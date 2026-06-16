@@ -1,4 +1,7 @@
+import { useEffect } from 'react'
 import { createFileRoute, Outlet } from '@tanstack/react-router'
+import { AgentProfile } from '@/components/agents/AgentProfile'
+import { useUiStore } from '@/store/ui'
 
 function AgentsError() {
   return (
@@ -23,8 +26,26 @@ function AgentsNotFound() {
   )
 }
 
+function AgentsLayout() {
+  // Close the agent edit slide-over when the user leaves the /agents/* subtree.
+  // Without this, `editAgentId` survives the layout unmount, and re-entering
+  // /agents re-opens the sheet for whatever agent the user last looked at — a
+  // phantom-open that violates the "I closed it" mental model. The cleanup
+  // fires on EVERY layout unmount, so this also covers the deep-link route
+  // (which navigates to /agents on mount, not away from /agents).
+  useEffect(() => () => useUiStore.getState().closeEditAgentSlideOver(), [])
+  return (
+    <>
+      <Outlet />
+      {/* Mounted once at the layout level so the edit slide-over is reachable
+          from every sub-route. The component reads `editAgentId` from the store. */}
+      <AgentProfile />
+    </>
+  )
+}
+
 export const Route = createFileRoute('/_app/agents')({
-  component: () => <Outlet />,
+  component: AgentsLayout,
   errorComponent: AgentsError,
   notFoundComponent: AgentsNotFound,
 })

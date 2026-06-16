@@ -21,7 +21,7 @@ type pin struct {
 	AgentName      string   `json:"agent_name,omitempty"`
 	SessionID      string   `json:"session_id,omitempty"`
 	MessageID      string   `json:"message_id,omitempty"`
-	ProjectID      string   `json:"project_id,omitempty"`
+	WorkspaceID    string   `json:"workspace_id,omitempty"`
 	Tags           []string `json:"tags,omitempty"`
 	ContentPreview string   `json:"content_preview,omitempty"`
 	CreatedAt      string   `json:"created_at"`
@@ -37,17 +37,17 @@ func NewPinListTool(d *Deps) *PinListTool     { return &PinListTool{deps: d} }
 func (t *PinListTool) Name() string           { return "system.pin.list" }
 func (t *PinListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *PinListTool) Description() string {
-	return "List pinned artifacts with optional filters.\nParameters: agent_id, project_id, tags, search (all optional)."
+	return "List pinned artifacts with optional filters.\nParameters: agent_id, workspace_id, tags, search (all optional)."
 }
 
 func (t *PinListTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"agent_id":   map[string]any{"type": "string"},
-			"project_id": map[string]any{"type": "string"},
-			"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"search":     map[string]any{"type": "string"},
+			"agent_id":     map[string]any{"type": "string"},
+			"workspace_id": map[string]any{"type": "string"},
+			"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"search":       map[string]any{"type": "string"},
 		},
 	}
 }
@@ -58,10 +58,10 @@ func (t *PinListTool) Execute(_ context.Context, args map[string]any) *tools.Too
 		return tools.ErrorResult(errorJSON("LIST_FAILED", err.Error(), ""))
 	}
 	searchQuery, _ := args["search"].(string)
-	projectFilter, _ := args["project_id"].(string)
+	workspaceFilter, _ := args["workspace_id"].(string)
 	var filtered []pin
 	for _, p := range all {
-		if projectFilter != "" && p.ProjectID != projectFilter {
+		if workspaceFilter != "" && p.WorkspaceID != workspaceFilter {
 			continue
 		}
 		if searchQuery != "" && !strings.Contains(
@@ -82,18 +82,18 @@ func NewPinCreateTool(d *Deps) *PinCreateTool   { return &PinCreateTool{deps: d}
 func (t *PinCreateTool) Name() string           { return "system.pin.create" }
 func (t *PinCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *PinCreateTool) Description() string {
-	return "Pin a chat response.\nParameters: session_id (required), message_id (required), title, tags, project_id."
+	return "Pin a chat response.\nParameters: session_id (required), message_id (required), title, tags, workspace_id."
 }
 
 func (t *PinCreateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"session_id": map[string]any{"type": "string"},
-			"message_id": map[string]any{"type": "string"},
-			"title":      map[string]any{"type": "string"},
-			"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"project_id": map[string]any{"type": "string"},
+			"session_id":   map[string]any{"type": "string"},
+			"message_id":   map[string]any{"type": "string"},
+			"title":        map[string]any{"type": "string"},
+			"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"workspace_id": map[string]any{"type": "string"},
 		},
 		"required": []string{"session_id", "message_id"},
 	}
@@ -117,8 +117,8 @@ func (t *PinCreateTool) Execute(_ context.Context, args map[string]any) *tools.T
 	} else {
 		p.Title = fmt.Sprintf("Pin from session %s", sessionID[:8])
 	}
-	if v, ok := args["project_id"].(string); ok {
-		p.ProjectID = v
+	if v, ok := args["workspace_id"].(string); ok {
+		p.WorkspaceID = v
 	}
 	if v, ok := args["tags"].([]any); ok {
 		for _, tag := range v {

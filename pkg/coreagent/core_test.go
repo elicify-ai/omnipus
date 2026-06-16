@@ -2,9 +2,10 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Wave 5b spec tests #15 and #16: core agent roster v1 (issue #45).
-// Tests the 5 new core agents (jim, ava, mia, ray, max) and their
+// Spec-3 roster re-cast: core agent roster v1 re-cast (v0.1.0 foundation).
+// Tests the 4 base core agents (mia, jim, ava, ray) and their
 // compiled-in metadata, prompts, tools, and deletion protection.
+// Max was retired from the seeded base.
 
 package coreagent_test
 
@@ -23,17 +24,33 @@ import (
 // Test #15 — TestCoreAgentRoster
 // =====================================================================
 
-// TestCoreAgentCount verifies exactly 5 core agents are returned by All().
+// TestCoreAgentCount verifies the base/worker split: All() returns the 4 base
+// agents PLUS the seeded general-purpose worker (5 total); BaseAgents() returns
+// just the 4 base agents.
 //
-// Traces to: wave5b-system-agent-spec.md — FR-012 (core agent roster v1, issue #45)
+// Traces to: Spec-3 (v0.1.0 roster re-cast) — 4-base roster: Mia·Assistant,
+// Jim·Orchestrator, Ray·Scout, Ava·Builder (Max retired) — plus the sub-agent
+// worker tier (general-purpose Worker, Type=worker).
 // BDD: "Given Omnipus default config, When All() called,
 //
-//	Then 5 core agents returned in display order (Mia first)"
+//	Then 4 base agents + 1 worker returned (base in display order, Mia first)"
 func TestCoreAgentCount(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 664
+	base := coreagent.BaseAgents()
+	require.Len(t, base, 4,
+		"BaseAgents() must return exactly 4 base core agents (Spec-3: mia, jim, ava, ray — max retired)")
+
 	all := coreagent.All()
 	require.Len(t, all, 5,
-		"All() must return exactly 5 core agents per issue #45 (jim, ava, mia, ray, max)")
+		"All() must return the 4 base agents + 1 worker (base/worker split)")
+
+	// The worker is present and is the only worker-tier entry.
+	workerCount := 0
+	for _, a := range all {
+		if coreagent.IsWorkerID(a.ID) {
+			workerCount++
+		}
+	}
+	require.Equal(t, 1, workerCount, "All() must include exactly one worker (the seeded general-purpose worker)")
 }
 
 // TestCoreAgentDisplayOrder verifies Mia is first (default selection for new users).
@@ -47,26 +64,23 @@ func TestCoreAgentDisplayOrder(t *testing.T) {
 		"Mia must be first in All() — she is the default selection for new users")
 }
 
-// TestCoreAgentIDs verifies all 5 expected IDs exist and are correct.
+// TestCoreAgentIDs verifies all 4 expected IDs exist and are correct.
 //
-// Traces to: wave5b-system-agent-spec.md — FR-012 (core agent roster v1)
-// BDD: "Given the 5 core agents, When ByID called for each,
+// Traces to: Spec-3 (v0.1.0 roster re-cast) — 4-base roster.
+// BDD: "Given the 4 base core agents, When ByID called for each,
 //
-//	Then each agent is found with the correct ID"
+//	Then each agent is found with the correct ID and re-cast name"
 func TestCoreAgentIDs(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 664
 	tests := []struct {
 		id   coreagent.CoreAgentID
 		name string
 	}{
-		// Dataset: core agent roster (issue #45). Names are the full display
-		// strings seeded into config (e.g. "Jim — General Purpose") so users see
-		// the role alongside the name in the roster card.
-		{coreagent.IDJim, "Jim — General Purpose"},
-		{coreagent.IDAva, "Ava — Agent Builder"},
-		{coreagent.IDMia, "Mia — Omnipus Guide"},
-		{coreagent.IDRay, "Ray — Researcher"},
-		{coreagent.IDMax, "Max — Automator"},
+		// Dataset: Spec-3 4-base roster. Names are the full display strings seeded
+		// into config so users see the role alongside the name in the roster card.
+		{coreagent.IDJim, "Jim — Orchestrator"},
+		{coreagent.IDAva, "Ava — Builder"},
+		{coreagent.IDMia, "Mia — Assistant"},
+		{coreagent.IDRay, "Ray — Scout"},
 	}
 
 	for _, tc := range tests {
@@ -74,7 +88,7 @@ func TestCoreAgentIDs(t *testing.T) {
 			agent := coreagent.ByID(tc.id)
 			require.NotNil(t, agent, "%s must be registered as a core agent", tc.id)
 			assert.Equal(t, tc.id, agent.ID, "ID field must match the lookup key")
-			assert.Equal(t, tc.name, agent.Name, "Name must match expected display name")
+			assert.Equal(t, tc.name, agent.Name, "Name must match expected re-cast display name")
 		})
 	}
 }
@@ -106,7 +120,7 @@ func TestCoreAgentMetadata(t *testing.T) {
 // TestCoreAgentMetadataDifferentiation verifies each agent has a DIFFERENT color and
 // subtitle, proving metadata is not hardcoded to a single value.
 //
-// Differentiation test: if all 5 agents returned the same color, this would catch it.
+// Differentiation test: if all 4 agents returned the same color, this would catch it.
 //
 // Traces to: wave5b-system-agent-spec.md — FR-012 (each agent distinct identity)
 func TestCoreAgentMetadataDifferentiation(t *testing.T) {
@@ -141,6 +155,15 @@ func TestCoreAgentMetadataDifferentiation(t *testing.T) {
 func TestCoreAgentPromptsHardcoded(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 152 (US-8 AC2)
 	for _, agent := range coreagent.All() {
+		// The sub-agent worker tier has an INTENTIONAL empty compiled prompt:
+		// the locked concept (`.preview-doc/agents.html`) says a worker's soul
+		// is OPTIONAL (may be left empty), and init() in core.go exempts
+		// workers from the mandatory-compiled-prompt invariant. The new
+		// TestWorkerSoulIsOptional_BootWithEmptySoul test asserts the
+		// empty-prompt design. Mirror the exemption here.
+		if coreagent.IsWorkerID(agent.ID) {
+			continue
+		}
 		t.Run(string(agent.ID)+" has non-empty compiled prompt", func(t *testing.T) {
 			prompt := coreagent.GetPrompt(string(agent.ID))
 			assert.NotEmpty(t, prompt,
@@ -160,13 +183,12 @@ func TestCoreAgentPromptsHardcoded(t *testing.T) {
 //
 // Differentiation test: call GetPrompt with two different IDs, assert different content.
 //
-// Traces to: wave5b-system-agent-spec.md — US-8 AC2 (per-agent compiled prompts)
+// Traces to: Spec-3 — compiled prompts for the 4-base roster.
 func TestCoreAgentPromptsDifferentiation(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 152
 	jimPrompt := coreagent.GetPrompt("jim")
-	maxPrompt := coreagent.GetPrompt("max")
-	assert.NotEqual(t, jimPrompt, maxPrompt,
-		"Jim and Max must have different compiled prompts — not the same hardcoded string")
+	avaPrompt := coreagent.GetPrompt("ava")
+	assert.NotEqual(t, jimPrompt, avaPrompt,
+		"Jim and Ava must have different compiled prompts — not the same hardcoded string")
 
 	miaPrompt := coreagent.GetPrompt("mia")
 	rayPrompt := coreagent.GetPrompt("ray")
@@ -203,25 +225,25 @@ func TestCoreAgentDefaultTools(t *testing.T) {
 // =====================================================================
 
 // TestCoreAgentIsCoreAgentFunction verifies the IsCoreAgent function correctly
-// identifies all 5 core agents and rejects non-core IDs.
+// identifies all 4 base core agents and rejects non-core IDs.
 //
-// Traces to: wave5b-system-agent-spec.md — Scenario: Core agent cannot be deleted (US-8 AC4)
+// Traces to: Spec-3 (v0.1.0 roster re-cast) — Max retired; 4-base roster.
 // BDD: "Given a core agent ID, When IsCoreAgent called,
 //
-//	Then true is returned; for custom IDs, false"
+//	Then true is returned; for custom IDs or retired Max, false"
 func TestCoreAgentIsCoreAgentFunction(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 679
 	coreIDs := []struct {
 		id       string
 		isCore   bool
 		scenario string
 	}{
-		// Dataset: core agent IDs that must be protected from deletion
-		{"jim", true, "Jim is a core agent"},
-		{"ava", true, "Ava is a core agent"},
-		{"mia", true, "Mia is a core agent"},
-		{"ray", true, "Ray is a core agent"},
-		{"max", true, "Max is a core agent"},
+		// Dataset: the 4 base core agents that must be protected from deletion
+		{"jim", true, "Jim is a core agent (Orchestrator)"},
+		{"ava", true, "Ava is a core agent (Builder)"},
+		{"mia", true, "Mia is a core agent (Assistant)"},
+		{"ray", true, "Ray is a core agent (Scout)"},
+		// Max is retired from the seeded base — must NOT be identified as core
+		{"max", false, "Max was retired from the seeded base (Spec-3); not a core agent"},
 		// Dataset: IDs that must NOT be identified as core
 		{"omnipus-system", false, "omnipus-system is the system agent, protected separately"},
 		{"financial-analyst", false, "custom agent is not a core agent"},
@@ -272,24 +294,23 @@ func TestAdminRBACAllowedToCallDelete(t *testing.T) {
 // Test: SeedConfig
 // =====================================================================
 
-// TestSeedConfigAddsAllCoreAgents verifies SeedConfig adds all 5 core agents
+// TestSeedConfigAddsAllCoreAgents verifies SeedConfig adds all 4 base core agents
 // to an empty config with Locked=true and returns true (modified).
 //
 // Persistence test: write via SeedConfig, read back from cfg.Agents.List.
 //
-// Traces to: wave5b-system-agent-spec.md — FR-012 (seed on first boot)
+// Traces to: Spec-3 (v0.1.0 roster re-cast) — seed on first boot, 4-base roster.
 // BDD: "Given empty config, When SeedConfig called,
 //
-//	Then all 5 core agents are in cfg.Agents.List with Locked=true"
+//	Then all 4 base core agents are in cfg.Agents.List with Locked=true"
 func TestSeedConfigAddsAllCoreAgents(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 664
 	cfg := &config.Config{}
 	modified := coreagent.SeedConfig(cfg)
 
 	assert.True(t, modified,
 		"SeedConfig must return true when agents are added to an empty config")
 	assert.Len(t, cfg.Agents.List, 5,
-		"SeedConfig must add exactly 5 core agents to an empty config")
+		"SeedConfig must add 4 base core agents + 1 worker to an empty config (Spec-3: max retired; worker tier added)")
 
 	// Verify each core agent was seeded with Locked=true
 	seededIDs := make(map[string]config.AgentConfig)
@@ -302,15 +323,19 @@ func TestSeedConfigAddsAllCoreAgents(t *testing.T) {
 			ac, found := seededIDs[string(ca.ID)]
 			require.True(t, found, "agent %s must be present in seeded config", ca.ID)
 			assert.True(t, ac.Locked,
-				"core agent %s must be seeded with Locked=true to protect identity fields", ca.ID)
-			assert.Equal(t, config.AgentTypeCore, ac.Type,
-				"core agent %s must have Type=core", ca.ID)
+				"agent %s must be seeded with Locked=true to protect identity fields", ca.ID)
+			wantType := config.AgentTypeCore
+			if coreagent.IsWorkerID(ca.ID) {
+				wantType = config.AgentTypeWorker
+			}
+			assert.Equal(t, wantType, ac.Type,
+				"agent %s must have Type=%s", ca.ID, wantType)
 			assert.Equal(t, ca.Name, ac.Name,
-				"core agent %s name must match compiled metadata", ca.ID)
+				"agent %s name must match compiled metadata", ca.ID)
 			require.NotNil(t, ac.Enabled,
-				"core agent %s must have Enabled set", ca.ID)
+				"agent %s must have Enabled set", ca.ID)
 			assert.True(t, *ac.Enabled,
-				"core agent %s must be enabled=true by default", ca.ID)
+				"agent %s must be enabled=true by default", ca.ID)
 		})
 	}
 }
@@ -318,15 +343,14 @@ func TestSeedConfigAddsAllCoreAgents(t *testing.T) {
 // TestSeedConfigIsIdempotent verifies SeedConfig does NOT duplicate agents when
 // called twice on the same config.
 //
-// Traces to: wave5b-system-agent-spec.md — FR-012 (SeedConfig idempotent)
-// BDD: "Given config with all 5 core agents, When SeedConfig called again,
+// Traces to: Spec-3 (v0.1.0 roster re-cast) — SeedConfig idempotent, 4-base roster.
+// BDD: "Given config with all 4 base core agents, When SeedConfig called again,
 //
 //	Then no agents are added and false is returned"
 func TestSeedConfigIsIdempotent(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 664
 	cfg := &config.Config{}
 
-	// First call: adds all 5 agents
+	// First call: adds all 4 base agents + the worker
 	modified1 := coreagent.SeedConfig(cfg)
 	assert.True(t, modified1, "first SeedConfig call must return true (agents added)")
 	assert.Len(t, cfg.Agents.List, 5)
@@ -336,7 +360,7 @@ func TestSeedConfigIsIdempotent(t *testing.T) {
 	assert.False(t, modified2,
 		"second SeedConfig call must return false — all agents already present")
 	assert.Len(t, cfg.Agents.List, 5,
-		"SeedConfig must not duplicate agents on repeated calls")
+		"SeedConfig must not duplicate agents on repeated calls (4 base + 1 worker)")
 }
 
 // TestSeedConfigPreservesExistingAgents verifies SeedConfig adds missing core agents
@@ -355,9 +379,9 @@ func TestSeedConfigPreservesExistingAgents(t *testing.T) {
 
 	modified := coreagent.SeedConfig(cfg)
 	assert.True(t, modified, "SeedConfig must add missing core agents")
-	// 5 core agents + 1 existing custom agent
+	// 4 base core agents + 1 worker + 1 existing custom agent
 	assert.Len(t, cfg.Agents.List, 6,
-		"SeedConfig must preserve existing agents while adding the 5 core agents")
+		"SeedConfig must preserve existing agents while adding the 4 base core agents + the worker")
 
 	// Verify custom agent is still present and unchanged
 	found := false

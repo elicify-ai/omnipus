@@ -1,0 +1,17 @@
+type: object
+description: >
+  Body for POST /auth/reauth. Re-verifies the single user's one password before a
+  sensitive settings change is permitted (FR-12.2). This is a consent primitive,
+  NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is
+  unrelated). A successful re-auth mints a short-lived re-auth token the SPA
+  attaches to the subsequent sensitive request.
+required:
+  - password
+additionalProperties: false
+properties:
+  password:
+    type: string
+    minLength: 1
+    maxLength: 72
+    description: The authenticated user's current password, re-typed for consent. Maximum 72 characters (bcrypt limit).
+    example: "mypassword"

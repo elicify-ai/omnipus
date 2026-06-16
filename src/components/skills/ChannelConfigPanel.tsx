@@ -23,6 +23,7 @@ import {
   getChannelRouting,
   setChannelRouting,
   fetchAgents,
+  isWorker,
   isApiError,
 } from '@/lib/api'
 import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
@@ -704,7 +705,13 @@ export function ChannelConfigPanel({
                         placeholder="(Global default)"
                         items={[
                           { value: '__none__', label: '(Global default)' },
-                          ...agents.map((a) => ({ value: a.id, label: a.name })),
+                          // Workers (type === 'worker') are delegation-only labour
+                          // agents — they can't be a channel routing default (the
+                          // backend 400s on a worker default_agent_id), so omit them
+                          // from the picker entirely.
+                          ...agents
+                            .filter((a) => !isWorker(a))
+                            .map((a) => ({ value: a.id, label: a.name })),
                         ]}
                       />
                     )}

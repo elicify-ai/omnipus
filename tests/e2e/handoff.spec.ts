@@ -247,9 +247,10 @@ test(
 
     // Wait up to 150s for a subagent-collapsed block to appear under
     // real-LLM determinism — spawn requires two LLM round-trips (parent
-    // tool call + subagent execution). z-ai/glm-5v-turbo enters extended
-    // thinking mode before tool dispatch; combined latency can exceed 90s
-    // under OpenRouter load. test.slow() gives 270s total; 150s here leaves
+    // tool call + subagent execution). google/gemini-2.5-flash's combined
+    // round-trip latency can still exceed 90s under OpenRouter load (the
+    // generous budget below stays safe; gemini is generally faster than the
+    // prior model). test.slow() gives 270s total; 150s here leaves
     // 120s for the click + expand assertions below.
     // Structural assertion: if no spawn occurred the test fails honestly.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]');
@@ -267,8 +268,8 @@ test(
 
     // Assert: expanded block has at least one tool-call-badge (the subagent called shell).
     // Structural assertion: checks [data-testid="tool-call-badge"] presence.
-    // 60s budget: the subagent's first LLM round-trip (extended-thinking + tool-call
-    // emission) can take 10-50s under suite load on z-ai/glm-5v-turbo; the previous
+    // 60s budget: the subagent's first LLM round-trip (tool-call emission) can
+    // take 10-50s under suite load on google/gemini-2.5-flash; the previous
     // 10s budget was tighter than the LLM's documented latency floor.
     const toolCallBadges = expandedBlock.locator('[data-testid="tool-call-badge"]');
     await expect(toolCallBadges.first()).toBeVisible({ timeout: 60_000 });

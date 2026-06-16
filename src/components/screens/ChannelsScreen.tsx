@@ -88,24 +88,22 @@ export function ChannelsScreen() {
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {channel.id !== 'webchat' && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setConfiguringChannel({
-                            id: channel.id,
-                            name: channel.name,
-                            nativeAvailable: channel.native_available,
-                            enabled: channel.enabled,
-                          })
-                        }
-                        className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
-                        aria-label={`Configure ${channel.name}`}
-                      >
-                        <Gear size={13} />
-                        Configure
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setConfiguringChannel({
+                          id: channel.id,
+                          name: channel.name,
+                          nativeAvailable: channel.native_available,
+                          enabled: channel.enabled,
+                        })
+                      }
+                      className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
+                      aria-label={`Configure ${channel.name}`}
+                    >
+                      <Gear size={13} />
+                      Configure
+                    </button>
                     <button
                       type="button"
                       onClick={() => doToggleChannel({ id: channel.id, enabled: channel.enabled })}

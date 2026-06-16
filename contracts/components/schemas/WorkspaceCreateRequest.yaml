@@ -1,0 +1,23 @@
+type: object
+description: Request body for POST /workspaces
+required:
+  - name
+properties:
+  name:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: Workspace name. Required. Not unique.
+  description:
+    type: string
+    maxLength: 2000
+    description: Optional description.
+  core_team:
+    type: array
+    items:
+      type: string
+    maxItems: 20
+    description: Optional default agent roster. Deduplicated at write time.
+  repository:
+    type: string
+    description: Optional git repository URL.

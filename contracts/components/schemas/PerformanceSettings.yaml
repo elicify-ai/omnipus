@@ -1,0 +1,25 @@
+title: PerformanceSettings
+description: >
+  Agent concurrency and fan-out settings returned by GET /api/v1/performance.
+  Controls the max-parallel gate for task/subagent dispatch.
+type: object
+additionalProperties: false
+properties:
+  max_parallel_agents:
+    type: integer
+    minimum: 2
+    maximum: 16
+    description: >
+      Maximum number of tasks/subagents that may run concurrently on the
+      dispatch path. The runtime clamps the configured value to
+      [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16.
+      Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var.
+    example: 4
+  effective_max_parallel_agents:
+    type: integer
+    minimum: 2
+    maximum: 16
+    description: >
+      The clamped value actually in use (after applying CPU/RAM heuristics
+      and env-var override). Always present in responses; absent in requests.
+    example: 4

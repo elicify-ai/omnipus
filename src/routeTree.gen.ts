@@ -14,15 +14,22 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as LandingRouteImport } from './routes/landing'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppTasksRouteImport } from './routes/_app/tasks'
 import { Route as AppSkillsRouteImport } from './routes/_app/skills'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppProfileRouteImport } from './routes/_app/profile'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
+import { Route as AppMonitorRouteImport } from './routes/_app/monitor'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
 import { Route as AppChannelsRouteImport } from './routes/_app/channels'
 import { Route as AppAgentsRouteImport } from './routes/_app/agents'
+import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
+import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
 import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
+import { Route as AppAgentsTrustRouteImport } from './routes/_app/agents.trust'
 import { Route as AppAgentsAgentIdRouteImport } from './routes/_app/agents.$agentId'
+import { Route as AppWorkspacesWorkspaceIdCalendarRouteImport } from './routes/_app/workspaces.$workspaceId.calendar'
 
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
@@ -48,6 +55,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppTasksRoute = AppTasksRouteImport.update({
+  id: '/tasks',
+  path: '/tasks',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSkillsRoute = AppSkillsRouteImport.update({
   id: '/skills',
   path: '/skills',
@@ -58,9 +70,19 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppRoute,
 } as any)
+const AppProfileRoute = AppProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppPoliciesRoute = AppPoliciesRouteImport.update({
   id: '/policies',
   path: '/policies',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppMonitorRoute = AppMonitorRouteImport.update({
+  id: '/monitor',
+  path: '/monitor',
   getParentRoute: () => AppRoute,
 } as any)
 const AppCommandCenterRoute = AppCommandCenterRouteImport.update({
@@ -78,21 +100,43 @@ const AppAgentsRoute = AppAgentsRouteImport.update({
   path: '/agents',
   getParentRoute: () => AppRoute,
 } as any)
+const AppWorkspacesIndexRoute = AppWorkspacesIndexRouteImport.update({
+  id: '/workspaces/',
+  path: '/workspaces/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AppAgentsRoute,
 } as any)
+const AppWorkspacesWorkspaceIdRoute =
+  AppWorkspacesWorkspaceIdRouteImport.update({
+    id: '/workspaces/$workspaceId',
+    path: '/workspaces/$workspaceId',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppSessionsSessionIdRoute = AppSessionsSessionIdRouteImport.update({
   id: '/sessions/$sessionId',
   path: '/sessions/$sessionId',
   getParentRoute: () => AppRoute,
+} as any)
+const AppAgentsTrustRoute = AppAgentsTrustRouteImport.update({
+  id: '/trust',
+  path: '/trust',
+  getParentRoute: () => AppAgentsRoute,
 } as any)
 const AppAgentsAgentIdRoute = AppAgentsAgentIdRouteImport.update({
   id: '/$agentId',
   path: '/$agentId',
   getParentRoute: () => AppAgentsRoute,
 } as any)
+const AppWorkspacesWorkspaceIdCalendarRoute =
+  AppWorkspacesWorkspaceIdCalendarRouteImport.update({
+    id: '/calendar',
+    path: '/calendar',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -102,12 +146,19 @@ export interface FileRoutesByFullPath {
   '/agents': typeof AppAgentsRouteWithChildren
   '/channels': typeof AppChannelsRoute
   '/command-center': typeof AppCommandCenterRoute
+  '/monitor': typeof AppMonitorRoute
   '/policies': typeof AppPoliciesRoute
+  '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
   '/skills': typeof AppSkillsRoute
+  '/tasks': typeof AppTasksRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
+  '/agents/trust': typeof AppAgentsTrustRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/agents/': typeof AppAgentsIndexRoute
+  '/workspaces/': typeof AppWorkspacesIndexRoute
+  '/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
 }
 export interface FileRoutesByTo {
   '/landing': typeof LandingRoute
@@ -115,13 +166,20 @@ export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
   '/channels': typeof AppChannelsRoute
   '/command-center': typeof AppCommandCenterRoute
+  '/monitor': typeof AppMonitorRoute
   '/policies': typeof AppPoliciesRoute
+  '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
   '/skills': typeof AppSkillsRoute
+  '/tasks': typeof AppTasksRoute
   '/': typeof AppIndexRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
+  '/agents/trust': typeof AppAgentsTrustRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/agents': typeof AppAgentsIndexRoute
+  '/workspaces': typeof AppWorkspacesIndexRoute
+  '/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -132,13 +190,20 @@ export interface FileRoutesById {
   '/_app/agents': typeof AppAgentsRouteWithChildren
   '/_app/channels': typeof AppChannelsRoute
   '/_app/command-center': typeof AppCommandCenterRoute
+  '/_app/monitor': typeof AppMonitorRoute
   '/_app/policies': typeof AppPoliciesRoute
+  '/_app/profile': typeof AppProfileRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/skills': typeof AppSkillsRoute
+  '/_app/tasks': typeof AppTasksRoute
   '/_app/': typeof AppIndexRoute
   '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
+  '/_app/agents/trust': typeof AppAgentsTrustRoute
   '/_app/sessions/$sessionId': typeof AppSessionsSessionIdRoute
+  '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/_app/agents/': typeof AppAgentsIndexRoute
+  '/_app/workspaces/': typeof AppWorkspacesIndexRoute
+  '/_app/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -150,12 +215,19 @@ export interface FileRouteTypes {
     | '/agents'
     | '/channels'
     | '/command-center'
+    | '/monitor'
     | '/policies'
+    | '/profile'
     | '/settings'
     | '/skills'
+    | '/tasks'
     | '/agents/$agentId'
+    | '/agents/trust'
     | '/sessions/$sessionId'
+    | '/workspaces/$workspaceId'
     | '/agents/'
+    | '/workspaces/'
+    | '/workspaces/$workspaceId/calendar'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/landing'
@@ -163,13 +235,20 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/channels'
     | '/command-center'
+    | '/monitor'
     | '/policies'
+    | '/profile'
     | '/settings'
     | '/skills'
+    | '/tasks'
     | '/'
     | '/agents/$agentId'
+    | '/agents/trust'
     | '/sessions/$sessionId'
+    | '/workspaces/$workspaceId'
     | '/agents'
+    | '/workspaces'
+    | '/workspaces/$workspaceId/calendar'
   id:
     | '__root__'
     | '/_app'
@@ -179,13 +258,20 @@ export interface FileRouteTypes {
     | '/_app/agents'
     | '/_app/channels'
     | '/_app/command-center'
+    | '/_app/monitor'
     | '/_app/policies'
+    | '/_app/profile'
     | '/_app/settings'
     | '/_app/skills'
+    | '/_app/tasks'
     | '/_app/'
     | '/_app/agents/$agentId'
+    | '/_app/agents/trust'
     | '/_app/sessions/$sessionId'
+    | '/_app/workspaces/$workspaceId'
     | '/_app/agents/'
+    | '/_app/workspaces/'
+    | '/_app/workspaces/$workspaceId/calendar'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -232,6 +318,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/tasks': {
+      id: '/_app/tasks'
+      path: '/tasks'
+      fullPath: '/tasks'
+      preLoaderRoute: typeof AppTasksRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/skills': {
       id: '/_app/skills'
       path: '/skills'
@@ -246,11 +339,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/profile': {
+      id: '/_app/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof AppProfileRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/policies': {
       id: '/_app/policies'
       path: '/policies'
       fullPath: '/policies'
       preLoaderRoute: typeof AppPoliciesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/monitor': {
+      id: '/_app/monitor'
+      path: '/monitor'
+      fullPath: '/monitor'
+      preLoaderRoute: typeof AppMonitorRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/command-center': {
@@ -274,12 +381,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/workspaces/': {
+      id: '/_app/workspaces/'
+      path: '/workspaces'
+      fullPath: '/workspaces/'
+      preLoaderRoute: typeof AppWorkspacesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/agents/': {
       id: '/_app/agents/'
       path: '/'
       fullPath: '/agents/'
       preLoaderRoute: typeof AppAgentsIndexRouteImport
       parentRoute: typeof AppAgentsRoute
+    }
+    '/_app/workspaces/$workspaceId': {
+      id: '/_app/workspaces/$workspaceId'
+      path: '/workspaces/$workspaceId'
+      fullPath: '/workspaces/$workspaceId'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/sessions/$sessionId': {
       id: '/_app/sessions/$sessionId'
@@ -288,6 +409,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSessionsSessionIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/agents/trust': {
+      id: '/_app/agents/trust'
+      path: '/trust'
+      fullPath: '/agents/trust'
+      preLoaderRoute: typeof AppAgentsTrustRouteImport
+      parentRoute: typeof AppAgentsRoute
+    }
     '/_app/agents/$agentId': {
       id: '/_app/agents/$agentId'
       path: '/$agentId'
@@ -295,16 +423,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsAgentIdRouteImport
       parentRoute: typeof AppAgentsRoute
     }
+    '/_app/workspaces/$workspaceId/calendar': {
+      id: '/_app/workspaces/$workspaceId/calendar'
+      path: '/calendar'
+      fullPath: '/workspaces/$workspaceId/calendar'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdCalendarRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
   }
 }
 
 interface AppAgentsRouteChildren {
   AppAgentsAgentIdRoute: typeof AppAgentsAgentIdRoute
+  AppAgentsTrustRoute: typeof AppAgentsTrustRoute
   AppAgentsIndexRoute: typeof AppAgentsIndexRoute
 }
 
 const AppAgentsRouteChildren: AppAgentsRouteChildren = {
   AppAgentsAgentIdRoute: AppAgentsAgentIdRoute,
+  AppAgentsTrustRoute: AppAgentsTrustRoute,
   AppAgentsIndexRoute: AppAgentsIndexRoute,
 }
 
@@ -312,26 +449,51 @@ const AppAgentsRouteWithChildren = AppAgentsRoute._addFileChildren(
   AppAgentsRouteChildren,
 )
 
+interface AppWorkspacesWorkspaceIdRouteChildren {
+  AppWorkspacesWorkspaceIdCalendarRoute: typeof AppWorkspacesWorkspaceIdCalendarRoute
+}
+
+const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildren =
+  {
+    AppWorkspacesWorkspaceIdCalendarRoute:
+      AppWorkspacesWorkspaceIdCalendarRoute,
+  }
+
+const AppWorkspacesWorkspaceIdRouteWithChildren =
+  AppWorkspacesWorkspaceIdRoute._addFileChildren(
+    AppWorkspacesWorkspaceIdRouteChildren,
+  )
+
 interface AppRouteChildren {
   AppAgentsRoute: typeof AppAgentsRouteWithChildren
   AppChannelsRoute: typeof AppChannelsRoute
   AppCommandCenterRoute: typeof AppCommandCenterRoute
+  AppMonitorRoute: typeof AppMonitorRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
+  AppProfileRoute: typeof AppProfileRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppSkillsRoute: typeof AppSkillsRoute
+  AppTasksRoute: typeof AppTasksRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSessionsSessionIdRoute: typeof AppSessionsSessionIdRoute
+  AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRouteWithChildren
+  AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppAgentsRoute: AppAgentsRouteWithChildren,
   AppChannelsRoute: AppChannelsRoute,
   AppCommandCenterRoute: AppCommandCenterRoute,
+  AppMonitorRoute: AppMonitorRoute,
   AppPoliciesRoute: AppPoliciesRoute,
+  AppProfileRoute: AppProfileRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppSkillsRoute: AppSkillsRoute,
+  AppTasksRoute: AppTasksRoute,
   AppIndexRoute: AppIndexRoute,
   AppSessionsSessionIdRoute: AppSessionsSessionIdRoute,
+  AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRouteWithChildren,
+  AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

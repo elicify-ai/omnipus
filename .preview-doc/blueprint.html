@@ -1,0 +1,118 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blueprint · as-is → to-be · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  .rel{display:inline-block;padding:1px 8px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap}
+  .r1{color:#D4AF37;border-color:#D4AF37}.r2{color:#fbbf24;border-color:#fbbf24}.r3{color:#34d399;border-color:#34d399}.r4{color:#a78bfa;border-color:#a78bfa}.r5{color:#60a5fa;border-color:#60a5fa}
+  table.x2b td:first-child{font-weight:600;color:#E2E8F0;white-space:nowrap}
+  table.x2b td.as{color:#8b8b97}table.x2b td.to{color:#cdd3de}
+  .stack{display:flex;flex-direction:column;gap:8px;max-width:760px;margin:6px auto}
+  .layer{border:1px solid var(--line);border-radius:12px;padding:12px 16px;background:#0e0e12}
+  .layer .lt{font-family:Outfit,sans-serif;font-weight:700;font-size:13.5px;margin-bottom:2px}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html" class="active">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Blueprint</div>
+  <div class="eyebrow">The whole picture · one page</div>
+  <h1>Blueprint: as-is → to-be</h1>
+  <p class="lede">Where Omnipus is, where it's going, and the one sequencing rule that makes the journey cheap: <b style="color:#fff">land every structural shape in v0.1.0 — additively, plus the one deliberate Connection migration done up front</b> — so the foundation never gets re-cut.</p>
+  <p class="note" style="margin-top:8px">Detail lives in the other pages; this is the synthesis. Legend — <span class="tag t-have">exists</span> <span class="tag t-part">partial</span> <span class="tag t-new">greenfield</span> · releases <span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span> <span class="rel r3">v0.3.0</span> <span class="rel r4">v0.4.0</span> <span class="rel r5">v1.0.0</span></p>
+</div></div>
+
+<!-- AT A GLANCE -->
+<section><div class="wrap">
+  <div class="eyebrow">The transformation</div>
+  <h2>Ten axes, today vs. target</h2>
+  <table class="x2b">
+    <tr><th>Axis</th><th>As-is (today)</th><th>To-be (target)</th><th>Lands</th></tr>
+    <tr><td>Scoping</td><td class="as"><span class="mono">owner=username</span> stamped (#406) but invisible; no workspace switcher in the UI</td><td class="to">one container — the <b>Workspace</b> as the scoping key (single user · <span class="mono">owner</span> = attribution, no multi-user/RBAC); context is agent-bound via the existing sidebar workspace switcher</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td>Channels</td><td class="as">system-wide <b>singleton</b> — one per type, keyed by type name (config: one field per type)</td><td class="to">multi-instance <b>Connections</b> with an identity (agent · user) + agent binding</td><td><span class="rel r1">migrate</span> <span class="rel r3">multi</span></td></tr>
+    <tr><td>Agents</td><td class="as">5 cores; un-named spawn = anonymous clone; no roster tiers</td><td class="to"><b>4 base agents</b> — Mia · Assistant ⭐ · Jim · Orchestrator · Ray · Scout · Ava · Builder — over a <b>sub-agent worker tier</b> (each worker has an <span class="mono">executor</span>: native · external-cli · future remote-a2a); Max retired from base (automation = a platform surface); specialists ship as marketplace packs</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td>Delegation</td><td class="as">two allowlists; 2 ungated work-paths (sync subagent · spawn/task); <b>no UI</b></td><td class="to">full <b>delegation-policy schema</b> (<span class="mono">to · accept_from · modes · depth · budget</span>) lands v0.1.0; only <span class="mono">to · modes</span> enforced now + trust-graph UI; <b>handover stays open</b>; <span class="mono">accept_from</span> + budget enforced later</td><td><span class="rel r1">schema+UI</span> <span class="rel r5">enforce</span></td></tr>
+    <tr><td>Tasks</td><td class="as">assignee + milestone; <b>no dates, no ordering</b></td><td class="to">start · due · recurrence · <span class="mono">blocked_by</span> deps · plans · workspace-scoped</td><td><span class="rel r1">shape</span> <span class="rel r2">live</span></td></tr>
+    <tr><td>Time</td><td class="as">cron schedules only</td><td class="to"><b>Calendar</b> (per-workspace, import) + <b>Automations</b> (Trigger → Action)</td><td><span class="rel r1">shell</span> <span class="rel r2">live</span></td></tr>
+    <tr><td>Memory</td><td class="as">agent-global flat <span class="mono">MEMORY.md</span> per agent — no workspace room, no graph</td><td class="to"><b>2 rooms — private (per-agent, agent-global) + a shared workspace room</b> · self-improving · no embeddings</td><td><span class="rel r1">v0.1.0</span> structure+logs <span class="rel r2">v0.2.0</span> behaviour</td></tr>
+    <tr><td><b>Tools</b></td><td class="as"><span class="as">LLM provider only in Settings; search + voice-in providers config-only; no image/TTS</span></td><td class="to"><span class="to">per-tool pluggable providers + Integrations UI; <b>agent voices</b> (TTS) + <b>image-gen</b></span></td><td><span class="rel r1">v0.1.0</span> UI <span class="rel r2">v0.2.0</span> voices+img</td></tr>
+    <tr><td>Accounts</td><td class="as">no user mailbox/calendar; OAuth is LLM-login only</td><td class="to">user-identity connections + connected-accounts vault + delegated OAuth</td><td><span class="rel r4">v0.4.0</span></td></tr>
+    <tr><td>Integration</td><td class="as">~70% REST; MCP outbound</td><td class="to">scoped API keys + webhook-out + event feed (Zapier/n8n/Make)</td><td><span class="rel r5">v1.0.0</span></td></tr>
+    <tr><td>Plugins &amp; Marketplaces</td><td class="as">skills already a plugin system (ClawHub · <span class="mono">SKILL.md</span>); MCP is the tool-plugin transport; channels factory-only; single ClawHub registry; no bundle format</td><td class="to">multi-marketplace provider model (ClawHub + GitHub, then Omnipus Marketplace as default) + plugin <b>bundles</b> (skills+agents+MCP+channels+providers), own-process kernel-confined exec; component-level-hybrid manifest</td><td><span class="rel r1">v0.1.0</span> manifest shape + marketplace list (ClawHub·GitHub) <span class="rel r2">v0.2.0</span>+ Omnipus Market replaces ClawHub · installer · UI</td></tr>
+  </table>
+</div></section>
+
+<!-- THE MODEL -->
+<section><div class="wrap">
+  <div class="eyebrow">The target model</div>
+  <h2>One coherent stack</h2>
+  <p class="sub">Everything hangs off one spine: a <b>Workspace</b> (keyed by <span class="mono">owner</span>, #406, already real — single user, so <span class="mono">owner</span> is attribution, not a tenancy boundary) → the substrate (agents, connections, tasks, calendar, automations, memory), all keyed the same way. Context is <b>agent-bound</b> and set by the existing sidebar workspace switcher.</p>
+  <div class="stack">
+    <div class="layer" style="border-color:#60a5fa"><div class="lt" style="color:#60a5fa">🗂 Workspaces — My Workspace (default) + named workspaces</div><span class="note">one container · pre-seeded My Workspace (PA: email/calendar/personal tasks/accounts) + your named workspaces · single user, so the Workspace is just context, not a tenancy line</span></div>
+    <div class="layer" style="border-color:#34d399"><div class="lt" style="color:#34d399">🤖 Agents — 4 base agents over a sub-agent tier, bound to a workspace</div><span class="note"><b>Base agents</b> — Mia · Assistant ⭐ · Jim · Orchestrator · Ray · Scout · Ava · Builder (chat targets, full citizens) · <b>Sub agents</b> (workers, each with an <span class="mono">executor</span> — native · external-cli · future remote-a2a — inherit the caller's workspace; not chat targets) · agent-private memory = a per-agent room (agent-global); the shared room per workspace</span></div>
+    <div class="layer"><div class="lt">🔌 Connections · 🗓️ Calendar · ⚡ Automations · 🧠 Memory · 🤝 Delegation graph · 🛠 Tools/providers · 🧩 Plugins/marketplaces</div><span class="note">the shared substrate — every entity carries its <span class="mono">Workspace</span>; delegation &amp; routing run on top</span></div>
+    <div class="layer"><div class="lt">🔗 Protocols — layered, shapes hooked in v0.1.0</div><span class="note"><b>MCP</b> (agent→tools — <span class="tag t-have">have</span>, <span class="mono">pkg/mcp</span>) · <b>ACP</b> (host→coding-agent — CLI floor now via the bidirectional <span class="mono">ExternalAgentRunner</span>, protocol later) · <b>A2A</b> (agent↔agent — agent-reference + Card-identity hooks now, protocol <span class="rel r5">v1.0.0</span>). Defer the behaviour, reserve the shape; A2A wire is external (Constraint #8 untouched)</span></div>
+  </div>
+  <div class="callout b">The single idea: <b>one container, the Workspace</b>, is the key for tasks, memory, calendar, connections and automations alike — and context is agent-bound, set by the existing sidebar workspace switcher (My Workspace + named workspaces). The data spine (<span class="mono">owner=username</span>) already exists — the work is to formalize it and give it a UI. Memory is self-improving, no embeddings — see <a href="learning.html">Learning</a>. See <a href="spaces.html">Workspaces</a>, <a href="memory.html">Memory</a>, <a href="delegation.html">Delegation</a>, <a href="time.html">Calendar &amp; Automations</a>.</div>
+</div></section>
+
+<!-- TAXONOMY -->
+<section><div class="wrap">
+  <div class="eyebrow">Agents · the canonical taxonomy</div>
+  <h2>Four <span class="gold">base agents</span> over a <span class="mono">sub-agent</span> tier</h2>
+  <div class="grid g2">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>⭐ Base agents</h3><p class="note">Four named roles — <b>Mia · Assistant ⭐</b> (default; memory-rich personal front door) · <b>Jim · Orchestrator</b> (planner/PM; supervises tasks over a <span class="mono">blocked_by</span> DAG + delegation graph, Max-parallel, worktrees) · <b>Ray · Scout</b> (research &amp; summarize) · <b>Ava · Builder</b> (agent &amp; skill authoring). Full citizens: <b>chat · heartbeat · own connections · full memory · default-★ · can delegate</b>, work across workspaces. Max is <b>retired from base</b> — automation is a platform surface, not a persona (an optional ops/automation pack later). <span class="tag t-have">cores exist</span> · <a href="agents.html">detail</a>.</p></div>
+    <div class="card"><h3>⚙️ Sub agents</h3><p class="note">A <b>separate roster section</b> — workers; the unit of fan-out. Each carries an <span class="mono">executor</span>: <b>native</b> · <b>external-cli</b> (Claude Code · opencode · Codex) · <b>future remote-a2a</b>. Deliberately stripped: <b>no heartbeat · no own connection/identity · ephemeral memory</b> (run-log, no continuity) · <b>not chat targets</b> (invoked only via delegation — a "test run" button is the exception) · not default-★ · depth-limited · a leaner/cheaper model. <i>A tool you point at work, not a colleague.</i> <span class="tag t-new">new tier</span> · <a href="delegation.html">detail</a></p></div>
+  </div>
+  <p class="note" style="margin-top:10px">The roster splits into <b>base agents</b> and <b>sub-agent workers</b> (made explicit in v0.1.0). Beyond the base — Maker/creative-media · ops · smart-home · other specialists — ships as <b>marketplace agent packs</b>, not built-in cores.</p>
+</div></section>
+
+<!-- ROADMAP THESIS -->
+<section><div class="wrap">
+  <div class="eyebrow">The sequencing rule</div>
+  <h2>Front-load the <span class="gold">shapes</span>; add behaviour on top</h2>
+  <p class="sub">The expensive refactors in this codebase are wire-format, scoping-key and config-shape changes. So we make all of those <b>once, in v0.1.0</b> — most additively, plus the <b>one deliberate breaking migration</b> (Connection-as-instance config shape) done up front. Every later release then <i>adds behaviour</i> or <i>lifts a cap</i> — it never re-cuts the foundation.</p>
+  <div class="grid g2" style="margin-top:6px">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>v0.1.0 locks the shapes (additive + one migration)</h3><ul class="clean">
+      <li><b>Additive:</b> the <b>Workspace scoping key</b> on tasks/memory/calendar/connections (My Workspace pre-seeded; the sidebar workspace switcher already sets context); <b>single-user onboarding — one password</b>, sensitive settings re-type it (sudo-style)</li>
+      <li><b>Additive:</b> the <b>base / sub-agent</b> roster split (4 base agents + an <span class="mono">executor</span>-bearing worker tier) + <b>delegation-policy</b> contract type (<span class="mono">to</span> · <span class="mono">modes</span>) + the <b>"Max parallel agents"</b> setting</li>
+      <li><b>Additive:</b> task fields — start · due · recurrence · <span class="mono">blocked_by</span> (nullable)</li>
+      <li><b>One deliberate migration:</b> <b>Connection-as-instance</b> — config shape one-field-per-type → list (capped at one), new credential keys, openapi <span class="mono">ChannelEntry</span>/<span class="mono">ChannelConfigureRequest</span> change</li>
+    </ul></div>
+    <div class="card"><h3>…so later releases only add behaviour</h3><ul class="clean">
+      <li>multi-instance = <b>lift the cap</b> (the breaking config migration already happened in v0.1.0 — v0.3 just raises the per-type limit)</li>
+      <li>the <b>My Workspace</b> + PA capabilities — pre-seeded, PA features light up here (additive)</li>
+      <li>calendar/automations = <b>fill</b> the shapes (dates, deps, rules)</li>
+      <li>the v0.1.0 <b>UI is real</b> — it sits on real shapes, not placeholders</li>
+    </ul></div>
+  </div>
+
+  <h3 style="margin-top:22px">The five releases — each builds on the last</h3>
+  <div class="fig">
+  <svg viewBox="0 0 980 110" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><marker id="b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5f6675"/></marker></defs>
+    <line x1="60" y1="55" x2="930" y2="55" stroke="#2a2a31" stroke-width="2" marker-end="url(#b)"/>
+    <g font-family="JetBrains Mono" font-size="11" text-anchor="middle">
+      <circle cx="95" cy="55" r="7" fill="#D4AF37"/><text x="95" y="34" fill="#D4AF37">v0.1.0</text><text x="95" y="80" fill="#8b8b97" font-family="Inter">Foundation</text>
+      <circle cx="300" cy="55" r="7" fill="#fbbf24"/><text x="300" y="34" fill="#fbbf24">v0.2.0</text><text x="300" y="80" fill="#8b8b97" font-family="Inter">Time &amp; Rules</text>
+      <circle cx="500" cy="55" r="7" fill="#34d399"/><text x="500" y="34" fill="#34d399">v0.3.0</text><text x="500" y="80" fill="#8b8b97" font-family="Inter">Connections</text>
+      <circle cx="700" cy="55" r="7" fill="#a78bfa"/><text x="700" y="34" fill="#a78bfa">v0.4.0</text><text x="700" y="80" fill="#8b8b97" font-family="Inter">Assistant</text>
+      <circle cx="900" cy="55" r="7" fill="#60a5fa"/><text x="900" y="34" fill="#60a5fa">v1.0.0</text><text x="900" y="80" fill="#8b8b97" font-family="Inter">Integration</text>
+    </g>
+  </svg>
+  </div>
+  <table class="x2b">
+    <tr><th>Release</th><th>Theme</th><th>Builds on</th><th>Ships</th></tr>
+    <tr><td><span class="rel r1">v0.1.0</span></td><td>Foundation</td><td class="as">the current build</td><td class="to">all shapes + IA shell + the 4 base agents (Mia · Jim · Ray · Ava) over a sub-agent/executor tier + delegation trust-graph + seeded worker + stabilize</td></tr>
+    <tr><td><span class="rel r2">v0.2.0</span></td><td>Time &amp; Rules</td><td class="as">v0.1 task fields, calendar/automations shells</td><td class="to">calendar live + iCal + automations engine (<span class="mono">task_status_changed</span>) + deps/recurrence + manual task sequencing</td></tr>
+    <tr><td><span class="rel r3">v0.3.0</span></td><td>Connections</td><td class="as">v0.1 instance config shape (openapi <span class="mono">ChannelEntry</span>) + bus <span class="mono">instance_id</span> (in-process Go field)</td><td class="to">lift the multi-instance cap · Email: provider-OAuth + agent identity (basic IMAP/SMTP email already ships v0.1.0) · webhook channel · per-agent bots</td></tr>
+    <tr><td><span class="rel r4">v0.4.0</span></td><td>Assistant</td><td class="as">v0.1 Workspace key + v0.1 basic email + v0.3 multi-mailbox + v0.2 calendar</td><td class="to">My Workspace + PA capabilities light up · Mia (Assistant) binding · connected-accounts vault · delegated OAuth</td></tr>
+    <tr><td><span class="rel r5">v1.0.0</span></td><td>Integration &amp; Scale</td><td class="as">v0.2 deps + v0.1 delegation policy</td><td class="to">scoped API keys · webhook-out · event feed · full orchestration (coordinator, fan-out, budget) · two-way calendar</td></tr>
+  </table>
+  <div class="callout">Full detail, risk and the build-upon logic on the <a href="roadmap.html"><b>Roadmap →</b></a>. Screen-by-screen changes on <a href="ui-changes.html"><b>UI Changes →</b></a>.</div>
+</div></section>
+
+<footer><div class="wrap"><p><a href="index.html" style="color:var(--muted)">← Overview</a> &nbsp;·&nbsp; Next: <a href="spaces.html">Workspaces &amp; Channels →</a></p></div></footer>
+</body></html>

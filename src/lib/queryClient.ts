@@ -1,5 +1,19 @@
 import { QueryClient } from '@tanstack/react-query'
-import { ApiSchemaError } from './api'
+import { ApiSchemaError, ApiError } from './api'
+import { forceLogout } from './authLogout'
+
+// ── Global 401 logout handler ─────────────────────────────────────────────────
+//
+// Debounced: once a 401 is detected, subsequent concurrent 401 failures within
+// the same 2-second window are suppressed so concurrent polling queries don't
+// each trigger a redirect. The redirect fires synchronously on the first call;
+// only the debounce-flag reset uses setTimeout (see authLogout.ts).
+
+function _handleAuthError(err: unknown): void {
+  if (!(err instanceof ApiError)) return
+  if (err.status !== 401) return
+  forceLogout()
+}
 
 // Singleton QueryClient — created once and shared between:
 //   - main.tsx (passed to QueryClientProvider)
@@ -10,14 +24,22 @@ export const queryClient = new QueryClient({
       staleTime: 30_000,
       // Never retry ApiSchemaError — retrying cannot fix a schema mismatch and
       // would produce a toast storm (4 toasts per failure with default retry:3).
+      // Never retry 401/403 — these are auth errors that will keep failing with
+      // the same token and would flood the console before the redirect fires.
+      // Never retry 404 — a missing resource will not appear on retry (e.g. a
+      // just-deleted schedule whose refetch fires after the delete onSuccess).
       retry: (failureCount, err) =>
-        !(err instanceof ApiSchemaError) && failureCount < 3,
+        !(err instanceof ApiSchemaError) &&
+        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
+        failureCount < 3,
       retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
     },
     mutations: {
-      // Same guard for mutations: schema mismatches are not transient errors.
+      // Same guard for mutations: schema mismatches, auth errors, and 404s are not transient.
       retry: (failureCount, err) =>
-        !(err instanceof ApiSchemaError) && failureCount < 3,
+        !(err instanceof ApiSchemaError) &&
+        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
+        failureCount < 3,
     },
   },
 })
@@ -56,11 +78,13 @@ function _handleApiSchemaError(err: unknown): void {
 queryClient.getQueryCache().subscribe((event) => {
   if (event.type === 'updated' && event.action.type === 'error') {
     _handleApiSchemaError(event.action.error)
+    _handleAuthError(event.action.error)
   }
 })
 
 queryClient.getMutationCache().subscribe((event) => {
   if (event.type === 'updated' && event.mutation.state.status === 'error') {
     _handleApiSchemaError(event.mutation.state.error)
+    _handleAuthError(event.mutation.state.error)
   }
 })

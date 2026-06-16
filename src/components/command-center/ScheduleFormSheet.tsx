@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FloppyDisk } from '@phosphor-icons/react'
+import { FloppyDisk, WarningCircle } from '@phosphor-icons/react'
 import {
   Sheet,
   SheetContent,
@@ -18,6 +18,7 @@ import {
   fetchAgents,
   createSchedule,
   updateSchedule,
+  isWorker,
   isApiError,
 } from '@/lib/api'
 import type { Schedule, ScheduleCreate, ScheduleUpdate, ScheduleTrigger } from '@/lib/api/generated/openapi-types'
@@ -214,6 +215,12 @@ function buildTrigger(form: FormState): ScheduleTrigger {
  * Build a human-readable description of the trigger derived from form state,
  * used by NextRunPreview. Returns null when inputs are incomplete/invalid.
  */
+/** Pluralize a unit label based on count. "1 hour", "2 hours", etc. */
+function pluralizeUnit(n: number, unit: EveryUnit): string {
+  const singular: Record<EveryUnit, string> = { minutes: 'minute', hours: 'hour', days: 'day' }
+  return n === 1 ? singular[unit] : unit
+}
+
 function formTriggerDescription(form: FormState): string | null {
   switch (form.friendlyMode) {
     case 'once':
@@ -223,7 +230,7 @@ function formTriggerDescription(form: FormState): string | null {
       if (form.repeatShape === 'interval') {
         const n = parseInt(form.everyValue, 10)
         if (isNaN(n) || n < 1) return null
-        return `Every ${n} ${form.everyUnit}`
+        return `Every ${n} ${pluralizeUnit(n, form.everyUnit)}`
       }
       const cron = buildRepeatCron(form.repeatShape, form.repeatTime, form.weekday, form.monthDay)
       if (!cron) return null
@@ -319,18 +326,22 @@ export function ScheduleFormSheet({
     }
   }
 
-  const { data: agents = [] } = useQuery({
+  const { data: agents = [], isError: agentsLoadFailed, error: agentsError } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     enabled: open,
   })
 
-  // Default owner: agent with default:true, or first agent.
+  // Workers (type === 'worker') have no heartbeat and the backend rejects a
+  // scheduled run owned by a worker, so the owner picker must exclude them.
+  const ownerAgents = agents.filter((a) => !isWorker(a))
+
+  // Default owner: agent with default:true, or first eligible (non-worker) agent.
   // Applied only when the form is new (no schedule) and no defaultOwnerAgentId provided.
   useEffect(() => {
-    if (!open || isEdit || defaultOwnerAgentId || agents.length === 0) return
+    if (!open || isEdit || defaultOwnerAgentId || ownerAgents.length === 0) return
     if (form.ownerAgentId !== '') return
-    const defaultAgent = agents.find((a) => a.default) ?? agents[0]
+    const defaultAgent = ownerAgents.find((a) => a.default) ?? ownerAgents[0]
     if (defaultAgent) setValue('ownerAgentId', defaultAgent.id)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, open])
@@ -444,9 +455,29 @@ export function ScheduleFormSheet({
             <SmartSelect
               value={form.ownerAgentId}
               onValueChange={(v) => setValue('ownerAgentId', v)}
-              placeholder="Select an agent"
-              items={agents.map((a) => ({ value: a.id, label: a.name }))}
+              placeholder={agentsLoadFailed ? 'Could not load agents' : 'Select an agent'}
+              items={ownerAgents.map((a) => ({ value: a.id, label: a.name }))}
             />
+            {agentsLoadFailed && (
+              <div
+                role="alert"
+                className="mt-1.5 flex items-start gap-1.5 text-[11px] text-destructive"
+              >
+                <WarningCircle size={13} weight="fill" className="mt-px shrink-0" />
+                <span>
+                  Couldn&apos;t load agents
+                  {(() => {
+                    const detail = isApiError(agentsError)
+                      ? agentsError.userMessage
+                      : agentsError instanceof Error
+                        ? agentsError.message
+                        : ''
+                    return detail ? `: ${detail}` : '.'
+                  })()}{' '}
+                  The owner dropdown is empty and Save is disabled until agents load. Close and reopen to retry.
+                </span>
+              </div>
+            )}
           </Field>
 
           {/* Name */}

@@ -1,0 +1,150 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Impact Assessment · Omnipus concept</title><link rel="stylesheet" href="style.css">
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html" class="active">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Impact assessment</div>
+  <div class="eyebrow">What it touches</div>
+  <h1>Impact assessment</h1>
+  <p class="lede">Every workstream, scored for effort and risk, with blast-radius and contract impact (Constraint #8), grounded in the codebase. The shape of the work, not a quote.</p>
+  <p class="note" style="margin-top:8px">Legend — effort / risk: <span class="lvl l-lo"><i></i></span> low &nbsp; <span class="lvl l-md"><i></i></span> medium &nbsp; <span class="lvl l-hi"><i></i></span> high. &nbsp; <span class="tag t-have">exists</span> <span class="tag t-part">partial</span> <span class="tag t-new">greenfield</span></p>
+</div></div>
+
+<section><div class="wrap">
+  <div class="eyebrow">At a glance</div>
+  <h2>The workstreams</h2>
+  <table>
+    <tr><th>Workstream</th><th>Effort</th><th>Risk</th><th>Wire / contract</th><th>Today</th></tr>
+    <tr><td><b>Task dates &amp; recurrence</b></td><td><span class="lvl l-lo"><i></i></span></td><td><span class="lvl l-lo"><i></i></span></td><td>BoardTask schema +fields (additive)</td><td><span class="tag t-new">none</span></td></tr>
+    <tr><td><b>Calendar (native + iCal)</b></td><td><span class="lvl l-md"><i></i></span></td><td><span class="lvl l-lo"><i></i></span></td><td>new Event / CalendarSource schemas</td><td><span class="tag t-new">greenfield</span></td></tr>
+    <tr><td><b>Automations engine</b></td><td><span class="lvl l-md"><i></i></span></td><td><span class="lvl l-md"><i></i></span></td><td>new Rule schema; emit latent events</td><td><span class="tag t-part">bus exists</span></td></tr>
+    <tr><td><b>Channels → multi-instance</b></td><td><span class="lvl l-hi"><i></i></span></td><td><span class="lvl l-hi"><i></i></span></td><td><b>openapi channel schemas</b> (ChannelEntry / ChannelConfigureRequest) + config-shape migration + cred keys</td><td><span class="tag t-part">singleton</span></td></tr>
+    <tr><td><b>Email channel (basic IMAP/SMTP — v0.1.0)</b></td><td><span class="lvl l-md"><i></i></span></td><td><span class="lvl l-md"><i></i></span></td><td>new channel id + fields (one mailbox)</td><td><span class="tag t-new">greenfield</span></td></tr>
+    <tr><td><b>Workspaces (unify the prior User/Agent/Project tiers)</b></td><td><span class="lvl l-md"><i></i></span></td><td><span class="lvl l-lo"><i></i></span></td><td>Workspace as the scoping key on tasks/memory/cal; <span class="mono">owner</span> = attribution (single-user — no tenancy build)</td><td><span class="tag t-have">#406 owner spine exists · no per-user isolation needed</span></td></tr>
+    <tr><td><b>Single-user onboarding + password gate</b></td><td><span class="lvl l-lo"><i></i></span></td><td><span class="lvl l-lo"><i></i></span></td><td>onboarding (name + one password + model key); re-type gate reuses <span class="mono">RequireNotBypass</span></td><td><span class="tag t-have">guard + auth tree exist</span></td></tr>
+    <tr><td><b>4 base agents + sub-agent roster</b></td><td><span class="lvl l-lo"><i></i></span></td><td><span class="lvl l-lo"><i></i></span></td><td>4 base agents (Mia · Assistant ⭐ · Jim · Orchestrator · Ray · Scout · Ava · Builder) + a sub-agent/executor tier; additive agent <span class="mono">kind</span> / tier; Assistant auto-provisioned</td><td><span class="tag t-part">agent config exists</span></td></tr>
+    <tr><td><b>"Max parallel agents" setting</b></td><td><span class="lvl l-lo"><i></i></span></td><td><span class="lvl l-lo"><i></i></span></td><td>Settings → Performance; CPU/RAM recommendation + over-limit warning</td><td><span class="tag t-new">stabilization win</span></td></tr>
+    <tr><td><b>Personal Assistant</b></td><td><span class="lvl l-md"><i></i></span></td><td><span class="lvl l-md"><i></i></span></td><td>auto-provisioned at onboarding; PA capabilities + connected-accounts later</td><td><span class="tag t-part">tasks ride spine · custom-agent seed exists</span></td></tr>
+    <tr><td><b>Webhooks in/out + Zapier</b></td><td><span class="lvl l-md"><i></i></span></td><td><span class="lvl l-md"><i></i></span></td><td>webhook channel + webhook-out action</td><td><span class="tag t-part">seam exists</span></td></tr>
+    <tr><td><b>Scoped API keys</b></td><td><span class="lvl l-md"><i></i></span></td><td><span class="lvl l-md"><i></i></span></td><td>new auth artifact + scopes</td><td><span class="tag t-part">tokens exist</span></td></tr>
+    <tr><td><b>Calendar/Email provider OAuth</b></td><td><span class="lvl l-hi"><i></i></span></td><td><span class="lvl l-hi"><i></i></span></td><td>per-user delegated tokens</td><td><span class="tag t-new">greenfield</span></td></tr>
+    <tr><td><b>Memory (rooms + self-improvement)</b></td><td><span class="lvl l-hi"><i></i></span></td><td><span class="lvl l-md"><i></i></span></td><td>new memory file format + 3 tools; bleve index (new dep)</td><td><span class="tag t-part">store + idle recap exist; structure greenfield</span></td></tr>
+    <tr><td><b>Tools — pluggable providers + multimodal</b></td><td><span class="lvl l-md"><i></i></span></td><td><span class="lvl l-lo"><i></i></span></td><td>new <span class="mono">Synthesizer</span> + <span class="mono">ImageProvider</span> interfaces; Integrations UI</td><td><span class="tag t-part">search + voice-in providers exist; TTS/image greenfield</span></td></tr>
+  </table>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Deep dive</div>
+  <h2>By area</h2>
+
+  <div class="grid g2" style="margin-top:6px">
+    <div class="card"><h3>1 · Data model &amp; contracts <span class="lvl l-md"><i></i></span></h3>
+      <p>Contract-first (Constraint #8) — schema → generated Go/TS → handlers. Additive changes are low-risk:</p>
+      <ul class="clean">
+        <li><b>Task</b>: +<span class="mono">start_date · due_at · recurrence</span> (nullable → safe migration). <span class="mono">BoardTask.yaml</span> + struct.</li>
+        <li><b>Connection</b>: channel config struct-per-type → <b>list of instances</b> {id, identity, agent_binding, secret_ref}. Breaking config shape + a migration.</li>
+        <li><b>Calendar / Automation / API-key</b>: new entities + schemas.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-color:rgba(248,113,113,.3)"><h3>2 · Channels → multi-instance <span class="lvl l-hi"><i></i></span> <span class="tag t-new">biggest</span></h3>
+      <p>The cross-cutting one. Today: one instance per type, keyed by type name everywhere.</p>
+      <ul class="clean">
+        <li><b>Wire / contract</b> (Constraint #8): the change is in <b>OpenAPI</b> — the channel schemas (<span class="mono">ChannelEntry</span> / <span class="mono">ChannelConfigureRequest</span>) carry an instance id → regenerate Go/TS.</li>
+        <li><b>Config</b> (<span class="mono">config.go:774</span>): one field per type → instance lists. Breaking config shape + a migration.</li>
+        <li><b>Manager</b> (<span class="mono">manager.go:582-708</span>): hardcoded if-ladder → loop over instances; map keyed by instance id (<span class="mono">:113</span>).</li>
+        <li><b>Bus</b> (<span class="mono">bus/types.go</span>): add an <b>instance_id</b> field — but these are <b>in-process Go structs, not in asyncapi.yaml</b>; it's an internal change threaded through dispatch + every channel send, <i>not</i> a wire change.</li>
+        <li><b>Credentials</b> (<span class="mono">channelCredKey</span>, <span class="mono">rest.go:2090</span>): cred key per instance.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card"><h3>3 · Workspaces — unify the prior User/Agent/Project tiers <span class="lvl l-md"><i></i></span></h3>
+      <p><b>Single-user</b> shrinks this sharply: #406 already stamps <span class="mono">owner=username</span> on sessions/tasks/projects, and with no multi-user / tenancy build there's <b>no per-user isolation, no <span class="mono">canAccess</span> filtering</b> to write. The work is the <b>Workspace scoping key</b> + grouping the data spine that already exists.</p>
+      <ul class="clean">
+        <li>One container — the <b>Workspace</b> — is the scoping key; collapses the three prior tiers, no new "space" entity.</li>
+        <li><span class="mono">owner</span> is <b>attribution</b>, not an access axis — single user, so no owner-spine ACL, no admin-override, no team-shared / SaaS layer to build.</li>
+        <li>Context is <b>agent-bound</b>, set by the existing sidebar workspace switcher; workers inherit the caller's workspace.</li>
+        <li>One pre-seeded default — <b>My Workspace</b> (Assistant + your accounts); named workspaces for real work. No separate Personal/General.</li>
+        <li>Agents are <b>workspace members</b>; Calendar &amp; Connections gain a workspace tag.</li>
+      </ul>
+    </div>
+    <div class="card"><h3>4 · Automations / events <span class="lvl l-md"><i></i></span></h3>
+      <p>The EventBus is a real pub/sub; the gap is that domain events aren't on it.</p>
+      <ul class="clean">
+        <li>Emit latent transitions onto the bus (start: <span class="mono">task_status_changed</span> — contract slot exists, no producer).</li>
+        <li>A rule-matcher subscriber (Trigger→Action).</li>
+        <li>Generalize cron action (prompt → also run-task / send-to-connection / webhook-out).</li>
+        <li>Outbound webhooks = a bus subscriber → signed POST + retry/log.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card"><h3>5 · Email &amp; Calendar <span class="lvl l-md"><i></i></span>→<span class="lvl l-hi"><i></i></span></h3>
+      <p>Both greenfield but pure-Go &amp; well-trodden.</p>
+      <ul class="clean">
+        <li><b>Email Tier-1</b>: IMAP poll + SMTP (no CGo), one mailbox (your address + app-password). Thread = session. <b>Ships v0.1.0.</b> <span class="lvl l-md"><i></i></span></li>
+        <li><b>Calendar import</b>: <span class="mono">golang-ical</span> + <span class="mono">rrule-go</span>, ICS read-only. <span class="lvl l-md"><i></i></span></li>
+        <li><b>Provider OAuth</b> (Gmail/Google Cal, MS Graph): token refresh, <span class="mono">watch</span> renewals (7-day), <span class="mono">410</span> resync — the heavy lifecycle. <span class="lvl l-hi"><i></i></span></li>
+      </ul>
+    </div>
+    <div class="card"><h3>6 · Security — single-user, password-gated <span class="lvl l-md"><i></i></span> <span class="tag t-have">spine exists</span></h3>
+      <ul class="clean">
+        <li><b>No tenancy.</b> One user, one password — no RBAC, per-user isolation, or owner-spine ACL to build; <span class="mono">owner</span> stays attribution.</li>
+        <li><b>v0.1.0 work = a password re-type gate</b> for sensitive settings (sudo-style), mapping straight onto the existing <span class="mono">RequireNotBypass</span> guard + auth tree — small, contained.</li>
+        <li><b>Delegated OAuth</b> (later) = high blast-radius (agent acts with your Google): scopes, consent, vault, allow/ask/deny on writes, audit.</li>
+        <li>Inbound webhook + email = untrusted command surface (HMAC #162, sender allowlist, DMARC/SPF).</li>
+        <li><b>Scoped API keys</b> (later) = least-privilege vs today's full tokens.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card"><h3>7 · UI / Information architecture <span class="lvl l-md"><i></i></span> <span class="tag t-info">ship the shell early</span></h3>
+    <p>The IA changes are the cheapest part and the highest-leverage to do <b>first</b> (so nothing moves later):</p>
+    <div class="grid g3" style="margin-top:6px">
+      <ul class="clean"><li>Rename <b>Channels → Connectors</b>; show instances + identity</li><li>New <b>Calendar</b> surface (per-workspace · All + 4 filters)</li></ul>
+      <ul class="clean"><li>New <b>Automations</b> surface (Schedules reframed)</li><li>Context via the <b>existing sidebar workspace switcher</b>; pre-seed My Workspace</li></ul>
+      <ul class="clean"><li>Tasks gain visible <b>date / repeat</b> fields</li><li>Settings: connected accounts · API keys · integrations</li></ul>
+    </div>
+    <p class="note" style="margin-top:10px">Plus three small v0.1.0 adds: <b>single-user onboarding</b> (name + one password + a model key); a <b>password re-type</b> on sensitive settings (reuses <span class="mono">RequireNotBypass</span>); the <b>4 base agents</b> (Mia · Assistant ⭐ · Jim · Orchestrator · Ray · Scout · Ava · Builder) over a <b>sub-agent/executor tier</b> (additive agent <span class="mono">kind</span>, Assistant auto-provisioned; specialists as packs); and a <b>"Max parallel agents"</b> control in Settings → Performance (CPU/RAM recommendation + over-limit warning) — low effort, and a stabilization win on fan-out.</p>
+  </div>
+
+  <div class="card"><h3>8 · Memory — rooms + self-improvement <span class="lvl l-hi"><i></i></span> <span class="tag t-part">upgrade today's store</span></h3>
+    <p><b>Upgrade</b> today's multi-artifact store (<span class="mono">MEMORY.md</span> + daily notes + last-session + retros + idle-time recap; <span class="mono">pkg/agent/memory.go</span> · <span class="mono">session_end.go</span>) to <b>two rooms</b> — a <b>private</b> room per agent (agent-global) + a <b>workspace</b> room shared across a workspace — plus <b>bleve</b> ranking, the graph/MOCs, cross-session distillation, and workspace sharing (the self-improving <a href="learning.html">Learning</a> engine). <span class="mono">recall</span> composes private + current workspace.</p>
+    <ul class="clean">
+      <li><b>5 self-improvement loops</b>: refinement / supersede · access counters · confidence drift · MinHash conflict · the <b>Dreamcatcher</b> nightly distillation.</li>
+      <li><b>Graph</b>: 6 edge types + 6 seeded MOCs; query-rephrase + graph + MOCs do retrieval — <b>no embeddings</b>.</li>
+      <li><b>Pure-Go, no SQLite</b> (Constraints #1–2): bleve BM25 + MinHash; <span class="mono">bleve</span> is a new dep (not in <span class="mono">go.mod</span> today).</li>
+      <li><b>Wire / contract</b>: new memory file format + 3 tools; the bleve index is a new dependency.</li>
+    </ul>
+  </div>
+
+  <div class="card"><h3>9 · Tools &amp; multimodal <span class="lvl l-md"><i></i></span> <span class="tag t-part">providers exist · TTS/image new</span></h3>
+    <p>Tools are <b>per-tool pluggable providers</b> — and the pattern is already proven: the <span class="mono">SearchProvider</span> interface (Brave/Tavily/Perplexity/SearXNG/GLM/Baidu) and the voice-in <span class="mono">Transcriber</span> interface (Groq/ElevenLabs/audio-model) plus vision (image-in) all ship today. The new work is to extend the same shape and surface it.</p>
+    <ul class="clean">
+      <li><b>Cheap (surface what exists)</b>: the <b>Integrations</b> provider-picker UI over the existing search + voice-in backend + a <b>mic</b> in chat — <span class="rel r1">v0.1.0</span>. <span class="lvl l-lo"><i></i></span></li>
+      <li><b>New interfaces</b>: <span class="mono">Synthesizer</span> (TTS — per-agent voices) + voice playback + <span class="mono">ImageProvider</span> (image-gen) — <span class="rel r2">v0.2.0</span>. <span class="lvl l-md"><i></i></span></li>
+      <li><b>Sovereignty</b>: API default + optional <b>local sidecar</b> (Piper / whisper / SD / SearXNG); per-agent provider overrides + image edits/variations + <b>realtime voice</b> — <span class="rel r5">v1.0.0</span>.</li>
+      <li><b>Wire / contract</b>: two new provider interfaces + the Integrations UI; the existing providers are already multi-backend. See <a href="tools.html">Tools</a><a href="plugins.html">Plugins</a>.</li>
+    </ul>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Sequencing</div>
+  <h2>Critical path &amp; the one big rock</h2>
+  <div class="callout r">The single high-risk, high-blast-radius item is <b style="color:var(--red)">multi-instance connections</b>. The wire-format change is in <b>OpenAPI</b> — the channel schemas (<span class="mono">ChannelEntry</span> / <span class="mono">ChannelConfigureRequest</span>) — plus the breaking <span class="mono">config.go:774</span> shape migration and per-instance credential keys; the bus <span class="mono">instance_id</span> is an internal Go-struct field, not an asyncapi change. Per-agent bots, the Email channel, and the Personal Assistant <i>all</i> depend on it. Everything else (calendar, task dates, automations spine, iCal import, the whole IA shell) is independent and lower-risk — so it ships first while the instance-id work is designed carefully.</div>
+  <div class="grid g2">
+    <div class="card"><h3>Independent &amp; low-risk (do now)</h3><ul class="clean"><li>Single-user onboarding + password re-type gate</li><li>4 base agents (Mia·Assistant⭐ · Jim·Orchestrator · Ray·Scout · Ava·Builder) + sub-agent/executor tier + auto-provisioned Assistant; specialists as packs</li><li>"Max parallel agents" setting (stabilization)</li><li>Basic IMAP/SMTP email (one mailbox)</li><li>Task dates + recurrence</li><li>Calendar + iCal import</li><li>Automations spine (events + rules)</li><li>The full IA shell (workspace switcher, Calendar/Automations/Connectors surfaces)</li></ul></div>
+    <div class="card"><h3>Gated on the instance-id rock</h3><ul class="clean"><li>Per-agent chat bots</li><li>Multi-mailbox email (per-agent identity) — basic one-mailbox email is independent, ships v0.1.0</li><li>Personal Assistant capabilities (user-identity connections)</li><li>Generic webhook channel</li></ul></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap"><p><a href="time.html" style="color:var(--muted)">← Calendar &amp; Automations</a> &nbsp;·&nbsp; Next: <a href="roadmap.html">Roadmap →</a></p></div></footer>
+</body></html>

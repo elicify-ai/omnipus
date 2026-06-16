@@ -114,15 +114,18 @@ func saveWeixinConfig(token, baseURL, proxy string) error {
 		return fmt.Errorf("failed to unlock credential store: %w", err)
 	}
 
-	cfg.Channels.Weixin.Enabled = true
-	cfg.Channels.Weixin.TokenRef = weixinTokenCredRef
+	inst := cfg.Channels["weixin"]
+	inst.Type = "weixin"
+	inst.Enabled = true
+	inst.TokenRef = weixinTokenCredRef
 	const defaultBase = "https://ilinkai.weixin.qq.com/"
 	if baseURL != "" && baseURL != defaultBase {
-		cfg.Channels.Weixin.BaseURL = baseURL
+		inst.BaseURL = baseURL
 	}
 	if proxy != "" {
-		cfg.Channels.Weixin.Proxy = proxy
+		inst.Proxy = proxy
 	}
+	cfg.Channels["weixin"] = inst
 
 	// Serialize concurrent auth runs via an advisory flock on the credentials
 	// file so that two simultaneous "omnipus auth weixin" processes cannot race

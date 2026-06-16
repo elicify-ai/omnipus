@@ -11,6 +11,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSandboxStatus: vi.fn(),
     fetchSandboxConfig: vi.fn(),
     updateSandboxConfig: vi.fn(),
+    reAuth: vi.fn(),
   }
 })
 
@@ -31,10 +32,20 @@ vi.mock('@/store/ui', () => ({
   useUiStore: vi.fn(() => ({ addToast: mockAddToast })),
 }))
 
-import { fetchSandboxStatus, fetchSandboxConfig, updateSandboxConfig } from '@/lib/api'
+import { fetchSandboxStatus, fetchSandboxConfig, updateSandboxConfig, reAuth, ApiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 import { SandboxSection } from './SandboxSection'
 import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
+
+// reAuth403 is the exact 403 the backend's requireReAuth gate returns. The
+// useReAuthGate hook detects it by body match and opens the consent dialog.
+function reAuth403() {
+  return new ApiError(
+    403,
+    "You don't have permission to perform this action.",
+    { body: '{"error":"this change requires re-typing your password — call POST /api/v1/auth/reauth first"}' },
+  )
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -233,8 +244,10 @@ describe('allowed_paths editor', () => {
     })
 
     await waitFor(() => {
+      // The re-auth gate's optimistic first attempt passes token '' as the 2nd arg.
       expect(updateSandboxConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ allowed_paths: ['/b'] })
+        expect.objectContaining({ allowed_paths: ['/b'] }),
+        '',
       )
     })
   })
@@ -703,6 +716,48 @@ describe('mode radio', () => {
     // Permissive should still be checked
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: /sandbox mode: permissive/i })).toBeChecked()
+    })
+  })
+})
+
+// ── describe: re-auth gate (Spec-6 FR-12.2) ─────────────────────────────────────
+
+describe('sandbox-config re-auth gate', () => {
+  it('opens the re-auth dialog when the gated PUT returns 403, then replays the token', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({
+      ...baseConfig,
+      allowed_paths: ['/a'],
+    })
+    // First attempt (no consent token) is rejected by the re-auth gate; the
+    // second attempt (with the minted token) succeeds.
+    vi.mocked(updateSandboxConfig)
+      .mockRejectedValueOnce(reAuth403())
+      .mockResolvedValueOnce({ ...baseConfig, allowed_paths: ['/a', '/valid'], requires_restart: true })
+    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /new allowed path/i })).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/valid' } })
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+
+    // The first PUT (token '') fired and 403'd → consent dialog appears.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0][1]).toBe('')
+
+    // Re-authenticate; the PUT is replayed with the consent token.
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(reAuth).toHaveBeenCalledWith('mypassword')
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(updateSandboxConfig).mock.calls[1][1]).toBe('reauth_tok')
     })
   })
 })

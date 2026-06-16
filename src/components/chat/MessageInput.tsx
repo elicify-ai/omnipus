@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { PaperPlaneRight, Stop, SpinnerGap } from '@phosphor-icons/react'
+import { PaperPlaneRight, Stop, SpinnerGap, Microphone, CircleNotch } from '@phosphor-icons/react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
+import { useUiStore } from '@/store/ui'
+import { transcribeAudio, isApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 // B3: label union for the stop button state machine.
@@ -11,11 +13,120 @@ import { cn } from '@/lib/utils'
 // 'cancelled'      — detached stage received; shown briefly before revert.
 type StopLabel = 'stop' | 'stopping' | 'force-stopping' | 'cancelled'
 
+// MicState drives the composer mic button (Spec-6 FR-12.1):
+// 'idle'        — not recording; click to start.
+// 'recording'   — capturing audio; click to stop & transcribe.
+// 'transcribing'— audio sent to the transcriber, awaiting text.
+type MicState = 'idle' | 'recording' | 'transcribing'
+
 export function MessageInput() {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { sendMessage, cancelStream, isStreaming, cancelStage } = useChatStore()
   const { isConnected } = useConnectionStore()
+  const { addToast } = useUiStore()
+
+  // Composer mic state + MediaRecorder plumbing.
+  const [micState, setMicState] = useState<MicState>('idle')
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+
+  // Append transcribed text to the current input, inserting a space when needed.
+  const appendTranscript = useCallback((text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setValue((prev) => (prev.trim() ? `${prev.trimEnd()} ${trimmed}` : trimmed))
+    textareaRef.current?.focus()
+  }, [])
+
+  // Stop the mic stream tracks (releases the OS mic indicator).
+  const releaseStream = useCallback(() => {
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop())
+    mediaStreamRef.current = null
+  }, [])
+
+  const startRecording = useCallback(async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      addToast({ message: 'Voice input is not supported in this browser.', variant: 'error' })
+      return
+    }
+    if (typeof MediaRecorder === 'undefined') {
+      addToast({ message: 'Voice input is not supported in this browser.', variant: 'error' })
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaStreamRef.current = stream
+      audioChunksRef.current = []
+      const recorder = new MediaRecorder(stream)
+      mediaRecorderRef.current = recorder
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+      recorder.onstop = async () => {
+        releaseStream()
+        const chunks = audioChunksRef.current
+        audioChunksRef.current = []
+        if (chunks.length === 0) {
+          setMicState('idle')
+          return
+        }
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })
+        setMicState('transcribing')
+        try {
+          const result = await transcribeAudio(blob)
+          appendTranscript(result.text)
+        } catch (err) {
+          const message = isApiError(err)
+            ? err.status === 503
+              ? 'No voice transcriber configured. Add one in Settings → Integrations.'
+              : err.userMessage
+            : err instanceof Error
+              ? err.message
+              : 'Transcription failed'
+          addToast({ message, variant: 'error' })
+        } finally {
+          setMicState('idle')
+        }
+      }
+      recorder.start()
+      setMicState('recording')
+    } catch (err) {
+      releaseStream()
+      setMicState('idle')
+      // getUserMedia rejects with NotAllowedError when the user denies permission.
+      const denied = err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'SecurityError')
+      addToast({
+        message: denied
+          ? 'Microphone access was denied. Enable it in your browser to use voice input.'
+          : 'Could not start recording.',
+        variant: 'error',
+      })
+    }
+  }, [addToast, appendTranscript, releaseStream])
+
+  const stopRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop() // triggers onstop → transcription
+    } else {
+      releaseStream()
+      setMicState('idle')
+    }
+  }, [releaseStream])
+
+  const handleMicClick = useCallback(() => {
+    if (micState === 'recording') {
+      stopRecording()
+    } else if (micState === 'idle') {
+      void startRecording()
+    }
+    // 'transcribing' → button disabled, no-op.
+  }, [micState, startRecording, stopRecording])
+
+  // Release the mic stream on unmount so the OS indicator clears.
+  useEffect(() => releaseStream, [releaseStream])
 
   // B3: stop-button label state machine.
   // Optimistic: clicking Stop immediately shows 'stopping'.
@@ -126,6 +237,40 @@ export function MessageInput() {
           style={{ overflow: 'hidden' }}
           aria-label="Message input"
         />
+
+        {/* Composer mic — voice input via the active transcriber (Spec-6 FR-12.1).
+            Hidden while streaming (the Stop button takes the slot). */}
+        {!isStreaming && (
+          <button
+            type="button"
+            onClick={handleMicClick}
+            disabled={disconnected || micState === 'transcribing'}
+            aria-label={
+              micState === 'recording'
+                ? 'Stop recording and transcribe'
+                : micState === 'transcribing'
+                ? 'Transcribing…'
+                : 'Start voice input'
+            }
+            aria-pressed={micState === 'recording'}
+            title={micState === 'recording' ? 'Stop recording' : 'Voice input'}
+            data-testid="mic-btn"
+            className={cn(
+              'shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors',
+              micState === 'recording'
+                ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 animate-pulse'
+                : micState === 'transcribing'
+                ? 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait'
+                : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] disabled:opacity-50 disabled:cursor-not-allowed'
+            )}
+          >
+            {micState === 'transcribing' ? (
+              <CircleNotch size={15} className="animate-spin" />
+            ) : (
+              <Microphone size={15} weight={micState === 'recording' ? 'fill' : 'regular'} />
+            )}
+          </button>
+        )}
 
         {/* Send / Stop button */}
         {isStreaming ? (

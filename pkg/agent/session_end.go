@@ -565,12 +565,13 @@ func (al *AgentLoop) agentSessionHasRetro(agentInst *AgentInstance, sessionID st
 	if agentInst == nil {
 		return false
 	}
-	sessionsDir := filepath.Join(agentInst.Workspace, "memory", "sessions")
-	dateDirs, err := os.ReadDir(sessionsDir)
+	// Spec-5: retros now live in <workspace>/.omnipus/retros/<date>/<sessionID>_retro.md
+	retrosDir := filepath.Join(agentInst.Workspace, ".omnipus", "retros")
+	dateDirs, err := os.ReadDir(retrosDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			slog.Warn("session_end: read retro dir failed",
-				"dir", sessionsDir,
+				"dir", retrosDir,
 				"agent_id", agentInst.ID,
 				"error", err,
 			)
@@ -581,7 +582,7 @@ func (al *AgentLoop) agentSessionHasRetro(agentInst *AgentInstance, sessionID st
 		if !dateDir.IsDir() {
 			continue
 		}
-		retroPath := filepath.Join(sessionsDir, dateDir.Name(), sessionID+"_retro.md")
+		retroPath := filepath.Join(retrosDir, dateDir.Name(), sessionID+"_retro.md")
 		if _, statErr := os.Stat(retroPath); statErr == nil {
 			return true
 		}

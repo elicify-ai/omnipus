@@ -1,15 +1,19 @@
 import { type APIRequestContext, request } from '@playwright/test';
 
 const DEFAULT_PROVIDER_ID = 'openrouter';
-// z-ai/glm-5v-turbo — operator-locked model for all e2e tests (user request,
-// 2026-05-09). Tool-capable on OpenRouter (verified via direct chat-completion
-// probe with a tool definition, returned tool_calls finish_reason). Selected
-// for fast TTFT and low contention compared to Anthropic Opus, which was
-// returning frequent empty_response retries under suite load. Determinism
-// for "exactly N tool calls" subagent assertions (the original reason Opus
-// was chosen) is enforced via the temperature=0 + seed=42 plumbing the
-// suite already passes through to OpenRouter, not by the model alone.
-const DEFAULT_MODEL = 'z-ai/glm-5v-turbo';
+// google/gemini-2.5-flash — model for all e2e tests, matching the E2E CI model
+// in .github/workflows/pr.yml. (The previous z-ai/glm-5v-turbo was removed from
+// OpenRouter and is now a dead model — that is why CI failed.) Tool-capable on
+// OpenRouter and generally faster than the prior pick, so existing generous
+// timeouts remain safe. Determinism for "exactly N tool calls" subagent
+// assertions is enforced via the temperature=0 + seed=42 plumbing the suite
+// already passes through to OpenRouter, not by the model alone.
+//
+// NOTE: CI uses pr.yml's model (this one). The nightly evals
+// (.github/workflows/evals-nightly.yml + evals/cmd/eval-runner/main.go)
+// intentionally stay on z-ai/glm-5-turbo (a LIVE model whose eval baselines
+// depend on it) — the E2E-vs-evals model difference is deliberate.
+const DEFAULT_MODEL = 'google/gemini-2.5-flash';
 const DEFAULT_USERNAME = 'admin';
 const DEFAULT_PASSWORD = 'admin123';
 

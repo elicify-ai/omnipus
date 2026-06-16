@@ -278,6 +278,12 @@ type processOptions struct {
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
 	TranscriptStore         *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
 
+	// WorkspaceID is the Spec-1 Workspace identifier for this turn.
+	// When set, the memory store uses the shared workspace room
+	// ($OMNIPUS_HOME/workspaces/<id>/.omnipus/) for memories scoped to "shared".
+	// Empty means no workspace is associated (private room only).
+	WorkspaceID string
+
 	// AutoDenyAsk, when true, makes every `ask`-policy tool call auto-DENIED
 	// without ever requesting human approval (issue #264, FR-009). Scheduled
 	// runs are headless — there is no operator to approve, so blocking on an
@@ -330,6 +336,7 @@ const (
 	metadataKeyAccountID      = "account_id"
 	metadataKeyGuildID        = "guild_id"
 	metadataKeyTeamID         = "team_id"
+	metadataKeyInstanceID     = "instance_id"
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
 )
@@ -426,10 +433,19 @@ func NewAgentLoop(
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
 
-	// Initialize task store (sibling of workspace: ~/.omnipus/tasks).
+	// Initialize task store at ~/.omnipus/workflow-tasks/ (separate from GTD tasks/).
 	homePath := filepath.Dir(cfg.WorkspacePath())
-	al.taskStore = taskstore.New(filepath.Join(homePath, "tasks"))
+	al.taskStore = taskstore.New(filepath.Join(homePath, "workflow-tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
+
+	// Register workspace session linker: auto-links sessions to workspaces on task create/update.
+	if err := al.hooks.Mount(NamedHook("workspace-session-linker", &workspaceLinkerAdapter{
+		linker: systools.NewProjectSessionLinker(homePath),
+	})); err != nil {
+		logger.WarnCF("agent", "Failed to mount workspace-session-linker hook", map[string]any{
+			"error": err.Error(),
+		})
+	}
 
 	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
 	// All new chat sessions are created here (joined session model).
@@ -1366,11 +1382,43 @@ func registerSharedTools(
 		// time with clear errors.
 		{
 			clawHubConfig := cfg.Tools.Skills.Registries.ClawHub
+			githubConfig := cfg.Tools.Skills.Github
+
+			// GitHub registry: enabled when a token ref is configured.
+			// The token is resolved via the credential store (SEC-23): credentials.InjectFromConfig
+			// writes the secret into the env-var named by TokenRef before this point.
+			var githubRegistries []skills.GitHubRegistryConfig
+			if githubConfig.TokenRef != "" {
+				githubRegistries = []skills.GitHubRegistryConfig{
+					{
+						Enabled:   true,
+						Name:      "github",
+						Token:     os.Getenv(githubConfig.TokenRef),
+						Proxy:     githubConfig.Proxy,
+						Workspace: agent.Workspace,
+					},
+				}
+			}
+
+			// Agent↔UI parity: the UI builds its ClawHub client directly via
+			// skills.NewClawHubRegistry, which defaults BaseURL to
+			// https://clawhub.ai when empty. Mirror that here so the agent's
+			// find_skills/install_skill reach the SAME ClawHub the UI does.
+			// (config.restoreSkillDiscoveryDefaults already heals Enabled/BaseURL
+			// for configs that never explicitly disabled ClawHub; this is a
+			// belt-and-suspenders default so an empty URL never yields a broken
+			// registry.) An operator who explicitly disabled ClawHub keeps
+			// Enabled=false and ClawHub is skipped downstream.
+			clawHubBaseURL := clawHubConfig.BaseURL
+			if clawHubBaseURL == "" {
+				clawHubBaseURL = "https://clawhub.ai"
+			}
+
 			registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
 				MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
 				ClawHub: skills.ClawHubConfig{
 					Enabled:         clawHubConfig.Enabled,
-					BaseURL:         clawHubConfig.BaseURL,
+					BaseURL:         clawHubBaseURL,
 					AuthToken:       os.Getenv(clawHubConfig.AuthTokenRef),
 					SearchPath:      clawHubConfig.SearchPath,
 					SkillsPath:      clawHubConfig.SkillsPath,
@@ -1379,6 +1427,7 @@ func registerSharedTools(
 					MaxZipSize:      clawHubConfig.MaxZipSize,
 					MaxResponseSize: clawHubConfig.MaxResponseSize,
 				},
+				GitHubRegistries: githubRegistries,
 			})
 
 			searchCache := skills.NewSearchCache(
@@ -1414,13 +1463,17 @@ func registerSharedTools(
 					// means spawn was called outside of an agent loop (e.g. tests or raw
 					// invocations). The ad-hoc state is functional but has no session.
 					logger.WarnCF("agent", "Spawn callback using ad-hoc turnState: no parent turnState in context", nil)
+					// Drive the ad-hoc semaphore capacity from the resolved MaxParallelAgents
+					// value (FR-6.6) so that even out-of-loop spawn calls respect the
+					// configured fan-out ceiling instead of the former hardcoded 5.
+					adHocSemCap := al.getSubTurnConfig().maxConcurrent
 					parentTS = &turnState{
 						ctx:            ctx,
 						turnID:         "adhoc-root",
 						depth:          0,
 						session:        nil, // Ephemeral session not needed for adhoc spawn
 						pendingResults: make(chan *tools.ToolResult, 16),
-						concurrencySem: make(chan struct{}, 5),
+						concurrencySem: make(chan struct{}, adHocSemCap),
 					}
 				}
 
@@ -1432,13 +1485,7 @@ func registerSharedTools(
 					}
 				}
 
-				// 3. System Prompt
-				systemPrompt := "You are a subagent. Complete the given task independently and report the result.\n" +
-					"You have access to tools - use them as needed to complete your task.\n" +
-					"After completing the task, provide a clear summary of what was done.\n\n" +
-					"Task: " + task
-
-				// 4. Resolve Model
+				// 3. Resolve Model
 				modelToUse := agent.Model
 				if targetAgentID != "" {
 					if targetAgent, ok := al.GetRegistry().GetAgent(targetAgentID); ok {
@@ -1446,17 +1493,26 @@ func registerSharedTools(
 					}
 				}
 
-				// 5. Build SubTurnConfig
+				// 4. Build SubTurnConfig. The task is the first USER message; the
+				//    delegate's soul (worker / configured agent) is resolved inside
+				//    spawnSubTurn and used as the system role. The legacy
+				//    "You are a subagent" wrapper is REMOVED — workers and
+				//    configured agents now expose their own persona, and a worker
+				//    with an empty soul runs with an empty system role (soul is
+				//    OPTIONAL). The label, when set, is preserved as the task label
+				//    for the WS subTurn_start frame.
 				cfg := SubTurnConfig{
-					Model:        modelToUse,
-					Tools:        tlSlice,
-					SystemPrompt: systemPrompt,
+					Model:         modelToUse,
+					Tools:         tlSlice,
+					SystemPrompt:  task,
+					TargetAgentID: targetAgentID,
+					TaskLabel:     label,
 				}
 				if hasMaxTokens {
 					cfg.MaxTokens = maxTokens
 				}
 
-				// 6. Spawn SubTurn
+				// 5. Spawn SubTurn
 				return spawnSubTurn(ctx, al, parentTS, cfg)
 			})
 
@@ -1468,15 +1524,56 @@ func registerSharedTools(
 			spawnTool := tools.NewSpawnTool(subagentManager)
 			spawnTool.SetSpawner(NewSubTurnSpawner(al))
 			currentAgentID := agentID
+			// spawnTool: repointed to unified DelegationPolicy.To (FR-6.3).
+			// Falls back to SubagentsConfig.AllowAgents via CanSpawnSubagent
+			// when DelegationPolicy is nil (backward compat, no silent widening).
+			spawnAgentCfg := findAgentConfig(cfg, currentAgentID)
 			spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
+				toList := config.ResolveDelegationTo(spawnAgentCfg, cfg.Agents.Defaults)
+				if toList != nil {
+					// Canonical unified policy is set — use it.
+					return config.IsDelegationAllowed(toList, targetAgentID)
+				}
+				// Unified policy not set for this agent — fall back to
+				// SubagentsConfig.AllowAgents (legacy path, deny-by-default preserved).
 				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 			})
+			// FR-6.2: full-policy gate — trust set + mode("background") + depth.
+			// Takes precedence over the allowlist checker and surfaces a reason.
+			spawnTool.SetDelegationDenyChecker(buildDelegationDenyChecker(
+				currentAgentID, spawnAgentCfg, cfg.Agents.Defaults,
+				config.DelegationModeBackground, registry,
+			))
 
 			agent.Tools.Register(spawnTool)
 
-			// Also register the synchronous subagent tool
+			// Also register the synchronous subagent tool.
+			// Gate: uses the unified DelegationPolicy.To via IsDelegationAllowedAny
+			// (sync subagent has no explicit target; the check is "can delegate at all").
 			subagentTool := tools.NewSubagentTool(subagentManager)
 			subagentTool.SetSpawner(NewSubTurnSpawner(al))
+			// FR-6.3: gate the previously-ungated sync subagent tool.
+			subagentAgentCfg := spawnAgentCfg // same agent, captured once
+			subagentTool.SetDelegateChecker(func() bool {
+				toList := config.ResolveDelegationTo(subagentAgentCfg, cfg.Agents.Defaults)
+				if toList != nil {
+					// Canonical policy present — allowed only if at least one target is permitted.
+					return config.IsDelegationAllowedAny(toList)
+				}
+				// No canonical policy — fall back to SubagentsConfig.AllowAgents existence.
+				// If AllowAgents is non-nil (even empty), the operator set a spawn policy;
+				// treat non-nil as opt-in allowed (AllowAgents nil → deny, per legacy semantics).
+				if subagentAgentCfg != nil && subagentAgentCfg.Subagents != nil {
+					return subagentAgentCfg.Subagents.AllowAgents != nil
+				}
+				return false
+			})
+			// FR-6.2: full-policy gate for the synchronous "await" mode. The sync
+			// subagent tool has no explicit target, so the trust check is "can
+			// delegate at all"; mode + depth still apply.
+			subagentTool.SetDelegationDenyChecker(buildSubagentDelegationDenyChecker(
+				subagentAgentCfg, cfg.Agents.Defaults,
+			))
 			agent.Tools.Register(subagentTool)
 
 			agent.Tools.Register(tools.NewSpawnStatusTool(subagentManager))
@@ -1491,6 +1588,12 @@ func registerSharedTools(
 
 			taskCreate := tools.NewTaskCreateTool(al.taskStore)
 			taskCreate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
+			// FR-6.2: full-policy gate — trust set + mode("task") + depth.
+			// Takes precedence over the boolean delegate checker.
+			taskCreate.SetDelegationDenyChecker(buildDelegationDenyChecker(
+				currentAgentID, agentCfg, cfg.Agents.Defaults,
+				config.DelegationModeTask, registry,
+			))
 			agent.Tools.Register(taskCreate)
 
 			taskUpdate := tools.NewTaskUpdateTool(al.taskStore)
@@ -1581,22 +1684,148 @@ func findAgentConfig(cfg *config.Config, agentID string) *config.AgentConfig {
 }
 
 // buildDelegateChecker returns a function that checks whether delegation from agentCfg
-// to a target agent is allowed.  Supports the "*" wildcard.
+// to a target agent is allowed.
+//
+// FR-6.3 (Spec-3 keystone): repointed to the unified DelegationPolicy.To via
+// config.ResolveDelegationTo + config.IsDelegationAllowed. The legacy
+// CanDelegateTo fields remain as a backward-compat fallback when
+// DelegationPolicy is nil (handled inside ResolveDelegationTo).
+// No silent authz widening: deny-by-default is preserved when toList is nil.
 func buildDelegateChecker(agentCfg *config.AgentConfig, defaults config.AgentDefaults) func(string) bool {
-	var allowList []string
-	if agentCfg != nil && len(agentCfg.CanDelegateTo) > 0 {
-		allowList = agentCfg.CanDelegateTo
-	} else {
-		allowList = defaults.CanDelegateTo
-	}
-
+	toList := config.ResolveDelegationTo(agentCfg, defaults)
 	return func(targetAgentID string) bool {
-		for _, allowed := range allowList {
-			if allowed == "*" || allowed == targetAgentID {
-				return true
+		return config.IsDelegationAllowed(toList, targetAgentID)
+	}
+}
+
+// currentDelegationDepth reports the delegation-chain depth of the turn that is
+// about to delegate, read from the turnState carried on ctx. The root user turn
+// has depth 0; each nested sub-turn increments it. Returns 0 when no turnState is
+// present (e.g. ad-hoc/raw invocations or tests) — a conservative default that
+// never spuriously trips the depth cap.
+func currentDelegationDepth(ctx context.Context) int {
+	if ts := turnStateFromContext(ctx); ts != nil {
+		return ts.depth
+	}
+	return 0
+}
+
+// buildDelegationDenyChecker returns the full FR-6.2 delegation gate for a
+// targeted delegation tool (spawn = "background", task_create = "task"). It
+// enforces, in order, and returns the first violation as a human-readable reason
+// (empty string = allowed):
+//
+//  1. trust set — the target must be permitted by the unified DelegationPolicy.To
+//     (with the legacy CanDelegateTo / SubagentsConfig.AllowAgents fallbacks).
+//  2. mode      — the tool's delegation mode must be permitted by the policy's
+//     Modes list (empty Modes = all allowed; nil policy = unconstrained).
+//  3. depth     — the current delegation-chain depth must be below the policy's
+//     per-agent Depth cap (0 = uncapped; the global SubTurn.MaxDepth ceiling
+//     still applies independently at sub-turn dispatch).
+//
+// An empty targetAgentID means "no explicit target" (the LLM omitted agent_id);
+// the trust check is then skipped here — untargeted spawns resolve to the default
+// agent and are gated by the existing allowlist semantics — while mode and depth
+// still apply.
+func buildDelegationDenyChecker(
+	currentAgentID string,
+	agentCfg *config.AgentConfig,
+	defaults config.AgentDefaults,
+	mode config.DelegationMode,
+	registry *AgentRegistry,
+) func(ctx context.Context, targetAgentID string) string {
+	policy := config.ResolveDelegationPolicy(agentCfg, defaults)
+	toList := config.ResolveDelegationTo(agentCfg, defaults)
+	policyDepth := config.ResolveDelegationDepth(policy)
+
+	return func(ctx context.Context, targetAgentID string) string {
+		// 1. Trust set (only when an explicit target is named).
+		if targetAgentID != "" {
+			allowed := false
+			if toList != nil {
+				allowed = config.IsDelegationAllowed(toList, targetAgentID)
+			} else {
+				// No canonical/legacy To — fall back to the registry allowlist.
+				allowed = registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+			}
+			if !allowed {
+				logger.WarnCF("agent", "delegation denied: target not in trust set", map[string]any{
+					"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+				})
+				return fmt.Sprintf("agent %q is not in this agent's delegation trust set ('to' allowlist)", targetAgentID)
 			}
 		}
-		return false
+
+		// 2. Mode.
+		if !config.IsDelegationModeAllowed(policy, mode) {
+			logger.WarnCF("agent", "delegation denied: mode not permitted", map[string]any{
+				"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+			})
+			return fmt.Sprintf("delegation mode %q is not permitted by this agent's delegation policy", string(mode))
+		}
+
+		// 3. Depth.
+		if policyDepth > 0 {
+			if d := currentDelegationDepth(ctx); d >= policyDepth {
+				logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
+					"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+					"current_depth": d, "max_depth": policyDepth,
+				})
+				return fmt.Sprintf("maximum delegation depth (%d) reached — cannot delegate further", policyDepth)
+			}
+		}
+
+		return ""
+	}
+}
+
+// buildSubagentDelegationDenyChecker returns the FR-6.2 gate for the synchronous
+// subagent tool (mode = "await"). The sync subagent tool has no explicit target,
+// so the trust check is "can this agent delegate at all" (at least one permitted
+// target), then mode and depth apply identically to the targeted path.
+func buildSubagentDelegationDenyChecker(
+	agentCfg *config.AgentConfig,
+	defaults config.AgentDefaults,
+) func(ctx context.Context) string {
+	policy := config.ResolveDelegationPolicy(agentCfg, defaults)
+	toList := config.ResolveDelegationTo(agentCfg, defaults)
+	policyDepth := config.ResolveDelegationDepth(policy)
+
+	return func(ctx context.Context) string {
+		// 1. Trust: must be able to delegate at all.
+		canDelegate := false
+		if toList != nil {
+			canDelegate = config.IsDelegationAllowedAny(toList)
+		} else if agentCfg != nil && agentCfg.Subagents != nil {
+			// Legacy: a non-nil AllowAgents means the operator opted in.
+			canDelegate = agentCfg.Subagents.AllowAgents != nil
+		}
+		if !canDelegate {
+			logger.WarnCF("agent", "delegation denied: no permitted targets", map[string]any{
+				"mode": string(config.DelegationModeAwait),
+			})
+			return "no target agent is permitted by this agent's delegation policy ('to' allowlist is empty)"
+		}
+
+		// 2. Mode.
+		if !config.IsDelegationModeAllowed(policy, config.DelegationModeAwait) {
+			logger.WarnCF("agent", "delegation denied: mode not permitted", map[string]any{
+				"mode": string(config.DelegationModeAwait),
+			})
+			return fmt.Sprintf("delegation mode %q is not permitted by this agent's delegation policy", string(config.DelegationModeAwait))
+		}
+
+		// 3. Depth.
+		if policyDepth > 0 {
+			if d := currentDelegationDepth(ctx); d >= policyDepth {
+				logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
+					"mode": string(config.DelegationModeAwait), "current_depth": d, "max_depth": policyDepth,
+				})
+				return fmt.Sprintf("maximum delegation depth (%d) reached — cannot delegate further", policyDepth)
+			}
+		}
+
+		return ""
 	}
 }
 
@@ -2753,6 +2982,67 @@ func (al *AgentLoop) processTaskDirect(
 	})
 }
 
+// ExecuteBoardTask dispatches a GTD board task to the agent loop in a background
+// goroutine. The session must already exist in the per-agent store (via GetAgentStore).
+// onComplete is called with the result string and execution error once the agent
+// finishes; the caller is responsible for persisting the terminal task status.
+//
+// Shutdown behavior:
+//   - Graceful shutdown (Stop + WaitForActiveRequests): the goroutine is tracked in
+//     activeRequests, so WaitForActiveRequests/Close drain it before the process exits
+//     and onComplete is called with the cancellation error, transitioning the task to
+//     "failed" normally.
+//   - Crash / SIGKILL / OOM: the goroutine is abandoned and onComplete never runs,
+//     leaving the task persisted with status "active". On next boot,
+//     gateway.reconcileStuckBoardTasks scans for any task with status=="active" and
+//     resets it to "failed" with a note that the gateway restarted while it was running.
+func (al *AgentLoop) ExecuteBoardTask(agentID, taskID, sessionID, prompt string, onComplete func(string, error)) {
+	// Board-task goroutines run on context.Background() — they are detached from the
+	// HTTP request lifecycle and outlive the Run loop.
+	taskCtx := context.Background()
+
+	al.activeRequests.Add(1)
+	go func() {
+		defer al.activeRequests.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				panicMsg := fmt.Sprintf("%v", r)
+				logger.ErrorCF("agent", "ExecuteBoardTask: panic recovered",
+					map[string]any{
+						"task_id":    taskID,
+						"agent_id":   agentID,
+						"session_id": sessionID,
+						"panic":      panicMsg,
+					})
+				if onComplete != nil {
+					onComplete("", fmt.Errorf("panic: %v", r))
+				}
+			}
+		}()
+		sessionKey := fmt.Sprintf("agent:%s:board:%s", agentID, taskID)
+		logger.InfoCF("agent", "ExecuteBoardTask: dispatching",
+			map[string]any{
+				"task_id":     taskID,
+				"agent_id":    agentID,
+				"session_id":  sessionID,
+				"session_key": sessionKey,
+			})
+		result, err := al.processTaskDirect(taskCtx, agentID, prompt, sessionKey, sessionID)
+		if err != nil {
+			logger.ErrorCF("agent", "ExecuteBoardTask: execution failed",
+				map[string]any{
+					"task_id":    taskID,
+					"agent_id":   agentID,
+					"session_id": sessionID,
+					"error":      err.Error(),
+				})
+		}
+		if onComplete != nil {
+			onComplete(result, err)
+		}
+	}()
+}
+
 // SetMediaStore injects a MediaStore for media lifecycle management.
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	al.mediaStoreMu.Lock()
@@ -2791,6 +3081,14 @@ func (al *AgentLoop) GetMediaRefsDropped() int64 {
 // SetTranscriber injects a voice transcriber for agent-level audio transcription.
 func (al *AgentLoop) SetTranscriber(t voice.Transcriber) {
 	al.transcriber = t
+}
+
+// GetTranscriber returns the currently configured voice transcriber, or nil
+// when none is configured. The gateway's POST /voice/transcribe handler uses
+// this to serve the composer-mic flow with the same transcriber the agent loop
+// uses for inbound audio messages (Spec-6 FR-12.1).
+func (al *AgentLoop) GetTranscriber() voice.Transcriber {
+	return al.transcriber
 }
 
 // SetReloadFunc sets the callback function for triggering config reload.
@@ -3167,11 +3465,30 @@ func (al *AgentLoop) ProcessScheduled(
 	// (which is what RequestCancel(CancelScope{SessionID}) matches against).
 	transcriptStore := al.ResolveSessionStore(sessionID)
 	if transcriptStore == nil {
-		logger.WarnCF(
-			"agent",
-			"scheduled run: session store not found for session id — tool calls will not be recorded",
-			map[string]any{"session_id": sessionID, "owner": ownerAgentID},
+		// Hard error: without a store the user message cannot be recorded, the
+		// assistant reply will be lost, and message_count stays at 0. Do not
+		// silently degrade — return now so the caller records an explicit failure.
+		return "", fmt.Errorf(
+			"scheduled run: session store not found for session %q (owner %s) — aborting to avoid unrecorded turn",
+			sessionID, ownerAgentID,
 		)
+	}
+
+	// Append the user message to the transcript before running the agent loop,
+	// mirroring the interactive websocket path (pkg/gateway/websocket.go ~l980).
+	// Without this, message_count stays at 0 and "Run now" always shows "error"
+	// because the agent loop's assistant reply has no paired user turn to count.
+	userEntry := session.TranscriptEntry{
+		ID:        fmt.Sprintf("scheduled-%s-%d", sessionID, time.Now().UnixNano()),
+		Role:      "user",
+		AgentID:   ownerAgentID,
+		Content:   content,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := transcriptStore.AppendTranscript(sessionID, userEntry); err != nil {
+		logger.ErrorCF("agent", "scheduled run: failed to record user message to transcript",
+			map[string]any{"session_id": sessionID, "owner": ownerAgentID, "error": err.Error()})
+		return "", fmt.Errorf("scheduled run: transcript write failed for session %q: %w", sessionID, err)
 	}
 
 	return al.runAgentLoop(ctx, agent, processOptions{
@@ -3398,25 +3715,42 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 	// explicit agent_id (e.g. channel inputs that don't track agent state).
 	if explicitID := inboundMetadata(msg, "agent_id"); explicitID != "" {
 		if agent, ok := registry.GetAgent(explicitID); ok {
-			// Clear stale handoff override only when the explicit target differs from
-			// the current override. If the user selects the same agent that the handoff
-			// already set, clearing the override would incorrectly reset routing state.
-			if cur, ok := al.sessionActiveAgent.Load(sessionScopeKey(msg)); !ok || cur.(string) != explicitID {
-				al.sessionActiveAgent.Delete(sessionScopeKey(msg))
+			// A worker is a delegation-only labour tier — never a chat target.
+			// An inbound message that explicitly addresses a worker (e.g. a stale
+			// SPA dropdown value or a crafted channel payload) must NOT let the
+			// worker answer as a live persona. Degrade to the normal routing
+			// cascade, which resolves a chat-target default. Do not delete any
+			// handoff pin here — falling through preserves an existing chat-target
+			// override if one is set.
+			if agent.IsWorker() {
+				logger.WarnCF("agent", "Explicit agent_id references a worker (not a chat target); ignoring and falling back to default route", map[string]any{
+					"agent_id":   explicitID,
+					"session_id": msg.SessionID,
+					"reason":     "worker is invoked via delegation, not as a chat target",
+				})
+				// Fall through to the handoff-override / ResolveRoute cascade below.
+			} else {
+				// Clear stale handoff override only when the explicit target differs from
+				// the current override. If the user selects the same agent that the handoff
+				// already set, clearing the override would incorrectly reset routing state.
+				if cur, ok := al.sessionActiveAgent.Load(sessionScopeKey(msg)); !ok || cur.(string) != explicitID {
+					al.sessionActiveAgent.Delete(sessionScopeKey(msg))
+				}
+				logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
+					"agent_id":   explicitID,
+					"session_id": msg.SessionID,
+					"workspace":  agent.Workspace,
+				})
+				sk := agentSessionKey(explicitID, msg)
+				return routing.ResolvedRoute{AgentID: explicitID, SessionKey: sk}, agent, nil
 			}
-			logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
-				"agent_id":   explicitID,
-				"session_id": msg.SessionID,
-				"workspace":  agent.Workspace,
+		} else {
+			logger.ErrorCF("agent", "explicit agent_id not found in registry", map[string]any{
+				"agent_id":       explicitID,
+				"registered_ids": registry.ListAgentIDs(),
 			})
-			sk := agentSessionKey(explicitID, msg)
-			return routing.ResolvedRoute{AgentID: explicitID, SessionKey: sk}, agent, nil
+			return routing.ResolvedRoute{}, nil, fmt.Errorf("the requested agent is not available")
 		}
-		logger.ErrorCF("agent", "explicit agent_id not found in registry", map[string]any{
-			"agent_id":       explicitID,
-			"registered_ids": registry.ListAgentIDs(),
-		})
-		return routing.ResolvedRoute{}, nil, fmt.Errorf("the requested agent is not available")
 	}
 
 	// Check session/chat-scope handoff override. Only reached when the message
@@ -3428,19 +3762,36 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 			agentID := activeAgent.(string)
 			if agentID != "" {
 				if agent, ok := registry.GetAgent(agentID); ok {
-					logger.InfoCF("agent", "Session handoff override active", map[string]any{
-						"session_id": msg.SessionID,
-						"agent_id":   agentID,
-					})
-					sk := agentSessionKey(agentID, msg)
-					return routing.ResolvedRoute{AgentID: agentID, SessionKey: sk}, agent, nil
+					// A worker must never be a live chat target. A pin that points at
+					// a worker is stale/illegitimate (handoff now rejects worker
+					// targets, but a pin created before this guard, or via another
+					// path, could still exist). Drop the stale pin and fall through
+					// to the normal ResolveRoute cascade so a chat-target default
+					// answers instead of the worker.
+					if agent.IsWorker() {
+						logger.WarnCF("agent", "Session handoff pin references a worker (not a chat target); clearing stale pin and falling back to default route", map[string]any{
+							"session_id": msg.SessionID,
+							"agent_id":   agentID,
+							"reason":     "worker is invoked via delegation, not as a chat target",
+						})
+						al.sessionActiveAgent.Delete(scopeKey)
+					} else {
+						logger.InfoCF("agent", "Session handoff override active", map[string]any{
+							"session_id": msg.SessionID,
+							"agent_id":   agentID,
+						})
+						sk := agentSessionKey(agentID, msg)
+						return routing.ResolvedRoute{AgentID: agentID, SessionKey: sk}, agent, nil
+					}
+				} else {
+					// Agent was deleted after the override was set — clean up and fall through.
+					al.sessionActiveAgent.Delete(scopeKey)
 				}
-				// Agent was deleted after the override was set — clean up and fall through.
-				al.sessionActiveAgent.Delete(scopeKey)
 			}
 		}
 	}
 
+	instanceID := inboundInstanceID(msg)
 	route := registry.ResolveRoute(routing.RouteInput{
 		Channel:    msg.Channel,
 		AccountID:  inboundMetadata(msg, metadataKeyAccountID),
@@ -3448,6 +3799,8 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		ParentPeer: extractParentPeer(msg),
 		GuildID:    inboundMetadata(msg, metadataKeyGuildID),
 		TeamID:     inboundMetadata(msg, metadataKeyTeamID),
+		InstanceID: instanceID,
+		Identity:   al.resolveInboundIdentity(instanceID),
 	})
 
 	agent, ok := registry.GetAgent(route.AgentID)
@@ -3765,6 +4118,20 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
+	// Inject the session owner so sysagent tools (system.workspace.create,
+	// system.task.create) can stamp the owner on newly created entities
+	// (Rule-2 of the sysagent ownership rule, SEC-2/#406).
+	if ts.opts.TranscriptSessionID != "" {
+		if store := al.ResolveSessionStore(ts.opts.TranscriptSessionID); store != nil {
+			if meta, err := store.GetMeta(ts.opts.TranscriptSessionID); err == nil && meta.Owner != "" {
+				turnCtx = tools.WithSessionOwner(turnCtx, meta.Owner)
+			}
+		}
+	}
+	// Inject the workspace ID so memory tools can route to the shared room (FR-7.1).
+	if ts.opts.WorkspaceID != "" {
+		turnCtx = tools.WithWorkspaceID(turnCtx, ts.opts.WorkspaceID)
+	}
 
 	al.registerActiveTurn(ts)
 	// B1: Finish must run before clearActiveTurn so that IsAlive() goes false
@@ -4393,6 +4760,34 @@ turnLoop:
 			}
 
 			if isTimeoutError && retry < maxRetries {
+				// FIX 2: re-check hard-abort FIRST. A user cancel mid-stream can
+				// surface as a transport-drop string (classified FailoverTimeout)
+				// rather than context.Canceled. Without this guard the branch would
+				// emit a spurious "Retrying…" message + stray LLMRetry/TurnTimeout
+				// events before the canceled turnCtx collapses the backoff. Breaking
+				// here lets the canceled turn finalize quietly.
+				if ts.hardAbortRequested() {
+					break
+				}
+				// FIX 1: only inline-retry a transport-drop when NO partial content
+				// was already streamed to the client for this attempt. If tokens were
+				// already streamed, the dropped attempt sent no `done` frame, so the
+				// SPA's bubble stays in "streaming" state; re-streaming the full
+				// response on retry would concatenate attempt-2 onto attempt-1 and
+				// visibly duplicate text. In that case break instead — the turn
+				// surfaces the error normally and the SPA finalizes the bubble as
+				// interrupted. When there is no active streamer (non-streaming /
+				// Chat path) or it streamed nothing yet (drop before the first
+				// token — the common, safe case), retry as before.
+				if sc, ok := ts.lastStreamer.(interface{ StreamedContentLen() int }); ok && sc.StreamedContentLen() > 0 {
+					logger.WarnCF("agent", "Transport drop after partial stream; not inline-retrying to avoid duplicated text", map[string]any{
+						"agent_id":  ts.agent.ID,
+						"iteration": iteration,
+						"streamed":  sc.StreamedContentLen(),
+						"error":     err.Error(),
+					})
+					break
+				}
 				// I1: emit EventKindTurnTimeout when a timeout error is detected.
 				al.emitEvent(
 					EventKindTurnTimeout,
@@ -4873,6 +5268,27 @@ turnLoop:
 		if !ts.opts.NoHistory {
 			ts.agent.Sessions.AddFullMessage(ts.sessionKey, assistantMsg)
 			ts.recordPersistedMessage(assistantMsg)
+		}
+
+		// Bug #416 fix: persist the narration text the LLM emitted alongside
+		// this round's tool calls. Without this, only the FINAL iteration's text
+		// reaches the transcript — intermediate "Okay, I've saved X." sentences
+		// are shown live via wsStreamer.Update but never written to transcript.jsonl.
+		//
+		// We write BEFORE the tool_call entries so the transcript order mirrors
+		// the live stream: [text segment N] → [tool_call round N] → …
+		//
+		// Tokens/cost are 0 here — the turn total is attributed to the final
+		// assistant entry only (wsStreamer.Finalize or appendAssistantTranscript).
+		ts.appendIntermediateAssistantTranscript(response.Content)
+		if response.Content != "" {
+			// The narration is now in the transcript. If this round's streamer
+			// ends up being finalized (the turn exits via max_tool_iterations
+			// exhaustion, where the last executed round is a tool-call round),
+			// suppress its duplicate transcript write (#416 gate fix). The check
+			// mirrors appendIntermediateAssistantTranscript's own content==""
+			// early-return so the mark fires only when a write actually happened.
+			ts.markLastStreamerTranscriptPersisted()
 		}
 
 		ts.setPhase(TurnPhaseTools)
@@ -5915,6 +6331,24 @@ func (al *AgentLoop) GetStartupInfo() map[string]any {
 	return info
 }
 
+// ListSkillsDetailed returns the full per-skill metadata (name, source,
+// description, author, version) for every installed skill, sourced from the
+// default agent's ContextBuilder skills loader — the same loader that feeds
+// GetStartupInfo's skills summary. This is the data path GET /api/v1/skills uses
+// to enrich its response beyond bare names. Returns nil when there is no default
+// agent or its ContextBuilder is unset (e.g. an uninitialized loop).
+func (al *AgentLoop) ListSkillsDetailed() []skills.SkillInfo {
+	registry := al.GetRegistry()
+	if registry == nil {
+		return nil
+	}
+	agent := registry.GetDefaultAgent()
+	if agent == nil || agent.ContextBuilder == nil {
+		return nil
+	}
+	return agent.ContextBuilder.ListSkillsDetailed()
+}
+
 // formatMessagesForLog formats messages for logging
 func formatMessagesForLog(messages []providers.Message) string {
 	if len(messages) == 0 {
@@ -6536,6 +6970,40 @@ func inboundMetadata(msg bus.InboundMessage, key string) string {
 		return ""
 	}
 	return msg.Metadata[key]
+}
+
+// inboundInstanceID returns the channel-instance key a message arrived on
+// (Spec-2 FR-2.5). Channels MAY tag the instance explicitly via the
+// "instance_id" metadata key; in v0.1 (cap-1/type) the instance key equals the
+// channel type, so an untagged message falls back to msg.Channel. The result is
+// lower-cased to match the config map keys (which are channel-type names).
+func inboundInstanceID(msg bus.InboundMessage) string {
+	if id := strings.TrimSpace(inboundMetadata(msg, metadataKeyInstanceID)); id != "" {
+		return strings.ToLower(id)
+	}
+	return strings.ToLower(strings.TrimSpace(msg.Channel))
+}
+
+// resolveInboundIdentity returns the persisted routing identity for the channel
+// instance a message arrived on (Spec-2 US-5 / FR-2.9), or nil when the instance
+// has no identity override configured. The identity selects how an inbound
+// message is attributed/routed: kind "agent" binds the connection to a specific
+// agent; kind "user" (or no identity) leaves the normal binding cascade in
+// effect. Returns a copy so the caller never mutates the live config.
+func (al *AgentLoop) resolveInboundIdentity(instanceID string) *config.ChannelIdentity {
+	if instanceID == "" {
+		return nil
+	}
+	cfg := al.GetConfig()
+	if cfg == nil || cfg.Channels == nil {
+		return nil
+	}
+	inst, ok := cfg.Channels[instanceID]
+	if !ok || inst.Identity == nil {
+		return nil
+	}
+	id := *inst.Identity
+	return &id
 }
 
 // extractParentPeer extracts the parent peer (reply-to) from inbound message metadata.

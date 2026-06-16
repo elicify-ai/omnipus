@@ -11,7 +11,8 @@ func init() {
 	channels.RegisterFactory(
 		"feishu",
 		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			return NewFeishuChannel(cfg.Channels.Feishu, secrets, b)
+			inst := cfg.Channels["feishu"]
+			return NewFeishuChannel(config.InstanceToFeishu(inst), secrets, b)
 		},
 	)
 }

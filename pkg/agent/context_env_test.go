@@ -207,7 +207,7 @@ func TestRestConfigChange_InvalidatesAllContextBuilders(t *testing.T) {
 // ---------------------------------------------------------------------------
 // #23 — TestContextBuilder_SourcePaths_IncludesLastSession
 // Traces to: env-awareness-and-memory-spec.md FR-021
-// sourcePaths() must include memory/sessions/LAST_SESSION.md.
+// sourcePaths() must include the private room's last-session.md.
 // ---------------------------------------------------------------------------
 
 func TestContextBuilder_SourcePaths_IncludesLastSession(t *testing.T) {
@@ -218,13 +218,13 @@ func TestContextBuilder_SourcePaths_IncludesLastSession(t *testing.T) {
 
 	found := false
 	for _, p := range paths {
-		if strings.HasSuffix(p, "LAST_SESSION.md") {
+		if strings.HasSuffix(p, "last-session.md") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("sourcePaths() does not include LAST_SESSION.md; got: %v", paths)
+		t.Errorf("sourcePaths() does not include last-session.md; got: %v", paths)
 	}
 }
 
@@ -244,8 +244,8 @@ func TestContextBuilder_Cache_InvalidatesOnLastSessionWrite(t *testing.T) {
 		t.Fatal("first BuildSystemPromptWithCache returned empty")
 	}
 
-	// Write LAST_SESSION.md — this should mark the cache stale.
-	ms := NewMemoryStore(dir)
+	// Write last-session.md — this should mark the cache stale.
+	ms := NewMemoryStore(dir, t.TempDir())
 	if err := ms.WriteLastSession("## Last session\nWe did useful things."); err != nil {
 		t.Fatalf("WriteLastSession: %v", err)
 	}
@@ -340,11 +340,12 @@ func TestContextBuilder_Rule4_ExactText(t *testing.T) {
 
 	// Rule 4 specifies "remember", "recall_memory", and "retrospective".
 	// These are woven into getWorkspaceAndRules via the sprintf format.
+	// Spec-5: MEMORY.md is replaced by per-memory .md files in .omnipus/memories/.
 	required := []string{
 		"remember",
 		"recall_memory",
 		"retrospective",
-		"MEMORY.md",
+		".omnipus/memories/",
 	}
 	for _, token := range required {
 		if !strings.Contains(prompt, token) {
@@ -366,6 +367,8 @@ func TestContextBuilder_Rule4_PreservesOtherRules(t *testing.T) {
 	prompt := cb.BuildSystemPrompt()
 
 	// Each rule has a recognizable anchor.
+	// Spec-5: Rule 4 now uses per-memory rooms; Rule 5 is "Context summaries"
+	// (the old "Daily notes" Rule 5 was removed in the rooms rewrite).
 	rules := []struct {
 		rule   string
 		marker string
@@ -374,8 +377,7 @@ func TestContextBuilder_Rule4_PreservesOtherRules(t *testing.T) {
 		{"Rule 2", "Artifacts over chat"},
 		{"Rule 3", "Be helpful and accurate"},
 		{"Rule 4", "remember(content"},
-		{"Rule 5", "Daily notes"},
-		{"Rule 6", "Context summaries"},
+		{"Rule 5", "Context summaries"},
 	}
 	for _, r := range rules {
 		if !strings.Contains(prompt, r.marker) {
@@ -392,7 +394,7 @@ func TestContextBuilder_Rule4_PreservesOtherRules(t *testing.T) {
 
 func TestContextBuilder_GetMemoryContext_BothSections(t *testing.T) {
 	dir := t.TempDir()
-	ms := NewMemoryStore(dir)
+	ms := NewMemoryStore(dir, t.TempDir())
 
 	if err := ms.WriteLastSession("## Last session\nSomething useful happened."); err != nil {
 		t.Fatalf("WriteLastSession: %v", err)

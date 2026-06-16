@@ -2,7 +2,6 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -30,7 +29,7 @@ func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*Gi
 		return nil, fmt.Errorf("stdio mode not implemented for GitHub Copilot provider; please use 'grpc' mode instead")
 	case "grpc":
 		client := copilot.NewClient(&copilot.ClientOptions{
-			CLIUrl: uri,
+			Connection: copilot.URIConnection{URL: uri},
 		})
 		if err := client.Start(context.Background()); err != nil {
 			return nil, fmt.Errorf(
@@ -76,22 +75,19 @@ func (p *GitHubCopilotProvider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
-	type tempMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+	// The Copilot SDK session is stateful — it maintains server-side history.
+	// SendAndWait expects a single new user-turn string, not the full history.
+	var prompt string
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			prompt = messages[i].Content
+			break
+		}
 	}
-	out := make([]tempMessage, 0, len(messages))
-	for _, msg := range messages {
-		out = append(out, tempMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
+	if prompt == "" {
+		return nil, fmt.Errorf("no user message found in conversation")
 	}
 
-	fullcontent, err := json.Marshal(out)
-	if err != nil {
-		return nil, fmt.Errorf("marshal messages: %w", err)
-	}
 	p.mu.Lock()
 	session := p.session
 	p.mu.Unlock()
@@ -101,7 +97,7 @@ func (p *GitHubCopilotProvider) Chat(
 	}
 
 	resp, err := session.SendAndWait(ctx, copilot.MessageOptions{
-		Prompt: string(fullcontent),
+		Prompt: prompt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to send message to copilot: %w", err)
@@ -110,12 +106,9 @@ func (p *GitHubCopilotProvider) Chat(
 	if resp == nil {
 		return nil, fmt.Errorf("empty response from copilot")
 	}
-	// SDK 0.2.0 moved SessionEvent.Data to an interface (SessionEventData). The
-	// final event from SendAndWait on a message turn is typed as AssistantMessageData,
-	// where Content is now a plain string (not *string).
 	msgData, ok := resp.Data.(*copilot.AssistantMessageData)
 	if !ok || msgData.Content == "" {
-		return nil, fmt.Errorf("no content in copilot response (event type %q)", resp.Type)
+		return nil, fmt.Errorf("no content in copilot response (event type %q)", resp.Type())
 	}
 	content := msgData.Content
 

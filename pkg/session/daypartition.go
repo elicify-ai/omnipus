@@ -69,24 +69,29 @@ func NewPartitionStore(agentWorkspaceDir, agentID string) *PartitionStore {
 
 // SessionMeta is the meta.json file per Appendix E §E.5.1.
 type SessionMeta struct {
-	ID        string        `json:"id"`
-	AgentID   string        `json:"agent_id"`
-	Title     string        `json:"title,omitempty"`
-	Status    SessionStatus `json:"status"` // StatusActive | StatusArchived | StatusInterrupted
-	CreatedAt time.Time     `json:"created_at"`
-	UpdatedAt time.Time     `json:"updated_at"`
-	Model     string        `json:"model,omitempty"`
-	Provider  string        `json:"provider,omitempty"`
-	Stats     SessionStats  `json:"stats"`
-	ProjectID string        `json:"project_id,omitempty"`
-	TaskID    string        `json:"task_id,omitempty"`
-	Channel   string        `json:"channel"`
+	ID          string        `json:"id"`
+	AgentID     string        `json:"agent_id"`
+	Title       string        `json:"title,omitempty"`
+	Status      SessionStatus `json:"status"` // StatusActive | StatusArchived | StatusInterrupted
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
+	Model       string        `json:"model,omitempty"`
+	Provider    string        `json:"provider,omitempty"`
+	Stats       SessionStats  `json:"stats"`
+	WorkspaceID string        `json:"workspace_id,omitempty"`
+	TaskID      string        `json:"task_id,omitempty"`
+	Channel     string        `json:"channel"`
 	// PeerID is the channel-native chat/peer identifier (e.g. Telegram user ID "7236886139").
 	// Set for non-webchat sessions to allow per-peer session resumption.
 	PeerID     string   `json:"peer_id,omitempty"`
 	Partitions []string `json:"partitions"`
 
 	LastCompactionSummary string `json:"last_compaction_summary,omitempty"`
+
+	// Owner is the username of the authenticated user who created this session.
+	// Empty means unowned/shared (agent-created or legacy sessions). Internal
+	// use only — not serialized to any REST response or wire format.
+	Owner string `json:"owner,omitempty"`
 
 	// v2 multi-agent fields (joined session model)
 	AgentIDs            []string          `json:"agent_ids,omitempty"`

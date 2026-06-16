@@ -402,8 +402,19 @@ func TestTypedEnums_IsValidEventName(t *testing.T) {
 		{"shutdown valid", audit.EventShutdown, true},
 		{"boot.abort valid", audit.EventBootAbort, true},
 		{"process_kill_failed valid", audit.EventProcessKillFailed, true},
+		// Workspace mutation events (project→workspace rename). rest_workspaces.go
+		// emits these; they MUST be in the allowlist or every workspace mutation
+		// trips the unknown-event warn-once.
+		{"workspace.create valid", audit.EventName("workspace.create"), true},
+		{"workspace.update valid", audit.EventName("workspace.update"), true},
+		{"workspace.delete valid", audit.EventName("workspace.delete"), true},
+		// Legacy pre-rename project.* events retained for back-compat.
+		{"project.create valid (back-compat)", audit.EventName("project.create"), true},
+		{"project.update valid (back-compat)", audit.EventName("project.update"), true},
+		{"project.delete valid (back-compat)", audit.EventName("project.delete"), true},
 		{"empty rejected", "", false},
 		{"typo rejected", "tool_calll", false},
+		{"workspace typo rejected", audit.EventName("workspace.craete"), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

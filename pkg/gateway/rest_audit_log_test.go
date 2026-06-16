@@ -63,7 +63,7 @@ func newTestRestAPIWithAuditLog(t *testing.T) (*restAPI, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(filepath.Join(tmpDir, "tasks")),
+		taskStore:     taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
 	}
 	return api, tmpDir
 }

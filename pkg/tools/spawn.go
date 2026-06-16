@@ -14,6 +14,14 @@ type SpawnTool struct {
 	maxTokens      int
 	temperature    float64
 	allowlistCheck func(targetAgentID string) bool
+	// delegationDeny, when non-nil, gates the spawn (background-mode) delegation
+	// against the full delegation policy (trust set + modes + depth — FR-6.2). It
+	// receives the call ctx (for current delegation depth) and the resolved
+	// target agent id ("" when no explicit target was given), and returns a
+	// non-empty human-readable reason string to DENY, or "" to ALLOW. Takes
+	// precedence over allowlistCheck so the LLM sees *why* a delegation was
+	// rejected (mode forbidden / depth exceeded / target untrusted).
+	delegationDeny func(ctx context.Context, targetAgentID string) string
 }
 
 // Compile-time check: SpawnTool implements AsyncExecutor.
@@ -70,6 +78,15 @@ func (t *SpawnTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
 	t.allowlistCheck = check
 }
 
+// SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2):
+// trust set + modes + depth. The checker returns a non-empty reason to DENY or
+// "" to ALLOW. When set, it takes precedence over the allowlist checker so the
+// rejected delegation surfaces a clear reason to the LLM instead of a generic
+// "not allowed" message.
+func (t *SpawnTool) SetDelegationDenyChecker(check func(ctx context.Context, targetAgentID string) string) {
+	t.delegationDeny = check
+}
+
 func (t *SpawnTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	return t.execute(ctx, args, nil)
 }
@@ -97,43 +114,43 @@ func (t *SpawnTool) execute(
 	label, _ := args["label"].(string)
 	agentID, _ := args["agent_id"].(string)
 
-	// Check allowlist if targeting a specific agent
-	if agentID != "" && t.allowlistCheck != nil {
+	// Delegation policy gate (FR-6.2): trust set + modes + depth. The
+	// full-policy checker takes precedence and is consulted on every spawn
+	// (including untargeted ones, where mode/depth still apply) so the reason
+	// for any denial is surfaced to the LLM.
+	if t.delegationDeny != nil {
+		if reason := t.delegationDeny(ctx, agentID); reason != "" {
+			return ErrorResult("delegation denied: " + reason).
+				WithError(fmt.Errorf("delegation policy denied (spawn): %s", reason))
+		}
+	} else if agentID != "" && t.allowlistCheck != nil {
+		// Backward-compat: legacy trust-only allowlist check.
 		if !t.allowlistCheck(agentID) {
 			return ErrorResult(fmt.Sprintf("not allowed to spawn agent '%s'", agentID))
 		}
 	}
 
-	// Build system prompt for spawned subagent
-	systemPrompt := fmt.Sprintf(
-		`You are a spawned subagent running in the background. Complete the given task independently and report back when done.
-
-Task: %s`,
-		task,
-	)
-
-	if label != "" {
-		systemPrompt = fmt.Sprintf(
-			`You are a spawned subagent labeled "%s" running in the background. Complete the given task independently and report back when done.
-
-Task: %s`,
-			label,
-			task,
-		)
-	}
-
 	// Use spawner if available (direct SpawnSubTurn call)
+	//
+	// The task is the first USER message; the delegate's soul (worker / configured
+	// agent) is resolved inside spawnSubTurn and used as the system role. The
+	// legacy "You are a spawned subagent running in the background" wrapper is
+	// REMOVED — the spawn tool does not pre-inject any persona, so a configured
+	// delegate exposes its own soul and a soul-less worker runs with an empty
+	// system role (worker souls are OPTIONAL by design). The label, when set,
+	// is preserved as the task label for the WS subTurn_start frame.
 	if t.spawner != nil {
 		// Launch async sub-turn in goroutine
 		go func() {
 			result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-				Model:        t.defaultModel,
-				Tools:        nil, // Will inherit from parent via context
-				SystemPrompt: systemPrompt,
-				MaxTokens:    t.maxTokens,
-				Temperature:  t.temperature,
-				Async:        true,  // Async execution
-				TaskLabel:    label, // FR-H-004: propagate to SubTurnSpawnPayload for WS frame
+				Model:         t.defaultModel,
+				Tools:         nil, // Will inherit from parent via context
+				SystemPrompt:  task,
+				TargetAgentID: agentID,
+				MaxTokens:     t.maxTokens,
+				Temperature:   t.temperature,
+				Async:         true,  // Async execution
+				TaskLabel:     label, // FR-H-004: propagate to SubTurnSpawnPayload for WS frame
 			})
 			if err != nil {
 				result = ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)

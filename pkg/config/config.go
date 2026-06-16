@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	mathrand "math/rand"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,21 +114,24 @@ const CurrentVersion = 1
 
 // Config is the current config structure with version support
 type Config struct {
-	Version   int             `json:"version"             yaml:"-"` // Config schema version for migration
-	Agents    AgentsConfig    `json:"agents"              yaml:"-"`
-	Bindings  []AgentBinding  `json:"bindings,omitempty"  yaml:"-"`
-	Session   SessionConfig   `json:"session,omitempty"   yaml:"-"`
-	Channels  ChannelsConfig  `json:"channels"            yaml:"channels"`
-	Providers []*ModelConfig  `json:"providers"           yaml:"providers"` // Configured providers with credentials
-	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
-	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
-	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
-	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
-	Schedules SchedulesConfig `json:"schedules,omitempty" yaml:"-"`
-	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
-	Voice     VoiceConfig     `json:"voice"               yaml:"-"`
+	Version   int                              `json:"version"             yaml:"-"` // Config schema version for migration
+	Agents    AgentsConfig                     `json:"agents"              yaml:"-"`
+	Bindings  []AgentBinding                   `json:"bindings,omitempty"  yaml:"-"`
+	Session   SessionConfig                    `json:"session,omitempty"   yaml:"-"`
+	Channels  map[string]ChannelInstanceConfig `json:"channels"            yaml:"channels"`
+	Providers []*ModelConfig                   `json:"providers"           yaml:"providers"` // Configured providers with credentials
+	Gateway   GatewayConfig                    `json:"gateway"             yaml:"-"`
+	Hooks     HooksConfig                      `json:"hooks,omitempty"     yaml:"-"`
+	Tools     ToolsConfig                      `json:"tools"               yaml:",inline"`
+	Heartbeat HeartbeatConfig                  `json:"heartbeat"           yaml:"-"`
+	Schedules SchedulesConfig                  `json:"schedules,omitempty" yaml:"-"`
+	Devices   DevicesConfig                    `json:"devices"             yaml:"-"`
+	Voice     VoiceConfig                      `json:"voice"               yaml:"-"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
+
+	// Performance controls the max-parallel fan-out gate for task/subagent dispatch.
+	Performance PerformanceConfig `json:"performance,omitempty" yaml:"-"`
 
 	// Omnipus-specific sections (additive, does not break Omnipus compatibility).
 	Storage         OmnipusStorageConfig            `json:"storage,omitempty"          yaml:"-"`
@@ -316,6 +321,86 @@ func (c *Config) FilterSensitiveData(content string) string {
 	return c.SensitiveDataReplacer().Replace(content)
 }
 
+// PerformanceConfig controls the max-parallel fan-out gate for task/subagent dispatch.
+// It is stored in config.json under the "performance" key and may also be overridden
+// at runtime via the OMNIPUS_MAX_PARALLEL_AGENTS env var.
+type PerformanceConfig struct {
+	// MaxParallelAgents is the maximum number of concurrent task/subagent dispatches.
+	// 0 means "use the auto-detected default" (clamped from CPU and RAM).
+	// The runtime clamps this to [2, min(NumCPU-2, RAM/1.5 GB)] ≤ 16.
+	// Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var when set.
+	MaxParallelAgents int `json:"max_parallel_agents,omitempty" env:"OMNIPUS_MAX_PARALLEL_AGENTS"`
+}
+
+// EffectiveMaxParallelAgents returns the clamped, environment-override-aware
+// value for MaxParallelAgents. It applies:
+//  1. An env-var override (OMNIPUS_MAX_PARALLEL_AGENTS) if set and valid.
+//  2. The configured value (p.MaxParallelAgents), if non-zero.
+//  3. An auto-detect heuristic: min(NumCPU-2, RAM_GB/1.5), floor 2, ceiling 16.
+//
+// An explicit MaxParallelAgents=1 is honoured — only the auto-detect path
+// enforces a floor of 2 (to prevent accidental single-flight on capable hardware).
+func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
+	// Env-var override has highest priority.
+	if s := os.Getenv("OMNIPUS_MAX_PARALLEL_AGENTS"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 1 {
+			return clampParallelExplicit(v)
+		}
+	}
+	if p.MaxParallelAgents > 0 {
+		// Explicit user-set value: allow 1 (single-flight); cap at 16.
+		return clampParallelExplicit(p.MaxParallelAgents)
+	}
+	return autoDetectMaxParallel()
+}
+
+// clampParallelExplicit clamps an explicitly configured value to [1, 16].
+// The floor is 1 so that a user who deliberately sets max_parallel_agents=1
+// gets single-flight behaviour. Use autoDetectMaxParallel for the auto path
+// (which floors at 2 to avoid accidental single-flight on capable hardware).
+func clampParallelExplicit(v int) int {
+	const minPar, maxPar = 1, 16
+	if v < minPar {
+		return minPar
+	}
+	if v > maxPar {
+		return maxPar
+	}
+	return v
+}
+
+// clampParallel clamps the auto-detected value to [2, 16].
+// Only used by autoDetectMaxParallel; explicit user values use clampParallelExplicit.
+func clampParallel(v int) int {
+	const minPar, maxPar = 2, 16
+	if v < minPar {
+		return minPar
+	}
+	if v > maxPar {
+		return maxPar
+	}
+	return v
+}
+
+// autoDetectMaxParallel returns min(NumCPU-2, RAM_GB/1.5) clamped to [2, 16].
+// RAM_GB is derived from the virtual memory total reported by the OS.
+func autoDetectMaxParallel() int {
+	cpuBased := runtime.NumCPU() - 2
+	ramBased := int(float64(totalRAMBytes()) / (1.5 * 1024 * 1024 * 1024))
+	val := cpuBased
+	if ramBased < val {
+		val = ramBased
+	}
+	return clampParallel(val)
+}
+
+// totalRAMBytes returns the total physical memory in bytes. It reads
+// /proc/meminfo on Linux and falls back to a conservative 4 GB constant
+// on other platforms.
+func totalRAMBytes() uint64 {
+	return readMemTotalBytes()
+}
+
 type HooksConfig struct {
 	Enabled   bool                         `json:"enabled"`
 	Defaults  HookDefaultsConfig           `json:"defaults,omitempty"`
@@ -449,6 +534,14 @@ type AgentConfig struct {
 	Skills        []string          `json:"skills,omitempty"`
 	Subagents     *SubagentsConfig  `json:"subagents,omitempty"`
 	CanDelegateTo []string          `json:"can_delegate_to,omitempty"`
+	// DelegationPolicy is the canonical unified delegation policy.
+	// When set, it takes precedence over CanDelegateTo and Subagents.AllowAgents.
+	// Nil means "unset — fall back to legacy fields for backward compatibility".
+	DelegationPolicy *DelegationPolicy `json:"delegation_policy,omitempty"`
+	// Voice is the per-agent persona voice identifier (e.g. TTS voice name).
+	// Distinct from the global VoiceConfig engine settings.
+	// Schema-pinned; not active until v0.2.0 TTS delivery.
+	Voice string `json:"voice,omitempty"`
 	// Enabled controls whether the agent is active. A nil pointer means
 	// "treat as active" for backward compatibility with configs that predate
 	// this field. Agents with Enabled=false are inactive; Enabled=true are
@@ -497,6 +590,13 @@ const (
 	AgentTypeSystem AgentType = "system"
 	AgentTypeCore   AgentType = "core"
 	AgentTypeCustom AgentType = "custom"
+	// AgentTypeWorker is a sub-agent worker: a depth-limited, ephemeral labour
+	// tier invoked ONLY via delegation. A worker is NOT a chat target (it never
+	// receives inbound channel messages and is never resolved as the default
+	// agent), has no heartbeat, and cannot be marked as the routing default.
+	// Workers carry an Executor (Subagents.Executor) selecting native /
+	// external-cli / remote-a2a. "A tool you point at work, not a colleague."
+	AgentTypeWorker AgentType = "worker"
 )
 
 // AgentShellPolicy configures per-agent shell command deny patterns for the
@@ -581,9 +681,316 @@ func (a AgentConfig) ResolveType(isCoreAgent func(string) bool) AgentType {
 	return AgentTypeCustom
 }
 
+// IsWorker reports whether this agent is a sub-agent worker (Type==worker).
+//
+// Worker is an EXPLICIT classification — it is only ever set via the Type field
+// (workers are not inferred from an ID list), so the check does not need the
+// isCoreAgent resolver and is safe to call without it. A worker is a
+// delegation-only labour tier: never a chat target, never the routing default,
+// no heartbeat. See AgentTypeWorker.
+func (a AgentConfig) IsWorker() bool {
+	return a.Type == AgentTypeWorker
+}
+
+// IsChatTarget reports whether this agent may receive inbound channel messages
+// and be resolved as the default/routing agent. Every agent kind is a chat
+// target EXCEPT a worker. Routing (resolveDefaultAgentID, first-enabled
+// fallback) and the default-agent setter/repair use this to exclude workers.
+func (a AgentConfig) IsChatTarget() bool {
+	return !a.IsWorker()
+}
+
+// DelegationMode is the mode in which delegation is allowed.
+// "await" = synchronous subagent (blocks caller).
+// "background" = async spawn (caller continues).
+// "task" = task_create delegation.
+type DelegationMode string
+
+const (
+	DelegationModeAwait      DelegationMode = "await"
+	DelegationModeBackground DelegationMode = "background"
+	DelegationModeTask       DelegationMode = "task"
+)
+
+// AgentRefKind enumerates the legal values for AgentRef.Kind. A non-empty value
+// outside this set is REJECTED at config-load time (see AgentRef.Validate) so a
+// typo fails loudly instead of silently mis-resolving a delegation target.
+const (
+	// AgentRefKindLocal resolves the ref by id within the running instance.
+	AgentRefKindLocal = "local"
+	// AgentRefKindRemoteA2A is reserved for the future A2A protocol; the kind is
+	// accepted by validation but not enforced/dispatched in v0.1.0.
+	AgentRefKindRemoteA2A = "remote-a2a"
+)
+
+// AgentRef is an agent reference used in delegation policy targets.
+// Kind is currently "local" (resolved by id within the instance) or
+// "remote-a2a" (reserved for future A2A protocol; not enforced in v0.1.0).
+// The id "*" is a wildcard matching any agent of the given kind.
+type AgentRef struct {
+	Kind string `json:"kind"` // "local" or "remote-a2a"
+	ID   string `json:"id"`
+}
+
+// Validate rejects a non-empty AgentRef.Kind that is outside the known set.
+// An empty Kind is accepted for back-compat: callers (ResolveDelegationTo)
+// default an absent kind to "local". Only a present-but-unknown value (a typo)
+// is an error, so it fails loudly rather than silently downgrading routing.
+//
+// The Kind is canonicalized (lowercased + trimmed) BEFORE the membership check
+// so Validate accepts exactly what the API write path and route.go accept —
+// both normalize the kind the same way. Validating the raw value would reject a
+// mixed-case/whitespace payload (e.g. {"kind":"Local"}) that the API gate let
+// through and that routes fine, bricking the very next config load. Genuinely-
+// unknown values (e.g. "robot") are still rejected.
+func (r AgentRef) Validate() error {
+	switch strings.ToLower(strings.TrimSpace(r.Kind)) {
+	case "", AgentRefKindLocal, AgentRefKindRemoteA2A:
+		return nil
+	default:
+		return fmt.Errorf("invalid agent ref kind %q (want %q or %q)",
+			r.Kind, AgentRefKindLocal, AgentRefKindRemoteA2A)
+	}
+}
+
+// DelegationPolicy is the unified delegation policy for an agent.
+// It unifies the three legacy allowlists:
+//   - AgentConfig.CanDelegateTo   (per-agent task delegation)
+//   - AgentDefaults.CanDelegateTo (global-default task delegation)
+//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+//
+// Precedence: agent-level To > defaults-level To; SubagentsConfig.AllowAgents
+// serves as a backward-compat fallback when To is nil.
+//
+// AcceptFrom and Budget are present but NOT enforced in v0.1.0. A startup WARN
+// is emitted when either is non-empty to prevent them being mistaken for an
+// active authorization boundary.
+type DelegationPolicy struct {
+	// To is the list of agent references this agent may delegate work to.
+	// Nil means "unset — fall back to legacy fields".
+	// An explicitly empty slice means "no delegation allowed".
+	To []AgentRef `json:"to,omitempty"`
+
+	// AcceptFrom is INERT in v0.1.0. Listed here so configs that set it
+	// trigger a startup WARN rather than being silently ignored.
+	AcceptFrom []AgentRef `json:"accept_from,omitempty"`
+
+	// Modes lists allowed delegation modes. Enforced in v0.1.0.
+	// An empty/nil Modes list means all modes are allowed (when To permits).
+	Modes []DelegationMode `json:"modes,omitempty"`
+
+	// Depth is the maximum delegation chain depth. Enforced as a safety cap.
+	// Zero means uncapped (nil pointer = uncapped).
+	Depth *int `json:"depth,omitempty"`
+
+	// Budget is INERT in v0.1.0. Present to trigger a startup WARN when set.
+	Budget *DelegationBudget `json:"budget,omitempty"`
+}
+
+// DelegationBudget is present in the schema but not enforced until a later release.
+type DelegationBudget struct {
+	MaxCostUSD float64 `json:"max_cost_usd,omitempty"`
+	MaxTokens  int     `json:"max_tokens,omitempty"`
+}
+
+// WarnIfInertFieldsSet logs a startup WARN if accept_from or budget are non-empty.
+// This prevents operators from mistaking them for active authorization boundaries.
+func (dp *DelegationPolicy) WarnIfInertFieldsSet(agentID string) {
+	if dp == nil {
+		return
+	}
+	if len(dp.AcceptFrom) > 0 {
+		slog.Warn("delegation policy: accept_from is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
+			"agent_id", agentID)
+	}
+	if dp.Budget != nil {
+		slog.Warn("delegation policy: budget is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
+			"agent_id", agentID)
+	}
+}
+
+// ResolveDelegationTo returns the canonical unified "to" allowlist for an agent,
+// implementing the three-path precedence rules without silent authz widening.
+//
+// Precedence (first non-nil wins):
+//  1. agentCfg.DelegationPolicy.To  (canonical; set by Spec-3 code paths)
+//  2. agentCfg.CanDelegateTo        (legacy task delegation allowlist)
+//  3. defaults.DelegationPolicy.To  (global default canonical policy)
+//  4. defaults.CanDelegateTo        (global default legacy allowlist)
+//
+// Unset behavior per path:
+//   - If the agent has DelegationPolicy set (non-nil), its To list is used even
+//     if that list is empty — an empty explicit To means "deny all delegation".
+//   - If the agent has no DelegationPolicy and has CanDelegateTo, those string IDs
+//     are used as {kind:local, id:X} references (backward compat).
+//   - If neither agent field is set, the defaults chain is consulted the same way.
+//   - If nothing is set at any level, nil is returned (deny-by-default).
+//
+// SubagentsConfig.AllowAgents is NOT consulted here; it is used only as a
+// backward-compat fallback in CanSpawnSubagent when DelegationPolicy.To is nil.
+func ResolveDelegationTo(agentCfg *AgentConfig, defaults AgentDefaults) []AgentRef {
+	// 1. Agent-level canonical policy (DelegationPolicy.To takes precedence;
+	//    even an empty slice is authoritative — it means deny all).
+	if agentCfg != nil && agentCfg.DelegationPolicy != nil {
+		return agentCfg.DelegationPolicy.To
+	}
+
+	// 2. Agent-level legacy CanDelegateTo (backward compat: treat as local refs).
+	if agentCfg != nil && len(agentCfg.CanDelegateTo) > 0 {
+		refs := make([]AgentRef, len(agentCfg.CanDelegateTo))
+		for i, id := range agentCfg.CanDelegateTo {
+			refs[i] = AgentRef{Kind: "local", ID: id}
+		}
+		return refs
+	}
+
+	// 3. Global default canonical policy.
+	if defaults.DelegationPolicy != nil {
+		return defaults.DelegationPolicy.To
+	}
+
+	// 4. Global default legacy CanDelegateTo.
+	if len(defaults.CanDelegateTo) > 0 {
+		refs := make([]AgentRef, len(defaults.CanDelegateTo))
+		for i, id := range defaults.CanDelegateTo {
+			refs[i] = AgentRef{Kind: "local", ID: id}
+		}
+		return refs
+	}
+
+	// Nothing set at any level — deny-by-default.
+	return nil
+}
+
+// IsDelegationAllowed checks whether delegation from an agent to targetAgentID
+// is permitted by the unified to-allowlist. Returns false when toList is nil
+// (deny-by-default). Wildcards ("*") match any target.
+func IsDelegationAllowed(toList []AgentRef, targetAgentID string) bool {
+	for _, ref := range toList {
+		if ref.Kind != "local" && ref.Kind != "" {
+			// remote-a2a and unknown kinds are not enforced locally in v0.1.0.
+			continue
+		}
+		if ref.ID == "*" || ref.ID == targetAgentID {
+			return true
+		}
+	}
+	return false
+}
+
+// IsDelegationAllowedAny checks whether any delegation is permitted (used when
+// no specific target is known, e.g. the sync subagent tool that has no agent_id).
+// Returns true only if the toList contains at least one entry.
+func IsDelegationAllowedAny(toList []AgentRef) bool {
+	return len(toList) > 0
+}
+
+// ResolveDelegationPolicy returns the effective DelegationPolicy for an agent,
+// applying the same agent>defaults precedence used by ResolveDelegationTo. It is
+// used by the dispatch layer to enforce the policy's Modes and Depth fields
+// (FR-6.2) — which ResolveDelegationTo (which only resolves the To allowlist)
+// does not surface.
+//
+// Precedence (first non-nil wins):
+//  1. agentCfg.DelegationPolicy  (canonical per-agent policy)
+//  2. defaults.DelegationPolicy  (global default canonical policy)
+//
+// Returns nil when neither level sets a canonical DelegationPolicy. A nil result
+// means "no canonical Modes/Depth constraints" — callers treat that as
+// "all modes allowed / depth uncapped" so the legacy To-only paths are unaffected
+// (no silent behavior change for configs that never adopted DelegationPolicy).
+func ResolveDelegationPolicy(agentCfg *AgentConfig, defaults AgentDefaults) *DelegationPolicy {
+	if agentCfg != nil && agentCfg.DelegationPolicy != nil {
+		return agentCfg.DelegationPolicy
+	}
+	if defaults.DelegationPolicy != nil {
+		return defaults.DelegationPolicy
+	}
+	return nil
+}
+
+// IsDelegationModeAllowed reports whether the given delegation mode is permitted
+// by a DelegationPolicy (FR-6.2). The contract:
+//   - nil policy            → allowed (no canonical policy ⇒ no mode constraint).
+//   - non-nil, empty Modes  → allowed (empty/nil Modes means "all modes allowed").
+//   - non-nil, Modes set    → allowed only if mode is present in the list.
+func IsDelegationModeAllowed(dp *DelegationPolicy, mode DelegationMode) bool {
+	if dp == nil || len(dp.Modes) == 0 {
+		return true
+	}
+	for _, m := range dp.Modes {
+		if m == mode {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveDelegationDepth returns the effective max delegation-chain depth cap
+// from a DelegationPolicy (FR-6.2). The contract:
+//   - nil policy or nil/<=0 Depth → 0, meaning "uncapped by policy" (the global
+//     SubTurn.MaxDepth safety ceiling still applies independently).
+//   - positive Depth              → that value, an additional per-agent cap.
+func ResolveDelegationDepth(dp *DelegationPolicy) int {
+	if dp == nil || dp.Depth == nil || *dp.Depth <= 0 {
+		return 0
+	}
+	return *dp.Depth
+}
+
+// ExecutorKind enumerates the runtime used to execute a sub-agent task.
+// "native" runs the task inside the existing Omnipus agent loop (default, existing behaviour).
+//
+//   - "external-cli" is ACTIVE in v0.1.0: it drives an external CLI tool (Claude
+//     Code, Codex, opencode) over JSON streaming. Each run is git-worktree-isolated
+//     and executes under the external CLI's OWN sandbox (Codex = Landlock/seccomp +
+//     Seatbelt; Claude Code = its permission model) — Omnipus adds no new confiner.
+//     The CLI's permission prompts route to the Omnipus consent layer best-effort
+//     post-hoc (the CLI's own sandbox + the worktree are the authoritative boundary
+//     — see pkg/agent/runner/consent.go's POST-HOC CONSENT note).
+//   - "remote-a2a" is RESERVED for future A2A protocol resolution: accepted in the
+//     schema for forward-compatibility, rejected at dispatch in v0.1.0.
+type ExecutorKind string
+
+const (
+	// ExecutorKindNative is the default: sub-agent runs inside the Omnipus agent loop.
+	ExecutorKindNative ExecutorKind = "native"
+	// ExecutorKindExternalCLI drives an external CLI agent (claude-code, codex,
+	// opencode) over a JSON-streaming subprocess. ACTIVE in v0.1.0: dispatch resolves
+	// it to runner.DispatchKindExternalCLI and runs it worktree-isolated under the
+	// CLI's own sandbox (consent best-effort post-hoc — see consent.go).
+	ExecutorKindExternalCLI ExecutorKind = "external-cli"
+	// ExecutorKindRemoteA2A is reserved. Accepted in schema; rejected at dispatch in v0.1.0.
+	ExecutorKindRemoteA2A ExecutorKind = "remote-a2a"
+)
+
+// ExecutorConfig specifies how a sub-agent's tasks are executed.
+// When nil (the default), behaviour is identical to Kind="native".
+//
+// Kind="native" and Kind="external-cli" are both functional in v0.1.0;
+// Kind="remote-a2a" is RESERVED and rejected at dispatch (see ExecutorKind and
+// runner.ResolveDispatch).
+type ExecutorConfig struct { // not-wire-format
+	// Kind selects the execution runtime. Defaults to "native" when absent.
+	Kind ExecutorKind `json:"kind"`
+	// CLI names the external CLI tool for Kind="external-cli".
+	// Valid values: "claude-code", "codex", "opencode". Required when
+	// Kind="external-cli"; ignored otherwise.
+	CLI string `json:"cli,omitempty"`
+}
+
+// EffectiveKind returns the ExecutorKind with nil-safe defaulting to native.
+func (ec *ExecutorConfig) EffectiveKind() ExecutorKind {
+	if ec == nil || ec.Kind == "" {
+		return ExecutorKindNative
+	}
+	return ec.Kind
+}
+
 type SubagentsConfig struct {
 	AllowAgents []string          `json:"allow_agents,omitempty"`
 	Model       *AgentModelConfig `json:"model,omitempty"`
+	Executor    *ExecutorConfig   `json:"executor,omitempty"`
 }
 
 type PeerMatch struct {
@@ -661,7 +1068,11 @@ type AgentDefaults struct {
 	SplitOnMarker             bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	TimeoutSeconds            int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
 	CanDelegateTo             []string           `json:"can_delegate_to,omitempty"`
-	DefaultAgentID            string             `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
+	// DelegationPolicy is the canonical unified delegation policy for the global
+	// default. When set, it takes precedence over CanDelegateTo.
+	// Nil means "unset — fall back to CanDelegateTo for backward compatibility".
+	DelegationPolicy *DelegationPolicy `json:"delegation_policy,omitempty"`
+	DefaultAgentID   string            `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
 	// When false, CloseSession is a no-op and no background LLM calls are made.
@@ -771,21 +1182,579 @@ func (d *AgentDefaults) GetModelName() string {
 	return d.ModelName
 }
 
-type ChannelsConfig struct {
-	WhatsApp WhatsAppConfig `json:"whatsapp" yaml:"-"`
-	Telegram TelegramConfig `json:"telegram" yaml:"telegram,omitempty"`
-	Feishu   FeishuConfig   `json:"feishu"   yaml:"feishu,omitempty"`
-	Discord  DiscordConfig  `json:"discord"  yaml:"discord,omitempty"`
+// ChannelIdentityKind enumerates the legal values for ChannelIdentity.Kind.
+// route.go treats ONLY "agent" as the agent-routing path and everything else as
+// the user fallback; without validation a typo (e.g. "agnet") would silently
+// downgrade to user routing. A non-empty value outside this set is therefore
+// REJECTED at config-load time (see ChannelIdentity.Validate).
+const (
+	// ChannelIdentityKindAgent routes the inbound connection AS the given agent ID.
+	ChannelIdentityKindAgent = "agent"
+	// ChannelIdentityKindUser attributes the inbound connection to the user and
+	// routes via the normal binding cascade to the default agent.
+	ChannelIdentityKindUser = "user"
+)
 
-	QQ         QQConfig         `json:"qq"          yaml:"qq,omitempty"`
-	DingTalk   DingTalkConfig   `json:"dingtalk"    yaml:"dingtalk,omitempty"`
-	Slack      SlackConfig      `json:"slack"       yaml:"slack,omitempty"`
-	Matrix     MatrixConfig     `json:"matrix"      yaml:"matrix,omitempty"`
-	LINE       LINEConfig       `json:"line"        yaml:"line,omitempty"`
-	WeCom      WeComConfig      `json:"wecom"       yaml:"wecom,omitempty"       envPrefix:"OMNIPUS_CHANNELS_WECOM_"`
-	Weixin     WeixinConfig     `json:"weixin"      yaml:"weixin,omitempty"`
-	IRC        IRCConfig        `json:"irc"         yaml:"irc,omitempty"`
-	GoogleChat GoogleChatConfig `json:"google-chat" yaml:"google-chat,omitempty"`
+// ChannelIdentity identifies whether an inbound connection acts on behalf of an
+// agent ("agent" kind) or routes as the default user ("user" kind). Persisted per
+// instance; wired into ResolveRoute input (Spec-2 FR-2.9 / US-5).
+type ChannelIdentity struct {
+	Kind string `json:"kind"`         // "agent" or "user"
+	ID   string `json:"id,omitempty"` // agent ID when kind=agent; empty when kind=user
+}
+
+// Validate rejects a non-empty ChannelIdentity.Kind outside the known set so a
+// typo fails loudly at load instead of silently routing as the user. An empty
+// Kind is accepted for back-compat — route.go's documented default for an
+// absent/empty identity kind is the user-routing fallback. When kind=agent the
+// id MUST be present (an agent identity with no id can never resolve).
+//
+// The Kind is canonicalized (lowercased + trimmed) BEFORE the membership check
+// so Validate accepts exactly what the API write path (validateChannelIdentity
+// in pkg/gateway/rest.go) and route.go accept — both normalize the kind the same
+// way. Validating the raw value would reject a mixed-case/whitespace payload
+// (e.g. {"kind":"Agent"}) that the API gate let through and that routes fine,
+// bricking the very next config load. Genuinely-unknown values (e.g. "robot")
+// are still rejected.
+func (i ChannelIdentity) Validate() error {
+	switch strings.ToLower(strings.TrimSpace(i.Kind)) {
+	case "", ChannelIdentityKindUser:
+		return nil
+	case ChannelIdentityKindAgent:
+		if strings.TrimSpace(i.ID) == "" {
+			return fmt.Errorf("channel identity kind %q requires a non-empty id", i.Kind)
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid channel identity kind %q (want %q or %q)",
+			i.Kind, ChannelIdentityKindAgent, ChannelIdentityKindUser)
+	}
+}
+
+// maxInstancesPerType is the cap-1 limit on instances per channel type.
+// v0.3 will lift this to allow multiple instances per type.
+const maxInstancesPerType = 1
+
+// ChannelInstanceConfig is the map value for Config.Channels.
+// The map is keyed by instance ID (currently equal to the channel type name in
+// v0.1 since the cap is 1/type). Each instance carries its type discriminator,
+// the common enabled flag, an optional identity override, and the full union of
+// all per-channel-type configuration fields — only the fields relevant to the
+// instance type are non-zero.
+//
+// Wire-format note: this struct is NOT a gateway wire type — it lives in config.json,
+// not in REST request/response bodies. The not-wire-format opt-out is not needed here
+// because config structs are exempt from the gateway wire-format lint rule.
+type ChannelInstanceConfig struct {
+	// Common fields.
+	Type     string           `json:"type"`
+	Enabled  bool             `json:"enabled"`
+	Identity *ChannelIdentity `json:"identity,omitempty"`
+
+	// --- Common per-channel fields shared across multiple channel types ---
+	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
+	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
+	Typing             TypingConfig        `json:"typing,omitempty"`
+	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
+	ReasoningChannelID string              `json:"reasoning_channel_id,omitempty"`
+	Proxy              string              `json:"proxy,omitempty"`
+	// token_ref is used by Telegram (bot token ref) and Weixin (account token ref).
+	TokenRef string `json:"token_ref,omitempty"`
+	// base_url is used by Telegram (API base URL) and Weixin (WeChat base URL).
+	BaseURL string `json:"base_url,omitempty"`
+
+	// --- WhatsApp-specific fields ---
+	SessionStorePath string `json:"session_store_path,omitempty"`
+
+	// --- Telegram-specific fields ---
+	Streaming     StreamingConfig `json:"streaming,omitempty"`
+	UseMarkdownV2 bool            `json:"use_markdown_v2,omitempty"`
+
+	// --- Feishu / Lark-specific fields ---
+	AppID                string              `json:"app_id,omitempty"`
+	AppSecretRef         string              `json:"app_secret_ref,omitempty"`
+	EncryptKeyRef        string              `json:"encrypt_key_ref,omitempty"`
+	VerificationTokenRef string              `json:"verification_token_ref,omitempty"`
+	RandomReactionEmoji  FlexibleStringSlice `json:"random_reaction_emoji,omitempty"`
+	IsLark               bool                `json:"is_lark,omitempty"`
+
+	// --- Discord-specific fields ---
+	// TokenRef (see common above) is also used by Discord.
+	// Proxy (see common above) is also used by Discord.
+	MentionOnly bool `json:"mention_only,omitempty"`
+
+	// --- QQ-specific fields ---
+	// AppID (see Feishu above) is also used by QQ.
+	MaxMessageLength     int   `json:"max_message_length,omitempty"`
+	MaxBase64FileSizeMiB int64 `json:"max_base64_file_size_mib,omitempty"`
+	SendMarkdown         bool  `json:"send_markdown,omitempty"`
+
+	// --- DingTalk-specific fields ---
+	ClientID        string `json:"client_id,omitempty"`
+	ClientSecretRef string `json:"client_secret_ref,omitempty"`
+
+	// --- Slack-specific fields ---
+	BotTokenRef string `json:"bot_token_ref,omitempty"`
+	AppTokenRef string `json:"app_token_ref,omitempty"`
+
+	// --- Matrix-specific fields ---
+	Homeserver          string `json:"homeserver,omitempty"`
+	UserID              string `json:"user_id,omitempty"`
+	AccessTokenRef      string `json:"access_token_ref,omitempty"`
+	DeviceID            string `json:"device_id,omitempty"`
+	JoinOnInvite        bool   `json:"join_on_invite,omitempty"`
+	MessageFormat       string `json:"message_format,omitempty"`
+	CryptoDatabasePath  string `json:"crypto_database_path,omitempty"`
+	CryptoPassphraseRef string `json:"crypto_passphrase_ref,omitempty"`
+
+	// --- LINE-specific fields ---
+	ChannelSecretRef      string `json:"channel_secret_ref,omitempty"`
+	ChannelAccessTokenRef string `json:"channel_access_token_ref,omitempty"`
+	WebhookHost           string `json:"webhook_host,omitempty"`
+	WebhookPort           int    `json:"webhook_port,omitempty"`
+	WebhookPath           string `json:"webhook_path,omitempty"`
+
+	// --- WeCom-specific fields ---
+	BotID               string                      `json:"bot_id,omitempty"`
+	SecretRef           string                      `json:"secret_ref,omitempty"`
+	WebSocketURL        string                      `json:"websocket_url,omitempty"`
+	SendThinkingMessage bool                        `json:"send_thinking_message,omitempty"`
+	DMPolicy            string                      `json:"dm_policy,omitempty"`
+	GroupPolicy         string                      `json:"group_policy,omitempty"`
+	GroupAllowFrom      FlexibleStringSlice         `json:"group_allow_from,omitempty"`
+	Groups              map[string]WeComGroupConfig `json:"groups,omitempty"`
+
+	// --- Weixin-specific fields ---
+	// TokenRef (see common above) is also used by Weixin.
+	// BaseURL (see common above) is also used by Weixin.
+	// Proxy (see common above) is also used by Weixin.
+	AccountID  string `json:"account_id,omitempty"`
+	CDNBaseURL string `json:"cdn_base_url,omitempty"`
+
+	// --- IRC-specific fields ---
+	Server              string              `json:"server,omitempty"`
+	TLS                 bool                `json:"tls,omitempty"`
+	Nick                string              `json:"nick,omitempty"`
+	IRCUser             string              `json:"user,omitempty"`
+	RealName            string              `json:"real_name,omitempty"`
+	PasswordRef         string              `json:"password_ref,omitempty"`
+	NickServPasswordRef string              `json:"nickserv_password_ref,omitempty"`
+	SASLUser            string              `json:"sasl_user,omitempty"`
+	SASLPasswordRef     string              `json:"sasl_password_ref,omitempty"`
+	IRCChannels         FlexibleStringSlice `json:"channels,omitempty"`
+	RequestCaps         FlexibleStringSlice `json:"request_caps,omitempty"`
+
+	// --- Google Chat-specific fields ---
+	Mode                  string       `json:"mode,omitempty"`
+	WebhookURL            SecureString `json:"webhook_url,omitzero"`
+	WebhookURLRef         string       `json:"webhook_url_ref,omitempty"`
+	ServiceAccountFile    string       `json:"service_account_file,omitempty"`
+	ServiceAccountJSON    SecureString `json:"service_account_json,omitzero"`
+	ServiceAccountJSONRef string       `json:"service_account_json_ref,omitempty"`
+	Space                 string       `json:"space,omitempty"`
+	BotUser               string       `json:"bot_user,omitempty"`
+
+	// --- Email-specific fields ---
+	// IMAPHost is the IMAP server hostname. TLS-only (port 993).
+	IMAPHost string `json:"imap_host,omitempty"`
+	// IMAPPort is the IMAP server port. Defaults to 993.
+	IMAPPort int `json:"imap_port,omitempty"`
+	// SMTPHost is the SMTP server hostname for outbound email. TLS-only.
+	SMTPHost string `json:"smtp_host,omitempty"`
+	// SMTPPort is the SMTP server port. Defaults to 587 (STARTTLS).
+	SMTPPort int `json:"smtp_port,omitempty"`
+	// EmailUsername is the login username for IMAP and SMTP authentication.
+	// Note: "password_ref" is reused from the IRC-specific PasswordRef field above.
+	// Both IRC and email use the same password_ref JSON key for their connection
+	// password, which is stored encrypted in the credential store.
+	EmailUsername string `json:"username,omitempty"`
+}
+
+// knownChannelTypes is the set of supported channel type identifiers.
+// Any map entry whose key is not in this set is logged as WARN and dropped.
+var knownChannelTypes = map[string]struct{}{
+	"telegram":    {},
+	"discord":     {},
+	"slack":       {},
+	"whatsapp":    {},
+	"feishu":      {},
+	"qq":          {},
+	"dingtalk":    {},
+	"matrix":      {},
+	"line":        {},
+	"wecom":       {},
+	"weixin":      {},
+	"irc":         {},
+	"google-chat": {},
+	"email":       {},
+}
+
+// normalizeChannelMap fills in the Type field from the map key when absent
+// (so JSON-loaded entries without an explicit "type" field get a default),
+// and drops entries whose keys are not in knownChannelTypes, emitting a
+// structured Warn for each unknown entry.
+func normalizeChannelMap(channels map[string]ChannelInstanceConfig) map[string]ChannelInstanceConfig {
+	out := make(map[string]ChannelInstanceConfig, len(channels))
+	for key, inst := range channels {
+		if _, ok := knownChannelTypes[key]; !ok {
+			slog.Warn("config: unknown channel type in channels map — ignoring legacy or unsupported section",
+				"key", key)
+			continue
+		}
+		if inst.Type == "" {
+			inst.Type = key
+		}
+		out[key] = inst
+	}
+	return out
+}
+
+// ErrChannelsCap1Violated is the sentinel wrapped by ValidateChannelsCap1 when
+// more than one instance of a channel type is present (Spec-2 FR-2.3). Callers
+// (e.g. the gateway) detect it with errors.Is to map the failure onto a clean
+// 422 "one-per-type" response rather than an opaque 500.
+var ErrChannelsCap1Violated = errors.New("channels: cap-1/type violated (v0.1 allows one instance per type)")
+
+// ValidateChannelsCap1 checks that there is at most one instance per channel
+// type in the map. Returns an error wrapping ErrChannelsCap1Violated and listing
+// all duplicate types. Called at config load time so a hand-edited config.json
+// with two telegram instances is rejected early rather than silently running the
+// second (FR-2.3: enforced at config LOAD, not just the API).
+func ValidateChannelsCap1(channels map[string]ChannelInstanceConfig) error {
+	typeCounts := make(map[string]int, len(channels))
+	for key, inst := range channels {
+		// Effective type: the explicit Type field, or the map key when absent
+		// (the same inference normalizeChannelMap applies). Counting by effective
+		// type lets this run on a RAW map and still catch a duplicate hidden under
+		// a non-type key (e.g. "telegram-2" with type:telegram).
+		t := strings.TrimSpace(inst.Type)
+		if t == "" {
+			t = strings.TrimSpace(key)
+		}
+		typeCounts[t]++
+	}
+	var dups []string
+	for t, n := range typeCounts {
+		if n > maxInstancesPerType {
+			dups = append(dups, fmt.Sprintf("%s (count=%d)", t, n))
+		}
+	}
+	if len(dups) != 0 {
+		sort.Strings(dups)
+		return fmt.Errorf("%w: %s", ErrChannelsCap1Violated, strings.Join(dups, ", "))
+	}
+	return nil
+}
+
+// canonicalizeKind lowercases and trims a kind string so persisted configs are
+// stored in the single canonical form that ChannelIdentity.Validate, AgentRef.
+// Validate, the API write path (validateChannelIdentity), and route.go all agree
+// on. An empty/whitespace-only kind canonicalizes to "" (its back-compat default).
+func canonicalizeKind(kind string) string {
+	return strings.ToLower(strings.TrimSpace(kind))
+}
+
+// validateIdentityAndAgentRefKinds rejects any non-empty ChannelIdentity.Kind or
+// AgentRef.Kind that is outside its known set. This runs at config load so a typo
+// fails loudly with a clear error instead of silently downgrading routing (a
+// mis-spelled channel identity kind would otherwise fall through to user routing
+// in route.go) or mis-resolving a delegation target. Empty/absent kinds keep
+// their documented defaults and are NOT rejected (back-compat).
+//
+// On success it also normalizes the stored Kind in place (lowercase + trim) so a
+// value the API accepted in mixed case (e.g. {"kind":"Agent"}) is persisted in
+// canonical form. This keeps the on-disk config self-consistent with the
+// case-tolerant API/route paths and prevents drift between what was accepted at
+// write time and what is loaded later. Validate already normalizes before
+// comparing, so this is belt-and-suspenders: even an un-normalized stored value
+// would load, but we canonicalize it here so it does not stay mixed-case forever.
+func validateIdentityAndAgentRefKinds(cfg *Config) error {
+	// Channel instance identity overrides.
+	for key, inst := range cfg.Channels {
+		if inst.Identity == nil {
+			continue
+		}
+		if err := inst.Identity.Validate(); err != nil {
+			return fmt.Errorf("channel %q identity: %w", key, err)
+		}
+		// Persist the canonical kind. inst is a copy (map value), so mutate and
+		// write the entry back into the map.
+		if canon := canonicalizeKind(inst.Identity.Kind); canon != inst.Identity.Kind {
+			inst.Identity.Kind = canon
+			cfg.Channels[key] = inst
+		}
+	}
+
+	// Agent delegation-policy refs (per-agent and global defaults). Both the
+	// active To list and the inert AcceptFrom list are validated so a typo'd kind
+	// is caught regardless of where it sits.
+	validatePolicy := func(scope string, dp *DelegationPolicy) error {
+		if dp == nil {
+			return nil
+		}
+		// dp.To / dp.AcceptFrom are slices of value type AgentRef; index to mutate
+		// the stored element rather than the loop copy so normalization persists.
+		for i := range dp.To {
+			if err := dp.To[i].Validate(); err != nil {
+				return fmt.Errorf("%s delegation_policy.to: %w", scope, err)
+			}
+			dp.To[i].Kind = canonicalizeKind(dp.To[i].Kind)
+		}
+		for i := range dp.AcceptFrom {
+			if err := dp.AcceptFrom[i].Validate(); err != nil {
+				return fmt.Errorf("%s delegation_policy.accept_from: %w", scope, err)
+			}
+			dp.AcceptFrom[i].Kind = canonicalizeKind(dp.AcceptFrom[i].Kind)
+		}
+		return nil
+	}
+	if err := validatePolicy("agents.defaults", cfg.Agents.Defaults.DelegationPolicy); err != nil {
+		return err
+	}
+	for _, ag := range cfg.Agents.List {
+		scope := fmt.Sprintf("agent %q", ag.ID)
+		if err := validatePolicy(scope, ag.DelegationPolicy); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// --- Extraction helpers — convert ChannelInstanceConfig to the typed sub-config
+// that each channel constructor expects. ---
+
+// InstanceToTelegram returns the TelegramConfig for a ChannelInstanceConfig of
+// type "telegram".
+func InstanceToTelegram(inst ChannelInstanceConfig) TelegramConfig {
+	return TelegramConfig{
+		Enabled:            inst.Enabled,
+		TokenRef:           inst.TokenRef,
+		BaseURL:            inst.BaseURL,
+		Proxy:              inst.Proxy,
+		AllowFrom:          inst.AllowFrom,
+		GroupTrigger:       inst.GroupTrigger,
+		Typing:             inst.Typing,
+		Placeholder:        inst.Placeholder,
+		Streaming:          inst.Streaming,
+		ReasoningChannelID: inst.ReasoningChannelID,
+		UseMarkdownV2:      inst.UseMarkdownV2,
+	}
+}
+
+// InstanceToWhatsApp returns the WhatsAppConfig for a ChannelInstanceConfig of
+// type "whatsapp".
+func InstanceToWhatsApp(inst ChannelInstanceConfig) WhatsAppConfig {
+	return WhatsAppConfig{
+		Enabled:            inst.Enabled,
+		SessionStorePath:   inst.SessionStorePath,
+		AllowFrom:          inst.AllowFrom,
+		ReasoningChannelID: inst.ReasoningChannelID,
+		GroupTrigger:       inst.GroupTrigger,
+	}
+}
+
+// InstanceToFeishu returns the FeishuConfig for a ChannelInstanceConfig of
+// type "feishu".
+func InstanceToFeishu(inst ChannelInstanceConfig) FeishuConfig {
+	return FeishuConfig{
+		Enabled:              inst.Enabled,
+		AppID:                inst.AppID,
+		AppSecretRef:         inst.AppSecretRef,
+		EncryptKeyRef:        inst.EncryptKeyRef,
+		VerificationTokenRef: inst.VerificationTokenRef,
+		AllowFrom:            inst.AllowFrom,
+		GroupTrigger:         inst.GroupTrigger,
+		Placeholder:          inst.Placeholder,
+		ReasoningChannelID:   inst.ReasoningChannelID,
+		RandomReactionEmoji:  inst.RandomReactionEmoji,
+		IsLark:               inst.IsLark,
+	}
+}
+
+// InstanceToDiscord returns the DiscordConfig for a ChannelInstanceConfig of
+// type "discord".
+func InstanceToDiscord(inst ChannelInstanceConfig) DiscordConfig {
+	return DiscordConfig{
+		Enabled:            inst.Enabled,
+		TokenRef:           inst.TokenRef,
+		Proxy:              inst.Proxy,
+		AllowFrom:          inst.AllowFrom,
+		MentionOnly:        inst.MentionOnly,
+		GroupTrigger:       inst.GroupTrigger,
+		Typing:             inst.Typing,
+		Placeholder:        inst.Placeholder,
+		ReasoningChannelID: inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToQQ returns the QQConfig for a ChannelInstanceConfig of type "qq".
+func InstanceToQQ(inst ChannelInstanceConfig) QQConfig {
+	return QQConfig{
+		Enabled:              inst.Enabled,
+		AppID:                inst.AppID,
+		AppSecretRef:         inst.AppSecretRef,
+		AllowFrom:            inst.AllowFrom,
+		GroupTrigger:         inst.GroupTrigger,
+		MaxMessageLength:     inst.MaxMessageLength,
+		MaxBase64FileSizeMiB: inst.MaxBase64FileSizeMiB,
+		SendMarkdown:         inst.SendMarkdown,
+		ReasoningChannelID:   inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToDingTalk returns the DingTalkConfig for a ChannelInstanceConfig of
+// type "dingtalk".
+func InstanceToDingTalk(inst ChannelInstanceConfig) DingTalkConfig {
+	return DingTalkConfig{
+		Enabled:            inst.Enabled,
+		ClientID:           inst.ClientID,
+		ClientSecretRef:    inst.ClientSecretRef,
+		AllowFrom:          inst.AllowFrom,
+		GroupTrigger:       inst.GroupTrigger,
+		ReasoningChannelID: inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToSlack returns the SlackConfig for a ChannelInstanceConfig of type
+// "slack".
+func InstanceToSlack(inst ChannelInstanceConfig) SlackConfig {
+	return SlackConfig{
+		Enabled:            inst.Enabled,
+		BotTokenRef:        inst.BotTokenRef,
+		AppTokenRef:        inst.AppTokenRef,
+		AllowFrom:          inst.AllowFrom,
+		GroupTrigger:       inst.GroupTrigger,
+		Typing:             inst.Typing,
+		Placeholder:        inst.Placeholder,
+		ReasoningChannelID: inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToMatrix returns the MatrixConfig for a ChannelInstanceConfig of
+// type "matrix".
+func InstanceToMatrix(inst ChannelInstanceConfig) MatrixConfig {
+	return MatrixConfig{
+		Enabled:             inst.Enabled,
+		Homeserver:          inst.Homeserver,
+		UserID:              inst.UserID,
+		AccessTokenRef:      inst.AccessTokenRef,
+		DeviceID:            inst.DeviceID,
+		JoinOnInvite:        inst.JoinOnInvite,
+		MessageFormat:       inst.MessageFormat,
+		AllowFrom:           inst.AllowFrom,
+		GroupTrigger:        inst.GroupTrigger,
+		Placeholder:         inst.Placeholder,
+		ReasoningChannelID:  inst.ReasoningChannelID,
+		CryptoDatabasePath:  inst.CryptoDatabasePath,
+		CryptoPassphraseRef: inst.CryptoPassphraseRef,
+	}
+}
+
+// InstanceToLINE returns the LINEConfig for a ChannelInstanceConfig of type
+// "line".
+func InstanceToLINE(inst ChannelInstanceConfig) LINEConfig {
+	return LINEConfig{
+		Enabled:               inst.Enabled,
+		ChannelSecretRef:      inst.ChannelSecretRef,
+		ChannelAccessTokenRef: inst.ChannelAccessTokenRef,
+		WebhookHost:           inst.WebhookHost,
+		WebhookPort:           inst.WebhookPort,
+		WebhookPath:           inst.WebhookPath,
+		AllowFrom:             inst.AllowFrom,
+		GroupTrigger:          inst.GroupTrigger,
+		Typing:                inst.Typing,
+		Placeholder:           inst.Placeholder,
+		ReasoningChannelID:    inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToWeCom returns the WeComConfig for a ChannelInstanceConfig of type
+// "wecom".
+func InstanceToWeCom(inst ChannelInstanceConfig) WeComConfig {
+	return WeComConfig{
+		Enabled:             inst.Enabled,
+		BotID:               inst.BotID,
+		SecretRef:           inst.SecretRef,
+		WebSocketURL:        inst.WebSocketURL,
+		SendThinkingMessage: inst.SendThinkingMessage,
+		AllowFrom:           inst.AllowFrom,
+		ReasoningChannelID:  inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToWeixin returns the WeixinConfig for a ChannelInstanceConfig of
+// type "weixin".
+func InstanceToWeixin(inst ChannelInstanceConfig) WeixinConfig {
+	return WeixinConfig{
+		Enabled:            inst.Enabled,
+		TokenRef:           inst.TokenRef,
+		AccountID:          inst.AccountID,
+		BaseURL:            inst.BaseURL,
+		CDNBaseURL:         inst.CDNBaseURL,
+		Proxy:              inst.Proxy,
+		AllowFrom:          inst.AllowFrom,
+		ReasoningChannelID: inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToIRC returns the IRCConfig for a ChannelInstanceConfig of type
+// "irc".
+func InstanceToIRC(inst ChannelInstanceConfig) IRCConfig {
+	return IRCConfig{
+		Enabled:             inst.Enabled,
+		Server:              inst.Server,
+		TLS:                 inst.TLS,
+		Nick:                inst.Nick,
+		User:                inst.IRCUser,
+		RealName:            inst.RealName,
+		PasswordRef:         inst.PasswordRef,
+		NickServPasswordRef: inst.NickServPasswordRef,
+		SASLUser:            inst.SASLUser,
+		SASLPasswordRef:     inst.SASLPasswordRef,
+		Channels:            inst.IRCChannels,
+		RequestCaps:         inst.RequestCaps,
+		AllowFrom:           inst.AllowFrom,
+		GroupTrigger:        inst.GroupTrigger,
+		Typing:              inst.Typing,
+		ReasoningChannelID:  inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToGoogleChat returns the GoogleChatConfig for a ChannelInstanceConfig
+// of type "google-chat".
+func InstanceToGoogleChat(inst ChannelInstanceConfig) GoogleChatConfig {
+	return GoogleChatConfig{
+		Enabled:               inst.Enabled,
+		Mode:                  inst.Mode,
+		WebhookURL:            inst.WebhookURL,
+		WebhookURLRef:         inst.WebhookURLRef,
+		ServiceAccountFile:    inst.ServiceAccountFile,
+		ServiceAccountJSON:    inst.ServiceAccountJSON,
+		ServiceAccountJSONRef: inst.ServiceAccountJSONRef,
+		Space:                 inst.Space,
+		BotUser:               inst.BotUser,
+		AllowFrom:             inst.AllowFrom,
+		GroupTrigger:          inst.GroupTrigger,
+		Typing:                inst.Typing,
+		Placeholder:           inst.Placeholder,
+		ReasoningChannelID:    inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToEmail returns the EmailConfig for a ChannelInstanceConfig of type "email".
+// The password credential is stored encrypted via PasswordRef; only non-secret fields
+// are copied directly from the instance. The PasswordRef field in ChannelInstanceConfig
+// (shared with IRC) carries the email credential-store key.
+func InstanceToEmail(inst ChannelInstanceConfig) EmailConfig {
+	return EmailConfig{
+		Enabled:     inst.Enabled,
+		IMAPHost:    inst.IMAPHost,
+		IMAPPort:    inst.IMAPPort,
+		SMTPHost:    inst.SMTPHost,
+		SMTPPort:    inst.SMTPPort,
+		Username:    inst.EmailUsername,
+		PasswordRef: inst.PasswordRef,
+	}
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.
@@ -994,6 +1963,19 @@ type IRCConfig struct {
 	ReasoningChannelID  string              `json:"reasoning_channel_id"            yaml:"-"`
 }
 
+// EmailConfig holds configuration for the email channel (IMAP inbound + SMTP outbound).
+// Credentials (password) are stored in the encrypted credential store via PasswordRef;
+// only public config (hosts, ports, username) is stored in config.json.
+type EmailConfig struct {
+	Enabled     bool   `json:"enabled"`
+	IMAPHost    string `json:"imap_host,omitempty"`
+	IMAPPort    int    `json:"imap_port,omitempty"`
+	SMTPHost    string `json:"smtp_host,omitempty"`
+	SMTPPort    int    `json:"smtp_port,omitempty"`
+	Username    string `json:"username,omitempty"`
+	PasswordRef string `json:"password_ref,omitempty"`
+}
+
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"OMNIPUS_HEARTBEAT_ENABLED"`
 	Interval int  `json:"interval" env:"OMNIPUS_HEARTBEAT_INTERVAL"` // minutes, min 5
@@ -1152,14 +2134,125 @@ func (r *UserRole) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// TokenEntry is a single bearer-token credential in a user's token set.
+//
+// SEC-1 / UAT #399: a user may hold several concurrent bearer tokens (one per
+// tab / device / client). Each entry carries a short non-secret ID prefix that
+// is also embedded in the issued raw token (omnipus_<id>_<hex>), so token
+// verification can index directly to the matching hash instead of bcrypt-looping
+// every entry. The ID is NOT a secret — it only selects which bcrypt hash to
+// verify the (secret) token body against.
+type TokenEntry struct {
+	ID        string     `json:"id"`                   // short non-secret prefix, also embedded in the raw token
+	Hash      BcryptHash `json:"hash"`                 // bcrypt hash of the full raw bearer token
+	CreatedAt string     `json:"created_at,omitempty"` // RFC3339 issue time (for oldest-first eviction)
+}
+
 // UserConfig holds per-user authentication and authorization settings.
 type UserConfig struct {
-	Username         string     `json:"username,omitempty"`
-	PasswordHash     string     `json:"password_hash,omitempty"`      // bcrypt hash
-	TokenHash        BcryptHash `json:"token_hash,omitempty"`         // bcrypt hash of bearer token
-	SessionTokenHash BcryptHash `json:"session_token_hash,omitempty"` // bcrypt hash of session cookie token
-	Role             UserRole   `json:"role"`
-	Name             string     `json:"name,omitempty"`
+	Username     string `json:"username,omitempty"`
+	PasswordHash string `json:"password_hash,omitempty"` // bcrypt hash
+	// TokenHash is the LEGACY single bearer-token hash. New code writes the
+	// Tokens set instead; this field is retained so pre-existing config.json
+	// records (and the migrate-on-read path) still authenticate. Treated as a
+	// one-element set during verification.
+	TokenHash BcryptHash `json:"token_hash,omitempty"`
+	// Tokens is the active bearer-token SET (SEC-1). Login appends; logout
+	// removes a single entry; password reset clears all.
+	Tokens           []TokenEntry `json:"tokens,omitempty"`
+	SessionTokenHash BcryptHash   `json:"session_token_hash,omitempty"` // bcrypt hash of session cookie token
+	Role             UserRole     `json:"role"`
+	Name             string       `json:"name,omitempty"`
+}
+
+// MaxUserTokens caps the number of concurrent bearer tokens kept per user.
+// On login the newest token is appended; when the set exceeds this cap the
+// oldest entries are evicted (logged by the caller). Prevents an unbounded
+// token set from a long-lived account that logs in from many clients.
+const MaxUserTokens = 10
+
+// TokenIDFromRaw extracts the embedded non-secret ID prefix from a raw bearer
+// token of the form "omnipus_<id>_<body>". Returns "" when the token is not in
+// the ID-tagged form (e.g. a legacy "omnipus_<hex>" token or an env token),
+// signaling callers to fall back to scanning the whole set.
+func TokenIDFromRaw(raw string) string {
+	const prefix = "omnipus_"
+	if !strings.HasPrefix(raw, prefix) {
+		return ""
+	}
+	rest := raw[len(prefix):]
+	idx := strings.IndexByte(rest, '_')
+	if idx <= 0 {
+		// No second underscore → legacy "omnipus_<hex>" form with no ID.
+		return ""
+	}
+	return rest[:idx]
+}
+
+// TokenSecret returns the substring of a raw bearer token that is bcrypt-hashed
+// to produce a token-set entry's Hash.
+//
+// SEC-1 / bcrypt 72-byte limit: an ID-tagged token "omnipus_<id>_<body>" is
+// 81 bytes — past bcrypt's 72-byte input ceiling, beyond which bytes are
+// silently ignored. Because the ID prefix is NON-SECRET routing metadata, we
+// bcrypt only the secret <body> (the 256-bit entropy). Generation and
+// verification MUST agree on this, so both go through TokenSecret. A legacy
+// token with no ID is returned whole (its stored hash was computed over the
+// full "omnipus_<hex>" string, which is exactly 72 bytes).
+func TokenSecret(raw string) string {
+	if id := TokenIDFromRaw(raw); id != "" {
+		// Strip "omnipus_<id>_" leaving the secret body.
+		return raw[len("omnipus_")+len(id)+1:]
+	}
+	return raw
+}
+
+// VerifyToken reports whether raw matches any active bearer token for this user.
+//
+// SEC-1: it first parses the embedded ID prefix and, when present, verifies
+// against ONLY the matching entry's hash (constant-time bcrypt compare over the
+// secret body). When the ID is absent (legacy token) it scans every token entry
+// and the legacy single TokenHash. Returns nil on a match, ErrNoHashSet when the
+// user holds no tokens at all, or the bcrypt mismatch error otherwise.
+func (u *UserConfig) VerifyToken(raw string) error {
+	if raw == "" {
+		return ErrNoHashSet
+	}
+	if len(u.Tokens) == 0 && u.TokenHash.IsZero() {
+		return ErrNoHashSet
+	}
+
+	secret := TokenSecret(raw)
+
+	// Fast path: direct index by embedded ID prefix.
+	if id := TokenIDFromRaw(raw); id != "" {
+		for i := range u.Tokens {
+			if u.Tokens[i].ID == id {
+				return u.Tokens[i].Hash.Verify(secret)
+			}
+		}
+		// ID present but no matching entry — fall through to a full scan so a
+		// race (entry just appended/evicted) or a colliding legacy token still
+		// gets a fair chance, then report mismatch.
+	}
+
+	// Scan the full token set (legacy token, or ID lookup miss).
+	for i := range u.Tokens {
+		if u.Tokens[i].Hash.Verify(secret) == nil {
+			return nil
+		}
+	}
+	// Legacy single-token field — its hash was computed over the FULL raw token.
+	if !u.TokenHash.IsZero() && u.TokenHash.Verify(raw) == nil {
+		return nil
+	}
+	return bcrypt.ErrMismatchedHashAndPassword
+}
+
+// HasActiveToken reports whether the user holds at least one live bearer token
+// (either in the new Tokens set or the legacy TokenHash field).
+func (u *UserConfig) HasActiveToken() bool {
+	return len(u.Tokens) > 0 || !u.TokenHash.IsZero()
 }
 
 type GatewayConfig struct {
@@ -1712,6 +2805,29 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// Migrate legacy channel config fields to new unified structures
 	cfg.migrateChannelConfigs()
 
+	if cfg.Channels == nil {
+		cfg.Channels = make(map[string]ChannelInstanceConfig)
+	}
+	// Cap-1 validation (FR-2.3): reject configs with >1 instance per channel type.
+	// Run on the RAW map BEFORE normalizeChannelMap drops unknown keys — otherwise
+	// a hand-edited duplicate under a non-type key (e.g. "telegram-2" with
+	// type:telegram) would be silently dropped rather than rejected. The check
+	// counts by effective type (the Type field, or the map key when Type is empty).
+	if err := ValidateChannelsCap1(cfg.Channels); err != nil {
+		return nil, err
+	}
+
+	// Normalize channel map: populate Type from map key when absent, drop unknown types.
+	cfg.Channels = normalizeChannelMap(cfg.Channels)
+
+	// Reject typo'd identity / agent-ref Kind values so a mis-spelled kind fails
+	// loudly here instead of silently downgrading routing (route.go treats any
+	// non-"agent" identity kind as the user fallback) or mis-resolving a
+	// delegation target. Empty/absent kinds keep their documented defaults.
+	if err := validateIdentityAndAgentRefKinds(cfg); err != nil {
+		return nil, err
+	}
+
 	// Merge Omnipus channel_policies routing rules into Bindings.
 	cfg.MergeChannelPoliciesIntoBindings()
 
@@ -1741,6 +2857,15 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// security.tool_policies deny entries so operator intent is enforced
 	// by the policy engine rather than silently ignored (issue #237).
 	migrateDeprecatedToolEnableFlags(cfg, data)
+
+	// Restore skill-discovery tool defaults (find_skills/install_skill enabled,
+	// ClawHub {enabled:true, base_url:"https://clawhub.ai"}) for configs that
+	// persisted them as disabled/empty zero values. Onboarded/legacy configs
+	// otherwise leave the agent loop's skills RegistryManager with ZERO
+	// registries, so the agent's find_skills/install_skill silently return
+	// nothing while the UI (which constructs ClawHub directly) works. Operator
+	// intent (an explicit enabled key) is preserved.
+	restoreSkillDiscoveryDefaults(cfg, data)
 
 	// Enforce at-most-one Default=true invariant across cfg.Agents.List.
 	// Hand-edited configs may contain multiple defaults; repair them now so the
@@ -1801,9 +2926,15 @@ func makeBackup(path string) error {
 }
 
 func (c *Config) migrateChannelConfigs() {
-	// Discord: mention_only -> group_trigger.mention_only
-	if c.Channels.Discord.MentionOnly && !c.Channels.Discord.GroupTrigger.MentionOnly {
-		c.Channels.Discord.GroupTrigger.MentionOnly = true
+	// Discord: mention_only -> group_trigger.mention_only (preserved from the typed singleton era).
+	// The map may have zero, one, or (after v0.3) more discord instances. Walk the
+	// map and normalise any instance of type "discord" that has the legacy flag set
+	// without the group_trigger equivalent.
+	for id, inst := range c.Channels {
+		if inst.Type == "discord" && inst.MentionOnly && !inst.GroupTrigger.MentionOnly {
+			inst.GroupTrigger.MentionOnly = true
+			c.Channels[id] = inst
+		}
 	}
 }
 

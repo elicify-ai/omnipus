@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
 import React from 'react'
 
@@ -37,8 +38,36 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.
 
 // Mock auth store
 vi.mock('@/store/auth', () => ({
-  useAuthStore: () => ({ clearAuth: vi.fn() }),
+  useAuthStore: { getState: () => ({ clearAuth: vi.fn() }) },
 }))
+
+// Mock fetchWorkspaces so the Sidebar's useQuery never hits the network in tests.
+vi.mock('@/lib/api', () => ({
+  fetchWorkspaces: () => Promise.resolve([]),
+  workspacesQueryKeys: {
+    list: (params?: unknown) => ['workspaces', params],
+  },
+}))
+
+// Mock useWorkspacesStore used by Sidebar
+vi.mock('@/store/workspacesStore', () => ({
+  useWorkspacesStore: (selector?: (s: unknown) => unknown) => {
+    const state = { activeWorkspaceId: null, setActiveWorkspaceId: vi.fn() }
+    return selector ? selector(state) : state
+  },
+}))
+
+// Mock NewProjectSlideOver — it imports more dependencies we don't need in these tests
+vi.mock('@/components/projects/NewProjectSlideOver', () => ({
+  NewProjectSlideOver: () => null,
+}))
+
+function makeWrapper() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
+}
 
 // Mock Framer Motion — AnimatePresence/motion renders children without animation
 vi.mock('framer-motion', () => ({
@@ -92,7 +121,7 @@ describe('Sidebar — responsive: pin button hidden on narrow viewports', () => 
     mockMatchMedia(false) // Simulate narrow viewport
 
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     // The pin button relies on canPin being true — at narrow width it must not appear.
     const pinButton = document.querySelector('button[aria-label="Pin sidebar"]') as HTMLButtonElement | null
@@ -105,7 +134,7 @@ describe('Sidebar — responsive: pin button hidden on narrow viewports', () => 
     mockMatchMedia(true) // Simulate wide viewport
 
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     const pinButton = screen.getByRole('button', { name: 'Pin sidebar' })
     expect(pinButton).toBeTruthy()
@@ -124,7 +153,7 @@ describe('Sidebar — responsive: pinned mode renders permanent aside', () => {
   it('renders a non-overlay aside when pinned and canPin=true', () => {
     mockMatchMedia(true)
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
-    const { container } = render(<Sidebar />)
+    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
 
     // The pinned aside does NOT have role="dialog" — it's a permanent panel.
     const dialogAside = container.querySelector('aside[role="dialog"]')
@@ -134,7 +163,7 @@ describe('Sidebar — responsive: pinned mode renders permanent aside', () => {
   it('renders overlay dialog aside when NOT pinned', () => {
     mockMatchMedia(true)
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    const { container } = render(<Sidebar />)
+    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
 
     const dialogAside = container.querySelector('aside[role="dialog"]')
     expect(dialogAside).not.toBeNull()
@@ -153,7 +182,7 @@ describe('Sidebar — responsive: pinned mode renders permanent aside', () => {
 describe('Sidebar — ARIA labels on interactive elements', () => {
   it('sign out button has aria-label="Sign out"', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     const signOutBtn = screen.getByRole('button', { name: 'Sign out' })
     expect(signOutBtn).toBeTruthy()
@@ -162,7 +191,7 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
 
   it('nav element has aria-label="Main navigation"', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     const nav = screen.getByRole('navigation', { name: 'Main navigation' })
     expect(nav).toBeTruthy()
@@ -171,7 +200,7 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
   it('pin button has aria-label="Pin sidebar" when unpinned', () => {
     mockMatchMedia(true)
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     const pinBtn = screen.getByRole('button', { name: 'Pin sidebar' })
     expect(pinBtn).toBeTruthy()
@@ -181,7 +210,7 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
   it('pin button has aria-label="Unpin sidebar" when pinned', () => {
     mockMatchMedia(true)
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     const unpinBtn = screen.getByRole('button', { name: 'Unpin sidebar' })
     expect(unpinBtn).toBeTruthy()
@@ -191,7 +220,7 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
   it('pin button has aria-pressed="true" when pinned', () => {
     mockMatchMedia(true)
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     const unpinBtn = screen.getByRole('button', { name: 'Unpin sidebar' })
     expect(unpinBtn.getAttribute('aria-pressed')).toBe('true')
@@ -199,7 +228,7 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
 
   it('Chat nav link has aria-label="Chat"', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     const chatLink = screen.getByRole('link', { name: 'Chat' })
     expect(chatLink).toBeTruthy()
@@ -218,7 +247,7 @@ describe('Sidebar — aria-current on active nav items', () => {
   it('Chat link has aria-current="page" when pathname is "/"', () => {
     // useLocation is mocked to return { pathname: '/' }
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     const chatLink = screen.getByRole('link', { name: 'Chat' })
     expect(chatLink.getAttribute('aria-current')).toBe('page')
@@ -226,7 +255,7 @@ describe('Sidebar — aria-current on active nav items', () => {
 
   it('non-active nav links do not have aria-current', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     const agentsLink = screen.getByRole('link', { name: 'Agents' })
     // pathname is '/', so Agents is NOT active
@@ -247,12 +276,12 @@ describe('Sidebar — differentiation: pinned vs unpinned renders different stru
 
     // Pinned rendering
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
-    const { container: pinnedContainer } = render(<Sidebar />)
+    const { container: pinnedContainer } = render(<Sidebar />, { wrapper: makeWrapper() })
     const hasPinnedDialog = !!pinnedContainer.querySelector('aside[role="dialog"]')
 
     // Overlay rendering
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    const { container: overlayContainer } = render(<Sidebar />)
+    const { container: overlayContainer } = render(<Sidebar />, { wrapper: makeWrapper() })
     const hasOverlayDialog = !!overlayContainer.querySelector('aside[role="dialog"]')
 
     // Differentiation: pinned has NO dialog; overlay HAS dialog

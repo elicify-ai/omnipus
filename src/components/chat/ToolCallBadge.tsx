@@ -13,6 +13,7 @@ import {
 } from '@phosphor-icons/react'
 import type { ToolCall } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { humanizeToolName } from '@/lib/humanizeToolName'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
@@ -81,7 +82,9 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
         aria-expanded={expanded}
       >
         <Icon size={13} className="text-[var(--color-muted)] shrink-0" />
-        <span className="text-[var(--color-secondary)] font-medium">{toolCall.tool}</span>
+        <span className="text-[var(--color-secondary)] font-medium">
+          {humanizeToolName(toolCall.tool)}
+        </span>
         <span className="flex items-center gap-1 ml-1">
           {config.icon}
           <span className="text-[var(--color-muted)]">{config.label}</span>
@@ -96,6 +99,12 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
       {/* Expanded detail */}
       {expanded && toolCall.status !== 'running' && (
         <div className="border-t border-[var(--color-border)] px-3 py-2 space-y-2">
+          <div>
+            <div className="text-[var(--color-muted)] mb-1">Tool</div>
+            <code className="text-[10px] text-[var(--color-secondary)] break-all">
+              {toolCall.tool}
+            </code>
+          </div>
           <div>
             <div className="text-[var(--color-muted)] mb-1">Parameters</div>
             <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all">

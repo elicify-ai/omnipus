@@ -27,7 +27,7 @@ function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
-function renderModal(props: { open?: boolean; onClose?: () => void; onCreate?: (data: any) => Promise<void> } = {}) {
+function renderModal(props: { open?: boolean; onClose?: () => void; onCreate?: (data: any) => Promise<void>; initialType?: 'custom' | 'worker' } = {}) {
   return render(
     <QueryClientProvider client={makeClient()}>
       <CreateAgentModal {...props} />
@@ -49,16 +49,58 @@ describe('CreateAgentModal — rendering (test #14)', () => {
   it('shows Create Agent dialog when open via prop', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Creating a custom agent (AC1)
     renderModal({ open: true, onClose: vi.fn() })
-    // Use heading role to distinguish the dialog title h2 from the "Create Agent" submit button
-    expect(screen.getByRole('heading', { name: /create agent/i })).toBeInTheDocument()
+    // Prop-driven open pins the type to 'custom' regardless of the store, so
+    // the title is "New custom agent". Identify via the data-testid that the
+    // shared getCreateAgentFormCopy() helper emits.
+    expect(screen.getByTestId('create-custom-modal-title')).toBeInTheDocument()
   })
 
   it('shows Create Agent dialog when createAgentModalOpen is true in store', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Creating a custom agent (AC1)
-    act(() => { useUiStore.setState({ createAgentModalOpen: true }) })
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'custom' }) })
     renderModal()
-    // Use heading role to distinguish the dialog title h2 from the "Create Agent" submit button
-    expect(screen.getByRole('heading', { name: /create agent/i })).toBeInTheDocument()
+    // Default tier (custom) → "New custom agent" title.
+    expect(screen.getByTestId('create-custom-modal-title')).toBeInTheDocument()
+  })
+
+  it('shows the worker title when createAgentModalType is worker', () => {
+    // Tier-preset: 'worker' set on the store flips the title + description +
+    // form shape. The "New worker" button on the Agents screen sets this
+    // before opening the modal.
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'worker' }) })
+    renderModal()
+    expect(screen.getByTestId('create-worker-modal-title')).toBeInTheDocument()
+    expect(screen.getByText(/configure a delegation-only labour agent/i)).toBeInTheDocument()
+  })
+
+  it('shows the worker form shape when the initialType prop is "worker" (prop-only path)', () => {
+    // Prop-only path (open + initialType) lets a parent render the modal in
+    // worker mode without touching the Zustand store. The modal must still
+    // resolve to the worker form shape — title, task-prompt field, and the
+    // "Create worker" submit label.
+    renderModal({ open: true, onClose: vi.fn(), initialType: 'worker' })
+    expect(screen.getByTestId('create-worker-modal-title')).toBeInTheDocument()
+    expect(screen.getByTestId('create-worker-task-prompt')).toBeInTheDocument()
+    expect(screen.getByTestId('create-agent-submit')).toHaveTextContent(/create worker/i)
+  })
+
+  it('initialType=custom is the prop-only default and renders the custom form', () => {
+    // When the prop path is taken without initialType (or with the explicit
+    // 'custom' value), the modal falls back to the custom form shape. The
+    // title testid differentiates the two tiers without an OR over strings.
+    renderModal({ open: true, onClose: vi.fn() })
+    expect(screen.getByTestId('create-custom-modal-title')).toBeInTheDocument()
+    // The worker-only task-prompt field must NOT be in the DOM for custom.
+    expect(screen.queryByTestId('create-worker-task-prompt')).toBeNull()
+  })
+
+  it('initialType=worker wins over the store value when the prop path is taken', () => {
+    // Defensive: even if the store accidentally says 'custom', the
+    // initialType prop must still drive the modal. The prop is the source
+    // of truth on the prop-only path.
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'custom' }) })
+    renderModal({ open: true, onClose: vi.fn(), initialType: 'worker' })
+    expect(screen.getByTestId('create-worker-modal-title')).toBeInTheDocument()
   })
 
   it('does not render dialog content when closed', () => {
@@ -232,3 +274,194 @@ describe('CreateAgentModal — Skills picker (US-E6)', () => {
     expect(latestCall.skills).toBeUndefined()
   })
 })
+
+// Spec-4 FR-4.1 — Executor selector wired into the create flow.
+describe('CreateAgentModal — Executor (Spec-4)', () => {
+  it('omits executor when left on the native default', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Native Agent' } })
+    fireEvent.click(screen.getByRole('button', { name: /create agent/i }))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: 'Native Agent' }))
+    })
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.executor).toBeUndefined()
+  })
+
+  it('includes an external-cli executor in the create payload', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+
+    // Open Advanced to reveal the executor selector.
+    fireEvent.click(await screen.findByRole('button', { name: /advanced/i }))
+    const kind = await screen.findByTestId('executor-kind-select')
+    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    fireEvent.change(await screen.findByTestId('executor-cli-select'), {
+      target: { value: 'opencode' },
+    })
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'CLI Agent' } })
+    fireEvent.click(screen.getByRole('button', { name: /create agent/i }))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'CLI Agent',
+          executor: { kind: 'external-cli', cli: 'opencode' },
+        }),
+      )
+    })
+  })
+
+  it('does not render the connection test button in the create flow (no agentId)', async () => {
+    renderModal({ open: true, onClose: vi.fn() })
+    fireEvent.click(await screen.findByRole('button', { name: /advanced/i }))
+    const kind = await screen.findByTestId('executor-kind-select')
+    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    // CLI select shows, but no runner test button (no persisted agent yet).
+    expect(await screen.findByTestId('executor-cli-select')).toBeInTheDocument()
+    expect(screen.queryByTestId('runner-test-button')).toBeNull()
+  })
+})
+
+// ── Tier-preset: worker modal (v0.3 worker roster split) ────────────────────
+// Traces to: per-section "New worker" button → CreateAgentModal in worker
+// mode. The form shape, payload type, and executor-required validation are
+// the worker's defining contract.
+describe('CreateAgentModal — worker tier preset (v0.3)', () => {
+  it('shows the worker task-prompt field when opened in worker mode', () => {
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'worker' }) })
+    renderModal()
+    // The task prompt textarea is the worker-specific affordance.
+    expect(screen.getByTestId('create-worker-task-prompt')).toBeInTheDocument()
+    // The submit button is relabelled.
+    expect(screen.getByTestId('create-agent-submit')).toHaveTextContent(/create worker/i)
+  })
+
+  it('hides the worker task-prompt field when opened in custom (default) mode', () => {
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'custom' }) })
+    renderModal()
+    // The task prompt is a worker-only field. Base agents seed soul later
+    // via the profile edit flow.
+    expect(screen.queryByTestId('create-worker-task-prompt')).toBeNull()
+    expect(screen.getByTestId('create-agent-submit')).toHaveTextContent(/create agent/i)
+  })
+
+  it('blocks submission when the worker has no executor', async () => {
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'worker' }) })
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ onCreate })
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Orphan Worker' } })
+    // Open advanced to reach the submit button (it's always reachable, but
+    // the executor is hidden inside Advanced by default).
+    fireEvent.click(await screen.findByRole('button', { name: /advanced/i }))
+    fireEvent.click(screen.getByTestId('create-agent-submit'))
+
+    await vi.waitFor(() => {
+      expect(onCreate).not.toHaveBeenCalled()
+    })
+    // The executor-required error surfaces inline.
+    expect(await screen.findByTestId('executor-error')).toHaveTextContent(/worker requires an executor/i)
+  })
+
+  it('sends type=worker and the executor in the create payload when valid', async () => {
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'worker' }) })
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ onCreate })
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Scout Worker' } })
+    // Fill the optional task prompt — should be sent as `soul` on the wire.
+    fireEvent.change(screen.getByTestId('create-worker-task-prompt'), {
+      target: { value: '# Task prompt\n\nGather sources for the calling agent.' },
+    })
+    // Pick an external-cli executor in Advanced.
+    fireEvent.click(await screen.findByRole('button', { name: /advanced/i }))
+    fireEvent.change(await screen.findByTestId('executor-kind-select'), {
+      target: { value: 'external-cli' },
+    })
+    fireEvent.change(await screen.findByTestId('executor-cli-select'), {
+      target: { value: 'opencode' },
+    })
+    fireEvent.click(screen.getByTestId('create-agent-submit'))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'worker',
+          name: 'Scout Worker',
+          soul: expect.stringContaining('Gather sources for the calling agent.'),
+          executor: { kind: 'external-cli', cli: 'opencode' },
+        }),
+      )
+    })
+  })
+
+  it('sends type=custom in the create payload when opened in custom mode', async () => {
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'custom' }) })
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ onCreate })
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Base Agent' } })
+    fireEvent.click(screen.getByTestId('create-agent-submit'))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'custom', name: 'Base Agent' }),
+      )
+    })
+    // The custom payload must NOT carry soul (the base agent seeds it later
+    // via the profile edit flow) and must NOT carry a native executor.
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.soul).toBeUndefined()
+    expect(call.executor).toBeUndefined()
+  })
+
+  it('omits soul in the worker payload when the task prompt is left empty', async () => {
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'worker' }) })
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ onCreate })
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Quiet Worker' } })
+    fireEvent.click(await screen.findByRole('button', { name: /advanced/i }))
+    fireEvent.change(await screen.findByTestId('executor-kind-select'), {
+      target: { value: 'external-cli' },
+    })
+    fireEvent.change(await screen.findByTestId('executor-cli-select'), {
+      target: { value: 'claude-code' },
+    })
+    // Leave the task prompt empty.
+    fireEvent.click(screen.getByTestId('create-agent-submit'))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'worker', name: 'Quiet Worker' }),
+      )
+    })
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.soul).toBeUndefined()
+  })
+})
+
+// ── getCreateAgentFormCopy (shared tier copy) ─────────────────────────────────
+describe('getCreateAgentFormCopy — tier-branched copy', () => {
+  it('returns the worker copy when type=worker', async () => {
+    const { getCreateAgentFormCopy } = await import('./AgentFormFields')
+    const copy = getCreateAgentFormCopy('worker')
+    expect(copy.title).toBe('New sub-agent worker')
+    expect(copy.submitLabel).toBe('Create worker')
+    expect(copy.testId).toBe('create-worker-modal-title')
+  })
+
+  it('returns the custom copy when type=custom', async () => {
+    const { getCreateAgentFormCopy } = await import('./AgentFormFields')
+    const copy = getCreateAgentFormCopy('custom')
+    expect(copy.title).toBe('New custom agent')
+    expect(copy.submitLabel).toBe('Create agent')
+    expect(copy.testId).toBe('create-custom-modal-title')
+  })
+})
+

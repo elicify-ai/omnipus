@@ -22,98 +22,133 @@ import (
 // ran, the factory lookup always failed at runtime, and the operator-visible
 // `channels.teams.enabled` config flag was a dead knob.
 //
+// After the Spec-2 map migration, initChannels uses a data-driven loop (no
+// hardcoded initChannel("name", ...) string literals). The wiring guarantee is
+// now expressed differently: every channel sub-package that calls
+// channels.RegisterFactory(name, ...) in its init() must be blank-imported
+// somewhere in pkg/gateway/ so that its init() runs at startup.
+//
 // This test asserts source-level wiring intent rather than runtime
 // registration so it stays correct under any build-tag combination:
 //
-//  1. parse pkg/channels/manager.go and collect every initChannel("name", ...)
-//     call's first argument (the channel subpackage name);
+//  1. parse every *.go file under pkg/channels/<subpackage>/ (excluding test
+//     files) and collect every RegisterFactory("name", ...) call's first
+//     string argument — these are the factory names that NEED blank imports;
 //  2. parse every *.go file under pkg/gateway/ (regardless of build tags) and
 //     collect every blank import of pkg/channels/<subpackage>;
-//  3. assert each initChannel name maps to at least one blank import.
+//  3. assert each factory name maps to at least one blank import.
 //
 // A channel may legitimately be guarded by a build tag (matrix's CGO+OS
-// constraints are an example) — what is forbidden is referencing the channel
-// from initChannel without any companion blank import that would let its
-// factory register at startup on at least one supported platform.
+// constraints are an example) — what is forbidden is calling RegisterFactory
+// from a sub-package without any companion blank import that would let its
+// init() run on at least one supported platform.
 func TestNoHalfWiredChannels(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
 	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	channelsDir := filepath.Join(repoRoot, "pkg", "channels")
 
-	wantedNames := initChannelArguments(t, filepath.Join(repoRoot, "pkg", "channels", "manager.go"))
-	if len(wantedNames) == 0 {
-		t.Fatal("no initChannel(\"name\", ...) calls found in manager.go — AST parse drifted, fix the test")
+	// registeredFactories maps factory name → sub-package directory name
+	// (e.g. "google-chat" → "googlechat", "telegram" → "telegram").
+	registeredFactories := collectRegisteredFactories(t, channelsDir)
+	if len(registeredFactories) == 0 {
+		t.Fatal("no RegisterFactory(\"name\", ...) calls found under pkg/channels/ — " +
+			"AST parse drifted or all channel packages were removed; fix the test")
 	}
+
+	// subpackageOverrides reverses the factory-name → subdir mapping for factories
+	// whose name differs from their sub-package directory name.
+	// Key: factory name, value: sub-package dir name.
+	// (googlechat's factory is "google-chat" but the dir is "googlechat".)
+	// This map is the inverse of what initChannelArguments previously used.
+	// We build it from the discovered registeredFactories map directly.
 
 	imported := blankImportedChannels(t, filepath.Join(repoRoot, "pkg", "gateway"))
 
-	subpackageOverrides := map[string]string{
-		"google-chat": "googlechat",
-	}
-
 	var halfWired []string
-	for name, pos := range wantedNames {
-		pkg := name
-		if override, ok := subpackageOverrides[name]; ok {
-			pkg = override
-		}
-		if _, ok := imported[pkg]; !ok {
-			halfWired = append(halfWired, name+" -> pkg/channels/"+pkg+" ("+pos.String()+")")
+	for factoryName, subpkg := range registeredFactories {
+		if _, ok := imported[subpkg]; !ok {
+			halfWired = append(halfWired,
+				"factory \""+factoryName+"\" (pkg/channels/"+subpkg+") has no blank import in pkg/gateway/")
 		}
 	}
 	sort.Strings(halfWired)
 
 	if len(halfWired) > 0 {
 		t.Fatalf(
-			"half-wired channels — referenced by initChannel(...) in manager.go"+
+			"half-wired channels — RegisterFactory called in sub-package"+
 				" but no companion blank import in pkg/gateway/*.go:\n  %v\n\n"+
 				"Either blank-import the channel subpackage somewhere under pkg/gateway/"+
 				" (so its init() can run and call channels.RegisterFactory),"+
-				" or delete the initChannel branch entirely.",
-			halfWired,
+				" or remove the RegisterFactory call entirely.",
+			strings.Join(halfWired, "\n  "),
 		)
 	}
 }
 
-func initChannelArguments(t *testing.T, managerPath string) map[string]token.Position {
+// collectRegisteredFactories walks pkg/channels/<subpackage>/*.go (non-test
+// files) and collects every RegisterFactory("name", ...) call's first string
+// argument. Returns a map of factoryName → subpackage directory name.
+func collectRegisteredFactories(t *testing.T, channelsDir string) map[string]string {
 	t.Helper()
-	if _, err := os.Stat(managerPath); err != nil {
-		t.Fatalf("manager.go not found at %s: %v", managerPath, err)
-	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, managerPath, nil, parser.SkipObjectResolution)
+	entries, err := os.ReadDir(channelsDir)
 	if err != nil {
-		t.Fatalf("parse manager.go: %v", err)
+		t.Fatalf("read channels dir: %v", err)
 	}
-	out := map[string]token.Position{}
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+	result := map[string]string{}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "initChannel" {
-			return true
-		}
-		if len(call.Args) == 0 {
-			return true
-		}
-		lit, ok := call.Args[0].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return true
-		}
-		name, err := strconv.Unquote(lit.Value)
+		subpkg := e.Name()
+		subDir := filepath.Join(channelsDir, subpkg)
+		goFiles, err := os.ReadDir(subDir)
 		if err != nil {
-			return true
+			t.Logf("warn: could not read %s: %v", subDir, err)
+			continue
 		}
-		if _, seen := out[name]; !seen {
-			out[name] = fset.Position(lit.Pos())
+		for _, gf := range goFiles {
+			if gf.IsDir() || !strings.HasSuffix(gf.Name(), ".go") ||
+				strings.HasSuffix(gf.Name(), "_test.go") {
+				continue
+			}
+			filePath := filepath.Join(subDir, gf.Name())
+			file, err := parser.ParseFile(fset, filePath, nil, parser.SkipObjectResolution)
+			if err != nil {
+				// Parse errors under build-tag-excluded files are expected; skip.
+				continue
+			}
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel == nil || sel.Sel.Name != "RegisterFactory" {
+					return true
+				}
+				if len(call.Args) == 0 {
+					return true
+				}
+				lit, ok := call.Args[0].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				name, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					return true
+				}
+				if _, seen := result[name]; !seen {
+					result[name] = subpkg
+				}
+				return true
+			})
 		}
-		return true
-	})
-	return out
+	}
+	return result
 }
 
 func blankImportedChannels(t *testing.T, gatewayDir string) map[string]struct{} {

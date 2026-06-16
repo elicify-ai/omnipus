@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ProvidersSection } from '@/components/settings/ProvidersSection'
 
@@ -7,8 +7,15 @@ import { ProvidersSection } from '@/components/settings/ProvidersSection'
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Adding a new provider
 //             wave5a-wire-ui-spec.md — Scenario: Provider connection test fails
 //             wave5a-wire-ui-spec.md — Scenario: API key stored securely
-
-// Note: ProviderCard is not a standalone export — provider rows live inside ProvidersSection.
+//
+// Round-3 re-auth migration: saving a provider key is now consent-gated
+// (Spec-6 FR-12.2). "Save & Connect" no longer calls configureProvider
+// directly — it stages the change and opens the ReAuthDialog. The PUT only
+// fires from onReAuthConfirmed once reAuth() mints a consent token, which is
+// then replayed in configureProvider's reAuthToken arg. The tests below drive
+// that full happy path: open inline form → type key → Save & Connect →
+// confirm password in the ReAuthDialog → assert configureProvider fires with
+// the minted token.
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -17,10 +24,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchProviders: vi.fn(),
     configureProvider: vi.fn(),
     testProvider: vi.fn(),
+    reAuth: vi.fn(),
   }
 })
 
-import { fetchProviders, configureProvider, testProvider } from '@/lib/api'
+import { fetchProviders, configureProvider, testProvider, reAuth } from '@/lib/api'
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
@@ -43,30 +51,51 @@ beforeEach(() => {
   ])
   vi.mocked(configureProvider).mockResolvedValue({ id: 'openai', name: 'OpenAI', status: 'connected', models: [] })
   vi.mocked(testProvider).mockResolvedValue({ success: true })
+  // Re-auth succeeds and mints a consent token the save flow replays.
+  vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'consent-token-abc', expires_in: 300 })
 })
 
 describe('provider save & connect integration (test #27)', () => {
-  it('saves key by calling configureProvider when Save & Connect is clicked', async () => {
+  it('saves key by calling configureProvider after re-auth when Save & Connect is clicked', async () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Adding a new provider (AC2-3)
     render(<ProvidersSection />, { wrapper })
 
     await screen.findByText('OpenAI')
 
     // Find all Configure buttons — providers are [openai, anthropic, google, groq, openrouter].
-    // Click the second button (index 1) to expand Anthropic's form.
+    // Click the second button (index 1) to expand Anthropic's inline form.
     const configBtns = screen.getAllByRole('button', { name: /configure|edit/i })
     fireEvent.click(configBtns[1])
 
-    // Enter API key in the expanded form
-    // API key inputs are type="password" — not accessible as role="textbox"; use placeholder
+    // Enter API key in the expanded inline form.
+    // API key inputs are type="password" — not accessible as role="textbox"; use placeholder.
     const keyInput = screen.getByPlaceholderText(/sk-ant/i)
     fireEvent.change(keyInput, { target: { value: 'sk-ant-test-1234' } })
 
-    // Click Save & Connect
+    // Click Save & Connect — this stages the change and opens the ReAuthDialog;
+    // it does NOT call configureProvider yet (Spec-6 FR-12.2 consent gate).
     fireEvent.click(screen.getByRole('button', { name: /save.*connect/i }))
 
+    // The ReAuthDialog mounts in a portal — query it asynchronously.
+    const reauthDialog = await screen.findByRole('dialog')
+    const passwordInput = within(reauthDialog).getByTestId('reauth-password-input')
+    fireEvent.change(passwordInput, { target: { value: 'my-password' } })
+
+    // Confirm in the dialog → reAuth() resolves → onConfirmed(token) → configureProvider fires.
+    fireEvent.click(within(reauthDialog).getByTestId('reauth-confirm'))
+
     await waitFor(() => {
-      expect(configureProvider).toHaveBeenCalledWith('anthropic', 'sk-ant-test-1234')
+      expect(reAuth).toHaveBeenCalledWith('my-password')
+    })
+    await waitFor(() => {
+      // configureProvider(id, apiKey, endpoint?, model?, reAuthToken?)
+      expect(configureProvider).toHaveBeenCalledWith(
+        'anthropic',
+        'sk-ant-test-1234',
+        undefined,
+        undefined,
+        'consent-token-abc',
+      )
     })
   })
 
@@ -78,9 +107,11 @@ describe('provider save & connect integration (test #27)', () => {
     const configBtns = screen.getAllByRole('button', { name: /configure/i })
     fireEvent.click(configBtns[0])
 
-    // Do NOT enter a key — Save & Connect should be disabled
+    // Do NOT enter a key — Save & Connect should be disabled, so the re-auth
+    // gate is never reached and configureProvider is never called.
     const saveBtn = screen.getByRole('button', { name: /save.*connect/i })
     expect(saveBtn).toBeDisabled()
+    expect(reAuth).not.toHaveBeenCalled()
     expect(configureProvider).not.toHaveBeenCalled()
   })
 
@@ -100,13 +131,19 @@ describe('provider save & connect integration (test #27)', () => {
     render(<ProvidersSection />, { wrapper })
     await screen.findByText('Anthropic')
 
-    // Expand Anthropic's form — it's at index 1 in the [openai, anthropic, ...] order
+    // Expand Anthropic's inline form — it's at index 1 in the [openai, anthropic, ...] order.
     const configBtns = screen.getAllByRole('button', { name: /configure/i })
     fireEvent.click(configBtns[1])
-    // API key inputs are type="password" — not accessible as role="textbox"; use placeholder
+    // API key inputs are type="password" — not accessible as role="textbox"; use placeholder.
     const keyInput = screen.getByPlaceholderText(/sk-ant/i)
     fireEvent.change(keyInput, { target: { value: 'sk-ant-valid-key' } })
     fireEvent.click(screen.getByRole('button', { name: /save.*connect/i }))
+
+    // Pass the re-auth gate so the PUT actually fires.
+    const reauthDialog = await screen.findByRole('dialog')
+    const passwordInput = within(reauthDialog).getByTestId('reauth-password-input')
+    fireEvent.change(passwordInput, { target: { value: 'my-password' } })
+    fireEvent.click(within(reauthDialog).getByTestId('reauth-confirm'))
 
     await waitFor(() => {
       expect(configureProvider).toHaveBeenCalled()

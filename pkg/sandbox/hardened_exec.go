@@ -1,26 +1,50 @@
 // Package sandbox — hardened-exec child wrapper for Tier 2 (build_static)
 // and Tier 3 (web_serve dev mode + workspace.shell_bg) tools.
 //
-// Cross-platform contract:
+// Cross-platform contract — what each platform's applyPlatformHardening /
+// applyPostStartHardening actually does:
 //
-// - Linux: Setpgid + Pdeathsig=SIGTERM for clean parent-death cleanup,
-// plus prlimit on RLIMIT_AS (memory) and RLIMIT_CPU (cpu seconds).
-// Children inherit gateway Landlock + seccomp unchanged (,
-// no narrowing in v4).
-// - macOS: prlimit-equivalent via Setrlimit (RLIMIT_AS unsupported on
-// darwin; uses RLIMIT_DATA which approximates heap+stack). No isolation
-// primitive beyond OS perms.
-// - Windows: Job Object with JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-// (process-memory limit + KILL_ON_JOB_CLOSE so the child dies if the
-// gateway exits). No DACL/Restricted Token/AppContainer in v4.
+//   - Linux: Setpgid (so the whole subtree can be signalled) + Pdeathsig=
+//     SIGTERM (so an orphaned child dies if the gateway exits). Post-start,
+//     prlimit sets RLIMIT_NPROC unconditionally (fork-bomb cap) and RLIMIT_AS
+//     when Limits.MemoryLimitBytes is non-zero. NOTE: RLIMIT_CPU is
+//     deliberately NOT used — cpu-time != wall-clock, so the timeout is
+//     enforced via context cancellation instead (see Limits.TimeoutSeconds).
+//   - macOS: Setpgid only. There is NO Pdeathsig (XNU has no equivalent) and
+//     NO memory limit (RLIMIT_AS is unimplemented on XNU; RLIMIT_DATA does not
+//     cover the mmap regions where Node/V8 live and prlimit does not exist, so
+//     MemoryLimitBytes is ignored — applyPostStartHardening only logs a WARN
+//     and Run reports Result.MemoryLimitUnsupported=true). No isolation
+//     primitive beyond normal OS user permissions.
+//   - Windows: Job Object with JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+//     (process-memory limit + KILL_ON_JOB_CLOSE so the child dies if the
+//     gateway exits). No DACL / Restricted Token / AppContainer.
 //
-// All platforms inject HTTP_PROXY/HTTPS_PROXY when EgressProxyAddr is non-
-// empty and npm_config_cache when WorkspaceDir is non-empty ( — per-
-// agent npm cache so concurrent builds don't fight over a shared cache).
+// Landlock + seccomp are NOT applied by this package's per-child hardening.
+// They are process-wide state established once by the gateway at boot (Linux
+// >= 5.13, enforce/permissive mode only) and are inherited by fork()ed
+// children of any thread that carries the Landlock domain. Because Go's M:N
+// scheduler may run the spawning goroutine on a worker thread that never had
+// restrict_self applied, the Run and StartLocked entry points lock a fresh OS
+// thread and call restrictCurrentThreadIfNeeded BEFORE forking so the child
+// reliably inherits the kernel sandbox. Callers that build their own *exec.Cmd
+// and use ApplyChildHardening directly (instead of Run/StartLocked) do NOT get
+// that per-thread re-apply and must perform the spawn on an already-restricted
+// thread themselves (the workspace.shell_bg path routes through StartLocked for
+// exactly this reason). On older kernels, non-Linux platforms, and sandbox
+// mode "off", there is no Landlock/seccomp domain to inherit at all.
 //
-// Threat note: Tier 2 and Tier 3 are documented as trusted-prompt features
-//. The child has the gateway's full filesystem reach;
-// raw TCP egress is unblocked. Operator awareness is the primary control.
+// All platforms inject HTTP_PROXY/HTTPS_PROXY (lower- and upper-case) when
+// Limits.EgressProxyAddr is non-empty, and npm_config_cache when
+// Limits.WorkspaceDir is non-empty (per-agent npm cache so concurrent builds
+// don't fight over a shared cache). See mergeEnv. Egress-proxy coverage is
+// HTTP/HTTPS only — raw TCP connect() is not routed through the proxy.
+//
+// Threat note: Tier 2 and Tier 3 are documented as trusted-prompt features.
+// On the sandbox-off path the child has the gateway user's full filesystem
+// reach and raw TCP egress is unblocked; on the sandbox-on path the gateway's
+// Landlock FS rules and bind/connect port allow-list constrain it. Operator
+// awareness remains a primary control.
 
 package sandbox
 
@@ -33,6 +57,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -204,6 +229,122 @@ func isAllowedChildEnvKey(name string) bool {
 // Closes pentest item 3 (#155).
 func ScrubGatewayEnv() []string {
 	return filterChildEnv()
+}
+
+// runnerCredentialEnvKeys is the SEPARATE, security-sensitive allowlist of
+// credential / config-home environment variable names that an EXTERNAL-AGENT
+// CLI RUNNER child (Claude Code, Codex, opencode — Spec-4 FR-5.3) is permitted
+// to inherit, ON TOP OF the generic allowedChildEnvKeys set.
+//
+// Threat model (Spec-4 FR-5.3, security-sensitive):
+//
+//	These keys CARRY SECRETS (API keys, OAuth bearer tokens). They are
+//	DELIBERATELY ABSENT from the generic allowedChildEnvKeys allowlist because
+//	the generic allowlist feeds EVERY hardened-exec child — every
+//	`workspace.shell`, `web_serve`, and `build_static` subprocess. Leaking an
+//	Anthropic / OpenAI key into an arbitrary build script is exactly the
+//	fail-open class the v0.2 #155 allowlist rework closed.
+//
+//	The external-CLI runner is the ONE caller that legitimately needs these:
+//	the CLI authenticates to its upstream model provider on the operator's
+//	behalf. The runner's dispatch site
+//	(pkg/agent/external_dispatch.go::runExternalCLISubTurn) sets
+//	RunOptions.Env = ScrubGatewayEnvForRunner() (below), which unions THIS
+//	narrow set with the generic allowlist; the driver then uses that slice as
+//	the COMPLETE child env (runner.buildChildEnv) with NO os.Environ() fallback.
+//	No other spawn path sees these keys, and the gateway secrets (e.g.
+//	OMNIPUS_MASTER_KEY) never reach the child.
+//
+// Each key is grounded in the respective CLI's documented auth contract:
+//
+//	ANTHROPIC_API_KEY    — Claude Code + opencode (Anthropic mode): the
+//	                       sk-ant-api03 model key. Without it the CLI 403s.
+//	ANTHROPIC_AUTH_TOKEN — Claude Code: OAuth / corporate-proxy bearer token.
+//	ANTHROPIC_BASE_URL   — Claude Code + opencode: provider endpoint override
+//	                       (not itself a secret, but auth is meaningless if the
+//	                       child can't reach the configured endpoint).
+//	CLAUDE_CONFIG_DIR    — Claude Code: config-dir override; the OAuth creds
+//	                       live as files under it (default ~/.claude, reached
+//	                       via HOME, already allowlisted). Passed through so an
+//	                       operator-isolated config dir resolves in the child.
+//	OPENAI_API_KEY       — Codex + opencode: the OpenAI model key.
+//	OPENAI_BASE_URL      — Codex + opencode: provider endpoint override.
+//	CODEX_HOME           — Codex: override for ~/.codex (holds auth.json).
+//	                       Default ~/.codex is reached via HOME; this honours a
+//	                       custom location. See providers.CodexHomeEnvVar.
+//
+// DO NOT add a key here unless an external-CLI runner provably needs it to
+// authenticate. Anything added is a secret that reaches every external-CLI
+// child for the life of the gateway. This set is intentionally exact — not a
+// prefix family — so a future audit can enumerate every leak path by reading
+// this map.
+var runnerCredentialEnvKeys = map[string]struct{}{
+	"ANTHROPIC_API_KEY":    {},
+	"ANTHROPIC_AUTH_TOKEN": {},
+	"ANTHROPIC_BASE_URL":   {},
+	"CLAUDE_CONFIG_DIR":    {},
+	"OPENAI_API_KEY":       {},
+	"OPENAI_BASE_URL":      {},
+	"CODEX_HOME":           {},
+}
+
+// RunnerCredentialEnvKeys returns a sorted snapshot of the external-CLI runner
+// credential-env allowlist (see runnerCredentialEnvKeys). Exported for the
+// runner package's tests and for audit tooling that needs to enumerate the
+// exact secret-bearing keys that may reach a runner child. The returned slice
+// is a copy; mutating it does not affect the allowlist.
+func RunnerCredentialEnvKeys() []string {
+	out := make([]string, 0, len(runnerCredentialEnvKeys))
+	for k := range runnerCredentialEnvKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// isRunnerCredentialEnvKey reports whether name is in the external-CLI runner
+// credential allowlist. It is NOT consulted by the generic isAllowedChildEnvKey
+// path — only by filterChildEnvForRunner — so these secret-bearing keys never
+// leak into a generic workspace.shell / build child.
+func isRunnerCredentialEnvKey(name string) bool {
+	_, ok := runnerCredentialEnvKeys[name]
+	return ok
+}
+
+// ScrubGatewayEnvForRunner returns os.Environ() filtered through the UNION of
+// the generic child allowlist (allowedChildEnvKeys + prefixes) AND the
+// external-CLI runner credential allowlist (runnerCredentialEnvKeys).
+//
+// This is the ONLY function that lets credential-bearing env vars through. It
+// is reserved for the Spec-4 external-agent CLI runner spawn path (FR-5.3 —
+// "the CLI's credentials are passed via the env-allowlist"). Generic children
+// (workspace.shell, web_serve, build_static) MUST keep using ScrubGatewayEnv,
+// which excludes these keys.
+//
+// The runner still spawns inside a git-worktree FS boundary and under the
+// external CLI's own kernel sandbox; the credential env is what lets the CLI
+// authenticate to its model provider from inside that confinement.
+func ScrubGatewayEnvForRunner() []string {
+	return filterChildEnvForRunner()
+}
+
+// filterChildEnvForRunner is filterChildEnv with the runner credential keys
+// additionally permitted. Same drop rules for malformed entries.
+func filterChildEnvForRunner() []string {
+	parent := os.Environ()
+	out := make([]string, 0, len(parent))
+	for _, kv := range parent {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			continue
+		}
+		key := kv[:eq]
+		if !isAllowedChildEnvKey(key) && !isRunnerCredentialEnvKey(key) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // filterChildEnv returns os.Environ() filtered through the child process

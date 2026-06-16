@@ -82,10 +82,6 @@ func NewProvider(apiKey, apiBase, proxy string, opts ...Option) (*Provider, erro
 	return p, nil
 }
 
-func NewProviderWithMaxTokensField(apiKey, apiBase, proxy, maxTokensField string) (*Provider, error) {
-	return NewProvider(apiKey, apiBase, proxy, WithMaxTokensField(maxTokensField))
-}
-
 func NewProviderWithMaxTokensFieldAndTimeout(
 	apiKey, apiBase, proxy, maxTokensField string,
 	requestTimeoutSeconds int,
@@ -221,6 +217,7 @@ func (p *Provider) ChatStream(
 
 	requestBody := p.buildRequestBody(messages, tools, model, options)
 	requestBody["stream"] = true
+	requestBody["stream_options"] = map[string]any{"include_usage": true}
 
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {

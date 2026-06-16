@@ -1,0 +1,68 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspaces · Omnipus concept</title><link rel="stylesheet" href="style.css">
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html" class="active">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Workspaces</div>
+  <div class="eyebrow">The structural foundation, simplified</div>
+  <h1>Workspaces</h1>
+  <p class="lede"><b style="color:#fff">One container — the Workspace</b> — holds everything for a context: tasks, memory, calendar, automations, connections, member agents. One pre-seeded default (<b style="color:#fff">My Workspace</b>), named workspaces for real work, and the sidebar switcher sets the context. No abstract "spaces", no mode switcher. <span style="color:var(--muted)">(Channels &amp; Connections have their <a href="channels.html">own page →</a>)</span></p>
+</div></div>
+
+<!-- PROJECTS -->
+<section id="projects"><div class="wrap">
+  <div class="eyebrow">Simplification · "Rooms"/"Spaces" → just Workspaces</div>
+  <h2>One container, and context is <span class="gold">which workspace you're in</span></h2>
+  <p class="sub">An earlier draft had three parallel "space" tiers (User · Agent · Project) plus a global scope switcher — too many systems doing the same job. Collapse them: there is <b>one container, the Workspace</b>. You never pick a "scope" — the context is simply <b>which workspace you've selected</b> in the <b>workspace switcher already in the sidebar</b>.</p>
+  <div class="fig">
+  <svg viewBox="0 0 980 250" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><marker id="g" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b8b97"/></marker></defs>
+    <rect x="30" y="30" width="220" height="200" rx="12" fill="#0e0e12" stroke="#23232a"/>
+    <text x="48" y="54" fill="#8b8b97" font-size="10.5" font-family="JetBrains Mono" letter-spacing="1">SIDEBAR · workspace switcher</text>
+    <g font-size="12.5">
+      <rect x="46" y="68" width="188" height="34" rx="8" fill="#16161c" stroke="#a78bfa"/><text x="60" y="90" fill="#a78bfa">🏠 My Workspace (default)</text>
+      <rect x="46" y="110" width="188" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="60" y="132" fill="#cdd3de">📁 Acme</text>
+      <rect x="46" y="152" width="188" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="60" y="174" fill="#cdd3de">📁 Q3 Launch</text>
+      <rect x="46" y="194" width="188" height="26" rx="8" fill="#101014" stroke="#2a2a31"/><text x="60" y="211" fill="#5f5f6b" font-size="11">+ new workspace</text>
+    </g>
+    <text x="340" y="48" fill="#5f5f6b" font-size="11" text-anchor="middle">picking a workspace sets the whole context</text>
+    <line x1="250" y1="85" x2="430" y2="85" stroke="#8b8b97" stroke-dasharray="3 3" marker-end="url(#g)"/>
+    <line x1="250" y1="127" x2="430" y2="127" stroke="#8b8b97" stroke-dasharray="3 3" marker-end="url(#g)"/>
+    <rect x="440" y="40" width="510" height="180" rx="14" fill="#101014" stroke="#60a5fa"/>
+    <text x="466" y="66" fill="#60a5fa" font-family="Outfit" font-weight="700" font-size="15">📁 The selected Workspace = the context</text>
+    <g font-size="12" fill="#cdd3de"><text x="466" y="92">· tasks · milestones · shared memory room</text><text x="466" y="114">· calendar · automations · its connections</text><text x="466" y="136">· member agents (incl. their private memory)</text></g>
+    <rect x="466" y="156" width="460" height="46" rx="9" fill="#0e0e12" stroke="#a78bfa"/><text x="486" y="174" fill="#a78bfa" font-size="11.5">My Workspace is special: the Assistant is bound to it</text><text x="486" y="190" fill="#8b8b97" font-size="11">(your accounts · email · calendar) — but it's still just a Workspace.</text>
+  </svg>
+  <div class="figcap">Pick a workspace in the sidebar → that's your context. The Assistant is bound to My Workspace; team agents work in whichever workspace you've selected.</div>
+  </div>
+  <div class="grid g2">
+    <div class="card"><h3>How context is decided — no switcher mode</h3><ul class="clean">
+      <li><b>Mia (your Assistant)</b> → <b>My Workspace</b>; can recall across all your workspaces</li>
+      <li><b>The other base agents</b> (Jim · Ray · Ava) → the <b>selected workspace</b>, and work in whichever workspace you've selected</li>
+      <li><b>Workers</b> inherit the caller's workspace; <b>handover</b> stays within it</li>
+      <li>The sidebar <b>workspace switcher</b> (already in the product) is the only control — it sets the overall context</li>
+    </ul></div>
+    <div class="card"><h3>Pre-seeded</h3><ul class="clean">
+      <li><b>My Workspace</b> — the one default; the Assistant's home; your connected accounts (email · calendar), your default tasks; team agents work here too by default</li>
+      <li>You create <b>named workspaces</b> ("Acme", "Q3 Launch") for real work — "+ new workspace"</li>
+      <li><span class="muted">Naming: code currently seeds the default as <span class="mono">"Main"</span> — proposed rename to default workspace <span class="mono">"My Workspace"</span></span></li>
+    </ul></div>
+  </div>
+  <div class="callout">Naming goes <b>all the way down</b>: we rename <span class="mono">project → workspace</span> across code, contracts and storage too — today's <span class="mono">project_id → workspace_id</span>, <span class="mono">rest_projects.go → rest_workspaces.go</span>, <span class="mono">Project.yaml → Workspace.yaml</span>, <span class="mono">users/&lt;user&gt;/projects/ → /workspaces/</span>, and the memory "project room" → "workspace room". A <b>v0.1.0 migration</b> (contract-affecting, Constraint #8), done up front so nothing downstream carries the old name. <span class="muted">(Pages cite today's <span class="mono">project_*</span> names as the current code.)</span></div>
+  <div class="callout b">Tenancy, precisely: Omnipus is a <b>single-user</b> self-hosted app — <b>one user</b> (name set at onboarding), <b>one password</b>. No multi-user, no RBAC roles, no tenancy. Sensitive settings (model/billing keys, channel setup, security, deletes) are protected by <b style="color:var(--blue)">re-typing the same password</b> — a sudo-style confirm, not a second credential or admin account. <span class="mono">owner=username</span> (#406) survives only as <b>attribution</b> ("you" vs which agent created something), never an access gate. Workspaces, agents, memory and tasks are simply yours — nothing is hidden or access-gated.</div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">The outside world</div>
+  <h2>Channels live on their own page</h2>
+  <p class="sub">How agents reach Telegram / Email / Webhooks — the Channel · Connection · Identity · Binding model, the singleton limit, and the multi-instance "rock" — now has a dedicated page.</p>
+  <p><a class="more" href="channels.html" style="font-family:'JetBrains Mono',monospace;color:var(--gold)">Channels &amp; Connections →</a></p>
+</div></section>
+
+<footer><div class="wrap"><p><a href="blueprint.html" style="color:var(--muted)">← Blueprint</a> &nbsp;·&nbsp; Next: <a href="channels.html">Channels →</a></p></div></footer>
+</body></html>

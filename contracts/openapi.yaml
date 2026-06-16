@@ -49,6 +49,14 @@ tags:
   description: Agent management endpoints
 - name: Settings
   description: Credentials, backup/restore, and storage management
+- name: Workspaces
+  description: Workspace management — create, list, update, delete, and session linking.
+- name: Board Tasks
+  description: GTD board tasks — distinct from workflow tasks at /tasks.
+- name: Milestones
+  description: Workspace milestones — group tasks under named milestones with optional due dates.
+- name: Stats
+  description: Usage statistics and aggregations.
 components:
   securitySchemes:
     BearerAuth:
@@ -126,6 +134,8 @@ components:
       $ref: ./components/schemas/AgentCreateRequest.yaml
     AgentUpdateRequest:
       $ref: ./components/schemas/AgentUpdateRequest.yaml
+    ExecutorConfig:
+      $ref: ./components/schemas/ExecutorConfig.yaml
     AgentSession:
       $ref: ./components/schemas/AgentSession.yaml
     SessionScopeRequest:
@@ -142,6 +152,8 @@ components:
       $ref: ./components/schemas/GlobalToolPolicies.yaml
     ChannelId:
       $ref: ./components/schemas/ChannelId.yaml
+    ChannelIdentity:
+      $ref: ./components/schemas/ChannelIdentity.yaml
     ChannelEntry:
       $ref: ./components/schemas/ChannelEntry.yaml
     RetentionConfig:
@@ -174,8 +186,53 @@ components:
       $ref: ./components/schemas/HealthResponse.yaml
     GatewayStatus:
       $ref: ./components/schemas/GatewayStatus.yaml
+    PerformanceSettings:
+      $ref: ./components/schemas/PerformanceSettings.yaml
+    PerformanceSettingsUpdate:
+      $ref: ./components/schemas/PerformanceSettingsUpdate.yaml
     Provider:
       $ref: ./components/schemas/Provider.yaml
+    ReAuthRequest:
+      $ref: ./components/schemas/ReAuthRequest.yaml
+    ReAuthResponse:
+      $ref: ./components/schemas/ReAuthResponse.yaml
+    IntegrationProvider:
+      $ref: ./components/schemas/IntegrationProvider.yaml
+    IntegrationProvidersResponse:
+      type: object
+      description: >
+        Response from GET /api/v1/integrations/providers. Lists every
+        configurable search and voice-input integration provider (FR-12.1),
+        plus which provider is currently active for each kind. Defined inline so
+        the search/voice arrays reference the shared IntegrationProvider
+        component (a relative file $ref would inline as anonymous structs).
+      required:
+        - search
+        - voice
+      additionalProperties: false
+      properties:
+        search:
+          type: array
+          description: Configurable web-search providers.
+          items:
+            $ref: '#/components/schemas/IntegrationProvider'
+        voice:
+          type: array
+          description: Configurable voice-input transcription providers.
+          items:
+            $ref: '#/components/schemas/IntegrationProvider'
+        active_search:
+          type: string
+          description: id of the currently active search provider, when one is selected.
+          example: "brave"
+        active_voice:
+          type: string
+          description: id of the currently active voice transcriber, when one is configured.
+          example: "elevenlabs"
+    IntegrationProviderUpdateRequest:
+      $ref: ./components/schemas/IntegrationProviderUpdateRequest.yaml
+    TranscribeResponse:
+      $ref: ./components/schemas/TranscribeResponse.yaml
     Skill:
       $ref: ./components/schemas/Skill.yaml
     ActivityEvent:
@@ -276,6 +333,8 @@ components:
       $ref: ./components/schemas/RetentionUpdateResponse.yaml
     AgentToolsResponse:
       $ref: ./components/schemas/AgentToolsResponse.yaml
+    RunnerTestResponse:
+      $ref: ./components/schemas/RunnerTestResponse.yaml
     ChannelEnabledResponse:
       $ref: ./components/schemas/ChannelEnabledResponse.yaml
     ChannelTestResponse:
@@ -328,6 +387,10 @@ components:
       $ref: ./components/schemas/AppStatePatchRequest.yaml
     SkillInstallRequest:
       $ref: ./components/schemas/SkillInstallRequest.yaml
+    SkillSearchResult:
+      $ref: ./components/schemas/SkillSearchResult.yaml
+    SkillMarketplaceStatus:
+      $ref: ./components/schemas/SkillMarketplaceStatus.yaml
     SseChatRequest:
       $ref: ./components/schemas/SseChatRequest.yaml
     ToolApprovalActionRequest:
@@ -370,6 +433,65 @@ components:
       $ref: ./components/schemas/Notification.yaml
     NotificationList:
       $ref: ./components/schemas/NotificationList.yaml
+    Workspace:
+      $ref: ./components/schemas/Workspace.yaml
+    WorkspaceCreateRequest:
+      $ref: ./components/schemas/WorkspaceCreateRequest.yaml
+    WorkspaceUpdateRequest:
+      $ref: ./components/schemas/WorkspaceUpdateRequest.yaml
+    GTDBoardTaskStatus:
+      $ref: ./components/schemas/GTDBoardTaskStatus.yaml
+    BoardTaskUpdateStatus:
+      $ref: ./components/schemas/BoardTaskUpdateStatus.yaml
+    BoardTask:
+      $ref: ./components/schemas/BoardTask.yaml
+    BoardTaskListItem:
+      $ref: ./components/schemas/BoardTaskListItem.yaml
+    BoardTaskListResponse:
+      type: object
+      description: Paginated list response for GET /board/tasks
+      required:
+        - items
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BoardTaskListItem'
+        total:
+          type: integer
+          description: Total number of tasks matching the filter (before pagination).
+          example: 42
+    BoardTaskCreateRequest:
+      $ref: ./components/schemas/BoardTaskCreateRequest.yaml
+    BoardTaskUpdateRequest:
+      $ref: ./components/schemas/BoardTaskUpdateRequest.yaml
+    WorkspaceSessionLink:
+      $ref: ./components/schemas/WorkspaceSessionLink.yaml
+    Milestone:
+      $ref: ./components/schemas/Milestone.yaml
+    MilestoneCreateRequest:
+      $ref: ./components/schemas/MilestoneCreateRequest.yaml
+    MilestoneUpdateRequest:
+      $ref: ./components/schemas/MilestoneUpdateRequest.yaml
+    MilestoneListResponse:
+      type: object
+      description: List response for GET /workspaces/{id}/milestones
+      required:
+        - milestones
+        - total
+      properties:
+        milestones:
+          type: array
+          items:
+            $ref: '#/components/schemas/Milestone'
+        total:
+          type: integer
+          description: Total number of milestones for this workspace.
+    AgentTokenEntry:
+      $ref: ./components/schemas/AgentTokenEntry.yaml
+    TokenUsageSummary:
+      $ref: ./components/schemas/TokenUsageSummary.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -420,6 +542,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     500InternalServerError:
       description: Internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    502BadGateway:
+      description: "Bad gateway \u2014 an upstream dependency (e.g. a skill registry) is unreachable or returned an error."
       content:
         application/json:
           schema:
@@ -560,6 +688,138 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /auth/reauth:
+    post:
+      operationId: reAuth
+      summary: Re-verify the user's password to consent to a sensitive setting change
+      description: 'Single-user consent primitive (FR-12.2). Re-verifies the authenticated user''s one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+
+        '
+      tags:
+      - auth
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReAuthRequest'
+      responses:
+        '200':
+          description: Password re-verified; a consent token is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReAuthResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /integrations/providers:
+    get:
+      operationId: getIntegrationProviders
+      summary: List configurable search and voice-input integration providers
+      description: 'Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+
+        '
+      tags:
+      - integrations
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: The integration provider catalogue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationProvidersResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /integrations/providers/{id}:
+    put:
+      operationId: updateIntegrationProvider
+      summary: Configure a search or voice-input integration provider
+      description: 'Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+
+        '
+      tags:
+      - integrations
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider identifier (e.g. "brave", "elevenlabs").
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationProviderUpdateRequest'
+      responses:
+        '200':
+          description: Provider configured; the updated catalogue is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationProvidersResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /voice/transcribe:
+    post:
+      operationId: transcribeAudio
+      summary: Transcribe an uploaded audio clip with the active transcriber
+      description: 'Accepts a multipart/form-data audio file (field "audio") captured by the chat composer mic and returns the transcribed text via the active Transcriber (FR-12.1). Responds 503 when no transcriber is configured. Requires authentication.
+
+        '
+      tags:
+      - voice
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - audio
+              properties:
+                audio:
+                  type: string
+                  format: binary
+                  description: The recorded audio clip (webm/ogg/wav/mp3).
+      responses:
+        '200':
+          description: Transcription succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscribeResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
         '500':
           $ref: '#/components/responses/500InternalServerError'
   /onboarding/complete:
@@ -1369,6 +1629,40 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+  /agents/{id}/runner/test:
+    post:
+      operationId: testAgentRunner
+      summary: Test an external-CLI runner connection for an agent
+      description: 'Connection/health check for the agent''s configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent''s executor is native/remote-a2a (no runner to test).
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: jim
+      responses:
+        '200':
+          description: Connection test result (the test ran; ok indicates pass/fail).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunnerTestResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /security/session-scope:
     get:
       operationId: getSessionScope
@@ -2138,6 +2432,63 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: Sweep already in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /performance:
+    get:
+      operationId: getPerformanceSettings
+      summary: Get agent concurrency settings
+      description: >
+        Returns the max-parallel-agents cap and the effective (clamped) value
+        currently in use. Admin-only.
+      tags:
+        - Settings
+      responses:
+        '200':
+          description: Current performance settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerformanceSettings'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updatePerformanceSettings
+      summary: Update agent concurrency settings (admin only)
+      description: >
+        Updates max_parallel_agents. The effective value is clamped to
+        [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a
+        gateway restart to take effect (requires_restart: false — the semaphore
+        is resized in-memory on PUT). Admin-only.
+      tags:
+        - Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PerformanceSettingsUpdate'
+      responses:
+        '200':
+          description: Updated performance settings (including effective value).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerformanceSettings'
+        '400':
+          description: Invalid value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required.
           content:
             application/json:
               schema:
@@ -3049,13 +3400,85 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /skills/search:
+    get:
+      operationId: searchSkills
+      summary: Search the skill marketplace
+      description: >
+        Searches configured skill registries (e.g. ClawHub) for skills matching
+        the query. Returns an array of marketplace results (not installed skills).
+        Install a result by its slug via POST /skills/install.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: q
+        in: query
+        required: true
+        description: Search query. Must be non-empty.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+        example: "web search"
+      - name: limit
+        in: query
+        required: false
+        description: Maximum number of results to return (default 20, capped at 50).
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 20
+        example: 20
+      responses:
+        '200':
+          description: Array of skill marketplace search results (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillSearchResult'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '502':
+          $ref: '#/components/responses/502BadGateway'
+  /skills/marketplace:
+    get:
+      operationId: getSkillMarketplaceStatus
+      summary: Report skill marketplace availability
+      description: >
+        Reports whether any skill marketplace registry is enabled. The SPA gates
+        its skill-browse UI on this: when enabled is false, search and
+        install-by-slug are unavailable (those endpoints return 409) and the UI
+        offers only "install from file".
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Skill marketplace status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillMarketplaceStatus'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
   /skills/install:
     post:
       operationId: installSkill
       summary: Install a skill from the ClawHub registry
       description: >
-        Installs a skill by name from the ClawHub registry. Currently returns
-        501 Not Implemented while the registry integration is in progress.
+        Installs a skill by its slug from the ClawHub registry. The slug is the
+        identifier returned in a SkillSearchResult. An optional version pins the
+        installed version; when omitted the latest version is installed.
       tags:
       - Skills
       security:
@@ -3077,12 +3500,12 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
-        '501':
-          description: Not yet implemented.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '502':
+          $ref: '#/components/responses/502BadGateway'
   /chat:
     post:
       operationId: postChat
@@ -4018,5 +4441,571 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+
+  /workspaces:
+    get:
+      operationId: listWorkspaces
+      summary: List workspaces
+      description: >
+        Returns all workspaces, newest-first. Excludes archived workspaces by default.
+        Use ?status=archived to list archived workspaces or ?status=all for everything.
+        task_count is computed live from the GTD task store.
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [active, archived, all]
+        description: Filter by workspace status. Defaults to active.
+      responses:
+        '200':
+          description: Workspace list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Workspace'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: createWorkspace
+      summary: Create a workspace
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceCreateRequest'
+      responses:
+        '201':
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /workspaces/{id}:
+    get:
+      operationId: getWorkspace
+      summary: Get a workspace by ID
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updateWorkspace
+      summary: Update a workspace (partial update — absent fields unchanged)
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceUpdateRequest'
+      responses:
+        '200':
+          description: Updated workspace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteWorkspace
+      summary: Delete a workspace and cascade-delete its tasks and session links
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/sessions:
+    get:
+      operationId: listWorkspaceSessions
+      summary: List sessions auto-linked to this workspace
+      description: >
+        Returns sessions that were auto-linked when an agent created or updated
+        a GTD task with this workspace_id. Returns 200 with empty array when workspace
+        exists but has no links. Returns 404 when workspace does not exist.
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Linked sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WorkspaceSessionLink'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/milestones:
+    get:
+      operationId: listWorkspaceMilestones
+      summary: List milestones for a workspace
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      responses:
+        '200':
+          description: Milestone list with total count
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MilestoneListResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    post:
+      operationId: createWorkspaceMilestone
+      summary: Create a milestone for a workspace
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MilestoneCreateRequest'
+      responses:
+        '201':
+          description: Created milestone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Milestone'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/milestones/{milestoneId}:
+    get:
+      operationId: getWorkspaceMilestone
+      summary: Get a milestone by ID
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: milestoneId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Milestone ID.
+      responses:
+        '200':
+          description: Milestone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Milestone'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updateWorkspaceMilestone
+      summary: Update a milestone (partial update)
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: milestoneId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Milestone ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MilestoneUpdateRequest'
+      responses:
+        '200':
+          description: Updated milestone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Milestone'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteWorkspaceMilestone
+      summary: Delete a milestone
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: milestoneId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Milestone ID.
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /board/tasks:
+    get:
+      operationId: listBoardTasks
+      summary: List GTD board tasks
+      description: >
+        Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow
+        tasks at /tasks. Supports filtering by workspace_id and status.
+        Default limit 200, max 1000.
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by workspace ID.
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [inbox, next, active, waiting, done, failed]
+        description: Filter by GTD status.
+      - name: agent_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by agent ID.
+      - name: milestone_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by milestone ID.
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 200
+          maximum: 1000
+        description: Maximum items to return.
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+        description: Pagination offset.
+      responses:
+        '200':
+          description: Board task list with total count
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTaskListResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: createBoardTask
+      summary: Create a GTD board task
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: './components/schemas/BoardTaskCreateRequest.yaml'
+      responses:
+        '201':
+          description: Created board task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTask'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /board/tasks/{id}:
+    get:
+      operationId: getBoardTask
+      summary: Get a GTD board task by ID
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Board task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTask'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updateBoardTask
+      summary: Update a GTD board task (partial update)
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: './components/schemas/BoardTaskUpdateRequest.yaml'
+      responses:
+        '200':
+          description: Updated board task (full object)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTask'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteBoardTask
+      summary: Delete a GTD board task
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /board/tasks/{id}/start:
+    post:
+      operationId: startBoardTask
+      summary: Start a board task — create session, link it, set status active
+      tags:
+        - Board Tasks
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task started; session_id and status=active set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTask'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /stats/tokens:
+    get:
+      operationId: getTokenStats
+      summary: Get per-agent token usage summary
+      description: >
+        Aggregates token usage from SessionMeta.Stats across all session files
+        for the requested period. period=month means the current calendar month UTC.
+        No dollar estimates — token counts only.
+      tags:
+      - Stats
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: period
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [month]
+          default: month
+        description: Aggregation period.
+      responses:
+        '200':
+          description: Token usage summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenUsageSummary'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
 security:
 - BearerAuth: []

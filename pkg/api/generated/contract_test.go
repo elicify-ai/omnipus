@@ -3267,3 +3267,110 @@ func TestContract_TaskEntity_LegacyInProgressStatusRejected(t *testing.T) {
 		"un-migrated status=\"in_progress\" must FAIL Task.yaml validation — "+
 			"this is the canary that catches a code change skipping the migration")
 }
+
+// ── Level-1 / Spec-3 / Spec-6 REST response type contract tests ──────────────
+// Marshal-validate roundtrip coverage so a Go struct producing schema-invalid
+// JSON for a served REST response type is caught by CI.
+
+func TestContract_BoardTask_Populated(t *testing.T) {
+	mustPassComponent(t, "BoardTask", FixtureBoardTask_Populated())
+}
+
+func TestContract_BoardTask_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "BoardTask", FixtureBoardTask_ZeroValue(),
+		"status is \"\" (not in enum) and name is \"\" (minLength: 1)")
+}
+
+func TestContract_Milestone_Populated(t *testing.T) {
+	mustPassComponent(t, "Milestone", FixtureMilestone_Populated())
+}
+
+func TestContract_Milestone_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "Milestone", FixtureMilestone_ZeroValue(),
+		"name is \"\" (minLength: 1)")
+}
+
+func TestContract_Milestone_ProgressRange(t *testing.T) {
+	// progress must be within [0, 1]; a value outside the range must fail.
+	m := FixtureMilestone_Populated()
+	bad := float32(1.5)
+	m.Progress = &bad
+	raw, err := json.Marshal(m)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Milestone", raw),
+		"progress=1.5 must FAIL Milestone.yaml validation (maximum: 1)")
+}
+
+func TestContract_Workspace_Populated(t *testing.T) {
+	mustPassComponent(t, "Workspace", FixtureWorkspace_Populated())
+}
+
+func TestContract_Workspace_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "Workspace", FixtureWorkspace_ZeroValue(),
+		"status is \"\" (not in [active, archived]) and name is \"\" (minLength: 1)")
+}
+
+func TestContract_DelegationPolicy_Populated(t *testing.T) {
+	assert.NoError(t,
+		validateAgainstComponentSchemaRawJSON(t, "DelegationPolicy", FixtureDelegationPolicy_PopulatedJSON()),
+		"fully-specified delegation policy must validate against DelegationPolicy.yaml")
+}
+
+func TestContract_DelegationPolicy_ZeroValue(t *testing.T) {
+	// No required fields → empty object is schema-valid (deny-by-default).
+	assert.NoError(t,
+		validateAgainstComponentSchemaRawJSON(t, "DelegationPolicy", FixtureDelegationPolicy_ZeroValueJSON()),
+		"empty delegation policy {} must validate (no required fields)")
+}
+
+func TestContract_DelegationPolicy_Invalid(t *testing.T) {
+	assert.Error(t,
+		validateAgainstComponentSchemaRawJSON(t, "DelegationPolicy", FixtureDelegationPolicy_InvalidJSON()),
+		"out-of-enum reference kind must FAIL DelegationPolicy.yaml validation")
+}
+
+func TestContract_ExecutorConfig_Populated(t *testing.T) {
+	mustPassComponent(t, "ExecutorConfig", FixtureExecutorConfig_Populated())
+}
+
+func TestContract_ExecutorConfig_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "ExecutorConfig", FixtureExecutorConfig_ZeroValue(),
+		"kind is \"\" (not in [native, external-cli, remote-a2a])")
+}
+
+func TestContract_IntegrationProvider_Populated(t *testing.T) {
+	mustPassComponent(t, "IntegrationProvider", FixtureIntegrationProvider_Populated())
+}
+
+func TestContract_IntegrationProvider_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "IntegrationProvider", FixtureIntegrationProvider_ZeroValue(),
+		"kind is \"\" (not in [search, voice])")
+}
+
+func TestContract_ReAuthResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "ReAuthResponse", FixtureReAuthResponse_Populated())
+}
+
+func TestContract_ReAuthResponse_ZeroValue(t *testing.T) {
+	// All required fields are scalars with no value constraints → zero value is valid.
+	mustPassComponent(t, "ReAuthResponse", FixtureReAuthResponse_ZeroValue())
+}
+
+func TestContract_PerformanceSettings_Populated(t *testing.T) {
+	mustPassComponent(t, "PerformanceSettings", FixturePerformanceSettings_Populated())
+}
+
+func TestContract_PerformanceSettings_ZeroValue(t *testing.T) {
+	// No required fields; both properties are optional pointers → {} is valid.
+	mustPassComponent(t, "PerformanceSettings", FixturePerformanceSettings_ZeroValue())
+}
+
+func TestContract_PerformanceSettings_OutOfRange(t *testing.T) {
+	// max_parallel_agents must be within [2, 16].
+	ps := FixturePerformanceSettings_Populated()
+	ps.MaxParallelAgents = intPtr(99)
+	raw, err := json.Marshal(ps)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "PerformanceSettings", raw),
+		"max_parallel_agents=99 must FAIL PerformanceSettings.yaml validation (maximum: 16)")
+}

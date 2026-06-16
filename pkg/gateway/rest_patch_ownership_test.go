@@ -147,7 +147,7 @@ func newPatchOwnershipAPI(
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(filepath.Join(tmpDir, "tasks")),
+		taskStore:     taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
 	}
 	return api, tmpDir, auditDir
 }
@@ -417,7 +417,7 @@ func TestPatchOwnership_DifferentAgents_ProduceDifferentResults(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(filepath.Join(tmpDir, "tasks")),
+		taskStore:     taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
 	}
 
 	admin := &config.UserConfig{Username: "admin", Role: config.UserRoleAdmin}

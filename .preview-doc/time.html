@@ -1,0 +1,85 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendar &amp; Automations · Omnipus concept</title><link rel="stylesheet" href="style.css">
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html" class="active">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Calendar &amp; Automations</div>
+  <div class="eyebrow">Time &amp; rules</div>
+  <h1>Calendar &amp; Automations</h1>
+  <p class="lede">The <b style="color:#fff">Calendar</b> makes "when" intuitive for everyone. <b style="color:#fff">Automations</b> (Trigger → Action) are the engine that already exists — surfaced. Both are scoped to the current <b style="color:#fff">workspace</b> (set by the sidebar switcher).</p>
+</div></div>
+
+<!-- CALENDAR -->
+<section id="calendar"><div class="wrap">
+  <div class="eyebrow">The friendly view</div>
+  <h2>Calendar — native + import, per workspace</h2>
+  <div class="fig">
+  <svg viewBox="0 0 980 220" width="100%" role="img" font-family="Inter,sans-serif">
+    <g font-size="12">
+      <rect x="20" y="12" width="60" height="26" rx="13" fill="#D4AF37"/><text x="50" y="30" text-anchor="middle" fill="#0A0A0B" font-weight="700">All</text>
+      <rect x="90" y="12" width="124" height="26" rx="13" fill="#16161c" stroke="#2a2a31"/><circle cx="107" cy="25" r="5" fill="#a78bfa"/><text x="118" y="30" fill="#E2E8F0">System Events</text>
+      <rect x="224" y="12" width="190" height="26" rx="13" fill="#16161c" stroke="#2a2a31"/><circle cx="241" cy="25" r="5" fill="#60a5fa"/><text x="252" y="30" fill="#E2E8F0">Calendar Events (imported)</text>
+      <rect x="424" y="12" width="108" height="26" rx="13" fill="#16161c" stroke="#2a2a31"/><circle cx="441" cy="25" r="5" fill="#34d399"/><text x="452" y="30" fill="#E2E8F0">Milestones</text>
+      <rect x="542" y="12" width="138" height="26" rx="13" fill="#16161c" stroke="#2a2a31"/><circle cx="559" cy="25" r="5" fill="#fbbf24"/><text x="570" y="30" fill="#E2E8F0">Scheduled Tasks</text>
+      <rect x="784" y="12" width="176" height="26" rx="8" fill="#16161c" stroke="#D4AF37"/><text x="798" y="30" fill="#D4AF37" font-family="JetBrains Mono" font-size="10.5">Workspace ▾ My Workspace · Acme</text>
+    </g>
+    <g fill="#0e0e12" stroke="#222229"><rect x="20" y="52" width="300" height="160" rx="9"/><rect x="332" y="52" width="300" height="160" rx="9"/><rect x="644" y="52" width="316" height="160" rx="9"/></g>
+    <g font-size="11.5" fill="#0A0A0B" font-weight="600">
+      <rect x="32" y="66" width="276" height="28" rx="7" fill="#fbbf24"/><text x="42" y="85">Draft weekly report · repeats</text>
+      <rect x="32" y="138" width="276" height="26" rx="7" fill="#a78bfa"/><text x="42" y="156" fill="#1c1442">Heartbeat (system)</text>
+      <rect x="344" y="82" width="276" height="28" rx="7" fill="#60a5fa"/><text x="354" y="101" fill="#06243f">Sam's Google Calendar (delegated)</text>
+      <rect x="344" y="138" width="276" height="26" rx="7" fill="#60a5fa" opacity=".55"/><text x="354" y="156" fill="#06243f">Imported: Holiday feed (iCal)</text>
+      <rect x="656" y="94" width="290" height="28" rx="7" fill="#34d399"/><text x="666" y="113" fill="#053524">Milestone: v0.4 (workspace only)</text>
+    </g>
+  </svg>
+  <div class="figcap">All (default) + 4 category filters · the sidebar workspace switcher · imported &amp; delegated calendars overlay read-only.</div>
+  </div>
+  <div class="grid g3">
+    <div class="card"><h3>① iCal subscribe <span class="tag t-have">universal</span></h3><p class="note">Paste a <span class="mono">.ics</span> URL → read-only overlay, server-refreshed. Zero credentials. Pure-Go: <span class="mono">golang-ical</span> + <span class="mono">rrule-go</span>.</p></div>
+    <div class="card"><h3>② Provider OAuth <span class="tag t-part">two-way</span></h3><p class="note">Google (then MS Graph): <b>free/busy</b> for agents + write-back. <span class="mono">syncToken</span> + <span class="mono">watch</span> webhooks (7-day renewal).</p></div>
+    <div class="card"><h3>③ CalDAV <span class="tag t-new">self-host</span></h3><p class="note">Nextcloud / Fastmail / iCloud. Lower priority — vendor quirks, poll-based.</p></div>
+  </div>
+  <div class="callout">Tasks gain <span class="mono">start_date</span> + <span class="mono">due_at</span> + <span class="mono">recurrence</span> (the model has <b>zero</b> date fields today). A recurring task = a task + a repeating trigger. Expand RRULE against the <b>IANA tz database</b> — DST is the #1 calendar bug.</div>
+</div></section>
+
+<!-- AUTOMATIONS -->
+<section id="automations"><div class="wrap">
+  <div class="eyebrow">The engine, surfaced</div>
+  <h2>Automations — Trigger → Action</h2>
+  <p class="sub">Omnipus already funnels almost every trigger through one path (a message → an agent turn) over a real <span class="mono">EventBus</span>. We surface it as readable rules.</p>
+  <div class="grid g2" style="margin-top:6px">
+    <div class="card"><h3>Triggers — "when…"</h3><ul class="clean">
+      <li>⏰ <b>Time</b> — every Mon 9am · cron · interval <span class="tag t-have">engine exists</span></li>
+      <li>⚡ <b>Event</b> — task done · run failed · milestone due <span class="tag t-part">bus exists</span></li>
+      <li>📥 <b>Connection received</b> — email · webhook · message <span class="tag t-part">seam exists</span></li>
+      <li>🗓️ <b>Calendar</b> — event starts / nears <span class="tag t-new">new</span></li>
+    </ul></div>
+    <div class="card"><h3>Actions — "…do this"</h3><ul class="clean">
+      <li>🤖 Run an agent <span class="tag t-have">exists</span></li>
+      <li>📋 Run / create a task <span class="tag t-part">new link</span></li>
+      <li>🛠️ Invoke a tool / MCP <span class="tag t-have">MCP today</span></li>
+      <li>📤 Send via a connection · 📡 webhook-out · 🔔 notify</li>
+    </ul></div>
+  </div>
+  <div class="callout b">The lowest-friction first event: <span class="mono">task_status_changed</span> is <b style="color:var(--blue)">already defined in the contract with no producer</b> — a ready slot. <span class="mono">schedule_failed</span> is already a live event. Heartbeat / "dreaming" = automations flagged <span class="mono">system:true</span>, shown in the Calendar's System filter.</div>
+  <p class="note" style="margin-top:8px">Automations are <b>authored by the Assistant (Mia) from chat</b> (<i>"want me to do this every morning?"</i>) and <b>run by the platform</b> — there is no separate automation agent (no Forge / Max persona).</p>
+</div></section>
+
+<!-- INTEGRATION -->
+<section id="integration"><div class="wrap">
+  <div class="eyebrow">Opening up</div>
+  <h2>Zapier / n8n / Make — open primitives</h2>
+  <div class="grid g3">
+    <div class="card"><h3>External → Omnipus <span class="tag t-part">~70%</span></h3><p class="note">REST exposes create/run task, schedule, send-chat. Gap → <b class="gold">scoped API keys</b>. Or POST to an inbound <b>webhook channel</b>.</p></div>
+    <div class="card"><h3>Omnipus → External <span class="tag t-new">new</span></h3><p class="note">A <b>webhook-out action</b>: on an event, POST signed JSON (retry + log). Generalizes cron's <span class="mono">Deliver/Channel</span>.</p></div>
+    <div class="card"><h3>Agent → External <span class="tag t-have">MCP today</span></h3><p class="note">Agents already reach Zapier/n8n + 1000s of actions via <b>MCP</b> — the established outbound path.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap"><p><a href="agents.html" style="color:var(--muted)">← Personal Assistant</a> &nbsp;·&nbsp; Next: <a href="impact.html">Impact →</a></p></div></footer>
+</body></html>

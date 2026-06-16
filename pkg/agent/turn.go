@@ -2,11 +2,12 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
@@ -408,6 +409,24 @@ func (ts *turnState) setLastStreamer(s bus.Streamer) {
 	ts.lastStreamer = s
 }
 
+// markLastStreamerTranscriptPersisted tells the active streamer that the agent
+// loop has already written this round's narration to the transcript (via
+// appendIntermediateAssistantTranscript), so the streamer's own Finalize must
+// not write it again. Only the streamer that ends up finalized (the last one)
+// matters; marking superseded streamers is harmless (they are never finalized).
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-streaming-transcript impls (telegram, wecom, sse, manager) are
+// untouched; only wsStreamer implements SuppressTranscriptWrite.
+func (ts *turnState) markLastStreamerTranscriptPersisted() {
+	ts.mu.RLock()
+	s := ts.lastStreamer
+	ts.mu.RUnlock()
+	if sup, ok := s.(interface{ SuppressTranscriptWrite() }); ok {
+		sup.SuppressTranscriptWrite()
+	}
+}
+
 // streamerStatsSetter is an optional interface a Streamer may implement to
 // receive turn-end stats (tokens, cost, duration) before Finalize is called.
 // The ws streamer uses this to populate the "done" frame so the chat UI shows
@@ -631,6 +650,42 @@ func (ts *turnState) resolveActiveAgentID() string {
 	return ts.agentID
 }
 
+// appendIntermediateAssistantTranscript persists an assistant text segment that
+// immediately precedes a round of tool calls within a single turn. It is called
+// once per tool-call iteration when the LLM emits both narration text AND tool
+// calls in the same response — the text must be recorded BEFORE the tool_call
+// entries so the transcript faithfully reflects the interleaved order the user
+// saw live.
+//
+// Tokens and cost are always 0 for intermediate entries to avoid double-counting:
+// the turn total is attributed to the final assistant entry written by either
+// wsStreamer.Finalize (streaming path) or appendAssistantTranscript (non-streaming).
+//
+// Bug #416 fix: without this, only the last text segment reached the transcript.
+func (ts *turnState) appendIntermediateAssistantTranscript(content string) {
+	if ts.abandoned.Load() {
+		abandonedWritesSuppressed.Add(1)
+		return
+	}
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
+		return
+	}
+	agentID := ts.resolveActiveAgentID()
+	entry := session.TranscriptEntry{
+		ID:        uuid.New().String(),
+		Role:      "assistant",
+		AgentID:   agentID,
+		Content:   content,
+		Timestamp: time.Now().UTC(),
+		// Tokens and Cost are intentionally 0 — the turn total is attributed to
+		// the final assistant entry only. See appendAssistantTranscript.
+	}
+	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
+		logger.WarnCF("agent", "could not record intermediate assistant message to transcript",
+			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})
+	}
+}
+
 // appendAssistantTranscript persists a completed assistant text response to the
 // session transcript. It is called on the non-streaming path (no wsStreamer) so
 // that replay can reconstruct the full conversation even after a WS disconnect.
@@ -647,12 +702,18 @@ func (ts *turnState) appendAssistantTranscript(content string) {
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
+	// Populate token/cost from accumulated turn stats so scheduled and
+	// non-websocket turns record real usage, mirroring the wsStreamer.Finalize
+	// path (#411). GetTurnStats is safe to call here — the turn is finishing.
+	turnTokens, turnCost := ts.GetTurnStats()
 	entry := session.TranscriptEntry{
-		ID:        fmt.Sprintf("assistant-%d", time.Now().UnixNano()),
+		ID:        uuid.New().String(),
 		Role:      "assistant",
 		AgentID:   agentID,
 		Content:   content,
 		Timestamp: time.Now().UTC(),
+		Tokens:    int(turnTokens),
+		Cost:      turnCost,
 	}
 	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
 		logger.WarnCF("agent", "could not record assistant message to transcript",

@@ -17,7 +17,8 @@ func init() {
 	channels.RegisterFactory(
 		"matrix",
 		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			matrixCfg := cfg.Channels.Matrix
+			inst := cfg.Channels["matrix"]
+			matrixCfg := config.InstanceToMatrix(inst)
 			cryptoDatabasePath := matrixCfg.CryptoDatabasePath
 			if cryptoDatabasePath == "" {
 				cryptoDatabasePath = filepath.Join(cfg.WorkspacePath(), "matrix")

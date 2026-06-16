@@ -1,0 +1,113 @@
+type: object
+description: >
+  Delegation policy for an agent. Controls which other agents this agent may delegate
+  work to, and how delegation modes are gated.
+
+  The canonical "to" field unifies the three legacy allowlists:
+    - AgentConfig.CanDelegateTo (per-agent, task delegation)
+    - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+    - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+
+  Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into
+  agent-level "to" when both are set.
+
+  "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0.
+  A startup WARN is emitted if either field is non-empty, to avoid presenting them
+  as an active authorization boundary.
+properties:
+  to:
+    type: array
+    description: >
+      List of agent references this agent is allowed to delegate work to.
+      An empty array means NO delegation is allowed (deny-by-default).
+      Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
+    items:
+      type: object
+      description: Agent reference target.
+      required:
+        - kind
+        - id
+      properties:
+        kind:
+          type: string
+          enum:
+            - local
+            - remote-a2a
+          description: >
+            The kind of agent reference. "local" = a locally-registered agent
+            resolved by id. "remote-a2a" = reserved for future A2A protocol
+            external agent resolution; not enforced in v0.1.0.
+          example: "local"
+        id:
+          type: string
+          description: >
+            Agent identifier. For kind=local, this is the agent's ID (UUID or
+            well-known string). The value "*" is a wildcard allowing delegation
+            to any agent of the given kind.
+          example: "ray"
+      additionalProperties: false
+  accept_from:
+    type: array
+    description: >
+      PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this
+      agent accepts delegated work. A startup WARN is emitted if non-empty.
+      Do not rely on this field as an authorization boundary until enforcement is shipped.
+    items:
+      type: object
+      required:
+        - kind
+        - id
+      properties:
+        kind:
+          type: string
+          enum:
+            - local
+            - remote-a2a
+          example: "local"
+        id:
+          type: string
+          example: "jim"
+      additionalProperties: false
+  modes:
+    type: array
+    description: >
+      Allowed delegation modes. Enforced in v0.1.0.
+      "await" = synchronous subagent (blocks caller until result).
+      "background" = async spawn (caller continues; result posted when done).
+      "task" = task_create delegation (creates a persistent task for another agent).
+    items:
+      type: string
+      enum:
+        - await
+        - background
+        - task
+    uniqueItems: true
+    example:
+      - await
+      - background
+      - task
+  depth:
+    type: integer
+    minimum: 0
+    description: >
+      Maximum delegation chain depth (number of hops). 0 = no delegation allowed.
+      Enforced in v0.1.0 as a safety cap. Default is uncapped when absent.
+      Counts the number of nested delegation levels, not total agents involved.
+    example: 3
+  budget:
+    type: object
+    description: >
+      PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN
+      is emitted if non-empty. Do not rely on this as an authorization boundary.
+    properties:
+      max_cost_usd:
+        type: number
+        format: double
+        description: Maximum USD spend allowed for delegated work.
+        example: 1.0
+      max_tokens:
+        type: integer
+        description: Maximum token count allowed for delegated work.
+        example: 100000
+    additionalProperties: false
+additionalProperties: false

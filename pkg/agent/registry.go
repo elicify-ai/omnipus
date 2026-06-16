@@ -123,11 +123,36 @@ func (r *AgentRegistry) ListAgentIDs() []string {
 }
 
 // CanSpawnSubagent checks if parentAgentID is allowed to spawn targetAgentID.
+//
+// FR-6.3 (Spec-3 keystone): consults the unified DelegationPolicy.To first
+// when non-nil, falling back to the legacy SubagentsConfig.AllowAgents path.
+// Deny-by-default is preserved in both paths.
 func (r *AgentRegistry) CanSpawnSubagent(parentAgentID, targetAgentID string) bool {
 	parent, ok := r.GetAgent(parentAgentID)
 	if !ok {
 		return false
 	}
+
+	// Unified DelegationPolicy.To takes precedence when set.
+	if parent.DelegationPolicy != nil {
+		targetNorm := routing.NormalizeAgentID(targetAgentID)
+		for _, ref := range parent.DelegationPolicy.To {
+			if ref.Kind != "local" && ref.Kind != "" {
+				// remote-a2a and unknown kinds are not resolved locally in v0.1.0.
+				continue
+			}
+			if ref.ID == "*" {
+				return true
+			}
+			if routing.NormalizeAgentID(ref.ID) == targetNorm {
+				return true
+			}
+		}
+		// Policy was set explicitly — deny (empty To = deny all).
+		return false
+	}
+
+	// Legacy fallback: SubagentsConfig.AllowAgents (deny when nil).
 	if parent.Subagents == nil || parent.Subagents.AllowAgents == nil {
 		return false
 	}
@@ -173,6 +198,21 @@ func (r *AgentRegistry) GetAgentName(agentID string) (string, bool) {
 	return name, true
 }
 
+// IsWorker reports whether the agent identified by agentID is a sub-agent worker
+// (the delegation-only labour tier). Returns false when the agent does not exist,
+// so callers that have already validated existence get a definitive worker/not-worker
+// answer. Satisfies the tools.AgentRegistryReader interface used by HandoffTool to
+// reject worker handoff targets without an import cycle.
+func (r *AgentRegistry) IsWorker(agentID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	agent, ok := r.agents[agentID]
+	if !ok {
+		return false
+	}
+	return agent.IsWorker()
+}
+
 // Close releases resources held by all registered agents and clears the map (M9).
 func (r *AgentRegistry) Close() {
 	r.mu.Lock()
@@ -197,9 +237,10 @@ func (r *AgentRegistry) Close() {
 //     multiple agents somehow carry Default==true (operator error — F11 repairs
 //     this at boot), the one with the lexicographically smallest ID wins.
 //  2. The configurable override from config.Agents.Defaults.DefaultAgentID,
-//     when the named agent exists in the registry.
-//  3. The built-in "main" sentinel agent.
-//  4. The lexicographically first registered agent (deterministic fallback, M10).
+//     when the named agent exists in the registry and is not a worker.
+//  3. The built-in "main" sentinel agent, when it is not a worker.
+//  4. The lexicographically first registered non-worker agent (deterministic
+//     fallback, M10). Workers are never chat targets, so every priority skips them.
 func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -219,18 +260,26 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	}
 
 	// Priority 2: explicit override from config.Agents.Defaults.DefaultAgentID.
+	// A worker is never a chat target, so a hand-edited override pointing at one
+	// is skipped (defense in depth; consistent with the Priority-4 hardening).
 	if r.defaultAgentOverride != "" {
-		if agent, ok := r.agents[r.defaultAgentOverride]; ok {
+		if agent, ok := r.agents[r.defaultAgentOverride]; ok && !agent.IsWorker() {
 			return agent
 		}
 	}
 
-	// Priority 3: the "main" built-in sentinel.
-	if agent, ok := r.agents[DefaultAgentID]; ok {
+	// Priority 3: the "main" built-in sentinel — unless it is somehow a worker
+	// (degenerate/tampered config), in which case fall through to Priority 4.
+	if agent, ok := r.agents[DefaultAgentID]; ok && !agent.IsWorker() {
 		return agent
 	}
 
-	// Priority 4: lexicographically first registered agent (M10).
+	// Priority 4: lexicographically first registered agent (M10) — but never a
+	// worker. Workers are not chat targets and must not be resolved as the
+	// default even in the last-resort fallback. Prefer the first non-worker; only
+	// if EVERY registered agent is a worker do we fall back to the first overall
+	// (degenerate config — better to return something than nil so callers that
+	// require a default don't panic).
 	ids := make([]string, 0, len(r.agents))
 	for id := range r.agents {
 		ids = append(ids, id)
@@ -239,5 +288,10 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 		return nil
 	}
 	sort.Strings(ids)
+	for _, id := range ids {
+		if ag := r.agents[id]; ag != nil && !ag.IsWorker() {
+			return ag
+		}
+	}
 	return r.agents[ids[0]]
 }

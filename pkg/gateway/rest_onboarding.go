@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -167,12 +168,20 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
 		return
 	}
-	tokenHash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.DefaultCost)
+	// SEC-1: bcrypt only the secret body so the ID-tagged token (81 bytes)
+	// stays under bcrypt's 72-byte input ceiling; the issued token is stored in
+	// the bearer-token SET so later logins append rather than evict.
+	tokenHash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(token)), bcrypt.DefaultCost)
 	if err != nil {
 		slog.Error("onboarding: bcrypt token hash failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
 		return
 	}
+	tokenEntry := []any{map[string]any{
+		"id":         config.TokenIDFromRaw(token),
+		"hash":       string(tokenHash),
+		"created_at": time.Now().UTC().Format(time.RFC3339),
+	}}
 
 	// Phase 2: Write config.json only (no state.json write inside the callback).
 	// The commit() closure writes state.json after safeUpdateConfigJSON returns.
@@ -244,7 +253,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		newUser := map[string]any{
 			"username":      body.Admin.Username,
 			"password_hash": string(passwordHash),
-			"token_hash":    string(tokenHash),
+			"tokens":        tokenEntry,
 			"role":          "admin",
 		}
 
@@ -275,7 +284,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			}
 			if um["username"] == body.Admin.Username {
 				um["password_hash"] = string(passwordHash)
-				um["token_hash"] = string(tokenHash)
+				um["tokens"] = tokenEntry
 				return nil
 			}
 		}

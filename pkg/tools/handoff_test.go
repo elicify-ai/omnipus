@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,12 +13,17 @@ import (
 // --- test doubles ---
 
 type stubRegistry struct {
-	agents map[string]string // id → name
+	agents  map[string]string // id → name
+	workers map[string]bool   // id → isWorker
 }
 
 func (r *stubRegistry) GetAgentName(id string) (string, bool) {
 	name, ok := r.agents[id]
 	return name, ok
+}
+
+func (r *stubRegistry) IsWorker(id string) bool {
+	return r.workers[id]
 }
 
 type stubSessionStore struct {
@@ -84,6 +90,35 @@ func TestHandoffTool_RejectsUnknownAgent(t *testing.T) {
 	})
 	if !result.IsError {
 		t.Fatal("expected error for unknown agent")
+	}
+}
+
+func TestHandoffTool_RejectsWorkerTarget(t *testing.T) {
+	store := &stubSessionStore{}
+	reg := &stubRegistry{
+		agents:  map[string]string{"hans": "Hans"},
+		workers: map[string]bool{"hans": true},
+	}
+	tool := NewHandoffTool(
+		func() AgentRegistryReader { return reg },
+		store,
+		func(string) int { return 8192 },
+		nil,
+	)
+	ctx := makeCtx("session_abc", "chat_1", "mia")
+	result := tool.Execute(ctx, map[string]any{
+		"agent_id": "hans",
+		"context":  "do the work",
+	})
+	if !result.IsError {
+		t.Fatal("expected error when handing off to a worker")
+	}
+	if !strings.Contains(result.ForLLM, "worker") {
+		t.Errorf("expected worker-rejection message, got %q", result.ForLLM)
+	}
+	// The session must NOT have been switched — no transcript entry appended.
+	if len(store.appendedEvents) != 0 {
+		t.Errorf("expected no session switch on rejected worker handoff, got %d appended events", len(store.appendedEvents))
 	}
 }
 

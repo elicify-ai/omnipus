@@ -179,7 +179,7 @@ function OnboardingWizard() {
   // Surfaced inline on the final step when completeOnboardingTransaction fails,
   // so the user stays on the step and can retry rather than failing silently.
   const [finishError, setFinishError] = useState('')
-  // Admin credentials step (Step 3)
+  // Account step (Step 3) — single-user: one username + password
   const [adminUsername, setAdminUsername] = useState('')
   const [adminPassword, setAdminPassword] = useState('')
   const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('')
@@ -806,7 +806,7 @@ function ProviderStep({
   )
 }
 
-// ── Step 3: Admin Credentials ──────────────────────────────────────────────────
+// ── Step 3: Your Account ───────────────────────────────────────────────────────
 
 function AdminCredentialsStep({
   username,
@@ -859,10 +859,10 @@ function AdminCredentialsStep({
       >
         <h2 className="font-headline text-3xl font-bold mb-2"
           style={{ color: 'var(--color-secondary)' }}>
-          Admin Account
+          Your Account
         </h2>
         <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-          Set up your admin login for Omnipus
+          Choose a username and password — this is the one account for your Omnipus
         </p>
       </motion.div>
 

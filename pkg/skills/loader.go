@@ -30,6 +30,8 @@ const (
 type SkillMetadata struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
+	Author       string   `json:"author"`        // optional frontmatter: author/publisher
+	Version      string   `json:"version"`       // optional frontmatter: semver string
 	ArgumentHint string   `json:"argument_hint"` // ClawHub: argument-hint
 	Context      string   `json:"context"`       // ClawHub: context (workspace/global/builtin)
 	AllowedTools []string `json:"allowed_tools"` // ClawHub: allowed-tools
@@ -39,21 +41,43 @@ type SkillMetadata struct {
 }
 
 type SkillInfo struct {
+	// ID is the stable skill identifier: the skill's directory name (slug). It is
+	// the value used everywhere a skill must be addressed unambiguously — DELETE,
+	// activation allowlists, and built-in detection (DefaultSkillNames returns
+	// slugs). It is always present and always slug-shaped (validated).
+	ID string `json:"id"`
+	// Name is the human-readable display name, sourced from SKILL.md frontmatter
+	// `name:` (e.g. "Daily Briefing"). It falls back to the slug when no
+	// frontmatter name is present. Unlike ID it is free-form and NOT slug-validated.
 	Name        string `json:"name"`
 	Path        string `json:"path"`
 	Source      string `json:"source"`
 	Description string `json:"description"`
+	Author      string `json:"author"`  // optional, from SKILL.md frontmatter
+	Version     string `json:"version"` // optional, from SKILL.md frontmatter
 }
 
+// validate enforces the loader's contract: the ID (slug) must be a valid skill
+// identifier (alphanumeric with hyphens, within the length cap) and a
+// description must be present. The display Name is intentionally NOT
+// slug-validated — it is free-form (e.g. "Daily Briefing") — but it must be
+// non-empty (the loader falls it back to the slug, so this only fails when both
+// are empty, which cannot happen for a real on-disk skill directory).
 func (info SkillInfo) validate() error {
 	var errs error
-	if info.Name == "" {
+	id := info.ID
+	if id == "" {
+		// Back-compat: callers that only populate Name (e.g. the authoring
+		// validator) validate the Name as the identifier.
+		id = info.Name
+	}
+	if id == "" {
 		errs = errors.Join(errs, errors.New("name is required"))
 	} else {
-		if len(info.Name) > MaxNameLength {
+		if len(id) > MaxNameLength {
 			errs = errors.Join(errs, fmt.Errorf("name exceeds %d characters", MaxNameLength))
 		}
-		if !namePattern.MatchString(info.Name) {
+		if !namePattern.MatchString(id) {
 			errs = errors.Join(errs, errors.New("name must be alphanumeric with hyphens"))
 		}
 	}
@@ -72,6 +96,12 @@ type SkillsLoader struct {
 	globalSkills    string // global skills (~/.omnipus/skills)
 	builtinSkills   string // builtin skills
 }
+
+// GlobalSkillsDir returns the global (user) skills directory used by this
+// loader (typically ~/.omnipus/skills). This is the directory the authoring
+// tools write to so that editing a built-in produces a user override rather
+// than mutating the shipped built-in in place.
+func (sl *SkillsLoader) GlobalSkillsDir() string { return sl.globalSkills }
 
 // SkillRoots returns all unique skill root directories used by this loader.
 // The order follows resolution priority: workspace > global > builtin.
@@ -129,6 +159,9 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				continue
 			}
 			info := SkillInfo{
+				// ID is the stable slug — the directory name — and never
+				// changes regardless of the display name in frontmatter.
+				ID:     d.Name(),
 				Name:   d.Name(),
 				Path:   skillFile,
 				Source: source,
@@ -136,7 +169,15 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 			metadata := sl.getSkillMetadata(skillFile)
 			if metadata != nil {
 				info.Description = metadata.Description
-				info.Name = metadata.Name
+				// Name is the human-readable display name from frontmatter
+				// (falls back to the slug). It is kept separate from ID so a
+				// proper English name like "Daily Briefing" does not change the
+				// addressable identifier "daily-briefing".
+				if metadata.Name != "" {
+					info.Name = metadata.Name
+				}
+				info.Author = metadata.Author
+				info.Version = metadata.Version
 			}
 			if err := info.validate(); err != nil {
 				slog.Warn("invalid skill from "+source, "name", info.Name, "error", err)
@@ -203,6 +244,15 @@ func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
 }
 
 func (sl *SkillsLoader) BuildSkillsSummary() string {
+	return sl.BuildSkillsSummaryFunc(nil)
+}
+
+// BuildSkillsSummaryFunc renders the skills summary block, optionally filtered
+// by an allow predicate. When allow is non-nil, only skills for which
+// allow(name) is true are listed — this implements per-agent progressive
+// disclosure so an agent's system prompt advertises only its allowlisted skills
+// (FR-9.4). When allow is nil, every loaded skill is listed.
+func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) string {
 	allSkills := sl.ListSkills()
 	if len(allSkills) == 0 {
 		return ""
@@ -210,20 +260,37 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 
 	var lines []string
 	lines = append(lines, "<skills>")
+	emitted := 0
 	for _, s := range allSkills {
-		escapedName := escapeXML(s.Name)
+		// The allowlist is keyed on the slug (ID), never the display name.
+		if allow != nil && !allow(s.ID) {
+			continue
+		}
+		// The agent invokes a skill by the slug (ID) — that is the identifier
+		// ResolveSkillName/LoadSkill resolve against — so <name> carries the
+		// slug. The human-readable display name is surfaced separately so the
+		// model can refer to it naturally.
+		escapedName := escapeXML(s.ID)
+		escapedDisplay := escapeXML(s.Name)
 		escapedDesc := escapeXML(s.Description)
 		escapedPath := escapeXML(s.Path)
 
-		lines = append(lines, fmt.Sprintf("  <skill>"))
+		lines = append(lines, "  <skill>")
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
+		if s.Name != "" && s.Name != s.ID {
+			lines = append(lines, fmt.Sprintf("    <display_name>%s</display_name>", escapedDisplay))
+		}
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
 		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
 		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
 		lines = append(lines, "  </skill>")
+		emitted++
 	}
 	lines = append(lines, "</skills>")
 
+	if emitted == 0 {
+		return ""
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -258,6 +325,8 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 	var jsonMeta struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		Author      string `json:"author"`
+		Version     string `json:"version"`
 	}
 	if err := json.Unmarshal([]byte(frontmatter), &jsonMeta); err == nil {
 		if jsonMeta.Name != "" {
@@ -265,6 +334,12 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 		}
 		if jsonMeta.Description != "" {
 			metadata.Description = jsonMeta.Description
+		}
+		if jsonMeta.Author != "" {
+			metadata.Author = jsonMeta.Author
+		}
+		if jsonMeta.Version != "" {
+			metadata.Version = jsonMeta.Version
 		}
 		return metadata
 	}
@@ -276,6 +351,12 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 	}
 	if description := yamlMeta["description"]; description != "" {
 		metadata.Description = description
+	}
+	if author := yamlMeta["author"]; author != "" {
+		metadata.Author = author
+	}
+	if version := yamlMeta["version"]; version != "" {
+		metadata.Version = version
 	}
 	if hint := yamlMeta["argument-hint"]; hint != "" {
 		metadata.ArgumentHint = hint
@@ -373,11 +454,12 @@ func (sl *SkillsLoader) parseSimpleYAML(content string) map[string]string {
 	knownKeys := map[string]bool{
 		"name": true, "description": true, "argument-hint": true,
 		"context": true, "allowed-tools": true, "model-hint": true,
+		"author": true, "version": true,
 	}
 
 	for k, v := range raw {
 		switch k {
-		case "name", "description", "context", "model-hint":
+		case "name", "description", "context", "model-hint", "author", "version":
 			if s, ok := v.(string); ok && s != "" {
 				result[k] = s
 			}

@@ -11,7 +11,8 @@ func init() {
 	channels.RegisterFactory(
 		"qq",
 		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			return NewQQChannel(cfg.Channels.QQ, secrets, b)
+			inst := cfg.Channels["qq"]
+			return NewQQChannel(config.InstanceToQQ(inst), secrets, b)
 		},
 	)
 }

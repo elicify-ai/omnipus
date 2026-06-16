@@ -79,6 +79,12 @@ type TaskCreateTool struct {
 	BaseTool
 	store         *taskstore.TaskStore
 	delegateCheck func(targetAgentID string) bool
+	// delegationDeny, when non-nil, applies the full delegation policy (trust
+	// set + modes ("task") + depth — FR-6.2). It receives the call ctx (for
+	// current delegation depth) and the target agent id, and returns a non-empty
+	// reason to DENY or "" to ALLOW. Takes precedence over delegateCheck so a
+	// rejected task delegation surfaces a clear reason to the LLM.
+	delegationDeny func(ctx context.Context, targetAgentID string) string
 }
 
 func NewTaskCreateTool(store *taskstore.TaskStore) *TaskCreateTool {
@@ -88,6 +94,13 @@ func NewTaskCreateTool(store *taskstore.TaskStore) *TaskCreateTool {
 // SetDelegateChecker sets the function that checks whether delegation to a target agent is allowed.
 func (t *TaskCreateTool) SetDelegateChecker(fn func(targetAgentID string) bool) {
 	t.delegateCheck = fn
+}
+
+// SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2):
+// trust set + modes ("task") + depth. Returns a non-empty reason to DENY or ""
+// to ALLOW. When set, it takes precedence over the boolean delegateCheck.
+func (t *TaskCreateTool) SetDelegationDenyChecker(fn func(ctx context.Context, targetAgentID string) string) {
+	t.delegationDeny = fn
 }
 
 func (t *TaskCreateTool) Name() string     { return "task_create" }
@@ -144,7 +157,13 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("agent_id is required")
 	}
 
-	if t.delegateCheck != nil && !t.delegateCheck(agentID) {
+	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
+	// The full-policy checker takes precedence and surfaces a specific reason.
+	if t.delegationDeny != nil {
+		if reason := t.delegationDeny(ctx, agentID); reason != "" {
+			return ErrorResult("delegation denied: " + reason)
+		}
+	} else if t.delegateCheck != nil && !t.delegateCheck(agentID) {
 		return ErrorResult(fmt.Sprintf("delegation to %s not allowed", agentID))
 	}
 

@@ -33,6 +33,10 @@ vi.mock('@/lib/api', () => ({
   fetchAboutInfo: vi.fn().mockResolvedValue({}),
 }))
 
+vi.mock('@assistant-ui/react', () => ({
+  makeAssistantToolUI: (config: Record<string, unknown>) => config,
+}))
+
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -208,9 +212,6 @@ describe('WebServeUI — kind=dev', () => {
 
 describe('WebServeUI — back-compat alias: ServeWorkspaceUI', () => {
   it('exports ServeWorkspaceUI as a defined AssistantUI tool component', async () => {
-    vi.mock('@assistant-ui/react', () => ({
-      makeAssistantToolUI: (config: Record<string, unknown>) => config,
-    }))
     const mod = await import('./ServeWorkspaceUI')
     expect(mod.ServeWorkspaceUI).toBeDefined()
   })
@@ -218,9 +219,6 @@ describe('WebServeUI — back-compat alias: ServeWorkspaceUI', () => {
 
 describe('WebServeUI — back-compat alias: RunInWorkspaceUI', () => {
   it('exports RunInWorkspaceUI as a defined AssistantUI tool component', async () => {
-    vi.mock('@assistant-ui/react', () => ({
-      makeAssistantToolUI: (config: Record<string, unknown>) => config,
-    }))
     const mod = await import('./RunInWorkspaceUI')
     expect(mod.RunInWorkspaceUI).toBeDefined()
   })
@@ -327,9 +325,6 @@ describe('WebServeUI — malformed result block (B1.3e)', () => {
 
 describe('WebServeUI — module exports', () => {
   it('exports WebServeUI, makeWebServeUI, and WebServeBlock', async () => {
-    vi.mock('@assistant-ui/react', () => ({
-      makeAssistantToolUI: (config: Record<string, unknown>) => config,
-    }))
     const mod = await import('./WebServeUI')
     expect(mod.WebServeUI).toBeDefined()
     expect(mod.makeWebServeUI).toBeDefined()

@@ -356,7 +356,7 @@ func NewManager(
 	// Register as streaming delegate so the agent loop can obtain streamers
 	messageBus.SetStreamDelegate(m)
 
-	if err := m.initChannels(&cfg.Channels); err != nil {
+	if err := m.initChannels(cfg.Channels); err != nil {
 		return nil, err
 	}
 
@@ -579,122 +579,144 @@ func (m *Manager) FailedChannels() []ChannelInitError {
 	return out
 }
 
-func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
+// channelTypeToFactory maps a channel instance type to the factory name
+// registered via channels.RegisterFactory. For most channel types the factory
+// name equals the type; WhatsApp is the one exception (type="whatsapp",
+// factory="whatsapp_native" — the legacy bridge was removed and all builds use
+// whatsmeow).
+var channelTypeToFactory = map[string]string{
+	"whatsapp": "whatsapp_native",
+}
+
+// factoryNameForType returns the registered factory name for a channel type.
+func factoryNameForType(channelType string) string {
+	if name, ok := channelTypeToFactory[channelType]; ok {
+		return name
+	}
+	return channelType
+}
+
+// initChannels activates all enabled instances in the channels map. The
+// if-ladder over typed ChannelsConfig fields is replaced by a loop over the
+// instance map + a type→factory map (Spec-2 FR-2.4).
+func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig) error {
 	logger.InfoC("channels", "Initializing channel manager")
 
-	if channels.Telegram.Enabled && channels.Telegram.TokenRef != "" {
-		if err := m.initChannel("telegram", "Telegram"); err != nil {
-			m.recordChannelFailure("telegram", "Telegram", err)
+	for instanceID, inst := range channels {
+		if !inst.Enabled {
+			continue
 		}
-	} else if channels.Telegram.Enabled {
-		warnMisconfigured("Telegram", "token")
-	}
+		// Normalize: if Type is unset, treat the map key as the type. This mirrors
+		// what normalizeChannelMap does at config-load time, but initChannels is also
+		// called with a synthesized subset map (toChannelConfig) whose entries may
+		// have been created from a zero-value ChannelInstanceConfig (e.g. a map-key
+		// lookup on an empty DefaultConfig().Channels, which skips normalizeChannelMap).
+		// Without this guard, inst.Type == "" falls through every check and produces
+		// a "factory not registered for channel """ error that aborts the reload.
+		if inst.Type == "" {
+			inst.Type = instanceID
+		}
+		factoryName := factoryNameForType(inst.Type)
+		displayName := inst.Type // factories use the type as display name
 
-	if channels.WhatsApp.Enabled {
-		// WhatsApp is always native (whatsmeow). The legacy bridge channel was
-		// removed; on a lite/stub build (or an architecture where
-		// modernc.org/sqlite is unavailable) whatsapp_native fails to construct
-		// and we record a clear failure rather than silently no-op.
-		if err := m.initChannel("whatsapp_native", "WhatsApp Native"); err != nil {
-			wrapped := fmt.Errorf(
-				"WhatsApp requires the native build (bridge removed); "+
-					"unavailable on this build variant: %w",
-				err,
-			)
-			m.recordChannelFailure("whatsapp_native", "WhatsApp Native", wrapped)
+		if inst.Type == "whatsapp" {
+			// WhatsApp is always native (whatsmeow). The legacy bridge channel was
+			// removed; on a lite/stub build (or an architecture where
+			// modernc.org/sqlite is unavailable) whatsapp_native fails to construct
+			// and we record a clear failure rather than silently no-op.
+			if err := m.initChannel(factoryName, "WhatsApp Native"); err != nil {
+				wrapped := fmt.Errorf(
+					"WhatsApp requires the native build (bridge removed); "+
+						"unavailable on this build variant: %w",
+					err,
+				)
+				m.recordChannelFailure(factoryName, "WhatsApp Native", wrapped)
+			}
+			continue
 		}
-	}
 
-	if channels.Feishu.Enabled {
-		if err := m.initChannel("feishu", "Feishu"); err != nil {
-			m.recordChannelFailure("feishu", "Feishu", err)
+		// Per-type prerequisite checks (misconfiguration guard).
+		switch inst.Type {
+		case "telegram":
+			if inst.TokenRef == "" {
+				warnMisconfigured("Telegram", "token")
+				continue
+			}
+		case "discord":
+			if inst.TokenRef == "" {
+				warnMisconfigured("Discord", "token")
+				continue
+			}
+		case "dingtalk":
+			if inst.ClientID == "" {
+				warnMisconfigured("DingTalk", "client_id")
+				continue
+			}
+		case "slack":
+			if inst.BotTokenRef == "" {
+				warnMisconfigured("Slack", "bot_token")
+				continue
+			}
+		case "matrix":
+			// Validate THIS instance's matrix config (instanceID may differ from the
+			// "matrix" type key — a hardcoded m.config.Channels["matrix"] lookup would
+			// validate the wrong/absent instance and mis-gate a correctly-named one).
+			if inst.Homeserver == "" || inst.UserID == "" || inst.AccessTokenRef == "" {
+				warnMisconfigured("Matrix", "homeserver, user_id, access_token")
+				continue
+			}
+		case "line":
+			if inst.ChannelAccessTokenRef == "" {
+				warnMisconfigured("LINE", "channel_access_token")
+				continue
+			}
+		case "wecom":
+			if inst.BotID == "" || inst.SecretRef == "" {
+				warnMisconfigured("WeCom", "bot_id, secret")
+				continue
+			}
+		case "weixin":
+			if inst.TokenRef == "" {
+				warnMisconfigured("Weixin", "token")
+				continue
+			}
+		case "irc":
+			if inst.Server == "" {
+				warnMisconfigured("IRC", "server")
+				continue
+			}
+		case "google-chat":
+			gc := inst
+			if gc.WebhookURLRef == "" &&
+				gc.ServiceAccountJSONRef == "" &&
+				gc.WebhookURL.String() == "" &&
+				gc.ServiceAccountJSON.String() == "" &&
+				gc.ServiceAccountFile == "" {
+				warnMisconfigured("Google Chat", "webhook_url, service_account_json, or service_account_file")
+				continue
+			}
+		case "email":
+			if inst.IMAPHost == "" {
+				warnMisconfigured("Email", "imap_host")
+				continue
+			}
+			if inst.SMTPHost == "" {
+				warnMisconfigured("Email", "smtp_host")
+				continue
+			}
+			if inst.EmailUsername == "" {
+				warnMisconfigured("Email", "username")
+				continue
+			}
+			if inst.PasswordRef == "" {
+				warnMisconfigured("Email", "password")
+				continue
+			}
 		}
-	}
 
-	if channels.Discord.Enabled && channels.Discord.TokenRef != "" {
-		if err := m.initChannel("discord", "Discord"); err != nil {
-			m.recordChannelFailure("discord", "Discord", err)
+		if err := m.initChannel(factoryName, displayName); err != nil {
+			m.recordChannelFailure(factoryName, displayName, err)
 		}
-	} else if channels.Discord.Enabled {
-		warnMisconfigured("Discord", "token")
-	}
-
-	if channels.QQ.Enabled {
-		if err := m.initChannel("qq", "QQ"); err != nil {
-			m.recordChannelFailure("qq", "QQ", err)
-		}
-	}
-
-	if channels.DingTalk.Enabled && channels.DingTalk.ClientID != "" {
-		if err := m.initChannel("dingtalk", "DingTalk"); err != nil {
-			m.recordChannelFailure("dingtalk", "DingTalk", err)
-		}
-	} else if channels.DingTalk.Enabled {
-		warnMisconfigured("DingTalk", "client_id")
-	}
-
-	if channels.Slack.Enabled && channels.Slack.BotTokenRef != "" {
-		if err := m.initChannel("slack", "Slack"); err != nil {
-			m.recordChannelFailure("slack", "Slack", err)
-		}
-	} else if channels.Slack.Enabled {
-		warnMisconfigured("Slack", "bot_token")
-	}
-
-	if channels.Matrix.Enabled &&
-		m.config.Channels.Matrix.Homeserver != "" &&
-		m.config.Channels.Matrix.UserID != "" &&
-		m.config.Channels.Matrix.AccessTokenRef != "" {
-		if err := m.initChannel("matrix", "Matrix"); err != nil {
-			m.recordChannelFailure("matrix", "Matrix", err)
-		}
-	} else if channels.Matrix.Enabled {
-		warnMisconfigured("Matrix", "homeserver, user_id, access_token")
-	}
-
-	if channels.LINE.Enabled && channels.LINE.ChannelAccessTokenRef != "" {
-		if err := m.initChannel("line", "LINE"); err != nil {
-			m.recordChannelFailure("line", "LINE", err)
-		}
-	} else if channels.LINE.Enabled {
-		warnMisconfigured("LINE", "channel_access_token")
-	}
-
-	if channels.WeCom.Enabled && channels.WeCom.BotID != "" && channels.WeCom.SecretRef != "" {
-		if err := m.initChannel("wecom", "WeCom"); err != nil {
-			m.recordChannelFailure("wecom", "WeCom", err)
-		}
-	} else if channels.WeCom.Enabled {
-		warnMisconfigured("WeCom", "bot_id, secret")
-	}
-
-	if channels.Weixin.Enabled && channels.Weixin.TokenRef != "" {
-		if err := m.initChannel("weixin", "Weixin"); err != nil {
-			m.recordChannelFailure("weixin", "Weixin", err)
-		}
-	} else if channels.Weixin.Enabled {
-		warnMisconfigured("Weixin", "token")
-	}
-
-	if channels.IRC.Enabled && channels.IRC.Server != "" {
-		if err := m.initChannel("irc", "IRC"); err != nil {
-			m.recordChannelFailure("irc", "IRC", err)
-		}
-	} else if channels.IRC.Enabled {
-		warnMisconfigured("IRC", "server")
-	}
-
-	if channels.GoogleChat.Enabled &&
-		(channels.GoogleChat.WebhookURLRef != "" ||
-			channels.GoogleChat.ServiceAccountJSONRef != "" ||
-			channels.GoogleChat.WebhookURL.String() != "" ||
-			channels.GoogleChat.ServiceAccountJSON.String() != "" ||
-			channels.GoogleChat.ServiceAccountFile != "") {
-		if err := m.initChannel("google-chat", "Google Chat"); err != nil {
-			m.recordChannelFailure("google-chat", "Google Chat", err)
-		}
-	} else if channels.GoogleChat.Enabled {
-		warnMisconfigured("Google Chat", "webhook_url, service_account_json, or service_account_file")
 	}
 
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{

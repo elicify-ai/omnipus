@@ -74,7 +74,7 @@ func (a *restAPI) HandleUsersList(w http.ResponseWriter, r *http.Request) {
 			Username:       u.Username,
 			Role:           gen.UserRole(u.Role),
 			HasPassword:    u.PasswordHash != "",
-			HasActiveToken: !u.TokenHash.IsZero(),
+			HasActiveToken: u.HasActiveToken(),
 		})
 	}
 	jsonOK(w, out)
@@ -465,7 +465,11 @@ func (a *restAPI) HandleUserResetPassword(w http.ResponseWriter, r *http.Request
 			u["password_hash"] = string(newHash)
 			// Zero token_hash in the SAME transaction so the target
 			// user's currently-issued bearer 401s after the refresh.
+			// SEC-1 / UAT #399: also clear the whole bearer-token SET so ALL of
+			// this user's sessions are revoked, not just the legacy token_hash.
+			// Scoped to this one user (reset invalidates every session).
 			u["token_hash"] = ""
+			u["tokens"] = []any{}
 			return nil
 		})
 	}); updErr != nil {

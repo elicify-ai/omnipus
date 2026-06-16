@@ -16,7 +16,7 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, assistantMessages, newChatButton } from './fixtures/selectors';
+import { chatInput, assistantMessages, newChatButton, selectAgent } from './fixtures/selectors';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -48,13 +48,20 @@ async function waitForSubagentBlock(
   }
 }
 
-// Helper: start a fresh chat session.
+// Helper: start a fresh chat session and route to a spawn-capable task agent.
+//
+// AGENT ROUTING: every test in this file expects the active agent to emit `spawn`.
+// The default agent Mia's "guide" persona makes the model REFUSE to spawn ("My role
+// is to explain… not to spawn subagents"), captured in CI artifacts. Switch to Jim
+// (the general-purpose task agent) so the spawn-dependent assertions are exercised.
 async function startFreshChat(page: import('@playwright/test').Page): Promise<void> {
   const newChat = page.getByRole('banner').getByRole('button', { name: 'New Chat' });
   if (await newChat.isVisible({ timeout: 5_000 })) {
     await newChat.click();
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
   }
+  // Route to Jim — Mia declines to spawn (see note above).
+  await selectAgent(page, /Jim/i);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -335,7 +342,7 @@ test(
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
 
     // Best-effort: IF a SubagentBlock appeared, verify basic UI behavior.
-    // Use .first(): a natural-language prompt is non-deterministic and glm-5v-turbo
+    // Use .first(): a natural-language prompt is non-deterministic and gemini-2.5-flash
     // sometimes spawns more than one subagent, which would make a bare locator
     // strict-mode-fail on isVisible(). We only care whether >=1 block appeared.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]').first();

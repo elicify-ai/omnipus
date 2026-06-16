@@ -116,17 +116,18 @@ func TestPollWeComQRCodeResult(t *testing.T) {
 
 func TestApplyWeComAuthResult(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Channels.WeCom.WebSocketURL = ""
+	// WebSocketURL is already empty on a fresh default config; no explicit zero-set needed.
 
 	applyWeComAuthResult(cfg, wecomQRBotInfo{
 		BotID:  "bot-1",
 		Secret: "secret-1",
 	})
 
-	assert.True(t, cfg.Channels.WeCom.Enabled)
-	assert.Equal(t, "bot-1", cfg.Channels.WeCom.BotID)
-	assert.Equal(t, wecomSecretCredRef, cfg.Channels.WeCom.SecretRef)
-	assert.Equal(t, wecomDefaultWebSocketURL, cfg.Channels.WeCom.WebSocketURL)
+	wecom := config.InstanceToWeCom(cfg.Channels["wecom"])
+	assert.True(t, wecom.Enabled)
+	assert.Equal(t, "bot-1", wecom.BotID)
+	assert.Equal(t, wecomSecretCredRef, wecom.SecretRef)
+	assert.Equal(t, wecomDefaultWebSocketURL, wecom.WebSocketURL)
 }
 
 func TestAuthWeComCmdWithScanner(t *testing.T) {
@@ -157,10 +158,11 @@ func TestAuthWeComCmdWithScanner(t *testing.T) {
 
 	cfg, err := config.LoadConfig(internal.GetConfigPath())
 	require.NoError(t, err)
-	assert.True(t, cfg.Channels.WeCom.Enabled)
-	assert.Equal(t, "bot-1", cfg.Channels.WeCom.BotID)
-	assert.Equal(t, wecomSecretCredRef, cfg.Channels.WeCom.SecretRef)
-	assert.Equal(t, wecomDefaultWebSocketURL, cfg.Channels.WeCom.WebSocketURL)
+	wecom := config.InstanceToWeCom(cfg.Channels["wecom"])
+	assert.True(t, wecom.Enabled)
+	assert.Equal(t, "bot-1", wecom.BotID)
+	assert.Equal(t, wecomSecretCredRef, wecom.SecretRef)
+	assert.Equal(t, wecomDefaultWebSocketURL, wecom.WebSocketURL)
 	assert.Contains(t, output.String(), "WeCom connected.")
 
 	// Verify the secret was stored in the credential store.

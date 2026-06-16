@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, agentPicker, assistantMessages } from './fixtures/selectors'
+import { chatInput, agentPicker, assistantMessages, selectAgent } from './fixtures/selectors'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -157,7 +157,7 @@ async function triggerLongStreamingTurn(page: Page): Promise<void> {
   await expect(picker).toContainText(/Jim/i, { timeout: 5_000 })
 
   // Forbid tools and demand inline prose: on a bare "write 500 words" prompt,
-  // glm-5v-turbo intermittently shortcuts to the write_file TOOL (Jim has it on
+  // gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has it on
   // default_policy:allow), which ends the turn instantly with zero inline stream
   // and no cancellable window. Forcing long inline prose keeps stop-btn live for
   // several seconds so Stop/Escape/cancel land mid-stream.
@@ -331,10 +331,8 @@ test(
   'T24 — cancel cascades to subagent: transcript.jsonl records turn_canceled with descendants',
   async ({ page }) => {
     // 270s: matches sibling spawn-based tests (handoff(b), subagent(a/d)) which
-    // all use Mia and complete in 6-16s standalone, up to 60-90s under suite
-    // load. test.slow() ceiling. Previously inflated to 600s when this test
-    // forced agent=Jim and Jim's spawn was hitting 4-6 min in CI; with Mia
-    // restored we no longer need that headroom.
+    // complete in 6-16s standalone, up to 60-90s under suite load. test.slow()
+    // ceiling.
     test.slow()
 
     await page.goto('/')
@@ -347,16 +345,14 @@ test(
     // does NOT bind the SPA — the input falls back to creating a new session
     // on first message, leaving us reading the wrong transcript file.
     //
-    // Why Mia (default), NOT Jim: file-level "switch to Jim" comment applies
-    // to T22/T23/T25/T26 (cancel during inline prose — needs Jim's long
-    // streaming). T24's cancel window comes from the SUBAGENT running long enough
-    // (it streams a multi-hundred-word inline essay), so the parent's prose
-    // behaviour is irrelevant. Jim has 16 default
-    // tools with overlapping action options (spawn, subagent, workspace.shell,
-    // workspace.shell_bg) that push glm-5v-turbo into extended thinking when
-    // asked to spawn. Mia has 7 cleaner tools and reliably emits spawn in
-    // single-digit seconds — same agent every other spawn-based test uses
-    // (handoff(b), subagent(a/d)).
+    // Route to Jim (general-purpose task agent), NOT the default agent Mia.
+    // CI investigation (run 27296266639) found Mia's "guide" persona makes the
+    // model REFUSE to spawn ("My role is to explain… not to spawn subagents"),
+    // so the parent never emits a spawn frame and the subagent-collapsed block
+    // never appears. Jim emits spawn on the explicit prompt below. The cancel
+    // window comes from the SUBAGENT running long enough (it streams a
+    // multi-hundred-word inline essay), so the parent agent's prose behaviour is
+    // irrelevant — only that it spawns.
     // Clicking "New Chat" only nullifies activeSessionId — it does NOT mint
     // a new session in the URL. The SPA creates the session lazily on the
     // first sent message. We need to (a) trigger that flow, then (b) read the
@@ -365,6 +361,9 @@ test(
     await expect(newChatBtn).toBeVisible({ timeout: 10_000 })
     await newChatBtn.click()
     await expect(input).toBeEnabled({ timeout: 20_000 })
+
+    // Switch to Jim so the parent turn will actually emit `spawn`.
+    await selectAgent(page, /Jim/i)
 
     // Trigger a turn that uses the spawn tool. The prompt must be explicit enough
     // to overcome GLM-5v-turbo's tendency to reply in prose on short prompts.
@@ -396,9 +395,9 @@ test(
     if (!sessionId) throw new Error('T24: no session ID in URL after first message')
 
     // Wait for the subagent collapsed block to appear — confirms spawn fired.
-    // 150s: matches the sibling Mia-spawn tests (subagent(a) uses 150s; the
-    // empirical CI tail for Mia's spawn is single-digit seconds, so 150s is
-    // already comfortable headroom).
+    // 150s: matches the sibling spawn-based tests (subagent(a) uses 150s); the
+    // empirical CI tail for the explicit spawn prompt is single-digit seconds,
+    // so 150s is already comfortable headroom.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]')
     await expect(collapsedBlock).toBeVisible({ timeout: 150_000 })
 

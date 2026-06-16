@@ -1553,6 +1553,12 @@ func FixtureSessionCloseFrame_Edge() SessionCloseFrame {
 
 func strPtr(s string) *string { return &s }
 
+func intPtr(i int) *int { return &i }
+
+func boolPtr(b bool) *bool { return &b }
+
+func float32Ptr(f float32) *float32 { return &f }
+
 func repeatStr(s string, n int) string {
 	result := make([]byte, 0, len(s)*n)
 	for i := 0; i < n; i++ {
@@ -2072,4 +2078,192 @@ func FixtureAgentOwnerUpdateResponse_Edge() AgentOwnerUpdateResponse {
 		OwnerUsername: "unicode-owner-🔑",
 		Success:       false,
 	}
+}
+
+// ── Level-1 / Spec-3 / Spec-6 REST response fixtures ─────────────────────────
+// Marshal-validate roundtrip coverage for the REST response types served by the
+// gateway, so a Go struct producing schema-invalid JSON is caught by CI.
+
+// ── BoardTask ────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/BoardTask.yaml
+
+func FixtureBoardTask_Populated() BoardTask {
+	return BoardTask{
+		Id:          "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+		Name:        "Fix login bug",
+		Description: strPtr("The login form rejects valid credentials."),
+		Status:      BoardTaskStatusActive,
+		WorkspaceId: strPtr("a1b2c3d4-e5f6-7890-abcd-ef1234567890"),
+		AgentId:     strPtr("mia"),
+		Priority:    intPtr(2),
+		Owner:       strPtr("alice"),
+		CreatedAt:   time.Date(2026, 6, 8, 14, 22, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 6, 8, 15, 0, 0, 0, time.UTC),
+	}
+}
+
+// FixtureBoardTask_ZeroValue — Go zero values. Expected to FAIL validation:
+// status is "" (not in enum) and name is "" (minLength: 1).
+func FixtureBoardTask_ZeroValue() BoardTask {
+	return BoardTask{}
+}
+
+// ── Milestone ────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/Milestone.yaml
+
+func FixtureMilestone_Populated() Milestone {
+	return Milestone{
+		Id:          "c3d4e5f6-a7b8-9012-cdef-123456789012",
+		WorkspaceId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		Name:        "v1.0 Launch",
+		Description: strPtr("Ship the first public release."),
+		DueDate:     strPtr("2026-12-31"),
+		Owner:       strPtr("alice"),
+		Progress:    float32Ptr(0.5),
+		CreatedAt:   time.Date(2026, 6, 8, 14, 22, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 6, 8, 15, 0, 0, 0, time.UTC),
+	}
+}
+
+// FixtureMilestone_ZeroValue — Go zero values. Expected to FAIL validation:
+// name is "" (minLength: 1) and workspace_id/id are required-but-empty
+// (id has no minLength, but name does, so the object is invalid).
+func FixtureMilestone_ZeroValue() Milestone {
+	return Milestone{}
+}
+
+// ── Workspace ────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/Workspace.yaml
+
+func FixtureWorkspace_Populated() Workspace {
+	return Workspace{
+		Id:          "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		Name:        "website-api",
+		Description: strPtr("Main REST API service"),
+		Status:      WorkspaceStatusActive,
+		Pinned:      true,
+		PinOrder:    1,
+		CoreTeam:    &[]string{"mia", "jim"},
+		Repository:  strPtr("https://github.com/org/repo"),
+		TaskCount:   3,
+		IsDefault:   boolPtr(false),
+		Owner:       strPtr("alice"),
+		CreatedAt:   time.Date(2026, 6, 8, 14, 22, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 6, 8, 15, 0, 0, 0, time.UTC),
+	}
+}
+
+// FixtureWorkspace_ZeroValue — Go zero values. Expected to FAIL validation:
+// status is "" (not in [active, archived]) and name is "" (minLength: 1).
+func FixtureWorkspace_ZeroValue() Workspace {
+	return Workspace{}
+}
+
+// ── DelegationPolicy ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/DelegationPolicy.yaml
+//
+// DelegationPolicy is not promoted to a named top-level component (oapi-codegen
+// inlines it as an anonymous struct inside Agent / AgentCreateRequest /
+// AgentUpdateRequest). The wire shape served by the gateway is the Agent's
+// `delegation_policy` sub-object, so these fixtures return that exact serialized
+// shape as raw JSON for validation against the schema file. Note: the schema has
+// no required fields, so the empty object ({}) is VALID (deny-by-default).
+
+// FixtureDelegationPolicy_PopulatedJSON returns the serialized shape the gateway
+// emits for a fully-specified delegation policy.
+func FixtureDelegationPolicy_PopulatedJSON() []byte {
+	return []byte(`{
+		"to": [{"kind": "local", "id": "ray"}],
+		"accept_from": [{"kind": "local", "id": "jim"}],
+		"modes": ["await", "background", "task"],
+		"depth": 3,
+		"budget": {"max_cost_usd": 1.0, "max_tokens": 100000}
+	}`)
+}
+
+// FixtureDelegationPolicy_ZeroValueJSON is the empty object the gateway emits
+// when no delegation is configured. Expected to PASS: no required fields.
+func FixtureDelegationPolicy_ZeroValueJSON() []byte {
+	return []byte(`{}`)
+}
+
+// FixtureDelegationPolicy_InvalidJSON has an out-of-enum reference kind.
+// Expected to FAIL: to[].kind must be one of [local, remote-a2a].
+func FixtureDelegationPolicy_InvalidJSON() []byte {
+	return []byte(`{"to": [{"kind": "telepathy", "id": "ray"}]}`)
+}
+
+// ── ExecutorConfig ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ExecutorConfig.yaml
+
+func FixtureExecutorConfig_Populated() ExecutorConfig {
+	cli := ExecutorConfigCliClaudeCode
+	return ExecutorConfig{
+		Kind: ExternalCli,
+		Cli:  &cli,
+	}
+}
+
+// FixtureExecutorConfig_ZeroValue — Go zero values. Expected to FAIL validation:
+// kind is "" (not in [native, external-cli, remote-a2a]).
+func FixtureExecutorConfig_ZeroValue() ExecutorConfig {
+	return ExecutorConfig{}
+}
+
+// ── IntegrationProvider ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/IntegrationProvider.yaml
+
+func FixtureIntegrationProvider_Populated() IntegrationProvider {
+	return IntegrationProvider{
+		Id:          "brave",
+		Kind:        IntegrationProviderKindSearch,
+		DisplayName: "Brave Search",
+		Configured:  true,
+		RequiresKey: true,
+		Active:      boolPtr(true),
+	}
+}
+
+// FixtureIntegrationProvider_ZeroValue — Go zero values. Expected to FAIL
+// validation: kind is "" (not in [search, voice]).
+func FixtureIntegrationProvider_ZeroValue() IntegrationProvider {
+	return IntegrationProvider{}
+}
+
+// ── ReAuthResponse ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ReAuthResponse.yaml
+// Note: all required fields are scalar with no value constraints, so the Go
+// zero value ({verified:false, token:"", expires_in:0}) is a VALID object —
+// there is no ZeroValue-fails case for this type.
+
+func FixtureReAuthResponse_Populated() ReAuthResponse {
+	return ReAuthResponse{
+		Verified:  true,
+		Token:     "reauth_2f1a9c0b8d7e6f5a",
+		ExpiresIn: 300,
+	}
+}
+
+// FixtureReAuthResponse_ZeroValue — Go zero values. Expected to PASS: all
+// required fields are present (false/""/0 are valid for their types).
+func FixtureReAuthResponse_ZeroValue() ReAuthResponse {
+	return ReAuthResponse{}
+}
+
+// ── PerformanceSettings ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PerformanceSettings.yaml
+// Note: PerformanceSettings has no required fields and both properties are
+// optional pointers, so the zero value ({}) is a VALID empty object.
+
+func FixturePerformanceSettings_Populated() PerformanceSettings {
+	return PerformanceSettings{
+		MaxParallelAgents:          intPtr(4),
+		EffectiveMaxParallelAgents: intPtr(4),
+	}
+}
+
+// FixturePerformanceSettings_ZeroValue — nil pointers marshal to {}. Expected
+// to PASS: no required fields.
+func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
+	return PerformanceSettings{}
 }

@@ -124,6 +124,20 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
+	// Re-auth gate (Spec-6 FR-12.2): a sandbox-config mutation is a sensitive
+	// HTTP-layer security change and requires the single-use re-auth consent
+	// token — the same gate the Integrations PUT enforces. RequireNotBypass
+	// (already in adminWrap) is a 503 dev-mode guard, NOT this consent check; the
+	// two are layered. The user is guaranteed in context here (admin-wrapped).
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	var body gen.SandboxConfigUpdate
