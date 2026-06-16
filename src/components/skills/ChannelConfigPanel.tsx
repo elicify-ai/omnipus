@@ -7,9 +7,8 @@ import {
   Play,
   Lightning,
   Warning,
-  Info,
 } from '@phosphor-icons/react'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -24,16 +23,80 @@ import {
   getChannelRouting,
   setChannelRouting,
   fetchAgents,
+  isWorker,
   isApiError,
 } from '@/lib/api'
 import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
+import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
+import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
+import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
 
 interface ChannelConfigPanelProps {
   channelId: string
   channelName: string
   open: boolean
   onOpenChange: (open: boolean) => void
+  /**
+   * Capability flag from the channel's ChannelEntry (#299): whether this server
+   * build can run native WhatsApp (whatsmeow). Only `false` gates the WhatsApp
+   * linked-device QR pairing UI; `undefined`/`true` are treated as available so
+   * the QR renders by default ("the UI must only offer what the binary can do").
+   */
+  nativeAvailable?: boolean
+  /**
+   * Whether the channel is currently enabled. Used to gate the WhatsApp QR
+   * pairing UI: whatsmeow only starts the QR handshake after the channel is
+   * enabled, so we show an informational prompt when enabled is false/undefined
+   * rather than starting the 15-second QR timeout with no chance of a QR arriving.
+   */
+  enabled?: boolean
+}
+
+// #326: Map raw snake_case API field keys to human-readable labels using the
+// channel descriptor. E.g. "bot_token" → "Bot Token".
+// Dev-mode: emits console.warn for any snake_case token that looks like a field
+// name but has no mapping — surfacing descriptor/backend drift early.
+function mapErrorsToHumanLabels(
+  fields: ChannelField[],
+  raw: string,
+): string {
+  // Build a lookup from key → label for this channel.
+  const labelMap: Record<string, string> = {}
+  for (const f of fields) {
+    // Support flat key and dotted key (e.g. "group_trigger.mention_only").
+    labelMap[f.key] = f.label
+    // Also map the leaf part of dotted keys (e.g. "mention_only" → label).
+    if (f.key.includes('.')) {
+      const leaf = f.key.split('.').pop()
+      if (leaf) labelMap[leaf] = f.label
+    }
+  }
+
+  const unmapped: string[] = []
+
+  // Replace every snake_case token that matches a known field key; collect
+  // candidates that look like field identifiers but have no mapping for
+  // observability (dev-mode only, never in production log spam).
+  const result = raw.replace(/\b([a-z][a-z0-9_]*)\b/g, (match) => {
+    if (labelMap[match]) return labelMap[match]
+    // Only flag tokens that look like field names (contain underscore or are
+    // long enough to plausibly be an api key), not common English words.
+    if (match.includes('_') || match.length > 12) {
+      unmapped.push(match)
+    }
+    return match
+  })
+
+  if (import.meta.env.DEV && unmapped.length > 0) {
+    console.warn(
+      '[ChannelConfigPanel] mapErrorsToHumanLabels: unmapped snake_case tokens in error message — add to channel descriptor or check for backend/descriptor drift:',
+      unmapped,
+      '| raw message:', raw,
+    )
+  }
+
+  return result
 }
 
 function PasswordField({
@@ -56,6 +119,7 @@ function PasswordField({
         placeholder={field.placeholder}
         className="pr-9 font-mono text-xs"
         autoComplete="off"
+        aria-describedby={field.helpText ? `help-${field.key}` : undefined}
       />
       <button
         type="button"
@@ -69,23 +133,156 @@ function PasswordField({
   )
 }
 
-function WhatsAppNativeNotice() {
+// HelperLink renders the helpText and optional helpLink for a channel field.
+// LOCAL component — single consumer (ChannelConfigPanel); see spec §2, M-11.
+// Rendered as a one-liner under the input.
+function HelperLink({ field }: { field: ChannelField }) {
+  if (!field.helpText && !field.helpLink) return null
   return (
-    <div className="space-y-2 mt-1">
-      <div className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]">
-        <Info size={14} className="text-[var(--color-accent)] shrink-0 mt-0.5" weight="fill" />
-        <p className="text-xs text-[var(--color-secondary)]">
-          After enabling, check the gateway terminal for a QR code. Scan it with{' '}
-          <span className="font-medium">WhatsApp → Linked Devices → Link a Device</span>.
-        </p>
-      </div>
-      <div className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30">
-        <Warning size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
-        <p className="text-xs text-[var(--color-muted)]">
-          WhatsApp native mode stores sessions locally. The gateway must keep running for the session
-          to stay active.
-        </p>
-      </div>
+    <p id={`help-${field.key}`} className="text-[10px] text-[var(--color-muted)] leading-relaxed">
+      {field.helpText}
+      {field.helpText && field.helpLink && ' '}
+      {field.helpLink && (
+        <a
+          href={field.helpLink.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
+        >
+          {field.helpLink.label}
+        </a>
+      )}
+    </p>
+  )
+}
+
+// ── Dotted-key helpers ────────────────────────────────────────────────────────
+//
+// Both functions support exactly one level of nesting (a.b), which is the
+// only depth used in the channel descriptor today.  Deep nesting (a.b.c)
+// would require a recursive implementation — extend when needed.
+
+/**
+ * Return a shallow-merged copy of `obj` with `dottedKey` set to `value`.
+ * "group_trigger.mention_only" → obj["group_trigger"]["mention_only"] = value.
+ * Flat keys are set directly.
+ */
+function setNested(
+  obj: Record<string, unknown>,
+  dottedKey: string,
+  value: unknown,
+): Record<string, unknown> {
+  if (!dottedKey.includes('.')) {
+    return { ...obj, [dottedKey]: value }
+  }
+  const dot = dottedKey.indexOf('.')
+  const parent = dottedKey.slice(0, dot)
+  const child = dottedKey.slice(dot + 1)
+  return {
+    ...obj,
+    [parent]: {
+      ...((obj[parent] as Record<string, unknown>) ?? {}),
+      [child]: value,
+    },
+  }
+}
+
+/**
+ * Read `dottedKey` from `obj`.
+ * "group_trigger.mention_only" → (obj["group_trigger"] ?? {})["mention_only"].
+ * Flat keys are read directly.
+ */
+function getNested(obj: Record<string, unknown>, dottedKey: string): unknown {
+  if (!dottedKey.includes('.')) return obj[dottedKey]
+  const dot = dottedKey.indexOf('.')
+  const parent = dottedKey.slice(0, dot)
+  const child = dottedKey.slice(dot + 1)
+  return (obj[parent] as Record<string, unknown> | undefined)?.[child]
+}
+
+// Google Chat auth method groups for the pick-one radio (#324 / US-C2).
+type GChatAuthMethod = 'webhook' | 'service_account'
+
+const GCHAT_AUTH_OPTIONS: Array<{ value: GChatAuthMethod; label: string; description: string }> = [
+  {
+    value: 'webhook',
+    label: 'Webhook URL',
+    description: 'Simplest setup — send messages to a Google Chat space via an incoming webhook.',
+  },
+  {
+    value: 'service_account',
+    label: 'Service account',
+    description: 'Full bot mode — create spaces, post as a bot, receive events.',
+  },
+]
+
+// ChannelFieldRow renders a single field with its label, input, and help text.
+// The `descriptionId` is used as the aria-describedby target for the sheet.
+function ChannelFieldRow({
+  field,
+  getValue,
+  setValue,
+}: {
+  field: ChannelField
+  getValue: (key: string) => unknown
+  setValue: (key: string, value: unknown) => void
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label
+        htmlFor={`field-${field.key}`}
+        className="text-xs font-medium text-[var(--color-secondary)]"
+      >
+        {field.label}
+        {field.required && (
+          <span className="text-[var(--color-error)] ml-0.5">*</span>
+        )}
+      </Label>
+
+      {field.type === 'toggle' ? (
+        <div className="flex items-center gap-2 py-1">
+          <Switch
+            id={`field-${field.key}`}
+            checked={Boolean(getValue(field.key))}
+            onCheckedChange={(checked) => setValue(field.key, checked)}
+            aria-describedby={field.helpText ? `help-${field.key}` : undefined}
+          />
+        </div>
+      ) : field.type === 'password' ? (
+        <PasswordField
+          field={field}
+          value={String(getValue(field.key) ?? '')}
+          onChange={(val) => setValue(field.key, val)}
+        />
+      ) : field.type === 'textarea' ? (
+        <Textarea
+          id={`field-${field.key}`}
+          value={String(getValue(field.key) ?? '')}
+          onChange={(e) => setValue(field.key, e.target.value)}
+          placeholder={field.placeholder}
+          className="font-mono text-xs resize-none h-20"
+          aria-describedby={field.helpText ? `help-${field.key}` : undefined}
+        />
+      ) : (
+        <Input
+          id={`field-${field.key}`}
+          type={field.type === 'number' ? 'number' : 'text'}
+          value={String(getValue(field.key) ?? '')}
+          onChange={(e) =>
+            setValue(
+              field.key,
+              field.type === 'number'
+                ? e.target.value === '' ? '' : Number(e.target.value)
+                : e.target.value,
+            )
+          }
+          placeholder={field.placeholder}
+          className="text-xs"
+          aria-describedby={field.helpText ? `help-${field.key}` : undefined}
+        />
+      )}
+
+      <HelperLink field={field} />
     </div>
   )
 }
@@ -95,6 +292,8 @@ export function ChannelConfigPanel({
   channelName,
   open,
   onOpenChange,
+  nativeAvailable,
+  enabled,
 }: ChannelConfigPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -105,6 +304,15 @@ export function ChannelConfigPanel({
 
   const [formValues, setFormValues] = useState<Record<string, unknown>>({})
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  // Tracks whether Save & Enable was just clicked in this panel session. Needed because
+  // the `enabled` prop comes from the parent's stale state after Save & Enable keeps the
+  // dialog open — without this, the panel would keep showing the enable-prompt even after
+  // the channel was just enabled in this session.
+  const [wasJustEnabled, setWasJustEnabled] = useState(false)
+
+  // #324 — Google Chat auth method picker. Switching method clears the other
+  // group's useState value so a stale secret cannot be resurrected on switch-back (F-G08).
+  const [gChatAuthMethod, setGChatAuthMethod] = useState<GChatAuthMethod>('webhook')
 
   const { data: currentConfig, isLoading } = useQuery({
     queryKey: ['channel-config', channelId],
@@ -113,6 +321,7 @@ export function ChannelConfigPanel({
   })
 
   const isWebchat = channelId === 'webchat'
+  const isGoogleChat = channelId === 'google-chat'
 
   const { data: agents = [], isError: agentsError } = useQuery({
     queryKey: ['agents'],
@@ -146,100 +355,228 @@ export function ChannelConfigPanel({
       queryClient.invalidateQueries({ queryKey: ['channel-routing', channelId] })
     },
   })
+  // Reset wasJustEnabled when the dialog closes so next open starts fresh.
+  useEffect(() => {
+    if (!open) setWasJustEnabled(false)
+  }, [open])
 
-  // Populate form when config loads — skip if user has unsaved edits
+  // useRef (not useState) — timer ID mutation must not trigger re-render
+  const routingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (routingDebounceRef.current !== null) clearTimeout(routingDebounceRef.current)
+  }, [])
+  const doSaveRoutingDebounced = (agentId: string | undefined) => {
+    if (routingDebounceRef.current) clearTimeout(routingDebounceRef.current)
+    routingDebounceRef.current = setTimeout(() => {
+      routingDebounceRef.current = null
+      doSaveRouting(agentId)
+    }, 400)
+  }
+
+  // Populate form when config loads — skip if user has unsaved edits.
+  // For google-chat, also detect which auth group is pre-configured.
   useEffect(() => {
     if (!currentConfig) return
     if (isDirtyRef.current) return
     setFormValues(currentConfig)
-  }, [currentConfig])
+    // Detect pre-existing method on load: prefer service_account if any SA field is set.
+    if (isGoogleChat) {
+      const cfg = currentConfig as Record<string, unknown>
+      if (cfg['service_account_json'] || cfg['service_account_file']) {
+        setGChatAuthMethod('service_account')
+      } else {
+        setGChatAuthMethod('webhook')
+      }
+    }
+  }, [currentConfig, isGoogleChat])
 
   const { mutate: doSave, isPending: saving } = useMutation({
-    mutationFn: () => configureChannel(channelId, formValues),
+    mutationFn: () => configureChannel(channelId, buildSubmitPayload()),
     onSuccess: () => {
       isDirtyRef.current = false
+      setTestResult(null)
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
       addToast({ message: 'Configuration saved', variant: 'success' })
     },
-    onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed', variant: 'error' }),
+    onError: (err: unknown) => {
+      const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed'
+      addToast({ message: mapErrorsToHumanLabels(fields, rawMsg), variant: 'error' })
+    },
   })
 
   const { mutate: doSaveAndEnable, isPending: savingAndEnabling } = useMutation({
     mutationFn: async () => {
-      await configureChannel(channelId, formValues)
+      await configureChannel(channelId, buildSubmitPayload())
       await enableChannel(channelId)
     },
     onSuccess: () => {
       isDirtyRef.current = false
+      setTestResult(null)
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
-      addToast({ message: 'Channel configured and enabled', variant: 'success' })
-      onOpenChange(false)
+      // #358: channels with a live pairing flow (WhatsApp native) must keep the panel
+      // open after enable so the QR — pushed over the whatsapp_pairing WS frame once the
+      // backend starts the channel — can render in WhatsAppNativeNotice. Closing here
+      // unmounts the notice and drops its subscription before any QR frame arrives, which
+      // is why "Enable & Save" never showed a code. Other channels have no pairing step.
+      // Uses the REST-facing id ('whatsapp') that channel.id carries from GET /channels.
+      const hasPairingFlow = channelId === WHATSAPP_CHANNEL_ID
+      addToast({
+        message: hasPairingFlow
+          ? 'Channel enabled — scan the QR code below to link your device'
+          : 'Channel configured and enabled',
+        variant: 'success',
+      })
+      if (hasPairingFlow) {
+        setWasJustEnabled(true)
+      } else {
+        onOpenChange(false)
+      }
     },
-    onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel', variant: 'error' }),
+    onError: (err: unknown) => {
+      const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel'
+      addToast({ message: mapErrorsToHumanLabels(fields, rawMsg), variant: 'error' })
+    },
   })
 
   const { mutate: doTest, isPending: testing } = useMutation({
-    mutationFn: () => testChannel(channelId),
+    mutationFn: () => {
+      // #326 — validate required fields client-side before hitting the API.
+      const missingRequired = fields.filter((f) => {
+        // Only check fields visible in the current context (authGroup filtering for GChat).
+        if (isGoogleChat && f.authGroup && f.authGroup !== gChatAuthMethod) return false
+        if (!f.required) return false
+        const val = getValue(f.key)
+        return val === undefined || val === null || val === ''
+      })
+      if (missingRequired.length > 0) {
+        const labels = missingRequired.map((f) => f.label).join(', ')
+        throw new Error(`Please fill in: ${labels}`)
+      }
+      return testChannel(channelId)
+    },
     onSuccess: (result) => {
       setTestResult(result)
       if (result.success) {
         addToast({ message: 'Connection test passed', variant: 'success' })
       } else {
-        addToast({ message: result.message || 'Test failed', variant: 'error' })
+        const humanMsg = mapErrorsToHumanLabels(fields, result.message || 'Test failed')
+        setTestResult({ success: false, message: humanMsg })
+        addToast({ message: humanMsg, variant: 'error' })
       }
     },
     onError: (err: unknown) => {
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Test failed'
-      setTestResult({ success: false, message: msg })
-      addToast({ message: msg, variant: 'error' })
+      const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Test failed'
+      const humanMsg = mapErrorsToHumanLabels(fields, rawMsg)
+      setTestResult({ success: false, message: humanMsg })
+      addToast({ message: humanMsg, variant: 'error' })
     },
   })
 
   function setValue(key: string, value: unknown) {
     markDirty()
     // Support nested keys like "group_trigger.mention_only"
-    if (key.includes('.')) {
-      const [parent, child] = key.split('.')
-      setFormValues((prev) => ({
-        ...prev,
-        [parent]: {
-          ...((prev[parent] as Record<string, unknown>) ?? {}),
-          [child]: value,
-        },
-      }))
-    } else {
-      setFormValues((prev) => ({ ...prev, [key]: value }))
-    }
+    setFormValues((prev) => setNested(prev, key, value))
   }
 
   function getValue(key: string): unknown {
-    if (key.includes('.')) {
-      const [parent, child] = key.split('.')
-      const parentObj = formValues[parent] as Record<string, unknown> | undefined
-      return parentObj?.[child]
-    }
-    return formValues[key]
+    return getNested(formValues, key)
   }
 
-  const isWhatsAppNative =
-    channelId === 'whatsapp' && Boolean(getValue('use_native'))
+  // #324 — on method switch: clear the deselected group's field values so a
+  // stale secret cannot be resurrected on switch-back (M-13 / F-G08).
+  function handleGChatMethodSwitch(method: GChatAuthMethod) {
+    if (method === gChatAuthMethod) return
+    markDirty()
+
+    const clearGroup = method === 'webhook' ? 'service_account' : 'webhook'
+    const fieldsToClear = fields.filter((f) => f.authGroup === clearGroup)
+
+    setFormValues((prev) => {
+      let next = { ...prev }
+      for (const f of fieldsToClear) {
+        next = setNested(next, f.key, '')
+      }
+      return next
+    })
+    setGChatAuthMethod(method)
+  }
+
+  // #324 — build the payload, explicitly clearing deselected authGroup fields.
+  //
+  // SECURITY: must NOT omit/delete deselected fields — the backend configureChannel
+  // is a deep-merge (pkg/gateway/rest.go ~4549-4561). An absent field is left
+  // untouched, so a previously-stored service_account_json_ref would survive in
+  // config.json + the credential store after switching to Webhook. Instead, we
+  // send an explicit '' for each deselected field so the backend's clear path
+  // (rest.go ~4532-4537) fires: presence with empty string → clear the _ref and
+  // delete the stored credential.
+  function buildSubmitPayload(): Record<string, unknown> {
+    if (!isGoogleChat) return formValues
+
+    let payload = { ...formValues }
+    const deselectedGroup = gChatAuthMethod === 'webhook' ? 'service_account' : 'webhook'
+    const fieldsToClear = fields.filter((f) => f.authGroup === deselectedGroup)
+    // Send '' (not delete) so the backend detects the clear and revokes any
+    // stored credential for this field. Dotted keys do not appear in GChat
+    // descriptors but handle them defensively for future-proofing.
+    for (const f of fieldsToClear) {
+      payload = setNested(payload, f.key, '')
+    }
+    return payload
+  }
+
+  // WhatsApp is always native (whatsmeow) — the legacy bridge + the `use_native`
+  // toggle were removed, so there is no user-facing native toggle. The
+  // linked-device QR pairing UI is still capability-gated (#299): on a lite/stub
+  // build the backend reports native_available:false on the whatsapp ChannelEntry,
+  // and we must NOT show a QR that can never pair. Only `false` gates;
+  // `undefined`/`true` default to available.
+  // Uses the REST-facing id ('whatsapp') that channel.id carries from GET /channels.
+  const isWhatsApp = channelId === WHATSAPP_CHANNEL_ID
+  const whatsAppNativeUnavailable = isWhatsApp && nativeAvailable === false
 
   const isBusy = saving || savingAndEnabling
 
+  // #326 — a unique id for the sheet's aria-describedby pointing at the channel
+  // description element ("How to connect" intro text).
+  const descriptionId = `channel-config-desc-${channelId}`
+
   if (fields.length === 0) return null
+
+  // Split fields into primary and advanced groups.
+  const primaryFields = fields.filter((f) => !f.advanced)
+  const advancedFields = fields.filter((f) => f.advanced)
+
+  // For Google Chat, further split primary fields by authGroup for the picker.
+  // Fields with no authGroup render unconditionally (e.g. space, allow_from in primary).
+  const gChatGroupedFields = isGoogleChat
+    ? primaryFields.filter((f) => f.authGroup === gChatAuthMethod || !f.authGroup)
+    : null
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
         className="sm:w-[480px] bg-[var(--color-surface-1)] border-[var(--color-border)] overflow-y-auto"
+        aria-describedby={descriptionId}
       >
         <SheetHeader className="pb-4 border-b border-[var(--color-border)]">
           <SheetTitle className="font-headline text-base font-semibold text-[var(--color-secondary)]">
             Configure {channelName}
           </SheetTitle>
+          {/* #326 — aria-describedby target: the "How to connect" intro */}
+          <SheetDescription
+            id={descriptionId}
+            className="text-xs text-[var(--color-muted)] leading-relaxed"
+          >
+            {isGoogleChat
+              ? 'Choose how you want to connect Google Chat, then fill in the credentials below.'
+              : isWhatsApp
+              ? 'Link your WhatsApp account by scanning the QR code with your phone.'
+              : `Enter your ${channelName} credentials to connect the bot.`}
+          </SheetDescription>
         </SheetHeader>
 
         {isLoading ? (
@@ -250,70 +587,93 @@ export function ChannelConfigPanel({
           </div>
         ) : (
           <div className="pt-5 space-y-5">
-            {fields.map((field) => (
-              <div key={field.key} className="space-y-1.5">
-                <Label
-                  htmlFor={`field-${field.key}`}
-                  className="text-xs font-medium text-[var(--color-secondary)]"
-                >
-                  {field.label}
-                  {field.required && (
-                    <span className="text-[var(--color-error)] ml-0.5">*</span>
-                  )}
-                </Label>
-
-                {field.type === 'toggle' ? (
-                  <div className="flex items-center gap-2 py-1">
-                    <Switch
-                      id={`field-${field.key}`}
-                      checked={Boolean(getValue(field.key))}
-                      onCheckedChange={(checked) => setValue(field.key, checked)}
-                    />
-                  </div>
-                ) : field.type === 'password' ? (
-                  <PasswordField
-                    field={field}
-                    value={String(getValue(field.key) ?? '')}
-                    onChange={(val) => setValue(field.key, val)}
-                  />
-                ) : field.type === 'textarea' ? (
-                  <Textarea
-                    id={`field-${field.key}`}
-                    value={String(getValue(field.key) ?? '')}
-                    onChange={(e) => setValue(field.key, e.target.value)}
-                    placeholder={field.placeholder}
-                    className="font-mono text-xs resize-none h-20"
-                  />
-                ) : (
-                  <Input
-                    id={`field-${field.key}`}
-                    type={field.type === 'number' ? 'number' : 'text'}
-                    value={String(getValue(field.key) ?? '')}
-                    onChange={(e) =>
-                      setValue(
-                        field.key,
-                        field.type === 'number'
-                          ? e.target.value === '' ? '' : Number(e.target.value)
-                          : e.target.value,
-                      )
-                    }
-                    placeholder={field.placeholder}
-                    className="text-xs"
-                  />
-                )}
-
-                {field.helpText && (
-                  <p className="text-[10px] text-[var(--color-muted)] leading-relaxed">
-                    {field.helpText}
-                  </p>
-                )}
-
-                {/* WhatsApp native mode notices */}
-                {channelId === 'whatsapp' && field.key === 'use_native' && isWhatsAppNative && (
-                  <WhatsAppNativeNotice />
-                )}
+            {/* #324 — Google Chat auth method picker */}
+            {isGoogleChat && (
+              <div className="space-y-3">
+                <p className="text-xs font-medium text-[var(--color-secondary)]">
+                  How do you want to connect?
+                </p>
+                <div className="flex flex-col gap-2" role="radiogroup" aria-label="Connection method">
+                  {GCHAT_AUTH_OPTIONS.map((opt) => (
+                    <label
+                      key={opt.value}
+                      className={`flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors ${
+                        gChatAuthMethod === opt.value
+                          ? 'border-[var(--color-accent)]/60 bg-[var(--color-accent)]/5'
+                          : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border)]/80'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="gchat-auth-method"
+                        value={opt.value}
+                        checked={gChatAuthMethod === opt.value}
+                        onChange={() => handleGChatMethodSwitch(opt.value)}
+                        className="mt-0.5 accent-[var(--color-accent)]"
+                        aria-label={opt.label}
+                      />
+                      <div>
+                        <p className="text-xs font-medium text-[var(--color-secondary)]">{opt.label}</p>
+                        <p className="text-[10px] text-[var(--color-muted)] mt-0.5">{opt.description}</p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
               </div>
+            )}
+
+            {/* Primary fields (not advanced); GChat applies authGroup filter */}
+            {(isGoogleChat ? gChatGroupedFields! : primaryFields).map((field) => (
+              <ChannelFieldRow
+                key={field.key}
+                field={field}
+                getValue={getValue}
+                setValue={setValue}
+              />
             ))}
+
+            {/* Advanced fields — collapsed under the shared AdvancedDisclosure (#323). */}
+            {advancedFields.length > 0 && (
+              <AdvancedDisclosure>
+                <div className="space-y-4">
+                  {advancedFields.map((field) => (
+                    <ChannelFieldRow
+                      key={field.key}
+                      field={field}
+                      getValue={getValue}
+                      setValue={setValue}
+                    />
+                  ))}
+                </div>
+              </AdvancedDisclosure>
+            )}
+
+            {/* WhatsApp is always native (whatsmeow): show the live linked-device
+                QR pairing UI (#283) — but only when the server build can run
+                native WhatsApp. On a lite/stub build (native_available:false) show
+                a hint instead of a QR that can never pair (#299).
+                When the channel is not yet enabled, show an informational prompt
+                instead of starting the 15-second QR timeout: whatsmeow only
+                generates a QR after the channel is enabled. */}
+            {isWhatsApp &&
+              (whatsAppNativeUnavailable ? (
+                <p
+                  data-testid="native-unavailable-hint"
+                  className="text-xs text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                >
+                  WhatsApp requires the native build (whatsmeow); this server build
+                  doesn&apos;t include it, so linked-device pairing is unavailable.
+                </p>
+              ) : (enabled || wasJustEnabled) ? (
+                <WhatsAppNativeNotice />
+              ) : (
+                <p
+                  data-testid="whatsapp-enable-prompt"
+                  className="text-xs text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                >
+                  Save &amp; Enable WhatsApp to start pairing. Once enabled, the QR code will appear here automatically.
+                </p>
+              ))}
 
             {/* Routing — hidden for webchat (no agent-routing concept) */}
             {!isWebchat && (
@@ -340,12 +700,18 @@ export function ChannelConfigPanel({
                         onValueChange={(v) => {
                           const next = v === '__none__' ? undefined : v
                           setSelectedAgentId(v)
-                          doSaveRouting(next)
+                          doSaveRoutingDebounced(next)
                         }}
                         placeholder="(Global default)"
                         items={[
                           { value: '__none__', label: '(Global default)' },
-                          ...agents.map((a) => ({ value: a.id, label: a.name })),
+                          // Workers (type === 'worker') are delegation-only labour
+                          // agents — they can't be a channel routing default (the
+                          // backend 400s on a worker default_agent_id), so omit them
+                          // from the picker entirely.
+                          ...agents
+                            .filter((a) => !isWorker(a))
+                            .map((a) => ({ value: a.id, label: a.name })),
                         ]}
                       />
                     )}
@@ -357,9 +723,11 @@ export function ChannelConfigPanel({
               </div>
             )}
 
-            {/* Test result */}
+            {/* Test result — pass/fail line (#326) */}
             {testResult && (
               <div
+                role="status"
+                aria-live="polite"
                 className={`flex gap-2 p-3 rounded-md border text-xs ${
                   testResult.success
                     ? 'bg-[var(--color-success)]/10 border-[var(--color-success)]/30 text-[var(--color-success)]'
@@ -383,7 +751,7 @@ export function ChannelConfigPanel({
                 disabled={isBusy}
               >
                 <Lightning size={13} weight="fill" />
-                Save & Enable
+                Save &amp; Enable
               </Button>
               <div className="flex gap-2">
                 <Button
@@ -403,11 +771,16 @@ export function ChannelConfigPanel({
                     doTest()
                   }}
                   disabled={testing || saving || savingAndEnabling}
+                  title="Check the connection without saving"
                 >
                   <Play size={13} weight="fill" />
                   {testing ? 'Testing…' : 'Test'}
                 </Button>
               </div>
+              {/* #326 — Test clarity: explain Test = check without saving */}
+              <p className="text-[10px] text-[var(--color-muted)] text-center">
+                Test checks your connection without saving any changes.
+              </p>
             </div>
           </div>
         )}
@@ -415,3 +788,4 @@ export function ChannelConfigPanel({
     </Sheet>
   )
 }
+

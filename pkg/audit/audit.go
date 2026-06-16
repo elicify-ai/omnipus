@@ -52,6 +52,12 @@ const (
 	EventShutdown          = "shutdown"
 	EventBootAbort         = "boot.abort"
 	EventProcessKillFailed = "process_kill_failed"
+	// EventChannelPairing records device-pairing lifecycle transitions for
+	// channels with an interactive pairing flow (WhatsApp linked-device QR, #358).
+	// The pairing status rides in Details; Decision is allow (linked) or error
+	// (failed/expired). The QR-bearing "code" state is never logged (it is a
+	// scannable secret).
+	EventChannelPairing = "channel.pairing"
 )
 
 // Decision values for audit entries. Values are Decision-compatible
@@ -92,6 +98,7 @@ func IsValidEventName(e EventName) bool {
 		EventShutdown,
 		EventBootAbort,
 		EventProcessKillFailed,
+		EventChannelPairing,
 		// Tool Registry redesign event names from events.go. These are
 		// emitted from the agent loop and the policy package.
 		EventToolPolicyDenyAttempted,
@@ -129,7 +136,31 @@ func IsValidEventName(e EventName) bool {
 		// and RetrospectiveTool.logRateLimited).
 		"memory.remember",
 		"memory.retrospective",
-		"memory.rate_limited":
+		"memory.rate_limited",
+		// Board tasks (pkg/gateway/rest_board.go), workspaces
+		// (pkg/gateway/rest_workspaces.go: workspace.create/update/delete),
+		// and milestones (pkg/gateway/rest_milestones.go). The legacy
+		// "project.*" names are retained here for back-compat with audit
+		// logs written before the project→workspace rename; no current
+		// handler emits them (rest_projects.go was renamed to
+		// rest_workspaces.go).
+		"board_task.create",
+		"board_task.update",
+		"board_task.delete",
+		"board_task.start",
+		// Current workspace mutation events (rest_workspaces.go emits these).
+		"workspace.create",
+		"workspace.update",
+		"workspace.delete",
+		// Legacy pre-rename project.* events, retained for back-compat with
+		// audit logs written before the project→workspace rename. No current
+		// handler emits them.
+		"project.create",
+		"project.update",
+		"project.delete",
+		"milestone.create",
+		"milestone.update",
+		"milestone.delete":
 		return true
 	}
 	return false

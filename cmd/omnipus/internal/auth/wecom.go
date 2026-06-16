@@ -203,12 +203,15 @@ func defaultWeComQRFlowOptions(timeout time.Duration) wecomQRFlowOptions {
 const wecomSecretCredRef = "WECOM_SECRET"
 
 func applyWeComAuthResult(cfg *config.Config, botInfo wecomQRBotInfo) {
-	cfg.Channels.WeCom.Enabled = true
-	cfg.Channels.WeCom.BotID = botInfo.BotID
-	cfg.Channels.WeCom.SecretRef = wecomSecretCredRef
-	if strings.TrimSpace(cfg.Channels.WeCom.WebSocketURL) == "" {
-		cfg.Channels.WeCom.WebSocketURL = wecomDefaultWebSocketURL
+	inst := cfg.Channels["wecom"]
+	inst.Type = "wecom"
+	inst.Enabled = true
+	inst.BotID = botInfo.BotID
+	inst.SecretRef = wecomSecretCredRef
+	if strings.TrimSpace(inst.WebSocketURL) == "" {
+		inst.WebSocketURL = wecomDefaultWebSocketURL
 	}
+	cfg.Channels["wecom"] = inst
 }
 
 func scanWeComQRCodeInteractive(ctx context.Context, opts wecomQRFlowOptions) (wecomQRBotInfo, error) {

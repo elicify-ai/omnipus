@@ -23,6 +23,5 @@ var supportedChannels = map[string]bool{
 	"slack":    true,
 	"matrix":   true,
 	"line":     true,
-	"onebot":   true,
 	"wecom":    true,
 }

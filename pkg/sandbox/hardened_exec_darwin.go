@@ -1,7 +1,7 @@
 //go:build darwin
 
-// Darwin platform hardening for hardened_exec children. Per we
-// document this platform as best-effort: there is no kernel isolation
+// Darwin platform hardening for hardened_exec children. We document this
+// platform as best-effort: there is no kernel isolation
 // primitive equivalent to Landlock or AppContainer that we can use without
 // CGo. The child runs under the OS's normal user permissions; the only
 // active controls are Setpgid (so the parent can SIGTERM the whole tree
@@ -60,8 +60,11 @@ func applyPlatformHardening(cmd *exec.Cmd, _ Limits) error {
 // rather than only operators tailing logs).
 func applyPostStartHardening(_ *exec.Cmd, lim Limits) error {
 	if lim.MemoryLimitBytes > 0 {
-		slog.Warn("hardened_exec/darwin: MemoryLimitBytes ignored (RLIMIT_AS unsupported on macOS); child runs unbounded",
-			"requested_bytes", lim.MemoryLimitBytes)
+		slog.Warn(
+			"hardened_exec/darwin: MemoryLimitBytes ignored (RLIMIT_AS unsupported on macOS); child runs unbounded",
+			"requested_bytes",
+			lim.MemoryLimitBytes,
+		)
 	}
 	return nil
 }

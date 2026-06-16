@@ -25,11 +25,12 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 		NewAgentReadMetadataTool(d),
 		NewAgentWriteMetadataTool(d),
 
-		// Project management (4)
-		NewProjectCreateTool(d),
-		NewProjectUpdateTool(d),
-		NewProjectDeleteTool(d),
-		NewProjectListTool(d),
+		// Workspace management (5)
+		NewWorkspaceCreateTool(d),
+		NewWorkspaceUpdateTool(d),
+		NewWorkspaceDeleteTool(d),
+		NewWorkspaceListTool(d),
+		NewWorkspaceGetTool(d),
 
 		// Task management (4)
 		NewTaskCreateTool(d),
@@ -44,11 +45,15 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 		NewChannelListTool(d),
 		NewChannelTestTool(d),
 
-		// Skill management (4)
+		// Skill management (6)
 		NewSkillInstallTool(d),
 		NewSkillRemoveTool(d),
 		NewSkillSearchTool(d),
 		NewSkillListTool(d),
+		// Skill authoring / self-improvement (Spec-6 U2): consent-gated +
+		// versioned writes. Editing a built-in produces a user override.
+		NewSkillCreateTool(d),
+		NewSkillEditTool(d),
 
 		// MCP server management (3)
 		NewMCPAddTool(d),
@@ -78,7 +83,7 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 41 system tools.
+// BuildRegistry creates a ToolRegistry containing all 42 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps, navCb NavigateCallback) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()

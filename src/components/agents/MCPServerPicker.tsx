@@ -40,7 +40,8 @@ export function MCPServerPicker({ servers, mcpConfig, onChange }: MCPServerPicke
                 {server.name}
               </p>
               <p className="text-[10px] text-[var(--color-muted)]">
-                {server.tool_count} tool{server.tool_count !== 1 ? 's' : ''} — {server.transport}
+                {server.tool_count} tool{server.tool_count !== 1 ? 's' : ''}
+                {server.transport === 'stdio' ? ' — local program' : ' — network'}
               </p>
             </div>
             <Switch

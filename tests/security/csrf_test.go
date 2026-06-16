@@ -111,6 +111,18 @@ func TestCSRFProtection(t *testing.T) {
 	// compares cookie to header; any value works so long as both legs match.
 	const csrfToken = "csrf-test-fixture-value-42"
 
+	// Onboard a real password-backed admin so the happy-path sub-test can clear
+	// the re-auth gate on sensitive PUTs (e.g. /security/tool-policies, Spec-6
+	// FR-12.2). The synthetic env-token admin (WithBearerAuth) has no password
+	// hash and so cannot mint a consent token via POST /api/v1/auth/reauth.
+	// Onboarding seeds gateway.users, which disables the legacy env-token bearer
+	// (gw.Token()) — checkBearerAuth then requires a token in the user list — so
+	// the happy path authenticates with this onboarded admin token instead.
+	// The two ATTACK sub-tests below send NO bearer (modeling cross-origin CSRF),
+	// so they are unaffected by the user-list seeding.
+	const adminPassword = "securepass123"
+	adminToken := onboardCSRFAdmin(t, gw, adminPassword)
+
 	for _, tgt := range csrfTargets() {
 		name := strings.NewReplacer("/", "_", " ", "_").Replace(tgt.path)
 
@@ -195,11 +207,22 @@ func TestCSRFProtection(t *testing.T) {
 			if tgt.needsJSONBody {
 				req.Header.Set("Content-Type", "application/json")
 			}
-			if gw.Token() != "" {
-				req.Header.Set("Authorization", "Bearer "+gw.Token())
-			}
+			// Authenticate with the onboarded admin (not gw.Token() — the env
+			// token is dead once gateway.users is seeded by onboarding).
+			req.Header.Set("Authorization", "Bearer "+adminToken)
 			req.AddCookie(&http.Cookie{Name: "__Host-csrf", Value: csrfToken})
 			req.Header.Set("X-Csrf-Token", csrfToken)
+			// Re-auth gate (Spec-6 FR-12.2): sensitive PUTs (e.g. tool-policies)
+			// also require a single-use consent token AFTER the CSRF + admin
+			// checks. Mint one so the request reaches the handler — what this
+			// sub-test actually asserts is that the CSRF compare path lets a
+			// matching cookie+header through (NotEqual 403), not that re-auth is
+			// absent. Without the token the handler's re-auth gate would 403 and
+			// mask a genuine CSRF regression.
+			if isReAuthGatedPUT(tgt.method, tgt.path) {
+				rt := mintReAuthToken(t, gw.HTTPClient, gw.URL, gw.URL, adminToken, adminPassword)
+				req.Header.Set(reAuthHeader, rt)
+			}
 			resp, err := gw.HTTPClient.Do(req)
 			require.NoError(t, err)
 			defer resp.Body.Close()

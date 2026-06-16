@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,7 +79,7 @@ func newTestRestAPIWithHomeAuth(t *testing.T) *restAPI {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 }
 
@@ -112,7 +113,7 @@ func TestHandleLogin_Success(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	body := `{"username":"testuser","password":"password123"}`
@@ -166,7 +167,7 @@ func newRestAPIWithSingleUser(t *testing.T, username, passwordHash string) *rest
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 }
 
@@ -306,7 +307,7 @@ func TestHandleLogin_DifferentInputProducesDifferentToken(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// Login as user1
@@ -365,7 +366,7 @@ func TestHandleLogin_ConcurrentRequests(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	const n = 5
@@ -420,7 +421,7 @@ func TestHandleValidateToken_ValidToken(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// Step 1: Login to get a token
@@ -446,11 +447,17 @@ func TestHandleValidateToken_ValidToken(t *testing.T) {
 	users := gwMap["users"].([]any)
 	require.Len(t, users, 1)
 	userMap := users[0].(map[string]any)
-	tokenHash, _ := userMap["token_hash"].(string)
-	require.NotEmpty(t, tokenHash, "token_hash should be set after login")
+	// SEC-1: login writes the token into the bearer-token SET; the entry hash
+	// is bcrypt of the secret BODY (config.TokenSecret), not the full token.
+	tokens, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set should be present after login")
+	require.Len(t, tokens, 1)
+	entry := tokens[0].(map[string]any)
+	tokenHash, _ := entry["hash"].(string)
+	require.NotEmpty(t, tokenHash, "token entry hash should be set after login")
 
-	// Verify the token matches the hash (sanity check).
-	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(token)))
+	// Verify the token matches the stored hash (sanity check).
+	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(config.TokenSecret(token))))
 
 	// Step 2: Validate the token by injecting user context (as withAuth would
 	// after a successful config reload).
@@ -682,7 +689,7 @@ func TestHandleLogin_RateLimitBlocksAtLimit(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// Use a unique username to avoid colliding with other tests' rate limit state.
@@ -755,7 +762,7 @@ func TestHandleLogin_DevModeBypass_DenyByDefault(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// Attempt login with no users configured.
@@ -803,7 +810,7 @@ func newTestRestAPIWithUser(t *testing.T, username, password string) (*restAPI, 
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 	return api, tmpDir
 }
@@ -869,6 +876,68 @@ func TestHandleLogout_TokenNoLongerValid(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code,
 		"validate must return 401 when no user is in context (post-logout state)")
+}
+
+// TestHandleLogout_RevokesOnlyPresentedToken proves the SEC-1 / UAT #399 fix:
+// logout removes ONLY the caller's presented bearer token from the set; tokens
+// for other concurrent sessions stay valid.
+//
+// BDD: Given a user who logged in twice (two live tokens in the set),
+// When that user POSTs /auth/logout presenting token-1,
+// Then token-1 is removed from the on-disk set,
+// And token-2 still verifies.
+func TestHandleLogout_RevokesOnlyPresentedToken(t *testing.T) {
+	api, tmpDir := newTestRestAPIWithUser(t, "multiuser", "multi-pass-123")
+
+	login := func() string {
+		t.Helper()
+		body := `{"username":"multiuser","password":"multi-pass-123"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		api.HandleLogin(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "login must succeed: %s", w.Body.String())
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		return resp["token"].(string)
+	}
+
+	tok1 := login()
+	tok2 := login()
+
+	// Logout presenting tok1.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+tok1)
+	req = injectUser(req, "multiuser", config.UserRoleAdmin)
+	w := httptest.NewRecorder()
+	api.HandleLogout(w, req)
+	require.Equal(t, http.StatusNoContent, w.Code, "logout must return 204")
+
+	// Read the on-disk token set.
+	raw, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	gw := diskCfg["gateway"].(map[string]any)
+	users := gw["users"].([]any)
+	require.Len(t, users, 1)
+	userMap := users[0].(map[string]any)
+	tokens, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set must still exist after single-token logout")
+	require.Len(t, tokens, 1, "exactly ONE token must remain after logging out one of two sessions")
+
+	verifyAgainstSet := func(plain string) bool {
+		for _, e := range tokens {
+			entry := e.(map[string]any)
+			h, _ := entry["hash"].(string)
+			if bcrypt.CompareHashAndPassword([]byte(h), []byte(config.TokenSecret(plain))) == nil {
+				return true
+			}
+		}
+		return false
+	}
+	assert.False(t, verifyAgainstSet(tok1), "the logged-out token (tok1) must be revoked")
+	assert.True(t, verifyAgainstSet(tok2), "the other session's token (tok2) must remain valid")
 }
 
 // TestHandleLogout_Unauthenticated verifies that POST /api/v1/auth/logout without
@@ -1145,12 +1214,13 @@ func TestHandleChangePassword_Unauthenticated(t *testing.T) {
 // --- Token entropy and hash-storage regression guards ---
 
 // TestGenerateUserToken_EntropyAndFormat verifies the canonical bearer token
-// format (omnipus_<64 hex chars>) and entropy properties.
+// format (omnipus_<8 hex id>_<64 hex body>) and entropy properties (SEC-1).
 //
-// Three properties are asserted:
-//  1. Format: every token matches ^omnipus_[0-9a-f]{64}$.
-//  2. Byte length: the hex portion decodes to exactly 32 bytes.
-//  3. Uniqueness: 100 invocations produce 100 distinct tokens (no collision
+// Four properties are asserted:
+//  1. Format: every token matches ^omnipus_[0-9a-f]{8}_[0-9a-f]{64}$.
+//  2. ID: the embedded non-secret ID prefix is recoverable (8 hex chars).
+//  3. Byte length: the secret body decodes to exactly 32 bytes (256-bit).
+//  4. Uniqueness: 100 invocations produce 100 distinct tokens (no collision
 //     from a broken RNG, hardcoded seed, or constant return value).
 func TestGenerateUserToken_EntropyAndFormat(t *testing.T) {
 	const invocations = 100
@@ -1160,14 +1230,22 @@ func TestGenerateUserToken_EntropyAndFormat(t *testing.T) {
 		tok, err := generateUserToken("")
 		require.NoError(t, err, "generateUserToken must not error (invocation %d)", i)
 
-		assert.Regexp(t, `^omnipus_[0-9a-f]{64}$`, tok,
-			"token must match omnipus_<64 hex> format (invocation %d)", i)
+		// SEC-1: token now carries a non-secret ID prefix:
+		// omnipus_<8 hex id>_<64 hex body>.
+		assert.Regexp(t, `^omnipus_[0-9a-f]{8}_[0-9a-f]{64}$`, tok,
+			"token must match omnipus_<id>_<body> format (invocation %d)", i)
 
-		hexPart := strings.TrimPrefix(tok, "omnipus_")
-		decoded, decErr := hex.DecodeString(hexPart)
-		require.NoError(t, decErr, "hex portion must be valid hex (invocation %d)", i)
+		// The embedded ID must be recoverable and 8 hex chars (32-bit).
+		id := config.TokenIDFromRaw(tok)
+		assert.Regexp(t, `^[0-9a-f]{8}$`, id,
+			"config.TokenIDFromRaw must recover the 8-hex-char ID (invocation %d)", i)
+
+		// The secret body must decode to exactly 32 bytes (256-bit entropy).
+		bodyHex := strings.TrimPrefix(tok, "omnipus_"+id+"_")
+		decoded, decErr := hex.DecodeString(bodyHex)
+		require.NoError(t, decErr, "body portion must be valid hex (invocation %d)", i)
 		assert.Len(t, decoded, 32,
-			"hex portion must decode to exactly 32 bytes (invocation %d)", i)
+			"body portion must decode to exactly 32 bytes (invocation %d)", i)
 
 		seen[tok] = struct{}{}
 	}
@@ -1210,29 +1288,37 @@ func TestHandleLogin_StoresBcryptedTokenHash(t *testing.T) {
 	require.Len(t, usersRaw, 1)
 	userMap := usersRaw[0].(map[string]any)
 
-	tokenHash, _ := userMap["token_hash"].(string)
-	require.NotEmpty(t, tokenHash, "token_hash must be written to disk after login")
+	// SEC-1: login now writes the token into the bearer-token SET ("tokens"),
+	// not the legacy single token_hash field.
+	tokensRaw, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set must be written to disk after login")
+	require.Len(t, tokensRaw, 1, "first login must create exactly one token entry")
+	entry := tokensRaw[0].(map[string]any)
+	tokenHash, _ := entry["hash"].(string)
+	require.NotEmpty(t, tokenHash, "token entry hash must be written to disk after login")
 
 	require.NoError(t,
-		bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(plaintextToken)),
-		"token_hash on disk must be bcrypt of the plaintext token returned to the caller")
+		bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(config.TokenSecret(plaintextToken))),
+		"stored token hash must be bcrypt of the token's secret body (SEC-1: ID prefix excluded)")
 
 	assert.False(t, strings.Contains(string(raw), plaintextToken),
 		"plaintext token must NOT appear anywhere in config.json — hash-only storage required")
 }
 
-// TestHandleLogin_OverwritesTokenHash_AfterRepeatedLogin verifies that each
-// successful login rotates the token and its hash: no two coexisting token
-// lifecycles.
+// TestHandleLogin_AppendsTokenSet_AfterRepeatedLogin verifies the SEC-1 /
+// UAT #399 fix: repeated logins APPEND to the bearer-token set rather than
+// overwriting a single token_hash, so a second login from another tab/device
+// does NOT invalidate the first client's token.
 //
 // BDD: Given a user "rotateuser",
 // When POST /api/v1/auth/login is called twice,
-// Then the token returned by login-2 differs from the token returned by login-1,
-// And the token_hash on disk after login-2 differs from the token_hash after login-1.
-func TestHandleLogin_OverwritesTokenHash_AfterRepeatedLogin(t *testing.T) {
+// Then login-2 returns a distinct token,
+// And the disk token set holds TWO entries,
+// And BOTH issued tokens still verify against the stored set.
+func TestHandleLogin_AppendsTokenSet_AfterRepeatedLogin(t *testing.T) {
 	api, tmpDir := newTestRestAPIWithUser(t, "rotateuser", "rotate-pass-123")
 
-	doLogin := func() (plaintextToken, diskHash string) {
+	doLogin := func() (plaintextToken string) {
 		t.Helper()
 		body := `{"username":"rotateuser","password":"rotate-pass-123"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
@@ -1245,28 +1331,43 @@ func TestHandleLogin_OverwritesTokenHash_AfterRepeatedLogin(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		tok, _ := resp["token"].(string)
 		require.NotEmpty(t, tok, "login response must include token")
-
-		raw, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
-		require.NoError(t, err)
-		var diskCfg map[string]any
-		require.NoError(t, json.Unmarshal(raw, &diskCfg))
-		gw := diskCfg["gateway"].(map[string]any)
-		usersRaw := gw["users"].([]any)
-		require.Len(t, usersRaw, 1)
-		userMap := usersRaw[0].(map[string]any)
-		hash, _ := userMap["token_hash"].(string)
-		require.NotEmpty(t, hash, "token_hash must be non-empty after login")
-
-		return tok, hash
+		return tok
 	}
 
-	tok1, hash1 := doLogin()
-	tok2, hash2 := doLogin()
+	tok1 := doLogin()
+	tok2 := doLogin()
 
 	assert.NotEqual(t, tok1, tok2,
 		"each login must issue a cryptographically distinct plaintext token")
-	assert.NotEqual(t, hash1, hash2,
-		"each login must overwrite token_hash with a new bcrypt hash")
+
+	// Read the on-disk token set.
+	raw, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	gw := diskCfg["gateway"].(map[string]any)
+	usersRaw := gw["users"].([]any)
+	require.Len(t, usersRaw, 1)
+	userMap := usersRaw[0].(map[string]any)
+	tokens, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set must exist on disk")
+	require.Len(t, tokens, 2, "second login must APPEND, leaving two live tokens (not overwrite)")
+
+	// BOTH tokens must still verify against the stored set — the core SEC-1
+	// guarantee that the first client is not logged out by the second login.
+	verify := func(plain string) bool {
+		for _, e := range tokens {
+			entry := e.(map[string]any)
+			h, _ := entry["hash"].(string)
+			// SEC-1: entry hashes are over the secret body, not the full token.
+			if bcrypt.CompareHashAndPassword([]byte(h), []byte(config.TokenSecret(plain))) == nil {
+				return true
+			}
+		}
+		return false
+	}
+	assert.True(t, verify(tok1), "first login's token must remain valid after the second login")
+	assert.True(t, verify(tok2), "second login's token must be valid")
 }
 
 // --- apiRateLimiter tests ---
@@ -1487,7 +1588,7 @@ func TestLogin_AfterOnboardingWithoutRestart(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 		credStore:     credStore,
 	}
 
@@ -1551,7 +1652,7 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// First login to get a valid token.
@@ -1591,4 +1692,209 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "testuser", resp["username"])
 	assert.Equal(t, "admin", resp["role"])
+}
+
+// TestHandleChangePassword_InvalidatesExistingToken verifies that after a
+// successful password change, the existing token is invalidated:
+//  1. token_hash and session_token_hash are cleared in config.json on disk.
+//  2. The old bearer token, when presented to HandleValidateToken without an
+//     active user context (as withAuth behaves when no hash matches), returns 401.
+//
+// BDD: Given a user "tknuser" with password "OldTokenPass1",
+// When POST /auth/login succeeds (token_hash written to config.json)
+// AND POST /auth/change-password with correct current_password succeeds,
+// Then: (a) token_hash is empty in config.json on disk,
+//
+//	(b) session_token_hash is empty in config.json on disk,
+//	(c) the old bearer token presented to /auth/validate (no context user)
+//	    returns 401 Unauthorized.
+//
+// This test is designed to FAIL on code where HandleChangePassword did NOT clear
+// token_hash / session_token_hash, and PASS on the fixed code that clears them.
+func TestHandleChangePassword_InvalidatesExistingToken(t *testing.T) {
+	api, tmpDir := newTestRestAPIWithUser(t, "tknuser", "OldTokenPass1")
+
+	// Step 1: Login to obtain a token and write token_hash to config.json.
+	loginBody := `{"username":"tknuser","password":"OldTokenPass1"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginW := httptest.NewRecorder()
+	api.HandleLogin(loginW, loginReq)
+	require.Equal(t, http.StatusOK, loginW.Code, "login must succeed before password change")
+	var loginResp map[string]any
+	require.NoError(t, json.Unmarshal(loginW.Body.Bytes(), &loginResp))
+	oldToken := loginResp["token"].(string)
+	require.NotEmpty(t, oldToken, "login must return a non-empty token")
+
+	// Confirm token_hash is non-empty on disk after login.
+	diskDataBefore, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfgBefore map[string]any
+	require.NoError(t, json.Unmarshal(diskDataBefore, &diskCfgBefore))
+	gwBefore := diskCfgBefore["gateway"].(map[string]any)
+	usersBefore := gwBefore["users"].([]any)
+	require.Len(t, usersBefore, 1)
+	userMapBefore := usersBefore[0].(map[string]any)
+	// SEC-1 / UAT #399: login appends bearer tokens to the "tokens" SET, not the
+	// legacy single "token_hash" field. The precondition is that the new token is
+	// live on disk, which now means the "tokens" array is non-empty.
+	tokensBefore, ok := userMapBefore["tokens"].([]any)
+	require.True(t, ok, "tokens array must be present in config.json after login")
+	require.NotEmpty(t, tokensBefore,
+		"a bearer token must be written to the tokens set on disk after login (precondition)")
+
+	// Step 2: Change password — must clear token_hash and session_token_hash.
+	cpBody := `{"current_password":"OldTokenPass1","new_password":"NewTokenPass2"}`
+	cpReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(cpBody))
+	cpReq.Header.Set("Content-Type", "application/json")
+	cpReq = injectUser(cpReq, "tknuser", config.UserRoleAdmin)
+	cpW := httptest.NewRecorder()
+	api.HandleChangePassword(cpW, cpReq)
+	require.Equal(t, http.StatusOK, cpW.Code,
+		"change-password must succeed (got %s)", cpW.Body.String())
+
+	// Step 3a: Verify token_hash and session_token_hash are cleared on disk.
+	diskDataAfter, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfgAfter map[string]any
+	require.NoError(t, json.Unmarshal(diskDataAfter, &diskCfgAfter))
+	gwAfter, ok := diskCfgAfter["gateway"].(map[string]any)
+	require.True(t, ok, "gateway key must be present in config.json after change-password")
+	usersAfter, ok := gwAfter["users"].([]any)
+	require.True(t, ok, "users array must be present in config.json after change-password")
+	require.Len(t, usersAfter, 1)
+	userMapAfter, ok := usersAfter[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "", userMapAfter["token_hash"],
+		"token_hash must be cleared in config.json after password change — "+
+			"old token must be invalidated")
+	assert.Equal(t, "", userMapAfter["session_token_hash"],
+		"session_token_hash must be cleared in config.json after password change")
+	// SEC-1 / UAT #399: the active bearer-token SET must also be emptied, else the
+	// old token still verifies via UserConfig.VerifyToken and the password change
+	// would not invalidate existing sessions.
+	if tokensAfter, ok := userMapAfter["tokens"].([]any); ok {
+		assert.Empty(t, tokensAfter,
+			"tokens set must be cleared in config.json after password change — "+
+				"old bearer tokens must be invalidated")
+	}
+
+	// Step 3b: The old token, routed through withAuth (which calls checkBearerAuth
+	// and bcrypt-compares against token_hash in the in-memory config), must yield
+	// 401 because HandleChangePassword cleared token_hash above.
+	//
+	// safeUpdateConfigJSON calls refreshConfigAndRewireServices after every write,
+	// so GetConfig() already reflects the empty token_hash — no process restart
+	// required. This assertion FAILS if HandleChangePassword does NOT clear
+	// token_hash (the hash still matches → withAuth injects the user → 200).
+	validateHandler := api.withAuth(api.HandleValidateToken)
+	validateReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
+	validateReq.Header.Set("Authorization", "Bearer "+oldToken)
+	validateW := httptest.NewRecorder()
+	validateHandler(validateW, validateReq)
+	assert.Equal(t, http.StatusUnauthorized, validateW.Code,
+		"old bearer token must be rejected after password change (token_hash cleared)")
+}
+
+// --- triggerReloadAndWait tests (B5 poll loop) ---
+
+// newTestRestAPIForReload builds a minimal restAPI backed by a temp dir and
+// returns both the api and the underlying AgentLoop so tests can configure
+// SetReloadFunc and drive ClearReloadPending.
+func newTestRestAPIForReload(t *testing.T) (*restAPI, *agentLoopWrapper) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	apiObj := &restAPI{
+		agentLoop:     al,
+		homePath:      tmpDir,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		taskStore:     taskstore.New(tmpDir + "/tasks"),
+	}
+	return apiObj, &agentLoopWrapper{al: al}
+}
+
+// agentLoopWrapper gives access to reload control methods in tests without
+// importing agent.AgentLoop directly (the interface enforces only what we need).
+type agentLoopWrapper struct {
+	al interface {
+		SetReloadFunc(fn func() error)
+		ClearReloadPending()
+	}
+}
+
+// TestTriggerReloadAndWait_PollsUntilNotPending verifies that triggerReloadAndWait
+// returns nil once IsReloadPending() clears — i.e., the polling loop unblocks
+// when a goroutine calls ClearReloadPending after ~50ms.
+//
+// BDD: Given a reloadFunc that keeps reloadPending=true until ClearReloadPending
+// is called by a goroutine, when triggerReloadAndWait is called,
+// then it blocks briefly and returns nil once the pending flag clears.
+func TestTriggerReloadAndWait_PollsUntilNotPending(t *testing.T) {
+	apiObj, wrap := newTestRestAPIForReload(t)
+
+	// reloadFunc simply returns nil; TriggerReload sets reloadPending=true before
+	// calling it. The goroutine below clears the flag after 50ms so the poll loop
+	// has something real to wait for.
+	wrap.al.SetReloadFunc(func() error {
+		return nil
+	})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		wrap.al.ClearReloadPending()
+	}()
+
+	start := time.Now()
+	err := apiObj.triggerReloadAndWait()
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "triggerReloadAndWait must return nil when reload completes")
+	// Must have polled for at least 40ms (pending was set), but well under 5s deadline.
+	assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(40),
+		"triggerReloadAndWait must poll until the pending flag clears")
+	assert.Less(t, elapsed, 5*time.Second,
+		"triggerReloadAndWait must return well before the 5s deadline")
+}
+
+// TestTriggerReloadAndWait_AlreadyInProgress_PollsThrough verifies that when
+// TriggerReload returns ErrReloadAlreadyInProgress, triggerReloadAndWait falls
+// through to the polling loop and returns nil when IsReloadPending() clears.
+//
+// BDD: Given a reloadFunc that simulates "already in progress", when
+// triggerReloadAndWait is called, then it polls until the pending flag is
+// cleared and returns nil.
+func TestTriggerReloadAndWait_AlreadyInProgress_PollsThrough(t *testing.T) {
+	apiObj, wrap := newTestRestAPIForReload(t)
+
+	// reloadFunc returns the "already in progress" sentinel string. TriggerReload
+	// sets reloadPending=true before calling it, so the poll loop will see pending=true.
+	wrap.al.SetReloadFunc(func() error {
+		return fmt.Errorf("reload already in progress")
+	})
+
+	// Clear the pending flag from a goroutine after ~50ms.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		wrap.al.ClearReloadPending()
+	}()
+
+	err := apiObj.triggerReloadAndWait()
+	require.NoError(t, err,
+		"triggerReloadAndWait must return nil on ErrReloadAlreadyInProgress poll-through")
 }

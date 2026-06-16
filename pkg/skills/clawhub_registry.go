@@ -106,11 +106,21 @@ type clawhubSearchResponse struct {
 }
 
 type clawhubSearchResult struct {
-	Score       float64 `json:"score"`
-	Slug        *string `json:"slug"`
+	Score       float64           `json:"score"`
+	Slug        *string           `json:"slug"`
+	DisplayName *string           `json:"displayName"`
+	Summary     *string           `json:"summary"`
+	Version     *string           `json:"version"`
+	OwnerHandle *string           `json:"ownerHandle"`
+	Owner       *clawhubOwnerInfo `json:"owner"`
+}
+
+// clawhubOwnerInfo carries the nested owner object some registry responses
+// include alongside the flat ownerHandle field.
+type clawhubOwnerInfo struct {
+	Handle      *string `json:"handle"`
 	DisplayName *string `json:"displayName"`
-	Summary     *string `json:"summary"`
-	Version     *string `json:"version"`
+	Image       *string `json:"image"`
 }
 
 func (c *ClawHubRegistry) Search(ctx context.Context, query string, limit int) ([]SearchResult, error) {
@@ -153,6 +163,13 @@ func (c *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 			displayName = slug
 		}
 
+		// Owner handle: prefer the flat ownerHandle, fall back to the nested
+		// owner.handle object when present.
+		ownerHandle := utils.DerefStr(r.OwnerHandle, "")
+		if ownerHandle == "" && r.Owner != nil {
+			ownerHandle = utils.DerefStr(r.Owner.Handle, "")
+		}
+
 		results = append(results, SearchResult{
 			Score:        r.Score,
 			Slug:         slug,
@@ -160,6 +177,7 @@ func (c *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 			Summary:      summary,
 			Version:      utils.DerefStr(r.Version, ""),
 			RegistryName: c.Name(),
+			OwnerHandle:  ownerHandle,
 		})
 	}
 

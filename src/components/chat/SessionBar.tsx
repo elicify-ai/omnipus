@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { Robot, CurrencyDollar, ArrowsClockwise, CaretDown, PencilSimpleLine } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
@@ -11,7 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
-import { fetchAgents } from '@/lib/api'
+import { fetchAgents, isWorker } from '@/lib/api'
 
 function formatCost(cost: number): string {
   if (cost === 0) return '$0.00'
@@ -25,16 +26,31 @@ function formatTokens(tokens: number): string {
 }
 
 export function SessionBar() {
-  const { activeAgentId, activeSessionId, setActiveSession, startNewSession } = useSessionStore()
+  const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
   const { sessionTokens, sessionCost, isStreaming } = useChatStore()
+  const navigate = useNavigate()
+
+  // New Chat just navigates to "/". RootChatScreen owns the new-session
+  // lifecycle: it clears the active session on mount and only advances the URL
+  // when a session is genuinely minted there, so a stale activeSessionId can no
+  // longer bounce the URL back to the old conversation (#417). This is identical
+  // to clicking the sidebar "Chat" link — the route is the single source of truth.
+  const handleNewChat = () => {
+    void navigate({ to: '/' })
+  }
 
   const { data: agents = [], isError: agentsError } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
   })
 
-  // Only show agents that are ready to chat (active or idle — not draft)
-  const chatAgents = agents.filter((a) => a.status === 'active' || a.status === 'idle')
+  // Only show agents that are ready to chat (active or idle — not draft) and
+  // exclude workers: a worker (type === 'worker') is a delegation-only labour
+  // agent, never a chat target, so it must never appear in the switcher nor be
+  // auto-selected as the active chat persona below.
+  const chatAgents = agents.filter(
+    (a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a),
+  )
 
   // Auto-select the first ready agent if none is active yet.
   // Done in useEffect (not during render) to avoid calling setState mid-render,
@@ -149,7 +165,7 @@ export function SessionBar() {
       {/* New Chat — icon-only on mobile, icon+text on desktop */}
       <button
         type="button"
-        onClick={() => startNewSession(effectiveAgentId ?? undefined, activeAgent?.type ?? null)}
+        onClick={handleNewChat}
         title="New chat"
         className="sm:hidden w-7 h-7 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
       >
@@ -161,7 +177,7 @@ export function SessionBar() {
         variant="ghost"
         size="sm"
         className="hidden sm:flex h-7 px-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] gap-1"
-        onClick={() => startNewSession(effectiveAgentId ?? undefined, activeAgent?.type ?? null)}
+        onClick={handleNewChat}
         title="New chat"
       >
         <PencilSimpleLine size={13} />

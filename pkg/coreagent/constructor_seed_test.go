@@ -111,7 +111,7 @@ func TestBoot_HasSystemAllowsInConstructorSeed(t *testing.T) {
 	assert.True(t, HasSystemAllowsInConstructorSeed(string(IDAva)),
 		"Ava must return true (she has explicit system.* allows)")
 
-	nonAvaAgents := []CoreAgentID{IDJim, IDMia, IDRay, IDMax}
+	nonAvaAgents := []CoreAgentID{IDJim, IDMia, IDRay}
 	for _, id := range nonAvaAgents {
 		assert.False(t, HasSystemAllowsInConstructorSeed(string(id)),
 			"agent %q must return false (no explicit system.* allows)", id)
@@ -265,7 +265,7 @@ func TestSeedConfig_JimProfileMigration(t *testing.T) {
 				List: []config.AgentConfig{
 					{
 						ID:      string(IDJim),
-						Name:    "Jim — General Purpose",
+						Name:    "Jim — Orchestrator",
 						Locked:  true,
 						Enabled: &enabled,
 						// SandboxProfile intentionally empty (pre-PR5 config)
@@ -295,7 +295,7 @@ func TestSeedConfig_JimProfileMigration(t *testing.T) {
 				List: []config.AgentConfig{
 					{
 						ID:             string(IDJim),
-						Name:           "Jim — General Purpose",
+						Name:           "Jim — Orchestrator",
 						Locked:         true,
 						Enabled:        &enabled,
 						SandboxProfile: config.SandboxProfileHost, // operator override

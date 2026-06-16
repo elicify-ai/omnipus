@@ -65,10 +65,10 @@ properties:
     example: "anthropic"
   stats:
     $ref: './SessionStats.yaml'
-  project_id:
+  workspace_id:
     type: string
-    description: Associated project ID (optional, future v0.3 feature).
-    example: "proj-123"
+    description: Associated workspace ID (optional, future v0.3 feature).
+    example: "ws-123"
   task_id:
     type: string
     description: Associated task ID when this session was created to service a task.

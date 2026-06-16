@@ -60,12 +60,12 @@ Bindings are evaluated top-to-bottom. The first match wins. The last entry (`cha
 
 ## Match precedence
 
-Within a binding, criteria are matched in this order (`pkg/routing/route.go::ResolveRoute`). The first criterion that matches stamps the route's `MatchedBy` field; the agent loop logs it on every routed message for traceability.
+Within a binding, criteria are matched in this order (`pkg/routing/route.go::ResolveRoute`). The first criterion that matches stamps the route's `MatchedBy` field on the returned `ResolvedRoute`; the value is used for observability and downstream filtering but the gateway does **not** log a per-message "matched by" line from `route.go` itself (see [observability.md](observability.md) for the actual event log surface).
 
 | `matched_by` | Trigger |
 |---|---|
 | `binding.peer` | Direct match on a specific user/peer (`peer.id`) |
-| `binding.peer.parent` | Match on a thread parent or reply-target |
+| `binding.peer.parent` | Match on a thread parent or reply-target (note: `peer.kind` is matched case-insensitively while `peer.id` is case-sensitive — see `pkg/routing/route.go:154-171`) |
 | `binding.guild` | Discord guild ID match |
 | `binding.team` | Slack team ID match |
 | `binding.account` | Channel account ID match (e.g. a specific bot account) |
@@ -75,6 +75,8 @@ Within a binding, criteria are matched in this order (`pkg/routing/route.go::Res
 ## The default agent
 
 The **default agent** handles any message that has no more-specific binding. Exactly one agent is the default: the one whose config carries `default: true`. On a fresh install this is **Mia**.
+
+A subtle but important distinction: the built-in *fallback* agent ID constant in code is `routing.DefaultAgentID = "main"` (`pkg/routing/agent_id.go:9`). On a fresh install, `pkg/coreagent/core.go:228` sets `Default: true` on the `mia` agent when seeding, so user-visible routing behavior is "Mia is the default" — but the `DefaultAgentID` constant itself is the string `"main"`. The `resolveDefaultAgentID()` function (`pkg/routing/route.go:248-283`) prefers a user-marked default first, then falls back to the first enabled agent, then to the `DefaultAgentID` constant.
 
 - **From the UI:** on the **Agents** page, hover an agent card and click **Set as default** — the gold ★ moves to it. To override the default for a single channel, use **Channels → Configure → Routing → Default agent** (leave it on "(Global default)" to inherit the global default). See [Using the web app](using-omnipus-ui.md#channels).
 - **From config / API:** mark one agent `"default": true` under `agents.list[]`, add a channel-wildcard binding (`account_id: "*"`) under `gateway.bindings[]`, or `PUT /api/v1/channels/{id}/routing` with `{ "default_agent_id": "<id>" }`.

@@ -117,8 +117,6 @@
     },
     "whatsapp": {
       "enabled": false,
-      "bridge_url": "ws://localhost:3001",
-      "use_native": false,
       "session_store_path": "",
       "allow_from": [],
       "reasoning_channel_id": ""
@@ -176,15 +174,6 @@
       "channel_secret": "YOUR_LINE_CHANNEL_SECRET",
       "channel_access_token": "YOUR_LINE_CHANNEL_ACCESS_TOKEN",
       "webhook_path": "/webhook/line",
-      "allow_from": [],
-      "reasoning_channel_id": ""
-    },
-    "onebot": {
-      "enabled": false,
-      "ws_url": "ws://127.0.0.1:3001",
-      "access_token": "",
-      "reconnect_interval": 5,
-      "group_trigger_prefix": [],
       "allow_from": [],
       "reasoning_channel_id": ""
     },

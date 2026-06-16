@@ -169,6 +169,47 @@ describe('ToolApprovalModal — button dispatch', () => {
   })
 })
 
+describe('ToolApprovalModal — a11y safe-default contract (C2)', () => {
+  // This is a SECURITY-CRITICAL control. Two invariants must hold so a stray
+  // keypress can never auto-approve a tool call:
+  //   1. Escape resolves to DENY (the safe default), never approve, never a
+  //      silent dismiss that leaves the agent hanging.
+  //   2. Default keyboard focus lands on the Deny button on open, so a stray
+  //      Enter on open denies rather than approves.
+
+  it('Escape triggers DENY (the safe default), never approve', async () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    // Radix Dialog listens for Escape on the document via the dialog content.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' })
+
+    await waitFor(() => {
+      expect(api.postToolApproval).toHaveBeenCalledWith('appr-001', 'deny')
+    })
+    // The safe default must NEVER be an approve.
+    expect(api.postToolApproval).not.toHaveBeenCalledWith('appr-001', 'approve')
+  })
+
+  it('lands default focus on the Deny button when the modal opens', async () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    const denyButton = screen.getByRole('button', { name: /Deny/i })
+    // onOpenAutoFocus moves focus to Deny (overriding Radix's first-focusable
+    // heuristic which would land on the X close button or Approve).
+    await waitFor(() => {
+      expect(denyButton).toHaveFocus()
+    })
+    // Defence-in-depth: focus is NOT on Approve.
+    expect(screen.getByRole('button', { name: /Approve/i })).not.toHaveFocus()
+  })
+})
+
 describe('ToolApprovalModal — error handling', () => {
   it('dismisses silently on 410 Gone (already resolved)', async () => {
     vi.mocked(api.postToolApproval).mockRejectedValue(new api.ApiError(410, 'Gone'))

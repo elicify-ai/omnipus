@@ -91,9 +91,9 @@ func TestGatewayBoot_V0ConfigWithPlaintextSecretMigrates(t *testing.T) {
 	}
 
 	// Assert 3: config struct has TokenRef set.
-	if cfg.Channels.Telegram.TokenRef != "TELEGRAM_TOKEN" {
-		t.Errorf("cfg.Channels.Telegram.TokenRef = %q, want %q",
-			cfg.Channels.Telegram.TokenRef, "TELEGRAM_TOKEN")
+	if cfg.Channels["telegram"].TokenRef != "TELEGRAM_TOKEN" {
+		t.Errorf("cfg.Channels[telegram].TokenRef = %q, want %q",
+			cfg.Channels["telegram"].TokenRef, "TELEGRAM_TOKEN")
 	}
 
 	// Assert 4: rewritten config.json does NOT contain the plaintext token.

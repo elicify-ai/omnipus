@@ -9,6 +9,7 @@ package gateway
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,21 +26,30 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
+	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
+	whatsappnative "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/dapicom-ai/omnipus/pkg/cron"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/dapicom-ai/omnipus/pkg/notifications"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	providers_pkg "github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
@@ -121,11 +131,69 @@ type restAPI struct {
 	// Nil in test setups that do not wire MCP.
 	mcpRegistry *tools.MCPRegistry
 
+	// skillRegistry is the ClawHub marketplace registry backing GET
+	// /api/v1/skills/search. Built at boot from cfg.Tools.Skills.Registries.ClawHub
+	// with the SSRF-safe HTTP client (SEC-24). Nil in test setups (and when no
+	// registry is configured); the search handler returns 502 when it is nil so
+	// the SPA can surface "registry unavailable" rather than a hard 500.
+	skillRegistry skills.SkillRegistry
+
 	// allowGodMode is set when the gateway was started with --allow-god-mode.
 	// When false, the agent update handler rejects sandbox_profile=off with 403.
 	// Mirrors the same field on AgentLoop for runtime tool coercion.
 	// Latch (2) — REST enforcement.
 	allowGodMode bool
+
+	// cronService backs the /api/v1/schedules CRUD + run-now + pause endpoints
+	// (#264). Schedules are a contract-first projection over cron.CronJob.
+	// Stored as an atomic pointer so restartServices can update it from a reload
+	// goroutine without racing against concurrent HTTP schedule handler reads.
+	// Nil/zero in test setups that do not exercise schedules.
+	cronService atomic.Pointer[cron.CronService]
+
+	// notifStore backs /api/v1/notifications (#264). Per-user, file-based.
+	// Nil in test setups that do not exercise notifications.
+	notifStore *notifications.Store
+
+	// auditor is the shared audit logger for mutation events on workspaces and
+	// board tasks. Sourced from agentLoop.AuditLogger() at construction time;
+	// may be nil when audit logging is disabled (best-effort — nil-safe callers).
+	auditor *audit.Logger
+
+	// taskLock is the process-wide per-task-ID striped mutex shared by the REST
+	// board task handlers and the sysagent system.task.* tools. Both paths
+	// use boardtask.TaskFileLock (the package-level singleton), which is the
+	// same pointer stored here. Holding the lock for the full read→mutate→write
+	// cycle prevents a race between two concurrent /start calls, between a PUT
+	// and the completion callback, or between a PUT and a sysagent task.update.
+	taskLock *boardtask.StripedLock
+
+	// selfWriteReg is the registry of config.json content hashes written by
+	// the app itself. safeUpdateConfigJSON registers each write here so the
+	// config file watcher can suppress spurious full-service reloads on
+	// app-initiated changes (logins, settings writes, channel config, etc.).
+	// Nil in test setups that do not wire the config watcher.
+	selfWriteReg *configSelfWriteRegistry
+
+	// reauth is the in-memory store of short-lived password re-auth consent
+	// tokens (Spec-6 FR-12.2). Minted by HandleReAuth, consumed (single-use) by
+	// requireReAuth before a sensitive settings change. Distinct from
+	// RequireNotBypass (a 503 dev-mode guard). Lazily initialized via
+	// reauthStoreOrInit so test setups that construct restAPI literals without
+	// this field still function.
+	reauthOnce sync.Once
+	reauth     *reauthStore
+}
+
+// reauthStoreOrInit returns the lazily-initialized re-auth token store, creating
+// it on first use. Safe for concurrent callers.
+func (a *restAPI) reauthStoreOrInit() *reauthStore {
+	a.reauthOnce.Do(func() {
+		if a.reauth == nil {
+			a.reauth = newReAuthStore()
+		}
+	})
+	return a.reauth
 }
 
 // --- CORS / JSON helpers ---
@@ -159,7 +227,7 @@ func (a *restAPI) setCORSHeaders(w http.ResponseWriter, r ...*http.Request) {
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Csrf-Token")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Csrf-Token, X-Reauth-Token")
 	// Access-Control-Allow-Credentials must only be sent when the origin is
 	// explicitly configured — never when falling back to wildcard or localhost
 	// reflection. Per CORS spec, "true" + wildcard is illegal; restricting to
@@ -290,6 +358,10 @@ func jsonOK(w http.ResponseWriter, body any) { writeJSON(w, http.StatusOK, body)
 // `w.WriteHeader(http.StatusCreated); jsonOK(w, ...)` — that ordering drops the
 // Content-Type and the response is served as text/plain (#96).
 func jsonCreated(w http.ResponseWriter, body any) { writeJSON(w, http.StatusCreated, body) }
+
+// jsonAccepted writes body as a 202 Accepted JSON response. Use for async
+// operations that have been accepted and dispatched but not yet completed.
+func jsonAccepted(w http.ResponseWriter, body any) { writeJSON(w, http.StatusAccepted, body) }
 
 // jsonErr writes an ErrorResponse with the given status. Like writeJSON it sets
 // Content-Type before WriteHeader so error bodies are never served as text/plain
@@ -463,8 +535,8 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 	if m.Provider != "" {
 		s.Provider = &m.Provider
 	}
-	if m.ProjectID != "" {
-		s.ProjectId = &m.ProjectID
+	if m.WorkspaceID != "" {
+		s.WorkspaceId = &m.WorkspaceID
 	}
 	if m.TaskID != "" {
 		s.TaskId = &m.TaskID
@@ -647,6 +719,36 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 	jsonOK(w, map[string]bool{"success": true})
 }
 
+// firstEnabledAgentID returns the ID of the first active/enabled chat-target agent
+// in the config list, or "" when no such agent is configured. Used as a last-resort
+// fallback after GetDefaultAgent() — mirrors resolveDefaultAgentID in
+// pkg/routing/route.go. Workers are active but are NOT chat targets, so they are
+// skipped here: a last-resort fallback must never land on a worker, which is invoked
+// only via delegation.
+func firstEnabledAgentID(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	for _, ag := range cfg.Agents.List {
+		if ag.IsActive() && ag.IsChatTarget() {
+			return ag.ID
+		}
+	}
+	return ""
+}
+
+// isWorkerAgentID reports whether agentID resolves to a worker agent in the config.
+// Returns false for an unknown agent ID (existence is validated separately by the
+// caller). Used by gateway session-binding chokepoints to reject a worker as a chat
+// target — a worker is a delegation-only labour tier, never a live chat persona.
+func isWorkerAgentID(cfg *config.Config, agentID string) bool {
+	if cfg == nil || agentID == "" {
+		return false
+	}
+	ac := findAgentConfig(cfg, agentID)
+	return ac != nil && ac.IsWorker()
+}
+
 func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	var req gen.SessionCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
@@ -659,7 +761,16 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		agentID = *req.AgentId
 	}
 	if agentID == "" {
-		agentID = "main"
+		if reg := a.agentLoop.GetRegistry(); reg != nil {
+			if def := reg.GetDefaultAgent(); def != nil {
+				agentID = def.ID
+			}
+		}
+		if agentID == "" {
+			// Fall back to the first enabled agent (mirrors handleBoardTaskStart /
+			// resolveDefaultAgentID in pkg/routing/route.go).
+			agentID = firstEnabledAgentID(a.agentLoop.GetConfig())
+		}
 	}
 	if err := validateEntityID(agentID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid agent_id")
@@ -668,6 +779,14 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	// Validate the agent exists before creating the session.
 	if agentStore := a.agentLoop.GetAgentStore(agentID); agentStore == nil {
 		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("agent %q not found", agentID))
+		return
+	}
+	// A worker is a delegation-only labour tier — never a chat target. A session
+	// backs a live chat, so an explicit worker agent_id must be rejected (mirrors
+	// setChannelRouting's worker 400). Both no-agent fallbacks above already skip
+	// workers, so this only ever rejects an explicitly-supplied worker.
+	if isWorkerAgentID(a.agentLoop.GetConfig(), agentID) {
+		jsonErr(w, http.StatusBadRequest, "workers are not chat targets and cannot back a session")
 		return
 	}
 
@@ -738,6 +857,16 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// POST /api/v1/agents/{id}/runner/test — external-CLI runner connection test (Spec-4 FR-4.2)
+	if agentID != "" && subPath == "runner/test" {
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.testAgentRunner(w, r, agentID)
+		return
+	}
+
 	// GET/PUT /api/v1/agents/{id}/tools — per-agent tool registry view (FR-028, FR-086)
 	if agentID != "" && subPath == "tools" {
 		switch r.Method {
@@ -785,6 +914,63 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// testAgentRunner handles POST /api/v1/agents/{id}/runner/test (Spec-4 FR-4.2).
+// It validates the agent's configured external-CLI runner WITHOUT running real work:
+// binary present + version handshake + authenticated. Returns distinct reasons for
+// missing-binary vs unauthenticated. When the agent's executor is not external-cli
+// (native / remote-a2a / unset), there is no runner to test → reason "not-external-cli".
+func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentID string) {
+	cfg := a.agentLoop.GetConfig()
+
+	var found bool
+	var executor *config.ExecutorConfig
+	for _, ac := range cfg.Agents.List {
+		if ac.ID == agentID {
+			found = true
+			if ac.Subagents != nil {
+				executor = ac.Subagents.Executor
+			}
+			break
+		}
+	}
+	if !found {
+		jsonErr(w, http.StatusNotFound, "agent not found")
+		return
+	}
+
+	// The agent must be configured for external-cli to have a runner to test.
+	if executor == nil || executor.EffectiveKind() != config.ExecutorKindExternalCLI {
+		jsonOK(w, gen.RunnerTestResponse{
+			Ok:      false,
+			Reason:  gen.RunnerTestResponseReasonNotExternalCli,
+			Message: "agent executor is not external-cli; no external runner to test",
+		})
+		return
+	}
+	cli := executor.CLI
+	if cli == "" {
+		jsonOK(w, gen.RunnerTestResponse{
+			Ok:      false,
+			Reason:  gen.RunnerTestResponseReasonUnknownCli,
+			Message: "agent executor.cli is empty; set claude-code, codex, or opencode",
+			Cli:     strPtr(""),
+		})
+		return
+	}
+
+	res := runner.TestConnection(r.Context(), cli)
+	resp := gen.RunnerTestResponse{
+		Ok:      res.OK,
+		Reason:  gen.RunnerTestResponseReason(res.Reason),
+		Message: res.Message,
+		Cli:     strPtr(cli),
+	}
+	if res.CLIVersion != "" {
+		resp.CliVersion = strPtr(res.CLIVersion)
+	}
+	jsonOK(w, resp)
 }
 
 func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
@@ -1138,6 +1324,13 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
 		ag.Default = boolPtr(ac.Default)
+		if len(ac.Skills) > 0 {
+			skills := make([]string, len(ac.Skills))
+			copy(skills, ac.Skills)
+			ag.Skills = &skills
+		}
+		setAgentExecutorResponse(&ag, ac.Subagents)
+		setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 		agents = append(agents, ag)
 	}
 
@@ -1184,6 +1377,13 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Heartbeat = heartbeat
 			ag.Instructions = instructions
 			ag.Default = boolPtr(ac.Default)
+			if len(ac.Skills) > 0 {
+				skills := make([]string, len(ac.Skills))
+				copy(skills, ac.Skills)
+				ag.Skills = &skills
+			}
+			setAgentExecutorResponse(&ag, ac.Subagents)
+			setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 			jsonOK(w, ag)
 			return
 		}
@@ -1202,6 +1402,58 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
+	// Resolve the requested agent type. The contract enum is {custom, worker};
+	// when omitted it defaults to "custom" (preserves pre-existing behaviour).
+	// "core" and "system" are seeded-only classifications — sending them (or
+	// any other value) is a 400: the only way to obtain a core/system agent
+	// is via SeedConfig, never via the REST create path.
+	createType := config.AgentTypeCustom
+	if req.Type != nil {
+		switch *req.Type {
+		case gen.AgentCreateRequestTypeCustom:
+			createType = config.AgentTypeCustom
+		case gen.AgentCreateRequestTypeWorker:
+			createType = config.AgentTypeWorker
+		default:
+			jsonErr(w, http.StatusBadRequest,
+				"type must be \"custom\" or \"worker\"; \"core\" and \"system\" are seeded-only")
+			return
+		}
+	}
+	// Worker property-model correction: a worker must declare an executor.
+	// Workers run via delegation, not native — dispatch needs a target runtime
+	// (native, external-cli, or remote-a2a). The pre-existing FE rule was not
+	// mirrored here, so a worker with no executor would persist as a draft that
+	// the delegation path could not actually run. Reject at the write gate with
+	// the same kind of 400 we use for other property-model mismatches, and let
+	// any kind through (kind validation is the executor block's job below).
+	if createType == config.AgentTypeWorker && req.Executor == nil {
+		jsonErr(w, http.StatusBadRequest,
+			"a worker must declare an executor (workers run via delegation, not native)")
+		return
+	}
+	// Native-only executor on a non-worker (worker property-model correction):
+	// a freshly-created non-worker (type=custom) must run native, so reject a
+	// non-native executor on a custom create. A worker is the only legitimate
+	// user of an external executor in v0.1.0; this keeps the dispatch path
+	// coherent and surfaces the constraint at write time rather than on the
+	// first delegated run. The executor itself is then mapped into
+	// ac.Subagents in the executor block further down.
+	if createType != config.AgentTypeWorker && req.Executor != nil {
+		kind := string(req.Executor.Kind)
+		if kind == string(config.ExecutorKindExternalCLI) || kind == string(config.ExecutorKindRemoteA2A) {
+			jsonErr(w, http.StatusBadRequest,
+				"only sub-agent workers can use an external executor; base agents run native")
+			return
+		}
+	}
+	// Referential validation: reject unknown skill IDs before doing any work.
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+	}
 	description := ""
 	if req.Description != nil {
 		description = strings.TrimSpace(*req.Description)
@@ -1214,16 +1466,55 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Icon != nil {
 		icon = *req.Icon
 	}
+	// ac is the in-memory config record. Locked is left at its zero value
+	// (false) for BOTH custom and worker creates — the API is the operator's
+	// surface for editing; only SeedConfig-seeded agents are locked. A newly
+	// created worker is therefore editable (unlike the seeded default
+	// general-purpose worker, which is locked by coreagent.SeedConfig).
 	ac := config.AgentConfig{
 		ID:          uuid.New().String(),
 		Name:        req.Name,
 		Description: description,
 		Color:       color,
 		Icon:        icon,
-		Type:        config.AgentTypeCustom,
+		Type:        createType,
 	}
 	if req.Model != nil && *req.Model != "" {
 		ac.Model = &config.AgentModelConfig{Primary: *req.Model}
+	}
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		ac.Skills = make([]string, len(*req.Skills))
+		copy(ac.Skills, *req.Skills)
+	}
+	// Sub-agent executor (kind/cli). Mapped into AgentConfig.Subagents.Executor so
+	// it is actually persisted (previously the contract field was write-dropped).
+	if req.Executor != nil {
+		execCfg, errMsg := executorConfigFromRequest(string(req.Executor.Kind), executorCliStr(req.Executor.Cli))
+		if errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		if execCfg != nil {
+			ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
+		}
+	}
+	// Delegation policy (to/modes/depth enforced; accept_from/budget inert). Mapped
+	// into AgentConfig.DelegationPolicy so it is actually persisted (previously the
+	// contract field was write-dropped). Validate targets/modes/depth before any work
+	// so a bad request 400s rather than persisting an invalid policy. There is no
+	// existing stored policy on create, so inert fields come solely from the request.
+	if dpIn := delegationInputFromCreateRequest(&req); dpIn != nil {
+		cfg := a.agentLoop.GetConfig()
+		// selfID = the new agent's id (known at create time) so a self-ref A→A is
+		// rejected; selfIsWorker reflects the new agent's type so a worker created
+		// with a non-empty to[] is rejected (worker-leaf invariant). No existing
+		// stored policy on create → grandfathering is a no-op.
+		dp, errMsg := buildDelegationPolicy(dpIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg), ac.ID, ac.IsWorker())
+		if errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		ac.DelegationPolicy = dp
 	}
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get
 	// system.*: deny unless the caller explicitly overrides it.
@@ -1315,12 +1606,50 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			newAgent["tools"] = toolsCfg
 		}
+		if len(ac.Skills) > 0 {
+			newAgent["skills"] = ac.Skills
+		}
+		if ac.Subagents != nil && ac.Subagents.Executor != nil {
+			newAgent["subagents"] = map[string]any{
+				"executor": executorConfigToMap(ac.Subagents.Executor),
+			}
+		}
+		if ac.DelegationPolicy != nil {
+			newAgent["delegation_policy"] = delegationPolicyToMap(ac.DelegationPolicy)
+		}
 		agents["list"] = append(list, newAgent)
 		return nil
 	}); err != nil {
 		slog.Error("rest: save config for new agent", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
+	}
+	// Persist the create-time soul to SOUL.md. createAgent previously
+	// write-dropped req.Soul: the contract accepted it, the FE sent it, but
+	// nothing ever landed on disk — and a "draft" agent created without a
+	// soul stayed in the draft state forever on the soul-empty path. Write
+	// it here, mirroring the workspace-resolution + WriteFileAtomic pattern
+	// used by updateAgent. An empty (but non-nil) req.Soul is a legitimate
+	// "soul optional" create (workers may be created with no soul and edited
+	// later), so the field-nonzero check is intentional and matches the
+	// locked concept. Trimming is fine; this overwrites any prior SOUL.md
+	// (create is the only write gate at this point, so a re-run is
+	// idempotent against itself).
+	var createSoulContent string
+	if req.Soul != nil {
+		createSoulContent = strings.TrimSpace(*req.Soul)
+		workspace, wsErr := agentWorkspacePath(a.agentLoop.GetConfig(), ac.ID, ac.Workspace, a.homePath)
+		if wsErr != nil {
+			slog.Error("rest: agentWorkspacePath for create", "agent_id", ac.ID, "error", wsErr)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
+			return
+		}
+		soulPath := filepath.Join(workspace, "SOUL.md")
+		if err := fileutil.WriteFileAtomic(soulPath, []byte(createSoulContent), 0o600); err != nil {
+			slog.Error("rest: write SOUL.md for new agent", "agent_id", ac.ID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write SOUL.md: %v", err))
+			return
+		}
 	}
 	// Capture the default model name BEFORE triggering a reload to avoid a race
 	// between TriggerReload (which may swap the live config) and the read below.
@@ -1352,9 +1681,27 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if ac.Icon != "" {
 		ag.Icon = &ac.Icon
 	}
-	ag.Type = gen.AgentTypeCustom
+	// Type reflects the chosen classification (custom or worker). For
+	// "custom" this matches the pre-existing hardcoded behaviour. For
+	// "worker" it surfaces the create-time choice so the response — and
+	// subsequent GET / list reads via ac.ResolveType — round-trips the
+	// agent kind the caller actually created.
+	ag.Type = gen.AgentType(ac.Type)
+	ag.Locked = ac.Locked
 	ag.Model = &model
-	ag.Status = gen.AgentStatusDraft
+	// Echo the just-persisted soul so the FE round-trip works (req.Soul was
+	// write-dropped before this fix; a created agent would come back with
+	// soul="" regardless of what the caller sent). Status is derived from
+	// the soul too: a non-empty soul moves the agent out of "draft".
+	ag.Soul = createSoulContent
+	ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, nil, createSoulContent, ac.Locked))
+	if len(ac.Skills) > 0 {
+		skills := make([]string, len(ac.Skills))
+		copy(skills, ac.Skills)
+		ag.Skills = &skills
+	}
+	setAgentExecutorResponse(&ag, ac.Subagents)
+	setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
@@ -1407,10 +1754,10 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 		return
 	}
 	// Reload the live config so the deleted agent is no longer in memory.
-	// awaitReload sleeps 100ms after triggering so the in-memory config is
+	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
 	// updated before the 204 response is sent back to the caller (prevents a
 	// race where an immediate GET /sessions/:id still sees agent_removed=false).
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1462,15 +1809,109 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Locked core agents: reject identity and prompt mutations.
 	// Allowed: model selection, heartbeat schedule (enabled/interval), tools (via updateAgentTools).
 	foundAgent := cfg.Agents.List[foundIdx]
+	// Worker agents can never be the routing default — they are not chat targets
+	// (invoked only via delegation). Reject an attempt to star a worker before
+	// any work is done so the single-default invariant and routing stay coherent.
+	if req.Default != nil && *req.Default && foundAgent.IsWorker() {
+		jsonErr(w, http.StatusBadRequest, "a worker agent cannot be set as the default agent (workers are not chat targets)")
+		return
+	}
+	// Worker agents have no heartbeat — they execute one delegated task at a
+	// time and never run on a schedule. Reject enabling/setting heartbeat on
+	// a worker at the write gate so a worker never gets a HEARTBEAT.md prompt
+	// or a positive enable flag. Setting heartbeat to disabled / interval
+	// unchanged is fine (the gate below only rejects the "turning it on" path).
+	// This guard runs BEFORE the locked-agent identity check so a locked
+	// worker (the seed default) is also blocked: a worker must never have
+	// heartbeat regardless of its locked status.
+	if foundAgent.IsWorker() && (req.HeartbeatEnabled != nil || req.HeartbeatInterval != nil || req.Heartbeat != nil) {
+		// Allow idempotent "off" writes (e.g., setting enabled=false or
+		// clearing the interval) so an operator's defensive reset is not
+		// blocked; reject any write that would actually enable heartbeat on
+		// a worker. A worker is also free to receive an EMPTY HEARTBEAT.md
+		// (clearing) but never a non-empty one.
+		if (req.HeartbeatEnabled != nil && *req.HeartbeatEnabled) ||
+			(req.HeartbeatInterval != nil && *req.HeartbeatInterval > 0) ||
+			(req.Heartbeat != nil && strings.TrimSpace(*req.Heartbeat) != "") {
+			jsonErr(w, http.StatusBadRequest, "a worker cannot have heartbeat enabled (workers run only via delegation)")
+			return
+		}
+	}
+	// Per-agent voice is a chat-persona attribute (TTS persona) — workers are
+	// not chat personas. Reject setting a non-empty voice on a worker at the
+	// write gate so a worker never carries a TTS persona. An explicit null
+	// (clearing) is fine, and so is omitting the field. Runs BEFORE the
+	// locked-agent identity check so a locked worker is also blocked.
+	if foundAgent.IsWorker() && req.Voice != nil && strings.TrimSpace(*req.Voice) != "" {
+		jsonErr(w, http.StatusBadRequest, "a worker cannot have a per-agent voice (workers are not chat personas)")
+		return
+	}
 	if foundAgent.Locked {
 		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
-		// instructions, color, and icon are identity fields — reject on locked agents.
+		// instructions, color, icon, and skills are identity/capability fields — reject on locked agents.
+		// Skills are included here (B-2 defense-in-depth): core agents have compiled-in capability
+		// sets; allowing runtime skill assignment would silently override that invariant.
 		if req.Name != nil || req.Description != nil ||
 			req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
-			req.Color != nil || req.Icon != nil {
+			req.Color != nil || req.Icon != nil || req.Skills != nil {
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
 			return
 		}
+	}
+	// Referential validation: reject unknown skill IDs before doing any work.
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+	}
+	// Validate the executor (kind/cli) before any work so a bad request 400s
+	// rather than persisting an invalid combination.
+	var updatedExecutor *config.ExecutorConfig
+	if req.Executor != nil {
+		execCfg, errMsg := executorConfigFromRequest(string(req.Executor.Kind), executorCliStr(req.Executor.Cli))
+		if errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		// Native-only executor on a non-worker (worker property-model
+		// correction): only a sub-agent worker may declare a non-native
+		// executor. A base or custom agent updated to kind="external-cli"
+		// or "remote-a2a" is rejected at the update gate. A native (or
+		// absent) executor on a non-worker stays allowed.
+		if !foundAgent.IsWorker() && execCfg != nil {
+			kind := execCfg.EffectiveKind()
+			if kind == config.ExecutorKindExternalCLI || kind == config.ExecutorKindRemoteA2A {
+				jsonErr(w, http.StatusBadRequest,
+					"only sub-agent workers can use an external executor; base agents run native")
+				return
+			}
+		}
+		updatedExecutor = execCfg
+	}
+	// Delegation policy (to/modes/depth enforced; accept_from/budget inert).
+	// MERGE semantics: when req.DelegationPolicy is non-nil, set to/modes/depth from
+	// the request but PRESERVE any existing AcceptFrom/Budget already on the stored
+	// policy (the editor does not send those inert fields). When req.DelegationPolicy
+	// is nil, leave the stored policy untouched (do not wipe seeded delegation).
+	// Validate before any persistence so a bad target/mode/depth 400s.
+	var updatedDelegationPolicy *config.DelegationPolicy
+	delegationPolicyTouched := false
+	if dpIn := delegationInputFromUpdateRequest(&req); dpIn != nil {
+		delegationPolicyTouched = true
+		dp, errMsg := buildDelegationPolicy(
+			dpIn,
+			foundAgent.DelegationPolicy, // existing stored policy (may be nil)
+			rosterIDSet(cfg),
+			delegationDepthCeiling(cfg),
+			foundAgent.ID,         // selfID: reject A→A self-delegation
+			foundAgent.IsWorker(), // worker-leaf: reject a non-empty to[] on a worker
+		)
+		if errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		updatedDelegationPolicy = dp
 	}
 	// Persist to config.json BEFORE mutating the live config.
 	// Capture the new values to apply after persistence succeeds.
@@ -1633,6 +2074,46 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					}
 					agentMap["tools_cfg"] = tcMap
 				}
+				// Executor: write the sub-agent executor under subagents.executor when
+				// the caller sends it. kind="native" with no cli clears any prior
+				// external-cli config (executorConfigFromRequest returns nil → delete).
+				if req.Executor != nil {
+					subMap, _ := agentMap["subagents"].(map[string]any)
+					if updatedExecutor == nil {
+						if subMap != nil {
+							delete(subMap, "executor")
+							if len(subMap) == 0 {
+								delete(agentMap, "subagents")
+							}
+						}
+					} else {
+						if subMap == nil {
+							subMap = map[string]any{}
+							agentMap["subagents"] = subMap
+						}
+						subMap["executor"] = executorConfigToMap(updatedExecutor)
+					}
+				}
+				// Skills: replace the agent's skill list when the caller sends the field.
+				// An explicit empty array removes all skills. Nil (absent) leaves unchanged.
+				if req.Skills != nil {
+					if len(*req.Skills) > 0 {
+						agentMap["skills"] = *req.Skills
+					} else {
+						delete(agentMap, "skills")
+					}
+				}
+				// Delegation policy: only write when the caller sent the field.
+				// When omitted (delegationPolicyTouched=false), the stored policy is
+				// left untouched so seeded delegation is not wiped. The merged value
+				// already preserves inert accept_from/budget from the stored policy.
+				if delegationPolicyTouched {
+					if updatedDelegationPolicy != nil {
+						agentMap["delegation_policy"] = delegationPolicyToMap(updatedDelegationPolicy)
+					} else {
+						delete(agentMap, "delegation_policy")
+					}
+				}
 				break
 			}
 		}
@@ -1732,7 +2213,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// agent creation/deletion). Model, rate limit, timeout, and steering mode changes are
 	// config-only and do NOT need a reload — avoiding the WebSocket drop and context loss
 	// that a full reload causes mid-conversation.
-	needsReload := req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil
+	//
+	// A delegation_policy change MUST reload: each agent instance's spawn/subagent/task
+	// delegation deny-checkers are bound to the config captured at agent-instance
+	// construction (registerSharedTools → buildDelegationDenyChecker, etc.). Persisting
+	// the new policy + SwapConfig alone does NOT rebuild those closures, so the running
+	// agent would keep enforcing the OLD allowlist — a tightening edit (revoke a target /
+	// drop a mode) would silently not apply until a restart. TriggerReload →
+	// executeReload → ReloadProviderAndConfig → registerSharedTools reconstructs every
+	// agent's deny-checkers from the swapped config, applying the new policy live.
+	needsReload := req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
+		req.DelegationPolicy != nil
 	var reloadWarning string
 	if needsReload {
 		if err := a.agentLoop.TriggerReload(); err != nil {
@@ -1810,12 +2301,20 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if reloadWarning != "" {
 		ag.Warning = &reloadWarning
 	}
-	// Populate Default from the live config after the write (handles both the
-	// req.Default=true case and the leave-unchanged case).
+	// Populate Default, Skills, and Executor from the live config after the write
+	// (handles both the req.Default=true case and the leave-unchanged case, and
+	// ensures a GET→edit→PUT round-trip echoes the persisted executor).
 	if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
 				ag.Default = boolPtr(ac.Default)
+				if len(ac.Skills) > 0 {
+					skills := make([]string, len(ac.Skills))
+					copy(skills, ac.Skills)
+					ag.Skills = &skills
+				}
+				setAgentExecutorResponse(&ag, ac.Subagents)
+				setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 				break
 			}
 		}
@@ -2056,11 +2555,29 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 	if writeErr := fileutil.WriteFileAtomic(a.configPath(), out, 0o600); writeErr != nil {
 		return writeErr
 	}
+	// Register the content hash of what we just wrote so the config file
+	// watcher knows this is an app-initiated write and does not trigger a
+	// full service reload (channels disconnect/reconnect, cron lanes canceled).
+	// We register `out` first so even a fast poller tick before the refresh sees
+	// a known hash.
+	if a.selfWriteReg != nil {
+		a.selfWriteReg.register(sha256.Sum256(out))
+	}
 	// Refresh the in-memory config AND rewire sensitive-data scrubbing.
 	// Propagate the error so callers fail the HTTP request rather than silently
 	// serving stale in-memory state (prevents A1 regression on REST-initiated writes).
 	if refreshErr := a.refreshConfigAndRewireServices(a.configPath()); refreshErr != nil {
 		return fmt.Errorf("config written but in-memory refresh failed: %w", refreshErr)
+	}
+	// refreshConfigAndRewireServices loads the config, and config.LoadConfig may
+	// normalize + re-save the file (config.go SaveConfig-on-load), producing
+	// different bytes than `out`. Register the FINAL on-disk content hash too, so
+	// the poller recognizes the post-refresh file as an app write and suppresses
+	// the reload. Best-effort: a read failure just means the poller may reload once.
+	if a.selfWriteReg != nil {
+		if finalBytes, readErr := os.ReadFile(a.configPath()); readErr == nil {
+			a.selfWriteReg.register(sha256.Sum256(finalBytes))
+		}
 	}
 	// FR-061 single chokepoint: every config mutation invalidates all cached
 	// system-prompt preambles so the next agent turn rebuilds from the updated
@@ -2125,6 +2642,10 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 			return fmt.Errorf("load config (no store): %w", err)
 		}
 		a.agentLoop.SwapConfig(newCfg)
+		// Hot-apply the log level: gateway.log_level is a hot-reload key (not
+		// restart-gated), so a Settings save must take effect immediately
+		// rather than waiting for a manual restart.
+		logger.SetLevelFromString(newCfg.Gateway.LogLevel)
 		return nil
 	}
 	newCfg, err := config.LoadConfigWithStore(configPath, a.credStore)
@@ -2150,6 +2671,10 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	// Atomically swap the config pointer so all subsequent requests see the
 	// new config with scrubbing fully re-armed.
 	a.agentLoop.SwapConfig(newCfg)
+	// Hot-apply the log level: gateway.log_level is a hot-reload key (not
+	// restart-gated), so a Settings save must take effect immediately
+	// rather than waiting for a manual restart.
+	logger.SetLevelFromString(newCfg.Gateway.LogLevel)
 	return nil
 }
 
@@ -2239,7 +2764,9 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && sub == "":
 		a.listSkills(w)
-	case r.Method == http.MethodPost && sub == "search":
+	case r.Method == http.MethodGet && sub == "marketplace":
+		a.skillMarketplaceStatus(w)
+	case r.Method == http.MethodGet && sub == "search":
 		a.searchSkills(w, r)
 	case r.Method == http.MethodPost && sub == "install":
 		a.installSkill(w, r)
@@ -2251,50 +2778,406 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) listSkills(w http.ResponseWriter) {
-	info := a.agentLoop.GetStartupInfo()
-	// GetStartupInfo returns aggregate metadata (total, available, names) — not per-skill entries.
-	skillsInfo, ok := info["skills"].(map[string]any)
-	if !ok {
+	// Per-skill metadata (name, source, description, author, version) sourced from
+	// the default agent's skills loader — the single source of truth for installed
+	// skills (same loader that feeds GetStartupInfo's aggregate summary).
+	detailed := a.agentLoop.ListSkillsDetailed()
+	if len(detailed) == 0 {
 		jsonOK(w, []gen.Skill{})
 		return
 	}
-	names, _ := skillsInfo["names"].([]string)
-	if len(names) == 0 {
-		jsonOK(w, []gen.Skill{})
-		return
-	}
-	result := make([]gen.Skill, 0, len(names))
-	for _, name := range names {
-		result = append(result, gen.Skill{
-			Id:      name,
-			Name:    name,
-			Version: "0.0.0",
-			Status:  gen.SkillStatusActive,
-		})
+	result := make([]gen.Skill, 0, len(detailed))
+	for _, s := range detailed {
+		// The skill's stable identifier is its slug (ID = directory name). The
+		// display Name is the human-readable label (e.g. "Daily Briefing"). They
+		// are kept separate so renaming the display label never changes the ID
+		// used by DELETE, activation, or built-in detection.
+		id := s.ID
+		if id == "" {
+			id = s.Name // defensive: older loaders may not populate ID
+		}
+		name := s.Name
+		if name == "" {
+			name = id
+		}
+		// A skill is "built-in" (system) when it ships embedded in the binary —
+		// identified by its slug (ID), not the display name. DefaultSkillNames()
+		// returns slugs. The embedded defaults are seeded into the global skills
+		// dir on first boot, so the loader reports their source as "global"; we
+		// override that here so they surface as system skills.
+		isBuiltin := s.Source == "builtin" || isSystemSkill(id)
+
+		skill := gen.Skill{
+			Id:       id,
+			Name:     name,
+			Status:   gen.SkillStatusActive,
+			Verified: isBuiltin, // built-in skills are Omnipus-team-verified.
+		}
+
+		// Version: SKILL.md frontmatter when present, else a neutral default.
+		if s.Version != "" {
+			skill.Version = s.Version
+		} else {
+			skill.Version = "0.0.0"
+		}
+
+		// Description (optional wire field): omit when empty.
+		if s.Description != "" {
+			desc := s.Description
+			skill.Description = &desc
+		}
+
+		// Author (optional): built-ins are authored by Omnipus; otherwise use the
+		// frontmatter author if present, omitting the field when absent.
+		switch {
+		case isBuiltin:
+			author := "Omnipus"
+			skill.Author = &author
+		case s.Author != "":
+			author := s.Author
+			skill.Author = &author
+		}
+
+		// Source (optional): map the loader source onto the wire enum. Embedded
+		// defaults report "builtin" regardless of the dir they were seeded into.
+		effectiveSource := s.Source
+		if isBuiltin {
+			effectiveSource = "builtin"
+		}
+		if src, ok := skillSourceToWire(effectiveSource); ok {
+			skill.Source = &src
+		}
+
+		result = append(result, skill)
 	}
 	jsonOK(w, result)
 }
 
-func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
-	jsonErr(w, http.StatusNotImplemented, "ClawHub search not yet implemented")
+// skillSourceToWire maps a skills-loader source string onto the generated
+// SkillSource wire enum. Returns ok=false for unrecognized values so the caller
+// can leave the optional field unset rather than emit an invalid enum.
+func skillSourceToWire(source string) (gen.SkillSource, bool) {
+	switch source {
+	case "builtin":
+		return gen.SkillSourceBuiltin, true
+	case "global":
+		return gen.SkillSourceGlobal, true
+	case "workspace":
+		return gen.SkillSourceWorkspace, true
+	default:
+		return "", false
+	}
 }
 
+// skillSource returns the loader source ("builtin"/"global"/"workspace") for the
+// skill addressed by id (the slug = directory name), or "" when the skill is not
+// found. Used to enforce the built-in deletion guard (built-ins cannot be
+// removed). The DELETE route param is the skill's Id (slug), so matching is keyed
+// on the slug — never the human-readable display name.
+func (a *restAPI) skillSource(id string) string {
+	// Embedded defaults are system skills regardless of which dir they were
+	// seeded into (the loader reports them as "global"). DefaultSkillNames()
+	// returns slugs, so this check is keyed on the slug.
+	if isSystemSkill(id) {
+		return "builtin"
+	}
+	for _, s := range a.agentLoop.ListSkillsDetailed() {
+		skillID := s.ID
+		if skillID == "" {
+			skillID = s.Name
+		}
+		if skillID == id {
+			return s.Source
+		}
+	}
+	return ""
+}
+
+// systemSkillNames is the set of embedded default skill names (the "built-in"
+// system skills shipped inside the binary). They are seeded into the global
+// skills dir on first boot, so they must be identified by NAME — not by the
+// loader's directory-derived source — to be surfaced as built-in and protected
+// from deletion.
+var systemSkillNames = func() map[string]struct{} {
+	names := skills.DefaultSkillNames()
+	m := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		m[n] = struct{}{}
+	}
+	return m
+}()
+
+// isSystemSkill reports whether name is one of the embedded default skills.
+func isSystemSkill(name string) bool {
+	_, ok := systemSkillNames[name]
+	return ok
+}
+
+// installedSkillIDs returns the set of skill IDs currently known to the agent
+// loop (same source as GET /api/v1/skills). An empty map is returned when no
+// skills are installed, which lets the validation below produce a proper 400
+// ("unknown skill id") rather than silently accepting any string.
+func (a *restAPI) installedSkillIDs() map[string]struct{} {
+	info := a.agentLoop.GetStartupInfo()
+	skillsInfo, ok := info["skills"].(map[string]any)
+	if !ok {
+		return map[string]struct{}{}
+	}
+	names, _ := skillsInfo["names"].([]string)
+	result := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		result[n] = struct{}{}
+	}
+	return result
+}
+
+// validateSkillIDs returns an error string (for a 400 response) if any of the
+// supplied skill IDs are not present in the installed-skills registry.
+// Returns "" when all IDs are valid or when no skills are installed at all
+// (to avoid false rejections in environments where the skills directory hasn't
+// been populated yet — the agent loop's runtime filter is the final gate).
+func (a *restAPI) validateSkillIDs(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	installed := a.installedSkillIDs()
+	// Skip validation when the installed set is empty: the skills directory may
+	// not exist yet (fresh install, test environment). Accept any id and let the
+	// agent loop's skill filter gate unknown ids at runtime.
+	if len(installed) == 0 {
+		return ""
+	}
+	for _, id := range ids {
+		if _, ok := installed[id]; !ok {
+			return fmt.Sprintf("unknown skill id: %q", id)
+		}
+	}
+	return ""
+}
+
+// marketplaceEnabled reports whether at least one skill marketplace registry is
+// enabled, read live from the current config. When false the search and
+// slug-install endpoints refuse with 409 and the SPA hides its skill-browse UI.
+// A marketplace is available when ClawHub is enabled OR a GitHub registry token
+// is configured. ClawHub is enabled by default, so the default behavior is "on".
+func (a *restAPI) marketplaceEnabled() bool {
+	cfg := a.agentLoop.GetConfig()
+	if cfg == nil {
+		return false
+	}
+	return cfg.Tools.Skills.Registries.ClawHub.Enabled || cfg.Tools.Skills.Github.TokenRef != ""
+}
+
+// skillMarketplaceStatus handles GET /api/v1/skills/marketplace. It reports
+// whether any skill marketplace registry is enabled so the SPA can gate its
+// skill-browse UI (search / install-by-slug) on marketplace availability.
+func (a *restAPI) skillMarketplaceStatus(w http.ResponseWriter) {
+	cfg := a.agentLoop.GetConfig()
+
+	clawhubEnabled := false
+	githubEnabled := false
+	if cfg != nil {
+		clawhubEnabled = cfg.Tools.Skills.Registries.ClawHub.Enabled
+		githubEnabled = cfg.Tools.Skills.Github.TokenRef != ""
+	}
+
+	status := gen.SkillMarketplaceStatus{
+		Enabled: clawhubEnabled || githubEnabled,
+	}
+	status.Registries = append(status.Registries, struct {
+		Enabled bool   `json:"enabled"`
+		Name    string `json:"name"`
+	}{Enabled: clawhubEnabled, Name: "clawhub"})
+	if githubEnabled {
+		status.Registries = append(status.Registries, struct {
+			Enabled bool   `json:"enabled"`
+			Name    string `json:"name"`
+		}{Enabled: true, Name: "github"})
+	}
+
+	jsonOK(w, status)
+}
+
+// searchSkillsDefaultLimit / searchSkillsMaxLimit bound the number of marketplace
+// results returned by GET /api/v1/skills/search.
+const (
+	searchSkillsDefaultLimit = 20
+	searchSkillsMaxLimit     = 50
+)
+
+// searchSkills handles GET /api/v1/skills/search?q=<query>&limit=<n>. It queries
+// the configured skill marketplace (ClawHub) and maps each registry hit onto the
+// SkillSearchResult wire type. An empty query is a 400; a registry/transport
+// failure is a 502 (not a 500) so the SPA can surface "registry unavailable".
+func (a *restAPI) searchSkills(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		jsonErr(w, http.StatusBadRequest, "query parameter 'q' is required")
+		return
+	}
+
+	limit := searchSkillsDefaultLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 {
+			jsonErr(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	if limit > searchSkillsMaxLimit {
+		limit = searchSkillsMaxLimit
+	}
+
+	if !a.marketplaceEnabled() {
+		jsonErr(w, http.StatusConflict, "no skill marketplace is enabled")
+		return
+	}
+
+	if a.skillRegistry == nil {
+		slog.Warn("rest: skill search requested but no registry configured")
+		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
+		return
+	}
+
+	results, err := a.skillRegistry.Search(r.Context(), q, limit)
+	if err != nil {
+		slog.Warn("rest: skill search failed", "query", q, "error", err)
+		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
+		return
+	}
+
+	out := make([]gen.SkillSearchResult, 0, len(results))
+	for _, res := range results {
+		item := gen.SkillSearchResult{Slug: res.Slug}
+		if res.DisplayName != "" {
+			dn := res.DisplayName
+			item.DisplayName = &dn
+		}
+		if res.Summary != "" {
+			sm := res.Summary
+			item.Summary = &sm
+		}
+		if res.Version != "" {
+			v := res.Version
+			item.Version = &v
+		}
+		if res.Score != 0 {
+			score := res.Score
+			item.Score = &score
+		}
+		if res.RegistryName != "" {
+			rn := res.RegistryName
+			item.RegistryName = &rn
+		}
+		if res.OwnerHandle != "" {
+			oh := res.OwnerHandle
+			item.OwnerHandle = &oh
+		}
+		out = append(out, item)
+	}
+	jsonOK(w, out)
+}
+
+// installSkill handles POST /api/v1/skills/install. It installs a skill from the
+// ClawHub marketplace by its slug, optionally pinning a version. The slug is
+// path-validated; the install is SSRF-safe (the registry's HTTP client honors
+// the SSRF policy). On success it returns the freshly installed skill as it now
+// appears in the local inventory.
 func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	var req gen.SkillInstallRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "SkillInstallRequest", &req, validateEnabled) {
 		return
 	}
-	if req.Name == "" {
-		jsonErr(w, http.StatusBadRequest, "name is required")
+	slug := strings.TrimSpace(req.Slug)
+	if slug == "" {
+		jsonErr(w, http.StatusBadRequest, "slug is required")
 		return
 	}
-	jsonErr(w, http.StatusNotImplemented, "skill installation not yet available")
+	// Path-traversal / identity guard: the slug becomes a directory name.
+	if err := validateEntityID(slug); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid skill slug")
+		return
+	}
+
+	if !a.marketplaceEnabled() {
+		jsonErr(w, http.StatusConflict, "no skill marketplace is enabled")
+		return
+	}
+
+	if a.skillRegistry == nil {
+		slog.Warn("rest: skill install requested but no registry configured", "slug", slug)
+		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
+		return
+	}
+
+	// Reject re-installing over an existing skill (built-in or user) so an install
+	// never silently clobbers a local skill.
+	if a.skillSource(slug) != "" {
+		jsonErr(w, http.StatusConflict, fmt.Sprintf("skill %q is already installed", slug))
+		return
+	}
+
+	version := ""
+	if req.Version != nil {
+		version = strings.TrimSpace(*req.Version)
+	}
+
+	targetDir := filepath.Join(a.homePath, "skills", slug)
+	result, err := a.skillRegistry.DownloadAndInstall(r.Context(), slug, version, targetDir)
+	if err != nil {
+		// Clean up any partial extraction so a failed install leaves no debris.
+		if rmErr := os.RemoveAll(targetDir); rmErr != nil {
+			slog.Warn("rest: cleanup after failed skill install", "slug", slug, "error", rmErr)
+		}
+		slog.Warn("rest: skill install failed", "slug", slug, "version", version, "error", err)
+		jsonErr(w, http.StatusBadGateway, fmt.Sprintf("could not install skill %q: %v", slug, err))
+		return
+	}
+
+	// Surface a moderation block as a hard failure: do not leave a malware-flagged
+	// skill installed.
+	if result != nil && result.IsMalwareBlocked {
+		if rmErr := os.RemoveAll(targetDir); rmErr != nil {
+			slog.Warn("rest: cleanup after blocked skill install", "slug", slug, "error", rmErr)
+		}
+		jsonErr(w, http.StatusForbidden, fmt.Sprintf("skill %q is blocked by registry moderation", slug))
+		return
+	}
+
+	installedVersion := "0.0.0"
+	if result != nil && result.Version != "" && result.Version != "latest" {
+		installedVersion = result.Version
+	}
+
+	skill := gen.Skill{
+		Id:       slug,
+		Name:     slug,
+		Version:  installedVersion,
+		Status:   gen.SkillStatusActive,
+		Verified: result != nil && result.Verified,
+	}
+	if result != nil && result.Summary != "" {
+		summary := result.Summary
+		skill.Description = &summary
+	}
+	if src, ok := skillSourceToWire("global"); ok {
+		skill.Source = &src
+	}
+	jsonOK(w, skill)
 }
 
 func (a *restAPI) deleteSkill(w http.ResponseWriter, name string) {
 	if err := validateEntityID(name); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid skill name")
+		return
+	}
+	// Built-in (pre-installed/system) skills ship inside the binary's skills dir
+	// and must never be removable through the API — the frontend disables the
+	// button, but the backend is the enforcing gate. Reject with 403.
+	if a.skillSource(name) == "builtin" {
+		jsonErr(w, http.StatusForbidden, "built-in skills cannot be removed")
 		return
 	}
 	// Inject the SSRF checker (SEC-24) so that any outbound HTTP calls made by
@@ -2408,7 +3291,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "high",
 			"title":          "No LLM models configured",
 			"description":    "No models are configured in model_list. The agent cannot generate responses without at least one model.",
-			"recommendation": "Add at least one model to config.json model_list with a valid API key in credentials.json.",
+			"recommendation": "Go to Settings → Providers and add an API key.",
+			"action_link":    "/settings?tab=providers",
+			"action_label":   "Configure providers",
 		})
 	}
 
@@ -2420,8 +3305,10 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"id":             "no-custom-agents",
 			"severity":       "low",
 			"title":          "No custom agents configured",
-			"description":    "Only the system agent is available. Custom agents can be defined in config.json.",
-			"recommendation": "Add agent configurations to personalize your assistant.",
+			"description":    "Only the built-in agents are available. Custom agents can be defined to personalise your assistant.",
+			"recommendation": "Go to Settings → Agents and create a custom agent.",
+			"action_link":    "/settings?tab=agents",
+			"action_label":   "Manage agents",
 		})
 	}
 
@@ -2434,7 +3321,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "medium",
 			"title":          "Sandbox is disabled",
 			"description":    "Filesystem and process sandboxing is not enabled. Agent tool executions run without confinement.",
-			"recommendation": "Open Settings → Process Sandbox to enable sandbox mode for production use.",
+			"recommendation": "Go to Settings → Security → Advanced to enable sandbox mode.",
+			"action_link":    "/settings?tab=security",
+			"action_label":   "Open security settings",
 		})
 	}
 
@@ -2496,6 +3385,8 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/status", a.withAuth(a.HandleStatus))
 	cm.RegisterHTTPHandler("/api/v1/tasks", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))
+	cm.RegisterHTTPHandler("/api/v1/workspaces", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
+	cm.RegisterHTTPHandler("/api/v1/workspaces/", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))
@@ -2510,6 +3401,13 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/agents/", a.withAuth(a.HandleAgents))
 	cm.RegisterHTTPHandler("/api/v1/config/gateway/rotate-token", a.withAuth(a.rotateGatewayToken))
 	cm.RegisterHTTPHandler("/api/v1/activity", a.withAuth(a.HandleActivity))
+
+	// Schedules CRUD + run-now + pause (#264).
+	cm.RegisterHTTPHandler("/api/v1/schedules", a.withAuth(a.HandleSchedules))
+	cm.RegisterHTTPHandler("/api/v1/schedules/", a.withAuth(a.HandleSchedules))
+	// Header notification center (#264).
+	cm.RegisterHTTPHandler("/api/v1/notifications", a.withAuth(a.HandleNotifications))
+	cm.RegisterHTTPHandler("/api/v1/notifications/", a.withAuth(a.HandleNotifications))
 
 	// Settings endpoints (Wave 4).
 	// GET /api/v1/audit-log — admin-only: audit log contains every admin
@@ -2541,6 +3439,7 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/security/session-scope", a.adminWrap(a.HandleSessionScope))
 	cm.RegisterHTTPHandler("/api/v1/security/retention", a.adminWrap(a.HandleRetention))
 	cm.RegisterHTTPHandler("/api/v1/security/retention/sweep", a.adminWrap(a.HandleRetentionSweep))
+	cm.RegisterHTTPHandler("/api/v1/performance", a.adminWrap(a.HandlePerformance))
 	cm.RegisterHTTPHandler("/api/v1/users", a.adminWrap(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -2592,6 +3491,17 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/auth/validate", a.withAuth(withRateLimit(validateLimiter, a.HandleValidateToken)))
 	cm.RegisterHTTPHandler("/api/v1/auth/logout", a.withAuth(a.HandleLogout))
 	cm.RegisterHTTPHandler("/api/v1/auth/change-password", a.withAuth(a.HandleChangePassword))
+	// Password re-auth consent primitive (Spec-6 FR-12.2). Distinct from
+	// RequireNotBypass (a 503 dev-mode guard) — this re-verifies the user's one
+	// password before a sensitive settings change.
+	cm.RegisterHTTPHandler("/api/v1/auth/reauth", a.withAuth(withRateLimit(reauthLimiter, a.HandleReAuth)))
+
+	// Integrations provider-picker — search + voice-input providers (Spec-6
+	// FR-12.1). GET lists; PUT (gated by the re-auth consent token) configures.
+	cm.RegisterHTTPHandler("/api/v1/integrations/providers", a.withAuth(a.HandleIntegrationProviders))
+	cm.RegisterHTTPHandler("/api/v1/integrations/providers/", a.withAuth(a.HandleIntegrationProviders))
+	// Composer mic — voice transcription (Spec-6 FR-12.1).
+	cm.RegisterHTTPHandler("/api/v1/voice/transcribe", a.withAuth(a.HandleTranscribe))
 
 	// File upload endpoints (Milestone 3).
 	cm.RegisterHTTPHandler("/api/v1/upload", a.withUploadAuth(a.HandleUpload))
@@ -2614,6 +3524,16 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// returns valid empty arrays so the SPA DevicesSection renders its empty state
 	// rather than 404-ing. Traces to: contracts/components/schemas/DevicesResponse.yaml.
 	cm.RegisterHTTPHandler("/api/v1/devices", a.adminWrap(a.HandleDevices))
+
+	// GTD board task endpoints (Wave 2b, Level 1 Project & Task Mgmt).
+	// Full CRUD — GET list/item, POST create, PUT update, DELETE remove.
+	// Traces to: contracts/components/schemas/BoardTask.yaml, BoardTaskListResponse.yaml.
+	cm.RegisterHTTPHandler("/api/v1/board/tasks", a.withAuth(withRateLimit(configLimiter, a.HandleBoardTasks)))
+	cm.RegisterHTTPHandler("/api/v1/board/tasks/", a.withAuth(withRateLimit(configLimiter, a.HandleBoardTasks)))
+
+	// Token usage stats endpoint (Wave 2b).
+	// Traces to: contracts/components/schemas/TokenUsageSummary.yaml.
+	cm.RegisterHTTPHandler("/api/v1/stats/tokens", a.withAuth(withRateLimit(configLimiter, a.HandleTokenStats)))
 }
 
 // registerPreviewEndpoints registers /preview/, /serve/, and /dev/ on the
@@ -3004,12 +3924,23 @@ func (a *restAPI) createTask(w http.ResponseWriter, r *http.Request) {
 	if req.TriggerType != nil && *req.TriggerType != "" {
 		triggerType = string(*req.TriggerType)
 	}
+	var blockedBy []string
+	if req.BlockedBy != nil && len(*req.BlockedBy) > 0 {
+		blockedBy = *req.BlockedBy
+		// Validate that all referenced task IDs exist (empty string as selfID — not yet created).
+		if err := a.taskStore.ValidateBlockedBy("", blockedBy); err != nil {
+			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("blocked_by validation failed: %v", err))
+			return
+		}
+	}
+
 	t := &taskstore.TaskEntity{
 		Title:        title,
 		Prompt:       prompt,
 		AgentID:      agentID,
 		Priority:     priority,
 		ParentTaskID: parentTaskID,
+		BlockedBy:    blockedBy,
 		TriggerType:  triggerType,
 		CreatedBy:    "user",
 		Status:       "queued",
@@ -3325,10 +4256,18 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					models = []string{}
 				}
 			}
+			// FR-104: report Connected only when the provider's API key resolves to
+			// a non-empty credential. providerAPIKeys is populated above for every
+			// provider that has either a resolvable api_key_ref or an inline api_key;
+			// absence from the map means no key was found.
+			status := gen.ProviderStatusDisconnected
+			if _, hasKey := providerAPIKeys[name]; hasKey {
+				status = gen.ProviderStatusConnected
+			}
 			p := gen.Provider{
 				Id:     name,
 				Name:   name,
-				Status: gen.ProviderStatusConnected,
+				Status: status,
 				Models: models,
 			}
 			if modelFetchWarning != "" {
@@ -3354,6 +4293,17 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
 			jsonErr(w, http.StatusUnauthorized, "authentication required")
 			return
+		}
+		// Re-auth gate (Spec-6 FR-12.2 / FR-6.6): a model/provider API-key mutation
+		// is a sensitive HTTP-layer settings change and requires the single-use
+		// re-auth consent token — the same gate the Integrations PUT enforces.
+		// Skipped only during onboarding (no authenticated user yet), where the
+		// provider is configured before any password exists. When a user IS in
+		// context (post-onboarding edits), the token is mandatory.
+		if reauthUser, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && reauthUser != nil {
+			if !a.requireReAuth(w, r, reauthUser.Username) {
+				return
+			}
 		}
 		providerID := sub
 		var req gen.ProviderUpdateRequest
@@ -3656,6 +4606,30 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	// Per-transport field validation: stdio requires command; sse/http require url.
+	// The MCP manager (pkg/mcp/manager.go ConnectServer) hard-fails on missing
+	// cfg.URL for sse/http and missing cfg.Command for stdio — catch it here so the
+	// error surfaces as a 422 rather than a silent connection failure.
+	switch transport {
+	case "stdio":
+		if req.Command == nil || *req.Command == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "command is required for stdio transport")
+			return
+		}
+	case "sse", "http":
+		if req.Url == nil || *req.Url == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "url is required for sse/http transport")
+			return
+		}
+		// Mirror SPA isValidUrlScheme: https always accepted; http only for
+		// loopback (localhost, 127.x.x.x, ::1). Any other http:// URL is
+		// rejected so the SPA validation cannot be bypassed via direct API call.
+		if !mcpURLSchemeValid(*req.Url) {
+			jsonErr(w, http.StatusUnprocessableEntity,
+				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)")
+			return
+		}
+	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -3677,8 +4651,16 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		}
 		entry := map[string]any{
 			"enabled": true,
-			"command": req.Command,
 			"type":    transport,
+		}
+		// Write the correct config field for each transport so the MCP manager
+		// (pkg/mcp/manager.go ConnectServer) can connect: stdio uses cfg.Command,
+		// sse/http use cfg.URL.
+		switch transport {
+		case "stdio":
+			entry["command"] = *req.Command
+		case "sse", "http":
+			entry["url"] = *req.Url
 		}
 		if req.Args != nil && len(*req.Args) > 0 {
 			entry["args"] = *req.Args
@@ -3715,6 +4697,36 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		ToolCount: 0,
 	}
 	jsonCreated(w, resp)
+}
+
+// mcpURLSchemeValid reports whether rawURL is acceptable for an sse/http MCP
+// server endpoint. It mirrors the SPA's isValidUrlScheme function
+// (src/components/skills/McpServerModal.tsx) so the contract described in
+// McpServerCreate.yaml is enforced server-side and cannot be bypassed via
+// direct API calls.
+//
+// Rules:
+//   - https:// is always accepted.
+//   - http:// is accepted only for loopback hosts: "localhost", any 127.x.x.x
+//     address, or "::1" / "[::1]".
+//   - Any other scheme (http:// to a public host, ws://, ftp://, etc.) is rejected.
+func mcpURLSchemeValid(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch parsed.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := strings.ToLower(parsed.Hostname())
+		return host == "localhost" ||
+			strings.HasPrefix(host, "127.") ||
+			host == "::1" ||
+			host == "[::1]"
+	default:
+		return false
+	}
 }
 
 func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
@@ -3831,6 +4843,18 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// Use coreagent.IsCoreAgent or check the Locked flag.
 	if foundAgent.Locked {
 		jsonErr(w, http.StatusForbidden, fmt.Sprintf("agent %q is locked and cannot be modified", agentID))
+		return
+	}
+
+	// Re-auth gate (Spec-3 FR-3.3 / Spec-6 FR-12.2): changing which tools an
+	// agent may call is a sensitive capability grant and requires the single-use
+	// re-auth consent token — the same gate the Integrations PUT enforces.
+	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && user != nil {
+		if !a.requireReAuth(w, r, user.Username) {
+			return
+		}
+	} else {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
 
@@ -4006,7 +5030,7 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	if sub != "" {
 		parts := strings.SplitN(sub, "/", 2)
 		channelID := parts[0]
-		if !validChannelIDs[channelID] {
+		if !validChannelIDs[gen.ChannelId(channelID)] {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 			return
 		}
@@ -4067,87 +5091,242 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
-	ch := cfg.Channels
+	// channelEnabledByType returns true when any instance of the given channel type
+	// is enabled in the map. In v0.1 cap-1 guarantees at most one instance per type.
+	channelEnabledByType := func(channelType string) bool {
+		for _, inst := range cfg.Channels {
+			if inst.Type == channelType && inst.Enabled {
+				return true
+			}
+		}
+		return false
+	}
 	channels := []gen.ChannelEntry{
 		{Id: "webchat", Name: "Web Chat", Transport: "websocket", Enabled: true, Description: "Built-in browser chat"},
 		{
 			Id:          "telegram",
 			Name:        "Telegram",
 			Transport:   "webhook",
-			Enabled:     ch.Telegram.Enabled,
+			Enabled:     channelEnabledByType("telegram"),
 			Description: "Telegram Bot API",
 		},
 		{
 			Id:          "discord",
 			Name:        "Discord",
 			Transport:   "websocket",
-			Enabled:     ch.Discord.Enabled,
+			Enabled:     channelEnabledByType("discord"),
 			Description: "Discord Gateway",
 		},
 		{
 			Id:          "slack",
 			Name:        "Slack",
 			Transport:   "websocket",
-			Enabled:     ch.Slack.Enabled,
+			Enabled:     channelEnabledByType("slack"),
 			Description: "Slack Socket Mode",
 		},
 		{
-			Id:          "whatsapp",
-			Name:        "WhatsApp",
-			Transport:   "bridge",
-			Enabled:     ch.WhatsApp.Enabled,
-			Description: "WhatsApp via bridge or native",
+			Id:              "whatsapp",
+			Name:            "WhatsApp",
+			Transport:       "native",
+			Enabled:         channelEnabledByType("whatsapp"),
+			Description:     "WhatsApp (native, whatsmeow)",
+			NativeAvailable: boolPtr(whatsappnative.NativeAvailable),
 		},
 		{
 			Id:          "feishu",
 			Name:        "Feishu / Lark",
 			Transport:   "webhook",
-			Enabled:     ch.Feishu.Enabled,
+			Enabled:     channelEnabledByType("feishu"),
 			Description: "Feishu (Lark) Bot",
 		},
 		{
 			Id:          "dingtalk",
 			Name:        "DingTalk",
 			Transport:   "webhook",
-			Enabled:     ch.DingTalk.Enabled,
+			Enabled:     channelEnabledByType("dingtalk"),
 			Description: "DingTalk Bot",
 		},
 		{
 			Id:          "wecom",
 			Name:        "WeCom",
 			Transport:   "webhook",
-			Enabled:     ch.WeCom.Enabled,
+			Enabled:     channelEnabledByType("wecom"),
 			Description: "WeCom (WeChat Work) Bot",
 		},
 		{
 			Id:          "weixin",
 			Name:        "Weixin",
 			Transport:   "webhook",
-			Enabled:     ch.Weixin.Enabled,
+			Enabled:     channelEnabledByType("weixin"),
 			Description: "Weixin (WeChat) Official Account",
 		},
-		{Id: "line", Name: "LINE", Transport: "webhook", Enabled: ch.LINE.Enabled, Description: "LINE Messaging API"},
-		{Id: "qq", Name: "QQ", Transport: "websocket", Enabled: ch.QQ.Enabled, Description: "QQ via napcat"},
+		{Id: "line", Name: "LINE", Transport: "webhook", Enabled: channelEnabledByType("line"), Description: "LINE Messaging API"},
+		{Id: "qq", Name: "QQ", Transport: "websocket", Enabled: channelEnabledByType("qq"), Description: "QQ via napcat"},
+		{Id: "irc", Name: "IRC", Transport: "tcp", Enabled: channelEnabledByType("irc"), Description: "Internet Relay Chat"},
+		{Id: "matrix", Name: "Matrix", Transport: "http", Enabled: channelEnabledByType("matrix"), Description: "Matrix protocol"},
 		{
-			Id:          "onebot",
-			Name:        "OneBot",
-			Transport:   "websocket",
-			Enabled:     ch.OneBot.Enabled,
-			Description: "OneBot v11 protocol",
+			Id:          "google-chat",
+			Name:        "Google Chat",
+			Transport:   "webhook",
+			Enabled:     channelEnabledByType("google-chat"),
+			Description: "Google Chat (webhook or service account)",
 		},
-		{Id: "irc", Name: "IRC", Transport: "tcp", Enabled: ch.IRC.Enabled, Description: "Internet Relay Chat"},
-		{Id: "matrix", Name: "Matrix", Transport: "http", Enabled: ch.Matrix.Enabled, Description: "Matrix protocol"},
+		{
+			Id:          "email",
+			Name:        "Email",
+			Transport:   "email",
+			Enabled:     channelEnabledByType("email"),
+			Description: "Email (IMAP inbound + SMTP outbound, TLS only)",
+		},
 	}
+
+	// Overlay per-instance surface (Spec-2 FR-2.5): instance_id and identity.
+	// For each list entry that maps to a configured channel instance, expose the
+	// map key (instance_id) and the persisted routing identity so the SPA can
+	// address per-instance configure/enable/routing endpoints and render the
+	// identity override without re-deriving it. In v0.1 cap-1 the instance key
+	// equals the channel type, so the entry id matches the map key by type; we
+	// look up the instance by matching Type to keep this correct if a future map
+	// key diverges from the type. webchat is built-in and has no instance entry.
+	applyInstanceOverlay(channels, cfg.Channels)
+
+	// Overlay degraded state from the runtime channel manager. Channels that
+	// failed to construct at startup are marked degraded=true with the init
+	// error as the reason. whatsapp_native failures map to the "whatsapp" entry
+	// because both transports share one list entry.
+	if mgr := a.agentLoop.GetChannelManager(); mgr != nil {
+		failed := mgr.FailedChannels()
+		applyDegradedOverlay(channels, failed)
+		// Warn for any failed channel whose (normalised) id has no matching entry
+		// in the channels list — these are dead channels that would otherwise be
+		// silently invisible to operators.
+		if len(failed) > 0 {
+			entryIDs := make(map[string]struct{}, len(channels))
+			for _, e := range channels {
+				entryIDs[string(e.Id)] = struct{}{}
+			}
+			for _, f := range failed {
+				id := f.Name
+				if id == "whatsapp_native" {
+					id = "whatsapp"
+				}
+				if _, matched := entryIDs[id]; !matched {
+					slog.Warn("channels: failed channel has no matching entry in channels list",
+						"registry_id", f.Name,
+						"channel", f.Channel,
+						"error", f.Err.Error(),
+					)
+				}
+			}
+		}
+	}
+
 	jsonOK(w, channels)
+}
+
+// applyDegradedOverlay marks entries in channelList as degraded when the
+// supplied failed list contains a matching registry id.  It is a pure function
+// extracted from HandleChannels so that it can be unit-tested without a full
+// REST stack.
+//
+// Normalisation rule: "whatsapp_native" maps to the list entry "whatsapp"
+// because both the bridge and native transports share a single ChannelEntry.
+func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.ChannelInitError) {
+	if len(failed) == 0 {
+		return
+	}
+	// Build a map of normalised registry-id → error reason.
+	degradedMap := make(map[string]string, len(failed))
+	for _, f := range failed {
+		id := f.Name
+		if id == "whatsapp_native" {
+			id = "whatsapp"
+		}
+		degradedMap[id] = f.Err.Error()
+	}
+	for i := range channelList {
+		if reason, ok := degradedMap[string(channelList[i].Id)]; ok {
+			r := reason
+			channelList[i].Degraded = boolPtr(true)
+			channelList[i].DegradedReason = &r
+		}
+	}
+}
+
+// applyInstanceOverlay populates instance_id and identity on each list entry
+// that maps to a configured channel instance (Spec-2 FR-2.5). It is a pure
+// function extracted from HandleChannels so it can be unit-tested without a full
+// REST stack.
+//
+// Matching rule: an entry maps to an instance when the instance's Type equals
+// the entry id (the v0.1 cap-1 contract: instance key == channel type). The
+// instance_id surfaced is the actual config map key, so the SPA addresses the
+// right per-instance endpoint even if a future key diverges from the type.
+// Entries with no configured instance (e.g. the built-in webchat, or a channel
+// type the operator has never touched) are left untouched.
+func applyInstanceOverlay(channelList []gen.ChannelEntry, instances map[string]config.ChannelInstanceConfig) {
+	if len(instances) == 0 {
+		return
+	}
+	// Index instances by type → (key, identity) for an O(1) lookup per entry.
+	type instMeta struct {
+		key      string
+		identity *config.ChannelIdentity
+	}
+	byType := make(map[string]instMeta, len(instances))
+	for key, inst := range instances {
+		t := strings.ToLower(strings.TrimSpace(inst.Type))
+		if t == "" {
+			t = strings.ToLower(strings.TrimSpace(key))
+		}
+		byType[t] = instMeta{key: key, identity: inst.Identity}
+	}
+	for i := range channelList {
+		meta, ok := byType[strings.ToLower(string(channelList[i].Id))]
+		if !ok {
+			continue
+		}
+		instanceID := meta.key
+		channelList[i].InstanceId = &instanceID
+		if meta.identity == nil {
+			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(meta.identity.Kind))
+		// Only surface a well-formed identity; a malformed persisted identity is
+		// ignored rather than emitting a schema-invalid entry.
+		var entryKind gen.ChannelEntryIdentityKind
+		switch kind {
+		case "agent":
+			entryKind = gen.ChannelEntryIdentityKindAgent
+		case "user":
+			entryKind = gen.ChannelEntryIdentityKindUser
+		default:
+			continue
+		}
+		ident := struct { // not-wire-format: composite literal of the generated gen.ChannelEntry.Identity anonymous field type — not a parallel wire type
+			Id   *string                      `json:"id,omitempty"`
+			Kind gen.ChannelEntryIdentityKind `json:"kind"`
+		}{Kind: entryKind}
+		if id := strings.TrimSpace(meta.identity.ID); id != "" {
+			idCopy := id
+			ident.Id = &idCopy
+		}
+		channelList[i].Identity = &ident
+	}
 }
 
 // validChannelIDs is the set of channel IDs that can be toggled via the API.
 // "webchat" is always enabled and intentionally excluded.
-var validChannelIDs = map[string]bool{
-	"telegram": true, "discord": true, "slack": true, "whatsapp": true,
-	"feishu": true, "dingtalk": true, "wecom": true, "weixin": true,
-	"line": true, "qq": true, "onebot": true, "irc": true,
-	"matrix": true,
+//
+// drift-guard: keyed by the generated gen.ChannelId enum and populated with the
+// named enum constants (not string literals), so removing or renaming a ChannelId
+// value breaks this build until the list is brought back in sync with the contract.
+var validChannelIDs = map[gen.ChannelId]bool{
+	gen.Telegram: true, gen.Discord: true, gen.Slack: true, gen.Whatsapp: true,
+	gen.Feishu: true, gen.Dingtalk: true, gen.Wecom: true, gen.Weixin: true,
+	gen.Line: true, gen.Qq: true, gen.Irc: true,
+	gen.Matrix: true, gen.GoogleChat: true,
+	gen.Email: true,
 }
 
 // channelWildcardIdx returns the index of the channel-wildcard AgentBinding
@@ -4212,15 +5391,22 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 	// Validate the agent ID when non-empty.
 	if req.DefaultAgentId != nil && *req.DefaultAgentId != "" {
 		agentID := *req.DefaultAgentId
-		found := false
-		for _, ac := range cfg.Agents.List {
-			if ac.ID == agentID {
-				found = true
+		var found *config.AgentConfig
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == agentID {
+				found = &cfg.Agents.List[i]
 				break
 			}
 		}
-		if !found {
+		if found == nil {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
+			return
+		}
+		// A worker is never a chat target (invoked only via delegation), so it
+		// cannot serve as a channel's default agent. Reject before any work,
+		// mirroring updateAgent's rejection of starring a worker as default (M1).
+		if found.IsWorker() {
+			jsonErr(w, http.StatusBadRequest, "workers are not chat targets and cannot be a channel's default agent")
 			return
 		}
 	}
@@ -4304,7 +5490,7 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 }
 
 func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) {
-	if !validChannelIDs[channelID] {
+	if !validChannelIDs[gen.ChannelId(channelID)] {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 		return
 	}
@@ -4319,49 +5505,99 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 			ch = map[string]any{}
 			channels[channelID] = ch
 		}
+		// Persist the type discriminator (Spec-2 FR-2.5). In v0.1 cap-1 the map
+		// key equals the channel type, so write it explicitly rather than relying
+		// solely on load-time normalizeChannelMap inference — this keeps the
+		// on-disk instance self-describing and makes cap-1 validation deterministic.
+		ch["type"] = channelID
 		ch["enabled"] = enabled
 		return nil
 	}); err != nil {
+		// Cap-1 (FR-2.3): a config that now holds >1 instance of a type (e.g. a
+		// pre-existing hand-edited duplicate surfaced by the load-time validator)
+		// is a client-correctable constraint violation, not a server fault —
+		// return a clean 422 "one-per-type" rather than an opaque 500.
+		if errors.Is(err, config.ErrChannelsCap1Violated) {
+			slog.Warn("rest: set channel enabled rejected by cap-1", "channel", channelID, "enabled", enabled, "error", err)
+			jsonErr(w, http.StatusUnprocessableEntity, "one-per-type in v0.1.0: "+err.Error())
+			return
+		}
 		slog.Error("rest: set channel enabled", "channel", channelID, "enabled", enabled, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// #358: persisting channels.<id>.enabled via safeUpdateConfigJSON only swaps the
+	// in-memory config pointer (refreshConfigAndRewireServices → SwapConfig); it does
+	// NOT start or stop the channel. Reload so ChannelManager.Reload applies the diff —
+	// starting a newly-enabled channel (e.g. whatsapp_native, which then emits its
+	// pairing QR over the whatsapp_pairing WS frame) or stopping a disabled one. The
+	// Reload path is crash-safe and name-correct as of #313. triggerReloadAndWait treats an
+	// unwired reload pipeline (the unit-test environment) as a no-op and only returns an
+	// error on a genuine reload failure, which we surface rather than reporting a false
+	// success (the flag persisted but the channel did not start).
+	if a.agentLoop != nil {
+		if err := a.triggerReloadAndWait(); err != nil {
+			verb := "start"
+			if !enabled {
+				verb = "stop"
+			}
+			slog.Error("rest: channel reload after enable toggle failed",
+				"channel", channelID, "enabled", enabled, "error", err)
+			jsonErr(w, http.StatusInternalServerError,
+				fmt.Sprintf("channel %s saved but failed to %s: %v", channelID, verb, err))
+			return
+		}
+	}
 	jsonOK(w, gen.ChannelEnabledResponse{Id: gen.ChannelEnabledResponseId(channelID), Enabled: enabled})
 }
 
-// channelSensitiveFields maps channel IDs to their secret/credential field names.
+// channelSensitiveFields maps channel TYPE to their secret/credential field names.
 // These are redacted in GET responses (replaced with "[configured]" if set).
-var channelSensitiveFields = map[string][]string{
-	"telegram": {"token"},
-	"discord":  {"token"},
-	"slack":    {"bot_token", "app_token"},
-	"feishu":   {"app_secret", "encrypt_key", "verification_token"},
-	"matrix":   {"access_token", "crypto_passphrase"},
-	"line":     {"channel_secret", "channel_access_token"},
-	"dingtalk": {"client_secret"},
-	"qq":       {"app_secret"},
-	"wecom":    {"secret"},
-	"onebot":   {"access_token"},
-	"irc":      {"password", "nickserv_password", "sasl_password"},
-	"weixin":   {"token"},
-	"whatsapp": {},
+// Keyed by TYPE (not instance ID) because field sensitivity is type-level knowledge
+// shared across all instances of that type (SEC-23 type-vs-instance boundary).
+//
+// drift-guard: keyed by the generated gen.ChannelId enum with named enum
+// constants, so removing/renaming a ChannelId value breaks this build.
+var channelSensitiveFields = map[gen.ChannelId][]string{
+	gen.Telegram:   {"token"},
+	gen.Discord:    {"token"},
+	gen.Slack:      {"bot_token", "app_token"},
+	gen.Feishu:     {"app_secret", "encrypt_key", "verification_token"},
+	gen.Matrix:     {"access_token", "crypto_passphrase"},
+	gen.Line:       {"channel_secret", "channel_access_token"},
+	gen.Dingtalk:   {"client_secret"},
+	gen.Qq:         {"app_secret"},
+	gen.Wecom:      {"secret"},
+	gen.Irc:        {"password", "nickserv_password", "sasl_password"},
+	gen.Weixin:     {"token"},
+	gen.Whatsapp:   {},
+	gen.GoogleChat: {"webhook_url", "service_account_json"},
+	// email: password is the only secret field (username is public config, not a secret).
+	gen.Email: {"password"},
 }
 
-// channelRequiredFields maps channel IDs to fields that must be non-empty for the channel to work.
-var channelRequiredFields = map[string][]string{
-	"telegram": {"token"},
-	"discord":  {"token"},
-	"slack":    {"bot_token"},
-	"feishu":   {"app_id", "app_secret"},
-	"matrix":   {"homeserver", "user_id", "access_token"},
-	"line":     {"channel_secret", "channel_access_token"},
-	"dingtalk": {"client_id", "client_secret"},
-	"qq":       {"app_id", "app_secret"},
-	"wecom":    {"bot_id", "secret"},
-	"onebot":   {"ws_url"},
-	"irc":      {"server", "nick"},
-	"weixin":   {"token"},
-	"whatsapp": {},
+// channelRequiredFields maps channel TYPE to fields that must be non-empty for the
+// channel to work. Keyed by TYPE for the same reason as channelSensitiveFields —
+// required fields are type-level knowledge, not instance-specific.
+//
+// drift-guard: keyed by the generated gen.ChannelId enum with named enum
+// constants, so removing/renaming a ChannelId value breaks this build.
+var channelRequiredFields = map[gen.ChannelId][]string{
+	gen.Telegram:   {"token"},
+	gen.Discord:    {"token"},
+	gen.Slack:      {"bot_token"},
+	gen.Feishu:     {"app_id", "app_secret"},
+	gen.Matrix:     {"homeserver", "user_id", "access_token"},
+	gen.Line:       {"channel_secret", "channel_access_token"},
+	gen.Dingtalk:   {"client_id", "client_secret"},
+	gen.Qq:         {"app_id", "app_secret"},
+	gen.Wecom:      {"bot_id", "secret"},
+	gen.Irc:        {"server", "nick"},
+	gen.Weixin:     {"token"},
+	gen.Whatsapp:   {},
+	gen.GoogleChat: {},
+	// email: imap_host, smtp_host, username, and password (credential) are all required.
+	gen.Email: {"imap_host", "smtp_host", "username", "password"},
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a
@@ -4374,7 +5610,7 @@ func redactChannelConfig(channelID string, cfg map[string]any) map[string]any {
 	for k, v := range cfg {
 		out[k] = v
 	}
-	for _, field := range channelSensitiveFields[channelID] {
+	for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
 		// A set <field>_ref means a credential is stored → mark configured.
 		if ref, _ := out[field+"_ref"].(string); strings.TrimSpace(ref) != "" {
 			out[field] = "[configured]"
@@ -4390,6 +5626,58 @@ func redactChannelConfig(channelID string, cfg map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+// validateChannelIdentity validates the per-instance routing identity supplied
+// in a configure request body (Spec-2 US-5 / FR-2.9). It mirrors the
+// ChannelIdentity contract: required "kind" in {agent,user}; "id" required and
+// non-empty when kind=="agent" (the target agent), forbidden/ignored otherwise;
+// no unknown fields. Returns "" when valid, or a human-readable reason.
+func validateChannelIdentity(raw any) string {
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return "must be an object with a \"kind\" field"
+	}
+	for k := range obj {
+		switch k {
+		case "kind", "id":
+		default:
+			return fmt.Sprintf("unknown field %q", k)
+		}
+	}
+	kindRaw, present := obj["kind"]
+	if !present {
+		return "\"kind\" is required"
+	}
+	kind, isStr := kindRaw.(string)
+	if !isStr {
+		return "\"kind\" must be a string"
+	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	switch kind {
+	case "agent":
+		idRaw, hasID := obj["id"]
+		if !hasID {
+			return "\"id\" is required when kind is \"agent\""
+		}
+		idStr, idIsStr := idRaw.(string)
+		if !idIsStr {
+			return "\"id\" must be a string"
+		}
+		if strings.TrimSpace(idStr) == "" {
+			return "\"id\" must be non-empty when kind is \"agent\""
+		}
+	case "user":
+		// id is optional and ignored for user-kind.
+		if idRaw, hasID := obj["id"]; hasID {
+			if _, idIsStr := idRaw.(string); !idIsStr {
+				return "\"id\" must be a string"
+			}
+		}
+	default:
+		return fmt.Sprintf("\"kind\" must be \"agent\" or \"user\", got %q", kind)
+	}
+	return ""
 }
 
 // getChannelConfig handles GET /api/v1/channels/{id}.
@@ -4415,6 +5703,25 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	}
 	// Remove reserved fields that must not be set here.
 	delete(updates, "enabled")
+	// instance_id is a URL/addressing hint in the request body; the {id} path
+	// segment is the authoritative instance key in v0.1 (cap-1/type). Never
+	// persist it as a config field (it is not part of ChannelInstanceConfig).
+	delete(updates, "instance_id")
+
+	// Validate the optional per-instance identity (Spec-2 US-5 / FR-2.9) before
+	// any write. A malformed identity must be rejected up front (422) rather than
+	// silently dropped, otherwise identity-based routing would be a no-op without
+	// the operator ever knowing. The field is persisted as-is and later wired
+	// into ResolveRoute for inbound messages on this instance.
+	if raw, present := updates["identity"]; present {
+		if raw == nil {
+			// Explicit null clears the identity override.
+			delete(updates, "identity")
+		} else if errMsg := validateChannelIdentity(raw); errMsg != "" {
+			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid identity: %s", errMsg))
+			return
+		}
+	}
 
 	// SEC-23 / #289: route secret fields into the encrypted credential store and
 	// persist only their <field>_ref in config.json. Every channel constructor
@@ -4422,7 +5729,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// is both a plaintext-at-rest violation AND unreadable by the constructor —
 	// so a UI-configured token-based channel would never start.
 	var clearedRefs []string // credentials to delete AFTER the config write commits
-	for _, field := range channelSensitiveFields[channelID] {
+	for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
 		raw, present := updates[field]
 		if !present {
 			continue
@@ -4467,16 +5774,29 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		for k, v := range updates {
 			ch[k] = v
 		}
+		// Persist the type discriminator (Spec-2 FR-2.5): the map key equals the
+		// channel type in v0.1 cap-1, so record it explicitly so the on-disk
+		// instance is self-describing and cap-1 validation is deterministic.
+		ch["type"] = channelID
 		// Invariant (#289/SEC-23): a known secret field is never stored inline in
 		// config.json — it lives only in the credential store via its <field>_ref.
 		// This also scrubs any stale plaintext left by the pre-#289 blind merge.
-		for _, field := range channelSensitiveFields[channelID] {
+		for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
 			delete(ch, field)
 		}
 		channels[channelID] = ch
 		updatedCh = ch
 		return nil
 	}); err != nil {
+		// Cap-1 (FR-2.3): surface a >1-instance-per-type violation as a clean 422
+		// "one-per-type" rather than an opaque 500. Note the credential write above
+		// has already committed; the config write is reverted (the refresh failed),
+		// so a retry after the operator removes the duplicate succeeds.
+		if errors.Is(err, config.ErrChannelsCap1Violated) {
+			slog.Warn("rest: configure channel rejected by cap-1", "channel", channelID, "error", err)
+			jsonErr(w, http.StatusUnprocessableEntity, "one-per-type in v0.1.0: "+err.Error())
+			return
+		}
 		slog.Error("rest: configure channel", "channel", channelID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
@@ -4503,9 +5823,10 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		return
 	}
 
-	required := channelRequiredFields[channelID]
-	sensitive := make(map[string]bool, len(channelSensitiveFields[channelID]))
-	for _, f := range channelSensitiveFields[channelID] {
+	cid := gen.ChannelId(channelID)
+	required := channelRequiredFields[cid]
+	sensitive := make(map[string]bool, len(channelSensitiveFields[cid]))
+	for _, f := range channelSensitiveFields[cid] {
 		sensitive[f] = true
 	}
 	var missing []string
@@ -4553,24 +5874,9 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 
 // countEnabledChannels returns the number of non-webchat channels currently enabled in cfg.
 func countEnabledChannels(cfg *config.Config) int {
-	ch := cfg.Channels
 	count := 0
-	for _, enabled := range []bool{
-		ch.Telegram.Enabled,
-		ch.Discord.Enabled,
-		ch.Slack.Enabled,
-		ch.WhatsApp.Enabled,
-		ch.Feishu.Enabled,
-		ch.DingTalk.Enabled,
-		ch.WeCom.Enabled,
-		ch.Weixin.Enabled,
-		ch.LINE.Enabled,
-		ch.QQ.Enabled,
-		ch.OneBot.Enabled,
-		ch.IRC.Enabled,
-		ch.Matrix.Enabled,
-	} {
-		if enabled {
+	for _, inst := range cfg.Channels {
+		if inst.Enabled {
 			count++
 		}
 	}

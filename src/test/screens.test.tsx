@@ -139,39 +139,14 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={makeClient()}>{children}</QueryClientProvider>
 }
 
-describe('Command Center screen — empty state', () => {
-  let CommandCenterScreen: () => JSX.Element
-
-  beforeAll(async () => {
-    const mod = await import('@/routes/_app/command-center')
-    CommandCenterScreen = mod.Route.options.component as () => JSX.Element
-  }, 60_000)
-
-  it('renders "Command Center" screen with StatusBar and TaskList', () => {
-    // Traces to: wave5a-wire-ui-spec.md — US-13: Command Center renders StatusBar and TaskList
-    // Note: CommandCenterScreen has no <h1>; StatusBar + TaskList are the top-level sections.
-    // Checking for TaskList h2 "Tasks" as the primary landmark.
-    render(<CommandCenterScreen />, { wrapper })
-    // TaskList renders an h2 "Tasks"
-    expect(screen.getByRole('heading', { name: /Tasks/i })).toBeInTheDocument()
-  })
-
-  it('TaskList heading has font-headline class (Outfit Bold)', () => {
-    // Note: CommandCenterScreen has no h1; checking TaskList h2 for font-headline.
-    const { container } = render(<CommandCenterScreen />, { wrapper })
-    const h2 = container.querySelector('h2')
-    expect(h2?.className).toContain('font-headline')
-  })
-})
-
 describe('Agents screen — empty state', () => {
   let AgentsScreen: () => JSX.Element
 
   beforeAll(async () => {
-    // agents.tsx is the layout route (renders <Outlet />) — the actual list screen
-    // with the "Agents" h1 lives in agents.index.tsx. Import the index route instead.
-    const mod = await import('@/routes/_app/agents.index')
-    AgentsScreen = mod.Route.options.component as () => JSX.Element
+    // The agents/ index route now lazy-loads its screen; import the screen module
+    // directly so the test renders real content (not the Suspense fallback).
+    const mod = await import('@/components/screens/AgentListScreen')
+    AgentsScreen = mod.AgentListScreen as () => JSX.Element
   }, 60_000)
 
   it('renders "Agents" as h1 heading', () => {
@@ -184,8 +159,10 @@ describe('Skills screen — empty state', () => {
   let SkillsScreen: () => JSX.Element
 
   beforeAll(async () => {
-    const mod = await import('@/routes/_app/skills')
-    SkillsScreen = mod.Route.options.component as () => JSX.Element
+    // The skills route now lazy-loads its screen; import the screen module
+    // directly so the test renders real content (not the Suspense fallback).
+    const mod = await import('@/components/screens/SkillsScreen')
+    SkillsScreen = mod.SkillsScreen as () => JSX.Element
   }, 60_000)
 
   it('renders "Skills & Tools" as h1 heading', () => {
@@ -199,8 +176,10 @@ describe('Settings screen — empty state', () => {
   let SettingsScreen: () => JSX.Element
 
   beforeAll(async () => {
-    const mod = await import('@/routes/_app/settings')
-    SettingsScreen = mod.Route.options.component as () => JSX.Element
+    // The settings route now lazy-loads its screen; import the screen module
+    // directly so the test renders real content (not the Suspense fallback).
+    const mod = await import('@/components/screens/SettingsScreen')
+    SettingsScreen = mod.SettingsScreen as () => JSX.Element
   }, 60_000)
 
   it('renders "Settings" as h1 heading', () => {

@@ -64,7 +64,7 @@ func newTestRestAPIWithValidation(t *testing.T) *restAPI {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 }
 
@@ -247,7 +247,7 @@ func TestPutSandboxConfig_ValidateInbound_InvalidBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config", strings.NewReader(""))
 	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
+	r = withReAuthAdmin(t, api, r)
 
 	api.putSandboxConfig(w, r)
 
@@ -261,7 +261,7 @@ func TestPutSandboxConfig_ValidateInbound_NullBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config", strings.NewReader("null"))
 	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
+	r = withReAuthAdmin(t, api, r)
 
 	api.putSandboxConfig(w, r)
 
@@ -373,7 +373,7 @@ func newTestRestAPIWithValidationAndAgent(t *testing.T) *restAPI {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 }
 

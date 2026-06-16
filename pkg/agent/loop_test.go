@@ -167,6 +167,38 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	if lastMessage.Role != "user" || lastMessage.Content != "hello" {
 		t.Fatalf("last provider message = %+v, want unchanged user message", lastMessage)
 	}
+
+	// Channel-session routing: the non-webchat discord message must have caused a
+	// shared channel session to be created in the shared store.
+	//
+	// Traces to: pkg/agent/loop.go processMessage channel-session block
+	//            (channel session routing feature)
+	if al.sharedSessionStore == nil {
+		t.Fatal("sharedSessionStore must be initialized after NewAgentLoop")
+	}
+	sessions, listErr := al.sharedSessionStore.ListSessions()
+	if listErr != nil {
+		t.Fatalf("ListSessions after processMessage failed: %v", listErr)
+	}
+	// Filter to just the session created by this test (channel=discord, peerID=group-1).
+	// The shared store may contain sessions from other parallel tests that share the
+	// same OS temp parent directory, so we cannot assert an exact total count.
+	foundIdx := -1
+	for i := range sessions {
+		if sessions[i].Channel == "discord" && sessions[i].PeerID == "group-1" {
+			foundIdx = i
+			break
+		}
+	}
+	if foundIdx == -1 {
+		t.Fatalf(
+			"no channel session with Channel=discord PeerID=group-1 found in shared store (got %d sessions)",
+			len(sessions),
+		)
+	}
+	if string(sessions[foundIdx].Type) != "channel" {
+		t.Errorf("channel session Type = %q, want %q", sessions[foundIdx].Type, "channel")
+	}
 }
 
 func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
@@ -2216,12 +2248,12 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 		"feishu":   "rid-feishu",
 		"discord":  "rid-discord",
 
-		"qq":       "rid-qq",
-		"dingtalk": "rid-dingtalk",
-		"slack":    "rid-slack",
-		"line":     "rid-line",
-		"onebot":   "rid-onebot",
-		"wecom":    "rid-wecom",
+		"qq":          "rid-qq",
+		"dingtalk":    "rid-dingtalk",
+		"slack":       "rid-slack",
+		"line":        "rid-line",
+		"google-chat": "rid-google-chat",
+		"wecom":       "rid-wecom",
 	} {
 		chManager.RegisterChannel(name, &fakeChannel{id: id})
 	}
@@ -2239,7 +2271,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 		{channel: "dingtalk", wantID: "rid-dingtalk"},
 		{channel: "slack", wantID: "rid-slack"},
 		{channel: "line", wantID: "rid-line"},
-		{channel: "onebot", wantID: "rid-onebot"},
+		{channel: "google-chat", wantID: "rid-google-chat"},
 		{channel: "wecom", wantID: "rid-wecom"},
 		{channel: "unknown", wantID: ""},
 	}

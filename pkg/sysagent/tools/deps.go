@@ -20,6 +20,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/dapicom-ai/omnipus/pkg/skills"
 )
 
 // Deps bundles all shared dependencies for system tools.
@@ -103,6 +104,23 @@ type Deps struct {
 	// ReloadFunc triggers a hot-reload of the agent loop so newly created agents
 	// become available immediately. Nil in tests or when not wired.
 	ReloadFunc func() error
+	// SkillsLoader provides access to the locally installed skills tree
+	// (workspace, global, and builtin skill directories). Nil in tests or when
+	// not wired — callers must nil-check before use.
+	SkillsLoader *skills.SkillsLoader
+	// RegistryManager coordinates remote skill registries (ClawHub, etc.) for
+	// search and install-by-slug operations. Nil when no registries are
+	// configured or when not wired — callers must nil-check before use.
+	RegistryManager *skills.RegistryManager
+	// SkillInstaller downloads and installs skills from GitHub or a registry
+	// into the operator workspace. Nil in tests or when not wired — callers
+	// must nil-check before use.
+	SkillInstaller *skills.SkillInstaller
+	// SkillWriter authors and versions skills (system.skill.create / edit). It
+	// is rooted at the global (user) skills directory so editing a built-in
+	// produces a user override rather than mutating the shipped built-in in
+	// place. Nil in tests or when not wired — callers must nil-check before use.
+	SkillWriter *skills.SkillWriter
 }
 
 // clearMaps recursively walks v and zeros every map field it finds. Called
@@ -256,15 +274,38 @@ func writeEntity(dir, id string, v any) error {
 
 // deleteEntity removes dir/<id>.json.
 // A missing file is treated as success (idempotent delete).
+//
+// M5: the removal is performed under the SAME per-path advisory flock that
+// writeEntity holds (fileutil.WithFlock). Without it the delete — and any
+// cascade that calls deleteEntity (project/workspace delete sweeping its
+// tasks and pins) — races a concurrent writeEntity on the same file: the
+// writer's temp-file + rename could land after os.Remove and silently
+// resurrect a just-deleted entity, or the reader observes a half-written
+// file. Sharing the lock domain serializes delete against write per entity.
 func deleteEntity(dir, id string) error {
 	if err := validateID(id); err != nil {
 		return fmt.Errorf("delete entity: %w", err)
 	}
 	path := entityPath(dir, id)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("delete entity %s: %w", id, err)
+	// Fast idempotent path: if the file (or its directory) does not exist there
+	// is nothing to delete and nothing to race. Skipping the flock here also
+	// avoids fileutil.WithFlock's O_CREATE re-creating a lock file inside a
+	// missing/just-removed directory (which would both fail to open AND
+	// resurrect an empty entity).
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil
 	}
-	return nil
+	// The file exists: acquire the SAME per-path advisory flock writeEntity
+	// holds, then remove under it. This serializes delete against concurrent
+	// writeEntity so a writer's temp-file + rename cannot land after os.Remove
+	// and resurrect the entity. The os.IsNotExist re-check inside the lock keeps
+	// the delete idempotent if another locked deleter removed the file first.
+	return fileutil.WithFlock(path, func() error {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("delete entity %s: %w", id, err)
+		}
+		return nil
+	})
 }
 
 // listEntities reads all JSON files in dir and unmarshals them into a slice of T.
@@ -313,6 +354,46 @@ func successJSON(v any) string {
 		return `{"success":true}`
 	}
 	return string(b)
+}
+
+// stringSliceArg coerces a JSON-decoded tool argument into a []string.
+// JSON arrays decode to []any; non-string elements are skipped. Returns nil
+// for nil/empty/non-array inputs so callers can leave the field unset.
+func stringSliceArg(v any) []string {
+	raw, ok := v.([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, e := range raw {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// stringMapArg coerces a JSON-decoded tool argument into a map[string]string.
+// JSON objects decode to map[string]any; non-string values are skipped. Returns
+// nil for nil/empty/non-object inputs so callers can leave the field unset.
+func stringMapArg(v any) map[string]string {
+	raw, ok := v.(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, e := range raw {
+		if s, ok := e.(string); ok {
+			out[k] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // errorJSON returns a consistent error response per D.10.1.

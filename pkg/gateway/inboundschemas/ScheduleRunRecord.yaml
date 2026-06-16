@@ -1,0 +1,32 @@
+title: ScheduleRunRecord
+description: >
+  One execution of a schedule (#264). The last 20 are retained inline on a
+  Schedule; full history is reachable via the linked session_id.
+type: object
+required:
+  - ran_at_ms
+  - status
+additionalProperties: false
+properties:
+  ran_at_ms:
+    type: integer
+    format: int64
+    description: Unix epoch milliseconds when the run started.
+  status:
+    type: string
+    enum:
+      - ok
+      - error
+      - skipped
+      - timeout
+    description: ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+  error:
+    type: string
+    description: Failure reason when status is error or timeout.
+  session_id:
+    type: string
+    description: The scheduled session this run executed in (links to the transcript).
+  duration_ms:
+    type: integer
+    format: int64
+    description: Wall-clock duration of the run in milliseconds.

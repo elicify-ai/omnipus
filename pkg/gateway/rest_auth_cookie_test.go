@@ -89,7 +89,7 @@ func TestHandleLogin_IssuesSessionCookie(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	body := `{"username":"cookieuser","password":"TestPass123"}`
@@ -171,7 +171,7 @@ func TestHandleLogin_BothCookiesEmitted(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	w1 := httptest.NewRecorder()
@@ -230,7 +230,7 @@ func TestHandleRegisterAdmin_IssuesSessionCookie(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	body := `{"username":"admin","password":"AdminPass1"}`

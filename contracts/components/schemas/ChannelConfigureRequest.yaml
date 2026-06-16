@@ -8,6 +8,17 @@ description: >
 type: object
 additionalProperties: true
 properties:
+  instance_id:
+    type: string
+    description: >
+      Optional: the instance map key to configure. In v0.1 (cap-1/type) this
+      equals the channel type and can be omitted. Reserved for v0.3 multi-instance
+      support — the backend ignores this field today (the URL {id} is the key).
+  identity:
+    $ref: './ChannelIdentity.yaml'
+    description: >
+      Optional routing identity override for this channel instance. Persisted
+      per instance; wired into ResolveRoute for inbound messages on this channel.
   token:
     type: string
     description: Channel authentication token (e.g. Telegram bot token, Discord bot token).
@@ -23,3 +34,28 @@ properties:
   webhook_secret:
     type: string
     description: HMAC secret for verifying incoming webhook payloads.
+  imap_host:
+    type: string
+    description: IMAP server hostname (email channel). TLS required.
+    example: imap.gmail.com
+  imap_port:
+    type: integer
+    description: IMAP server port (email channel). Defaults to 993 (IMAPS).
+    example: 993
+  smtp_host:
+    type: string
+    description: SMTP server hostname for outbound email (email channel). TLS required.
+    example: smtp.gmail.com
+  smtp_port:
+    type: integer
+    description: SMTP server port (email channel). Defaults to 587 (STARTTLS) or 465 (SMTPS).
+    example: 587
+  username:
+    type: string
+    description: Login username for IMAP and SMTP authentication (email channel).
+    example: bot@example.com
+  password:
+    type: string
+    description: >
+      Login password for IMAP and SMTP authentication (email channel). Stored
+      encrypted in the credential store — never returned in GET responses.

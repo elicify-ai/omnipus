@@ -1,0 +1,269 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Collaboration · how it should work · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;border:1px solid}
+  .p-await{color:#60a5fa;border-color:#60a5fa}.p-bg{color:#34d399;border-color:#34d399}.p-task{color:#fbbf24;border-color:#fbbf24}.p-hand{color:#a78bfa;border-color:#a78bfa}
+  pre.policy{background:#0c0c0f;border:1px solid var(--line);border-radius:12px;padding:18px 20px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:.8rem;line-height:1.65;color:#cdd3de;margin:10px 0}
+  pre.policy .k{color:#a78bfa}pre.policy .s{color:#fbbf24}pre.policy .c{color:var(--faint)}pre.policy .n{color:#60a5fa}
+  .formula{background:#101014;border:1px solid var(--gold-dim);border-radius:12px;padding:16px 18px;font-family:'JetBrains Mono',monospace;font-size:.82rem;line-height:1.7;color:#E2E8F0}
+  .formula b{color:var(--gold)}
+  table.modes td:first-child{white-space:nowrap}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html" class="active">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Agent Collaboration · the model</div>
+  <div class="eyebrow">How it should work · a design</div>
+  <h1>Agent collaboration, designed</h1>
+  <p class="lede">Today there are four overlapping mechanisms and two half-wired permission lists. This is the <b style="color:#fff">target model</b>: <b style="color:#fff">two primitives</b>, <b style="color:#fff">one delegation policy</b> expressed as a graph, and the cross-cutting rules (ownership, context, results, scale) that make it coherent.</p>
+  <p class="note" style="margin-top:8px">Grounded in — and motivated by — the <a href="delegation-audit.html">as-is code audit →</a> (what exists, what's missing, where the gaps are).</p>
+</div></div>
+
+<!-- PRIMITIVE REFRAME -->
+<section><div class="wrap">
+  <div class="eyebrow">Step 1 · the reframe</div>
+  <h2>Two primitives, not four tools</h2>
+  <p class="sub">The four mechanisms collapse onto one distinction: does the <b>conversation move</b>, or does <b>work get farmed out</b>? These are different layers and should stop being lumped together.</p>
+  <div class="fig">
+  <svg viewBox="0 0 980 220" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><marker id="g" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b8b97"/></marker></defs>
+    <!-- Handover -->
+    <text x="245" y="26" text-anchor="middle" fill="#a78bfa" font-family="JetBrains Mono" font-size="11.5" letter-spacing="2">HANDOVER · routing</text>
+    <g font-size="12" text-anchor="middle">
+      <rect x="60" y="48" width="90" height="40" rx="10" fill="#101014" stroke="#cdd3de"/><text x="105" y="73" fill="#E2E8F0">👤 User</text>
+      <rect x="200" y="48" width="90" height="40" rx="10" fill="#101014" stroke="#a78bfa"/><text x="245" y="73" fill="#a78bfa">🤖 A</text>
+      <rect x="340" y="48" width="90" height="40" rx="10" fill="#0e0e12" stroke="#34d399"/><text x="385" y="73" fill="#34d399">🤖 B</text>
+      <line x1="150" y1="68" x2="198" y2="68" stroke="#8b8b97" marker-end="url(#g)"/>
+      <path d="M105,90 C105,150 385,150 385,92" fill="none" stroke="#34d399" stroke-dasharray="4 3" marker-end="url(#g)"/>
+      <text x="245" y="172" fill="#8b8b97" font-size="11">the baton moves — user now talks to B; A is done</text>
+    </g>
+    <line x1="490" y1="40" x2="490" y2="190" stroke="#222229"/>
+    <!-- Delegation -->
+    <text x="735" y="26" text-anchor="middle" fill="#34d399" font-family="JetBrains Mono" font-size="11.5" letter-spacing="2">DELEGATION · work</text>
+    <g font-size="12" text-anchor="middle">
+      <rect x="560" y="48" width="90" height="40" rx="10" fill="#101014" stroke="#cdd3de"/><text x="605" y="73" fill="#E2E8F0">👤 User</text>
+      <rect x="700" y="48" width="90" height="40" rx="10" fill="#101014" stroke="#a78bfa"/><text x="745" y="73" fill="#a78bfa">🤖 A</text>
+      <rect x="858" y="48" width="90" height="40" rx="10" fill="#101014" stroke="#34d399"/><text x="903" y="73" fill="#34d399">🤖 B</text>
+      <line x1="650" y1="68" x2="698" y2="68" stroke="#8b8b97"/>
+      <line x1="792" y1="62" x2="856" y2="62" stroke="#34d399" marker-end="url(#g)"/><text x="824" y="54" fill="#34d399" font-size="9">do W</text>
+      <line x1="856" y1="76" x2="794" y2="76" stroke="#60a5fa" marker-end="url(#g)"/><text x="824" y="92" fill="#60a5fa" font-size="9">result</text>
+      <text x="735" y="172" fill="#8b8b97" font-size="11">A keeps the floor with the user; B does a unit of work</text>
+    </g>
+  </svg>
+  <div class="figcap"><b>Handover</b> belongs to the routing layer — it only moves <i>your</i> conversation, so it stays <b>open / ungated</b> by design; the <span class="mono">handoff</span> <i>tool</i> performs a <i>handover</i>. <b>Delegation</b> is the work primitive — the one the trust-graph governs. The rest of this page designs delegation.</div>
+  </div>
+</div></section>
+
+<!-- DELEGATION MODES -->
+<section><div class="wrap">
+  <div class="eyebrow">Step 2 · one primitive, three commitments</div>
+  <h2>You always delegate <span class="gold">to a named agent</span> — you choose how committed</h2>
+  <p class="sub">"Ephemeral subagent" vs "durable task" shouldn't be two tools you pick between. It's one act — <i>ask agent B to do W</i> — with a <b>mode</b> that sets how committed the work is. The runtime decides ephemeral-vs-durable from the mode.</p>
+  <table class="modes">
+    <tr><th>Mode</th><th>Caller</th><th>Worker</th><th>Use when…</th><th>Today</th></tr>
+    <tr><td><span class="pill p-await">await</span></td><td>blocks for the answer</td><td>ephemeral sub-turn of B's persona</td><td>you need a result to continue your own turn (a lookup, a check, a draft)</td><td><span class="mono">subagent</span></td></tr>
+    <tr><td><span class="pill p-bg">background</span></td><td>keeps going; notified on done</td><td>ephemeral sub-turn</td><td>a side-quest that shouldn't block you; result soon</td><td><span class="mono">spawn</span></td></tr>
+    <tr><td><span class="pill p-task">task</span></td><td>hands it off; tracked on a board</td><td><b>B's own durable session</b>, survives restart</td><td>a real piece of work someone should <b>own</b> — maybe long, maybe a specialist</td><td><span class="mono">task_create</span></td></tr>
+  </table>
+  <div class="callout b"><b>The decision guide, in one line:</b> need it to keep talking? <span class="pill p-await">await</span> &nbsp;·&nbsp; need it done while you work? <span class="pill p-bg">background</span> &nbsp;·&nbsp; need it <i>owned</i>? <span class="pill p-task">task</span> &nbsp;·&nbsp; need the <i>user</i> to talk to someone else? <span class="pill p-hand">handover</span>.</div>
+  <p class="note">Why "always to a named agent": delegation should mean asking <i>someone</i> — Ray, Max, a custom specialist — not conjuring an anonymous clone. The target's persona, skills, tools and memory are what make the result good. An ephemeral worker is just "that agent, as a throwaway turn." This also gives the permission graph something real to reference.</p>
+
+  <div class="callout"><b>Implication — we must seed a default worker.</b> If every worker needs a resolvable identity, then "fan out without naming a specialist" needs a real target to resolve to. So we ship a built-in <b>general-purpose worker</b>. Confirmed gap: today an un-named spawn runs an <i>ad-hoc prompt + the parent's tools, with no identity</i> (<span class="mono">pkg/tools/spawn.go:98-122</span>) — and worse, it <b>bypasses the allowlist entirely</b>: the gate is <span class="mono">if agentID != "" &amp;&amp; t.allowlistCheck != nil</span> (<span class="mono">spawn.go:100</span>), so no <span class="mono">agent_id</span> ⇒ no check — exactly the <b>ungoverned anonymous spawn</b> we're replacing. (This does <b>not</b> remove direct spawning — the engine and the capability stay; <span class="mono">spawn</span>/<span class="mono">subagent</span> just become <span class="mono">delegate(mode=…)</span> against a real identity.)</div>
+
+  <h3 style="margin-top:20px">Who you can delegate to — the target spectrum</h3>
+  <table class="modes">
+    <tr><th>Target</th><th>Use when…</th><th>Persona</th><th>Status</th></tr>
+    <tr><td><b>A base agent or marketplace specialist</b> — Ray · Ava · custom-x</td><td>you want that agent's skills / tools / memory</td><td>full, persistent</td><td><span class="tag t-have">exists</span></td></tr>
+    <tr><td><b>general-purpose worker</b> <span class="mono">· sub-agent</span></td><td>cheap fan-out / a small unit needing no special skill</td><td>lean · ephemeral · machine-facing</td><td><span class="tag t-new">new built-in</span></td></tr>
+    <tr><td><b><span class="mono">self</span></b></td><td>parallelize your <i>own</i> reasoning (map-reduce)</td><td>your persona, throwaway turn</td><td><span class="tag t-part">implicit today</span></td></tr>
+  </table>
+  <p class="note" style="margin-top:8px">The <b>general-purpose worker</b> is a <b>sub-agent worker</b>, lean by design — a terse "do the unit, return a result" prompt, a cheap/fast default model (you may spawn hundreds), no greeting · no own connection · no heartbeat · ephemeral memory (a run-log, no continuity). It inherits the caller's tool scope bounded by policy, and is a leaf (<span class="mono">to: []</span>). It mirrors Claude Code's own <span class="mono">general-purpose</span> default subagent.</p>
+
+  <div class="callout b"><b>The roster has two tiers — base agents vs. sub-agent workers.</b> <b>Base agents</b> (the four seeded cores re-cast by role — <b>Mia · the Assistant ⭐</b> (default front door) · <b>Jim · the Orchestrator</b> (planner/PM) · <b>Ray · the Scout</b> (research) · <b>Ava · the Builder</b> — plus any custom you add: chat · heartbeat · own connections · full memory · default-★ · can delegate). And <b>sub-agent workers</b> (the seeded general-purpose worker + custom workers, each carrying an <span class="mono">executor</span> — <span class="mono">native</span> · <span class="mono">external-cli</span> · future <span class="mono">remote-a2a</span> — a separate roster section, deliberately stripped: <b>no heartbeat · no own connection/identity · ephemeral memory</b> (run-log, no continuity) · <b>not chat targets</b> (invoked only via delegation; a "test run" button is the exception) · not default-★ · depth-limited · a leaner/cheaper model). <i>A tool you point at work, not a colleague.</i> Anything beyond the base roster arrives as <a href="plugins.html">marketplace packs</a>. Note: <b>Max is retired from the base</b> — automation is now a platform surface, not a persona. The two axes don't collide: <i>sub-agent worker</i> is a roster <b>tier</b>; <span class="mono">spawn</span>/<span class="mono">subagent</span> are <b>how</b> any agent runs as an ephemeral child turn.</div>
+</div></section>
+
+<!-- ORCHESTRATION -->
+<section><div class="wrap">
+  <div class="eyebrow">Step 3 · the macro form</div>
+  <h2>Orchestration — <span class="gold">planning work across a team</span></h2>
+  <p class="sub">1:1 delegation is "do this unit." The other half is authoring a <b>plan</b>: many tasks, across many agents, with ordering — a coordinator decomposing a goal. This is the macro form of <span class="pill p-task">task</span> mode, and it's where delegation meets Workspaces, the Calendar and Automations.</p>
+  <div class="grid g2">
+    <div class="card"><h3>Two scales of delegation</h3><ul class="clean">
+      <li><b>1:1 · a task for one agent</b> — "Ray, write the competitor brief." One durable board item, one assignee. <span class="tag t-have">exists · agent_id</span></li>
+      <li><b>1:many · a plan for the team</b> — a coordinator emits a <b>DAG of tasks</b> (assignees + dependencies + schedule), then monitors &amp; synthesizes. <span class="tag t-new">orchestration</span></li>
+    </ul></div>
+    <div class="card"><h3>A plan = a DAG of task-delegations</h3><ul class="clean">
+      <li><b>Nodes</b> = tasks — each a <span class="pill p-task">task</span> delegation, <span class="mono">agent_id</span> = assignee</li>
+      <li><b>Edges</b> = <span class="mono">blocked_by</span> dependencies <span class="tag t-new">new field</span> — tasks have <b>no</b> ordering today</li>
+      <li><b>Grouping</b> = workspace + <span class="mono">milestone_id</span> <span class="tag t-have">exists</span></li>
+      <li><b>Timing</b> = start / due / recurrence from the <a href="time.html">Calendar</a></li>
+    </ul></div>
+  </div>
+  <div class="fig">
+  <svg viewBox="0 0 980 210" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><marker id="d" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5f6675"/></marker>
+    <marker id="db" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#fbbf24"/></marker></defs>
+    <rect x="24" y="82" width="130" height="46" rx="11" fill="#101014" stroke="#D4AF37"/><text x="89" y="103" text-anchor="middle" fill="#D4AF37" font-size="12.5">🧭 coordinator</text><text x="89" y="119" text-anchor="middle" fill="#8b8b97" font-size="9.5">owns the goal</text>
+    <g font-size="11.5" text-anchor="middle">
+      <rect x="250" y="20" width="180" height="44" rx="9" fill="#101014" stroke="#34d399"/><text x="340" y="40" fill="#34d399">Research A</text><text x="340" y="55" fill="#8b8b97" font-size="9.5">→ Ray</text>
+      <rect x="250" y="146" width="180" height="44" rx="9" fill="#101014" stroke="#34d399"/><text x="340" y="166" fill="#34d399">Research B</text><text x="340" y="181" fill="#8b8b97" font-size="9.5">→ Ray (×40 fan-out)</text>
+      <rect x="520" y="83" width="180" height="44" rx="9" fill="#101014" stroke="#cdd3de"/><text x="610" y="103" fill="#E2E8F0">Draft brief</text><text x="610" y="118" fill="#8b8b97" font-size="9.5">→ Jim</text>
+      <rect x="788" y="83" width="168" height="44" rx="9" fill="#101014" stroke="#fbbf24"/><text x="872" y="103" fill="#fbbf24">Schedule review</text><text x="872" y="118" fill="#8b8b97" font-size="9.5">→ Max · on the Calendar</text>
+    </g>
+    <g stroke="#5f6675" fill="none" marker-end="url(#d)"><path d="M154,98 L246,46"/><path d="M154,112 L246,164"/></g>
+    <g stroke="#fbbf24" fill="none" marker-end="url(#db)" opacity=".8"><path d="M430,48 L516,92"/><path d="M430,162 L516,118"/><path d="M700,105 L784,105"/></g>
+    <text x="475" y="58" fill="#fbbf24" font-size="9" font-family="JetBrains Mono">blocked_by</text>
+    <text x="742" y="98" fill="#fbbf24" font-size="9" font-family="JetBrains Mono">blocked_by</text>
+  </svg>
+  <div class="figcap">A coordinator authors the plan; each node is a durable task on the board, assigned to an agent; gold edges are dependencies that gate execution. A node can itself fan out (Research B → 40 workers).</div>
+  </div>
+  <div class="callout">The <b>coordinator pattern</b>: an agent owns a goal → authors the plan (<b>proposed → you approve → dispatched</b>) → the executor runs each task on its assignee as dependencies clear → <span class="mono">task_status_changed</span> events (the <a href="time.html">contract slot with no producer</a>) unlock the next step and notify the coordinator → it synthesizes. <b>Jim · the Orchestrator</b> is the seeded coordinator — the planner/PM that owns this story: it supervises the <span class="mono">tasks · blocked_by</span> DAG, drives the delegation graph, runs the fleet through the <b>Max-parallel</b> window, and isolates parallel work in worktrees. Any specialist or the general-purpose worker can also coordinate, but the Orchestrator is the one built for it.</div>
+  <div class="callout b"><b>Governed by the same graph:</b> every assignment in a plan is a <span class="pill p-task">task</span> edge — the coordinator's <span class="mono">delegation.to</span> must cover each assignee (or a <span class="mono">role:</span>). It can't assign to agents it isn't allowed to delegate to, and the whole plan carries the originating <span class="mono">owner</span> (#406) as attribution (single user). Orchestration is delegation at the plan level, not a new permission surface.</div>
+  <div class="callout"><b>The target is an agent-reference (A2A-ready, LOCKED).</b> The delegation <span class="mono">to</span> target is an <b>agent-reference</b> — in v0.1.0 it resolves to a <b>local agent</b>, but the same reference can resolve to a <b>remote A2A agent later</b>, so the policy / trust-graph never reshapes when peer agents arrive. <b>Handover stays local</b> — it moves a live conversation, which is inherently in-process. And the <b>Orchestrator</b> dispatches its fleet arms to <span class="mono">native</span> · <span class="mono">external-cli</span> · (later) <span class="mono">remote-a2a</span> executors — the same agent-reference resolution, one more executor kind. See <a href="plugins.html">Plugins · the protocol stack</a>.</div>
+</div></section>
+
+<!-- POLICY -->
+<section><div class="wrap">
+  <div class="eyebrow">Step 4 · one policy, a directed graph</div>
+  <h2>The delegation graph — start with out-edges</h2>
+  <p class="sub">Replace the two disconnected allowlists (<span class="mono">can_delegate_to</span> + <span class="mono">subagents.allow_agents</span>) with <b>one delegation policy per agent</b>. v0.1.0 ships <span class="mono">to</span> + <span class="mono">modes</span> and gates the <b>delegation work-paths</b>; <b>handover stays open by design</b> (it only moves your conversation, never farms out work). The in-edge (<span class="mono">accept_from</span>) and <span class="mono">budget</span> land later — sketched below in muted text.</p>
+  <pre class="policy"><span class="c"># agent: jim — one policy, governs the delegation work-paths (await / background / task)</span>
+<span class="k">delegation</span>:
+  <span class="k">to</span>:          [ray, max, <span class="s">"role:research"</span>, <span class="s">"*"</span>]   <span class="c"># out-edges — who Jim may ask  (v0.1.0)</span>
+  <span class="k">modes</span>:       [await, background, task]       <span class="c"># which commitments (default: all)  (v0.1.0)</span>
+  <span class="c"># --- later ---</span>
+  <span class="c"># accept_from: [mia, "owner:agents"]          # in-edge — who may ask Jim</span>
+  <span class="k">depth</span>:       <span class="n">3</span>                              <span class="c"># max recursion below me (see scale)</span>
+  <span class="c"># budget:      { concurrency: 10, tokens: 200k }  # throughput valve + cost ceiling</span></pre>
+  <p class="note" style="margin:4px 0 12px"><b>Handover is not in this policy</b> — it is ungated by design (it only re-routes your conversation). The v0.1.0 effective-delegation check is just the out-edge plus the existing single-user attribution and depth/cycle guard:</p>
+  <div class="formula">A may delegate W to B in mode M &nbsp;<b>iff ALL hold:</b><br>
+    &nbsp;&nbsp;• B in A.<b>delegation.to</b> &nbsp;<span class="c" style="color:var(--faint)">(A may ask B)  — v0.1.0</span><br>
+    &nbsp;&nbsp;• M in A.delegation.modes &nbsp;<span style="color:var(--faint)">(v0.1.0)</span><br>
+    &nbsp;&nbsp;• within <b>depth</b> &nbsp;and&nbsp; <b>no cycle</b> A&hellip;&rarr;A &nbsp;<span style="color:var(--faint)">(single user · <span class="mono">owner</span> = attribution, threaded through)</span><br>
+    &nbsp;&nbsp;<span style="color:var(--faint)">• later: A in B.<b>accept_from</b> (in-edge) &nbsp;and&nbsp; within <b>budget</b></span>
+  </div>
+  <div class="fig" style="margin-top:14px">
+  <svg viewBox="0 0 980 230" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><marker id="e" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5f6675"/></marker></defs>
+    <g font-size="12.5" text-anchor="middle">
+      <circle cx="150" cy="60" r="34" fill="#101014" stroke="#a78bfa" stroke-width="1.5"/><text x="150" y="64" fill="#a78bfa">Mia</text>
+      <circle cx="430" cy="60" r="34" fill="#101014" stroke="#cdd3de" stroke-width="1.5"/><text x="430" y="64" fill="#E2E8F0">Jim</text>
+      <circle cx="320" cy="180" r="34" fill="#101014" stroke="#34d399" stroke-width="1.5"/><text x="320" y="184" fill="#34d399">Ray</text>
+      <circle cx="560" cy="180" r="34" fill="#101014" stroke="#fbbf24" stroke-width="1.5"/><text x="560" y="184" fill="#fbbf24">Max</text>
+      <circle cx="780" cy="60" r="34" fill="#0e0e12" stroke="#5f5f6b" stroke-width="1.5" stroke-dasharray="4 3"/><text x="780" y="56" fill="#8b8b97" font-size="11">custom</text><text x="780" y="70" fill="#8b8b97" font-size="11">-x</text>
+    </g>
+    <g stroke="#5f6675" fill="none" marker-end="url(#e)">
+      <path d="M184,60 H394"/><path d="M178,84 L300,150"/><path d="M196,80 L300,156" opacity="0"/>
+      <path d="M430,96 V96 L350,150"/><path d="M460,90 L545,150"/>
+      <path d="M408,86 L340,150"/>
+    </g>
+    <g font-family="JetBrains Mono" font-size="9.5" fill="#8b8b97">
+      <text x="289" y="52">handover</text>
+      <text x="372" y="118">task</text>
+      <text x="515" y="118">await</text>
+    </g>
+    <text x="780" y="118" text-anchor="middle" fill="#5f5f6b" font-size="10.5">no in-edge →</text>
+    <text x="780" y="132" text-anchor="middle" fill="#5f5f6b" font-size="10.5">nobody can delegate to it</text>
+  </svg>
+  <div class="figcap">A visible, editable directed graph — the mental model the engine already half-encodes, finally surfaced. Edges carry their allowed modes; a node with no in-edges accepts no delegation.</div>
+  </div>
+  <div class="callout">Gate the <b>delegation work-paths</b> through this one policy — closing the two ungated work holes today (sync <span class="mono">subagent</span> and spawn/<span class="mono">task</span>). <b>Handover stays open by design</b> — it only moves your conversation, so the trust-graph governs delegation, not handover. One model, one place to reason about who may farm out work.</div>
+</div></section>
+
+<!-- SCALE & SAFETY — answers the user's question -->
+<section><div class="wrap">
+  <div class="eyebrow">Step 5 · scale &amp; safety</div>
+  <h2>Should you be able to spawn <span class="gold">hundreds</span> of subagents? Yes — through a window, within a budget</h2>
+  <p class="sub">The current hard caps (<span class="mono">max 5 concurrent</span>, <span class="mono">one level only</span>) conflate three things that should be separate controls. Pulling them apart is the answer to "why a limit at all?"</p>
+  <div class="grid g3" style="margin-top:6px">
+    <div class="card"><h3>↔ Width (fan-out) <span class="tag t-new">scale freely</span></h3><p class="note"><b>How many total.</b> Mapping over 300 files, 100 search angles, a per-customer sweep — these are legitimate. Width should be bounded by a <b>token/cost budget</b>, not a magic number. 500 workers is fine.</p></div>
+    <div class="card"><h3>⥄ Concurrency <span class="tag t-new">Max parallel agents</span></h3><p class="note"><b>How many at once.</b> The user-facing <b>"Max parallel agents"</b> setting (v0.1.0, Settings → Performance, behind the password re-type) — this <i>is</i> the concurrency window, now tunable. It does <b>not</b> cap the total; excess simply <b>queues</b> and drains through the window. Recommended from your hardware: <span class="mono">clamp(min(cores−2, RAM_GB÷1.5), 2, 16)</span> — e.g. 8 cores · 16 GB → 6 — with an over-limit warning.</p></div>
+    <div class="card" style="border-color:rgba(248,113,113,.3)"><h3>↧ Depth (recursion) <span class="tag t-part">stay bounded</span></h3><p class="note"><b>How many levels deep.</b> This is where runaway lives — keep it hard-bounded (3–5) <b>plus cycle detection</b>. Deep trees, not wide ones, are the danger.</p></div>
+  </div>
+  <div class="fig" style="margin-top:14px">
+  <svg viewBox="0 0 980 170" width="100%" role="img" font-family="Inter,sans-serif">
+    <rect x="40" y="60" width="120" height="48" rx="10" fill="#101014" stroke="#a78bfa"/><text x="100" y="89" text-anchor="middle" fill="#a78bfa" font-size="12">coordinator</text>
+    <rect x="250" y="20" width="180" height="130" rx="12" fill="none" stroke="#34d399" stroke-dasharray="5 3"/><text x="340" y="14" text-anchor="middle" fill="#34d399" font-size="10.5" font-family="JetBrains Mono">concurrency window = 10</text>
+    <g fill="#101014" stroke="#34d399"><rect x="262" y="30" width="156" height="20" rx="5"/><rect x="262" y="56" width="156" height="20" rx="5"/><rect x="262" y="82" width="156" height="20" rx="5"/><rect x="262" y="108" width="156" height="20" rx="5"/></g>
+    <text x="340" y="44" text-anchor="middle" fill="#cdd3de" font-size="10">worker · running</text><text x="340" y="70" text-anchor="middle" fill="#cdd3de" font-size="10">worker · running</text><text x="340" y="96" text-anchor="middle" fill="#cdd3de" font-size="10">worker · running</text><text x="340" y="122" text-anchor="middle" fill="#8b8b97" font-size="10">… up to 10</text>
+    <line x1="160" y1="84" x2="248" y2="84" stroke="#8b8b97"/>
+    <g fill="#0e0e12" stroke="#2a2a31"><rect x="480" y="34" width="150" height="16" rx="4"/><rect x="480" y="56" width="150" height="16" rx="4"/><rect x="480" y="78" width="150" height="16" rx="4"/><rect x="480" y="100" width="150" height="16" rx="4"/><rect x="480" y="122" width="150" height="16" rx="4"/></g>
+    <text x="555" y="20" text-anchor="middle" fill="#5f5f6b" font-size="10.5" font-family="JetBrains Mono">queued — drain as slots free (490 more)</text>
+    <line x1="430" y1="84" x2="478" y2="84" stroke="#5f6675" stroke-dasharray="3 3"/>
+    <rect x="690" y="48" width="250" height="72" rx="12" fill="#101014" stroke="var(--gold-dim)"/>
+    <text x="815" y="74" text-anchor="middle" fill="var(--gold)" font-size="11.5" font-family="JetBrains Mono">budget: 200k tokens</text>
+    <text x="815" y="98" text-anchor="middle" fill="#8b8b97" font-size="10.5">stops the whole tree when spent</text>
+  </svg>
+  <div class="figcap">Hundreds of workers, ten at a time, until the budget is spent. Exactly how a parallel map should behave — and how Omnipus's own Workflow engine already runs (concurrency ≈ cores, a high total backstop, budget-scaled).</div>
+  </div>
+  <div class="grid g2">
+    <div class="card"><h3>So why limit at all?</h3><ul class="clean">
+      <li><b>Cost</b> — each worker burns tokens; unbounded fan-out is unbounded spend.</li>
+      <li><b>Resources</b> — each is a real agent loop (RAM/CPU/file handles); this very pod OOMs if you run too many at once.</li>
+      <li><b>Provider rate-limits</b> — 429s if you blast 500 calls in parallel.</li>
+      <li><b>Cycles</b> — A→B→A must be caught, or it never ends.</li>
+      <li><b>Legibility</b> — a 10,000-node tree is unreadable; budgets keep trees comprehensible.</li>
+    </ul></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>The redesign</h3><ul class="clean">
+      <li>Lift the hard <b>count</b> cap → fan-out scales with the <b>token/cost budget</b>.</li>
+      <li>Keep a <b>concurrency window</b> (throughput valve) — now the user-tunable <b>"Max parallel agents"</b> setting (v0.1.0); queue the overflow.</li>
+      <li>Keep <b>depth</b> bounded + add <b>cycle detection</b> on the call-stack.</li>
+      <li>Replace the blunt <b>one-level ban</b> (children can't delegate at all) — too strict; it blocks a coordinator → workers → quick-lookup pattern. Depth-N + cycle + budget is safer <i>and</i> more capable.</li>
+    </ul></div>
+  </div>
+</div></section>
+
+<!-- CROSS-CUTTING -->
+<section><div class="wrap">
+  <div class="eyebrow">Step 6 · what makes it whole</div>
+  <h2>The cross-cutting rules</h2>
+  <p class="sub">These are the parts the as-is hand-waves — and where "half-baked" becomes "designed".</p>
+  <div class="grid g2">
+    <div class="card"><h3>🔐 On-behalf-of attribution</h3><p class="note">Omnipus is <b>single-user, one password</b> — no multi-user, no RBAC, no tenancy. Delegated work carries the caller's <span class="mono">owner</span> (#406) purely as <b>attribution</b>: B acts <i>for you</i>, and the <span class="mono">owner</span> stamp threads you → A → B → tools so every action traces back to the same person. Sensitive settings are guarded by re-typing the one password (sudo-style), not by per-user permissions. This spine already exists.</p></div>
+    <div class="card"><h3>🧠 Context &amp; memory flow</h3><p class="note">B receives the <b>brief</b> (explicit context) + its own <span class="mono">recall</span> — its <b>private room</b> (agent-global) plus the <b>current workspace's shared room</b> — and an optional bounded slice of A's thread. B does <b>not</b> get A's private room. Knowledge flows between agents through the <b>shared <a href="memory.html">workspace room</a></b> (the workspace's shared room), attributable by author (git-synced), never by copying private journals.</p></div>
+    <div class="card"><h3>📨 Results never lost</h3><p class="note"><span class="pill p-await">await</span> returns inline. <span class="pill p-bg">background</span> delivers on the live turn — and if the parent already finished, the result becomes a <b>notification</b> + is appended to the originating session (no silent "orphan" drop, which is a real as-is gap). <span class="pill p-task">task</span> result lands on the board + can fire a <a href="time.html">completion automation</a>.</p></div>
+    <div class="card"><h3>🔎 Observability &amp; discovery</h3><p class="note">One <b>call-tree activity view</b> unifies handovers + delegations + tasks (today they're two disconnected UIs). And a <b>capability directory</b> — agents advertise skills (Ray=research, Ava=build) — so A can pick the right target instead of guessing IDs.</p></div>
+  </div>
+</div></section>
+
+<!-- WORKED EXAMPLE -->
+<section><div class="wrap">
+  <div class="eyebrow">Step 7 · it hangs together</div>
+  <h2>A worked flow</h2>
+  <p class="sub">In a workspace (say <b>Acme</b>), the user asks <b>Jim · the Orchestrator</b> to "prepare a competitor brief and schedule a review." One request exercises every mode under the single owner (<span class="mono">owner=you</span> — attribution; the workspace is just the context it runs in).</p>
+  <ol class="clean" style="max-width:860px;line-height:1.9">
+    <li><b>You → Jim (Orchestrator)</b> — normal chat. <span class="mono">owner=you</span> is stamped on the session.</li>
+    <li><b>Jim delegates <span class="pill p-task">task</span> to Ray (Scout)</b> — "deep competitor research, cite sources." Tracked on the board, owned by Ray, <span class="mono">owner=you</span> inherited. Jim keeps talking to you.</li>
+    <li><b>Ray fans out <span class="pill p-bg">background</span> ×40</b> — one sub-agent worker per competitor/source, run through the <b>Max parallel agents</b> window, the rest queued. Findings land in the workspace's <b>shared room</b>.</li>
+    <li><b>Jim schedules the review on the platform</b> — a <span class="pill p-task">task</span> with start/due lands on the <a href="time.html">Calendar</a>, and a completion <b>automation</b> fires when the brief is done. No automation persona — scheduling and recurrence are a <b>platform surface</b>, owned by <span class="mono">owner=you</span>.</li>
+    <li><b>You want the details</b> — Jim <span class="pill p-hand">hands over</span> to Ray so you can dig into the research directly (handover is open — no policy gate). Baton moves; Jim steps back.</li>
+  </ol>
+  <div class="callout g">Every <i>delegation</i> step is governed by the one policy; handover is open by design. All stamped with <span class="mono">owner=you</span> (single user — attribution only), visible in one activity tree, with the research knowledge now in the workspace's shared room for next time. No orphaned results, no runaway fan-out.</div>
+</div></section>
+
+<!-- MIGRATION -->
+<section><div class="wrap">
+  <div class="eyebrow">Step 8 · from as-is to target</div>
+  <h2>What changes</h2>
+  <table>
+    <tr><th>As-is (<a href="delegation-audit.html">audit</a>)</th><th>Target</th><th>Effort</th></tr>
+    <tr><td>Two allowlists: <span class="mono">can_delegate_to</span> + <span class="mono">subagents.allow_agents</span></td><td>One <span class="mono">delegation</span> policy. v0.1.0: <span class="mono">to</span> · <span class="mono">modes</span> (read both for back-compat, merge); <span class="mono">accept_from</span> · budget later.</td><td><span class="lvl l-md"><i></i></span></td></tr>
+    <tr><td>Sync <span class="mono">subagent</span> &amp; spawn/<span class="mono">task</span> ungated work-paths</td><td>The two work-paths gated through the one policy; <b>handover stays open by design</b>.</td><td><span class="lvl l-lo"><i></i></span></td></tr>
+    <tr><td>No in-edge — only "who I may call"</td><td>Add <span class="mono">accept_from</span> later; effective = intersection.</td><td><span class="lvl l-md"><i></i></span></td></tr>
+    <tr><td>Hard <span class="mono">max 5</span> + <span class="mono">one-level</span> ban</td><td>Budget-scaled width · user-tunable <b>"Max parallel agents"</b> window · depth-N + cycle detection.</td><td><span class="lvl l-md"><i></i></span></td></tr>
+    <tr><td>Un-named spawn = ad-hoc anonymous clone; no default worker persona</td><td>Seed a built-in <span class="mono">general-purpose</span> worker as a <b>Sub agent</b> (separate roster tier: Primary / Sub).</td><td><span class="lvl l-md"><i></i></span></td></tr>
+    <tr><td>Tasks have <b>no ordering</b>; no plan/orchestration concept</td><td><span class="mono">blocked_by</span> dependency edges + a plan-authoring act (propose → approve → dispatch) + coordinator pattern on <span class="mono">task_status_changed</span>.</td><td><span class="lvl l-md"><i></i></span></td></tr>
+    <tr><td>Async "orphan result" can drop</td><td>Orphan → notification + appended to origin session.</td><td><span class="lvl l-lo"><i></i></span></td></tr>
+    <tr><td>No contract type, no UI</td><td>Policy in <span class="mono">contracts/</span> (Constraint #8) → generated type → <b>Delegation tab + trust-graph UI</b>.</td><td><span class="lvl l-md"><i></i></span></td></tr>
+    <tr><td>Two disconnected run UIs</td><td>One call-tree activity view + capability directory.</td><td><span class="lvl l-md"><i></i></span></td></tr>
+  </table>
+  <div class="callout b">Sequencing: surfacing the existing engine (<b>policy contract + Delegation tab + trust-graph</b>) with <span class="mono">to</span> + <span class="mono">modes</span> and closing the two ungated <b>work-path</b> holes is additive and safe — fits <a href="roadmap.html"><b>R1 (v0.1.0)</b></a>; handover stays open. The <b>"Max parallel agents"</b> setting also ships in v0.1.0; the budget redesign and <span class="mono">accept_from</span> land later. None of it depends on the multi-instance connections rock.</div>
+</div></section>
+
+<footer><div class="wrap"><p><a href="delegation-audit.html" style="color:var(--muted)">← As-is audit</a> &nbsp;·&nbsp; Next: <a href="time.html">Calendar &amp; Automations →</a></p></div></footer>
+</body></html>

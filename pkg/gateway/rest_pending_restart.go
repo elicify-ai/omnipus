@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"reflect"
 	"strings"
 
@@ -25,6 +24,13 @@ import (
 // deliberately excluded — changing them is picked up on the next request
 // without a restart.
 //
+// FR-105/FR-106: gateway.users is intentionally excluded. Auth reads
+// GetConfig() live on every request (configSnapshotMiddleware, auth.go:133),
+// and register-admin/HandleCompleteOnboarding call refreshConfigAndRewireServices
+// immediately after writing config.json — so user additions are hot and never
+// require a restart. Including gateway.users caused a spurious restart banner
+// on every fresh install (US-3 / SC-104).
+//
 // Exported so tests and future refactors can reference the canonical list
 // without duplicating it.
 var RestartGatedKeys = []config.ConfigKey{
@@ -32,8 +38,10 @@ var RestartGatedKeys = []config.ConfigKey{
 	config.SandboxAuditLog,
 	config.SandboxAllowedPaths,
 	config.SessionDMScope,
+	// Changing the bind host re-binds the listener (like the port), which can
+	// only happen safely on restart — so it is restart-gated like gateway.port.
+	config.GatewayHost,
 	config.GatewayPort,
-	config.GatewayUsers,
 	// Preview listener fields require restart because changing a listener's bind
 	// address or port mid-process races with active connections (FR-027b, MR-02).
 	config.GatewayPreviewPort,
@@ -64,14 +72,42 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := os.ReadFile(a.configPath())
+	// Load the on-disk config through the SAME path boot used to produce
+	// appliedConfig, so restart-gated fields that get a computed default at boot
+	// but are absent from config.json on disk do NOT surface as phantom diffs on
+	// a clean install (regression: session.dm_scope, gateway.preview_host,
+	// gateway.preview_port, tools.run_in_workspace.warmup_timeout_seconds).
+	//
+	// LoadConfig starts from DefaultConfig() (which seeds Session.DMScope =
+	// "per-channel-peer") and unmarshals the JSON over it with omitempty tags, so
+	// the dm_scope default is already applied here exactly as at boot. The
+	// gateway-specific normalization (preview defaults, warmup timeout) is applied
+	// separately at boot (gateway.go ~1248-1252) and is mirrored below.
+	//
+	// LoadConfig (not LoadConfigWithStore) is correct: every RestartGatedKey is a
+	// non-secret field. Post-boot the on-disk config is already at CurrentVersion,
+	// so LoadConfig takes the `case CurrentVersion` branch and does NOT defer a
+	// migration SaveConfig (only the legacy `case 0` path does) — reading is
+	// side-effect-free.
+	persistedCfg, err := config.LoadConfig(a.configPath())
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to read persisted config")
 		return
 	}
+	// Mirror the boot-time gateway normalization that produced appliedConfig.
+	if err := persistedCfg.Gateway.ValidateAndApplyPreviewDefaults(); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "failed to normalize persisted config")
+		return
+	}
+	persistedCfg.Tools.ApplyWarmupTimeoutDefault()
 
+	persistedRaw, err := json.Marshal(persistedCfg)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "failed to serialize persisted config")
+		return
+	}
 	var persisted map[string]any
-	if err := json.Unmarshal(raw, &persisted); err != nil {
+	if err := json.Unmarshal(persistedRaw, &persisted); err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to parse persisted config")
 		return
 	}
@@ -93,10 +129,6 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 	for _, key := range RestartGatedKeys {
 		pv := getAtPath(persisted, string(key))
 		av := getAtPath(applied, string(key))
-		if key == config.GatewayUsers {
-			pv = normalizeUsersForDiff(pv)
-			av = normalizeUsersForDiff(av)
-		}
 		if !reflect.DeepEqual(pv, av) {
 			diffs = append(diffs, pendingRestartEntry{
 				Key:            string(key),
@@ -149,41 +181,6 @@ func mustDeepCopyConfig(cfg *config.Config) *config.Config {
 		panic(fmt.Sprintf("pending-restart: boot snapshot failed: %v", err))
 	}
 	return snap
-}
-
-// normalizeUsersForDiff strips rotating credential fields from each user
-// record so the pending-restart diff isn't triggered by routine session
-// activity. session_token_hash and token_hash are re-issued on every login
-// and persisted immediately, while applied_value reflects the boot snapshot
-// — without this normalization, the banner fires on first login and never
-// clears. Adding/removing a user, changing username, or changing role still
-// produces a diff, since those are the structural changes that genuinely
-// require a restart. password_hash is also stripped: a password change is
-// audited via emitUserAudit and takes effect immediately on the next login,
-// it is not a restart-gated event.
-func normalizeUsersForDiff(v any) any {
-	users, ok := v.([]any)
-	if !ok {
-		return v
-	}
-	out := make([]any, 0, len(users))
-	for _, u := range users {
-		m, ok := u.(map[string]any)
-		if !ok {
-			out = append(out, u)
-			continue
-		}
-		stripped := make(map[string]any, len(m))
-		for k, val := range m {
-			switch k {
-			case "session_token_hash", "token_hash", "password_hash":
-				continue
-			}
-			stripped[k] = val
-		}
-		out = append(out, stripped)
-	}
-	return out
 }
 
 // getAtPath extracts a value from a nested map[string]any using a dotted path

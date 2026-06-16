@@ -125,7 +125,8 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
-		data, readErr := os.ReadFile(filepath.Join(ag.Workspace, "memory", "sessions", "LAST_SESSION.md"))
+		// Spec-5: last-session.md is now in <workspace>/.omnipus/last-session.md
+		data, readErr := os.ReadFile(filepath.Join(ag.Workspace, ".omnipus", "last-session.md"))
 		if readErr == nil {
 			lastSessionBytes = data
 			break
@@ -133,10 +134,10 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if lastSessionBytes == nil {
-		t.Fatalf("LAST_SESSION.md not produced within deadline; Chat calls=%d", script.callCount)
+		t.Fatalf("last-session.md not produced within deadline; Chat calls=%d", script.callCount)
 	}
 	if !strings.Contains(string(lastSessionBytes), "we shipped") {
-		t.Errorf("LAST_SESSION.md missing recap content; got:\n%s", lastSessionBytes)
+		t.Errorf("last-session.md missing recap content; got:\n%s", lastSessionBytes)
 	}
 
 	// FR-029a: recap Chat call must set max_tokens=250, extended_thinking=false,
@@ -164,19 +165,32 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		t.Errorf("recap model = %q, want claude-haiku-3 (LightModel)", script.lastModel)
 	}
 
-	// A retro file must exist too — date-directory under memory/sessions.
+	// A retro file must exist too — date-directory under .omnipus/retros/.
 	// WriteLastSession and AppendRetro run sequentially in the recap
-	// goroutine (pkg/agent/session_end.go:215-231), but the LAST_SESSION.md
+	// goroutine (pkg/agent/session_end.go), but the last-session.md
 	// poll above can see the first write before the goroutine completes
 	// the second one under heavy CI load. Poll the retro the same way.
-	sessionsDir := filepath.Join(ag.Workspace, "memory", "sessions")
+	// Spec-5: retros are now in <workspace>/.omnipus/retros/<date>/.
+	//
+	// os.IsNotExist is treated as a transient condition here: AppendRetro
+	// creates the retros/<date>/ directory atomically, so the directory may
+	// not yet exist when the goroutine is between WriteLastSession and
+	// AppendRetro. Calling t.Fatalf on ENOENT causes a spurious failure under
+	// parallel-sibling load (the goroutine has less CPU time between the two
+	// sequential writes). Only non-"not found" errors are fatal.
+	sessionsDir := filepath.Join(ag.Workspace, ".omnipus", "retros")
 	var foundRetro bool
 	var retroBytes []byte
 	retroDeadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(retroDeadline) && !foundRetro {
 		dateDirs, err := os.ReadDir(sessionsDir)
 		if err != nil {
-			t.Fatalf("read sessions dir: %v", err)
+			if !os.IsNotExist(err) {
+				t.Fatalf("read sessions dir (unexpected error): %v", err)
+			}
+			// Directory not yet created by AppendRetro — retry.
+			time.Sleep(20 * time.Millisecond)
+			continue
 		}
 		for _, d := range dateDirs {
 			if !d.IsDir() {
@@ -249,10 +263,11 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 	al.CloseSession(sessionID, "explicit")
 
 	// Wait for a retro to land (it will, via the fallback path).
+	// Spec-5: retros are now in <workspace>/.omnipus/retros/<date>/.
 	deadline := time.Now().Add(5 * time.Second)
 	var retroPath string
 	for time.Now().Before(deadline) {
-		sessionsDir := filepath.Join(ag.Workspace, "memory", "sessions")
+		sessionsDir := filepath.Join(ag.Workspace, ".omnipus", "retros")
 		dateDirs, _ := os.ReadDir(sessionsDir)
 		for _, d := range dateDirs {
 			if !d.IsDir() {
@@ -500,8 +515,9 @@ func TestBootstrapRecapPass_OneIterationPerSession(t *testing.T) {
 
 func countRetrosFor(t *testing.T, workspace, sessionID string) int {
 	t.Helper()
-	sessionsDir := filepath.Join(workspace, "memory", "sessions")
-	dates, err := os.ReadDir(sessionsDir)
+	// Spec-5: retros now live in <workspace>/.omnipus/retros/<date>/<sessionID>_retro.md
+	retrosDir := filepath.Join(workspace, ".omnipus", "retros")
+	dates, err := os.ReadDir(retrosDir)
 	if err != nil {
 		return 0
 	}
@@ -510,7 +526,7 @@ func countRetrosFor(t *testing.T, workspace, sessionID string) int {
 		if !d.IsDir() {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(sessionsDir, d.Name(), sessionID+"_retro.md")); err == nil {
+		if _, err := os.Stat(filepath.Join(retrosDir, d.Name(), sessionID+"_retro.md")); err == nil {
 			n++
 		}
 	}

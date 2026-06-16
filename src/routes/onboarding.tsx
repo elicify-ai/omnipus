@@ -49,11 +49,100 @@ const AVAILABLE_PROVIDERS = [
   { id: 'cerebras', display_name: 'Cerebras' },
 ]
 
+// Popular providers surfaced first in the onboarding selection grid to reduce
+// decision overload (Hick's law). Providers not listed here keep their original
+// order via a stable sort (see sortProvidersByPriority).
+const PROVIDER_PRIORITY = ['openai', 'anthropic', 'openrouter']
+
+// Stable sort that moves PROVIDER_PRIORITY entries to the front (in priority
+// order) and leaves every other provider in its original relative position.
+export function sortProvidersByPriority<T extends { id: string }>(list: T[]): T[] {
+  const rank = (id: string) => {
+    const i = PROVIDER_PRIORITY.indexOf(id)
+    return i === -1 ? PROVIDER_PRIORITY.length : i
+  }
+  return list
+    .map((p, index) => ({ p, index }))
+    .sort((a, b) => rank(a.p.id) - rank(b.p.id) || a.index - b.index)
+    .map(({ p }) => p)
+}
+
 const WELCOME_FEATURES = [
   { Icon: ShieldCheck, text: 'Kernel-level sandboxing — agents operate in security boundaries by default' },
   { Icon: Lightning, text: 'Zero-IPC channels — Discord, Slack, Telegram compiled into the binary' },
   { Icon: Cube, text: 'Single Go binary — no runtime dependencies, runs anywhere' },
 ]
+
+// Lightweight, dependency-free password strength heuristic. Scores on length
+// plus character-class diversity (lower / upper / digit / symbol). Returns a
+// 1–4 score with a human label and a brand token for the meter fill (or null
+// for empty input, so the meter is hidden until the user types).
+type PasswordStrengthLabel = 'Too short' | 'Weak' | 'Fair' | 'Good' | 'Strong'
+type PasswordStrengthColor =
+  | 'var(--color-error)'
+  | 'var(--color-warning)'
+  | 'var(--color-accent)'
+  | 'var(--color-success)'
+type PasswordStrength = {
+  score: 1 | 2 | 3 | 4
+  label: PasswordStrengthLabel
+  color: PasswordStrengthColor
+}
+
+// Exported for unit testing (table-driven coverage of the score boundaries).
+export function evaluatePasswordStrength(pw: string): PasswordStrength | null {
+  if (!pw) return null
+  // Passwords below the 8-char minimum are always "Too short" (score 1),
+  // regardless of character diversity, to match the validation gate. This
+  // early return also guarantees the score below is always 1–4 (never 0).
+  if (pw.length < 8) {
+    return { score: 1, label: 'Too short', color: 'var(--color-error)' }
+  }
+  let points = 1 // length >= 8 (guaranteed by the early return above)
+  if (pw.length >= 12) points += 1
+  const classes =
+    (/[a-z]/.test(pw) ? 1 : 0) +
+    (/[A-Z]/.test(pw) ? 1 : 0) +
+    (/[0-9]/.test(pw) ? 1 : 0) +
+    (/[^A-Za-z0-9]/.test(pw) ? 1 : 0)
+  if (classes >= 2) points += 1
+  if (classes >= 3) points += 1
+  const score = Math.min(points, 4) as PasswordStrength['score']
+  switch (score) {
+    case 1:
+      return { score, label: 'Weak', color: 'var(--color-error)' }
+    case 2:
+      return { score, label: 'Fair', color: 'var(--color-warning)' }
+    case 3:
+      return { score, label: 'Good', color: 'var(--color-accent)' }
+    case 4:
+      return { score, label: 'Strong', color: 'var(--color-success)' }
+  }
+}
+
+// Maps a raw upstream probe error string (e.g. "upstream models: status 401")
+// to a plain-language, actionable message for the given provider. The raw
+// string is preserved separately by the caller behind a "Technical details"
+// disclosure so debugging info is never lost. Exported for unit testing.
+export function friendlyProbeError(raw: string, providerName: string): string {
+  const r = (raw || '').toLowerCase()
+  const has = (...codes: string[]) =>
+    codes.some((c) => new RegExp(`(^|[^0-9])${c}([^0-9]|$)`).test(r))
+  if (has('401', '403') || /unauthor|forbidden|invalid api key|invalid key|rejected/.test(r)) {
+    return `That API key was rejected by ${providerName}. Double-check you copied the full key and that it's active, then retry.`
+  }
+  if (has('429') || /rate.?limit|too many requests/.test(r)) {
+    return `Rate limited by ${providerName}. Wait a moment and retry.`
+  }
+  return `Couldn't reach ${providerName}. Check your connection and the key, then retry.`
+}
+
+// Eye show/hide toggle button: pads the hit area to a 44x44 mobile tap target
+// (touch min) without enlarging the 14px icon — the icon is centered in the
+// padded box. Collapses to a snug box on sm+ (pointer). Shared by every
+// password/key field in onboarding + login.
+const EYE_TOGGLE_CLASS =
+  'absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 transition-colors'
 
 const stepVariants = {
   enter: (direction: number) => ({
@@ -87,7 +176,10 @@ function OnboardingWizard() {
   const [selectedModel, setSelectedModel] = useState('')
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [isSaving, setIsSaving] = useState(false)
-  // Admin credentials step (Step 3)
+  // Surfaced inline on the final step when completeOnboardingTransaction fails,
+  // so the user stays on the step and can retry rather than failing silently.
+  const [finishError, setFinishError] = useState('')
+  // Account step (Step 3) — single-user: one username + password
   const [adminUsername, setAdminUsername] = useState('')
   const [adminPassword, setAdminPassword] = useState('')
   const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('')
@@ -152,6 +244,7 @@ function OnboardingWizard() {
 
   const handleFinish = async () => {
     setIsSaving(true)
+    setFinishError('')
     try {
       const resp = await completeOnboardingTransaction({
         provider: {
@@ -167,10 +260,11 @@ function OnboardingWizard() {
       useAuthStore.getState().setToken(resp.token, resp.role, resp.username)
       navigate({ to: '/' })
     } catch (err) {
-      addToast({
-        message: `Could not complete setup: ${err instanceof Error ? err.message : 'Unknown error'}`,
-        variant: 'error',
-      })
+      // Surface the failure both inline (so the user stays on step 4 and can
+      // retry) and as a toast — never strand the error silently.
+      const message = `Could not complete setup: ${err instanceof Error ? err.message : 'Unknown error'}`
+      setFinishError(message)
+      addToast({ message, variant: 'error' })
     } finally {
       setIsSaving(false)
     }
@@ -231,11 +325,32 @@ function OnboardingWizard() {
         </div>
       )}
 
-      {/* Step indicator */}
-      <div className="flex items-center gap-2 mb-12 z-10" role="progressbar" aria-valuenow={step} aria-valuemin={1} aria-valuemax={4}>
-        {([1, 2, 3, 4] as Step[]).map((s) => (
+      {/* Step indicator — labeled for assistive tech so screen readers announce
+          progress. The dots themselves are decorative (aria-hidden); the
+          progressbar role + valuenow/min/max + aria-label carry the semantics,
+          and the sr-only line gives a plain-text "Step X of N" announcement. */}
+      <div className="flex flex-col items-center gap-2 mb-12 z-10">
+        {/* Visible step counter for sighted users — the dots alone are unlabeled. */}
+        <span
+          aria-hidden
+          className="text-xs font-medium tracking-wide"
+          style={{ color: 'var(--color-muted)' }}
+        >
+          Step {step} of 4
+        </span>
+        <div
+          className="flex items-center gap-2"
+          role="progressbar"
+          aria-valuenow={step}
+          aria-valuemin={1}
+          aria-valuemax={4}
+          aria-label={`Onboarding progress: step ${step} of 4`}
+        >
+          <span className="sr-only">Step {step} of 4</span>
+          {([1, 2, 3, 4] as Step[]).map((s) => (
           <motion.div
             key={s}
+            aria-hidden
             animate={{
               width: s === step ? 24 : 8,
               backgroundColor:
@@ -248,7 +363,8 @@ function OnboardingWizard() {
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             className="h-2 rounded-full"
           />
-        ))}
+          ))}
+        </div>
       </div>
 
       {/* Animated step content */}
@@ -337,6 +453,7 @@ function OnboardingWizard() {
                 providerName={providerDef?.display_name ?? selectedProvider}
                 isSaving={isSaving}
                 onFinish={handleFinish}
+                error={finishError}
               />
             </motion.div>
           )}
@@ -467,6 +584,8 @@ function ProviderStep({
   selectedModel: string
   onSelectModel: (model: string) => void
 }) {
+  // Order the rendered provider list with the popular providers first (stable).
+  const orderedProviders = sortProvidersByPriority(providers)
   // Build providerGroups for the ModelSelector — single group in onboarding (one provider at a time)
   const providerDef = providers.find((p) => p.id === selectedProvider)
   const providerGroups: ModelGroup[] =
@@ -483,11 +602,14 @@ function ProviderStep({
         <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
           Omnipus needs an AI provider to power your agents.
         </p>
+        <p className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>
+          Not sure? OpenAI or OpenRouter are good starting points.
+        </p>
       </div>
 
       {/* Provider selection grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {providers.map((p) => (
+        {orderedProviders.map((p) => (
           <button
             key={p.id}
             type="button"
@@ -546,7 +668,7 @@ function ProviderStep({
                   <button
                     type="button"
                     onClick={onToggleShowKey}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 transition-colors"
+                    className={EYE_TOGGLE_CLASS}
                     style={{ color: 'var(--color-muted)' }}
                     aria-label={showKey ? 'Hide API key' : 'Show API key'}
                   >
@@ -558,11 +680,36 @@ function ProviderStep({
                 </p>
               </div>
 
-              {/* Connection feedback */}
+              {/* Connection feedback — friendly, actionable message at the display
+                  layer; the raw upstream string is preserved behind a collapsible
+                  "Technical details" disclosure. role="alert" + aria-live make the
+                  failure announced to screen readers (a11y). */}
               {testStatus === 'error' && (
-                <div data-testid="onboarding-error" className="flex items-start gap-2 text-sm" style={{ color: 'var(--color-error)' }}>
+                <div
+                  data-testid="onboarding-error"
+                  role="alert"
+                  aria-live="assertive"
+                  className="flex items-start gap-2 text-sm"
+                  style={{ color: 'var(--color-error)' }}
+                >
                   <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
-                  <span>{testError || 'Connection failed — check your key and try again'}</span>
+                  <div className="min-w-0 space-y-1">
+                    <span>
+                      <span className="sr-only">Error: </span>
+                      {friendlyProbeError(
+                        testError,
+                        providerDef?.display_name ?? 'the provider',
+                      )}
+                    </span>
+                    {testError && (
+                      <details className="text-xs" style={{ color: 'var(--color-muted)' }}>
+                        <summary className="cursor-pointer select-none">
+                          Technical details
+                        </summary>
+                        <p className="mt-1 font-mono break-words">{testError}</p>
+                      </details>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -631,26 +778,35 @@ function ProviderStep({
 
       {/* Navigation */}
       <div className="flex items-center gap-3 pt-2">
-        <Button variant="ghost" className="gap-1.5" onClick={onBack}>
+        <Button variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
           <ArrowLeft size={14} />
           Back
         </Button>
-        <Button
-          className="flex-1 gap-2 font-headline font-bold"
-          onClick={onContinue}
-          disabled={
-            testStatus !== 'success' || !selectedModel.trim()
-          }
-        >
-          Continue
-          <ArrowRight size={14} weight="bold" />
-        </Button>
+        {(() => {
+          // Until Connect succeeds AND a model is chosen, render Continue with a
+          // clearly-disabled ghost/outline treatment (not dimmed gold, which reads
+          // as enabled on touch). Once enabled it becomes the gold default CTA, so
+          // the Connect-then-Continue sequence is visually obvious. Scoped to the
+          // onboarding CTA — does NOT touch the global button.tsx disabled style.
+          const continueEnabled = testStatus === 'success' && !!selectedModel.trim()
+          return (
+            <Button
+              variant={continueEnabled ? 'default' : 'outline'}
+              className="flex-1 gap-2 font-headline font-bold"
+              onClick={onContinue}
+              disabled={!continueEnabled}
+            >
+              Continue
+              <ArrowRight size={14} weight="bold" />
+            </Button>
+          )
+        })()}
       </div>
     </div>
   )
 }
 
-// ── Step 3: Admin Credentials ──────────────────────────────────────────────────
+// ── Step 3: Your Account ───────────────────────────────────────────────────────
 
 function AdminCredentialsStep({
   username,
@@ -680,6 +836,7 @@ function AdminCredentialsStep({
   onBack: () => void
 }) {
   const isValid = username.trim().length > 0 && password.length >= 8 && password === passwordConfirm
+  const strength = evaluatePasswordStrength(password)
   return (
     <div className="flex flex-col items-center text-center gap-6">
       <motion.div
@@ -702,10 +859,10 @@ function AdminCredentialsStep({
       >
         <h2 className="font-headline text-3xl font-bold mb-2"
           style={{ color: 'var(--color-secondary)' }}>
-          Admin Account
+          Your Account
         </h2>
         <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-          Set up your admin login for Omnipus
+          Choose a username and password — this is the one account for your Omnipus
         </p>
       </motion.div>
 
@@ -751,13 +908,41 @@ function AdminCredentialsStep({
             <button
               type="button"
               onClick={onToggleShowPassword}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 transition-colors"
+              className={EYE_TOGGLE_CLASS}
               style={{ color: 'var(--color-muted)' }}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
             </button>
           </div>
+          {/* Inline password-strength meter — length + character-class heuristic. */}
+          {strength && (
+            <div className="mt-2" data-testid="password-strength">
+              <div
+                className="flex gap-1"
+                role="meter"
+                aria-label="Password strength"
+                aria-valuenow={strength.score}
+                aria-valuemin={0}
+                aria-valuemax={4}
+                aria-valuetext={strength.label}
+              >
+                {[1, 2, 3, 4].map((seg) => (
+                  <div
+                    key={seg}
+                    className="h-1 flex-1 rounded-full transition-colors duration-200"
+                    style={{
+                      backgroundColor:
+                        seg <= strength.score ? strength.color : 'var(--color-surface-2)',
+                    }}
+                  />
+                ))}
+              </div>
+              <p className="text-[10px] mt-1 font-medium" style={{ color: strength.color }}>
+                {strength.label}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Confirm Password */}
@@ -779,7 +964,7 @@ function AdminCredentialsStep({
             <button
               type="button"
               onClick={onToggleShowPassword}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 transition-colors"
+              className={EYE_TOGGLE_CLASS}
               style={{ color: 'var(--color-muted)' }}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
@@ -799,7 +984,7 @@ function AdminCredentialsStep({
 
       {/* Navigation */}
       <div className="flex items-center gap-3 pt-2 w-full">
-        <Button variant="ghost" className="gap-1.5" onClick={onBack}>
+        <Button variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
           <ArrowLeft size={14} />
           Back
         </Button>
@@ -831,10 +1016,12 @@ function DoneStep({
   providerName,
   isSaving,
   onFinish,
+  error,
 }: {
   providerName: string
   isSaving: boolean
   onFinish: () => void
+  error?: string
 }) {
   return (
     <div className="flex flex-col items-center text-center gap-8">
@@ -867,8 +1054,20 @@ function DoneStep({
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.32, duration: 0.38 }}
-        className="w-full"
+        className="w-full space-y-3"
       >
+        {/* Inline failure — keeps the user on this step so they can retry. */}
+        {error && (
+          <div
+            role="alert"
+            data-testid="onboarding-error"
+            className="flex items-start gap-2 text-sm text-left"
+            style={{ color: 'var(--color-error)' }}
+          >
+            <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
         <Button
           className="w-full h-11 gap-2 font-headline font-bold text-base"
           onClick={onFinish}
@@ -878,6 +1077,11 @@ function DoneStep({
             <>
               <SpinnerGap size={16} className="animate-spin" />
               Loading...
+            </>
+          ) : error ? (
+            <>
+              Retry Setup
+              <ArrowRight size={16} weight="bold" />
             </>
           ) : (
             <>

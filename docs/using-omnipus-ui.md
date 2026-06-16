@@ -95,7 +95,7 @@ If you'd rather talk, connect a chat channel that supports voice. On channels li
 
 ## When an agent asks permission
 
-Your agents can do real work — run commands, touch files, automate a browser. For anything sensitive, Omnipus stops and asks **you** first. An approval card appears right in the chat showing exactly what the agent wants to do, with three buttons and a countdown of about **90 seconds**:
+Your agents can do real work — run commands, touch files, automate a browser. For anything sensitive, Omnipus stops and asks **you** first. An approval card appears right in the chat showing exactly what the agent wants to do, with three buttons and a countdown of about **5 minutes** (300 seconds):
 
 | Button | What it does |
 |--------|-------------|
@@ -155,7 +155,7 @@ The **Agents** page shows your roster as a grid of cards. Click any agent to ope
 ![The Agents roster with Mia marked as the default agent (gold star)](marketing/screenshots/agents-default-agent.png)
 *Mia is the default agent (★). Hover another card and click "Set as default" to change it.*
 
-On a profile you can always change the **Model** (which LLM powers that agent) and **Model settings** — things like temperature, max length, and top-p, plus rate limits.
+On a profile you can always change the **Model** (which LLM powers that agent) and **Model settings** — things like temperature, max length, and top-p, plus rate limits. **Switching the model mid-conversation keeps your context** — the running session carries over to the new model, so you can move a chat to a stronger (or cheaper) model without starting over.
 
 For the **five core agents** (Mia, Jim, Ava, Ray, Max), their identity is **locked** — you can't change who they are or rename them — but you *can* swap their model and tune those settings to taste. Custom agents you create are fully yours to edit.
 

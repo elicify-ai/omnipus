@@ -1,0 +1,168 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Work &amp; Memory · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  pre.tree{background:#0c0c0f;border:1px solid var(--line);border-radius:12px;padding:18px 20px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:.8rem;line-height:1.6;color:#cdd3de;margin:8px 0}
+  pre.tree .c{color:var(--faint)} pre.tree .u{color:var(--purple)} pre.tree .p{color:var(--blue)} pre.tree .a{color:var(--green)} pre.tree .g{color:var(--gold)}
+  .matrix td:first-child{font-family:'JetBrains Mono',monospace;font-size:.82rem}
+  .scope{display:flex;flex-direction:column;gap:0;max-width:600px;margin:6px auto}
+  .scope .ring{border:1px dashed;border-radius:12px;padding:12px 14px 14px;margin:-1px 0 0}
+  .rel{display:inline-block;padding:1px 7px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;border:1px solid;white-space:nowrap}
+  .r1{color:#D4AF37;border-color:#D4AF37}.r2{color:#fbbf24;border-color:#fbbf24}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html" class="active">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / <a href="spaces.html">Workspaces</a> / Agent work &amp; memory</div>
+  <div class="eyebrow">Deep dive · the room concept (spec-aligned)</div>
+  <h1>Agent work folders &amp; memory</h1>
+  <p class="lede">The locked design (<span class="mono">memory-redesign-2026-05.md</span>) is <b style="color:#fff">two rooms</b>: a <b style="color:#fff">private</b> room per agent (agent-global) and a <b style="color:#fff">shared</b> room per workspace — the spec calls this the <b style="color:#fff">"workspace room"</b> (a workspace's shared room). This page is the <b>room concept</b>; the <a href="learning.html">Learning page</a> is the self-improving engine that runs inside them. <b style="color:#fff">Today</b> memory already spans four artifacts (<span class="mono">MEMORY.md</span> · daily notes · last-session · retros) with an idle-time recap — but it's agent-global with no workspace room; the two-room <i>structure</i> + the <a href="learning.html">learning engine</a> are greenfield (bleve isn't in <span class="mono">go.mod</span>).</p>
+</div></div>
+
+<!-- THE HIERARCHY -->
+<section><div class="wrap">
+  <div class="callout b"><b>Foundational — structure now, behaviour later.</b> The room <b>structure</b> (topology + file format + tool contracts) is a <span class="rel r1">v0.1.0</span> shape tied to the <b>Workspace scoping key</b> (refactor if deferred); the append-only <b>logs</b> start in v0.1.0. The learning <b>behaviour</b> (ranking · graph · the Dreamcatcher) is <span class="rel r2">v0.2.0</span> over <b>derived, rebuildable</b> data — no migration. See <a href="learning.html">Learning</a>.</div>
+  <div class="eyebrow">The structure · two rooms</div>
+  <h2>Private (per-agent) &amp; Workspace room (per-workspace)</h2>
+  <p class="sub">Memory is scoped to a <b>room</b> (D17). Each agent has <b>one private room</b> — its own, spanning all its work (agent-global). Each workspace has <b>one shared room</b> — the spec's "workspace room" — written by its member agents and attributable by author. That's it — two rooms, one format, one set of tools.</p>
+  <div class="fig">
+  <svg viewBox="0 0 980 250" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><marker id="g" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5f6675"/></marker></defs>
+    <text x="175" y="24" text-anchor="middle" fill="#34d399" font-family="JetBrains Mono" font-size="11" letter-spacing="1">PRIVATE rooms · per-agent (agent-global)</text>
+    <g font-size="11" text-anchor="middle">
+      <rect x="40" y="36" width="270" height="46" rx="10" fill="#101014" stroke="#34d399"/><text x="175" y="56" fill="#34d399">🤖 Ray · private room</text><text x="175" y="72" fill="#8b8b97" font-size="9.5">sessions · last-session · memories · learnings</text>
+      <rect x="40" y="92" width="270" height="42" rx="10" fill="#101014" stroke="#34d399"/><text x="175" y="111" fill="#34d399">🤖 Mia · private room</text><text x="175" y="125" fill="#8b8b97" font-size="9.5">agent-global — spans every workspace she works</text>
+      <rect x="40" y="144" width="270" height="42" rx="10" fill="#101014" stroke="#D4AF37"/><text x="175" y="163" fill="#D4AF37">🤝 Assistant · private room</text><text x="175" y="177" fill="#8b8b97" font-size="9.5">agent-global ⇒ "knows you across workspaces"</text>
+    </g>
+    <text x="660" y="24" text-anchor="middle" fill="#60a5fa" font-family="JetBrains Mono" font-size="11" letter-spacing="1">WORKSPACE rooms · one shared room per workspace</text>
+    <g font-size="11" text-anchor="middle">
+      <rect x="400" y="36" width="240" height="64" rx="10" fill="#101014" stroke="#a78bfa"/><text x="520" y="58" fill="#a78bfa">📁 My Workspace — Assistant's home</text><text x="520" y="76" fill="#8b8b97" font-size="9.5">shared room · email/cal · your tasks</text><text x="520" y="90" fill="#8b8b97" font-size="9">no sessions / last-session (D19)</text>
+      <rect x="400" y="108" width="240" height="44" rx="10" fill="#101014" stroke="#60a5fa"/><text x="520" y="128" fill="#60a5fa">📁 Acme</text><text x="520" y="143" fill="#8b8b97" font-size="9.5">shared room · Ray + Mia write here</text>
+      <rect x="400" y="160" width="240" height="40" rx="10" fill="#101014" stroke="#60a5fa" opacity=".7"/><text x="520" y="184" fill="#60a5fa">📁 Q3 Launch …</text>
+    </g>
+    <g stroke="#5f6675" fill="none" marker-end="url(#g)" opacity=".7"><path d="M310,118 C360,118 370,128 398,128"/><path d="M310,60 C360,60 372,168 398,176"/></g>
+    <rect x="690" y="60" width="250" height="120" rx="12" fill="#0e0e12" stroke="#23232a"/>
+    <text x="815" y="84" text-anchor="middle" fill="#cdd3de" font-size="12" font-family="Outfit" font-weight="700">recall() composes</text>
+    <text x="815" y="108" text-anchor="middle" fill="#34d399" font-size="11">the agent's private room</text>
+    <text x="815" y="126" text-anchor="middle" fill="#8b8b97" font-size="11">+</text>
+    <text x="815" y="144" text-anchor="middle" fill="#60a5fa" font-size="11">the current workspace's room</text>
+    <text x="815" y="168" text-anchor="middle" fill="#5f5f6b" font-size="9.5">(both, when project-bound — D18)</text>
+  </svg>
+  <div class="figcap">Two rooms. An agent writes to its private room by default; in a workspace session it writes to that workspace's shared room (D18). The Assistant's agent-global private room is what lets it "know you" everywhere — no special store needed.</div>
+  </div>
+</div></section>
+
+<!-- THE CRUX -->
+<section><div class="wrap">
+  <div class="eyebrow">The key distinction</div>
+  <h2>Persona is global; memory lives in rooms</h2>
+  <p class="sub">This untangles "agents are shared but memory must be scoped." Separate the reusable agent from its memory.</p>
+  <div class="grid g2" style="margin-top:6px">
+    <div class="card"><h3>🎭 Agent <b>persona</b> — global, reusable</h3>
+      <p>The identity: <span class="mono">AGENT.md</span> · <span class="mono">SOUL.md</span> (prompt) · <span class="mono">HEARTBEAT.md</span> · skills · model · tools. One "Mia" persona, available to everyone. <b>Not memory.</b> Lives in the agent registry (core agents, or user-owned custom).</p>
+    </div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>🧠 Agent <b>memory</b> — in the rooms</h3>
+      <p>What the agent has learned: its <b>private room</b> (its own, agent-global) + the <b>workspace rooms</b> it's a member of. The persona is the same everywhere; the memory differs by room. <span class="mono">remember/recall/retrospective</span> are the only writers/readers.</p>
+    </div>
+  </div>
+  <div class="callout r"><b>Today (verified):</b> agent memory already spans <b>four artifacts</b> under <span class="mono">agents/&lt;id&gt;/memory/</span> — long-term <span class="mono">MEMORY.md</span>, daily notes, <span class="mono">LAST_SESSION.md</span>, and per-session <b>retros</b> — with an idle-time LLM <b>recap</b> (<span class="mono">session_end.go</span>). What's missing is the <i>structure</i>: it's <b style="color:var(--red)">agent-global (no workspace room), no ranking/graph, no cross-session distillation.</b> The two-room design + the bleve/3-tier learning engine are the greenfield part — see the <a href="learning.html">Learning page</a>; this page is the rooms.</div>
+  <div class="callout"><b>Memory has two halves.</b> <b>Declarative</b> memory — the <b>rooms</b> on this page (facts · learnings · sessions). <b>Procedural</b> memory — the <b>skills the agent authors &amp; refines</b>, its editable how-to. The detail lives on <a href="learning.html">Learning</a>.</div>
+</div></section>
+
+<!-- TWO ROOMS TABLE -->
+<section><div class="wrap">
+  <div class="eyebrow">The two rooms · precisely</div>
+  <h2>Same format, two scopes</h2>
+  <table class="matrix">
+    <tr><th>Room</th><th>Path</th><th>Holds</th><th>Sharing</th></tr>
+    <tr><td><b class="green">Private</b></td><td>agents/&lt;id&gt;/.omnipus/</td><td>sessions · last-session.md · memories · learnings</td><td>the agent's own — <b>agent-global</b>, spans all its work</td></tr>
+    <tr><td><b class="blue">Workspace room</b></td><td>&lt;project&gt;/.omnipus/</td><td>memories · learnings only — <b>no</b> sessions/last-session (D19)</td><td>a workspace's shared room · attributable by <span class="mono">author</span> · git-syncable</td></tr>
+  </table>
+  <div class="grid g2" style="margin-top:10px">
+    <div class="card"><h3>Default scope follows context (D18)</h3><ul class="clean">
+      <li>Workspace session → <span class="mono">remember()</span> writes the <b>project</b> room</li>
+      <li>Otherwise → writes the agent's <b>private</b> room</li>
+      <li>Explicit <span class="mono">scope=private|project</span> overrides</li>
+      <li><span class="mono">recall</span> searches <b>both</b> when project-bound (<span class="mono">room=private|project|both</span>)</li>
+    </ul></div>
+    <div class="card"><h3>Multi-agent workspace rooms</h3><ul class="clean">
+      <li>Three agents, one workspace room; each keeps its private room</li>
+      <li><span class="mono">author</span> is set on create, never mutated — ownership is informational</li>
+      <li>Counters via append-only <span class="mono">counters.jsonl</span> (no frontmatter contention); body edits via per-file flock + etag</li>
+      <li><b>git is the sync layer</b> — commit <span class="mono">&lt;project&gt;/.omnipus/memories/*.md</span>; no server, no merge daemon</li>
+    </ul></div>
+  </div>
+</div></section>
+
+<!-- RECALL CHAIN -->
+<section><div class="wrap">
+  <div class="eyebrow">How recall composes</div>
+  <h2>recall() = private room + current workspace room</h2>
+  <p class="sub">Two rooms compose; bleve ranks across them, results scope-tagged. The Assistant — your cross-workspace personal agent — additionally reads across the workspace rooms you own (its agent-global private room already spans your work).</p>
+  <div class="scope">
+    <div class="ring" style="border-color:var(--blue)"><b class="blue">Current workspace room</b> <span class="muted">— shared: "Acme: JWT in transit, OAuth at the boundary"</span>
+      <div class="ring" style="border-color:var(--green)"><b class="green">The agent's private room</b> <span class="muted">— agent-global: "I drafted the migration in scratch/v2"</span></div>
+    </div>
+  </div>
+  <p class="note" style="text-align:center;margin-top:8px">+ a thin <b>persona/skills</b> layer (the agent definition) sits outside memory · search is <a href="learning.html">bleve BM25 + graph + MOCs, no embeddings</a></p>
+  <div class="grid g2" style="margin-top:10px">
+    <div class="card"><h3>Worker · Ray on Acme</h3><p class="note">recall pulls Ray's private room (agent-global) + the Acme workspace room (shared with the team). Switch Ray to My Workspace → his private room is the same (it's agent-global), the workspace room is now My Workspace's.</p></div>
+    <div class="card"><h3>Personal assistant · Sam</h3><p class="note">The Assistant lives in Sam's My Workspace; its <b>agent-global private room</b> holds your conversations with it across everything — so it "knows you" for free. It also reads the workspace rooms you own when it acts there. No special memory store; just the two-room model + a wide read.</p></div>
+  </div>
+</div></section>
+
+<!-- FILE LAYOUT -->
+<section><div class="wrap">
+  <div class="eyebrow">Concrete</div>
+  <h2>The on-disk layout</h2>
+  <p class="sub">Per spec: the private room is <span class="mono">agents/&lt;id&gt;/.omnipus/</span> (agent-global); the workspace room is <span class="mono">&lt;project&gt;/.omnipus/</span> (the workspace dir, inside the workspace tree so git can sync it). All workspaces are the single user's.</p>
+  <pre class="tree"><span class="c"># secrets live OUTSIDE the data tree (sandbox A2)</span>
+$HOME/.omnipus-keys/&lt;install&gt;.key      <span class="c">master.key</span>
+
+$OMNIPUS_DATA/
+├─ <span class="a">agents/&lt;agent_id&gt;/</span>               <span class="c">THE AGENT</span>
+│  ├─ <span class="g">AGENT.md SOUL.md HEARTBEAT.md skills/</span>   <span class="c">persona — reusable identity, NOT memory</span>
+│  ├─ .omnipus/                      <span class="c">PRIVATE ROOM — per-agent, agent-global (spec)</span>
+│  │  ├─ sessions/&lt;id&gt;/&lt;date&gt;.jsonl   <span class="c">firehose (90d retention)</span>
+│  │  ├─ last-session.md             <span class="c">auto-injected continuity (D4)</span>
+│  │  ├─ memories/&lt;id&gt;.md  learnings/  <span class="c">remember() / retrospective()</span>
+│  │  └─ .index/ bleve/ edges.jsonl counters.jsonl tags.json minhash.jsonl
+│  └─ workspace/                     <span class="c">private scratch — RW only this agent</span>
+└─ <span class="p">workspaces/</span>                       <span class="c">your workspaces (single user)</span>
+   ├─ <span class="p">personal/</span>                     <span class="c">My Workspace — the Assistant's home (default)</span>
+   │  ├─ .omnipus/ memories/ learnings/ .index/   <span class="c">PROJECT ROOM (shared, no sessions)</span>
+   │  ├─ tasks/  connections/  &lt;workspace files…&gt;
+   └─ acme/ …                        <span class="c">same shape — a named workspace</span></pre>
+  <div class="grid g2">
+    <div class="card"><h3>Storage tiers (D3/D4)</h3><ul class="clean">
+      <li><span class="mono">memories/</span> — semantic, via <span class="mono">remember()</span></li>
+      <li><span class="mono">learnings/</span> — reflective, via <span class="mono">retrospective()</span> or auto-recap</li>
+      <li><span class="mono">sessions/</span> — episodic firehose (every turn)</li>
+      <li><span class="mono">last-session.md</span> — the <b>only</b> thing auto-injected each session</li>
+    </ul></div>
+    <div class="card"><h3>Work-folder (sandbox) rules</h3><ul class="clean">
+      <li>Cwd = the current <b>workspace</b> folder; private scratch in the agent's <b>workspace dir</b></li>
+      <li>Kernel grant per turn: RW agent-private + RW current workspace + R-only system</li>
+      <li>Workspace room has <b>no</b> sessions/last-session — continuity is the agent's (D19)</li>
+      <li>The learning engine (loops · Dreamcatcher · no-embeddings) → <a href="learning.html">Learning</a></li>
+    </ul></div>
+  </div>
+</div></section>
+
+<!-- OPEN -->
+<section><div class="wrap">
+  <div class="eyebrow">Settle these</div>
+  <h2>Open questions</h2>
+  <ul class="clean" style="max-width:860px">
+    <li><b>"About you" facts:</b> these live in the Assistant's <b>private room</b> (it's the agent you talk to in your My Workspace) — not a separate user tier. Any agent may still write a My Workspace memory with explicit <span class="mono">scope=project</span>.</li>
+    <li><b>Custom-agent personas:</b> global registry with an <span class="mono">owner</span> field (today's <span class="mono">AgentConfig.OwnerUsername</span>) — unchanged.</li>
+    <li><b>Migration:</b> the legacy flat <span class="mono">agents/&lt;id&gt;/memory/MEMORY.md</span> is <b>not migrated</b> (fresh-build, D2); the new room layout starts empty.</li>
+  </ul>
+</div></section>
+
+<footer><div class="wrap"><p>Grounded in <span class="mono">memory-redesign-2026-05.md</span> (D1–D22 · two rooms D17 · scope-follows-context D18 · no last-session in workspace rooms D19 · no embeddings D20) and <span class="mono">sandbox-redesign-2026-05.md</span> (two-room workspace · kernel per-agent scope) + the #406 owner spine. &nbsp; <a href="learning.html" style="color:var(--muted)">Learning engine →</a> · <a href="spaces.html" style="color:var(--muted)">← Workspaces</a></p></div></footer>
+</body></html>

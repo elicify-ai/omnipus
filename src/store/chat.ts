@@ -7,7 +7,9 @@ import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay }
 import { queryClient } from '@/lib/queryClient'
 import type { Message, ToolCall } from '@/lib/api'
 import type { WsReceiveFrame, WsExecApprovalRequestFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
-import type { ToolResultRef, TruncatedResult } from '@/lib/api/generated/asyncapi-types'
+import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame, ExecApprovalExpiredFrame } from '@/lib/api/generated/asyncapi-types'
+import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
+import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { registerSyncChatForeground } from '@/store/session'
 
@@ -435,6 +437,15 @@ interface ChatStore {
   respondToApproval: (id: string, decision: 'allow' | 'deny' | 'always') => void
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
 
+  // C8: defensively clear in-flight/streaming state for every session bucket.
+  // Called when the stream is terminated by something OTHER than a clean done
+  // frame (WS close/disconnect, a terminal error frame, an error event). Without
+  // this, a turn whose terminal frame is missed would leave isStreaming=true
+  // forever — the composer stays disabled and the "thinking" spinner never
+  // resolves (the "stuck chat stream" wedge). Marks any still-streaming
+  // assistant message as 'done' so AssistantUI stops rendering it as running.
+  clearStreamingState: () => void
+
   handleFrame: (frame: WsReceiveFrame) => void
 }
 
@@ -496,7 +507,7 @@ const EMPTY_BUCKET = emptySessionState()
 const SESSION_SCOPED_FRAME_TYPES = new Set([
   'token', 'done', 'tool_call_start', 'tool_call_result',
   'subagent_start', 'subagent_end', 'replay_message', 'replay_done',
-  'agent_switched', 'task_status_changed', 'exec_approval_request',
+  'agent_switched', 'task_status_changed', 'exec_approval_request', 'exec_approval_expired',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
 ])
@@ -1066,6 +1077,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
         clearTimeout(rateLimitClearTimers[sid])
         delete rateLimitClearTimers[sid]
       }
+      // Cancel any pending deferred replay-clear timer for this session, or it
+      // later fires withBucket(sid, {isReplaying:false}) on the freshly-reset
+      // bucket. Mirror the sibling timer maps above.
+      if (replayingClearTimers[sid] != null) {
+        clearTimeout(replayingClearTimers[sid])
+        delete replayingClearTimers[sid]
+      }
       sawReplayMessageThisTurn[sid] = false
       withBucket(sid, () => emptySessionState())
     },
@@ -1397,6 +1415,65 @@ export const useChatStore = create<ChatStore>((set, get) => {
       })
     },
 
+    clearStreamingState: () => {
+      // Sweep every bucket — not just the active one — because a background
+      // session can be mid-stream when the socket drops. Any bucket left with
+      // isStreaming=true would wedge if the user switches to it later.
+      set((state) => {
+        let mutated = false
+        const sessionsById: Record<string, SessionChatState> = {}
+        for (const [sid, bucket] of Object.entries(state.sessionsById)) {
+          // Mark any still-streaming assistant message as done and flip any
+          // running tool calls to cancelled so nothing renders as in-flight.
+          const order = bucket.messageOrder
+          let needsMsgFix = false
+          for (let i = order.length - 1; i >= 0; i--) {
+            const m = bucket.messagesById[order[i]]
+            if (m?.role === 'assistant' && (m.isStreaming || m.status === 'streaming')) {
+              needsMsgFix = true
+              break
+            }
+          }
+          const hasRunningTools = Object.values(bucket.toolCalls).some((tc) => tc.status === 'running')
+          if (!bucket.isStreaming && !needsMsgFix && !hasRunningTools && bucket.cancelStage === null) {
+            sessionsById[sid] = bucket
+            continue
+          }
+          mutated = true
+          const next: SessionChatState = { ...bucket, isStreaming: false, cancelStage: null }
+          if (needsMsgFix) {
+            const messagesById = { ...bucket.messagesById }
+            for (let i = order.length - 1; i >= 0; i--) {
+              const m = messagesById[order[i]]
+              if (m?.role === 'assistant' && (m.isStreaming || m.status === 'streaming')) {
+                // Preserve an already-'interrupted' status; otherwise close as 'done'.
+                messagesById[order[i]] = {
+                  ...m,
+                  isStreaming: false,
+                  status: m.status === 'interrupted' ? 'interrupted' : 'done',
+                } as ChatMessage
+              }
+            }
+            next.messagesById = messagesById
+          }
+          if (hasRunningTools) {
+            const toolCalls = { ...bucket.toolCalls }
+            for (const key of Object.keys(toolCalls)) {
+              if (toolCalls[key].status === 'running') {
+                toolCalls[key] = { ...toolCalls[key], status: 'cancelled' }
+              }
+            }
+            next.toolCalls = toolCalls
+          }
+          sessionsById[sid] = next
+        }
+        if (!mutated) return {}
+        const activeSid = getActiveSid()
+        const fg = (activeSid ? sessionsById[activeSid] : null) ?? EMPTY_BUCKET
+        return { sessionsById, ...bucketToForeground(fg) }
+      })
+    },
+
     respondToApproval: (id, decision) => {
       const { connection } = useConnectionStore.getState()
       if (!connection) {
@@ -1460,6 +1537,22 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       // HIGH-2: reset unknown-frame counter on every known-good frame.
       unknownFrameCount = 0
+
+      // I1: advance the reconnect `since` cursor for ANY frame that carries a
+      // sequence timestamp — not only replay_message. The cursor is sent as
+      // `since` on attach_session so the gateway skips frames the SPA already
+      // saw; if it only advanced on replay_message, every replayed/live frame
+      // that DID carry a timestamp would be re-replayed on the next reconnect.
+      // advanceEventTime is monotonic (only moves forward), so this is safe to
+      // run before the per-frame reducer regardless of dedup/early-return paths.
+      {
+        const frameTimestamp = (frame as { timestamp?: string }).timestamp
+        if (frameTimestamp && targetSid) {
+          withBucket(targetSid, (b) => ({
+            lastReceivedEventTime: advanceEventTime(b.lastReceivedEventTime, frameTimestamp),
+          }))
+        }
+      }
 
       switch (frame.type) {
         case 'session_started': {
@@ -1631,14 +1724,20 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   msg.isStreaming = false
                   msg.status = msg.status === 'interrupted' ? 'interrupted' : 'done'
                 }
-                // End-of-replay bake: gateway emits tool_call_start + tool_call_result
-                // frames for each persisted ToolCall during replay (pkg/gateway/replay.go),
-                // and the last turn's done frame is the only signal that those frames are
-                // complete. The replay_message bake (~1964) only fires when a *next*
-                // replay_message arrives, so tool calls in the final assistant entry
-                // are never baked onto message.tool_calls — VirtualAssistantMessageRow
-                // then renders no tool block / no iframe.
-                if (wasReplaying && lastMsgId && draft.toolCallOrder.length > 0) {
+                // Bake any pending tool calls into the last assistant message so
+                // VirtualAssistantMessageRow can render them from message.tool_calls.
+                // This covers two cases:
+                //   1. Replay: replay_message coalesces into the empty placeholder and
+                //      returns before baking; done is the only signal that all frames
+                //      for the final entry are complete.
+                //   2. Live turns: tool calls stay in toolCallOrder until the next
+                //      sendMessage bakes them, causing them to disappear the moment
+                //      isStreaming goes false and the message moves to the historical
+                //      renderer (VirtualAssistantMessageRow reads message.tool_calls, not
+                //      the bucket live map). Confirmed: ChatScreen.tsx switches to
+                //      VirtualAssistantMessageRow at isStreaming=false, so baking at
+                //      done is required for live turns too (hotfix/v0.1.1 aff2caa).
+                if (lastMsgId && draft.toolCallOrder.length > 0) {
                   const baked = draft.toolCallOrder
                     .filter((id) => draft.toolCalls[id])
                     .map((id) => {
@@ -1671,6 +1770,41 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         case 'error':
           {
+            // C8: a terminal error frame must always resolve the in-flight turn.
+            // When the frame can't be routed to a bucket (no active session /
+            // missing session_id in production), fall back to a global sweep so
+            // no bucket is left wedged in a streaming state.
+            if (!targetSid) {
+              const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
+              if (!isCancelAck) {
+                useConnectionStore.getState().setConnectionError(frame.message)
+              }
+              get().clearStreamingState()
+              break
+            }
+            // An error frame arriving during replay must also clear isReplaying —
+            // otherwise the session is permanently wedged behind the "Loading
+            // session history…" overlay with a disabled composer, and (unlike the
+            // done path) nothing else ever clears it. Mirror the done-frame logic:
+            // clear immediately once MIN_REPLAY_DISPLAY_MS has elapsed, otherwise
+            // defer to a timer (cancelling any stale one first).
+            const sid = targetSid
+            const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
+            const replayElapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
+            const MIN_REPLAY_DISPLAY_MS = 750
+            const clearReplayingNow = wasReplaying && replayElapsed >= MIN_REPLAY_DISPLAY_MS
+            if (wasReplaying) {
+              sawReplayMessageThisTurn[sid] = false
+              if (!clearReplayingNow) {
+                if (replayingClearTimers[sid]) {
+                  clearTimeout(replayingClearTimers[sid])
+                }
+                replayingClearTimers[sid] = setTimeout(() => {
+                  delete replayingClearTimers[sid]
+                  withBucket(sid, () => ({ isReplaying: false }))
+                }, MIN_REPLAY_DISPLAY_MS - replayElapsed)
+              }
+            }
             withBucket(targetSid, (b) => {
               const order = b.messageOrder
               let lastMsgId: string | null = null
@@ -1693,6 +1827,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   msg.isStreaming = false
                   msg.status = resolvedStatus
                   draft.isStreaming = false
+                  if (clearReplayingNow) {
+                    draft.isReplaying = false
+                  }
                 }) as Partial<SessionChatState>
               }
               // No assistant message — push one. Only show an error toast for non-cancel errors.
@@ -1709,7 +1846,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 isStreaming: false,
               }
               const msgs = [...getMessages(b), errMsg]
-              return { ...applyMessageArray(msgs, b), isStreaming: false }
+              return {
+                ...applyMessageArray(msgs, b),
+                isStreaming: false,
+                ...(clearReplayingNow ? { isReplaying: false } : {}),
+              }
             })
           }
           break
@@ -2014,6 +2155,29 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
           break
 
+        // Server-side approval timeout: remove from pendingApprovals and notify the user
+        case 'exec_approval_expired': {
+          const expiredFrame = frame as ExecApprovalExpiredFrame
+          let removed = false
+          if (targetSid) {
+            withBucket(targetSid, (b) => {
+              const prevLength = b.pendingApprovals.length
+              const nextApprovals = b.pendingApprovals.filter((a) => a.id !== expiredFrame.id)
+              if (nextApprovals.length < prevLength) {
+                removed = true
+              }
+              return { pendingApprovals: nextApprovals }
+            })
+          }
+          if (removed) {
+            useUiStore.getState().addToast({
+              message: 'Approval timed out — the tool call was denied automatically.',
+              variant: 'error',
+            })
+          }
+          break
+        }
+
         case 'task_status_changed':
           queryClient.invalidateQueries({ queryKey: ['tasks'] })
           break
@@ -2045,7 +2209,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const replayAgentId = replayFrame.agent_id
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
-              draft.lastReceivedEventTime = advanceEventTime(draft.lastReceivedEventTime, messageTimestamp)
+              // Cursor advancement is handled centrally before the switch (I1);
+              // no per-case advance needed here.
               const msgs = getMessages(b)
               // Reconnection dedup: prefer server-assigned id match when present;
               // fall back to (content + role + timestamp) tuple. Content-only dedup
@@ -2079,11 +2244,50 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
                 }
                 if (lastMsgId && (draft.messagesById[lastMsgId].content ?? '') === '') {
+                  // Bake any tool calls that belong to this turn BEFORE taking the early
+                  // return. Without this, toolCallOrder accumulates across turns and ends
+                  // up baked onto the wrong (later) assistant message.
+                  if (draft.toolCallOrder.length > 0) {
+                    const baked = draft.toolCallOrder
+                      .filter((id) => draft.toolCalls[id])
+                      .map((id) => {
+                        const tc = draft.toolCalls[id]
+                        return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
+                      })
+                    const existing = draft.messagesById[lastMsgId].tool_calls ?? []
+                    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                    for (const tc of baked) mergedById.set(tc.id, tc)
+                    draft.messagesById[lastMsgId].tool_calls = Array.from(mergedById.values())
+                    draft.toolCalls = {}
+                    draft.toolCallOrder = []
+                    draft.textAtToolCallStart = {}
+                  }
                   const m = draft.messagesById[lastMsgId]
                   m.content = text
                   m.status = 'done'
                   m.isStreaming = false
                   if (replayAgentId) m.agentId = replayAgentId
+                  // Coalesce path: this empty placeholder was created by the
+                  // turn's own tool_call_start frames, so any pending live tool
+                  // calls belong to THIS assistant. Bake them in before the early
+                  // return — otherwise toolCallOrder leaks into the next turn and
+                  // all calls get attributed to the LAST assistant at `done`.
+                  // Mirrors the non-coalesce bake path immediately below.
+                  if (draft.toolCallOrder.length > 0) {
+                    const baked = draft.toolCallOrder
+                      .filter((id) => draft.toolCalls[id])
+                      .map((id) => {
+                        const tc = draft.toolCalls[id]
+                        return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
+                      })
+                    const existing = m.tool_calls ?? []
+                    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                    for (const tc of baked) mergedById.set(tc.id, tc)
+                    m.tool_calls = Array.from(mergedById.values())
+                    draft.toolCalls = {}
+                    draft.toolCallOrder = []
+                    draft.textAtToolCallStart = {}
+                  }
                   return
                 }
                 // T1.10: Bake any live tool calls from the previous turn.
@@ -2233,6 +2437,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }, 60_000)
           break
         }
+        case 'whatsapp_pairing': {
+          // #283: global (not session-tied) — record QR/status for the Channels
+          // config panel. Accessed via getState() at frame time (not a hook
+          // subscription) so chatStore stays decoupled from the pairing store.
+          useWhatsAppPairingStore
+            .getState()
+            .apply(frame as WhatsAppPairingFrame)
+          break
+        }
+
+        case 'notification': {
+          // #264: global (not session-tied) — push into the dedicated
+          // Notifications store backing the header notification center. Mirrors
+          // the #283 whatsapp_pairing case: accessed via getState() at frame
+          // time so chatStore stays decoupled from the notifications store.
+          useNotificationsStore.getState().apply(frame as NotificationFrame)
+          break
+        }
 
         case 'tool_approval_required':
           useToolApprovalStore.getState().enqueue(frame)
@@ -2265,6 +2487,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // the stop-button label in real time. The done handler (above) clears
           // it back to null once the turn is definitively over.
           withBucket(targetSid, () => ({ cancelStage: frame.stage }))
+          break
+
+        case 'exec_approval_response_ack':
+          // I2: the gateway acknowledges receipt of the user's exec-approval
+          // response (respondToApproval already updated the pending entry
+          // optimistically). This is a transport-level ack with no UI effect —
+          // explicitly no-op so it does NOT fall through to the unknown-frame
+          // toast. The unknownFrameCount reset above already happened.
+          break
+
+        case 'device_pairing_request':
+          // I2: a new device is requesting pairing approval. DevicesSection
+          // polls the ['devices'] query while open; invalidating it surfaces the
+          // new pending request immediately instead of waiting for the next poll.
+          queryClient.invalidateQueries({ queryKey: ['devices'] })
           break
 
         default:

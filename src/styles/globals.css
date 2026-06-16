@@ -42,7 +42,8 @@
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   /* Spacing scale additions */
-  --spacing-sidebar: 256px;
+  /* Clamp so a pinned/overlaid sidebar never exceeds the viewport on small screens */
+  --spacing-sidebar: min(256px, 80vw);
 
   /* Animation */
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -56,7 +57,10 @@
 }
 
 html {
-  font-size: 16px;
+  /* FR-108: root font-size driven by user preference (12–20px, clamped).
+     When --user-font-size is unset the fallback is 14px (product default).
+     This rescales the entire rem scale — Tailwind v4 spacing/sizing/text. */
+  font-size: clamp(12px, var(--user-font-size, 14px), 20px);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -94,4 +98,32 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-muted);
+}
+
+/* ------------------------------------------------------------------ */
+/* Safe-area handling (viewport-fit=cover)                             */
+/* With viewport-fit=cover the app shell extends edge-to-edge under    */
+/* notches and home indicators. Pad the shell chrome with             */
+/* env(safe-area-inset-*) so content is never hidden. The sidebar      */
+/* applies its own insets inline (see Sidebar.tsx). Rules are scoped   */
+/* to the app-shell root via the [data-app-shell] marker (see          */
+/* AppShell.tsx) so a future nested <header>/<main> can never inherit  */
+/* notch padding from a fragile global descendant match.              */
+/*                                                                     */
+/* The bottom home-indicator inset is applied directly to each screen's*/
+/* scroll container (pb-[env(safe-area-inset-bottom)]), NOT to <main>: */
+/* every screen body is `absolute inset-0 overflow-y-auto`, sized to   */
+/* <main>'s padding box, so padding on <main> is overlapped by the     */
+/* child and is a no-op. The scroll container is the real fix.         */
+/* ------------------------------------------------------------------ */
+
+/* App-shell root reserves the right notch inset for the whole shell. */
+[data-app-shell] {
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Top bar — clear the top notch (max() keeps the existing py-3 when
+   there is no notch). */
+[data-app-shell] > div > header {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
 }

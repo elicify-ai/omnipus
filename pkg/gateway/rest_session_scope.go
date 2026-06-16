@@ -103,7 +103,7 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if reloadErr := a.awaitReload(); reloadErr != nil {
+	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
 		if a.agentLoop != nil {
 			if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
 				if err := audit.EmitSecuritySettingChange(

@@ -1,0 +1,116 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools, Providers &amp; Multimodal · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  .rel{display:inline-block;padding:1px 8px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap}
+  .r1{color:#D4AF37;border-color:#D4AF37}.r2{color:#fbbf24;border-color:#fbbf24}.rl{color:#60a5fa;border-color:#60a5fa}
+  table.cap td:first-child{font-weight:600;color:#E2E8F0;white-space:nowrap}
+  table.cap td.e{color:#cdd3de}
+  pre.wire{background:#0c0c0f;border:1px solid var(--line);border-radius:12px;padding:16px 18px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:.78rem;line-height:1.5;color:#cdd3de;margin:8px 0}
+  pre.wire .h{color:var(--gold)} pre.wire .m{color:var(--muted)} pre.wire .g{color:var(--green)}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html" class="active">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Tools, Providers &amp; Multimodal</div>
+  <div class="eyebrow">Capabilities · grounded in code</div>
+  <h1>Tools, Providers &amp; Multimodal</h1>
+  <p class="lede">Agents reach the world through <b style="color:#fff">tools</b> — search, image, voice. The key pattern, already half-built: <b style="color:#fff">every external tool has a pluggable provider</b> you pick in Settings. Web search and voice-in already work this way; we standardize it and add the missing pieces — <b style="color:#fff">agent voices, image generation</b>, and a provider-picker UI.</p>
+</div></div>
+
+<!-- LANDSCAPE -->
+<section><div class="wrap">
+  <div class="eyebrow">What exists vs. what's new (verified)</div>
+  <h2>The grounded landscape</h2>
+  <table class="cap">
+    <tr><th>Capability</th><th>Status</th><th>Evidence</th></tr>
+    <tr><td>Web search</td><td><span class="tag t-have">multi-provider</span></td><td class="e"><span class="mono">WebSearchTool</span> (<span class="mono">web.go:888</span>) behind a <span class="mono">SearchProvider</span> interface — <b>Brave · Tavily · Perplexity · SearXNG · GLM · Baidu</b>, SSRF-guarded. + <span class="mono">web_fetch</span>.</td></tr>
+    <tr><td>Voice-in (STT)</td><td><span class="tag t-have">multi-provider · wired</span></td><td class="e"><span class="mono">pkg/voice/</span> <span class="mono">Transcriber</span> — <b>Groq/Whisper · ElevenLabs · audio-model</b>; <span class="mono">DetectTranscriber</span> picks one; wired to the loop (<span class="mono">gateway.go:1141</span>).</td></tr>
+    <tr><td>Vision (image-in)</td><td><span class="tag t-have">works</span></td><td class="e">Multimodal content across providers — base64 → image block (<span class="mono">anthropic_messages:320</span>), <span class="mono">image_url</span> (<span class="mono">common.go:109</span>), OpenAI <span class="mono">InputImage</span>. Agents already <i>see</i> images.</td></tr>
+    <tr><td>Image render</td><td><span class="tag t-have">works</span></td><td class="e">Inline markdown images · attachment cards · lightbox. <b>Generated images would render for free.</b></td></tr>
+    <tr><td>Voice-out (TTS) · agent voices</td><td><span class="tag t-new">greenfield</span></td><td class="e">No speech synthesis yet. "One voice per agent" is new.</td></tr>
+    <tr><td>Image generation</td><td><span class="tag t-new">greenfield</span></td><td class="e">No image-gen tool/provider. The display is free; the tool isn't.</td></tr>
+    <tr><td>Realtime voice</td><td><span class="tag t-new">greenfield</span></td><td class="e">Full-duplex spoken conversation — not present.</td></tr>
+    <tr><td>Provider-picker UI</td><td><span class="tag t-part">LLM only</span></td><td class="e">Settings exposes <b>LLM providers</b> only (<span class="mono">ProvidersSection</span>); search + voice are <b>config/env-only</b> — working backend, no UI.</td></tr>
+  </table>
+  <div class="callout b">The headline: <b style="color:var(--blue)">the per-tool provider pattern you want already exists</b> — two interfaces (<span class="mono">SearchProvider</span>, <span class="mono">Transcriber</span>) with multiple implementations, config-selected. We <b>standardize</b> it and add two more (<span class="mono">Synthesizer</span> for TTS, <span class="mono">ImageProvider</span>) — plus the UI to drive them.</div>
+</div></section>
+
+<!-- PROVIDER MODEL -->
+<section><div class="wrap">
+  <div class="eyebrow">The model</div>
+  <h2>One pattern: Tool → Provider → Config</h2>
+  <p class="sub">Every external-service tool is a capability with a swappable backend. Pick the provider, drop in a key (encrypted store, behind the password re-type), optionally override per agent.</p>
+  <div class="grid g2">
+    <div class="card"><h3>Capabilities &amp; their providers</h3><ul class="clean">
+      <li><b>LLM</b> — OpenRouter · OpenAI · Anthropic <span class="tag t-have">+ failover</span></li>
+      <li><b>Web search</b> — Brave · Tavily · Perplexity · SearXNG · GLM · Baidu <span class="tag t-have">exists</span></li>
+      <li><b>Voice-in (STT)</b> — Groq/Whisper · ElevenLabs · audio-model <span class="tag t-have">exists</span></li>
+      <li><b>Image</b> — OpenAI · Replicate/Fal (Flux) · Stability · SD-local <span class="tag t-new">new</span></li>
+      <li><b>Voice-out (TTS)</b> — ElevenLabs · OpenAI · Cartesia · Piper-local <span class="tag t-new">new</span></li>
+    </ul></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>Two delivery modes — sovereignty</h3><ul class="clean">
+      <li><b>API (default)</b> — HTTP to a hosted service; pure-Go, single binary, no CGo</li>
+      <li><b>Local sidecar (opt-in)</b> — the established pattern (like Signal's <span class="mono">signal-cli</span>): run SearXNG · Piper · whisper.cpp · local SD over localhost</li>
+      <li>So a <b>fully-local stack</b> is possible — fits "no telemetry / The Sovereign Deep"</li>
+      <li>Global default per tool, with an <b>optional per-agent override</b></li>
+    </ul></div>
+  </div>
+</div></section>
+
+<!-- MULTIMODAL -->
+<section><div class="wrap">
+  <div class="eyebrow">The new capabilities</div>
+  <h2>Voices, images &amp; the three speech modes</h2>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>🔊 One voice per agent <span class="tag t-new">flagship</span></h3><p class="note">A <span class="mono">Synthesizer</span> interface (mirrors the existing <span class="mono">Transcriber</span>) + a <span class="mono">voice</span> field on the agent persona (provider · voice-id · rate). Mia, Jim and your <b>Assistant</b> each sound distinct — agents become <i>characters</i>. Only <b>Primary</b> agents get voices.</p></div>
+    <div class="card"><h3>🎨 Image generation</h3><p class="note">A <span class="mono">generate_image</span> tool + an <span class="mono">ImageProvider</span>. Result saved to the Workspace, rendered <b>inline</b> (display already exists), attachable to tasks / sent over channels. Per-agent tool policy. Edits/variations later.</p></div>
+    <div class="card"><h3>🗣️ Speech — three distinct things</h3><p class="note"><b>STT</b> (voice-in, exists) + <b>TTS</b> (voice-out, new) compose into push-to-talk. <b>Realtime</b> (full-duplex, interruptible) is a <i>separate</i> provider type — native speech-to-speech or a streaming pipeline — heavier, later.</p></div>
+  </div>
+  <div class="callout">Vision (image <b>input</b>) already works — agents see images today. The new work is image <b>output</b> (generation) and voice <b>output</b> (TTS / agent voices).</div>
+</div></section>
+
+<!-- INTEGRATIONS UI -->
+<section><div class="wrap">
+  <div class="eyebrow">The missing screen</div>
+  <h2>Settings → Integrations (provider picker)</h2>
+  <p class="sub">The biggest UI gap: working backend capabilities (search, voice-in) have no place to be configured. One screen surfaces them all.</p>
+  <pre class="wire"><span class="h">Settings > Integrations</span>                                      <span class="m">[re-type password to edit]</span>
+  ────────────────────────────────────────────────────────────
+  <span class="g">LLM</span>          OpenRouter        v   key ••••••   + fallback
+  <span class="g">Web search</span>   Tavily            v   key ••••••   o SearXNG (local)
+  <span class="g">Voice-in</span>     Groq / Whisper    v   key ••••••
+  <span class="g">Voice-out</span>    ElevenLabs        v   key ••••••       <span class="m">(new)</span>
+  <span class="g">Image</span>        Flux (Fal)        v   key ••••••       <span class="m">(new)</span>
+  ────────────────────────────────────────────────────────────
+  Each: provider v · key · test · o local-sidecar option</pre>
+</div></section>
+
+<!-- ROADMAP -->
+<section><div class="wrap">
+  <div class="eyebrow">Where it lands</div>
+  <h2>Sequencing</h2>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3><span class="rel r1">v0.1.0</span> Surface what exists</h3><ul class="clean">
+      <li><b>Integrations</b> provider-picker — surfaces the existing multi-provider <b>search</b> + <b>voice-in</b> (cheap, high-leverage)</li>
+      <li><b>Mic</b> button in the composer — voice-in capture (the transcriber backend already exists)</li>
+    </ul></div>
+    <div class="card"><h3><span class="rel r2">v0.2.0</span> Voices + images</h3><ul class="clean">
+      <li><b>One voice per agent</b> — a <span class="mono">Synthesizer</span> interface + a <span class="mono">voice</span> field on Primary personas + chat <b>playback</b></li>
+      <li><b>Image generation</b> — a <span class="mono">generate_image</span> tool + <span class="mono">ImageProvider</span> (display is free)</li>
+    </ul></div>
+    <div class="card"><h3><span class="rel rl">v1.0.0</span> Realtime + sovereignty</h3><ul class="clean">
+      <li><b>Realtime voice</b> — its own provider type (speech-to-speech)</li>
+      <li><b>Local sidecars</b> (Piper · whisper.cpp · SD · SearXNG) — a fully-local stack</li>
+      <li>Per-agent provider overrides · voice notes over channels · image edits/variations</li>
+    </ul></div>
+  </div>
+  <div class="callout b">Effort is lower than it looks: search + voice-in + vision + image-render are <b>done</b>. The genuinely new work is <b>TTS (agent voices)</b>, <b>image-gen</b>, and the <b>Integrations UI</b> — see the wireframes on <a href="ui-changes.html">UI Changes</a>, the cost on <a href="impact.html">Impact</a>.</div>
+</div></section>
+
+<footer><div class="wrap"><p><a href="channels.html" style="color:var(--muted)">← Channels</a> &nbsp;·&nbsp; Next: <a href="memory.html">Agent Memory →</a></p></div></footer>
+</body></html>

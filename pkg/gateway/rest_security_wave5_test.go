@@ -119,6 +119,7 @@ func TestHandleSandboxConfig_PUTPersistsMode(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
 		strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdmin(t, api, r)
 	api.HandleSandboxConfig(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code,
@@ -151,6 +152,7 @@ func TestHandleSandboxConfig_PUTRejectsInvalidMode(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
 		strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdmin(t, api, r)
 	api.HandleSandboxConfig(w, r)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -177,6 +179,7 @@ func TestHandleSandboxConfig_PUTPartialUpdate(t *testing.T) {
 	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
 		strings.NewReader(body1))
 	r1.Header.Set("Content-Type", "application/json")
+	r1 = withReAuthAdmin(t, api, r1)
 	w1 := httptest.NewRecorder()
 	api.HandleSandboxConfig(w1, r1)
 	require.Equal(t, http.StatusOK, w1.Code)
@@ -186,6 +189,7 @@ func TestHandleSandboxConfig_PUTPartialUpdate(t *testing.T) {
 	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
 		strings.NewReader(body2))
 	r2.Header.Set("Content-Type", "application/json")
+	r2 = withReAuthAdmin(t, api, r2)
 	w2 := httptest.NewRecorder()
 	api.HandleSandboxConfig(w2, r2)
 	require.Equal(t, http.StatusOK, w2.Code)

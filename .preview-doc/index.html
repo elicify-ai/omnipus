@@ -1,0 +1,88 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Omnipus · Workspaces, Channels, Calendar &amp; Automations — Concept</title>
+<link rel="stylesheet" href="style.css">
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="full" style="color:var(--muted);font-weight:500;font-size:.9rem">concept</span> <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html" class="active">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="eyebrow">Product concept · the whole picture</div>
+  <h1>One model: <span class="gold">Workspaces</span>, <span class="gold">Channels</span>,<br>Calendar &amp; Automations</h1>
+  <p class="lede">We pulled on a lot of threads — schedules, tasks, calendars, webhooks, email, Zapier, per-agent bots, a personal assistant, agent delegation. They collapse into one coherent model built on <b style="color:#fff">a single container, the Workspace</b>, and a release plan whose <b style="color:#fff">first priority is to lock every structural shape so nothing has to be re-cut later.</b></p>
+  <div class="pillrow">
+    <span class="pill">One container = <b>the Workspace</b></span>
+    <span class="pill">Channels = <b>multi-instance connections</b></span>
+    <span class="pill">Agents = <b>4 base (Mia·Jim·Ray·Ava)</b> + sub-agents</span>
+    <span class="pill">v0.1.0: <b>lock the shapes, stabilize</b></span>
+  </div>
+  <p class="note" style="margin-top:14px">New here? Start with the <a href="blueprint.html"><b>Blueprint</b></a> — the as-is → to-be picture on one page.</p>
+</div></div>
+
+<section><div class="wrap">
+  <div class="eyebrow">The four ideas</div>
+  <h2>Everything reduces to four concepts</h2>
+  <div class="fig">
+  <svg viewBox="0 0 1000 300" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><linearGradient id="sp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#D4AF37"/><stop offset="1" stop-color="#7a5f12"/></linearGradient>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#D4AF37"/></marker></defs>
+    <rect x="40" y="40" width="920" height="226" rx="20" fill="none" stroke="#3a3a44" stroke-dasharray="5 5"/>
+    <text x="60" y="64" fill="#60a5fa" font-family="JetBrains Mono" font-size="12" letter-spacing="2">WORKSPACE · the one container — My Workspace + named workspaces</text>
+    <text x="150" y="98" fill="#8b8b97" font-size="11" font-family="JetBrains Mono" text-anchor="middle">CHANNELS (connections)</text>
+    <g font-size="12" fill="#E2E8F0">
+      <g><rect x="64" y="110" width="180" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="78" y="132">💬 chat · ✉️ email</text></g>
+      <g><rect x="64" y="150" width="180" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="78" y="172">🔌 webhook · 🗓️ calendar</text></g>
+      <g><rect x="64" y="190" width="180" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="78" y="212">🔑 API</text></g>
+    </g>
+    <rect x="430" y="120" width="140" height="100" rx="14" fill="url(#sp)" opacity=".15" stroke="#D4AF37"/>
+    <text x="500" y="166" text-anchor="middle" fill="#D4AF37" font-family="Outfit" font-weight="800" font-size="15">Agents</text>
+    <text x="500" y="186" text-anchor="middle" fill="#8b8b97" font-size="11">bus · tools</text>
+    <text x="800" y="98" fill="#8b8b97" font-size="11" font-family="JetBrains Mono" text-anchor="middle">AUTOMATIONS · Trigger→Action</text>
+    <g font-size="12" fill="#E2E8F0">
+      <g><rect x="700" y="110" width="200" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="714" y="132">⚡ when X → 🤖 do Y</text></g>
+      <g><rect x="700" y="150" width="200" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="714" y="172">📋 tasks · 🗓️ calendar</text></g>
+      <g><rect x="700" y="190" width="200" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="714" y="212">⏰ schedules · 🩺 system</text></g>
+    </g>
+    <g stroke="#D4AF37" stroke-width="1.6" fill="none" opacity=".7" marker-end="url(#a)">
+      <path d="M244,160 C330,160 360,165 428,167"/><path d="M572,167 C640,167 660,160 698,160"/>
+    </g>
+  </svg>
+  <div class="figcap">A Workspace holds connections, agents and automations. Channels in, automations out. Context is the workspace you're in.</div>
+  </div>
+  <div class="grid g4" style="margin-top:8px">
+    <a class="card" href="spaces.html"><h3>1 · Workspaces</h3><p class="note">The one container — My Workspace + named workspaces you create. Holds tasks, memory, calendar &amp; connections. Context is the workspace you've selected in the sidebar switcher.</p><span class="more">drill down →</span></a>
+    <a class="card" href="channels.html"><h3>2 · Channels</h3><p class="note">A typed two-way link (chat · email · webhook · calendar · API). A Connection is an instance; its identity is an agent or a user.</p><span class="more">drill down →</span></a>
+    <a class="card" href="time.html"><h3>3 · Calendar</h3><p class="note">The friendly "when" view — scheduled tasks, events, milestones, imports — per workspace.</p><span class="more">drill down →</span></a>
+    <a class="card" href="time.html#automations"><h3>4 · Automations</h3><p class="note">Trigger → Action. The engine that already exists, surfaced: schedules, webhooks, event rules, integrations.</p><span class="more">drill down →</span></a>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">The headline shift</div>
+  <h2>"Rooms"/"Spaces" collapse into <span class="gold">Workspaces</span></h2>
+  <p class="sub">An earlier draft generalized Rooms into three "space" tiers (User · Agent · Project) plus a global scope switcher. That's too many parallel systems doing the same job. The simpler answer: <b>one container — the Workspace</b> — and context is simply which workspace you've selected in the workspace switcher already in the sidebar.</p>
+  <div class="grid g2" style="margin-top:6px">
+    <div class="card"><h3>The over-engineered draft (dropped)</h3><ul class="clean"><li>Three space tiers: <b>User</b> · <b>Agent</b> · <b>Project</b></li><li>A global <b>scope switcher</b> on every surface</li><li>Parallel keying schemes for tasks / memory / calendar</li><li>"Personal" as its own tier</li></ul></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>The simplification (this doc)</h3><ul class="clean"><li><b>One container: the Workspace</b> (My Workspace + named workspaces)</li><li>Context is <b>the workspace you've selected</b> — one default, My Workspace, for the Assistant and team agents</li><li>The existing <b>sidebar workspace switcher</b> sets it — no new mode</li><li><b>Single user, one password</b> — <span class="mono">owner=username</span> (#406) is just attribution, not an access gate</li></ul></div>
+  </div>
+  <p style="margin-top:14px"><a class="more" href="spaces.html" style="font-family:'JetBrains Mono',monospace;color:var(--gold)">Read the full Workspaces model →</a></p>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Where to go next</div>
+  <h2>Drill down</h2>
+  <div class="grid g4" style="margin-top:6px">
+    <a class="card" href="blueprint.html"><h3>🗺️ Blueprint</h3><p class="note">As-is → to-be on one page: the nine-axis transformation, the model stack, the agent taxonomy, and the foundation-first roadmap.</p><span class="more">open →</span></a>
+    <a class="card" href="delegation.html"><h3>🤝 Delegation</h3><p class="note">How agents engage each other — handover · task · spawn · subagent — unified into one policy graph + orchestration.</p><span class="more">open →</span></a>
+    <a class="card" href="tools.html"><h3>🛠 Tools</h3><p class="note">Per-tool pluggable providers (search · voice · image), one voice per agent, and image generation — what exists vs what's new.</p><span class="more">open →</span></a>
+    <a class="card" href="roadmap.html"><h3>🚀 Roadmap</h3><p class="note">v0.1.0 locks every structural shape additively; later releases add behaviour / lift caps. No re-cutting the foundation.</p><span class="more">open →</span></a>
+    <a class="card" href="plugins.html"><h3>🧩 Plugins</h3><p class="note">Skill marketplaces as a provider model + plugins as declarative bundles (skills · agents · MCP · channels · providers), each executable part own-process &amp; kernel-confined.</p><span class="more">open →</span></a>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <p>Concept site · grounded in a full codebase + prior-art assessment (Hermes · OpenClaw · PicoClaw · AgentMail · Cloudflare · Cal.com · Go libs · ClawHub · MCP registries — official/Smithery/Glama · Claude Code &amp; OpenClaw plugins) and Omnipus internals (#406 ownership · EventBus · channels singleton · delegation engine · Rooms design docs). Discussion stage — next is an ADR (<span class="mono">/albert</span>) then a phased plan-spec.</p>
+</div></footer>
+</body></html>

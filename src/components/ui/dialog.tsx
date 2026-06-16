@@ -36,7 +36,8 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4',
+        'fixed left-[50%] top-[50%] z-50 grid w-[calc(100%-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4',
+        'max-h-[90dvh] overflow-y-auto',
         'border border-[var(--color-border)] bg-[var(--color-surface-1)] p-6 shadow-2xl',
         'rounded-xl text-[var(--color-secondary)]',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
@@ -49,7 +50,7 @@ const DialogContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-[var(--color-surface-2)] data-[state=open]:text-[var(--color-muted)]">
+      <DialogPrimitive.Close className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-[var(--color-surface-2)] data-[state=open]:text-[var(--color-muted)]">
         <X size={16} />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>

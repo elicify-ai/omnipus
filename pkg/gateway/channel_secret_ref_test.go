@@ -305,3 +305,83 @@ func TestTestChannel_StoreUnavailableIsDistinct(t *testing.T) {
 	assert.Contains(t, resp.Message, "unavailable", "store fault must be reported distinctly, not as 'missing'")
 	assert.NotContains(t, resp.Message, "missing")
 }
+
+// TestConfigureChannel_GoogleChatWebhookRoutesToCredentialStore is the MAJ-1
+// guard (Epic #314): a Google Chat incoming-webhook URL is a possession-based
+// bearer secret (SEC-23 class). Configuring it via the UI must route it into the
+// encrypted credential store and persist only webhook_url_ref — never the
+// plaintext URL — and "Test" must then report the secret as resolvable.
+func TestConfigureChannel_GoogleChatWebhookRoutesToCredentialStore(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
+
+	const secretURL = "https://chat.googleapis.com/v1/spaces/AAA/messages?key=KKK&token=TTT"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/google-chat/configure",
+		strings.NewReader(`{"mode":"webhook","webhook_url":"`+secretURL+`"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w, r, "google-chat")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	// 1. The plaintext webhook URL must NOT appear anywhere in config.json (SEC-23).
+	raw, err := os.ReadFile(api.homePath + "/config.json")
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), secretURL, "plaintext webhook_url leaked into config.json")
+	assert.NotContains(t, string(raw), "token=TTT", "webhook secret query param leaked into config.json")
+
+	// 2. webhook_url_ref must be set; no inline webhook_url.
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	gc := diskCfg["channels"].(map[string]any)["google-chat"].(map[string]any)
+	assert.Equal(t, "channel_google-chat_webhook_url", gc["webhook_url_ref"])
+	_, hasInline := gc["webhook_url"]
+	assert.False(t, hasInline, "inline webhook_url must not be persisted to config.json")
+
+	// 3. The secret must be retrievable from the credential store.
+	got, err := api.credStore.Get("channel_google-chat_webhook_url")
+	require.NoError(t, err)
+	assert.Equal(t, secretURL, got)
+
+	// 4. credentialRefResolves (the Test path) must report the webhook ref as resolvable.
+	ok, err := api.credentialRefResolves("channel_google-chat_webhook_url")
+	require.NoError(t, err)
+	assert.True(t, ok, "Test must see the stored webhook credential as resolvable")
+}
+
+// TestConfigureChannel_GoogleChatServiceAccountRoutesToCredentialStore covers the
+// service-account-JSON secret path, which was effectively broken before MAJ-1:
+// configureChannel wrote service_account_json_ref, but GoogleChatConfig had no
+// *Ref struct field and ResolveAll did not list it, so the secret was dropped.
+func TestConfigureChannel_GoogleChatServiceAccountRoutesToCredentialStore(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
+
+	const saJSON = `{"client_email":"bot@proj.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\nSECRETKEYMATERIAL\n-----END PRIVATE KEY-----\n"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/google-chat/configure",
+		strings.NewReader(`{"mode":"bot","service_account_json":`+mustJSONString(t, saJSON)+`}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w, r, "google-chat")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	raw, err := os.ReadFile(api.homePath + "/config.json")
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "SECRETKEYMATERIAL", "plaintext service account key leaked into config.json")
+
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	gc := diskCfg["channels"].(map[string]any)["google-chat"].(map[string]any)
+	assert.Equal(t, "channel_google-chat_service_account_json", gc["service_account_json_ref"])
+	_, hasInline := gc["service_account_json"]
+	assert.False(t, hasInline, "inline service_account_json must not be persisted to config.json")
+
+	got, err := api.credStore.Get("channel_google-chat_service_account_json")
+	require.NoError(t, err)
+	assert.Equal(t, saJSON, got)
+}
+
+// mustJSONString returns s encoded as a JSON string literal (with quotes).
+func mustJSONString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	require.NoError(t, err)
+	return string(b)
+}

@@ -50,7 +50,8 @@ Omnipus is pre-1.0. Only the current `main` branch and the active release branch
 | Branch / version | Supported |
 |---|---|
 | `main` | ✅ active |
-| `feature/iframe-preview-tier13` (v0.1 RC) | ✅ active |
+| `hotfix/v0.1.1` | ✅ active |
+| `hotfix/v0.1.0` | ✅ active |
 | Any pre-release tag | ❌ historical reference only — please upgrade |
 
 When 1.0 ships, this table will list the supported semver range explicitly.

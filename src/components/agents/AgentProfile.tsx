@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useMemo, KeyboardEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft,
   Robot,
   Brain,
   Lightbulb,
@@ -15,14 +14,13 @@ import {
   X,
   CaretDown,
   CaretUp,
-  Scroll,
-  NotePencil,
   UploadSimple,
   Info,
+  Plus,
+  Sparkle,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
-import { useNavigate } from '@tanstack/react-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -35,6 +33,11 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
+import { ExecutorSelector } from './ExecutorSelector'
+import { BehaviorFields } from './AgentFormFields'
+import { SchedulesList } from '@/components/command-center/SchedulesList'
+import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
   fetchAppState,
@@ -42,11 +45,16 @@ import {
   fetchProviders,
   fetchAgentSessions,
   fetchActivity,
+  fetchSkills,
+  isWorker,
   type AgentSession,
   type ActivityEvent,
   type AgentToolsCfg,
   type SandboxProfile,
+  type Skill,
+  type ExecutorConfig,
 } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { AVATAR_COLORS } from '@/lib/constants'
 
@@ -74,17 +82,26 @@ function getIconComponent(name: string | undefined) {
 }
 
 interface AgentProfileProps {
-  agentId: string
+  /**
+   * Explicit agent id (wins over the store-driven `editAgentId`). Used by
+   * tests and direct renders; the primary path is the UI store.
+   */
+  agentId?: string
 }
 
-export function AgentProfile({ agentId }: AgentProfileProps) {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const { addToast } = useUiStore()
+export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
+  const editAgentId = useUiStore((s) => s.editAgentId)
+  const closeEditAgentSlideOver = useUiStore((s) => s.closeEditAgentSlideOver)
+  const addToast = useUiStore((s) => s.addToast)
+  const agentId = agentIdProp ?? editAgentId
+  const isOpen = agentId !== null
 
-  const { data: agent, isLoading, isError } = useQuery({
+  const queryClient = useQueryClient()
+
+  const { data: agent, isLoading, isError, error: agentError, refetch: refetchAgent } = useQuery({
     queryKey: ['agent', agentId],
-    queryFn: () => fetchAgent(agentId),
+    queryFn: () => fetchAgent(agentId as string),
+    enabled: agentId !== null,
   })
 
   const { data: providers = [], isError: providersError } = useQuery({
@@ -94,7 +111,8 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
 
   const { data: agentSessions = [], isError: sessionsError } = useQuery({
     queryKey: ['agent-sessions', agentId],
-    queryFn: () => fetchAgentSessions(agentId),
+    queryFn: () => fetchAgentSessions(agentId as string),
+    enabled: agentId !== null,
   })
 
   const { data: allActivity = [], isError: activityError } = useQuery({
@@ -106,6 +124,13 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
   const { data: appState } = useQuery({
     queryKey: ['app-state'],
     queryFn: fetchAppState,
+    staleTime: 60_000,
+  })
+
+  // US-E6: fetch available (installed) skills so the picker can show them.
+  const { data: availableSkills = [] } = useQuery<Skill[]>({
+    queryKey: ['skills'],
+    queryFn: fetchSkills,
     staleTime: 60_000,
   })
 
@@ -156,12 +181,17 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
   const [toolFeedback, setToolFeedback] = useState(false)
   const [heartbeatEnabled, setHeartbeatEnabled] = useState(false)
   const [heartbeatInterval, setHeartbeatInterval] = useState(30)
+  const [creatingSchedule, setCreatingSchedule] = useState(false)
   const [toolsCfg, setToolsCfg] = useState<AgentToolsCfg>({
     builtin: { default_policy: 'allow' },
   })
+  // US-E6: per-agent skill assignment (opt-in, default none).
+  const [agentSkills, setAgentSkills] = useState<string[]>([])
   const [sandboxProfile, setSandboxProfile] = useState<SandboxProfile | undefined>(undefined)
   const [shellDenyPatterns, setShellDenyPatterns] = useState<string[]>([])
   const [shellAdvancedOpen, setShellAdvancedOpen] = useState(false)
+  // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
+  const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
 
   useEffect(() => {
     if (!agent) return
@@ -193,10 +223,14 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
     setHeartbeatInterval(agent.heartbeat_interval ?? 30)
     setSandboxProfile(agent.sandbox_profile)
     setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
+    // Spec-4: hydrate executor (absent → native default, modelled as undefined).
+    setExecutor(agent.executor)
     if (agent.tools_cfg) setToolsCfg((prev) => ({
       builtin: agent.tools_cfg?.builtin ?? prev.builtin,
       mcp: agent.tools_cfg?.mcp as AgentToolsCfg['mcp'],
     }))
+    // US-E6: hydrate agent skills from the API response (default none).
+    setAgentSkills(agent.skills ?? [])
     hasHydrated.current = true
   }, [agentId, agent])
 
@@ -231,32 +265,47 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
       custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
     },
     tools_cfg: toolsCfg,
+    // US-E6: include the per-agent skill list in the auto-save payload.
+    // Send the current list (may be empty, meaning no skills). The backend
+    // treats an absent field as "leave unchanged" and an explicit empty
+    // array as "remove all skills" — we always send the current value so
+    // a deliberate clear (removing the last skill) is persisted correctly.
+    skills: agentSkills,
+    // Spec-4 FR-4.1: persist the executor only when explicitly configured.
+    // Omitting it (undefined) leaves the backend on its "native" default
+    // rather than forcing an empty value over the wire.
+    executor,
   }), [
     name, description, model, selectedColor, selectedIcon, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, instructions, heartbeat,
     timeoutSeconds, maxToolIterations, steeringMode, toolFeedback,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
-    toolsCfg,
+    toolsCfg, agentSkills, executor,
   ])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     formData,
     async (data) => {
-      // Guard: do not save before the server data has been hydrated into state.
-      // Saving before hydration would overwrite real data with empty defaults.
+      // Do not save before the server data has been hydrated into state —
+      // saving before hydration would overwrite real data with empty defaults.
       if (!hasHydrated.current) return
+      // Form is mounted at the layout level; its state can outlive a
+      // closed sheet. Refuse a save with no id rather than PUT /null.
+      if (agentId === null) return
       // Locked agents: strip every field the backend treats as immutable for
       // the locked roster (Mia/Jim/Ava/Ray/Max). Identity fields plus the
-      // sandbox profile, shell policy, and tools_cfg are all built-in for
-      // these agents — sending them yields either a 400 from the locked-field
-      // validator or silently no-ops, and either way the autosave indicator
-      // would surface a spurious error.
+      // sandbox profile, shell policy, tools_cfg, and skills are all built-in
+      // for these agents — sending them yields a 403 from the locked-field
+      // validator, and the autosave indicator would surface a spurious error.
+      // Skills are stripped here (B-2 defense-in-depth on the frontend side):
+      // the Skills picker is rendered disabled for locked agents, so this strip
+      // is the belt-and-suspenders path for any state that may survive hydration.
       const payload = agent?.locked
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
             heartbeat: _h, instructions: _ins, sandbox_profile: _sp,
-            shell_policy: _shp, tools_cfg: _tc, ...rest
+            shell_policy: _shp, tools_cfg: _tc, skills: _sk, executor: _ex, ...rest
           }) => rest)(data)
         : data
       await updateAgent(agentId, payload)
@@ -323,45 +372,74 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full text-[var(--color-muted)] text-sm">
-        Loading agent...
-      </div>
+      <ProfileSheet isOpen={isOpen} onClose={closeEditAgentSlideOver} title="Edit agent">
+        <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
+          Loading agent...
+        </div>
+      </ProfileSheet>
     )
   }
 
   if (isError || !agent) {
+    // Distinguish "this agent does not exist" (404) from transient errors so
+    // the user gets the right copy and the right path forward. The previous
+    // version lumped every error into "Agent not found", which misled users
+    // on 500s / 401s / 502s and gave them no retry affordance.
+    const isNotFound = isApiError(agentError) && agentError.status === 404
+    const title = isNotFound ? 'Agent not found' : "Couldn't load agent"
+    const detail = isNotFound
+      ? 'This agent may have been deleted.'
+      : isApiError(agentError)
+        ? agentError.userMessage
+        : agentError instanceof Error
+          ? agentError.message
+          : 'Check your connection and try again.'
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4">
-        <p className="text-[var(--color-muted)] text-sm">Agent not found</p>
-        <a href="/#/agents" className="text-sm text-[var(--color-muted)] underline hover:text-[var(--color-secondary)]">
-          Back to Agents
-        </a>
-      </div>
+      <ProfileSheet
+        isOpen={isOpen}
+        onClose={closeEditAgentSlideOver}
+        title={isNotFound ? 'Agent not found' : "Couldn't load agent"}
+      >
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+          <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
+          <p className="text-xs text-[var(--color-muted)] max-w-sm">{detail}</p>
+          <div className="flex gap-2">
+            {!isNotFound && (
+              <Button variant="outline" size="sm" onClick={() => refetchAgent()}>
+                Retry
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={closeEditAgentSlideOver}>
+              Back to Agents
+            </Button>
+          </div>
+        </div>
+      </ProfileSheet>
     )
   }
 
   const isLocked = agent.locked === true
   const canEdit = !isLocked
+  // Past the early returns, `agent` is non-null and `agentId` is the id used
+  // to fetch it. Narrow once for child components that take `string`.
+  const resolvedAgentId = agentId as string
+  // Tier-branched form. Workers are delegation-only labour agents: never a chat
+  // target, no heartbeat, never the default, and carry an executor (the worker's
+  // defining property). Base agents (core/custom/system) run native/in-process
+  // only — no third-party executor is selectable for them. The locked concept
+  // (`.preview-doc/agents.html`) makes the worker-vs-base split a property of
+  // the agent itself, so we branch once here and let the JSX ask `isWorkerAgent`
+  // to decide which accordions render. See the contract schema for the
+  // `worker` type value: contracts/components/schemas/Agent.yaml.
+  const isWorkerAgent = isWorker(agent)
 
   return (
-    <div className="absolute inset-0 overflow-y-auto">
-    <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate({ to: '/agents' })}
-          className="gap-1 text-[var(--color-muted)]"
-        >
-          <ArrowLeft size={14} /> Agents
-        </Button>
-      </div>
-
-      <div className="flex items-center gap-4">
-        <div
-          className="w-14 h-14 rounded-full flex items-center justify-center shrink-0"
-          style={{ backgroundColor: selectedColor ?? 'var(--color-surface-3)' }}
+    <ProfileSheet isOpen={isOpen} onClose={closeEditAgentSlideOver} title={`Edit ${agent.name}`}>
+      <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
+          <div className="flex items-center gap-4">
+            <div
+              className="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
+              style={{ backgroundColor: selectedColor ?? 'var(--color-surface-3)' }}
         >
           <AvatarIcon size={22} className="text-[var(--color-primary)]" />
         </div>
@@ -383,9 +461,11 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           <AutoSaveIndicator status={saveStatus} error={saveError} />
         </div>
       </div>
+        </SheetHeader>
 
-      <Separator />
-
+      {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-2xl mx-auto px-8 py-6 space-y-4">
       <Accordion
         type="multiple"
         defaultValue={['identity']}
@@ -459,6 +539,15 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             <AccordionTrigger className="px-4 font-headline font-bold text-sm">
               <div className="flex items-center gap-2">
                 <span>Sandbox</span>
+                {/* #335 (US-D3): standing warning badge on accordion header when a widened profile is active */}
+                {(sandboxProfile === 'workspace+net' || sandboxProfile === 'off') && (
+                  <span
+                    data-testid="sandbox-accordion-widening-badge"
+                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                  >
+                    Widened
+                  </span>
+                )}
                 <SandboxInfoTooltip />
               </div>
             </AccordionTrigger>
@@ -541,6 +630,35 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           </AccordionItem>
         )}
 
+        {/* Executor — Spec-4 FR-4.1: sub-agent runtime selector + runner test.
+            Worker-only. Base agents run native/in-process only — there is no
+            third-party executor for them, so the entire accordion is omitted
+            rather than rendered disabled. Read-only for locked core workers. */}
+        {isWorkerAgent && (
+          <AccordionItem value="executor" className="border-0">
+            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+              <div className="flex items-center gap-2">
+                <span>Executor</span>
+                {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
+                    {executor.kind === 'external-cli' ? (executor.cli ?? 'external') : 'A2A'}
+                  </span>
+                )}
+              </div>
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="px-4">
+                <ExecutorSelector
+                  value={executor}
+                  agentId={resolvedAgentId}
+                  disabled={isLocked}
+                  onChange={(next) => { markDirty(); setExecutor(next) }}
+                />
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        )}
+
         {/* Model Configuration — default CLOSED */}
         <AccordionItem value="model" className="border-0">
           <AccordionTrigger className="px-4 font-headline font-bold text-sm">
@@ -590,6 +708,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                   </div>
                 </div>
               )}
+              {/* #335 (US-D3): temperature/top-p under "Sampling parameters" with plain captions */}
               {canEdit && (
                 <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
                   <button
@@ -597,13 +716,14 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                     onClick={() => setAdvancedOpen((o) => !o)}
                     className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
                   >
-                    <span>Advanced parameters</span>
+                    <span>Sampling parameters</span>
                     {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
                   </button>
                   {advancedOpen && (
                     <div className="px-3 pb-3 space-y-4 border-t border-[var(--color-border)]">
                       <RangeField
                         label="Temperature"
+                        caption="Higher = more creative / less predictable (0–2, default 1)"
                         value={temperature}
                         min={0}
                         max={2}
@@ -613,6 +733,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                       />
                       <RangeField
                         label="Max tokens"
+                        caption="Maximum length of each reply"
                         value={maxTokens}
                         min={256}
                         max={32768}
@@ -622,6 +743,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                       />
                       <RangeField
                         label="Top P"
+                        caption="Nucleus sampling mass — 1.0 disables it (default 1)"
                         value={topP}
                         min={0}
                         max={1}
@@ -702,7 +824,15 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           </AccordionItem>
         )}
 
-        {/* Behavior — default CLOSED (SOUL + Instructions + Heartbeat + Execution) */}
+        {/* Behavior — default CLOSED.
+            Tier-branched: base agents keep the full set (SOUL persona +
+            instructions + heartbeat + execution). Workers get a slimmer
+            section — a relabeled "Task prompt (optional)" instead of the
+            "Personality & instructions" framing, and NO heartbeat. The
+            task prompt is optional (empty is valid) per the locked concept
+            (`.preview-doc/agents.html`); the backend treats worker SOUL.md
+            as optional. Both tiers still get Execution params — they're
+            per-agent engine settings, not persona or scheduling. */}
         {canEdit && (
           <AccordionItem value="behavior" className="border-0">
             <AccordionTrigger className="px-4 font-headline font-bold text-sm">
@@ -710,99 +840,84 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             </AccordionTrigger>
             <AccordionContent>
               <div className="px-4 space-y-5">
-                {/* SOUL.md */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Scroll size={13} className="text-[var(--color-accent)]" />
-                    <p className="text-xs font-medium text-[var(--color-secondary)]">SOUL.md</p>
-                  </div>
-                  <p className="text-xs text-[var(--color-muted)]">
-                    The agent's personality and system prompt.
-                  </p>
-                  <Textarea
-                    value={soul}
-                    onChange={(e) => { markDirty(); setSoul(e.target.value) }}
-                    placeholder={"# Soul\n\nDefine this agent's personality, expertise, and behavioral guidelines..."}
-                    rows={6}
-                    className="text-xs font-mono resize-none"
-                  />
-                  <UploadButton onUpload={setSoul} />
-                </div>
+                {/* Shared "Behavior" block: SOUL/task-prompt + Additional Instructions.
+                    Delegates to the same component used by the create modal so
+                    the two surfaces cannot drift. The profile renders an Upload
+                    button per field; the modal does not (it has no file-upload
+                    affordance for soul/instructions). */}
+                <BehaviorFields
+                  isWorker={isWorkerAgent}
+                  soul={soul}
+                  setSoul={(v) => { markDirty(); setSoul(v) }}
+                  instructions={instructions}
+                  setInstructions={(v) => { markDirty(); setInstructions(v) }}
+                  renderUploadButton={(_, onUpload) => <UploadButton onUpload={onUpload} />}
+                />
 
-                <Separator />
-
-                {/* Additional Instructions */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <NotePencil size={13} className="text-[var(--color-accent)]" />
-                    <p className="text-xs font-medium text-[var(--color-secondary)]">Additional Instructions</p>
-                  </div>
-                  <p className="text-xs text-[var(--color-muted)]">
-                    Extra instructions appended to the agent's context.
-                  </p>
-                  <Textarea
-                    value={instructions}
-                    onChange={(e) => { markDirty(); setInstructions(e.target.value) }}
-                    placeholder="Add specific instructions, constraints, or domain knowledge..."
-                    rows={4}
-                    className="text-xs font-mono resize-none"
-                  />
-                  <UploadButton onUpload={setInstructions} />
-                </div>
-
-                <Separator />
-
-                {/* HEARTBEAT.md */}
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-[var(--color-secondary)]">HEARTBEAT.md</p>
-                  <p className="text-xs text-[var(--color-muted)]">
-                    The agent's persistent context — goals, preferences, and working memory.
-                  </p>
-                  <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
-                        <p className="text-xs text-[var(--color-muted)]">Run on a recurring schedule</p>
+                {/* #335 (US-D3): relabeled HEARTBEAT.md → "Background tasks / periodic instructions".
+                    Base-only. Workers never run on a schedule (delegation-only
+                    labour agents), so this whole sub-block is omitted. */}
+                {!isWorkerAgent && (
+                  <>
+                    <Separator />
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-[var(--color-secondary)]">Background tasks / periodic instructions</p>
+                      <p className="text-xs text-[var(--color-muted)]">
+                        Instructions the agent runs on a recurring schedule — check queues, summarize,
+                        or perform any background work. Stored as <span className="font-mono text-[11px]">HEARTBEAT.md</span>.
+                      </p>
+                      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
+                            <p className="text-xs text-[var(--color-muted)]">Run on a recurring schedule</p>
+                          </div>
+                          <Switch
+                            checked={heartbeatEnabled}
+                            onCheckedChange={(v) => { markDirty(); setHeartbeatEnabled(v) }}
+                          />
+                        </div>
+                        {heartbeatEnabled && (
+                          <div className="flex items-center gap-3 pt-1 border-t border-[var(--color-border)]">
+                            <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Interval (seconds)</label>
+                            <Input
+                              type="number"
+                              min={1}
+                              value={heartbeatInterval}
+                              onChange={(e) => { markDirty(); setHeartbeatInterval(Number(e.target.value)) }}
+                              className="text-xs h-8"
+                            />
+                          </div>
+                        )}
                       </div>
-                      <Switch
-                        checked={heartbeatEnabled}
-                        onCheckedChange={(v) => { markDirty(); setHeartbeatEnabled(v) }}
+                      <Textarea
+                        value={heartbeat}
+                        onChange={(e) => { markDirty(); setHeartbeat(e.target.value) }}
+                        placeholder="# Heartbeat&#10;&#10;Write persistent context for this agent..."
+                        rows={4}
+                        className="text-xs font-mono resize-none"
                       />
+                      <UploadButton onUpload={setHeartbeat} />
                     </div>
-                    {heartbeatEnabled && (
-                      <div className="flex items-center gap-3 pt-1 border-t border-[var(--color-border)]">
-                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Interval (seconds)</label>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={heartbeatInterval}
-                          onChange={(e) => { markDirty(); setHeartbeatInterval(Number(e.target.value)) }}
-                          className="text-xs h-8"
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <Textarea
-                    value={heartbeat}
-                    onChange={(e) => { markDirty(); setHeartbeat(e.target.value) }}
-                    placeholder="# Heartbeat&#10;&#10;Write persistent context for this agent..."
-                    rows={4}
-                    className="text-xs font-mono resize-none"
-                  />
-                  <UploadButton onUpload={setHeartbeat} />
-                </div>
+                  </>
+                )}
 
                 <Separator />
 
-                {/* Execution */}
+                {/* Execution — both tiers. Per-agent engine settings, not
+                    persona or scheduling. Locked core agents skip this
+                    sub-block (they run on a built-in policy). */}
                 {!isLocked && (
                   <div className="space-y-2">
                     <p className="text-xs font-medium text-[var(--color-secondary)]">Execution</p>
-                    <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
+                    {/* #335 (US-D3): plain captions for execution parameters */}
+                  <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
                       <div className="flex items-center gap-3">
                         <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
-                          Turn timeout (seconds)
-                          <span className="block text-[10px] text-[var(--color-muted)]/70">0 = no limit</span>
+                          Turn timeout
+                          <span className="block text-[10px] text-[var(--color-muted)]/70">
+                            Max seconds per turn. 0 = no limit.
+                          </span>
                         </label>
                         <Input
                           type="number"
@@ -813,7 +928,12 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                         />
                       </div>
                       <div className="flex items-center gap-3">
-                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Max tool iterations</label>
+                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                          Max tool calls per turn
+                          <span className="block text-[10px] text-[var(--color-muted)]/70">
+                            Stops runaway loops. Default: 50.
+                          </span>
+                        </label>
                         <Input
                           type="number"
                           min={1}
@@ -823,7 +943,12 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                         />
                       </div>
                       <div className="flex items-center gap-3">
-                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Message handling</label>
+                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                          Message handling
+                          <span className="block text-[10px] text-[var(--color-muted)]/70">
+                            How concurrent messages are processed.
+                          </span>
+                        </label>
                         <SmartSelect
                           value={steeringMode}
                           onValueChange={(v) => { markDirty(); setSteeringMode(v) }}
@@ -837,8 +962,10 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                       </div>
                       <div className="flex items-center justify-between py-1">
                         <div>
-                          <p className="text-sm text-[var(--color-secondary)]">Tool progress feedback</p>
-                          <p className="text-xs text-[var(--color-muted)]">Show tool call status while running</p>
+                          <p className="text-sm text-[var(--color-secondary)]">Show tool progress</p>
+                          <p className="text-xs text-[var(--color-muted)]">
+                            Echo tool results back to the agent as it works.
+                          </p>
                         </div>
                         <Switch
                           checked={toolFeedback}
@@ -865,15 +992,102 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             </AccordionTrigger>
             <AccordionContent>
               <div className="px-4">
+                {/* #332 (US-D5 / B-2): isLocked=true → read-only editor, no writes */}
                 <ToolsAndPermissions
                   agentId={agentId}
                   agentType={agent.type}
+                  isLocked={isLocked}
                   tools={toolsCfg}
                   onChange={setToolsCfg}
                 />
               </div>
             </AccordionContent>
           </AccordionItem>
+
+        {/* Skills — US-E6: per-agent skill assignment, opt-in, default none */}
+        <AccordionItem value="skills" className="border-0">
+          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <div className="flex items-center gap-2">
+              <span>Skills</span>
+              {agentSkills.length > 0 && (
+                <span className="text-xs text-[var(--color-muted)] font-normal">
+                  {agentSkills.length} granted
+                </span>
+              )}
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="px-4 space-y-3">
+              {isLocked ? (
+                <p className="text-xs text-[var(--color-muted)]">
+                  Skill assignment is read-only for locked core agents.
+                </p>
+              ) : (
+                <p className="text-xs text-[var(--color-muted)]">
+                  Grant specific installed skills to this agent. Only skills listed here
+                  are available during this agent's runs. Empty means no skills.
+                </p>
+              )}
+              {availableSkills.length === 0 ? (
+                <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-4 text-center">
+                  <Sparkle size={16} className="text-[var(--color-muted)] mx-auto mb-1.5" />
+                  <p className="text-xs text-[var(--color-muted)]">No skills installed.</p>
+                  <p className="text-xs text-[var(--color-muted)]/70 mt-0.5">
+                    Install skills from the Skills &amp; Tools screen.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {availableSkills.map((skill) => {
+                    const granted = agentSkills.includes(skill.id)
+                    return (
+                      <label
+                        key={skill.id}
+                        className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-2)]'}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={granted}
+                          disabled={isLocked}
+                          onChange={isLocked ? undefined : (e) => {
+                            markDirty()
+                            if (e.target.checked) {
+                              setAgentSkills((prev) => [...prev, skill.id])
+                            } else {
+                              setAgentSkills((prev) => prev.filter((s) => s !== skill.id))
+                            }
+                          }}
+                          className="mt-0.5 shrink-0 accent-[var(--color-accent)] disabled:opacity-50"
+                          data-testid={`skill-checkbox-${skill.id}`}
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-[var(--color-secondary)] leading-tight">
+                            {skill.name}
+                          </p>
+                          {skill.description && (
+                            <p className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-snug">
+                              {skill.description}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] font-mono text-[var(--color-muted)]/70">
+                              {skill.id}
+                            </span>
+                            {skill.verified && (
+                              <span className="text-[9px] px-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                verified
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
 
         {/* Sessions — default CLOSED */}
         <AccordionItem value="sessions" className="border-0">
@@ -896,6 +1110,33 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             </div>
           </AccordionContent>
         </AccordionItem>
+
+        {/* Schedules — default CLOSED (#264). Base-only. Workers are
+            delegation-only labour agents and never own a schedule, so the
+            whole accordion is omitted. The schedule-owner picker on the
+            create form also filters workers out (see ScheduleFormSheet). */}
+        {!isWorkerAgent && (
+          <AccordionItem value="schedules" className="border-0">
+            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+              Schedules
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="px-4 space-y-3">
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setCreatingSchedule(true)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                  >
+                    <Plus size={13} />
+                    New schedule
+                  </button>
+                </div>
+                <SchedulesList agentId={resolvedAgentId} />
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        )}
 
         {/* Activity — default CLOSED */}
         <AccordionItem value="activity" className="border-0">
@@ -941,8 +1182,69 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           </AccordionContent>
         </AccordionItem>
       </Accordion>
-    </div>
-    </div>
+        </div>
+      </div>
+
+      {/* Sticky footer — always present so the user has an explicit dismiss
+          affordance; the Radix X in the top-right is also wired here via
+          SheetContent's onOpenChange. */}
+      <div className="px-8 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-3">
+        <AutoSaveIndicator status={saveStatus} error={saveError} />
+        <Button
+          variant="outline"
+          onClick={closeEditAgentSlideOver}
+          data-testid="agent-profile-close"
+        >
+          Close
+        </Button>
+      </div>
+
+      {/* New schedule slide-over — owner pre-filled to this agent (#264) */}
+      {creatingSchedule && (
+        <ScheduleFormSheet
+          open={true}
+          defaultOwnerAgentId={resolvedAgentId}
+          onOpenChange={(open) => {
+            if (!open) setCreatingSchedule(false)
+          }}
+        />
+      )}
+    </ProfileSheet>
+  )
+}
+
+/** Local wrapper for the slide-over primitives. Keeps the three call sites
+ *  (loading / not-found / main) in sync on `open`, `onOpenChange`, side, and
+ *  the column layout that lets the body and footer stick inside the sheet. */
+function ProfileSheet({
+  isOpen,
+  onClose,
+  title,
+  children,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  /**
+   * Accessible title for screen readers. Rendered as a visually-hidden
+   * SheetTitle so Radix Dialog's aria-labelledby points at something
+   * meaningful — the visible h1 in the body is a sibling, not the
+   * Dialog.Title, so without this sr-only label the dialog opens
+   * with no announced name.
+   */
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <Sheet open={isOpen} onOpenChange={(o) => { if (!o) onClose() }}>
+      <SheetContent
+        side="right"
+        widthClass="w-full sm:max-w-3xl"
+        className="flex flex-col gap-0 p-0"
+      >
+        <SheetTitle className="sr-only">{title}</SheetTitle>
+        {children}
+      </SheetContent>
+    </Sheet>
   )
 }
 
@@ -1005,6 +1307,8 @@ function SessionRow({ session }: { session: AgentSession }) {
 
 interface RangeFieldProps {
   label: string
+  /** #335: plain language caption shown below the label */
+  caption?: string
   value: number
   min: number
   max: number
@@ -1013,11 +1317,16 @@ interface RangeFieldProps {
   format: (v: number) => string
 }
 
-function RangeField({ label, value, min, max, step, onChange, format }: RangeFieldProps) {
+function RangeField({ label, caption, value, min, max, step, onChange, format }: RangeFieldProps) {
   return (
     <div className="space-y-1 pt-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-[var(--color-muted)]">{label}</span>
+        <div>
+          <span className="text-xs text-[var(--color-muted)]">{label}</span>
+          {caption && (
+            <p className="text-[10px] text-[var(--color-muted)]/70 leading-snug mt-0.5">{caption}</p>
+          )}
+        </div>
         <span className="text-xs font-mono text-[var(--color-secondary)]">{format(value)}</span>
       </div>
       <input

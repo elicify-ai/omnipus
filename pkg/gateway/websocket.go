@@ -27,6 +27,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/pairing"
@@ -83,6 +84,9 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	PolicyRule        string  `json:"policy_rule,omitempty"`
 	RetryAfterSeconds float64 `json:"retry_after_seconds,omitempty"`
 	AgentID           string  `json:"agent_id,omitempty"`
+	// whatsapp_pairing fields (#283)
+	ChannelID string `json:"channel_id,omitempty"`
+	QR        string `json:"qr,omitempty"`
 	// media frame fields
 	Parts []map[string]any `json:"parts,omitempty"`
 	// subagent span fields (FR-H-004, FR-H-005)
@@ -131,6 +135,23 @@ type WSHandler struct {
 	// Set by the gateway after construction (nil = disabled, which is the test default).
 	toolStore *toolResultStore
 
+	// lastPairingState caches the most-recently-emitted whatsapp_pairing frame
+	// bytes for each channelID (key: string, value: []byte).  Written by the
+	// eventForwarder when status=="code"; deleted on terminal statuses (linked,
+	// error), non-terminal QR-rotation status (timeout — a fresh code typically
+	// follows within the next whatsmeow rotation cycle, ~20 s), known waiting
+	// status, and any future unknown status so stale codes are never shown.
+	// Used by subscribePairingInterest to re-emit the cached QR to late
+	// subscribers (#368).
+	//
+	// WHY a cache is necessary: whatsmeow is not request-driven — it emits QR
+	// codes on its own rotation schedule (up to ~60 s for the first code, ~20 s
+	// for subsequent codes on whatsmeow's rotation schedule).  A browser tab
+	// that opens the pairing UI after the first QR has fired would otherwise
+	// have to wait up to ~60 s before seeing any code.  The cache delivers the
+	// last-seen code immediately on subscribe via subscribePairingInterest.
+	lastPairingState sync.Map
+
 	upgrader websocket.Upgrader
 }
 
@@ -172,6 +193,70 @@ type wsConn struct {
 	// gives ~300× headroom for legitimate clients while bounding amplification
 	// if a buggy or malicious client floods pings.
 	lastPongSentUnixNano atomic.Int64
+
+	// pairingSubs tracks which channels this connection wants whatsapp_pairing
+	// (QR/status) frames for, so the QR secret is delivered only to the operator
+	// viewing that channel's pairing UI rather than every admin tab (#283,
+	// Option B). Guarded by pairingSubsMu; written by the inbound read loop and
+	// read by the event forwarder. Nil until the first subscribe.
+	pairingSubsMu sync.Mutex
+	pairingSubs   map[string]struct{}
+}
+
+// setPairingInterest registers (active) or clears this connection's interest in
+// channelID's whatsapp_pairing frames (#283, Option B).
+func (c *wsConn) setPairingInterest(channelID string, active bool) {
+	c.pairingSubsMu.Lock()
+	defer c.pairingSubsMu.Unlock()
+	if active {
+		if c.pairingSubs == nil {
+			c.pairingSubs = make(map[string]struct{})
+		}
+		c.pairingSubs[channelID] = struct{}{}
+		return
+	}
+	delete(c.pairingSubs, channelID)
+}
+
+// subscribePairingInterest registers or clears this connection's interest in
+// channelID's whatsapp_pairing frames, and immediately re-emits the cached QR
+// frame (if any) when active==true so late subscribers don't wait for the next
+// QR rotation (#368).
+//
+// WHY the cache is needed: whatsmeow emits QR codes on its own rotation
+// schedule (up to ~60 s for the first code, ~20 s for subsequent codes on
+// whatsmeow's rotation schedule) and is not request-driven — there is no way
+// to ask it to re-send the current QR on demand.  A subscriber that arrives
+// between rotations would otherwise wait up to ~60 s before seeing a code.
+// The cache lets us deliver the last-seen code immediately on subscribe.
+func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, active bool) {
+	wc.setPairingInterest(channelID, active)
+	if !active {
+		return
+	}
+	// Re-emit the last-seen QR frame for this channel, if one is cached and the
+	// QR is still "live" (terminal states are deleted from the map by the
+	// eventForwarder).  Route through sendRawFrameBytes so the replay-divert
+	// invariant (isReplayingLive / replayDivertCh) is respected — a direct
+	// wc.sendCh write would bypass the divert and interleave with a replay
+	// stream (#368 + Wave 2 review).
+	if cached, ok := h.lastPairingState.Load(channelID); ok {
+		frameBytes, ok := cached.([]byte)
+		if ok && len(frameBytes) > 0 {
+			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes)
+		} else if !ok {
+			slog.Error("ws: lastPairingState held non-[]byte value, skipping re-emit", "channel_id", channelID)
+		}
+	}
+}
+
+// wantsPairing reports whether this connection has subscribed to channelID's
+// whatsapp_pairing frames (#283, Option B). Safe on a nil map.
+func (c *wsConn) wantsPairing(channelID string) bool {
+	c.pairingSubsMu.Lock()
+	defer c.pairingSubsMu.Unlock()
+	_, ok := c.pairingSubs[channelID]
+	return ok
 }
 
 func (c *wsConn) close() {
@@ -474,10 +559,11 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
-	// 1. Check per-user list (RBAC — bcrypt token hash lookup).
+	// 1. Check per-user list (RBAC — bearer-token SET lookup, SEC-1).
 	if len(cfg.Gateway.Users) > 0 {
-		for _, user := range cfg.Gateway.Users {
-			if user.TokenHash.Verify(rawToken) == nil {
+		for i := range cfg.Gateway.Users {
+			user := cfg.Gateway.Users[i]
+			if user.VerifyToken(rawToken) == nil {
 				wc.role = user.Role
 				wc.userID = user.Username // FR-073: needed for session_state user scoping
 				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -747,6 +833,32 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				continue
 			}
 			h.handleDevicePairingResponse(f.DeviceId, f.Decision)
+		case string(generated.WsFrameTypeWhatsappPairingSubscribe):
+			// #283 (Option B): scope whatsapp_pairing frames to the connection(s)
+			// viewing a channel's pairing UI so the QR secret isn't broadcast to
+			// every admin tab. active=true subscribes this conn; false clears it.
+			if wc.role != config.UserRoleAdmin {
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "whatsapp_pairing_subscribe requires admin role",
+				})
+				continue
+			}
+			var f generated.WhatsAppPairingSubscribeFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed whatsapp_pairing_subscribe frame", "error", err)
+				wc.inboundDropped.Add(1)
+				continue
+			}
+			if f.ChannelId == "" {
+				wc.inboundDropped.Add(1)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "whatsapp_pairing_subscribe requires channel_id",
+				})
+				continue
+			}
+			h.subscribePairingInterest(wc, f.ChannelId, f.Active)
 		default:
 			slog.Debug("ws: unknown frame type ignored", "type", peek.Type, "chat_id", chatID)
 		}
@@ -770,6 +882,8 @@ func wsFrameSchemaName(frameType string) string {
 		return "DevicePairingResponseFrame"
 	case string(generated.WsFrameTypeSessionClose):
 		return "SessionCloseFrame"
+	case string(generated.WsFrameTypeWhatsappPairingSubscribe):
+		return "WhatsAppPairingSubscribeFrame"
 	case string(generated.WsFrameTypePing):
 		return "PingFrame"
 	default:
@@ -790,7 +904,30 @@ func (h *WSHandler) handleChatMessage(
 ) {
 	targetAgentID := agentID
 	if targetAgentID == "" {
-		targetAgentID = "main"
+		if reg := h.agentLoop.GetRegistry(); reg != nil {
+			if def := reg.GetDefaultAgent(); def != nil {
+				targetAgentID = def.ID
+			}
+		}
+		if targetAgentID == "" {
+			// Fall back to the first enabled agent (mirrors handleBoardTaskStart /
+			// resolveDefaultAgentID in pkg/routing/route.go). firstEnabledAgentID
+			// already skips workers, so this fallback never lands on one.
+			targetAgentID = firstEnabledAgentID(h.agentLoop.GetConfig())
+		}
+	} else if isWorkerAgentID(h.agentLoop.GetConfig(), targetAgentID) {
+		// An explicit agent_id that resolves to a worker is illegitimate: a worker
+		// is a delegation-only labour tier, never a chat target. Refuse to mint a
+		// live chat session for it. Mirror the error-frame pattern used for an
+		// unknown/invalid session below.
+		slog.Warn("ws: rejecting chat frame addressed to a worker agent",
+			"agent_id", targetAgentID, "chat_id", chatID,
+			"reason", "worker is invoked via delegation, not as a chat target")
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "this agent is a worker and cannot be a chat target — workers are invoked via delegation",
+		})
+		return
 	}
 
 	sessionID := frameSessionID
@@ -859,8 +996,11 @@ func (h *WSHandler) handleChatMessage(
 			} else {
 				title = content
 			}
-			if err := store.SetMeta(meta.ID, session.MetaPatch{Title: &title}); err != nil {
-				slog.Warn("ws: could not set session title", "session_id", meta.ID, "error", err)
+			// Stamp the session owner from the authenticated WebSocket user (SEC-2/#406).
+			// wc.userID is set at auth time (FR-073); empty on dev-mode bypass.
+			ownerCopy := wc.userID
+			if err := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, Owner: &ownerCopy}); err != nil {
+				slog.Warn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
 			}
 			// Ack the new session_id so the SPA can associate all subsequent frames.
 			startedFrame := generated.SessionStartedFrame{
@@ -2136,6 +2276,96 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				rateF.Tool = &tool
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeRateLimit), rateF)
+		case agent.EventKindWhatsAppPairing:
+			// #283: WhatsApp linked-device pairing (QR + status). Not tied to a
+			// chatID. Delivered only to connections that subscribed to this
+			// channel's pairing UI (Option B), so the QR pairing secret isn't
+			// broadcast to every authenticated admin tab.
+			p, ok := evt.Payload.(agent.WhatsAppPairingPayload)
+			if !ok {
+				continue
+			}
+			pairF := generated.WhatsAppPairingFrame{
+				Type:      string(generated.WsFrameTypeWhatsappPairing),
+				ChannelId: p.ChannelID,
+				Status:    string(p.Status),
+			}
+			if p.QR != "" {
+				qr := p.QR
+				pairF.Qr = &qr
+			}
+			if p.Message != "" {
+				msg := p.Message
+				pairF.Message = &msg
+			}
+			// #368: maintain the per-channel QR cache so late subscribers (e.g.
+			// a tab that opens the pairing UI after the first QR fires) receive
+			// the last-seen code immediately on subscribe rather than waiting for
+			// the next QR rotation.  Only "code" (QR available) is cached;
+			// terminal states are evicted so stale QRs are not re-emitted.
+			switch p.Status {
+			case channels.PairingStatusCode:
+				if frameBytes, merr := json.Marshal(pairF); merr == nil {
+					h.lastPairingState.Store(p.ChannelID, frameBytes)
+				} else {
+					slog.Error("ws: failed to marshal whatsapp_pairing frame for cache",
+						"channel_id", p.ChannelID, "error", merr)
+				}
+			case channels.PairingStatusLinked, channels.PairingStatusTimeout, channels.PairingStatusError:
+				h.lastPairingState.Delete(p.ChannelID)
+			default:
+				// PairingStatusWaiting and any future statuses that are not
+				// "code" must not leave a stale QR in the cache — evict so a
+				// late subscriber is not shown an outdated code.
+				h.lastPairingState.Delete(p.ChannelID)
+			}
+			if !wc.wantsPairing(p.ChannelID) {
+				continue
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
+		case agent.EventKindNotification:
+			// #264: a user-facing notification (e.g. a scheduled run failed).
+			// Delivered ONLY to the recipient user's connections (filtered by
+			// wc.userID) so it never leaks to other admins' tabs. The
+			// NotificationAdminBroadcast sentinel fans out to admin-role
+			// connections when no specific recipient could be resolved.
+			p, ok := evt.Payload.(agent.NotificationPayload)
+			if !ok {
+				continue
+			}
+			if p.Recipient == agent.NotificationAdminBroadcast {
+				if wc.role != config.UserRoleAdmin {
+					continue
+				}
+			} else if wc.userID != p.Recipient {
+				continue
+			}
+			notifF := generated.NotificationFrame{
+				Type:             string(generated.WsFrameTypeNotification),
+				Id:               p.ID,
+				NotificationType: p.NotificationType,
+				Title:            p.Title,
+				Severity:         p.Severity,
+				Read:             p.Read,
+				CreatedAtMs:      int(p.CreatedAtMs),
+			}
+			if p.Body != "" {
+				body := p.Body
+				notifF.Body = &body
+			}
+			if p.ScheduleID != "" {
+				sid := p.ScheduleID
+				notifF.ScheduleId = &sid
+			}
+			if p.SessionID != "" {
+				ses := p.SessionID
+				notifF.SessionId = &ses
+			}
+			if p.AgentID != "" {
+				aid := p.AgentID
+				notifF.AgentId = &aid
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeNotification), notifF)
 		}
 	}
 }
@@ -2159,6 +2389,39 @@ type wsStreamer struct {
 	statsTokens   int64
 	statsCostUSD  float64
 	statsDuration time.Duration
+
+	// transcriptPersisted records that the agent loop already wrote this
+	// streamer's narration to the transcript via
+	// appendIntermediateAssistantTranscript (#416). When set, Finalize must NOT
+	// append the accumulated content again — it would create a duplicate
+	// assistant entry on replay when the turn exits via max_tool_iterations
+	// exhaustion (the last executed round is a tool-call round whose streamer is
+	// the lastStreamer that gets finalized). Guarded by statsMu, which Finalize
+	// already holds while reading stats.
+	transcriptPersisted bool
+}
+
+// SuppressTranscriptWrite marks this streamer so its Finalize skips the
+// transcript-append block. The agent loop calls this (via the inline
+// SuppressTranscriptWrite interface) after it has already persisted the round's
+// narration through appendIntermediateAssistantTranscript (#416 gate fix).
+func (s *wsStreamer) SuppressTranscriptWrite() {
+	s.statsMu.Lock()
+	s.transcriptPersisted = true
+	s.statsMu.Unlock()
+}
+
+// StreamedContentLen reports how many bytes of streamed content this streamer
+// has already emitted to the client for the current attempt. The agent loop's
+// inline-retry guard uses this to avoid re-streaming a full response onto a
+// partially-streamed bubble after a mid-stream transport drop (which would
+// visibly duplicate text in the SPA, since the dropped attempt sent no `done`
+// frame). Guarded by statsMu — the same mutex Update holds when it appends to
+// accumulated — so the read is race-free across goroutines.
+func (s *wsStreamer) StreamedContentLen() int {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	return s.accumulated.Len()
 }
 
 // SetTurnStats is called by the agent loop's finalizeStreamer just before
@@ -2202,7 +2465,13 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 		slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", s.agentID)
 		return fmt.Errorf("ws: token channel full, token dropped")
 	}
+	// Guarded by statsMu so StreamedContentLen() (read by the agent loop's
+	// inline-retry guard, possibly from a different goroutine) observes a
+	// consistent length. Finalize reads accumulated only after streaming has
+	// completed, so it remains lock-free there.
+	s.statsMu.Lock()
 	s.accumulated.WriteString(content)
+	s.statsMu.Unlock()
 	// Cross-browser session attach (#133): also forward the token to every
 	// other connection bound to the same session. The originating chat
 	// already received the frame above; secondary tabs see the live stream
@@ -2258,6 +2527,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	tokensF := float64(s.statsTokens)
 	costF := s.statsCostUSD
 	durF := float64(s.statsDuration.Milliseconds())
+	transcriptAlreadyPersisted := s.transcriptPersisted
 	s.statsMu.Unlock()
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
@@ -2281,8 +2551,15 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	if s.channel != nil && s.accumulated.Len() > 0 {
 		s.channel.markStreamed(s.chatID)
 	}
-	// Record the full assistant response to the session transcript.
-	if s.agentStore != nil && s.sessionID != "" {
+	// Record the full assistant response to the session transcript — unless the
+	// agent loop already persisted this round's narration via
+	// appendIntermediateAssistantTranscript (#416 gate fix). This happens when
+	// the turn exits via max_tool_iterations exhaustion: the last executed round
+	// is a tool-call round whose streamer (this one) becomes the lastStreamer.
+	// Writing here too would duplicate the assistant bubble on replay. We still
+	// sent the done frame, fan-out, and markStreamed above — only the append is
+	// suppressed.
+	if s.agentStore != nil && s.sessionID != "" && !transcriptAlreadyPersisted {
 		content := s.accumulated.String()
 		// Fallback: when accumulated is empty (every Update() call silently
 		// failed because the client WS was already closed), use the
@@ -2299,6 +2576,8 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				AgentID:   s.agentID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
+				Tokens:    int(tokensF),
+				Cost:      costF,
 			}
 			if err := s.agentStore.AppendTranscript(s.sessionID, entry); err != nil {
 				slog.Warn("ws: could not record streamed assistant message", "session_id", s.sessionID, "error", err)

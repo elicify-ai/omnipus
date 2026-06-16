@@ -4,6 +4,9 @@ import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION
 import type { SessionChatState } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { useWhatsAppPairingStore } from './whatsappPairing'
+import { useUiStore } from './ui'
+import type { ExecApprovalRequestFrame, ExecApprovalExpiredFrame, WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
 
 // test_chat_store (test #22)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
@@ -876,13 +879,14 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     // Extract the single assistant message
     const liveAssistant = liveState.messages.find((m) => m.role === 'assistant')
     expect(liveAssistant).toBeDefined()
-    const liveContent = liveAssistant!.content           // "AB"
-    const liveToolCallOrder = liveState.toolCallOrder    // ['tc_live_1']
-    const liveToolCall = liveState.toolCalls['tc_live_1']
+    const liveContent = liveAssistant!.content
+    // After done, tool calls are baked into message.tool_calls and live map is cleared.
+    const liveBakedToolCalls = liveAssistant!.tool_calls ?? []
     expect(liveContent).toBe('AB')
-    expect(liveToolCallOrder).toHaveLength(1)
-    expect(liveToolCall.tool).toBe('shell')
-    expect(liveToolCall.status).toBe('success')
+    expect(liveBakedToolCalls).toHaveLength(1)
+    expect(liveBakedToolCalls[0].tool).toBe('shell')
+    expect(liveBakedToolCalls[0].status).toBe('success')
+    expect(liveState.toolCallOrder).toHaveLength(0)
     // Live sequence: streaming flags settled
     expect(liveAssistant!.isStreaming).toBe(false)
 
@@ -933,13 +937,13 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     // Content must match
     expect(replayAssistant!.content).toBe(liveContent)
 
-    // Tool-call count must match
-    expect(replayState.toolCallOrder).toHaveLength(liveToolCallOrder.length)
+    // Tool-call count must match (both baked into message.tool_calls after done)
+    const replayBakedToolCalls = replayAssistant!.tool_calls ?? []
+    expect(replayBakedToolCalls).toHaveLength(liveBakedToolCalls.length)
 
     // Tool-call properties must match
-    const replayToolCall = replayState.toolCalls['tc_replay_1']
-    expect(replayToolCall.tool).toBe(liveToolCall.tool)
-    expect(replayToolCall.status).toBe(liveToolCall.status)
+    expect(replayBakedToolCalls[0].tool).toBe(liveBakedToolCalls[0].tool)
+    expect(replayBakedToolCalls[0].status).toBe(liveBakedToolCalls[0].status)
 
     // Cursor/streaming flags: replay_message arrives as a completed message (no cursor)
     // Live message: also settled after done. Both must be false.
@@ -2045,5 +2049,151 @@ describe('eviction-leak regression — tool_call_result burst triggers eviction 
         `textAtToolCallStart has a dangling entry for "${callId}" not in toolCallOrder`,
       ).toBe(true)
     }
+  })
+})
+
+// ── exec_approval_expired frame handler ───────────────────────────────────────
+//
+// Verifies that an exec_approval_expired frame removes the matching approval from
+// pendingApprovals and dispatches a toast to the UI store. Also verifies that a
+// frame with a non-matching ID does nothing (no removal, no toast).
+//
+// Traces to: hotfix/v0.1.1 Wave 4 — exec_approval_expired removes pending approval and shows toast
+
+describe('chat store — exec_approval_expired frame', () => {
+  beforeEach(() => {
+    // Reset the UI store so toasts don't leak between tests.
+    act(() => {
+      useUiStore.setState({ toasts: [] })
+    })
+  })
+
+  it('removes the matching approval from pendingApprovals when exec_approval_expired arrives', () => {
+    // Seed a pending approval via exec_approval_request.
+    const reqFrame1: ExecApprovalRequestFrame = {
+      type: 'exec_approval_request',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_expire_1',
+      command: 'rm -rf /tmp/test',
+    }
+    act(() => {
+      useChatStore.getState().handleFrame(reqFrame1)
+    })
+
+    // Verify the approval is in the queue.
+    expect(useChatStore.getState().pendingApprovals).toHaveLength(1)
+    expect(useChatStore.getState().pendingApprovals[0].id).toBe('appr_expire_1')
+
+    // Send the expired frame.
+    const expiredFrame1: ExecApprovalExpiredFrame = {
+      type: 'exec_approval_expired',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_expire_1',
+    }
+    act(() => {
+      useChatStore.getState().handleFrame(expiredFrame1)
+    })
+
+    // The approval must be removed.
+    expect(useChatStore.getState().pendingApprovals).toHaveLength(0)
+  })
+
+  it('dispatches a toast when the matching approval is expired', () => {
+    const reqFrame2: ExecApprovalRequestFrame = {
+      type: 'exec_approval_request',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_expire_2',
+      command: 'git push --force',
+    }
+    act(() => {
+      useChatStore.getState().handleFrame(reqFrame2)
+    })
+
+    const expiredFrame2: ExecApprovalExpiredFrame = {
+      type: 'exec_approval_expired',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_expire_2',
+    }
+    act(() => {
+      useChatStore.getState().handleFrame(expiredFrame2)
+    })
+
+    // A toast must have been added.
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].variant).toBe('error')
+    // The message must mention timeout/timed out/denied.
+    expect(toasts[0].message.toLowerCase()).toMatch(/timed? ?out|denied/)
+  })
+
+  it('leaves pendingApprovals unchanged when expired id does not match any pending approval', () => {
+    // Seed two approvals.
+    const stayFrame1: ExecApprovalRequestFrame = {
+      type: 'exec_approval_request',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_stay_1',
+      command: 'npm install',
+    }
+    const stayFrame2: ExecApprovalRequestFrame = {
+      type: 'exec_approval_request',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_stay_2',
+      command: 'make build',
+    }
+    act(() => {
+      useChatStore.getState().handleFrame(stayFrame1)
+      useChatStore.getState().handleFrame(stayFrame2)
+    })
+
+    expect(useChatStore.getState().pendingApprovals).toHaveLength(2)
+
+    // Send an expired frame with a non-matching ID.
+    const noMatchExpired: ExecApprovalExpiredFrame = {
+      type: 'exec_approval_expired',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_nonexistent',
+    }
+    act(() => {
+      useChatStore.getState().handleFrame(noMatchExpired)
+    })
+
+    // pendingApprovals must be unchanged.
+    expect(useChatStore.getState().pendingApprovals).toHaveLength(2)
+  })
+
+  it('dispatches NO toast when the expired id does not match any pending approval', () => {
+    // Do NOT seed any approval — empty queue.
+    const noMatchExpired2: ExecApprovalExpiredFrame = {
+      type: 'exec_approval_expired',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_no_match',
+    }
+    act(() => {
+      useChatStore.getState().handleFrame(noMatchExpired2)
+    })
+
+    // No toast should have been added.
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(0)
+  })
+})
+
+describe('chat store — whatsapp_pairing routing (#283)', () => {
+  it('handleFrame(whatsapp_pairing) routes the QR to the pairing store', () => {
+    const pairingFrame: WhatsAppPairingFrame = {
+      type: 'whatsapp_pairing',
+      channel_id: 'whatsapp_native',
+      status: 'code',
+      qr: 'QR-ROUTED',
+    }
+    act(() => {
+      useWhatsAppPairingStore.setState({ byChannel: {} })
+      useChatStore.getState().handleFrame(pairingFrame)
+    })
+    expect(useWhatsAppPairingStore.getState().byChannel['whatsapp_native']).toEqual({
+      status: 'code',
+      qr: 'QR-ROUTED',
+      message: '',
+    })
   })
 })

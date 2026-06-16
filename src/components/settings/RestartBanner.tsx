@@ -1,5 +1,17 @@
+/**
+ * RestartBanner — persistent amber banner shown when restart-gated config
+ * changes are pending.
+ *
+ * US-B4 / #330:
+ * - Primary line: plain one-line summary ("1 change waits — restart to apply").
+ * - Raw config diff (key → value arrows) and systemd/docker jargon are hidden
+ *   behind an "Technical details" collapsible — safe to skip for non-experts.
+ * - The banner auto-hides when the diff empties (no dismiss button).
+ */
+
+import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowsClockwise } from '@phosphor-icons/react'
+import { ArrowsClockwise, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { usePendingRestart, PENDING_RESTART_QUERY_KEY } from '@/store/restart'
 import { useAuthStore } from '@/store/auth'
 import type { PendingRestartEntry } from '@/lib/api'
@@ -31,6 +43,7 @@ function EntryRow({ entry }: { entry: PendingRestartEntry }) {
 function RestartBannerInner() {
   const queryClient = useQueryClient()
   const { entries, isLoading, isError, error } = usePendingRestart()
+  const [techDetailsOpen, setTechDetailsOpen] = useState(false)
 
   // Loading first fetch: render nothing to avoid flicker.
   if (isLoading && entries.length === 0) return null
@@ -69,42 +82,64 @@ function RestartBannerInner() {
     void queryClient.invalidateQueries({ queryKey: [...PENDING_RESTART_QUERY_KEY] })
   }
 
+  const changeCount = entries.length
+  const summaryText = `${changeCount} change${changeCount !== 1 ? 's' : ''} saved — restart to apply`
+
   return (
     <div
       role="status"
       aria-live="polite"
       className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 mb-6"
+      data-testid="restart-banner"
     >
-      {/* Header row */}
-      <div className="flex items-start justify-between gap-2 flex-wrap">
-        <div>
-          <p className="text-sm font-semibold text-amber-300">Changes pending restart</p>
-          <p className="text-xs text-amber-300/70 mt-0.5">
-            Restart the gateway process for these changes to take effect.
-          </p>
+      {/* Plain one-line header row */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-sm font-semibold text-amber-300" data-testid="restart-banner-summary">
+          {summaryText}
+        </p>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleManualRefetch}
+            className="flex items-center gap-1 text-xs text-amber-300/60 hover:text-amber-300 transition-colors"
+            aria-label="Refresh pending restart status"
+            title="Refresh status"
+          >
+            <ArrowsClockwise size={13} />
+            <span>Refresh status</span>
+          </button>
         </div>
+      </div>
+
+      {/* Technical details — jargon behind a collapsed disclosure (US-B4) */}
+      <div className="mt-2">
         <button
           type="button"
-          onClick={handleManualRefetch}
-          className="shrink-0 text-amber-300/60 hover:text-amber-300 transition-colors"
-          aria-label="Refresh pending restart status"
+          onClick={() => setTechDetailsOpen((o) => !o)}
+          className="flex items-center gap-1.5 text-[11px] text-amber-300/60 hover:text-amber-300/80 transition-colors"
+          aria-expanded={techDetailsOpen}
+          data-testid="restart-banner-tech-toggle"
         >
-          <ArrowsClockwise size={14} />
+          {techDetailsOpen ? <CaretUp size={11} /> : <CaretDown size={11} />}
+          Technical details
         </button>
-      </div>
 
-      {/* Per-key diff rows */}
-      <div className="mt-2 space-y-1">
-        {entries.map((entry) => (
-          <EntryRow key={entry.key} entry={entry} />
-        ))}
+        {techDetailsOpen && (
+          <div className="mt-2 space-y-1.5" data-testid="restart-banner-tech-details">
+            {/* Per-key diff rows */}
+            <div className="space-y-1">
+              {entries.map((entry) => (
+                <EntryRow key={entry.key} entry={entry} />
+              ))}
+            </div>
+            {/* Supervisor jargon behind the disclosure */}
+            <p className="text-[11px] text-amber-300/50 leading-relaxed mt-1">
+              To apply these changes, restart via your process supervisor (systemd / docker / launchd / etc.).
+              This banner will clear automatically after restart.
+            </p>
+          </div>
+        )}
       </div>
-
-      {/* Helper text */}
-      <p className="mt-2 text-[11px] text-amber-300/50 leading-relaxed">
-        To apply these changes, restart via your process supervisor (systemd / docker / launchd / etc.).
-        This banner will clear automatically after restart.
-      </p>
     </div>
   )
 }

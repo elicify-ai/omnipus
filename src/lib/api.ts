@@ -56,10 +56,6 @@ import {
   SandboxStatus as SandboxStatusSchema,
   SessionScopeResponse as SessionScopeResponseSchema,
   SkillTrustResponse as SkillTrustResponseSchema,
-  UserCreateResponse as UserCreateResponseSchema,
-  UserDeleteResponse as UserDeleteResponseSchema,
-  UserResetPasswordResponse as UserResetPasswordResponseSchema,
-  UserRoleChangeResponse as UserRoleChangeResponseSchema,
   // New generated Zod schemas (contract-first #8):
   AppState as AppStateSchema,
   ValidateTokenResponse as ValidateTokenResponseSchema,
@@ -76,6 +72,8 @@ import {
   ChannelEntry as ChannelEntrySchema,
   ChannelEnabledResponse as ChannelEnabledResponseSchema,
   Skill as SkillSchema,
+  SkillSearchResult as SkillSearchResultSchema,
+  SkillMarketplaceStatus as SkillMarketplaceStatusSchema,
   McpServer as McpServerSchema,
   ActivityEvent as ActivityEventSchema,
   // Wire-shape schemas used for raw-to-SPA transform validation:
@@ -95,10 +93,32 @@ import {
   OperationResult as OperationResultSchema,
   UploadFilesResponse as UploadFilesResponseSchema,
   BackupCreateResponse as BackupCreateResponseSchema,
-  User as UserSchema,
+  RotateTokenResponse as RotateTokenResponseSchema,
   // fix-AC: promoted from hand-written inline schemas:
   UserContextResponse as UserContextResponseSchema,
   McpServerToolsResponse as McpServerToolsResponseSchema,
+  // #264 Schedules (contract-first #8):
+  Schedule as ScheduleSchema,
+  ScheduleList as ScheduleListSchema,
+  ScheduleRunResult as ScheduleRunResultSchema,
+  // #264 Notifications (contract-first #8):
+  NotificationList as NotificationListSchema,
+  // Level-1 workspaces + board tasks + token stats (contract-first #8):
+  Workspace as WorkspaceSchema,
+  WorkspaceSessionLink as WorkspaceSessionLinkSchema,
+  BoardTask as BoardTaskSchema,
+  BoardTaskListResponse as BoardTaskListResponseSchema,
+  TokenUsageSummary as TokenUsageSummarySchema,
+  // Milestones (contract-first #8):
+  Milestone as MilestoneSchema,
+  // Spec-3 max-parallel + orchestrator (contract-first #8):
+  PerformanceSettings as PerformanceSettingsSchema,
+  // Spec-6 U5 — re-auth + Integrations + transcribe (contract-first #8):
+  ReAuthResponse as ReAuthResponseSchema,
+  IntegrationProvidersResponse as IntegrationProvidersResponseSchema,
+  TranscribeResponse as TranscribeResponseSchema,
+  // Spec-4 — external-CLI runner connection test (contract-first #8):
+  RunnerTestResponse as RunnerTestResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -146,10 +166,11 @@ export function resetConfigCoercionCount(): void {
   _configCoercionCount = 0
 }
 
-// Expose counters on window.__omnipus_test_hooks in DEV/test builds
-// so Playwright tests can assert on validation health without reaching into module
+// Expose counters on window.__omnipus_test_hooks in DEV/test builds and in
+// Playwright automation (navigator.webdriver=true) so E2E tests against
+// production builds can assert on validation health without reaching into module
 // internals.
-if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined') {
+if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver)) && typeof window !== 'undefined') {
   const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
   w.__omnipus_test_hooks ??= {}
   w.__omnipus_test_hooks.getApiSchemaErrorCount = getApiSchemaErrorCount
@@ -179,14 +200,6 @@ import type {
   AgentToolEntry,
   SessionStats,
   Attachment,
-  User,
-  UserCreateRequest,
-  UserCreateResponse,
-  UserDeleteResponse,
-  UserRoleChangeRequest,
-  UserRoleChangeResponse,
-  UserResetPasswordRequest,
-  UserResetPasswordResponse,
   SessionScopeRequest,
   SessionScopeResponse,
   ToolRegistryEntry,
@@ -212,6 +225,9 @@ import type {
   Provider,
   GatewayStatus,
   Skill,
+  SkillSearchResult,
+  SkillMarketplaceStatus,
+  SkillInstallRequest,
   ActivityEvent,
   UploadedFile,
   AgentToolsCfg,
@@ -253,6 +269,42 @@ import type {
   AgentUpdateRequest,
   AgentCreateRequest,
   ChannelRouting,
+  // Level-1 workspaces + board tasks + token stats (contract-first #8):
+  Workspace,
+  WorkspaceCreateRequest,
+  WorkspaceUpdateRequest,
+  BoardTask,
+  BoardTaskListResponse,
+  WorkspaceSessionLink,
+  TokenUsageSummary,
+  // #264 Schedules (contract-first #8):
+  Schedule,
+  ScheduleCreate,
+  ScheduleUpdate,
+  ScheduleList,
+  ScheduleRunResult,
+  // #264 Notifications (contract-first #8):
+  NotificationList,
+  // Level-1 board task request types:
+  BoardTaskCreateRequest,
+  BoardTaskUpdateRequest,
+  // Milestones:
+  Milestone,
+  MilestoneCreateRequest,
+  MilestoneUpdateRequest,
+  MilestoneListResponse,
+  // Spec-3 max-parallel + orchestrator (contract-first #8):
+  PerformanceSettings,
+  PerformanceSettingsUpdate,
+  // Spec-6 U5 — re-auth + Integrations + transcribe (contract-first #8):
+  ReAuthResponse,
+  IntegrationProvider,
+  IntegrationProvidersResponse,
+  IntegrationProviderUpdateRequest,
+  TranscribeResponse,
+  // Spec-4 — sub-agent executor + external-CLI runner test (contract-first #8):
+  ExecutorConfig,
+  RunnerTestResponse,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -262,14 +314,6 @@ export type {
   AgentToolEntry,
   SessionStats,
   Attachment,
-  User,
-  UserCreateRequest,
-  UserCreateResponse,
-  UserDeleteResponse,
-  UserRoleChangeRequest,
-  UserRoleChangeResponse,
-  UserResetPasswordRequest,
-  UserResetPasswordResponse,
   SessionScopeRequest,
   SessionScopeResponse,
   ToolRegistryEntry,
@@ -294,6 +338,9 @@ export type {
   Provider,
   GatewayStatus,
   Skill,
+  SkillSearchResult,
+  SkillMarketplaceStatus,
+  SkillInstallRequest,
   ActivityEvent,
   UploadedFile,
   AgentToolsCfg,
@@ -335,6 +382,29 @@ export type {
   AgentUpdateRequest,
   AgentCreateRequest,
   ChannelRouting,
+  // Level-1 workspaces + board tasks + token stats:
+  Workspace,
+  WorkspaceCreateRequest,
+  WorkspaceUpdateRequest,
+  BoardTask,
+  BoardTaskListResponse,
+  WorkspaceSessionLink,
+  TokenUsageSummary,
+  BoardTaskCreateRequest,
+  BoardTaskUpdateRequest,
+  Milestone,
+  MilestoneCreateRequest,
+  MilestoneUpdateRequest,
+  MilestoneListResponse,
+  // Spec-6 U5:
+  ReAuthResponse,
+  IntegrationProvider,
+  IntegrationProvidersResponse,
+  IntegrationProviderUpdateRequest,
+  TranscribeResponse,
+  // Spec-4 — sub-agent executor + external-CLI runner test:
+  ExecutorConfig,
+  RunnerTestResponse,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -463,6 +533,23 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
     throw await ApiError.fromResponse(res)
   }
 
+  // Empty-body responses (HTTP 204 No Content, 205 Reset Content, or any 2xx
+  // that explicitly advertises a zero-length body) carry no JSON to parse.
+  // DELETE/PUT/POST handlers that return 204 would otherwise throw on
+  // res.json() ("Unexpected end of JSON input"), making a successful mutation
+  // appear to fail. Detect the DEFINITIVE empty-body signals and resolve with
+  // `undefined` — the correct value for the Promise<void> callers (deleteTask,
+  // deleteSkill, deleteMcpServer, deleteCredential, deleteSchedule,
+  // clearAllSessions, …). We deliberately do NOT key off Content-Type here: a
+  // non-JSON body with actual content (e.g. an HTML error page served with a
+  // misconfigured 200) is a different failure that must still flow to the
+  // schema/JSON-parse path below so it surfaces as an ApiSchemaError, not a
+  // silent success.
+  const contentLength = res.headers.get('Content-Length')
+  if (res.status === 204 || res.status === 205 || contentLength === '0') {
+    return undefined as T
+  }
+
   // Parse the response body, handling non-JSON (e.g. unexpected HTML 200)
   // gracefully — surface as ApiSchemaError with the raw text as rawBody so
   // callers can see what the server actually sent.
@@ -470,6 +557,16 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
   try {
     body = await res.json() as unknown
   } catch (cause) {
+    // A JSON-parse failure on a body with no Content-Length header is the
+    // common shape of an empty 2xx (some gateways omit Content-Length on a
+    // bodyless 200/202 instead of using 204). For a caller that passed NO
+    // schema — i.e. a Promise<void> mutation — that is a legitimate success,
+    // so resolve with undefined rather than throwing. When a schema WAS
+    // provided the body genuinely should have been JSON, so surface the
+    // ApiSchemaError as before.
+    if (schema === undefined && (contentLength === null || contentLength === '')) {
+      return undefined as T
+    }
     const rawText = String(cause instanceof Error ? cause.message : cause)
     if (schema !== undefined) {
       _apiSchemaErrorCount++
@@ -529,6 +626,22 @@ export interface AgentShellPolicy { // not-wire-format: SPA-internal helper type
 // Agent — re-exported from generated openapi-types (contract-first #8).
 // The generated type is the source of truth; see contracts/components/schemas/Agent.yaml.
 
+// AgentKind — the agent's "kind" axis. Derived directly from the generated
+// Agent['type'] so it is NOT a parallel wire type (Constraint #8): the generated
+// Agent remains the single source of truth. Re-used everywhere the literal union
+// 'core' | 'custom' | 'system' | 'worker' was previously repeated inline (session
+// store, ToolsAndPermissions) so the literal isn't scattered.
+export type AgentKind = NonNullable<Agent['type']>
+
+// isWorker — a worker is a delegation-only labour agent: never a chat target,
+// never a channel routing default, never a schedule owner. Used by the chat
+// switcher, channel-routing picker, and schedule-owner picker to filter workers
+// out of those selection sites. Accepts a loose shape so it works on partial
+// agent objects too.
+export function isWorker(a: { type?: string | null }): boolean {
+  return a.type === 'worker'
+}
+
 export function fetchAgents(): Promise<Agent[]> {
   return request<Agent[]>('/agents', undefined, z.array(AgentSchema) as ZodType<Agent[]>)
 }
@@ -543,6 +656,21 @@ export function createAgent(data: AgentCreateRequest): Promise<Agent> {
 
 export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {
   return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
+}
+
+// Spec-4 FR-4.2 — external-CLI runner connection test.
+// POST /api/v1/agents/{id}/runner/test validates the agent's configured external
+// CLI (claude-code / codex / opencode) without running any real agent work:
+// binary present + version handshake + authenticated. The response carries a
+// distinct `reason` (missing-binary | unauthenticated | handshake-failed |
+// unknown-cli | not-external-cli) so the UI can show a precise remedy. The
+// generated RunnerTestResponse type + Zod schema are the source of truth.
+export function testAgentRunner(id: string): Promise<RunnerTestResponse> {
+  return request<RunnerTestResponse>(
+    `/agents/${encodeURIComponent(id)}/runner/test`,
+    { method: 'POST' },
+    RunnerTestResponseSchema as ZodType<RunnerTestResponse>,
+  )
 }
 
 // AgentSession — re-exported from generated openapi-types (no local body needed).
@@ -565,6 +693,9 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   message_count: number
   total_tokens?: number
   total_cost?: number
+  // Channel identifier that initiated this session (e.g. "webchat", "telegram").
+  // Legacy sessions may omit this field; callers should treat undefined as "webchat".
+  channel?: string
   // Multi-agent session fields — present on sessions created with the joined
   // session model. For legacy single-agent sessions these are absent; callers
   // should fall back to [agent_id] when agent_ids is undefined.
@@ -581,6 +712,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   task_id?: string
   created_at: string
   updated_at: string
+  channel?: string
   agent_ids?: string[]
   active_agent_id?: string
   stats?: {
@@ -610,6 +742,7 @@ function rawToSession(raw: RawSession): Session {
     message_count: raw.stats?.message_count ?? 0,
     total_tokens: raw.stats?.tokens_total,
     total_cost: raw.stats?.cost,
+    channel: raw.channel,
     agent_ids: raw.agent_ids,
     active_agent_id: raw.active_agent_id,
   }
@@ -636,6 +769,13 @@ interface MessageBase { // not-wire-format
   timestamp: string
   tokens?: number
   cost?: number
+  /**
+   * Authoring agent id (assistant messages). Carried through from the wire
+   * `agent_id` so cold-load (REST) transcripts render each message under its
+   * true author after a handover — matching the WS-replay path which already
+   * populates ChatMessage.agentId from each frame's agent_id.
+   */
+  agentId?: string
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
@@ -827,6 +967,7 @@ function rawToMessage(raw: RawMessage): Message {
       timestamp: raw.timestamp,
       tokens: raw.tokens,
       cost: raw.cost,
+      agentId: raw.agent_id || undefined,
       status: (baseStatus === 'done' || baseStatus === 'error') ? baseStatus : 'done',
     } satisfies UserMessage
   }
@@ -839,6 +980,7 @@ function rawToMessage(raw: RawMessage): Message {
       timestamp: raw.timestamp,
       tokens: raw.tokens,
       cost: raw.cost,
+      agentId: raw.agent_id || undefined,
       status: 'done',
     } satisfies SystemMessage
   }
@@ -851,6 +993,9 @@ function rawToMessage(raw: RawMessage): Message {
     timestamp: raw.timestamp,
     tokens: raw.tokens,
     cost: raw.cost,
+    // Carry the per-message authoring agent so a reloaded handover transcript
+    // renders each assistant turn under its true author (not the active agent).
+    agentId: raw.agent_id || undefined,
     // Wire status is 'ok'→'done' | 'error' | 'interrupted'. 'streaming' is SPA-only
     // (never on persisted wire messages) so this branch guards for undefined only.
     status: (baseStatus === 'done' || baseStatus === 'error' || baseStatus === 'interrupted') ? baseStatus : 'done',
@@ -903,6 +1048,55 @@ export async function installSkillFromFile(content: string, filename: string): P
   })
 }
 
+/**
+ * searchSkills queries the ClawHub marketplace registry via
+ * GET /api/v1/skills/search?q=<query>&limit=<n>. Returns an array of
+ * SkillSearchResult (marketplace hits, NOT installed skills). The backend
+ * returns 400 for an empty/blank query and 502 when the registry is
+ * unreachable — both surface as a typed ApiError to the caller.
+ */
+export async function searchSkills(q: string, limit = 20): Promise<SkillSearchResult[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) })
+  return request<SkillSearchResult[]>(
+    `/skills/search?${params.toString()}`,
+    undefined,
+    z.array(SkillSearchResultSchema) as ZodType<SkillSearchResult[]>,
+  )
+}
+
+/**
+ * installSkillBySlug installs a marketplace skill by its slug via
+ * POST /api/v1/skills/install with a SkillInstallRequest body
+ * ({ slug, version? }). Returns the freshly installed Skill on success.
+ * The backend returns 409 when the skill is already installed and 502 when
+ * the registry is unreachable.
+ */
+export async function installSkillBySlug(slug: string, version?: string): Promise<Skill> {
+  const body: SkillInstallRequest = version ? { slug, version } : { slug }
+  return request<Skill>(
+    '/skills/install',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    SkillSchema as ZodType<Skill>,
+  )
+}
+
+/**
+ * fetchSkillMarketplaceStatus reports whether a skill marketplace is enabled
+ * via GET /api/v1/skills/marketplace. When `enabled` is false the SPA hides
+ * the search/browse UI and offers only file-based install — the backend
+ * returns 409 for /skills/search and /skills/install in that state.
+ */
+export async function fetchSkillMarketplaceStatus(): Promise<SkillMarketplaceStatus> {
+  return request<SkillMarketplaceStatus>(
+    '/skills/marketplace',
+    undefined,
+    SkillMarketplaceStatusSchema as ZodType<SkillMarketplaceStatus>,
+  )
+}
+
 export interface SessionDetail { // not-wire-format: SPA-internal detail type. Uses the SPA-internal Session (stats-flattened) and SPA-internal Message (params field), not the wire-format generated SessionDetail. See fetchSessionDetail() which transforms the raw response.
   session: Session
   messages: Message[]
@@ -941,7 +1135,6 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
   gateway: {
     bind_address: string
     port: number
-    auth_mode: 'none' | 'token'
     token?: string
     hot_reload?: boolean
     log_level?: string
@@ -979,11 +1172,13 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
   agents?: {
     defaults?: {
       default_agent_id?: string
+      // Previously missing — silently stripped by rawToFrontendConfig/frontendToRawConfig before this fix
+      model_name?: string
+      provider?: string
     }
   }
 }
 
-const VALID_AUTH_MODES = ['none', 'token'] as const
 const VALID_POLICY_MODES = ['allow', 'deny'] as const
 const VALID_EXEC_APPROVALS = ['auto', 'ask', 'deny'] as const
 const VALID_INJECTION_LEVELS = ['off', 'low', 'medium', 'high'] as const
@@ -1016,7 +1211,6 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
     gateway: {
       bind_address: cast<string>(gateway.host, '127.0.0.1'),
       port: cast<number>(gateway.port, 8080),
-      auth_mode: validEnum(gateway.auth_mode, VALID_AUTH_MODES, 'none'),
       token: gateway.token as string | undefined,
       hot_reload: gateway.hot_reload as boolean | undefined,
       log_level: gateway.log_level as string | undefined,
@@ -1043,6 +1237,8 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
     agents: {
       defaults: {
         default_agent_id: agentDefaults.default_agent_id as string | undefined,
+        model_name: agentDefaults.model_name as string | undefined,
+        provider: agentDefaults.provider as string | undefined,
       },
     },
   }
@@ -1069,7 +1265,6 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
     const gw: Record<string, unknown> = {}
     if (data.gateway.bind_address !== undefined) gw.host = data.gateway.bind_address
     if (data.gateway.port !== undefined) gw.port = data.gateway.port
-    if (data.gateway.auth_mode !== undefined) gw.auth_mode = data.gateway.auth_mode
     if (data.gateway.token !== undefined) gw.token = data.gateway.token
     if (data.gateway.hot_reload !== undefined) gw.hot_reload = data.gateway.hot_reload
     if (data.gateway.log_level !== undefined) gw.log_level = data.gateway.log_level
@@ -1123,13 +1318,26 @@ export function fetchProviders(): Promise<Provider[]> {
   return request<Provider[]>('/providers', undefined, z.array(ProviderSchema) as ZodType<Provider[]>)
 }
 
-export function configureProvider(id: string, apiKey?: string, endpoint?: string, model?: string): Promise<Provider> {
+// configureProvider sets a model/provider's API key, endpoint, and/or model.
+// Post-onboarding this PUT is re-auth gated (Spec-6 FR-12.2 / FR-6.6): the server
+// rejects it with 403 unless a single-use consent token (from reAuth) is replayed
+// in the X-Reauth-Token header. The token is OPTIONAL here because the same route
+// is used during onboarding, where no authenticated user exists yet and the gate
+// is skipped (see pkg/gateway/rest.go provider PUT handler).
+export function configureProvider(
+  id: string,
+  apiKey?: string,
+  endpoint?: string,
+  model?: string,
+  reAuthToken?: string,
+): Promise<Provider> {
   const body: Record<string, string> = {}
   if (apiKey !== undefined) body.api_key = apiKey
   if (endpoint !== undefined) body.endpoint = endpoint
   if (model !== undefined) body.model = model
   return request<Provider>(`/providers/${id}`, {
     method: 'PUT',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
   }, ProviderSchema as ZodType<Provider>)
 }
@@ -1139,7 +1347,7 @@ export function testProvider(id: string): Promise<OperationResult> {
 }
 
 export function rotateGatewayToken(): Promise<{ token: string }> {
-  return request('/config/gateway/rotate-token', { method: 'POST' })
+  return request('/config/gateway/rotate-token', { method: 'POST' }, RotateTokenResponseSchema as ZodType<{ token: string }>)
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
@@ -1176,6 +1384,60 @@ export function startTask(id: string): Promise<void> {
 
 export function deleteTask(id: string): Promise<void> {
   return request(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ── #264 Schedules ──────────────────────────────────────────────────────────────
+
+// Schedule wire types are re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Schedule*.yaml. The /schedules surface is the
+// contract projection over the underlying cron job.
+
+export function fetchSchedules(): Promise<Schedule[]> {
+  // GET /schedules returns { schedules: Schedule[] }; flatten to the array the UI consumes.
+  return request<ScheduleList>('/schedules', undefined, ScheduleListSchema as ZodType<ScheduleList>)
+    .then((list) => list.schedules)
+}
+
+export function createSchedule(body: ScheduleCreate): Promise<Schedule> {
+  return request<Schedule>('/schedules', { method: 'POST', body: JSON.stringify(body) }, ScheduleSchema as ZodType<Schedule>)
+}
+
+export function updateSchedule(id: string, body: ScheduleUpdate): Promise<Schedule> {
+  return request<Schedule>(`/schedules/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }, ScheduleSchema as ZodType<Schedule>)
+}
+
+export function deleteSchedule(id: string): Promise<void> {
+  return request<void>(`/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function runSchedule(id: string): Promise<ScheduleRunResult> {
+  return request<ScheduleRunResult>(`/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }, ScheduleRunResultSchema as ZodType<ScheduleRunResult>)
+}
+
+export function pauseSchedule(id: string): Promise<Schedule> {
+  return request<Schedule>(`/schedules/${encodeURIComponent(id)}/pause`, { method: 'POST' }, ScheduleSchema as ZodType<Schedule>)
+}
+
+// ── #264 Notifications ────────────────────────────────────────────────────────
+//
+// Header notification center. The REST surface seeds the store on mount and the
+// `notification` WS frame keeps it live. NotificationList wire type is re-exported
+// from generated openapi-types (contract-first #8); see
+// contracts/components/schemas/Notification*.yaml.
+
+export function fetchNotifications(): Promise<NotificationList> {
+  // GET /notifications → { notifications: Notification[], unread_count }.
+  return request<NotificationList>('/notifications', undefined, NotificationListSchema as ZodType<NotificationList>)
+}
+
+export function markNotificationRead(id: string): Promise<void> {
+  // POST /notifications/{id}/read — void response.
+  return request<void>(`/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' })
+}
+
+export function markAllNotificationsRead(): Promise<void> {
+  // POST /notifications/read-all — void response.
+  return request<void>('/notifications/read-all', { method: 'POST' })
 }
 
 // ── Gateway Status ────────────────────────────────────────────────────────────
@@ -1273,8 +1535,25 @@ export function setChannelRouting(id: string, body: ChannelRouting): Promise<Cha
 // McpServerCreate — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/McpServerCreate.yaml.
 
-export function fetchSkills(): Promise<Skill[]> {
-  return request<Skill[]>('/skills', undefined, z.array(SkillSchema) as ZodType<Skill[]>)
+export async function fetchSkills(): Promise<Skill[]> {
+  // Tolerant per-item validation: a single skill whose payload fails the Skill
+  // schema must NOT hide the entire installed-skills list. (A community/ClawHub
+  // skill with an unexpected field value previously made the whole list silently
+  // vanish.) Validate each item, keep the valid ones, drop + warn on the rest.
+  const raw = await request<unknown[]>('/skills')
+  if (!Array.isArray(raw)) return []
+  const out: Skill[] = []
+  let dropped = 0
+  for (const item of raw) {
+    const parsed = SkillSchema.safeParse(item)
+    if (parsed.success) out.push(parsed.data as Skill)
+    else dropped++
+  }
+  if (dropped > 0 && import.meta.env?.DEV) {
+    // eslint-disable-next-line no-console
+    console.warn(`fetchSkills: dropped ${dropped} skill(s) that failed schema validation`)
+  }
+  return out
 }
 
 export function deleteSkill(name: string): Promise<void> {
@@ -1627,6 +1906,100 @@ export function changePassword(currentPassword: string, newPassword: string): Pr
   }, OperationResultSchema as ZodType<OperationResult>)
 }
 
+// ── Re-auth consent primitive (Spec-6 FR-12.2) ─────────────────────────────────
+//
+// reAuth re-verifies the single user's one password before a sensitive settings
+// change. On success it returns a short-lived, single-use consent token the
+// caller replays in the X-Reauth-Token header on the very next sensitive request
+// (e.g. configureIntegrationProvider). This is the NEW consent primitive — it is
+// NOT RequireNotBypass (a 503 dev-mode guard, unrelated). A wrong password
+// rejects with a 401 ApiError.
+export const REAUTH_HEADER = 'X-Reauth-Token'
+
+export function reAuth(password: string): Promise<ReAuthResponse> {
+  return request<ReAuthResponse>('/auth/reauth', {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  }, ReAuthResponseSchema as ZodType<ReAuthResponse>)
+}
+
+// ── Integrations (Spec-6 FR-12.1) ──────────────────────────────────────────────
+
+export function fetchIntegrationProviders(): Promise<IntegrationProvidersResponse> {
+  return request<IntegrationProvidersResponse>(
+    '/integrations/providers',
+    undefined,
+    IntegrationProvidersResponseSchema as ZodType<IntegrationProvidersResponse>,
+  )
+}
+
+// configureIntegrationProvider sets a provider's API key and/or selects it as
+// active. It REQUIRES a re-auth consent token (from reAuth) — the server rejects
+// the PUT with 403 without a valid token. The token is replayed in the
+// X-Reauth-Token header.
+export function configureIntegrationProvider(
+  id: string,
+  body: IntegrationProviderUpdateRequest,
+  reAuthToken: string,
+): Promise<IntegrationProvidersResponse> {
+  return request<IntegrationProvidersResponse>(
+    `/integrations/providers/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      headers: { [REAUTH_HEADER]: reAuthToken },
+      body: JSON.stringify(body),
+    },
+    IntegrationProvidersResponseSchema as ZodType<IntegrationProvidersResponse>,
+  )
+}
+
+// ── Voice transcription (composer mic, Spec-6 FR-12.1) ─────────────────────────
+//
+// transcribeAudio uploads a recorded audio Blob to the active transcriber and
+// returns the recognised text. Multipart form-data; the request() helper is
+// JSON-only, so this uses fetch directly with the auth + CSRF headers.
+export async function transcribeAudio(audio: Blob): Promise<TranscribeResponse> {
+  const form = new FormData()
+  // Preserve the recorded mime type's extension hint where possible.
+  const ext = audio.type.includes('webm') ? 'webm'
+    : audio.type.includes('ogg') ? 'ogg'
+    : audio.type.includes('wav') ? 'wav'
+    : audio.type.includes('mp4') || audio.type.includes('mpeg') ? 'm4a'
+    : 'webm'
+  form.append('audio', audio, `recording.${ext}`)
+
+  const csrf = readCSRFCookie()
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/api/v1/voice/transcribe`, {
+      method: 'POST',
+      // NOTE: do NOT set Content-Type — the browser sets the multipart boundary.
+      headers: {
+        ...getAuthHeaders(),
+        ...(csrf ? { [CSRF_HEADER_NAME]: csrf } : {}),
+      },
+      body: form,
+    })
+  } catch (cause) {
+    throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
+  }
+  if (!res.ok) {
+    throw await ApiError.fromResponse(res)
+  }
+  const raw = (await res.json()) as unknown
+  const parsed = TranscribeResponseSchema.safeParse(raw)
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+    _apiSchemaErrorCount++
+    void maybeDevToast(
+      `[api] transcribe response schema mismatch: ${issues[0]?.message ?? 'unknown'}`,
+      'POST:/voice/transcribe:schema',
+    )
+    throw new ApiSchemaError('/voice/transcribe', issues, raw)
+  }
+  return parsed.data as TranscribeResponse
+}
+
 // ── Exec Allowlist ────────────────────────────────────────────────────────────
 
 // ExecAllowlist — re-exported from generated openapi-types (no local body needed).
@@ -1747,9 +2120,16 @@ export function fetchSandboxConfig(): Promise<SandboxConfigResponse> {
   return request<SandboxConfigResponse>('/security/sandbox-config', undefined, SandboxConfigSchema)
 }
 
-export function updateSandboxConfig(body: SandboxConfigUpdate): Promise<SandboxConfigResponse> {
+// updateSandboxConfig persists a sandbox-config mutation. It is re-auth gated
+// (Spec-6 FR-12.2): the server rejects the PUT with 403 unless a single-use
+// consent token (from reAuth) is replayed in the X-Reauth-Token header.
+export function updateSandboxConfig(
+  body: SandboxConfigUpdate,
+  reAuthToken?: string,
+): Promise<SandboxConfigResponse> {
   return request<SandboxConfigResponse>('/security/sandbox-config', {
     method: 'PUT',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
   }, SandboxConfigSchema)
 }
@@ -1816,43 +2196,30 @@ export function triggerRetentionSweep(): Promise<RetentionSweepResult> {
   return request<RetentionSweepResult>('/security/retention/sweep', { method: 'POST' }, RetentionSweepResultSchema)
 }
 
-// Users — list, create, delete, reset password, change role.
-// UserEntry — type alias for the generated User schema (contract-first #8).
-// See contracts/components/schemas/User.yaml.
-export type UserEntry = User
+// Performance — max-parallel agent concurrency settings.
+// PerformanceSettings and PerformanceSettingsUpdate are re-exported from
+// generated openapi-types (contract-first #8).
+// See contracts/components/schemas/PerformanceSettings.yaml.
 
-// UserEntry is the SPA-internal type; the generated User schema is compatible (passthrough).
-export function fetchUsers(): Promise<UserEntry[]> {
-  return request<UserEntry[]>('/users', undefined, z.array(UserSchema) as ZodType<UserEntry[]>)
+export type { PerformanceSettings, PerformanceSettingsUpdate }
+
+export function fetchPerformanceSettings(): Promise<PerformanceSettings> {
+  return request<PerformanceSettings>('/performance', undefined, PerformanceSettingsSchema)
 }
 
-export async function createUser(body: UserCreateRequest): Promise<UserCreateResponse> {
-  const response = await request<UserCreateResponse & { token?: string }>('/users', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  }, UserCreateResponseSchema)
-  if ('token' in response) {
-    throw new Error('unexpected token in create response')
-  }
-  return response
-}
-
-export function deleteUser(username: string): Promise<UserDeleteResponse> {
-  return request<UserDeleteResponse>(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' }, UserDeleteResponseSchema)
-}
-
-export function resetUserPassword(username: string, password: string): Promise<UserResetPasswordResponse> {
-  return request<UserResetPasswordResponse>(`/users/${encodeURIComponent(username)}/password`, {
+// updatePerformanceSettings persists the max-parallel-agents concurrency setting.
+// It is re-auth gated (Spec-6 FR-12.2 / Spec-3 FR-6.6): the server rejects the PUT
+// with 403 unless a single-use consent token (from reAuth) is replayed in the
+// X-Reauth-Token header.
+export function updatePerformanceSettings(
+  body: PerformanceSettingsUpdate,
+  reAuthToken?: string,
+): Promise<PerformanceSettings> {
+  return request<PerformanceSettings>('/performance', {
     method: 'PUT',
-    body: JSON.stringify({ password } satisfies UserResetPasswordRequest),
-  }, UserResetPasswordResponseSchema)
-}
-
-export function updateUserRole(username: string, role: UserRole): Promise<UserRoleChangeResponse> {
-  return request<UserRoleChangeResponse>(`/users/${encodeURIComponent(username)}/role`, {
-    method: 'PATCH',
-    body: JSON.stringify({ role } satisfies UserRoleChangeRequest),
-  }, UserRoleChangeResponseSchema)
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
+    body: JSON.stringify(body),
+  }, PerformanceSettingsSchema)
 }
 
 // ── Exec Proxy ────────────────────────────────────────────────────────────────
@@ -1923,9 +2290,17 @@ export function fetchGlobalToolPolicies(): Promise<GlobalToolPolicies> {
   return request<GlobalToolPolicies>('/security/tool-policies', undefined, GlobalToolPoliciesSchema)
 }
 
-export function updateGlobalToolPolicies(cfg: GlobalToolPolicies): Promise<GlobalToolPolicies> {
+// updateGlobalToolPolicies persists the global tool-policy grant. It is re-auth
+// gated (Spec-3 FR-3.3 / Spec-6 FR-12.2): the server rejects the PUT with 403
+// unless a single-use consent token (from reAuth) is replayed in the
+// X-Reauth-Token header.
+export function updateGlobalToolPolicies(
+  cfg: GlobalToolPolicies,
+  reAuthToken?: string,
+): Promise<GlobalToolPolicies> {
   return request<GlobalToolPolicies>('/security/tool-policies', {
     method: 'PUT',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(cfg),
   }, GlobalToolPoliciesSchema)
 }
@@ -1944,5 +2319,186 @@ export function fetchSandboxStatus(): Promise<SandboxStatus> {
 export function fetchToolResult(sessionId: string, ref: string): Promise<unknown> {
   return request<unknown>(
     `/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(ref)}`,
+  )
+}
+
+// ── Workspaces ────────────────────────────────────────────────────────────────
+//
+// Workspaces are lightweight metadata records (no filesystem dirs). All types are
+// re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Workspace*.yaml.
+
+export const workspacesQueryKeys = {
+  list: (params?: { status?: string }) => ['workspaces', params] as const,
+  detail: (id: string) => ['workspaces', id] as const,
+  sessions: (id: string) => ['workspaces', id, 'sessions'] as const,
+}
+
+export function fetchWorkspaces(params?: { status?: string }): Promise<Workspace[]> {
+  const qs = params?.status ? '?' + new URLSearchParams({ status: params.status }).toString() : ''
+  return request<Workspace[]>(`/workspaces${qs}`, undefined, z.array(WorkspaceSchema) as ZodType<Workspace[]>)
+}
+
+export function createWorkspace(body: WorkspaceCreateRequest): Promise<Workspace> {
+  return request<Workspace>(
+    '/workspaces',
+    { method: 'POST', body: JSON.stringify(body) },
+    WorkspaceSchema as ZodType<Workspace>,
+  )
+}
+
+export function updateWorkspace(id: string, body: WorkspaceUpdateRequest): Promise<Workspace> {
+  return request<Workspace>(
+    `/workspaces/${encodeURIComponent(id)}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    WorkspaceSchema as ZodType<Workspace>,
+  )
+}
+
+export function deleteWorkspace(id: string): Promise<void> {
+  return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function fetchWorkspaceSessions(id: string): Promise<WorkspaceSessionLink[]> {
+  return request<WorkspaceSessionLink[]>(
+    `/workspaces/${encodeURIComponent(id)}/sessions`,
+    undefined,
+    z.array(WorkspaceSessionLinkSchema) as ZodType<WorkspaceSessionLink[]>,
+  )
+}
+
+// ── GTD Board Tasks ───────────────────────────────────────────────────────────
+//
+// Board tasks are the GTD Kanban items. All types are re-exported from generated
+// openapi-types (contract-first #8). See contracts/components/schemas/BoardTask*.yaml.
+
+export const boardTasksQueryKeys = {
+  list: (params?: { workspace_id?: string; status?: string; milestone_id?: string; agent_id?: string }) => {
+    const cleaned = params
+      ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
+      : {}
+    return ['board-tasks', cleaned] as const
+  },
+  detail: (id: string) => ['board-tasks', id] as const,
+}
+
+export function fetchBoardTasks(params?: { workspace_id?: string; status?: string; milestone_id?: string; agent_id?: string }): Promise<BoardTask[]> {
+  const search = new URLSearchParams()
+  if (params?.workspace_id) search.set('workspace_id', params.workspace_id)
+  if (params?.status) search.set('status', params.status)
+  if (params?.milestone_id) search.set('milestone_id', params.milestone_id)
+  if (params?.agent_id) search.set('agent_id', params.agent_id)
+  const qs = search.toString() ? '?' + search.toString() : ''
+  return request<BoardTaskListResponse>(
+    `/board/tasks${qs}`,
+    undefined,
+    BoardTaskListResponseSchema as ZodType<BoardTaskListResponse>,
+  ).then((res) => res.items)
+}
+
+export function createBoardTask(body: BoardTaskCreateRequest): Promise<BoardTask> {
+  return request<BoardTask>(
+    '/board/tasks',
+    { method: 'POST', body: JSON.stringify(body) },
+    BoardTaskSchema as ZodType<BoardTask>,
+  )
+}
+
+export function updateBoardTask(id: string, body: BoardTaskUpdateRequest): Promise<BoardTask> {
+  return request<BoardTask>(
+    `/board/tasks/${encodeURIComponent(id)}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    BoardTaskSchema as ZodType<BoardTask>,
+  )
+}
+
+export function deleteBoardTask(id: string): Promise<void> {
+  return request<void>(`/board/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function startBoardTask(id: string): Promise<BoardTask> {
+  return request<BoardTask>(
+    `/board/tasks/${encodeURIComponent(id)}/start`,
+    { method: 'POST' },
+    BoardTaskSchema as ZodType<BoardTask>,
+  )
+}
+
+// ── Milestones ────────────────────────────────────────────────────────────────
+//
+// Milestones are scoped to a workspace. All types are re-exported from generated
+// openapi-types (contract-first #8). See contracts/components/schemas/Milestone*.yaml.
+//
+// `progress` (0–1 completion fraction) is a generated, read-only field on Milestone:
+// computed server-side at read time (done/total over the milestone's GTD board tasks).
+// It is optional in the schema and absent on create/update echoes when no tasks exist.
+
+export const milestonesQueryKeys = {
+  list: (workspaceId: string) => ['milestones', workspaceId] as const,
+  detail: (workspaceId: string, milestoneId: string) => ['milestones', workspaceId, milestoneId] as const,
+}
+
+const MilestoneListResponseSchema = z.object({
+  milestones: z.array(MilestoneSchema),
+  total: z.number().int(),
+})
+
+export function fetchMilestones(workspaceId: string): Promise<Milestone[]> {
+  return request<{ milestones: Milestone[]; total: number }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
+    undefined,
+    MilestoneListResponseSchema,
+  ).then((res) => res.milestones)
+}
+
+export function getMilestone(workspaceId: string, milestoneId: string): Promise<Milestone> {
+  return request<Milestone>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    undefined,
+    MilestoneSchema,
+  )
+}
+
+export function createMilestone(workspaceId: string, body: MilestoneCreateRequest): Promise<Milestone> {
+  return request<Milestone>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
+    { method: 'POST', body: JSON.stringify(body) },
+    MilestoneSchema,
+  )
+}
+
+export function updateMilestone(workspaceId: string, milestoneId: string, body: MilestoneUpdateRequest): Promise<Milestone> {
+  return request<Milestone>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    MilestoneSchema,
+  )
+}
+
+export function deleteMilestone(workspaceId: string, milestoneId: string): Promise<void> {
+  return request<void>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+// ── Token Usage Stats ─────────────────────────────────────────────────────────
+//
+// Token usage summary by agent for the current month.
+// See contracts/components/schemas/TokenUsageSummary.yaml.
+
+export const tokenStatsQueryKeys = {
+  monthly: () => ['token-stats', 'month'] as const,
+}
+
+export const auditLogQueryKeys = {
+  list: () => ['audit-log'] as const,
+}
+
+export function fetchTokenStats(): Promise<TokenUsageSummary> {
+  return request<TokenUsageSummary>(
+    '/stats/tokens?period=month',
+    undefined,
+    TokenUsageSummarySchema as ZodType<TokenUsageSummary>,
   )
 }

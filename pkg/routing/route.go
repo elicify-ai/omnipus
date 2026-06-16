@@ -15,6 +15,16 @@ type RouteInput struct {
 	ParentPeer *RoutePeer
 	GuildID    string
 	TeamID     string
+	// InstanceID is the channel-instance key the message arrived on. In v0.1
+	// (cap-1/type) this equals the channel type. Carried so identity-based
+	// routing can address the right instance once v0.3 lifts the cap. (FR-2.5)
+	InstanceID string
+	// Identity is the per-instance routing identity (Spec-2 US-5 / FR-2.9).
+	// When set with Kind=="agent" and a non-empty ID, the message is routed AS
+	// that agent, overriding the binding cascade. Kind=="user" (or a nil
+	// Identity) leaves the normal cascade in effect (peer→…→default). Populated
+	// by the agent loop from the inbound channel instance's persisted identity.
+	Identity *config.ChannelIdentity
 }
 
 // ResolvedRoute is the result of agent routing.
@@ -24,7 +34,7 @@ type ResolvedRoute struct {
 	AccountID      string
 	SessionKey     string
 	MainSessionKey string
-	MatchedBy      string // "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default"
+	MatchedBy      string // "identity.agent", "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default"
 }
 
 // RouteResolver determines which agent handles a message based on config bindings.
@@ -54,7 +64,7 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	bindings := r.filterBindings(channel, accountID)
 
 	choose := func(agentID string, matchedBy string) ResolvedRoute {
-		resolvedAgentID := r.pickAgentID(agentID)
+		resolvedAgentID := r.pickAgentID(agentID, matchedBy)
 		sessionKey := strings.ToLower(BuildAgentPeerSessionKey(SessionKeyParams{
 			AgentID:       resolvedAgentID,
 			Channel:       channel,
@@ -71,6 +81,21 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 			SessionKey:     sessionKey,
 			MainSessionKey: mainSessionKey,
 			MatchedBy:      matchedBy,
+		}
+	}
+
+	// Priority 0: Per-instance identity override (Spec-2 US-5 / FR-2.9).
+	// When the inbound channel instance carries identity{kind:agent,id:X}, the
+	// connection acts AS agent X — this overrides every binding. A user-kind
+	// identity (or no identity) leaves the normal cascade in effect: the message
+	// is attributed to the user and routed by the binding rules below, ending at
+	// the default agent. pickAgentID validates X against the agent list and logs
+	// a fallback to default if it is unknown, so a stale identity can never drop
+	// the message.
+	if input.Identity != nil {
+		kind := strings.ToLower(strings.TrimSpace(input.Identity.Kind))
+		if kind == "agent" && strings.TrimSpace(input.Identity.ID) != "" {
+			return choose(input.Identity.ID, "identity.agent")
 		}
 	}
 
@@ -222,7 +247,12 @@ func (r *RouteResolver) findChannelWildcardMatch(bindings []config.AgentBinding)
 	return nil
 }
 
-func (r *RouteResolver) pickAgentID(agentID string) string {
+// pickAgentID resolves a binding/identity-supplied agent ID to a concrete,
+// route-able agent ID. matchedBy is the routing rule that produced agentID
+// (e.g. "binding.peer", "identity.agent", "default") — it is threaded purely so
+// the fallback WARN logs can tell an operator WHICH binding rule routed to a
+// worker or a non-existent agent.
+func (r *RouteResolver) pickAgentID(agentID string, matchedBy string) string {
 	trimmed := strings.TrimSpace(agentID)
 	if trimmed == "" {
 		return NormalizeAgentID(r.resolveDefaultAgentID())
@@ -234,6 +264,17 @@ func (r *RouteResolver) pickAgentID(agentID string) string {
 	}
 	for _, a := range agents {
 		if NormalizeAgentID(a.ID) == normalized {
+			// A worker is never a chat target — it is invoked only via delegation.
+			// An explicit binding or identity override that resolves to a worker
+			// must degrade to the base default rather than letting the worker
+			// answer as a live persona (M1). Mirror the non-existent-agent
+			// fallback below: log a WARN and return the default.
+			if !a.IsChatTarget() {
+				defaultID := NormalizeAgentID(r.resolveDefaultAgentID())
+				logger.WarnCF("routing", "Binding/identity references a worker agent (not a chat target); falling back to default",
+					map[string]any{"requested_agent_id": normalized, "default_agent_id": defaultID, "matched_by": matchedBy})
+				return defaultID
+			}
 			return normalized
 		}
 	}
@@ -241,7 +282,7 @@ func (r *RouteResolver) pickAgentID(agentID string) string {
 	// so operators can detect misconfigured bindings at runtime.
 	defaultID := NormalizeAgentID(r.resolveDefaultAgentID())
 	logger.WarnCF("routing", "Binding references non-existent agent; falling back to default",
-		map[string]any{"requested_agent_id": normalized, "default_agent_id": defaultID})
+		map[string]any{"requested_agent_id": normalized, "default_agent_id": defaultID, "matched_by": matchedBy})
 	return defaultID
 }
 
@@ -251,21 +292,24 @@ func (r *RouteResolver) resolveDefaultAgentID() string {
 		return DefaultAgentID
 	}
 	// Primary: use the agent explicitly marked as default, but only if it is
-	// active. A disabled default must not receive messages — fall through to the
-	// first-enabled-agent fallback so routing never silently drops inbound work.
+	// active AND a chat target. A disabled default must not receive messages, and
+	// a worker is never a chat target (it is invoked only via delegation) — in
+	// either case fall through to the first-enabled-agent fallback so routing
+	// never silently drops inbound work and never points it at a worker.
 	for _, a := range agents {
-		if a.Default && a.IsActive() {
+		if a.Default && a.IsActive() && a.IsChatTarget() {
 			id := strings.TrimSpace(a.ID)
 			if id != "" {
 				return NormalizeAgentID(id)
 			}
 		}
 	}
-	// Fallback: no agent is marked as default. Pick the first enabled agent so
-	// inbound messages are never silently dropped. Log a warning so operators can
+	// Fallback: no agent is marked as default. Pick the first enabled chat-target
+	// agent so inbound messages are never silently dropped. Workers are skipped —
+	// they must never be resolved as the default. Log a warning so operators can
 	// detect misconfigured setups.
 	for _, a := range agents {
-		if a.IsActive() {
+		if a.IsActive() && a.IsChatTarget() {
 			id := strings.TrimSpace(a.ID)
 			if id == "" {
 				continue

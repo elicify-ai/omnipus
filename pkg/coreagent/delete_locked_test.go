@@ -29,23 +29,23 @@ func findAgent(cfg *config.Config, id string) *config.AgentConfig {
 	return nil
 }
 
-// TestDeleteLockedCoreAgentRejected verifies that all 5 core agents carry Locked=true
+// TestDeleteLockedCoreAgentRejected verifies that all 4 base core agents carry Locked=true
 // after SeedConfig, meaning any handler that checks Locked before deletion will block
 // the request.
 //
 // The system.agent.delete handler itself lives in the gateway (rest.go), but the
 // locked-identity contract is established here at the data layer. This test ensures
 // that the invariant SeedConfig guarantees — and that a re-seed after tampering
-// restores it — holds for every core agent.
+// restores it — holds for every base core agent.
 //
-// Traces to: temporal-puzzling-melody.md §4 Axis-1 — TestDeleteLockedCoreAgentRejected
+// Traces to: Spec-3 (v0.1.0 roster re-cast) — 4-base roster; Max retired.
 func TestDeleteLockedCoreAgentRejected(t *testing.T) {
-	// BDD: Given a fresh config with all core agents seeded.
+	// BDD: Given a fresh config with all base core agents seeded.
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
 
-	// All 5 core agent IDs per issue #45.
-	coreIDs := []string{"jim", "ava", "mia", "ray", "max"}
+	// All 4 base core agent IDs (Spec-3): Max retired from the seeded base.
+	coreIDs := []string{"jim", "ava", "mia", "ray"}
 
 	for _, id := range coreIDs {
 		t.Run(id, func(t *testing.T) {

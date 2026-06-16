@@ -65,7 +65,7 @@ func newTestAPIWithHome(t *testing.T) (*restAPI, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 	return api, tmpDir
 }
@@ -105,9 +105,33 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 	return api, tmpDir, hexKey
+}
+
+// setupMasterKeyTempDir creates a temp directory with a minimal config.json,
+// sets OMNIPUS_MASTER_KEY to a fresh random hex key, and returns (tmpDir, hexKey).
+// Unlike newTestAPIWithMasterKey it does NOT create an AgentLoop — use this
+// when the caller creates its own loop immediately, so that only ONE AgentLoop
+// is alive per test instead of two. This halves the peak heap footprint of
+// tests that previously called newTestAPIWithMasterKey only to throw away the
+// loop it returned.
+func setupMasterKeyTempDir(t *testing.T) (string, string) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	t.Setenv("OMNIPUS_KEY_FILE", "")
+
+	rawKey := make([]byte, 32)
+	_, err := rand.Read(rawKey)
+	require.NoError(t, err)
+	hexKey := hex.EncodeToString(rawKey)
+	t.Setenv("OMNIPUS_MASTER_KEY", hexKey)
+
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	return tmpDir, hexKey
 }
 
 // readConfigMap reads config.json from dir and returns it as a map.
@@ -150,7 +174,8 @@ func TestHandleRegisterAdmin_PersistsCorrectFields(t *testing.T) {
 	token, ok := resp["token"].(string)
 	require.True(t, ok, "token must be a string")
 	assert.NotEmpty(t, token, "token must be non-empty")
-	assert.True(t, strings.HasPrefix(token, "omnipus_"), "token must start with 'omnipus_'")
+	assert.Regexp(t, `^omnipus_[0-9a-f]{8}_[0-9a-f]{64}$`, token,
+		"token must match SEC-1 id-tagged format omnipus_<id>_<body>")
 	assert.Equal(t, string(config.UserRoleAdmin), resp["role"], "role must be 'admin'")
 	assert.Equal(t, "alpha", resp["username"], "username must match the request")
 
@@ -175,12 +200,20 @@ func TestHandleRegisterAdmin_PersistsCorrectFields(t *testing.T) {
 	require.NotEmpty(t, passwordHash, "password_hash must be non-empty")
 	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte("alph4pass")),
 		"persisted password_hash must match the submitted password")
-	// token_hash must be a valid bcrypt hash of the returned token.
-	tokenHash, ok := userMap["token_hash"].(string)
-	require.True(t, ok, "token_hash must be a string")
-	require.NotEmpty(t, tokenHash, "token_hash must be non-empty")
-	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(token)),
-		"persisted token_hash must match the returned token")
+	// SEC-1 / UAT #399: the bearer token is persisted in the token SET; the
+	// entry hash is bcrypt of the token's secret BODY (config.TokenSecret),
+	// not the full token (which would exceed bcrypt's 72-byte ceiling).
+	tokens, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set must be a JSON array")
+	require.Len(t, tokens, 1, "register-admin issues exactly one bearer token")
+	entry := tokens[0].(map[string]any)
+	tokenHash, ok := entry["hash"].(string)
+	require.True(t, ok, "token entry hash must be a string")
+	require.NotEmpty(t, tokenHash, "token entry hash must be non-empty")
+	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(config.TokenSecret(token))),
+		"persisted token entry hash must match the returned token's secret body")
+	assert.Equal(t, config.TokenIDFromRaw(token), entry["id"],
+		"persisted token entry id must match the issued token's embedded id")
 }
 
 // TestHandleRegisterAdmin_DifferentUsersDifferentTokens verifies that two calls
@@ -330,15 +363,25 @@ func TestHandleRegisterAdmin_ConcurrentOnlyOneSucceeds(t *testing.T) {
 // TestProviders_BackwardCompatPlaintextAPIKey verifies that a config with an old-style
 // plaintext api_key field (not api_key_ref) is still served by GET /api/v1/providers.
 //
-// BDD: Given config.json has a provider entry with plaintext "api_key" (not api_key_ref),
+// BDD: Given config.json has a provider entry with the legacy "api_key" field
+// AND the corresponding env-var (OPENAI_API_KEY, populated by InjectFromConfig at boot)
+// is set to the plaintext value,
 // When GET /api/v1/providers is called,
-// Then 200 with the provider listed (backward compat — old installs continue to work).
+// Then 200 with the provider listed as "connected" (backward compat — old installs work).
+//
+// FR-104: Connected status requires that the key resolves to a non-empty value.
+// In the old-format path, InjectFromConfig writes the plaintext to the env var
+// referenced by APIKeyRef; this test simulates that injection.
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders GET (backward compat)
 func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_MASTER_KEY", "")
 	t.Setenv("OMNIPUS_KEY_FILE", "")
+	// Simulate InjectFromConfig injecting the plaintext api_key into the env var
+	// referenced by the ModelConfig.APIKeyRef field ("OPENAI_API_KEY").
+	// On a real deployment, this injection happens at boot via credentials.InjectFromConfig.
+	t.Setenv("OPENAI_API_KEY", "sk-oldformat-plaintext")
 	tmpDir := t.TempDir()
 
 	// Old-format config: provider entry uses plaintext api_key (not api_key_ref).
@@ -360,7 +403,8 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", data, 0o600))
 
-	// Build config struct reflecting the old plaintext key.
+	// Build config struct reflecting the old plaintext key migrated to env-var injection.
+	// APIKeyRef points at the env var that InjectFromConfig would have populated.
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -381,7 +425,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	w := httptest.NewRecorder()
@@ -399,8 +443,9 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 	for _, p := range providers {
 		if id, ok := p["id"].(string); ok && id == "openai" {
 			found = true
+			// FR-104: key resolved via env var injection → connected.
 			assert.Equal(t, "connected", p["status"],
-				"openai provider must have status='connected' when plaintext api_key is set")
+				"openai provider must have status='connected' when env var holds the plaintext api_key")
 			break
 		}
 	}
@@ -538,6 +583,11 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/anthropic"
 	req = injectUser(req, "admin", config.UserRoleAdmin)
+	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
+	// consent token (mint one for the injected "admin" user).
+	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")
+	require.NoError(t, provTokErr)
+	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
 	api.HandleProviders(w, req)
@@ -614,6 +664,11 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/openai"
 	req = injectUser(req, "admin", config.UserRoleAdmin)
+	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
+	// consent token (mint one for the injected "admin" user).
+	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")
+	require.NoError(t, provTokErr)
+	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
 	api.HandleProviders(w, req)
@@ -637,7 +692,10 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders GET (api_key_ref resolution)
 func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
-	_, tmpDir, _ := newTestAPIWithMasterKey(t)
+	// setupMasterKeyTempDir sets OMNIPUS_MASTER_KEY and returns (tmpDir, hexKey)
+	// without creating an AgentLoop. The loop below is the only one created, so
+	// peak memory for this test is one AgentLoop (not two). #351 #352
+	tmpDir, _ := setupMasterKeyTempDir(t)
 
 	// Step 1: Store an API key in the credentials store.
 	credRef := "OPENAI_API_KEY"
@@ -685,7 +743,7 @@ func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// Step 4: GET /api/v1/providers — must include openai as connected.

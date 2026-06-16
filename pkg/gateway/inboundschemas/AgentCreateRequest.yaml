@@ -1,6 +1,6 @@
 type: object
 description: >
-  Body for POST /agents. Creates a new custom agent. A UUID is assigned by the server.
+  Body for POST /agents. Creates a new agent. A UUID is assigned by the server.
   The agent starts in "draft" status (no SOUL.md written yet).
 required:
   - name
@@ -11,6 +11,21 @@ properties:
     minLength: 1
     description: Display name for the new agent.
     example: "My Custom Agent"
+  type:
+    type: string
+    enum:
+      - custom
+      - worker
+    description: >
+      Agent tier to create. "custom" = a user-defined chat colleague
+      (default for the existing POST /agents flow). "worker" = a sub-agent
+      worker: a delegation-only labour agent that is NOT a chat target, has
+      no heartbeat, is never the default, and must carry an executor
+      (see Agent.executor). When omitted, the server creates a "custom"
+      agent. The "core" and "system" types are reserved and cannot be
+      created via this endpoint.
+    example: "custom"
+    default: "custom"
   description:
     type: string
     description: Short description of the agent's purpose.
@@ -79,3 +94,31 @@ properties:
         format: double
         description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
         example: 5.0
+  skills:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+    description: >
+      Initial list of skill IDs granted to this agent. An empty list (or
+      absent field) means no skills are granted (opt-in, default none).
+    example:
+      - "web-research"
+  soul:
+    type: string
+    description: >
+      Initial SOUL.md content. When omitted, the new agent starts in
+      "draft" with an empty soul (the profile edit flow writes it later).
+      Worker-tier agents (type=worker) treat this as the optional task
+      prompt; empty is valid for workers per the locked concept.
+    example: "You are a focused research assistant..."
+  delegation_policy:
+    $ref: './DelegationPolicy.yaml'
+  voice:
+    type: string
+    nullable: true
+    description: >
+      Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+    example: "alloy"
+  executor:
+    $ref: './ExecutorConfig.yaml'

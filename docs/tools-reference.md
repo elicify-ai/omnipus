@@ -4,9 +4,9 @@ Omnipus exposes three kinds of tools to agents.
 
 **Built-in tools** are compiled into the binary, registered on per-agent `ToolRegistry` instances by `pkg/agent/loop.go` and `pkg/agent/instance.go`. Names use snake_case (`read_file`) for the original set and dotted prefixes (`workspace.shell`, `browser.navigate`) for newer namespaced families.
 
-**System tools (`system.*`)** are 39 administrative tools defined in `pkg/sysagent/tools/`. Available to any agent whose per-agent policy allows them; custom agents have `system.*: deny` seeded by default. There is no separate "system agent" runtime — these are ordinary builtins governed entirely by policy.
+**System tools (`system.*`)** are 41 administrative tools defined in `pkg/sysagent/tools/`. Available to any agent whose per-agent policy allows them; custom agents have `system.*: deny` seeded by default. There is no separate "system agent" runtime — these are ordinary builtins governed entirely by policy.
 
-**MCP tools** are registered at runtime from Model Context Protocol servers configured under `mcp_servers` in `config.json`. Each tool is namespaced by the server name; the registry merges them into the same per-agent surface that the builtins occupy.
+**MCP tools** are registered at runtime from Model Context Protocol servers configured under `tools.mcp.servers` in `config.json`. Each tool is namespaced by the server name; the registry merges them into the same per-agent surface that the builtins occupy.
 
 The canonical tool name for any builtin is whatever `Name() string` returns on its concrete type. To find a tool, grep for `Name() string` in `pkg/tools/`, `pkg/tools/browser/`, or `pkg/sysagent/tools/`. The same name is used for policy matches (`pkg/tools/compositor.go:94-106`), audit logging, and `tool_call` frames over the WebSocket.
 
@@ -110,7 +110,7 @@ Note: the tool name for recall is `recall_memory`, not `recall`. The v0.3 Rooms 
 
 | Tool | What it does | Notes |
 |---|---|---|
-| `cron` | Schedule reminders or commands. Single tool with five operations: `add`, `list`, `remove`, `enable`, `disable` — pass the operation in the `op` argument. | `pkg/tools/cron.go:68-87`. |
+| `cron` | Schedule reminders or commands. Single tool with five operations: `add`, `list`, `remove`, `enable`, `disable` — pass the operation in the `action` argument. | `pkg/tools/cron.go:68-87`. |
 
 There is no separate `cron_list` or `cron_delete` builtin — `cron` is one tool with operation-style dispatch.
 
@@ -125,13 +125,13 @@ These exist so an agent can opt into a large hidden-tool surface on demand rathe
 
 ## System tools (`system.*`)
 
-Defined in `pkg/sysagent/tools/registry.go:13-74` as a flat list of 39 tools. Per-agent policy decides which agent can call which one — by default `SeedConfig` ships custom agents with `"system.*": "deny"` and a more permissive set for the core operator agent. Wildcards (`system.*`, `system.agent.*`) are honored with most-specific-prefix wins (`pkg/tools/compositor.go:51-106`).
+Defined in `pkg/sysagent/tools/registry.go:13-79` as a flat list of 41 tools. Per-agent policy decides which agent can call which one — by default `SeedConfig` ships custom agents with `"system.*": "deny"` and a more permissive set for the core operator agent. Wildcards (`system.*`, `system.agent.*`) are honored with most-specific-prefix wins (`pkg/tools/compositor.go:51-106`).
 
 Grouped by namespace:
 
 | Namespace | Count | Tools | Source |
 |---|---|---|---|
-| `system.agent.*` | 6 | `create`, `update`, `delete`, `list`, `activate`, `deactivate` | `pkg/sysagent/tools/agent.go` |
+| `system.agent.*` | 8 | `create`, `update`, `delete`, `list`, `activate`, `deactivate`, `read_metadata`, `write_metadata` | `pkg/sysagent/tools/agent.go`, `metadata.go` |
 | `system.project.*` | 4 | `create`, `update`, `delete`, `list` | `pkg/sysagent/tools/project.go` |
 | `system.task.*` | 4 | `create`, `update`, `delete`, `list` | `pkg/sysagent/tools/task.go` |
 | `system.channel.*` | 5 | `enable`, `configure`, `disable`, `list`, `test` | `pkg/sysagent/tools/channel.go` |
@@ -142,11 +142,11 @@ Grouped by namespace:
 | `system.config.*` | 2 | `get`, `set` | `pkg/sysagent/tools/config.go` |
 | Utilities | 4 | `system.doctor.run`, `system.backup.create`, `system.cost.query`, `system.navigate` | `pkg/sysagent/tools/diag.go`, `navigate.go` |
 
-`pkg/sysagent/tools/` is the source of truth for the exact set; the BRD's `Omnipus_BRD_AppendixD_System_Agent.md` describes the original 35 and predates the four utility additions.
+`pkg/sysagent/tools/` is the source of truth for the exact set; the BRD's `Omnipus_BRD_AppendixD_System_Agent.md` describes the original 35 and predates the six additions (the four utility tools and the two `system.agent.read_metadata` / `system.agent.write_metadata` accessors from issue #240).
 
 ## MCP tools
 
-Configured under `mcp_servers` in `config.json`. Each server's tools are discovered at connection time and registered into the per-agent registry as `<server_name>.<tool_name>` via the `MCPRegistry` (`pkg/tools/mcp_registry.go`) and the `MCPTool` adapter (`pkg/tools/mcp_tool.go:109`). The namespacing means an MCP server called `slack` exposing a tool called `post_message` shows up to agents as `slack.post_message`, and policy matches against that full name.
+Configured under `tools.mcp.servers` in `config.json`. Each server's tools are discovered at connection time and registered into the per-agent registry as `<server_name>.<tool_name>` via the `MCPRegistry` (`pkg/tools/mcp_registry.go`) and the `MCPTool` adapter (`pkg/tools/mcp_tool.go:109`). The namespacing means an MCP server called `slack` exposing a tool called `post_message` shows up to agents as `slack.post_message`, and policy matches against that full name.
 
 MCP tools are filtered through the same `FilterToolsByPolicy` pass as builtins. There is no separate trust tier — wildcards like `slack.*` work identically.
 

@@ -24,17 +24,34 @@ There is no per-token revocation endpoint in the current release. To invalidate 
 
 ## Kernel-enforced bind-port allow-list
 
-On Linux kernels with Landlock ABI v4+ (kernel 6.7 and later), the gateway and every child process it spawns are restricted to binding TCP ports inside `cfg.Sandbox.DevServerPortRange` (default `[18000, 18999]`) plus the gateway's own listener ports. Any `bind(2)` to a port outside that allow-list returns `EACCES` from the kernel — including `bind(0.0.0.0:5173)` from a shell-spawned dev server.
+On Linux kernels with Landlock ABI v4 (kernel 6.8 and later; see
+`pkg/sandbox/sandbox_linux.go:67` — "Landlock ABI v4 network access rights
+(kernel 6.8+)"), the gateway and every child process it spawns are restricted
+to binding TCP ports inside `cfg.Sandbox.DevServerPortRange` (default
+`[18000, 18999]`) plus the gateway's own listener ports. Any `bind(2)` to a
+port outside that allow-list returns `EACCES` from the kernel — including
+`bind(0.0.0.0:5173)` from a shell-spawned dev server.
 
-This means an agent calling `exec npx vite --host 0.0.0.0 --port 5173` will fail at the bind syscall, regardless of the agent's tool policy. The only legal way for an agent to expose a website is through the `web_serve` tool, which auto-picks a port from the allow-listed range and routes traffic through `/preview/<agent>/<token>/` with the bearer-token contract above.
+This means an agent calling `exec npx vite --host 0.0.0.0 --port 5173` will
+fail at the bind syscall, regardless of the agent's tool policy. The only
+legal way for an agent to expose a website is through the `web_serve` tool,
+which auto-picks a port from the allow-listed range and routes traffic
+through `/preview/<agent>/<token>/` with the bearer-token contract above.
 
-**Graceful degradation:** on kernels with Landlock ABI < 4 (no `NET_BIND_TCP`), this enforcement is silently inactive. Operators on such kernels still get tool-layer port-range validation (the `web_serve` tool refuses out-of-range ports), but a shell-spawned process can technically bind anywhere. Plan to upgrade to kernel 6.7+ for the full enforcement story.
+**Graceful degradation:** on kernels with Landlock ABI < 4 (no `NET_BIND_TCP`),
+this enforcement is silently inactive. The gateway probes runtime capability
+at boot via `probeLandlockABIPlatform()` (`pkg/sandbox/sandbox_linux.go:132`)
+and reports `landlock_enforced: false` on the `/health` endpoint when the
+feature is absent. Operators on such kernels still get tool-layer port-range
+validation (the `web_serve` tool refuses out-of-range ports), but a
+shell-spawned process can technically bind anywhere. Plan to upgrade to kernel
+6.8+ for the full enforcement story.
 
 ---
 
 ## Kernel-enforced outbound port allow-list (raw TCP egress, v0.2 #155)
 
-On Linux kernels with Landlock ABI v4+ (kernel 6.8 and later for the gateway's tested baseline), `connect(2)` from the gateway and every forked child is restricted to the union of:
+On Linux kernels with Landlock ABI v4 (kernel 6.8 and later for the gateway's tested baseline; see `pkg/sandbox/sandbox_linux.go:67`), `connect(2)` from the gateway and every forked child is restricted to the union of:
 
 - **`{53, 80, 443}`** — DNS, HTTP, HTTPS. The minimal set required by the gateway's outbound LLM/provider calls and the egress proxy's upstream connections. Defined as `sandbox.DefaultConnectPorts` in `pkg/sandbox/sandbox.go`.
 - **`cfg.Sandbox.DevServerPortRange`** — every port in the configured range (default `[18000, 18999]`). Lets children connect back to gateway-owned dev servers, the egress proxy, and other agents' running web_serve sessions.
@@ -47,7 +64,7 @@ Any `connect(2)` to a destination port outside that union returns `EACCES` from 
 - For HTTP clients the **gateway** controls (`pkg/web` search clients, MCP fetches, the skills installer), CIDR-level blocking is enforced by `pkg/security/SSRFChecker` when `cfg.Sandbox.SSRF.Enabled = true`. Operators with a legitimate internal-service requirement add CIDRs to `cfg.Sandbox.EgressAllowCIDRs` (or the SSRF allow_internal list) to bypass the deny.
 - For compiled binaries spawned via `workspace.shell` (e.g. `curl`, `wget`, custom Go programs), the SSRFChecker does not apply — only the kernel port allow-list does. CIDR-level enforcement for these binaries would require eBPF cgroup `BPF_CGROUP_INET4_CONNECT` and is deferred. Operators concerned about RFC1918 access from compiled children should keep `experimental.workspace_shell_enabled = false` on agents that handle untrusted content.
 
-**Graceful degradation:** on kernels with Landlock ABI < 4 (no `NET_CONNECT_TCP`), the connect rules are computed but ignored by the kernel. The `pkg/security/SSRFChecker` Go-side defence still runs for HTTP clients the gateway controls; raw-TCP egress is unrestricted on these older kernels. Plan to upgrade to kernel 6.7+ for full kernel enforcement.
+**Graceful degradation:** on kernels with Landlock ABI < 4 (no `NET_CONNECT_TCP`), the connect rules are computed but ignored by the kernel. The `pkg/security/SSRFChecker` Go-side defence still runs for HTTP clients the gateway controls; raw-TCP egress is unrestricted on these older kernels. Plan to upgrade to kernel 6.8+ for full kernel enforcement.
 
 ---
 

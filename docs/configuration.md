@@ -243,21 +243,19 @@ Omnipus runs in a sandboxed environment by default. The agent can only access fi
 {
   "agents": {
     "defaults": {
-      "workspace": "~/.omnipus/workspace",
-      "restrict_to_workspace": true
+      "workspace": "~/.omnipus/workspace"
     }
   }
 }
 ```
 
-| Option                  | Default                 | Description                               |
-| ----------------------- | ----------------------- | ----------------------------------------- |
-| `workspace`             | `~/.omnipus/workspace` | Working directory for the agent           |
-| `restrict_to_workspace` | `true`                  | Restrict file/command access to workspace |
+| Option      | Default                | Description                     |
+| ----------- | ---------------------- | ------------------------------- |
+| `workspace` | `~/.omnipus/workspace` | Working directory for the agent |
 
 #### Protected Tools
 
-When `restrict_to_workspace: true`, the following tools are sandboxed:
+The following tools are sandboxed to the workspace by default:
 
 | Tool          | Function         | Restriction                            |
 | ------------- | ---------------- | -------------------------------------- |
@@ -270,7 +268,7 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 
 #### Additional Exec Protection
 
-Even with `restrict_to_workspace: false`, the `exec` tool blocks the following dangerous commands:
+The `exec` tool also blocks the following dangerous commands, independent of the workspace restriction:
 
 | Command pattern | Reason blocked |
 |---|---|
@@ -319,41 +317,30 @@ For higher-risk environments, review build scripts before execution and prefer a
 {tool=exec, error=Command blocked by safety guard (dangerous pattern detected)}
 ```
 
-#### Disabling Restrictions (Security Risk)
+#### Security Boundary Consistency
 
-If you need the agent to access paths outside the workspace:
+The workspace restriction applies consistently across all execution paths:
 
-**Method 1: Config file**
+| Execution Path   | Security Boundary             |
+| ---------------- | ----------------------------- |
+| Main Agent       | Workspace-only by default ✅  |
+| Subagent / Spawn | Inherits same restriction ✅  |
+| Heartbeat tasks  | Inherits same restriction ✅  |
+
+All paths share the same workspace restriction — there's no way to bypass the security boundary through subagents or scheduled tasks.
+
+If you need to grant the agent access to additional paths outside the workspace, use the read/write path allow-lists instead of disabling the restriction:
 
 ```json
 {
-  "agents": {
-    "defaults": {
-      "restrict_to_workspace": false
-    }
+  "tools": {
+    "allow_read_paths": ["/var/log/myapp"],
+    "allow_write_paths": ["/srv/data"]
   }
 }
 ```
 
-**Method 2: Environment variable**
-
-```bash
-export OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false
-```
-
-> ⚠️ **Warning**: Disabling this restriction allows the agent to access any path on your system. Use with caution in controlled environments only.
-
-#### Security Boundary Consistency
-
-The `restrict_to_workspace` setting applies consistently across all execution paths:
-
-| Execution Path   | Security Boundary            |
-| ---------------- | ---------------------------- |
-| Main Agent       | `restrict_to_workspace` ✅   |
-| Subagent / Spawn | Inherits same restriction ✅ |
-| Heartbeat tasks  | Inherits same restriction ✅ |
-
-All paths share the same workspace restriction — there's no way to bypass the security boundary through subagents or scheduled tasks.
+See [File Access Control](#file-access-control) above.
 
 ### Heartbeat (Periodic Tasks)
 
@@ -450,9 +437,9 @@ Set `OMNIPUS_HEARTBEAT_ENABLED=false` to disable via environment variable, or `O
 | `cerebras`   | LLM (Cerebras direct)                   | [cerebras.ai](https://cerebras.ai)                           |
 | `vivgrid`    | LLM (Vivgrid direct)                    | [vivgrid.com](https://vivgrid.com)                           |
 
-### Model Configuration (model_list)
+### Model Configuration
 
-> **What's New?** Omnipus now uses a **model-centric** configuration approach. Simply specify `vendor/model` format (e.g., `zhipu/glm-4.7`) to add new providers — **zero code changes required!**
+The `providers` key holds an array of model entries, each shaped as `{"model_name": "<alias>", "model": "<vendor>/<model-id>"}` (e.g. `zhipu/glm-4.7`). Note: `providers` has always been the JSON key name — in the legacy v0 schema it was an *object* keyed by vendor; in the current v1 schema it is an *array* of model entries. The new shape supports per-entry credential references, multi-key failover, and per-agent model selection.
 
 This design also enables **multi-agent support** with flexible provider selection. Each agent can use its own LLM provider. You can configure primary and fallback models for resilience, distribute requests across multiple endpoints for load balancing, and manage all providers in one place through centralized configuration.
 
@@ -523,7 +510,6 @@ For complete documentation, see [`security_configuration.md`](security_configura
 | **DeepSeek**            | `deepseek/`       | `https://api.deepseek.com/v1`                       | OpenAI    | [Get Key](https://platform.deepseek.com)                         |
 | **Google Gemini**       | `gemini/`         | `https://generativelanguage.googleapis.com/v1beta`  | OpenAI    | [Get Key](https://aistudio.google.com/api-keys)                  |
 | **Groq**                | `groq/`           | `https://api.groq.com/openai/v1`                    | OpenAI    | [Get Key](https://console.groq.com)                              |
-| **Moonshot**            | `moonshot/`       | `https://api.moonshot.cn/v1`                        | OpenAI    | [Get Key](https://platform.moonshot.cn)                          |
 | **通义千问 (Qwen)**     | `qwen/`           | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI    | [Get Key](https://dashscope.console.aliyun.com)                  |
 | **NVIDIA**              | `nvidia/`         | `https://integrate.api.nvidia.com/v1`               | OpenAI    | [Get Key](https://build.nvidia.com)                              |
 | **Ollama**              | `ollama/`         | `http://localhost:11434/v1`                         | OpenAI    | Local (no key needed)                                            |
@@ -533,7 +519,6 @@ For complete documentation, see [`security_configuration.md`](security_configura
 | **Cerebras**            | `cerebras/`       | `https://api.cerebras.ai/v1`                        | OpenAI    | [Get Key](https://cerebras.ai)                                   |
 | **VolcEngine (Doubao)** | `volcengine/`     | `https://ark.cn-beijing.volces.com/api/v3`          | OpenAI    | [Get Key](https://www.volcengine.com/activity/codingplan?utm_campaign=Omnipus&utm_content=Omnipus&utm_medium=devrel&utm_source=OWO&utm_term=Omnipus) |
 | **神算云**              | `shengsuanyun/`   | `https://router.shengsuanyun.com/api/v1`            | OpenAI    | —                                                                |
-| **BytePlus**            | `byteplus/`       | `https://ark.ap-southeast.bytepluses.com/api/v3`    | OpenAI    | [Get Key](https://www.byteplus.com)                              |
 | **Vivgrid**             | `vivgrid/`        | `https://api.vivgrid.com/v1`                        | OpenAI    | [Get Key](https://vivgrid.com)                                   |
 | **LongCat**             | `longcat/`        | `https://api.longcat.chat/openai`                   | OpenAI    | [Get Key](https://longcat.chat/platform)                         |
 | **ModelScope (魔搭)**   | `modelscope/`     | `https://api-inference.modelscope.cn/v1`            | OpenAI    | [Get Token](https://modelscope.cn/my/tokens)                     |
@@ -568,7 +553,7 @@ For complete documentation, see [`security_configuration.md`](security_configura
   ],
   "agents": {
     "defaults": {
-      "model": "gpt-5.4"
+      "model_name": "gpt-5.4"
     }
   }
 }
@@ -756,10 +741,10 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
   "agents": {
     "defaults": {
       "workspace": "~/.omnipus/workspace",
-      "model": "glm-4.7",
-      "max_tokens": 8192,
+      "model_name": "glm-4.7",
+      "max_tokens": 32768,
       "temperature": 0.7,
-      "max_tool_iterations": 20
+      "max_tool_iterations": 50
     }
   },
   "providers": {
@@ -782,12 +767,11 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 {
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-5"
+      "model_name": "anthropic/claude-opus-4-6"
     }
   },
   "session": {
-    "dm_scope": "per-channel-peer",
-    "backlog_limit": 20
+    "dm_scope": "per-channel-peer"
   },
   "channels": {
     "telegram": {

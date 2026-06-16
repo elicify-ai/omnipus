@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -6,6 +6,7 @@ import { SessionPanel } from './SessionPanel'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
+import { fetchSessions } from '@/lib/api'
 
 // W2-1: SessionPanel chat-session routing regression test.
 //
@@ -300,5 +301,271 @@ describe('SessionPanel — per-session isStreaming dot (F-S11)', () => {
     // Pulse dot must NOT be present for the active session
     const dots = screen.queryAllByLabelText('Generating')
     expect(dots).toHaveLength(0)
+  })
+})
+
+// ── Channel grouping tests ────────────────────────────────────────────────────
+
+// Test A: webchat-only sessions render flat list (no group headers)
+describe('SessionPanel — channel grouping: webchat-only renders flat list (Test A)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-wc-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'WebChat Session One',
+        type: 'chat',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 2,
+      },
+      {
+        id: 'sess-wc-2',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'WebChat Session Two',
+        type: 'chat',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 4,
+      },
+    ])
+  })
+
+  it('renders sessions as a flat list with no group header buttons', async () => {
+    // BDD: Given all sessions have channel="webchat" (single distinct channel)
+    // BDD: Then showGroups=false, so no collapsible group header buttons are rendered
+    // BDD: And both session items are listed directly
+    renderPanel()
+
+    await screen.findByText('WebChat Session One')
+    await screen.findByText('WebChat Session Two')
+
+    // No group header buttons should be present.
+    // Group headers have aria-label matching "sessions, collapse" / "sessions, expand".
+    const groupButtons = screen.queryAllByRole('button', { name: /sessions, (collapse|expand)/i })
+    expect(groupButtons).toHaveLength(0)
+  })
+
+  it('renders flat list for sessions with no channel field (undefined treated as webchat)', async () => {
+    // BDD: Given sessions have no channel field (legacy sessions)
+    // BDD: Then they are treated as webchat and rendered flat (showGroups=false)
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-legacy-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Legacy Session One',
+        type: 'chat',
+        // channel field intentionally omitted
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 1,
+      },
+    ])
+
+    renderPanel()
+
+    await screen.findByText('Legacy Session One')
+
+    const groupButtons = screen.queryAllByRole('button', { name: /sessions, (collapse|expand)/i })
+    expect(groupButtons).toHaveLength(0)
+  })
+})
+
+// Test B: multi-channel renders group headers
+describe('SessionPanel — channel grouping: multi-channel renders group headers (Test B)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-wc-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'WebChat Session One',
+        type: 'chat',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 2,
+      },
+      {
+        id: 'sess-tg-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Telegram Session One',
+        type: 'chat',
+        channel: 'telegram',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 3,
+      },
+    ])
+  })
+
+  it('renders group header buttons for each distinct channel', async () => {
+    // BDD: Given sessions span 2 distinct channels (webchat, telegram)
+    // BDD: Then showGroups=true and a header button is rendered for each channel
+    renderPanel()
+
+    // Both group headers must appear
+    const webChatHeader = await screen.findByRole('button', { name: /Web Chat sessions/i })
+    const telegramHeader = await screen.findByRole('button', { name: /Telegram sessions/i })
+
+    expect(webChatHeader).toBeTruthy()
+    expect(telegramHeader).toBeTruthy()
+  })
+
+  it('renders both session items visible under their respective groups', async () => {
+    // BDD: Given the multi-channel sessions are loaded
+    // BDD: Then both session title items are visible (groups are expanded by default)
+    renderPanel()
+
+    await screen.findByLabelText('Open session: WebChat Session One')
+    await screen.findByLabelText('Open session: Telegram Session One')
+  })
+
+  it('shows count badge of 1 for each group', async () => {
+    // BDD: Given 1 session per channel
+    // BDD: Then each group header badge shows "1"
+    renderPanel()
+
+    // Wait for headers to appear
+    await screen.findByRole('button', { name: /Web Chat sessions/i })
+
+    // Both count badges display "1"
+    const badges = screen.getAllByText('1')
+    expect(badges.length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+// Test C: group collapse/expand toggle
+describe('SessionPanel — channel grouping: collapse/expand toggle (Test C)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-wc-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'WebChat Session One',
+        type: 'chat',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 2,
+      },
+      {
+        id: 'sess-tg-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Telegram Session One',
+        type: 'chat',
+        channel: 'telegram',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 3,
+      },
+    ])
+  })
+
+  it('collapses a group on first click and expands it on second click', async () => {
+    // BDD: Given a multi-channel panel (webchat + telegram), all groups expanded
+    // BDD: When the user clicks the Telegram group header
+    // BDD: Then aria-expanded=false and the telegram session item is removed from the DOM
+    // BDD: When the user clicks the Telegram header again
+    // BDD: Then aria-expanded=true and the telegram session item is visible again
+    renderPanel()
+
+    // Wait for groups to load
+    const telegramHeader = await screen.findByRole('button', { name: /Telegram sessions/i })
+
+    // Initially expanded: session item is visible
+    await screen.findByLabelText('Open session: Telegram Session One')
+    expect(telegramHeader).toHaveAttribute('aria-expanded', 'true')
+
+    // Click to collapse
+    fireEvent.click(telegramHeader)
+
+    // After collapse: session item gone, aria-expanded=false
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Open session: Telegram Session One')).toBeNull()
+    })
+    expect(telegramHeader).toHaveAttribute('aria-expanded', 'false')
+
+    // Webchat session is still visible (other group unaffected)
+    expect(screen.getByLabelText('Open session: WebChat Session One')).toBeTruthy()
+
+    // Click to expand again
+    fireEvent.click(telegramHeader)
+
+    // After expand: session item visible again, aria-expanded=true
+    await screen.findByLabelText('Open session: Telegram Session One')
+    expect(telegramHeader).toHaveAttribute('aria-expanded', 'true')
+  })
+})
+
+// Test D: search filters sessions and collapses empty groups
+describe('SessionPanel — channel grouping: search filters and hides empty groups (Test D)', () => {
+  beforeEach(() => {
+    // Use fake timers but allow testing-library's internal polling to advance automatically
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-wc-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Webchat Alpha',
+        type: 'chat',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 2,
+      },
+      {
+        id: 'sess-tg-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Telegram Beta',
+        type: 'chat',
+        channel: 'telegram',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 3,
+      },
+    ])
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('hides the Telegram group header when the search term matches only the webchat session', async () => {
+    // BDD: Given a multi-channel panel (webchat + telegram), both groups visible
+    // BDD: When the user types "Alpha" (matches only "Webchat Alpha")
+    // BDD: Then the Telegram group header disappears (no sessions pass the filter)
+    // BDD: And the webchat session remains visible (either flat or as the sole group)
+    renderPanel()
+
+    // Wait for both groups to load
+    await screen.findByRole('button', { name: /Telegram sessions/i })
+
+    // Type a search term that only matches the webchat session
+    const searchInput = screen.getByRole('textbox', { name: /search sessions/i })
+    fireEvent.change(searchInput, { target: { value: 'Alpha' } })
+
+    // Advance past the 300ms debounce
+    act(() => {
+      vi.advanceTimersByTime(350)
+    })
+
+    // After debounce: Telegram group header must be gone
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Telegram sessions/i })).toBeNull()
+    })
+
+    // The webchat session must still be present
+    expect(screen.getByLabelText('Open session: Webchat Alpha')).toBeTruthy()
   })
 })

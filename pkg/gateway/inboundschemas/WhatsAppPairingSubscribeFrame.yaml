@@ -1,0 +1,24 @@
+title: WhatsAppPairingSubscribeFrame
+description: >
+  Client → server. Registers or clears THIS connection's interest in a channel's
+  whatsapp_pairing (QR/status) frames. The SPA sends active:true when an operator
+  opens a channel's pairing UI and active:false when they leave, so the QR pairing
+  secret is delivered only to the connection that is watching rather than every
+  authenticated admin connection (#283).
+type: object
+required:
+  - type
+  - channel_id
+  - active
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: whatsapp_pairing_subscribe
+  channel_id:
+    type: string
+    minLength: 1
+    description: The channel whose pairing frames this connection wants (e.g. "whatsapp_native").
+  active:
+    type: boolean
+    description: true to start receiving pairing frames for channel_id on this connection, false to stop.

@@ -57,12 +57,13 @@ func (*PinListTool) Category() tools.ToolCategory   { return tools.CategorySyste
 func (*PinCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
 func (*PinDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
 
-// Project tools
+// Workspace tools
 
-func (*ProjectCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*ProjectUpdateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*ProjectDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*ProjectListTool) Category() tools.ToolCategory   { return tools.CategorySystem }
+func (*WorkspaceCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*WorkspaceUpdateTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*WorkspaceDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*WorkspaceListTool) Category() tools.ToolCategory   { return tools.CategorySystem }
+func (*WorkspaceGetTool) Category() tools.ToolCategory    { return tools.CategorySystem }
 
 // Provider tools
 
@@ -77,6 +78,8 @@ func (*SkillInstallTool) Category() tools.ToolCategory { return tools.CategorySy
 func (*SkillRemoveTool) Category() tools.ToolCategory  { return tools.CategorySystem }
 func (*SkillSearchTool) Category() tools.ToolCategory  { return tools.CategorySystem }
 func (*SkillListTool) Category() tools.ToolCategory    { return tools.CategorySystem }
+func (*SkillCreateTool) Category() tools.ToolCategory  { return tools.CategorySystem }
+func (*SkillEditTool) Category() tools.ToolCategory    { return tools.CategorySystem }
 
 // System task tools
 

@@ -313,22 +313,6 @@ func TestToolRegistry_Count(t *testing.T) {
 	}
 }
 
-func TestToolRegistry_GetSummaries(t *testing.T) {
-	r := NewToolRegistry()
-	r.Register(newMockTool("read_file", "Reads a file"))
-
-	summaries := r.GetSummaries()
-	if len(summaries) != 1 {
-		t.Fatalf("expected 1 summary, got %d", len(summaries))
-	}
-	if !strings.Contains(summaries[0], "`read_file`") {
-		t.Errorf("expected backtick-quoted name in summary, got %q", summaries[0])
-	}
-	if !strings.Contains(summaries[0], "Reads a file") {
-		t.Errorf("expected description in summary, got %q", summaries[0])
-	}
-}
-
 func TestToolToSchema(t *testing.T) {
 	tool := newMockTool("demo", "demo tool")
 	schema := ToolToSchema(tool)

@@ -349,9 +349,12 @@ omnipus doctor
 
 # Review the security and activity log
 omnipus audit
+
+# Walk the audit log and verify the HMAC chain (v0.2 #155)
+omnipus audit verify
 ```
 
-Run `omnipus doctor` after any big config change, and especially before exposing the gateway to the internet — it flags risky settings in plain language. Use `omnipus audit` whenever you want to see who did what and which tools ran.
+Run `omnipus doctor` after any big config change, and especially before exposing the gateway to the internet — it flags risky settings in plain language. Use `omnipus audit` whenever you want to see who did what and which tools ran. Use `omnipus audit verify` to confirm the audit log has not been tampered with (exit code 0 = intact, 1 = tampering detected, 2 = operational error; pass `--json` for machine-readable output).
 
 ---
 
@@ -390,7 +393,7 @@ open the app in a browser (`omnipus start`, then visit `http://localhost:5000`):
 |---|---|---|
 | Chat with an agent | ✅ `omnipus agent` | ✅ |
 | Cancel a running reply | ✅ press **Esc** twice | ✅ |
-| Use slash commands (`/help`, `/switch`, …) | ❌ not in the REPL | ✅ |
+| Use slash commands (`/help`, `/switch`, …) | ✅ see [Slash commands](#5-slash-commands-work-here-too) | ✅ |
 | See replies stream in live | ❌ prints when finished | ✅ |
 | Send an image or file in chat | ❌ text only | ✅ |
 | Browse / resume / delete past sessions | ⚠️ resume by key (`-s`) only | ✅ full history panel |

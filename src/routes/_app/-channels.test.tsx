@@ -60,6 +60,19 @@ vi.mock('framer-motion', () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
+vi.mock('@/store/connection', () => ({
+  useConnectionStore: vi.fn((selector: (s: { isConnected: boolean; connection: null }) => unknown) =>
+    selector({ isConnected: false, connection: null }),
+  ),
+}))
+
+vi.mock('@/store/whatsappPairing', () => ({
+  useWhatsAppPairingStore: vi.fn(
+    (selector: (s: { byChannel: Record<string, unknown>; clear: () => void }) => unknown) =>
+      selector({ byChannel: {}, clear: vi.fn() }),
+  ),
+}))
+
 // Import mocked modules after vi.mock declarations.
 import { useUiStore } from '@/store/ui'
 import {
@@ -73,6 +86,9 @@ import {
 } from '@/lib/api'
 import type { ChannelEntry } from '@/lib/api'
 import { ChannelConfigPanel } from '@/components/skills/ChannelConfigPanel'
+// The channels route now lazy-loads its screen; import the screen module
+// directly so the test renders real content (not the Suspense fallback).
+import { ChannelsScreen } from '@/components/screens/ChannelsScreen'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -452,5 +468,94 @@ describe('ChannelConfigPanel — Routing section', () => {
     await waitFor(() => {
       expect(setChannelRouting).toHaveBeenCalledWith('telegram', { default_agent_id: undefined })
     })
+  })
+})
+
+// ── Section 3: ChannelsScreen degraded state ──────────────────────────────────
+// Traces to: issue #299 — UI must not show degraded channels as healthy.
+
+// ChannelsScreen is imported directly from its (eager) module so the test
+// renders real content rather than the route's lazy Suspense fallback.
+const RealChannelsScreen = ChannelsScreen
+
+function renderRealChannelsScreen() {
+  const client = makeQueryClient()
+  return render(
+    <QueryClientProvider client={client}>
+      <RealChannelsScreen />
+    </QueryClientProvider>,
+  )
+}
+
+describe('ChannelsScreen — degraded channel state', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+  })
+
+  it('shows "Failed to start" badge (not "Enabled") for a degraded channel', async () => {
+    // Correctness test: a degraded-but-enabled channel must NOT display the green
+    // "Enabled" badge. It must display the error "Failed to start" badge.
+    // Traces to: issue #299 — degraded channels must not look healthy.
+    vi.mocked(fetchChannels).mockResolvedValue([
+      makeChannel({ id: 'whatsapp', name: 'WhatsApp', enabled: true, degraded: true }),
+    ])
+
+    renderRealChannelsScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to start')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Enabled')).not.toBeInTheDocument()
+  })
+
+  it('shows degraded_reason as helper text under the channel name', async () => {
+    // Content test: the degraded reason string must be visible to the operator
+    // so they understand why the channel failed.
+    vi.mocked(fetchChannels).mockResolvedValue([
+      makeChannel({
+        id: 'slack',
+        name: 'Slack',
+        enabled: true,
+        degraded: true,
+        degraded_reason: 'missing SLACK_BOT_TOKEN credential',
+      }),
+    ])
+
+    renderRealChannelsScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('missing SLACK_BOT_TOKEN credential')).toBeInTheDocument()
+    })
+  })
+
+  it('does not show degraded_reason text when degraded_reason is absent', async () => {
+    // Edge-case: degraded=true but no reason string — no extra text must appear
+    // below the name (no "undefined" or empty paragraph).
+    vi.mocked(fetchChannels).mockResolvedValue([
+      makeChannel({ id: 'discord', name: 'Discord', enabled: true, degraded: true }),
+    ])
+
+    renderRealChannelsScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to start')).toBeInTheDocument()
+    })
+    // No stray "undefined" text.
+    expect(screen.queryByText('undefined')).not.toBeInTheDocument()
+  })
+
+  it('shows green "Enabled" badge for a healthy (non-degraded) enabled channel', async () => {
+    // Differentiation test: a healthy enabled channel still shows green badge.
+    vi.mocked(fetchChannels).mockResolvedValue([
+      makeChannel({ id: 'telegram', name: 'Telegram', enabled: true, degraded: false }),
+    ])
+
+    renderRealChannelsScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('Enabled')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Failed to start')).not.toBeInTheDocument()
   })
 })

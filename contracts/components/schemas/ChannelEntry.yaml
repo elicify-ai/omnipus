@@ -14,6 +14,14 @@ properties:
     $ref: './ChannelId.yaml'
     description: Canonical channel identifier.
     example: telegram
+  instance_id:
+    type: string
+    description: >
+      The map key under which this instance is stored in config.json
+      (currently equals the channel type in v0.1 cap-1). Included in responses
+      so the SPA can address per-instance configure/enable/routing endpoints
+      without hardcoding the key.
+    example: telegram
   name:
     type: string
     description: Human-readable channel name.
@@ -25,9 +33,11 @@ properties:
       - websocket
       - webhook
       - bridge
+      - native
       - tcp
       - http
       - serial
+      - email
     example: webhook
   enabled:
     type: boolean
@@ -37,3 +47,30 @@ properties:
     type: string
     description: Short description of the channel.
     example: Telegram Bot API
+  identity:
+    $ref: './ChannelIdentity.yaml'
+    description: >
+      Optional routing identity override for this channel instance. When set,
+      messages from this channel are routed as the specified agent or as the
+      default user, overriding the normal per-sender routing rules.
+  native_available:
+    type: boolean
+    description: >
+      WhatsApp only: whether the native (whatsmeow) transport is compiled into
+      this binary. False on a lite build or an architecture where it is excluded.
+      Omitted for channels to which it does not apply. When false, clients MUST
+      NOT offer native mode (the QR pairing flow cannot work).
+    example: true
+  degraded:
+    type: boolean
+    description: >
+      True when the channel is enabled in config but failed to construct at
+      runtime (e.g. native WhatsApp requested on a build without it, or an
+      invalid credential). The channel is NOT serving despite enabled=true.
+    example: false
+  degraded_reason:
+    type: string
+    description: >
+      Human-readable reason the channel is degraded. Present only when degraded
+      is true.
+    example: "whatsapp native is not compiled into this build"

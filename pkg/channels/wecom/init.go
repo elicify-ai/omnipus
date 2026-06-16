@@ -11,7 +11,8 @@ func init() {
 	channels.RegisterFactory(
 		"wecom",
 		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			return NewChannel(cfg.Channels.WeCom, secrets, b)
+			inst := cfg.Channels["wecom"]
+			return NewChannel(config.InstanceToWeCom(inst), secrets, b)
 		},
 	)
 }

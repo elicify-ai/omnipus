@@ -65,7 +65,7 @@ func TestSeedConfig_MiaDefaultNotOverriddenOnReEnforcement(t *testing.T) {
 			List: []config.AgentConfig{
 				{
 					ID:      string(IDMia),
-					Name:    "Mia — Omnipus Guide",
+					Name:    "Mia — Assistant",
 					Locked:  true,
 					Enabled: &enabled,
 					Default: false, // operator explicitly cleared the default

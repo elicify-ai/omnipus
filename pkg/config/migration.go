@@ -559,7 +559,7 @@ func loadConfig(data []byte) (*Config, error) {
 // contains one of these keys will not cause a load error (the field is simply
 // ignored by the JSON unmarshaler), but we emit a structured Warn so operators
 // are aware the section is inert and can clean up their config file.
-var removedChannelKeys = []string{"maixcam", "teams"}
+var removedChannelKeys = []string{"maixcam", "teams", "onebot"}
 
 // warnRemovedChannelFields inspects the raw "channels" object in the JSON
 // config and emits a slog.Warn for any key that belongs to a removed channel.
@@ -759,5 +759,98 @@ func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) {
 				"component", "config",
 				"migrated_tools", migrated)
 		})
+	}
+}
+
+// restoreSkillDiscoveryDefaults repairs configs that persisted the skill-
+// discovery tool defaults as disabled/empty.
+//
+// Background (the bug): loadConfig starts from DefaultConfig() (which has
+// find_skills/install_skill enabled and ClawHub {enabled:true,
+// base_url:"https://clawhub.ai"}) then unmarshals the on-disk JSON over it. A
+// config.json that was written from a partially-populated or zero-valued struct
+// carries the JSON literals `"enabled": false` / `"base_url": ""` for these
+// fields, which OVERWRITE the in-memory defaults at unmarshal time. The result:
+// the agent loop builds its skills RegistryManager from a ClawHub config with
+// Enabled=false, NewRegistryManagerFromConfig skips it, and the agent's
+// find_skills/install_skill tools reach ZERO registries — while the UI works
+// because it constructs the ClawHub client directly (gateway.go), defaulting
+// the URL and ignoring the enabled flag.
+//
+// This restores the DefaultConfig() values ONLY when the corresponding key is
+// ABSENT from the raw JSON (no operator intent). It mirrors the intent-detection
+// in migrateDeprecatedToolEnableFlags: a missing key means "apply the default",
+// an explicitly-present key (e.g. `"enabled": false`) is honored as operator
+// intent and left untouched. This way an operator who deliberately disabled
+// ClawHub or the skill tools keeps that setting, while every legacy/onboarded
+// config that merely never wrote these fields (or wrote zero values for them
+// before they had defaults) is healed back to the working default.
+//
+// Empty BaseURL is always healed to the default URL even when the key is
+// present, because an empty base_url is never a meaningful operator choice and
+// the UI already treats empty-as-default (NewClawHubRegistry). This keeps
+// agent↔UI parity: both reach https://clawhub.ai when no URL is configured.
+func restoreSkillDiscoveryDefaults(cfg *Config, raw []byte) {
+	if cfg == nil {
+		return
+	}
+	defaults := DefaultConfig()
+
+	// Parse the raw "tools" object so we can tell "key absent" (apply default)
+	// from "key present" (honor operator intent). Best-effort: on any parse
+	// failure we fall back to absence semantics, which is the safe, healing
+	// direction for this fix.
+	var top struct {
+		Tools map[string]json.RawMessage `json:"tools"`
+	}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &top)
+	}
+
+	// jsonKeyPresent reports whether nested key path exists in the raw tools
+	// object. Each segment must resolve to a JSON object except the final one,
+	// whose mere presence is what we test.
+	jsonKeyPresent := func(path ...string) bool {
+		if len(path) == 0 {
+			return false
+		}
+		cur := top.Tools
+		for i, seg := range path {
+			rawVal, ok := cur[seg]
+			if !ok {
+				return false
+			}
+			if i == len(path)-1 {
+				return true
+			}
+			var next map[string]json.RawMessage
+			if err := json.Unmarshal(rawVal, &next); err != nil {
+				return false
+			}
+			cur = next
+		}
+		return true
+	}
+
+	// find_skills.enabled — restore default (true) unless the operator wrote
+	// an explicit find_skills.enabled value.
+	if !jsonKeyPresent("find_skills", "enabled") {
+		cfg.Tools.FindSkills.Enabled = defaults.Tools.FindSkills.Enabled
+	}
+	// install_skill.enabled — same treatment.
+	if !jsonKeyPresent("install_skill", "enabled") {
+		cfg.Tools.InstallSkill.Enabled = defaults.Tools.InstallSkill.Enabled
+	}
+
+	// tools.skills.registries.clawhub.enabled — restore default (true) unless
+	// the operator explicitly set it.
+	if !jsonKeyPresent("skills", "registries", "clawhub", "enabled") {
+		cfg.Tools.Skills.Registries.ClawHub.Enabled = defaults.Tools.Skills.Registries.ClawHub.Enabled
+	}
+	// tools.skills.registries.clawhub.base_url — default the URL whenever it is
+	// empty (absent OR explicitly blank). An empty URL is never a meaningful
+	// operator choice; the UI already treats empty-as-default.
+	if cfg.Tools.Skills.Registries.ClawHub.BaseURL == "" {
+		cfg.Tools.Skills.Registries.ClawHub.BaseURL = defaults.Tools.Skills.Registries.ClawHub.BaseURL
 	}
 }

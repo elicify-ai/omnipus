@@ -115,7 +115,7 @@ func checkPreviewPort(cfg *config.Config) []warning {
 		port int
 	}
 	knownPorts := []channelPort{
-		{"channels.line.webhook_port", cfg.Channels.LINE.WebhookPort},
+		{"channels.line.webhook_port", cfg.Channels["line"].WebhookPort},
 	}
 	for _, cp := range knownPorts {
 		if cp.port > 0 && cp.port == previewPort {
@@ -173,17 +173,18 @@ type dmChannel struct {
 // checkDMPolicies checks each enabled DM-capable channel for an empty allow_from.
 // Per US-15: warns when any DM channel accepts messages from anyone.
 func checkDMPolicies(cfg *config.Config) []warning {
-	ch := cfg.Channels
+	instOf := func(key string) config.ChannelInstanceConfig {
+		return cfg.Channels[key]
+	}
 
 	channels := []dmChannel{
-		{"Telegram", "WARN-DM-001", ch.Telegram.Enabled, ch.Telegram.AllowFrom},
-		{"Discord", "WARN-DM-002", ch.Discord.Enabled, ch.Discord.AllowFrom},
-		{"WhatsApp", "WARN-DM-003", ch.WhatsApp.Enabled, ch.WhatsApp.AllowFrom},
-		{"Slack", "WARN-DM-004", ch.Slack.Enabled, ch.Slack.AllowFrom},
-		{"LINE", "WARN-DM-005", ch.LINE.Enabled, ch.LINE.AllowFrom},
-		{"OneBot", "WARN-DM-006", ch.OneBot.Enabled, ch.OneBot.AllowFrom},
-		{"WeCom", "WARN-DM-007", ch.WeCom.Enabled, ch.WeCom.AllowFrom},
-		{"Feishu", "WARN-DM-008", ch.Feishu.Enabled, ch.Feishu.AllowFrom},
+		{"Telegram", "WARN-DM-001", instOf("telegram").Enabled, instOf("telegram").AllowFrom},
+		{"Discord", "WARN-DM-002", instOf("discord").Enabled, instOf("discord").AllowFrom},
+		{"WhatsApp", "WARN-DM-003", instOf("whatsapp").Enabled, instOf("whatsapp").AllowFrom},
+		{"Slack", "WARN-DM-004", instOf("slack").Enabled, instOf("slack").AllowFrom},
+		{"LINE", "WARN-DM-005", instOf("line").Enabled, instOf("line").AllowFrom},
+		{"WeCom", "WARN-DM-007", instOf("wecom").Enabled, instOf("wecom").AllowFrom},
+		{"Feishu", "WARN-DM-008", instOf("feishu").Enabled, instOf("feishu").AllowFrom},
 	}
 
 	var warnings []warning

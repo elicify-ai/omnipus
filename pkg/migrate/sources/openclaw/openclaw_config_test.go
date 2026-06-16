@@ -266,9 +266,10 @@ func TestConvertToOmnipus(t *testing.T) {
 		t.Errorf("expected telegram token 'test-token', got '%s'", omnipusCfg.Channels.Telegram.Token)
 	}
 
-	if omnipusCfg.Channels.WhatsApp.BridgeURL != "http://localhost:3000" {
-		t.Errorf("expected whatsapp bridge URL 'http://localhost:3000', got '%s'",
-			omnipusCfg.Channels.WhatsApp.BridgeURL)
+	// BridgeURL is no longer migrated (WhatsApp is always native; bridge removed).
+	// Verify the channel's enabled flag still migrates.
+	if !omnipusCfg.Channels.WhatsApp.Enabled {
+		t.Error("whatsapp should be enabled after migration")
 	}
 
 	if omnipusCfg.Channels.Feishu.AppID != "app-id" {
@@ -636,8 +637,7 @@ func TestToStandardConfig(t *testing.T) {
 				AllowFrom: []string{"user1"},
 			},
 			WhatsApp: WhatsAppConfig{
-				Enabled:   true,
-				BridgeURL: "http://localhost:3000",
+				Enabled: true,
 			},
 		},
 		Gateway: GatewayConfig{
@@ -683,15 +683,15 @@ func TestToStandardConfig(t *testing.T) {
 		t.Errorf("expected empty api key after migration (secrets not migrated), got '%s'", foundAPIKey)
 	}
 
-	if !stdCfg.Channels.Telegram.Enabled {
+	if !stdCfg.Channels["telegram"].Enabled {
 		t.Error("telegram should be enabled")
 	}
 	// Secrets are not migrated from OpenClaw; users must re-enter them via
 	// `omnipus credentials set TELEGRAM_TOKEN <value>` and set token_ref in config.
-	if stdCfg.Channels.Telegram.TokenRef != "" {
+	if stdCfg.Channels["telegram"].TokenRef != "" {
 		t.Errorf(
 			"expected empty token_ref after migration (secrets not migrated), got %q",
-			stdCfg.Channels.Telegram.TokenRef,
+			stdCfg.Channels["telegram"].TokenRef,
 		)
 	}
 

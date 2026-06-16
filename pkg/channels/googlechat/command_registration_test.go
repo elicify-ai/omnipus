@@ -19,7 +19,7 @@ func TestRegisterCommands_GoogleChat_ReturnsNil(t *testing.T) {
 		WebhookURL: newSS("https://chat.googleapis.com/webhook/test"),
 	}
 	msgBus := bus.NewMessageBus()
-	ch, err := NewGoogleChatChannel(cfg, msgBus)
+	ch, err := NewGoogleChatChannel(cfg, nil, msgBus)
 	if err != nil {
 		t.Fatalf("NewGoogleChatChannel() = %v", err)
 	}
@@ -45,7 +45,7 @@ func TestRegisterCommands_GoogleChat_FiltersEmptyDefs(t *testing.T) {
 		WebhookURL: newSS("https://chat.googleapis.com/webhook/test"),
 	}
 	msgBus := bus.NewMessageBus()
-	ch, err := NewGoogleChatChannel(cfg, msgBus)
+	ch, err := NewGoogleChatChannel(cfg, nil, msgBus)
 	if err != nil {
 		t.Fatalf("NewGoogleChatChannel() = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestRegisterCommands_GoogleChat_EmptyList(t *testing.T) {
 		WebhookURL: newSS("https://chat.googleapis.com/webhook/test"),
 	}
 	msgBus := bus.NewMessageBus()
-	ch, err := NewGoogleChatChannel(cfg, msgBus)
+	ch, err := NewGoogleChatChannel(cfg, nil, msgBus)
 	if err != nil {
 		t.Fatalf("NewGoogleChatChannel() = %v", err)
 	}

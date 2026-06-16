@@ -339,6 +339,7 @@ const clientFrames = [
   "AttachSessionFrame",
   "DevicePairingResponseFrame",
   "SessionCloseFrame",
+  "WhatsAppPairingSubscribeFrame",
 ];
 
 lines.push("// ── Client → server frames ──────────────────────────────────────────────────");

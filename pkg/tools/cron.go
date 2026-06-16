@@ -6,35 +6,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/constants"
 	"github.com/dapicom-ai/omnipus/pkg/cron"
 	"github.com/dapicom-ai/omnipus/pkg/utils"
 )
 
-// JobExecutor is the interface for executing cron jobs through the agent
-type JobExecutor interface {
-	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string) (string, error)
-}
-
 // CronTool provides scheduling capabilities for the agent
 type CronTool struct {
 	BaseTool
 	cronService  *cron.CronService
-	executor     JobExecutor
-	msgBus       *bus.MessageBus
-	execTool     *ExecTool
 	allowCommand bool
 	execEnabled  bool
 }
 
-// NewCronTool creates a new CronTool
-// execTimeout: 0 means no timeout, >0 sets the timeout duration
-func NewCronTool(
-	cronService *cron.CronService, executor JobExecutor, msgBus *bus.MessageBus, workspace string, restrict bool,
-	execTimeout time.Duration, config *config.Config,
-) (*CronTool, error) {
+// NewCronTool creates a new CronTool. The owner-aware autonomous fire path lives
+// in the gateway's scheduledRunner (wired via CronService.SetRunner); the tool
+// itself only creates/lists/edits schedules, so it carries no executor or exec
+// tool of its own. The allow_command / exec.enabled flags still gate whether a
+// command-bearing schedule may be created.
+func NewCronTool(cronService *cron.CronService, config *config.Config) *CronTool {
 	allowCommand := false
 	execEnabled := false
 	if config != nil {
@@ -42,26 +33,11 @@ func NewCronTool(
 		execEnabled = config.Tools.Exec.Enabled
 	}
 
-	var execTool *ExecTool
-	if execEnabled {
-		var err error
-		execTool, err = NewExecToolWithConfig(workspace, restrict, config)
-		if err != nil {
-			return nil, fmt.Errorf("unable to configure exec tool: %w", err)
-		}
-	}
-
-	if execTool != nil {
-		execTool.SetTimeout(execTimeout)
-	}
 	return &CronTool{
 		cronService:  cronService,
-		executor:     executor,
-		msgBus:       msgBus,
-		execTool:     execTool,
 		allowCommand: allowCommand,
 		execEnabled:  execEnabled,
-	}, nil
+	}
 }
 
 // Name returns the tool name
@@ -118,6 +94,20 @@ func (t *CronTool) Parameters() map[string]any {
 			"deliver": map[string]any{
 				"type":        "boolean",
 				"description": "If true, send message directly to channel. If false, let agent process message (for complex tasks). Default: false",
+			},
+			"session_mode": map[string]any{
+				"type": "string",
+				"enum": []string{"isolated", "continue", "main"},
+				"description": "Session mode for the scheduled run. 'isolated' (default): a fresh session each run. " +
+					"'continue': a persistent session that builds on history across runs. 'main': inject into the owning agent's main session.",
+			},
+			"owner": map[string]any{
+				"type":        "string",
+				"description": "Optional agent id that owns and runs this schedule. Defaults to the calling agent.",
+			},
+			"timeout_seconds": map[string]any{
+				"type":        "integer",
+				"description": "Optional per-schedule run deadline in seconds. 0 (default) uses the global schedules timeout.",
 			},
 		},
 		"required": []string{"action"},
@@ -222,25 +212,48 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	// Truncate message for job name (max 30 chars)
 	messagePreview := utils.Truncate(message, 30)
 
-	job, err := t.cronService.AddJob(
-		messagePreview,
-		schedule,
-		message,
-		deliver,
-		channel,
-		chatID,
-	)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
+	// Owner defaults to the calling agent (FR-002).
+	owner, _ := args["owner"].(string)
+	if owner == "" {
+		owner = ToolAgentID(ctx)
 	}
 
-	if command != "" {
-		job.Payload.Command = command
-		// Need to save the updated payload. H7: check error and remove job on failure.
-		if err := t.cronService.UpdateJob(job); err != nil {
-			t.cronService.RemoveJob(job.ID)
-			return ErrorResult(fmt.Sprintf("Error saving cron job command: %v", err))
-		}
+	// Session mode defaults to isolated (FR-004).
+	sessionModeStr, _ := args["session_mode"].(string)
+	sessionMode := cron.SessionMode(sessionModeStr)
+	switch {
+	case sessionModeStr == "":
+		sessionMode = cron.SessionModeIsolated
+	case sessionMode.Valid():
+		// valid
+	default:
+		return ErrorResult(fmt.Sprintf("invalid session_mode %q (want isolated|continue|main)", sessionModeStr))
+	}
+
+	// Optional per-schedule timeout (FR-003).
+	timeoutSeconds := 0
+	if ts, ok := args["timeout_seconds"].(float64); ok && ts > 0 {
+		timeoutSeconds = int(ts)
+	}
+
+	// Single atomic write (AddJobFull) so the job never persists with an empty
+	// owner/mode between an AddJob and a follow-up UpdateJob. SessionMode is
+	// already normalized above (isolated default + Valid() check); Enabled is
+	// true by default (nil → true).
+	job, err := t.cronService.AddJobFull(cron.JobSpec{
+		Name:           messagePreview,
+		Schedule:       schedule,
+		Message:        message,
+		Command:        command,
+		Deliver:        deliver,
+		Channel:        channel,
+		To:             chatID,
+		AgentID:        owner,
+		SessionMode:    sessionMode,
+		TimeoutSeconds: timeoutSeconds,
+	})
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
 	}
 
 	return SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))
@@ -300,89 +313,4 @@ func (t *CronTool) enableJob(args map[string]any, enable bool) *ToolResult {
 		status = "disabled"
 	}
 	return SilentResult(fmt.Sprintf("Cron job '%s' %s", job.Name, status))
-}
-
-// ExecuteJob executes a cron job through the agent
-func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
-	// Get channel/chatID from job payload
-	channel := job.Payload.Channel
-	chatID := job.Payload.To
-
-	// Default values if not set
-	if channel == "" {
-		channel = "cli"
-	}
-	if chatID == "" {
-		chatID = "direct"
-	}
-
-	// Execute command if present
-	if job.Payload.Command != "" {
-		if !t.execEnabled || t.execTool == nil {
-			output := "Error executing scheduled command: command execution is disabled"
-			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer pubCancel()
-			t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-				Channel: channel,
-				ChatID:  chatID,
-				Content: output,
-			})
-			return "ok"
-		}
-
-		args := map[string]any{
-			"action":    "run",
-			"command":   job.Payload.Command,
-			"__channel": channel,
-			"__chat_id": chatID,
-		}
-
-		result := t.execTool.Execute(ctx, args)
-		var output string
-		if result.IsError {
-			output = fmt.Sprintf("Error executing scheduled command: %s", result.ForLLM)
-		} else {
-			output = fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM)
-		}
-
-		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer pubCancel()
-		t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: output,
-		})
-		return "ok"
-	}
-
-	// If deliver=true, send message directly without agent processing
-	if job.Payload.Deliver {
-		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer pubCancel()
-		t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: job.Payload.Message,
-		})
-		return "ok"
-	}
-
-	// For deliver=false, process through agent (for complex tasks)
-	sessionKey := fmt.Sprintf("cron-%s", job.ID)
-
-	// Call agent with job's message
-	response, err := t.executor.ProcessDirectWithChannel(
-		ctx,
-		job.Payload.Message,
-		sessionKey,
-		channel,
-		chatID,
-	)
-	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
-	}
-
-	// Response is automatically sent via MessageBus by AgentLoop
-	_ = response // Will be sent by AgentLoop
-	return "ok"
 }

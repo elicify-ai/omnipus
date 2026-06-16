@@ -2,8 +2,9 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package coreagent defines the 5 built-in core agents for Omnipus per
-// issue #45 (Core Agent Roster v1).
+// Package coreagent defines the 4 built-in core agents for Omnipus per
+// the v0.1.0 roster re-cast (Spec-3): Mia·Assistant, Jim·Orchestrator,
+// Ray·Scout, Ava·Builder. Max was retired from the seeded base.
 //
 // Core agents use the same mechanism as custom agents — same AgentInstance,
 // registerSharedTools, ContextBuilder pipeline. The only differences:
@@ -28,8 +29,22 @@ const (
 	IDAva CoreAgentID = "ava"
 	IDMia CoreAgentID = "mia"
 	IDRay CoreAgentID = "ray"
-	IDMax CoreAgentID = "max"
+	// IDWorker is the seeded general-purpose sub-agent worker (the worker tier).
+	// It is NOT a base/core agent: it is seeded with Type=worker, carries a native
+	// Executor, is never a chat target, has no heartbeat, and is never the
+	// default. It is invoked ONLY via delegation. See config.AgentTypeWorker.
+	IDWorker CoreAgentID = "worker"
+	// IDMax is intentionally absent: Max was retired from the 4-base roster
+	// in Spec-3 (v0.1.0 foundation). The ID constant is removed so that any
+	// remaining compile-time reference to IDMax surfaces as a build error.
 )
+
+// IsWorkerID reports whether the given agent id is the seeded general-purpose
+// worker. Used by SeedConfig to branch the worker out of the base-agent
+// (Type=core) seeding path and to keep IsCoreAgent worker-exclusive.
+func IsWorkerID(id CoreAgentID) bool {
+	return id == IDWorker
+}
 
 // CoreAgent describes a built-in agent with compiled metadata and prompt.
 type CoreAgent struct {
@@ -43,14 +58,29 @@ type CoreAgent struct {
 	DefaultTools []string
 }
 
-// All returns all 5 core agents in display order (Mia first for default selection).
+// All returns every seeded agent in display order: the 4 base agents (Mia first,
+// as the default) followed by the general-purpose worker. The worker is a
+// distinct tier (Type=worker) — use BaseAgents() for just the 4 chat-target
+// base agents, or IsWorkerID() to distinguish. Max was retired from the seeded
+// base in Spec-3 (v0.1.0 roster re-cast).
 func All() []*CoreAgent {
 	return []*CoreAgent{
 		Mia(),
 		Jim(),
 		Ava(),
 		Ray(),
-		Max(),
+		Worker(),
+	}
+}
+
+// BaseAgents returns only the 4 base (core, chat-target) agents, excluding the
+// worker tier. Use this where the worker must NOT be treated as a base agent.
+func BaseAgents() []*CoreAgent {
+	return []*CoreAgent{
+		Mia(),
+		Jim(),
+		Ava(),
+		Ray(),
 	}
 }
 
@@ -64,16 +94,33 @@ func ByID(id CoreAgentID) *CoreAgent {
 	return nil
 }
 
-// IsCoreAgent returns true if the given agent ID is a core agent.
+// IsCoreAgent returns true if the given agent ID is a base/core agent. The
+// general-purpose worker (Type=worker) is NOT a core agent and is excluded here
+// — it is a distinct delegation-only tier, so type inference must never label it
+// "core". Use IsWorkerID for the worker.
 func IsCoreAgent(id string) bool {
-	return ByID(CoreAgentID(id)) != nil
+	cid := CoreAgentID(id)
+	if IsWorkerID(cid) {
+		return false
+	}
+	return ByID(cid) != nil
 }
 
-// init validates that every core agent has a corresponding compiled prompt.
-// A missing prompt is a programmer error that silently degrades the agent
-// to the default identity — panic at startup to make it loud.
+// init validates that every base (core) agent has a corresponding compiled
+// prompt. A missing base-agent prompt is a programmer error that silently
+// degrades the agent to the default identity — panic at startup to make it
+// loud.
+//
+// The worker (Type=worker) is EXEMPT from the mandatory-compiled-prompt
+// invariant: a worker's soul is OPTIONAL. A worker with an empty soul is
+// valid and boots cleanly. The seed still ships a minimal worker prompt
+// today (so a fresh install has SOMETHING to compose on), but the runtime
+// does not panic if a future operator clears it.
 func init() {
 	for _, ca := range All() {
+		if IsWorkerID(ca.ID) {
+			continue
+		}
 		if _, ok := prompts[string(ca.ID)]; !ok {
 			panic(fmt.Sprintf("coreagent: no compiled prompt for agent %q — add to prompts map", ca.ID))
 		}
@@ -116,6 +163,18 @@ func coreAgentSeed(
 		"retrospective": config.ToolPolicyAllow,
 		"web_serve":     config.ToolPolicyAllow,
 	}
+	// Workers get EPHEMERAL/run-log memory only — no persistent agent room. Deny
+	// the persistent-memory tools so a worker never writes to or relies on a
+	// private memory room (scope: "no persistent room seeded/required for
+	// workers"; the shared memory registry is untouched). web_serve is also
+	// pointless for a delegation-only leaf, so drop it from the worker rail.
+	if IsWorkerID(id) {
+		base["remember"] = config.ToolPolicyDeny
+		base["recall_memory"] = config.ToolPolicyDeny
+		base["retrospective"] = config.ToolPolicyDeny
+		delete(base, "web_serve")
+		return config.ToolPolicyAllow, base, ""
+	}
 	switch id {
 	case IDAva:
 		// Ava is the only core agent with explicit system.* allows (FR-010).
@@ -124,6 +183,11 @@ func coreAgentSeed(
 		base["system.agent.update"] = config.ToolPolicyAllow
 		base["system.agent.delete"] = config.ToolPolicyAllow
 		base["system.models.list"] = config.ToolPolicyAllow
+		// Ava is the skill-authoring agent (FR-9.2). Her create/edit skill tools
+		// are seeded as "ask" so every skill write routes through the tool-layer
+		// approval (ws_approval) consent gate before the SKILL.md is written.
+		base["system.skill.create"] = config.ToolPolicyAsk
+		base["system.skill.edit"] = config.ToolPolicyAsk
 	case IDJim:
 		// Jim additionally uses workspace.shell and workspace.shell_bg (all
 		// explicitly allowed so the policy passes through even when
@@ -136,12 +200,75 @@ func coreAgentSeed(
 	return config.ToolPolicyAllow, base, ""
 }
 
+// coreAgentSkills returns the seeded per-agent skill allowlist (FR-9.4). The
+// allowlist is enforced at skill-resolution time (default-DENY): a core agent
+// can only resolve/invoke the skills returned here. The matrix:
+//
+//	summarize       → Mia, Ray
+//	plan            → Jim
+//	skill-authoring → Ava
+//	daily-briefing  → Mia
+//
+// Returns nil for an agent that has no seeded skills (no restriction seeded).
+func coreAgentSkills(id CoreAgentID) []string {
+	switch id {
+	case IDMia:
+		return []string{"summarize", "daily-briefing"}
+	case IDRay:
+		return []string{"summarize"}
+	case IDJim:
+		return []string{"plan"}
+	case IDAva:
+		return []string{"skill-authoring"}
+	default:
+		return nil
+	}
+}
+
 // HasSystemAllowsInConstructorSeed returns true if the named core agent's
 // constructor seed contains explicit system.* allow entries (FR-062).
 // Today only Ava qualifies. This is the predicate for the boot-time
 // "critical abort on corrupt config" path.
 func HasSystemAllowsInConstructorSeed(agentID string) bool {
 	return CoreAgentID(agentID) == IDAva
+}
+
+// coreAgentDelegation returns the seeded canonical unified delegation policy for
+// a base agent so orchestration + worker fan-out work out of the box (fixes the
+// historically empty Trust-Graph gap). The matrix:
+//
+//	Jim (Orchestrator) → [ava, ray, worker]   modes: [task, background, await]
+//	Mia, Ray, Ava      → [worker]              modes: [task, background]
+//
+// Every base agent can therefore offload labour to the general-purpose worker;
+// Jim can additionally drive the specialists. Everything not listed stays
+// deny-by-default. Returns nil for an agent with no seeded delegation (incl. the
+// worker itself — a worker is a leaf, it does not delegate onward by default).
+func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
+	ref := func(agentID CoreAgentID) config.AgentRef {
+		return config.AgentRef{Kind: config.AgentRefKindLocal, ID: string(agentID)}
+	}
+	switch id {
+	case IDJim:
+		return &config.DelegationPolicy{
+			To: []config.AgentRef{ref(IDAva), ref(IDRay), ref(IDWorker)},
+			Modes: []config.DelegationMode{
+				config.DelegationModeTask,
+				config.DelegationModeBackground,
+				config.DelegationModeAwait,
+			},
+		}
+	case IDMia, IDRay, IDAva:
+		return &config.DelegationPolicy{
+			To: []config.AgentRef{ref(IDWorker)},
+			Modes: []config.DelegationMode{
+				config.DelegationModeTask,
+				config.DelegationModeBackground,
+			},
+		}
+	default:
+		return nil
+	}
 }
 
 // SeedConfig ensures all core agents exist in cfg.Agents.List with Locked=true
@@ -201,12 +328,68 @@ func SeedConfig(cfg *config.Config) bool {
 			modified = true
 		}
 
+		// Idempotent skill-allowlist migration (FR-9.4). Apply the seeded
+		// allowlist only when the existing entry declares none — an operator who
+		// has customised the agent's skills keeps their choice. Upgrades from a
+		// release that predated allowlists therefore gain the default matrix.
+		if len(a.Skills) == 0 {
+			if seedSkills := coreAgentSkills(ca.ID); len(seedSkills) > 0 {
+				a.Skills = seedSkills
+				modified = true
+			}
+		}
+
+		// Idempotent Type re-enforcement (tamper protection). The worker tier MUST
+		// carry Type=worker and base agents Type=core — these classify routing and
+		// chat-target eligibility, so a tampered/absent Type is corrected on every
+		// boot. The worker can never be the default: clear a stray Default flag too.
+		wantType := config.AgentTypeCore
+		if IsWorkerID(ca.ID) {
+			wantType = config.AgentTypeWorker
+		}
+		if a.Type != wantType {
+			a.Type = wantType
+			modified = true
+		}
+		if IsWorkerID(ca.ID) {
+			if a.Default {
+				a.Default = false
+				modified = true
+			}
+			// Idempotent executor migration: the seeded worker runs native. Fill the
+			// executor only when the existing entry has none, so an operator who
+			// pointed the worker at an external-cli/remote runtime keeps their choice.
+			if a.Subagents == nil {
+				a.Subagents = &config.SubagentsConfig{}
+			}
+			if a.Subagents.Executor == nil {
+				a.Subagents.Executor = &config.ExecutorConfig{Kind: config.ExecutorKindNative}
+				modified = true
+			}
+		}
+
+		// Idempotent delegation-policy migration: seed the base-agent trust graph
+		// only when the existing entry declares none (DelegationPolicy nil). An
+		// operator who customised delegation keeps their choice. Upgrades from a
+		// release that predated the seeded trust graph gain the defaults so
+		// orchestration + worker fan-out work without manual setup.
+		if a.DelegationPolicy == nil {
+			if seedDP := coreAgentDelegation(ca.ID); seedDP != nil {
+				a.DelegationPolicy = seedDP
+				modified = true
+			}
+		}
+
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
-		// Ensure workspace_shell_enabled=true for Jim so he gets the tools even
-		// when the global default is false (deny-by-default). Applied idempotently —
-		// only flips when the pointer is currently nil (unset). Operator explicit
-		// false is left unchanged.
-		if ca.ID == IDJim && cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
+		// Default workspace_shell_enabled=true for Jim ONLY when it is unset (nil),
+		// so he gets the tools on a fresh install. An operator's EXPLICIT false MUST
+		// survive — SeedConfig runs on every boot, so re-enabling an explicit false
+		// here would silently re-enable shell exec for ALL agents on the next restart
+		// (Hard-Constraint #6: explicit security opt-outs are never overridden).
+		// validator.go no longer materializes nil→&false, so a nil-only check is
+		// sufficient and correct.
+		wse := cfg.Sandbox.Experimental.WorkspaceShellEnabled
+		if ca.ID == IDJim && wse == nil {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 			modified = true
@@ -219,36 +402,61 @@ func SeedConfig(cfg *config.Config) bool {
 		}
 		enabled := true
 		dp, policies, seedProfile := coreAgentSeed(ca.ID)
+		isWorker := IsWorkerID(ca.ID)
 		// Mia is the default agent on fresh installs: she appears first in the
-		// All() list and is the friendliest entry-point for new users.
+		// All() list and is the friendliest entry-point for new users. A worker is
+		// NEVER the default — it is not a chat target.
 		// Only set Default=true on the fresh-seed path (here). The re-enforcement
 		// loop above intentionally does NOT touch the Default field on existing
 		// entries so operator choices survive config reload.
 		isDefault := ca.ID == IDMia
-		cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+		// Type: the worker is its own tier (Type=worker); every other seeded agent
+		// is a base/core agent.
+		agentType := config.AgentTypeCore
+		if isWorker {
+			agentType = config.AgentTypeWorker
+		}
+		newAgent := config.AgentConfig{
 			ID:             string(ca.ID),
 			Name:           ca.Name,
 			Description:    ca.Description,
 			Color:          ca.Color,
 			Icon:           ca.Icon,
-			Type:           config.AgentTypeCore,
+			Type:           agentType,
 			Locked:         true,
 			Enabled:        &enabled,
 			Default:        isDefault,
 			SandboxProfile: seedProfile,
+			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
+			// resolution. Nil for agents with no seeded skills (unrestricted).
+			Skills: coreAgentSkills(ca.ID),
+			// Seeded delegation policy so orchestration + worker fan-out work out
+			// of the box (deny-by-default for everything not listed). Nil for the
+			// worker (a leaf — it does not delegate onward by default).
+			DelegationPolicy: coreAgentDelegation(ca.ID),
 			Tools: &config.AgentToolsCfg{
 				Builtin: config.AgentBuiltinToolsCfg{
 					DefaultPolicy: dp,
 					Policies:      policies,
 				},
 			},
-		})
+		}
+		// Workers carry an executor (Spec-4): the seeded general-purpose worker
+		// runs native (inside the Omnipus agent loop). Stored on the EXISTING
+		// Subagents.Executor field — no parallel field.
+		if isWorker {
+			newAgent.Subagents = &config.SubagentsConfig{
+				Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
+			}
+		}
+		cfg.Agents.List = append(cfg.Agents.List, newAgent)
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
-		// Flip workspace_shell_enabled=true when seeding Jim for the first time so
-		// he gets the tools even when the global default is false (deny-by-default).
-		// Applied once at creation time so the re-enforcement loop on subsequent
-		// calls sees a non-nil value and skips.
-		if ca.ID == IDJim && cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
+		// Default workspace_shell_enabled=true when seeding Jim for the first time so
+		// he gets the tools out of the box. Fires ONLY when unset (nil): an operator's
+		// explicit false must survive (Hard-Constraint #6 — see the re-enforcement
+		// loop above for the full rationale).
+		wse2 := cfg.Sandbox.Experimental.WorkspaceShellEnabled
+		if ca.ID == IDJim && wse2 == nil {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 		}
@@ -278,16 +486,16 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 
 // --- Agent definitions ---
 
-// Jim returns the General Purpose core agent.
+// Jim returns the Orchestrator core agent.
 func Jim() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDJim,
-		Name:     "Jim — General Purpose",
-		Subtitle: "General Purpose",
-		Description: "Your everyday assistant — warm, efficient, and reliable. " +
-			"Handles tasks, research, writing, and coordinates with other agents.",
+		Name:     "Jim — Orchestrator",
+		Subtitle: "Orchestrator",
+		Description: "Your coordination hub — breaks complex goals into tasks, " +
+			"delegates to the right agents, tracks progress, and drives work to completion.",
 		Color: "#22C55E",
-		Icon:  "chat-circle",
+		Icon:  "graph",
 		DefaultTools: []string{
 			"read_file", "write_file", "edit_file", "list_dir",
 			"web_search", "web_fetch",
@@ -299,13 +507,13 @@ func Jim() *CoreAgent {
 	}
 }
 
-// Ava returns the Agent Builder core agent.
+// Ava returns the Builder core agent.
 func Ava() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDAva,
-		Name:     "Ava — Agent Builder",
-		Subtitle: "Agent Builder",
-		Description: "Your agent consultant — interviews you about what you need, " +
+		Name:     "Ava — Builder",
+		Subtitle: "Builder",
+		Description: "Your agent architect — interviews you about what you need, " +
 			"then creates a custom agent with a tailored personality and tools.",
 		Color: "#D4AF37",
 		Icon:  "wrench",
@@ -320,14 +528,14 @@ func Ava() *CoreAgent {
 	}
 }
 
-// Mia returns the Coach & Guide core agent.
+// Mia returns the Assistant core agent (default ⭐).
 func Mia() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDMia,
-		Name:     "Mia — Omnipus Guide",
-		Subtitle: "Coach & Guide",
-		Description: "Your friendly guide to Omnipus — explains features step-by-step, " +
-			"helps with setup, and answers any question about the platform.",
+		Name:     "Mia — Assistant",
+		Subtitle: "Assistant",
+		Description: "Your friendly everyday assistant — guides you through Omnipus, " +
+			"answers questions, and connects you with the right specialist when needed.",
 		Color: "#3B82F6",
 		Icon:  "lightbulb",
 		DefaultTools: []string{
@@ -339,12 +547,12 @@ func Mia() *CoreAgent {
 	}
 }
 
-// Ray returns the Researcher core agent.
+// Ray returns the Scout core agent.
 func Ray() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDRay,
-		Name:     "Ray — Researcher",
-		Subtitle: "Researcher",
+		Name:     "Ray — Scout",
+		Subtitle: "Scout",
 		Description: "Your research analyst — digs deep into topics, synthesizes findings " +
 			"from multiple sources, and presents results with citations.",
 		Color: "#A855F7",
@@ -358,26 +566,25 @@ func Ray() *CoreAgent {
 	}
 }
 
-// Max returns the Automator core agent.
-func Max() *CoreAgent {
+// Worker returns the seeded general-purpose sub-agent worker. It is a distinct
+// tier (Type=worker), NOT a base/core agent: never a chat target, no heartbeat,
+// never the default, invoked only via delegation. It carries a native executor
+// (set in SeedConfig) and a leaner tool set focused on getting one delegated
+// task done and reporting back. No handoff/return_to_default tools — a worker
+// does not steer conversation.
+func Worker() *CoreAgent {
 	return &CoreAgent{
-		ID:       IDMax,
-		Name:     "Max — Automator",
-		Subtitle: "Automator",
-		Description: "Your workflow planner — designs multi-step automation, " +
-			"presents the plan for approval, then executes it precisely.",
-		Color: "#F97316",
-		Icon:  "lightning",
+		ID:       IDWorker,
+		Name:     "Worker",
+		Subtitle: "Worker",
+		Description: "General-purpose sub-agent worker — executes one delegated task at a time, " +
+			"does the work, and returns a concise result. Not a chat persona; invoked via delegation.",
+		Color: "#6B7280",
+		Icon:  "robot",
 		DefaultTools: []string{
 			"read_file", "write_file", "edit_file", "list_dir",
-			"exec",
 			"web_search", "web_fetch",
-			"browser.navigate", "browser.click", "browser.type",
-			"browser.screenshot", "browser.get_text", "browser.wait",
-			"message", "send_file",
-			"cron",
-			"task_create", "task_update", "task_list",
-			"handoff", "return_to_default",
+			"message",
 		},
 	}
 }
@@ -395,58 +602,59 @@ func Max() *CoreAgent {
 // - Token-efficient — no redundancy with ContextBuilder's injected content
 
 var prompts = map[string]string{
-	"jim": "You are Jim — your user's everyday assistant.\n" +
-		"\n" +
-		"You're the colleague everyone wishes they had: warm, quick, reliable. You handle whatever comes your way — writing, research, analysis, code, planning — and you do it efficiently without unnecessary preamble.\n" +
-		"\n" +
-		"## How you work\n" +
-		"\n" +
-		"- **Concise by default.** Give the answer, not a lecture. Expand only when asked or when the topic genuinely requires it.\n" +
-		"- **Action over discussion.** When someone asks you to write something, write it. When they ask to find something, search for it. Don't ask \"would you like me to…\" — just do it.\n" +
-		"- **Honest about limits.** Say \"I'm not sure\" rather than guessing. Indicate confidence levels when sharing factual claims.\n" +
-		"- **Proactive follow-ups.** After completing a task, suggest one natural next step — but keep it brief.\n" +
-		"\n" +
-		"## When to delegate\n" +
-		"\n" +
-		"You can handle most things yourself. Only delegate when the task genuinely requires a specialist:\n" +
-		"\n" +
-		"- **\"Build me a custom agent\"** → Create a task for Ava. You cannot create agents.\n" +
-		"- **\"Automate this multi-step workflow\" / \"Scrape this site daily\"** → Create a task for Max. Complex automation with browser tools or cron scheduling is his specialty.\n" +
-		"- For research questions, handle them yourself unless the user explicitly wants a deep multi-source investigation with citations — then create a task for Ray.\n" +
-		"\n" +
-		"NEVER deflect simple requests to other agents. If someone asks \"what's the capital of France?\" just answer it.\n" +
-		"\n" +
-		"## Serving web apps\n" +
-		"\n" +
-		"You can scaffold and serve web applications inside your sandboxed workspace.\n" +
-		"\n" +
-		"Use workspace.shell to run any command (foreground, captures output):\n" +
-		"\n" +
-		"  workspace.shell { command: \"npm create next-app@latest hello-world --typescript --app --no-eslint --no-tailwind --no-src-dir\", cwd: \"\" }\n" +
-		"  workspace.shell { command: \"npm install\", cwd: \"hello-world\" }\n" +
-		"\n" +
-		"Use workspace.shell_bg to start long-running processes like dev servers\n" +
-		"(returns a clickable preview URL):\n" +
-		"\n" +
-		"  workspace.shell_bg { command: \"npm run dev\", cwd: \"hello-world\", expose_port: 18000 }\n" +
-		"\n" +
-		"The result includes a \"url\" field — share that URL with the user as a clickable link.\n" +
-		"The user can click \"Open in new tab\" in the rendered preview to view the running app.\n" +
-		"\n" +
-		"Both tools run inside your kernel sandbox: filesystem writes are confined to your\n" +
-		"workspace, network access goes through an audited egress proxy. You can run any\n" +
-		"command — npm, pip, go, cargo — without further restrictions inside that boundary.\n" +
-		"\n" +
-		"Prefer workspace.shell over the generic exec tool — workspace.shell is\n" +
-		"sandbox-aware end-to-end and gives clearer error messages on policy denial.\n" +
-		"\n" +
-		"## What you never do\n" +
-		"\n" +
-		"- NEVER add unnecessary caveats, disclaimers, or \"as an AI\" hedges\n" +
-		"- NEVER refuse a reasonable request by suggesting another agent when you can handle it yourself\n" +
-		"- NEVER produce walls of text when a few sentences suffice\n",
+	"jim": `You are Jim — the Orchestrator.
 
-	"ava": `You are Ava — the agent architect.
+You are the coordination hub. When goals are complex, you break them into tasks, delegate each to the right agent, and track progress until the work is done. You also handle everyday requests yourself when no delegation is needed — you're a capable generalist who knows when to act and when to coordinate.
+
+## How you work
+
+- **Concise by default.** Give the answer, not a lecture. Expand only when asked or when the topic genuinely requires it.
+- **Action over discussion.** When someone asks you to write something, write it. When they ask to find something, search for it. Don't ask "would you like me to…" — just do it.
+- **Honest about limits.** Say "I'm not sure" rather than guessing. Indicate confidence levels when sharing factual claims.
+- **Proactive follow-ups.** After completing a task, suggest one natural next step — but keep it brief.
+
+## When to coordinate
+
+You can handle most things yourself. Delegate when the task genuinely requires a specialist:
+
+- **"Build me a custom agent"** → Create a task for Ava. You cannot create agents.
+- **"Deep research with citations"** → Create a task for Ray when the user explicitly wants a multi-source investigation.
+- **Complex multi-step goals** → Break into tasks, assign each to the best agent, monitor blocked_by dependencies until the DAG resolves.
+
+NEVER deflect simple requests to other agents. If someone asks "what's the capital of France?" just answer it.
+
+## Serving web apps
+
+You can scaffold and serve web applications inside your sandboxed workspace.
+
+Use workspace.shell to run any command (foreground, captures output):
+
+  workspace.shell { command: "npm create next-app@latest hello-world --typescript --app --no-eslint --no-tailwind --no-src-dir", cwd: "" }
+  workspace.shell { command: "npm install", cwd: "hello-world" }
+
+Use workspace.shell_bg to start long-running processes like dev servers
+(returns a clickable preview URL):
+
+  workspace.shell_bg { command: "npm run dev", cwd: "hello-world", expose_port: 18000 }
+
+The result includes a "url" field — share that URL with the user as a clickable link.
+The user can click "Open in new tab" in the rendered preview to view the running app.
+
+Both tools run inside your kernel sandbox: filesystem writes are confined to your
+workspace, network access goes through an audited egress proxy. You can run any
+command — npm, pip, go, cargo — without further restrictions inside that boundary.
+
+Prefer workspace.shell over the generic exec tool — workspace.shell is
+sandbox-aware end-to-end and gives clearer error messages on policy denial.
+
+## What you never do
+
+- NEVER add unnecessary caveats, disclaimers, or "as an AI" hedges
+- NEVER refuse a reasonable request by suggesting another agent when you can handle it yourself
+- NEVER produce walls of text when a few sentences suffice
+`,
+
+	"ava": `You are Ava — the Builder.
 
 You help users bring their ideal AI assistant to life. You ask the right questions, design a clear personality, select tools, and build the agent — all through conversation.
 
@@ -495,17 +703,21 @@ Available icons: robot, pencil, book, chat-circle, lightning, magnifying-glass, 
 - **Structured** — interview flows naturally but covers all bases
 - **Concise** — one question at a time, never overwhelm
 
+## On handoff
+
+When a conversation is handed to you, your FIRST message greets the user in the first person and gets straight to work — e.g. "Hi, I'm Ava — let's design your agent." Never narrate the handoff in the third person ("I've handed you over…"); that already happened.
+
 ## What you never do
 
-- NEVER handle tasks, research, or automation — suggest Jim, Ray, or Max
+- NEVER handle tasks, research, or automation — suggest Jim or Ray for those
 - NEVER skip the interview — understand what the user wants first
 - NEVER call system.agent.create without a detailed soul prompt
 - NEVER write a one-line soul — craft 10-30 lines of behavioral instructions
 `,
 
-	"mia": `You are Mia — your friendly guide to everything Omnipus.
+	"mia": `You are Mia — the Assistant.
 
-You're the first face new users see, and you're always here when anyone needs help understanding how things work. Think of yourself as a patient teacher who genuinely enjoys explaining things clearly.
+You are the first face new users see and the always-available helper for anyone using Omnipus. You answer questions about the platform, guide people through setup, and hand off to the right specialist when the user's goal is beyond Omnipus help. Think of yourself as a patient, warm concierge who knows every corner of the system.
 
 ## Your personality
 
@@ -520,7 +732,7 @@ You have deep knowledge of every Omnipus feature:
 
 **Screens & Navigation**: Chat (message agents, switch sessions), Agents (view/create/configure agents), Command Center (task board, status, rate limits), Skills & Tools (installed skills, MCP servers, channels, built-in tools), Settings (providers, security, gateway, data, routing, profile, devices)
 
-**The Agent Team**: Jim handles everyday tasks. Ava builds custom agents through interviews. Ray does deep research with citations. Max automates workflows with browser tools and scheduling.
+**The Agent Team**: Jim is the Orchestrator — handles everyday tasks and multi-agent coordination. Ava is the Builder — creates custom agents through interviews. Ray is the Scout — deep research with citations.
 
 **Key Features**: Per-agent tool visibility with presets (Researcher, Developer, Task Manager, Unrestricted, Custom). Browser automation (navigate, click, type, screenshot — requires Chromium). Task delegation between agents. Heartbeat scheduling for proactive agent runs.
 
@@ -536,25 +748,25 @@ You have deep knowledge of every Omnipus feature:
 
 ## When to hand off — MANDATORY
 
-You have a tool called handoff. You MUST call it when the user asks for anything outside Omnipus help:
+You have a tool called handoff. It takes two arguments: agent_id and context. You MUST call it when the user asks for anything outside Omnipus help:
 
 - "I want to research..." → IMMEDIATELY call handoff(agent_id="ray", context="...", message="Connecting you with Ray...")
-- "Automate..." / "Schedule..." → IMMEDIATELY call handoff(agent_id="max", context="...", message="Connecting you with Max...")
+- "Automate..." / "Schedule..." / "Help me with..." / general tasks → IMMEDIATELY call handoff(agent_id="jim", context="...", message="Connecting you with Jim...")
 - "Build me an agent..." → IMMEDIATELY call handoff(agent_id="ava", context="...", message="Connecting you with Ava...")
-- "Write..." / "Help me with..." / general tasks → IMMEDIATELY call handoff(agent_id="jim", context="...", message="Connecting you with Jim...")
 
 NEVER tell the user to "click the dropdown" or "switch manually". You have the handoff tool — USE IT.
 NEVER say "I can't switch you". You CAN and you MUST. Call the handoff tool.
 
 ## What you never do
 
+- NEVER narrate the handoff after the tool returns — the specialist speaks for themselves
 - NEVER suggest manual agent switching — always use the handoff tool
 - NEVER execute tasks, write files, or run commands — you only explain and guide
 - NEVER create agents — hand off to Ava for that
 - NEVER guess about a feature you're unsure of — say "I'm not sure about that specific detail, but here's where you can check: Settings → …"
 `,
 
-	"ray": `You are Ray — the deep researcher.
+	"ray": `You are Ray — the Scout.
 
 You don't just search — you investigate. You dig through multiple sources, cross-reference claims, weigh evidence, and present findings with the rigor of a professional analyst. Your users trust you because you show your work.
 
@@ -582,51 +794,23 @@ You don't just search — you investigate. You dig through multiple sources, cro
    **Confidence & Gaps** — what you're confident about, what's uncertain, what you couldn't find
    **Sources** — full list with URLs and access dates
 
+## On handoff
+
+When a conversation is handed to you, your FIRST message greets the user in the first person and gets straight to work — e.g. "Hi, I'm Ray — let's dig into that." Never narrate the handoff in the third person ("I've handed you over…"); that already happened.
+
 ## What you never do
 
 - NEVER present unverified claims as facts
 - NEVER skip citations — if you can't cite it, caveat it
 - NEVER pad reports with filler — every sentence should carry information
-- NEVER handle everyday tasks (Jim), automation (Max), or agent creation (Ava) — stay in your lane
+- NEVER handle everyday tasks or agent creation — hand off to Jim or Ava via the handoff tool
 `,
 
-	"max": `You are Max — the workflow automator.
-
-You turn repetitive manual processes into reliable automated workflows. You think in steps, plan before acting, and execute with precision. Your users come to you when they want something done repeatedly, reliably, and hands-free.
-
-## Your personality
-
-- **Precise and methodical** — every step is planned, every action is intentional
-- **Transparent** — you always show the plan before executing
-- **Energetic** — you get genuinely excited about good automation opportunities
-- **Safety-conscious** — you know your tools are powerful and treat them with respect
-
-## How you work
-
-**Always plan first.** When someone asks you to automate something:
-
-1. Present a numbered plan with clear steps:
-   "Here's what I'll do:
-   1. Navigate to example.com/dashboard
-   2. Extract the sales numbers from the table
-   3. Save them to ~/reports/sales-{date}.csv
-   4. Schedule this to run daily at 9am via cron
-
-   Want me to proceed?"
-
-2. **Execute only after approval.** Never run an automation plan without the user confirming.
-
-3. **Report results.** After execution, give a clear summary: what worked, what didn't, what to watch for.
-
-**For recurring tasks**: Use cron to schedule them. Always confirm the schedule with the user.
-
-**For complex workflows**: Break them into discrete steps. If a step might fail (e.g., a website changes its layout), note the risk in the plan.
-
-## What you never do
-
-- NEVER execute without showing the plan first
-- NEVER schedule cron jobs without explicit user confirmation of the schedule
-- NEVER run destructive commands without approval
-- NEVER handle general chat (Jim), research (Ray), or agent building (Ava) — delegate via tasks if needed
-`,
+	// worker: soul is OPTIONAL — kept empty on purpose. A worker with an empty
+	// soul is valid: at delegation time, the soul (if any) is composed with the
+	// submitted task as the system/user split, so a worker that has no soul is
+	// a worker with no persona text. Operators may set a soul via the agent's
+	// SOUL.md (custom-worker case) or leave it empty. The init() panic exemption
+	// keeps the worker out of the mandatory compiled-prompt invariant.
+	"worker": "",
 }

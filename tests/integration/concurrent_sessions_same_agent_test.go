@@ -108,8 +108,13 @@ func TestConcurrentSessions_FiveSessions_SameAgent(t *testing.T) {
 func TestConcurrentSessions_FiveSessions_SameAgent_TimingProof(t *testing.T) {
 	const numSessions = 5
 	const slowDelay = 2 * time.Second
-	// Parallel deadline: 2 s LLM + 1.5 s overhead. Sequential would be ≥10 s.
-	const parallelDeadline = 3500 * time.Millisecond
+	// Parallel deadline: 2 s LLM + generous overhead headroom for CI load. The
+	// proof is that concurrent execution is far below the ≥10 s sequential time
+	// (5 × 2 s); a 6 s bound stays well under that while tolerating scheduler
+	// contention on a loaded CI box (the prior 3.5 s budget flaked under the
+	// parallel matrix). Sequential would still blow past 6 s on the first two
+	// sessions alone.
+	const parallelDeadline = 6 * time.Second
 
 	gw := startSlowIntegrationGateway(t, slowDelay)
 

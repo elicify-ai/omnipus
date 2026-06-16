@@ -402,8 +402,19 @@ func TestTypedEnums_IsValidEventName(t *testing.T) {
 		{"shutdown valid", audit.EventShutdown, true},
 		{"boot.abort valid", audit.EventBootAbort, true},
 		{"process_kill_failed valid", audit.EventProcessKillFailed, true},
+		// Workspace mutation events (project→workspace rename). rest_workspaces.go
+		// emits these; they MUST be in the allowlist or every workspace mutation
+		// trips the unknown-event warn-once.
+		{"workspace.create valid", audit.EventName("workspace.create"), true},
+		{"workspace.update valid", audit.EventName("workspace.update"), true},
+		{"workspace.delete valid", audit.EventName("workspace.delete"), true},
+		// Legacy pre-rename project.* events retained for back-compat.
+		{"project.create valid (back-compat)", audit.EventName("project.create"), true},
+		{"project.update valid (back-compat)", audit.EventName("project.update"), true},
+		{"project.delete valid (back-compat)", audit.EventName("project.delete"), true},
 		{"empty rejected", "", false},
 		{"typo rejected", "tool_calll", false},
+		{"workspace typo rejected", audit.EventName("workspace.craete"), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -510,6 +521,56 @@ func TestEmitEntry_LogFailure_BumpsIncSkipped(t *testing.T) {
 	after := audit.SnapshotSkipped().Total
 	assert.Greaterf(t, after, before,
 		"EmitEntry must bump IncSkipped when Log fails (CRIT-6); before=%d after=%d", before, after)
+}
+
+// TestEmit_LogFailure_BumpsIncSkipped verifies CRIT-6 for the Emit path
+// (used by EmitToolPolicyAskDenied and EmitToolPolicyAskGranted): when the
+// logger's writeLine fails (degraded mode), Emit bumps IncSkipped so /health
+// audit_degraded reflects the gap.
+//
+// This is the Emit analog of TestEmitEntry_LogFailure_BumpsIncSkipped, which
+// covers the EmitEntry path. Both paths share the same CRIT-6 contract —
+// covered separately here because Emit calls writeLine directly (bypassing
+// Logger.Log) and the IncSkipped label is the event name, not Entry.Tool.
+func TestEmit_LogFailure_BumpsIncSkipped(t *testing.T) {
+	audit.ResetSkippedForTest()
+	before := audit.SnapshotSkipped().Total
+
+	dir := t.TempDir()
+	logger, err := audit.NewLogger(audit.LoggerConfig{
+		Dir:           dir,
+		RetentionDays: 90,
+	})
+	require.NoError(t, err)
+
+	// Close the logger — sets degraded=true so the next writeLine call returns
+	// "operating in degraded mode" deterministically.
+	require.NoError(t, logger.Close())
+
+	// Confirm the degraded path fires: a direct Log call must fail after Close.
+	logErr := logger.Log(&audit.Entry{Event: audit.EventToolCall, Decision: audit.DecisionAllow})
+	if logErr == nil {
+		t.Skip(
+			"Log on a closed logger did not return an error on this platform — cannot exercise the Emit failure path",
+		)
+	}
+
+	// Call audit.Emit against the closed (degraded) logger using the same event
+	// that EmitToolPolicyAskDenied uses. writeLine will fail → IncSkipped bumped.
+	audit.Emit(
+		t.Context(),
+		logger,
+		audit.EventToolPolicyAskDenied,
+		audit.SeverityInfo,
+		map[string]any{
+			"tool_name": "test_tool",
+			"reason":    string(audit.AskDenyReasonScheduled),
+		},
+	)
+
+	after := audit.SnapshotSkipped().Total
+	assert.Greaterf(t, after, before,
+		"Emit must bump IncSkipped when writeLine fails (CRIT-6); before=%d after=%d", before, after)
 }
 
 // TestRecoverCorruption_HoldsLock verifies that recoverCorruption acquires the

@@ -2,7 +2,7 @@
 
 Omnipus is a single static Go binary. Most Go cross-compile targets will build, but only a subset is exercised in CI and shipped as a signed release artifact. This page tracks what is covered by the v0.1 release matrix, what is planned but deferred, and what to do if you need an unlisted platform.
 
-The minimum supported Go toolchain is `go 1.26.3` (`go.mod:3`). All listed platforms build with `CGO_ENABLED=0` and the standard release build tags `goolm,stdjson`.
+The minimum supported Go toolchain is `go 1.26.4` (`go.mod:3`). All listed platforms build with `CGO_ENABLED=0` and the standard release build tags `goolm,stdjson`.
 
 ## Officially supported in v0.1 (CI-tested)
 

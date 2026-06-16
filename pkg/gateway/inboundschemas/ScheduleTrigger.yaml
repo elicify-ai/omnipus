@@ -1,0 +1,28 @@
+title: ScheduleTrigger
+description: >
+  When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is
+  meaningful, selected by kind: cron (cron expression), every (fixed interval),
+  at (one-shot at a unix-ms instant).
+type: object
+required:
+  - kind
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - at
+      - every
+      - cron
+  cron_expr:
+    type: string
+    description: Cron expression (5/6 fields). Required when kind=cron.
+  every_ms:
+    type: integer
+    format: int64
+    minimum: 1000
+    description: Interval in milliseconds. Required when kind=every.
+  at_ms:
+    type: integer
+    format: int64
+    description: Unix epoch milliseconds for a one-shot run. Required when kind=at.

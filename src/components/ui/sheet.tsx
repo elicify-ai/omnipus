@@ -29,19 +29,32 @@ interface SheetContentProps
   extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
   side?: 'top' | 'bottom' | 'left' | 'right'
   overlay?: boolean
+  /**
+   * Tailwind width class (e.g. "sm:max-w-3xl", "sm:max-w-md") to override the
+   * default side-width. Defaults to "sm:w-80" per side. Use this when a
+   * slideout needs to be wider/narrower than the standard 20rem (320px).
+   */
+  widthClass?: string
 }
 
 const sideVariants = {
   top: 'inset-x-0 top-0 border-b border-[var(--color-border)] data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
   bottom: 'inset-x-0 bottom-0 border-t border-[var(--color-border)] data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
-  left: 'inset-y-0 left-0 h-full w-80 border-r border-[var(--color-border)] data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
-  right: 'inset-y-0 right-0 h-full w-80 border-l border-[var(--color-border)] data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
+  left: 'inset-y-0 left-0 h-full w-full border-r border-[var(--color-border)] data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
+  right: 'inset-y-0 right-0 h-full w-full border-l border-[var(--color-border)] data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
+}
+
+const sideDefaultWidth = {
+  top: '',
+  bottom: '',
+  left: 'sm:w-80',
+  right: 'sm:w-80',
 }
 
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = 'right', overlay = true, className, children, ...props }, ref) => (
+>(({ side = 'right', overlay = true, widthClass, className, children, ...props }, ref) => (
   <SheetPortal>
     {overlay && <SheetOverlay />}
     <DialogPrimitive.Content
@@ -50,12 +63,16 @@ const SheetContent = React.forwardRef<
         'fixed z-50 bg-[var(--color-surface-1)] p-6 shadow-xl transition ease-in-out',
         'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500',
         sideVariants[side],
+        // Default per-side width (e.g. left/right = sm:w-80). The widthClass
+        // prop OVERRIDES the default; pass a full Tailwind class like
+        // "sm:max-w-3xl" or "w-full sm:max-w-2xl".
+        widthClass ?? sideDefaultWidth[side],
         className
       )}
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2">
+      <DialogPrimitive.Close className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2">
         <X size={16} />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>

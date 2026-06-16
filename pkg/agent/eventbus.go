@@ -94,8 +94,39 @@ func (b *EventBus) Emit(evt Event) {
 			if evt.Kind < eventKindCount {
 				b.dropped[evt.Kind].Add(1)
 			}
-			logger.DebugCF("eventbus", "event dropped, subscriber buffer full", map[string]any{"event_kind": evt.Kind})
+			// Most kinds are high-frequency and lossy by design, so a drop is
+			// debug-level. State-critical kinds (see isStateCriticalEventKind) are
+			// low-frequency and a drop leaves the SPA showing stale state until the
+			// next refresh, so surface those at warn.
+			if isStateCriticalEventKind(evt.Kind) {
+				logger.WarnCF(
+					"eventbus",
+					"dropped state-critical event frame (subscriber buffer full); SPA may show stale state until refresh",
+					map[string]any{"event_kind": evt.Kind},
+				)
+			} else {
+				logger.DebugCF(
+					"eventbus",
+					"event dropped, subscriber buffer full",
+					map[string]any{"event_kind": evt.Kind},
+				)
+			}
 		}
+	}
+}
+
+// isStateCriticalEventKind reports whether a dropped event of this kind should
+// be logged at WARN rather than DEBUG. These are low-frequency, state-critical
+// frames whose loss leaves the SPA showing stale state until a manual refresh:
+//   - EventKindWhatsAppPairing: a dropped QR leaves the pairing screen blank (#283).
+//   - EventKindNotification: a dropped schedule_failed alert means the live bell
+//     never updates (M1) — same class as #283.
+func isStateCriticalEventKind(kind EventKind) bool {
+	switch kind {
+	case EventKindWhatsAppPairing, EventKindNotification:
+		return true
+	default:
+		return false
 	}
 }
 

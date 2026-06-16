@@ -1,9 +1,9 @@
 package agent
 
 // Smoke tests for PR 5 (quizzical-marinating-frog.md):
-//   - workspace_shell_enabled defaults to true (nil pointer → on)
-//   - workspace.shell and workspace.shell_bg are registered when the flag is on
-//   - Jim's seeded policy is applied correctly at the AgentLoop level
+//   - workspace_shell_enabled defaults to false (nil pointer → off, deny-by-default per Wave 1 B3)
+//   - workspace.shell and workspace.shell_bg are registered only when the flag is explicitly true
+//   - Jim's seeded policy forces workspace_shell_enabled=true via SeedConfig (kernel sandbox is the guard)
 
 import (
 	"testing"
@@ -14,18 +14,20 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// TestPR5_WorkspaceShellEnabledByDefault verifies that when
-// experimental.workspace_shell_enabled is nil (absent in config), the tools
-// are still registered (the default is true per PR 5).
+// TestPR5_WorkspaceShellNilDefaultsFalse verifies that when
+// experimental.workspace_shell_enabled is nil (absent in config), workspace.shell
+// is NOT registered for a generic agent (deny-by-default, Wave 1 B3).
+// Jim is the sole exception — SeedConfig forces WorkspaceShellEnabled=true for Jim
+// because the kernel sandbox is the protective layer (see TestPR5_JimSeedPolicyAppliedInLoop).
 //
 // BDD: Given a config where WorkspaceShellEnabled is nil (pointer is nil),
 //
-//	When WireTier13Deps is called on an AgentLoop,
-//	Then workspace.shell and workspace.shell_bg are registered for the agent.
+//	When WireTier13Deps is called on a non-Jim AgentLoop,
+//	Then workspace.shell is NOT registered for the agent.
 //
-// Traces to: quizzical-marinating-frog.md PR 5 — "Default config now has
-// experimental.workspace_shell_enabled = true".
-func TestPR5_WorkspaceShellEnabledByDefault(t *testing.T) {
+// Traces to: quizzical-marinating-frog.md Wave 1 B3 — deny-by-default for
+// experimental.workspace_shell_enabled; Hard Constraint #6.
+func TestPR5_WorkspaceShellNilDefaultsFalse(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{
@@ -43,14 +45,14 @@ func TestPR5_WorkspaceShellEnabledByDefault(t *testing.T) {
 			},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
-			// WorkspaceShellEnabled is nil — should behave as true (PR 5 default).
+			// nil → resolveBoolWithDefault(..., false) → workspace.shell not registered.
 			Experimental: config.ExperimentalConfig{WorkspaceShellEnabled: nil},
 		},
 	}
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	al.WireTier13Deps(Tier13Deps{}) // no registry needed for workspace.shell (foreground)
+	al.WireTier13Deps(Tier13Deps{})
 
 	reg := al.GetRegistry()
 	if reg == nil {
@@ -61,11 +63,9 @@ func TestPR5_WorkspaceShellEnabledByDefault(t *testing.T) {
 		t.Fatal("test-agent not found in registry")
 	}
 
-	if _, found := ag.Tools.Get("workspace.shell"); !found {
-		t.Error("workspace.shell must be registered when WorkspaceShellEnabled is nil (default=true)")
+	if _, found := ag.Tools.Get("workspace.shell"); found {
+		t.Error("workspace.shell must NOT be registered when WorkspaceShellEnabled is nil (deny-by-default)")
 	}
-	// workspace.shell_bg requires a DevServerRegistry; with nil registry it is not wired.
-	// That is correct behavior — the tool requires the registry to be useful.
 }
 
 // TestPR5_WorkspaceShellDisabledWhenFlagFalse verifies that setting
@@ -139,7 +139,7 @@ func TestPR5_JimSeedPolicyAppliedInLoop(t *testing.T) {
 			},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
-			// nil = default true
+			// nil here — SeedConfig will explicitly set WorkspaceShellEnabled=true for Jim.
 			Experimental: config.ExperimentalConfig{WorkspaceShellEnabled: nil},
 		},
 	}

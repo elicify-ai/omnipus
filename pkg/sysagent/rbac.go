@@ -53,11 +53,11 @@ var toolPermissions = map[string]ToolPermission{
 	"system.agent.read_metadata":  {MinRole: RoleViewer},
 	"system.agent.write_metadata": {MinRole: RoleOperator},
 
-	// Project management.
-	"system.project.create": {MinRole: RoleOperator},
-	"system.project.update": {MinRole: RoleOperator},
-	"system.project.delete": {MinRole: RoleAdmin},
-	"system.project.list":   {MinRole: RoleViewer},
+	// Workspace management.
+	"system.workspace.create": {MinRole: RoleOperator},
+	"system.workspace.update": {MinRole: RoleOperator},
+	"system.workspace.delete": {MinRole: RoleAdmin},
+	"system.workspace.list":   {MinRole: RoleViewer},
 
 	// Task management.
 	"system.task.create": {MinRole: RoleOperator},
@@ -77,6 +77,9 @@ var toolPermissions = map[string]ToolPermission{
 	"system.skill.remove":  {MinRole: RoleAdmin},
 	"system.skill.search":  {MinRole: RoleViewer},
 	"system.skill.list":    {MinRole: RoleViewer},
+	// Skill authoring (FR-9.2): consent-gated writes that mutate the skills tree.
+	"system.skill.create": {MinRole: RoleAdmin},
+	"system.skill.edit":   {MinRole: RoleAdmin},
 
 	// MCP server management.
 	"system.mcp.add":    {MinRole: RoleOperator},

@@ -644,9 +644,9 @@ describe('ClientFrameTypes — contract test', () => {
     expect(ClientFrameTypes).toContain('cancel')
   })
 
-  it('ClientFrameTypes contains exactly the 8 specified client frame types', () => {
+  it('ClientFrameTypes contains exactly the specified client frame types', () => {
     // Traces to: fix-Y — pr-test-analyzer gap: full-set assertion for ClientFrameTypes.
-    // These are the 8 client→server frame types defined in contracts/asyncapi.yaml.
+    // These are the client→server frame types defined in contracts/asyncapi.yaml.
     // Changing this set requires a corresponding spec change — catch regressions here.
     const expectedTypes = new Set([
       'auth',
@@ -657,6 +657,7 @@ describe('ClientFrameTypes — contract test', () => {
       'attach_session',
       'device_pairing_response',
       'session_close',
+      'whatsapp_pairing_subscribe',
     ])
     expect(new Set(ClientFrameTypes)).toEqual(expectedTypes)
   })

@@ -90,6 +90,34 @@ func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) 
 	return publish(ctx, mb, mb.outbound, msg)
 }
 
+// TryPublishOutbound attempts a NON-BLOCKING publish to the outbound channel.
+// It returns true if the message was enqueued, false if the buffer was full or
+// the bus is closed. Unlike PublishOutbound it never blocks waiting for a free
+// slot — callers that run inside the sole consumer of the outbound channel (the
+// channel Manager's dispatch loop) must use this to avoid self-deadlock under
+// backpressure: blocking there would wait on a slot only that same loop can drain.
+func (mb *MessageBus) TryPublishOutbound(msg OutboundMessage) bool {
+	// Guard closed+wg under publishMu, mirroring publish(), to avoid a TOCTOU
+	// race with Close() (send on a closed channel panics).
+	mb.publishMu.Lock()
+	if mb.closed.Load() {
+		mb.publishMu.Unlock()
+		return false
+	}
+	mb.wg.Add(1)
+	mb.publishMu.Unlock()
+	defer mb.wg.Done()
+
+	select {
+	case mb.outbound <- msg:
+		return true
+	case <-mb.done:
+		return false
+	default:
+		return false
+	}
+}
+
 func (mb *MessageBus) OutboundChan() <-chan OutboundMessage {
 	return mb.outbound
 }

@@ -1,0 +1,451 @@
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  PuzzlePiece,
+  HardDrives,
+  Wrench,
+  Shield,
+  Trash,
+  Plus,
+  MagnifyingGlass,
+  CaretDown,
+  CaretUp,
+  ArrowRight,
+} from '@phosphor-icons/react'
+import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
+  fetchSkills,
+  fetchMcpServers,
+  fetchTools,
+  deleteSkill,
+  deleteMcpServer,
+  isApiError,
+  type ToolRegistryEntry,
+} from '@/lib/api'
+import { useUiStore } from '@/store/ui'
+import { SkillBrowser } from '@/components/skills/SkillBrowser'
+import { McpServerModal } from '@/components/skills/McpServerModal'
+
+export function SkillsScreen() {
+  const { addToast } = useUiStore()
+  const queryClient = useQueryClient()
+
+  const [skillBrowserOpen, setSkillBrowserOpen] = useState(false)
+  const [mcpModalOpen, setMcpModalOpen] = useState(false)
+  const [confirmDeleteSkill, setConfirmDeleteSkill] = useState<string | null>(null)
+  const [confirmDeleteMcp, setConfirmDeleteMcp] = useState<string | null>(null)
+  const [expandedMcp, setExpandedMcp] = useState<string | null>(null)
+
+  const { data: rawSkills = [], isLoading: skillsLoading, isError: skillsError } = useQuery({
+    queryKey: ['skills'],
+    queryFn: fetchSkills,
+  })
+
+  const skills = rawSkills
+
+  const { data: mcpServers = [], isLoading: mcpLoading, isError: mcpError } = useQuery({
+    queryKey: ['mcp-servers'],
+    queryFn: fetchMcpServers,
+  })
+
+  const { data: tools = [], isLoading: toolsLoading, isError: toolsError } = useQuery({
+    queryKey: ['tools'],
+    queryFn: fetchTools,
+  })
+
+  const { mutate: doDeleteSkill } = useMutation({
+    mutationFn: (name: string) => deleteSkill(name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['skills'] })
+      addToast({ message: 'Skill removed', variant: 'success' })
+      setConfirmDeleteSkill(null)
+    },
+    onError: (err: Error) => {
+      addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
+      setConfirmDeleteSkill(null)
+    },
+  })
+
+  const { mutate: doDeleteMcp } = useMutation({
+    mutationFn: (id: string) => deleteMcpServer(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+      addToast({ message: 'MCP server removed', variant: 'success' })
+      setConfirmDeleteMcp(null)
+    },
+    onError: (err: Error) => {
+      addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
+      setConfirmDeleteMcp(null)
+    },
+  })
+
+  return (
+    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+    <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="mb-6">
+        <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Skills & Tools</h1>
+        <p className="text-sm text-[var(--color-muted)] mt-0.5">
+          Manage agent capabilities — skills, MCP servers, and built-in tools.
+        </p>
+      </div>
+
+      <Tabs defaultValue="skills">
+        <TabsList className="mb-6">
+          <TabsTrigger value="skills" className="gap-1.5">
+            <PuzzlePiece size={13} /> Installed Skills
+          </TabsTrigger>
+          <TabsTrigger value="mcp" className="gap-1.5">
+            <HardDrives size={13} /> MCP Servers
+          </TabsTrigger>
+          <TabsTrigger value="builtins" className="gap-1.5">
+            <Wrench size={13} /> Built-in Tools
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Installed Skills */}
+        <TabsContent value="skills">
+          {skillsError ? (
+            <ErrorState message="Could not load skills." />
+          ) : skillsLoading ? (
+            <SkeletonList />
+          ) : skills.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+              <div className="text-[var(--color-border)]">
+                <PuzzlePiece size={40} weight="thin" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm text-[var(--color-muted)]">No skills installed.</p>
+                <p className="text-xs text-[var(--color-muted)]/70">Browse the skill registry to add capabilities to your agents.</p>
+              </div>
+              <Button size="sm" className="gap-1.5 mt-1" onClick={() => setSkillBrowserOpen(true)}>
+                <MagnifyingGlass size={13} /> Browse Skills
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div className="flex justify-end mb-3">
+                <Button size="sm" className="gap-1.5" onClick={() => setSkillBrowserOpen(true)}>
+                  <MagnifyingGlass size={13} /> Browse Skills
+                </Button>
+              </div>
+            <div className="space-y-2">
+              {skills.map((skill) => (
+                <div
+                  key={skill.id}
+                  className="flex items-start gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm text-[var(--color-secondary)]">{skill.name}</span>
+                      {skill.version && skill.version !== '0.0.0' && (
+                        <span className="font-mono text-[10px] text-[var(--color-muted)]">v{skill.version}</span>
+                      )}
+                      {skill.source === 'builtin' && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          Built-in
+                        </Badge>
+                      )}
+                      {(skill.source === 'global' || skill.source === 'workspace') && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          Community
+                        </Badge>
+                      )}
+                      {skill.verified && (
+                        <Badge variant="success" className="gap-1 text-[10px]">
+                          <Shield size={9} weight="fill" /> Verified
+                        </Badge>
+                      )}
+                      <Badge
+                        variant={skill.status === 'active' ? 'success' : skill.status === 'error' ? 'error' : 'muted'}
+                        className="text-[10px]"
+                      >
+                        {skill.status}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-[var(--color-muted)] mt-1">{skill.description}</p>
+                    <div className="flex items-center gap-3 mt-1.5 text-[10px] text-[var(--color-muted)]">
+                      {skill.author && <span>by {skill.author}</span>}
+                      {skill.agent_assignment && <span>→ {skill.agent_assignment}</span>}
+                    </div>
+                  </div>
+                  {skill.source !== 'builtin' && (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteSkill(skill.name)}
+                      className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-1 rounded shrink-0"
+                      aria-label={`Remove ${skill.name}`}
+                    >
+                      <Trash size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            </>
+          )}
+        </TabsContent>
+
+        {/* MCP Servers */}
+        <TabsContent value="mcp">
+          <div className="flex justify-end mb-3">
+            <Button size="sm" className="gap-1.5" onClick={() => setMcpModalOpen(true)}>
+              <Plus size={13} /> Add Server
+            </Button>
+          </div>
+          {mcpError ? (
+            <ErrorState message="Could not load MCP servers." />
+          ) : mcpLoading ? (
+            <SkeletonList />
+          ) : mcpServers.length === 0 ? (
+            <EmptyState icon={<HardDrives size={40} weight="thin" />} message="No MCP servers connected." />
+          ) : (
+            <div className="space-y-2">
+              {mcpServers.map((server) => {
+                const isExpanded = expandedMcp === server.id
+                return (
+                  <div
+                    key={server.id}
+                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
+                  >
+                    <div className="flex items-center gap-3 p-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-sm text-[var(--color-secondary)]">{server.name}</span>
+                          <Badge variant="outline" className="text-[10px] font-mono">{server.transport}</Badge>
+                          <Badge
+                            variant={server.status === 'connected' ? 'success' : 'error'}
+                            className="text-[10px]"
+                          >
+                            {server.status}
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs text-[var(--color-muted)]">
+                          {server.tool_count} tools
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedMcp(isExpanded ? null : server.id)}
+                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-1 rounded"
+                          aria-label="Toggle tool list"
+                        >
+                          {isExpanded ? <CaretUp size={13} /> : <CaretDown size={13} />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteMcp(server.id)}
+                          className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-1 rounded"
+                          aria-label={`Remove ${server.name}`}
+                        >
+                          <Trash size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className="px-4 pb-4 border-t border-[var(--color-border)]">
+                        {server.tools && server.tools.length > 0 ? (
+                          <div className="pt-3 flex flex-wrap gap-1.5">
+                            {server.tools.map((tool) => (
+                              <span
+                                key={tool}
+                                className="font-mono text-[10px] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
+                              >
+                                {tool}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="pt-3 text-xs text-[var(--color-muted)]">No tool details available.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Built-in tools — read-only by-category overview (US-E2 / #338) */}
+        <TabsContent value="builtins">
+          {toolsError ? (
+            <ErrorState message="Could not load tools." />
+          ) : toolsLoading ? (
+            <SkeletonList />
+          ) : tools.length === 0 ? (
+            <EmptyState icon={<Wrench size={40} weight="thin" />} message="No tools available." />
+          ) : (
+            <ToolsOverview tools={tools} />
+          )}
+        </TabsContent>
+      </Tabs>
+
+      {/* Skill browser modal */}
+      <SkillBrowser open={skillBrowserOpen} onOpenChange={setSkillBrowserOpen} />
+
+      {/* MCP server add modal */}
+      <McpServerModal open={mcpModalOpen} onOpenChange={setMcpModalOpen} />
+
+      {/* Skill delete confirmation */}
+
+      <AlertDialog
+        open={confirmDeleteSkill !== null}
+        onOpenChange={(o) => !o && setConfirmDeleteSkill(null)}
+      >
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove skill</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove <span className="font-medium text-[var(--color-secondary)]">{confirmDeleteSkill}</span>? This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                if (confirmDeleteSkill) doDeleteSkill(confirmDeleteSkill)
+                setConfirmDeleteSkill(null)
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* MCP server delete confirmation */}
+      <AlertDialog
+        open={confirmDeleteMcp !== null}
+        onOpenChange={(o) => !o && setConfirmDeleteMcp(null)}
+      >
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove MCP server</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove this MCP server? Any agents using it will lose access to its tools.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                if (confirmDeleteMcp) doDeleteMcp(confirmDeleteMcp)
+                setConfirmDeleteMcp(null)
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+    </div>
+    </div>
+  )
+}
+
+/**
+ * Category display names for the by-category overview.
+ * Raw `system.*` scope tools are excluded; the rest are grouped by category.
+ * Editing happens in Settings → Security.
+ */
+const CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  workspace: 'Read, write, and search files; run commands in agent workspaces',
+  browser: 'Navigate, click, and screenshot web pages in a headless browser',
+  web: 'Search the web and fetch content from URLs',
+  system: 'Access system-level information and gateway management',
+  tasks: 'Create, update, and list tasks in the task board',
+  memory: 'Store and recall information across sessions',
+  message: 'Send messages and notifications to users',
+  session: 'Manage and query agent sessions',
+  skill: 'Install and manage skills',
+  general: 'General-purpose tools',
+}
+
+function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
+  // Exclude system-scope tools (not shown to end users)
+  const visible = tools.filter((t) => t.scope !== 'system')
+
+  // Group by category
+  const grouped = visible.reduce<Record<string, ToolRegistryEntry[]>>((acc, tool) => {
+    const cat = tool.category || 'general'
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(tool)
+    return acc
+  }, {})
+
+  const categories = Object.keys(grouped).sort()
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-[var(--color-muted)]">
+        What your agents can do — grouped by capability area. Individual tool
+        permissions are managed in{' '}
+        <a
+          href="/settings?tab=security"
+          className="inline-flex items-center gap-0.5 text-[var(--color-accent)] hover:opacity-80 underline"
+          data-testid="manage-permissions-link"
+        >
+          Settings → Security
+          <ArrowRight size={11} />
+        </a>
+        . No tool identifier prefixes (e.g. <span className="font-mono">system.*</span>) are shown here.
+      </p>
+
+      {categories.length === 0 ? (
+        <EmptyState
+          icon={<Wrench size={40} weight="thin" />}
+          message="No tools available."
+        />
+      ) : (
+        <div className="space-y-2">
+          {categories.map((cat) => {
+            const catTools = grouped[cat]
+            const description =
+              CATEGORY_DESCRIPTIONS[cat] ??
+              `${catTools.length} tool${catTools.length !== 1 ? 's' : ''} in this category`
+            return (
+              <div
+                key={cat}
+                className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-3"
+                data-testid={`tool-category-${cat}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="text-sm font-medium text-[var(--color-secondary)] capitalize">
+                      {cat}
+                    </span>
+                    <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                      {description}
+                    </p>
+                  </div>
+                  <Badge variant="muted" className="text-[10px] shrink-0">
+                    {catTools.length} tool{catTools.length !== 1 ? 's' : ''}
+                  </Badge>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}

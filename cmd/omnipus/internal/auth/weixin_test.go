@@ -44,8 +44,9 @@ func TestSaveWeixinConfig_Happy(t *testing.T) {
 	// Config must reference the ref, not the token value.
 	cfg, err := config.LoadConfig(internal.GetConfigPath())
 	require.NoError(t, err)
-	assert.True(t, cfg.Channels.Weixin.Enabled)
-	assert.Equal(t, weixinTokenCredRef, cfg.Channels.Weixin.TokenRef)
+	weixin := config.InstanceToWeixin(cfg.Channels["weixin"])
+	assert.True(t, weixin.Enabled)
+	assert.Equal(t, weixinTokenCredRef, weixin.TokenRef)
 
 	// Store must hold the actual token value.
 	storePath := filepath.Join(tmpDir, "credentials.json")
@@ -116,7 +117,7 @@ func TestSaveWeixinConfig_Overwrite(t *testing.T) {
 	// Config must still reference the standard ref.
 	cfg, err := config.LoadConfig(internal.GetConfigPath())
 	require.NoError(t, err)
-	assert.Equal(t, weixinTokenCredRef, cfg.Channels.Weixin.TokenRef)
+	assert.Equal(t, weixinTokenCredRef, config.InstanceToWeixin(cfg.Channels["weixin"]).TokenRef)
 }
 
 // TestSaveWeixinConfig_SaveConfigFailureRollsBackStore verifies that when

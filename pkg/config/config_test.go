@@ -301,8 +301,11 @@ func TestDefaultConfig_Gateway(t *testing.T) {
 	if cfg.Gateway.Port == 0 {
 		t.Error("Gateway port should have default value")
 	}
-	if cfg.Gateway.HotReload {
-		t.Error("Gateway hot reload should be disabled by default")
+	// FR-106: hot_reload must default to true so fresh installs apply config
+	// changes without a restart. Operators who set hot_reload:false in config.json
+	// retain the old behavior (JSON value wins over the default).
+	if !cfg.Gateway.HotReload {
+		t.Error("Gateway hot reload should be enabled by default (FR-106)")
 	}
 }
 
@@ -310,16 +313,16 @@ func TestDefaultConfig_Gateway(t *testing.T) {
 func TestDefaultConfig_Channels(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Channels.Telegram.Enabled {
+	if cfg.Channels["telegram"].Enabled {
 		t.Error("Telegram should be disabled by default")
 	}
-	if cfg.Channels.Discord.Enabled {
+	if cfg.Channels["discord"].Enabled {
 		t.Error("Discord should be disabled by default")
 	}
-	if cfg.Channels.Slack.Enabled {
+	if cfg.Channels["slack"].Enabled {
 		t.Error("Slack should be disabled by default")
 	}
-	if cfg.Channels.Matrix.Enabled {
+	if cfg.Channels["matrix"].Enabled {
 		t.Error("Matrix should be disabled by default")
 	}
 }
@@ -388,7 +391,11 @@ func TestSaveConfig_PreservesDisabledTelegramPlaceholder(t *testing.T) {
 	path := filepath.Join(tmpDir, "config.json")
 
 	cfg := DefaultConfig()
-	cfg.Channels.Telegram.Placeholder.Enabled = false
+	{
+		inst := cfg.Channels["telegram"]
+		inst.Placeholder.Enabled = false
+		cfg.Channels["telegram"] = inst
+	}
 
 	if err := SaveConfig(path, cfg); err != nil {
 		t.Fatalf("SaveConfig failed: %v", err)
@@ -409,7 +416,7 @@ func TestSaveConfig_PreservesDisabledTelegramPlaceholder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
-	if loaded.Channels.Telegram.Placeholder.Enabled {
+	if loaded.Channels["telegram"].Placeholder.Enabled {
 		t.Fatal("telegram placeholder should remain disabled after SaveConfig/LoadConfig round-trip")
 	}
 }
@@ -1003,7 +1010,7 @@ func TestLoadConfig_TelegramPlaceholderTextAcceptsSingleString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if got := []string(cfg.Channels.Telegram.Placeholder.Text); len(got) != 1 || got[0] != "Thinking..." {
+	if got := []string(cfg.Channels["telegram"].Placeholder.Text); len(got) != 1 || got[0] != "Thinking..." {
 		t.Fatalf("placeholder.text = %#v, want [\"Thinking...\"]", got)
 	}
 }
@@ -1622,7 +1629,7 @@ func TestConfigMigration_LegacyMaixCamGracefullyIgnored(t *testing.T) {
 	}
 
 	// Telegram channel must still be loaded correctly.
-	if !cfg.Channels.Telegram.Enabled {
+	if !cfg.Channels["telegram"].Enabled {
 		t.Error("telegram.enabled should be true; other channels must survive maixcam removal")
 	}
 

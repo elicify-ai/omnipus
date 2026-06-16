@@ -49,13 +49,18 @@ function SessionRoute() {
     const { session } = detail
     const { connection } = useConnectionStore.getState()
 
+    // After an agent handover the header/composer must reflect the LAST-ACTIVE
+    // agent (active_agent_id), not the session's creating agent (agent_id).
+    // Fall back to the creator when active_agent_id is absent (no handover).
+    const headerAgentId = session.active_agent_id ?? session.agent_id
+
     if (connection && attachedRef.current !== session.id) {
       attachedRef.current = session.id
-      attachToSession(session.id, 'chat', undefined, session.agent_id)
+      attachToSession(session.id, 'chat', undefined, headerAgentId)
     } else if (!connection) {
       // WS not open — fall back to setActiveSession so the store is consistent.
       // WsLifecycle sends attach_session once the WS connects (onConnected path).
-      setActiveSession(session.id, session.agent_id, null)
+      setActiveSession(session.id, headerAgentId, null)
     }
 
     if (session.type === 'task') {
@@ -64,6 +69,7 @@ function SessionRoute() {
   }, [
     detail?.session?.id,
     detail?.session?.agent_id,
+    detail?.session?.active_agent_id,
     detail?.session?.type,
     detail?.session?.title,
     attachToSession,
@@ -97,7 +103,10 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
       const detail = await fetchSessionDetail(params.sessionId)
       if (detail?.session) {
         const store = useSessionStore.getState()
-        store.setActiveSession(detail.session.id, detail.session.agent_id, null)
+        // Prefer the last-active agent (post-handover) over the creating agent
+        // so the header/composer seed under the correct agent on cold load.
+        const headerAgentId = detail.session.active_agent_id ?? detail.session.agent_id
+        store.setActiveSession(detail.session.id, headerAgentId, null)
         if (detail.session.type === 'task') {
           store.setAttachedContext('task', detail.session.title)
         }

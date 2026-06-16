@@ -40,7 +40,7 @@ func newOnboardingTestAPI(t *testing.T, tmpDir string, al *agent.AgentLoop) *res
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 		credStore:     credStore,
 	}
 }
@@ -117,7 +117,7 @@ func TestHandleCompleteOnboarding_AlreadyComplete(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboardingMgr,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// Mark onboarding as complete
@@ -218,6 +218,62 @@ func TestHandleCompleteOnboarding_MissingAdminPassword(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "admin.password is required", resp["error"])
+}
+
+// TestHandleCompleteOnboarding_RejectsInvalidUsername verifies that POST /api/v1/onboarding/complete
+// rejects usernames that fail usernameRE validation with 400.
+// BDD: Given an admin.username that violates the username constraints,
+// When POST /api/v1/onboarding/complete is called,
+// Then 400 with an error containing "username".
+func TestHandleCompleteOnboarding_RejectsInvalidUsername(t *testing.T) {
+	invalidCases := []struct {
+		name     string
+		username string
+	}{
+		{"too short (single char)", "a"},
+		{"starts with dot", ".admin"},
+		{"contains space", "admin user"},
+	}
+
+	for _, tc := range invalidCases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestRestAPIWithHomeAuth(t)
+
+			body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"` + tc.username + `","password":"secret123"}}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			api.HandleCompleteOnboarding(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code, "username %q should be rejected", tc.username)
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			errMsg, _ := resp["error"].(string)
+			assert.Contains(t, errMsg, "username", "error should mention username for input %q", tc.username)
+		})
+	}
+
+	// Positive case: a valid 2-char username must NOT be rejected by username validation.
+	// It may fail for other reasons (e.g. provider validation) but must not return usernameInvalidMsg.
+	t.Run("valid 2-char username passes username check", func(t *testing.T) {
+		api := newTestRestAPIWithHomeAuth(t)
+
+		body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"ab","password":"secret123"}}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		api.HandleCompleteOnboarding(w, req)
+
+		if w.Code == http.StatusBadRequest {
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			errMsg, _ := resp["error"].(string)
+			assert.NotEqual(t, usernameInvalidMsg, errMsg,
+				"valid username 'ab' must not be rejected by username validation")
+		}
+	})
 }
 
 // TestHandleCompleteOnboarding_WeakPassword verifies that POST /api/v1/onboarding/complete
@@ -386,7 +442,14 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 	require.True(t, ok, "user must be a map")
 	assert.Equal(t, "admin", user["username"])
 	assert.NotEmpty(t, user["password_hash"], "password_hash must be set")
-	assert.NotEmpty(t, user["token_hash"], "token_hash must be set")
+	// SEC-1 / UAT #399: onboarding now issues the admin's bearer token into the
+	// token SET, not the legacy single token_hash.
+	tokens, ok := user["tokens"].([]any)
+	require.True(t, ok, "tokens set must be written by onboarding")
+	require.Len(t, tokens, 1, "onboarding issues exactly one bearer token")
+	entry := tokens[0].(map[string]any)
+	assert.NotEmpty(t, entry["hash"], "token entry hash must be set")
+	assert.NotEmpty(t, entry["id"], "token entry id must be set")
 	assert.Equal(t, "admin", user["role"])
 }
 
@@ -565,7 +628,7 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboardingMgr,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 		credStore:     credStore,
 	}
 
@@ -638,7 +701,7 @@ func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 		credStore:     credStore,
 	}
 
@@ -817,6 +880,70 @@ func TestHandleOnboardingProbeProvider_MissingFields(t *testing.T) {
 			assert.Contains(t, w.Body.String(), tc.want)
 		})
 	}
+}
+
+// TestHandleCompleteOnboarding_BadRequest_ReleasesReservation verifies that
+// when HandleCompleteOnboarding returns 400 (bad request body — validation
+// failure before the config write), the onboarding reservation is released
+// so that a subsequent valid attempt can succeed.
+//
+// BDD: Given a fresh install (onboarding not complete),
+// When POST /api/v1/onboarding/complete with a missing admin.username (400 path),
+// Then: (a) HTTP 400 is returned, AND
+//
+//	(b) the onboarding manager is not in the "reserved" state so a second
+//	    valid POST succeeds with 200 (not 409 Conflict).
+//
+// This test is designed to FAIL on code where the defer guard was absent
+// (reservation held permanently after a 400) and PASS on the fixed code
+// (defer releases reservation on every non-committed return path).
+func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := newOnboardingTestAPI(t, tmpDir, al)
+
+	// Step 1: Send a bad request — admin.username is empty, which triggers a 400
+	// before the config write. The reservation must be released in the defer.
+	badBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"","password":"secret123"}}`
+	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(badBody))
+	badReq.Header.Set("Content-Type", "application/json")
+	badW := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(badW, badReq)
+
+	require.Equal(t, http.StatusBadRequest, badW.Code,
+		"bad request with empty username must return 400")
+
+	// Step 2: Verify the reservation was released by confirming IsComplete is still
+	// false and a second valid request succeeds with 200 (not 409).
+	// If the reservation were still held, ReserveComplete would return
+	// ErrAlreadyComplete and the handler would return 409.
+	require.False(t, api.onboardingMgr.IsComplete(),
+		"onboarding must NOT be complete after a 400 response")
+
+	goodBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	goodReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(goodBody))
+	goodReq.Header.Set("Content-Type", "application/json")
+	goodW := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(goodW, goodReq)
+
+	require.Equal(t, http.StatusOK, goodW.Code,
+		"second valid onboarding request must succeed after reservation released (got %s)", goodW.Body.String())
 }
 
 // TestHandleOnboardingProbeProvider_WrongMethod ensures non-POST verbs are rejected.

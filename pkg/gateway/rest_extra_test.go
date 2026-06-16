@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
@@ -54,7 +55,8 @@ func newTestRestAPIWithHome(t *testing.T) *restAPI {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskLock:      boardtask.TaskFileLock,
 	}
 }
 
@@ -578,4 +580,52 @@ func TestListSkillsMethodNotAllowed(t *testing.T) {
 	api.HandleSkills(w, r)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+// --- Doctor action_link test (US-B4) ---
+
+// TestDoctorIssuesHaveActionLinks verifies that every issue returned by
+// runDiagnosticChecks carries non-empty action_link and action_label fields so
+// the frontend DiagnosticsSection.tsx can render "fix this" links for each
+// score deduction (US-B4 / #330).
+//
+// The test triggers the "sandbox-disabled" issue by using the default test
+// config (sandbox mode = "off" in the test environment). At least one issue
+// must carry both fields.
+//
+// BDD: Given the gateway runs without a sandbox configured,
+// When POST /api/v1/doctor is called,
+// Then each returned issue has a non-empty "action_link" and "action_label".
+func TestDoctorIssuesHaveActionLinks(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/doctor", nil)
+	api.HandleDoctor(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	rawIssues, ok := resp["issues"]
+	require.True(t, ok, "response must contain 'issues'")
+	issues, ok := rawIssues.([]any)
+	require.True(t, ok, "issues must be an array")
+
+	// Confirm at least one issue is present so the assertion below is not vacuously true.
+	require.NotEmpty(t, issues, "at least one issue must be present (sandbox-disabled in test env)")
+
+	for i, rawIssue := range issues {
+		issue, ok := rawIssue.(map[string]any)
+		require.True(t, ok, "issue[%d] must be a map", i)
+
+		actionLink, hasLink := issue["action_link"].(string)
+		assert.True(t, hasLink, "issue[%d] (id=%s) must have 'action_link'", i, issue["id"])
+		assert.NotEmpty(t, actionLink, "issue[%d] action_link must not be empty", i)
+
+		actionLabel, hasLabel := issue["action_label"].(string)
+		assert.True(t, hasLabel, "issue[%d] (id=%s) must have 'action_label'", i, issue["id"])
+		assert.NotEmpty(t, actionLabel, "issue[%d] action_label must not be empty", i)
+	}
 }

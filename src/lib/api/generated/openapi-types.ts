@@ -104,6 +104,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/reauth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-verify the user's password to consent to a sensitive setting change
+         * @description Single-user consent primitive (FR-12.2). Re-verifies the authenticated user's one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+         */
+        post: operations["reAuth"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List configurable search and voice-input integration providers
+         * @description Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+         */
+        get: operations["getIntegrationProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Configure a search or voice-input integration provider
+         * @description Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+         */
+        put: operations["updateIntegrationProvider"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/voice/transcribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe an uploaded audio clip with the active transcriber
+         * @description Accepts a multipart/form-data audio file (field "audio") captured by the chat composer mic and returns the transcribed text via the active Transcriber (FR-12.1). Responds 503 when no transcriber is configured. Requires authentication.
+         */
+        post: operations["transcribeAudio"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/onboarding/complete": {
         parameters: {
             query?: never;
@@ -410,6 +490,26 @@ export interface paths {
          */
         put: operations["updateAgentTools"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/{id}/runner/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test an external-CLI runner connection for an agent
+         * @description Connection/health check for the agent's configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent's executor is native/remote-a2a (no runner to test).
+         */
+        post: operations["testAgentRunner"];
         delete?: never;
         options?: never;
         head?: never;
@@ -826,6 +926,30 @@ export interface paths {
          * @description Immediately purges session directories older than the configured retention window. Returns 409 if a sweep is already in progress. Returns skipped_reason="disabled" when retention is disabled. Admin-only; emits audit with resource="storage.retention.sweep".
          */
         post: operations["triggerRetentionSweep"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get agent concurrency settings
+         * @description Returns the max-parallel-agents cap and the effective (clamped) value currently in use. Admin-only.
+         */
+        get: operations["getPerformanceSettings"];
+        /**
+         * Update agent concurrency settings (admin only)
+         * @description Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT). Admin-only.
+         */
+        put: operations["updatePerformanceSettings"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1302,6 +1426,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skills/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search the skill marketplace
+         * @description Searches configured skill registries (e.g. ClawHub) for skills matching the query. Returns an array of marketplace results (not installed skills). Install a result by its slug via POST /skills/install.
+         */
+        get: operations["searchSkills"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skills/marketplace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report skill marketplace availability
+         * @description Reports whether any skill marketplace registry is enabled. The SPA gates its skill-browse UI on this: when enabled is false, search and install-by-slug are unavailable (those endpoints return 409) and the UI offers only "install from file".
+         */
+        get: operations["getSkillMarketplaceStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skills/install": {
         parameters: {
             query?: never;
@@ -1313,7 +1477,7 @@ export interface paths {
         put?: never;
         /**
          * Install a skill from the ClawHub registry
-         * @description Installs a skill by name from the ClawHub registry. Currently returns 501 Not Implemented while the registry integration is in progress.
+         * @description Installs a skill by its slug from the ClawHub registry. The slug is the identifier returned in a SkillSearchResult. An optional version pins the installed version; when omitted the latest version is installed.
          */
         post: operations["installSkill"];
         delete?: never;
@@ -1714,6 +1878,322 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List schedules
+         * @description Returns all schedules visible to the authenticated user (#264).
+         */
+        get: operations["listSchedules"];
+        put?: never;
+        /**
+         * Create a schedule
+         * @description Creates a schedule owned by the given agent. The owner must be an agent the caller is permitted to use (403 otherwise).
+         */
+        post: operations["createSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Get a schedule */
+        get: operations["getSchedule"];
+        /** Update a schedule */
+        put: operations["updateSchedule"];
+        post?: never;
+        /** Delete a schedule */
+        delete: operations["deleteSchedule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedules/{id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a schedule now
+         * @description Fires the schedule immediately, respecting the overlap guard and concurrency cap (#264).
+         */
+        post: operations["runSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedules/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Toggle a schedule's enabled state
+         * @description Flips enabled (pause/resume) and returns the updated schedule (#264).
+         */
+        post: operations["pauseSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the authenticated user's notifications */
+        get: operations["listNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark all of the user's notifications read */
+        post: operations["markAllNotificationsRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark one notification read */
+        post: operations["markNotificationRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List workspaces
+         * @description Returns all workspaces, newest-first. Excludes archived workspaces by default. Use ?status=archived to list archived workspaces or ?status=all for everything. task_count is computed live from the GTD task store.
+         */
+        get: operations["listWorkspaces"];
+        put?: never;
+        /** Create a workspace */
+        post: operations["createWorkspace"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a workspace by ID */
+        get: operations["getWorkspace"];
+        /** Update a workspace (partial update — absent fields unchanged) */
+        put: operations["updateWorkspace"];
+        post?: never;
+        /** Delete a workspace and cascade-delete its tasks and session links */
+        delete: operations["deleteWorkspace"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List sessions auto-linked to this workspace
+         * @description Returns sessions that were auto-linked when an agent created or updated a GTD task with this workspace_id. Returns 200 with empty array when workspace exists but has no links. Returns 404 when workspace does not exist.
+         */
+        get: operations["listWorkspaceSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/milestones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List milestones for a workspace */
+        get: operations["listWorkspaceMilestones"];
+        put?: never;
+        /** Create a milestone for a workspace */
+        post: operations["createWorkspaceMilestone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/milestones/{milestoneId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a milestone by ID */
+        get: operations["getWorkspaceMilestone"];
+        /** Update a milestone (partial update) */
+        put: operations["updateWorkspaceMilestone"];
+        post?: never;
+        /** Delete a milestone */
+        delete: operations["deleteWorkspaceMilestone"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/board/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List GTD board tasks
+         * @description Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by workspace_id and status. Default limit 200, max 1000.
+         */
+        get: operations["listBoardTasks"];
+        put?: never;
+        /** Create a GTD board task */
+        post: operations["createBoardTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/board/tasks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a GTD board task by ID */
+        get: operations["getBoardTask"];
+        /** Update a GTD board task (partial update) */
+        put: operations["updateBoardTask"];
+        post?: never;
+        /** Delete a GTD board task */
+        delete: operations["deleteBoardTask"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/board/tasks/{id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a board task — create session, link it, set status active */
+        post: operations["startBoardTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/stats/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get per-agent token usage summary
+         * @description Aggregates token usage from SessionMeta.Stats across all session files for the requested period. period=month means the current calendar month UTC. No dollar estimates — token counts only.
+         */
+        get: operations["getTokenStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2067,10 +2547,10 @@ export interface components {
             provider?: string;
             stats: components["schemas"]["SessionStats"];
             /**
-             * @description Associated project ID (optional, future v0.3 feature).
-             * @example proj-123
+             * @description Associated workspace ID (optional, future v0.3 feature).
+             * @example ws-123
              */
-            project_id?: string;
+            workspace_id?: string;
             /**
              * @description Associated task ID when this session was created to service a task.
              * @example task-456
@@ -2359,11 +2839,11 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one).
+             * @description Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
              * @example core
              * @enum {string}
              */
-            type: "core" | "custom" | "system";
+            type: "core" | "custom" | "system" | "worker";
             /**
              * @description When true, name, description, soul, heartbeat, and instructions are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
              * @example false
@@ -2468,6 +2948,20 @@ export interface components {
              * @example false
              */
             default?: boolean;
+            /**
+             * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            skills?: string[];
+            delegation_policy?: components["schemas"]["DelegationPolicy"];
+            /**
+             * @description Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured.
+             * @example alloy
+             */
+            voice?: string | null;
+            executor?: components["schemas"]["ExecutorConfig"];
         };
         /**
          * AgentModelParams
@@ -2642,13 +3136,20 @@ export interface components {
                 }[];
             };
         };
-        /** @description Body for POST /agents. Creates a new custom agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet). */
+        /** @description Body for POST /agents. Creates a new agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet). */
         AgentCreateRequest: {
             /**
              * @description Display name for the new agent.
              * @example My Custom Agent
              */
             name: string;
+            /**
+             * @description Agent tier to create. "custom" = a user-defined chat colleague (default for the existing POST /agents flow). "worker" = a sub-agent worker: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and must carry an executor (see Agent.executor). When omitted, the server creates a "custom" agent. The "core" and "system" types are reserved and cannot be created via this endpoint.
+             * @default custom
+             * @example custom
+             * @enum {string}
+             */
+            type: "custom" | "worker";
             /**
              * @description Short description of the agent's purpose.
              * @example Specialized data analysis assistant
@@ -2721,6 +3222,25 @@ export interface components {
                  */
                 max_cost_per_day?: number;
             };
+            /**
+             * @description Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            skills?: string[];
+            /**
+             * @description Initial SOUL.md content. When omitted, the new agent starts in "draft" with an empty soul (the profile edit flow writes it later). Worker-tier agents (type=worker) treat this as the optional task prompt; empty is valid for workers per the locked concept.
+             * @example You are a focused research assistant...
+             */
+            soul?: string;
+            delegation_policy?: components["schemas"]["DelegationPolicy"];
+            /**
+             * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+             * @example alloy
+             */
+            voice?: string | null;
+            executor?: components["schemas"]["ExecutorConfig"];
         };
         /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. */
         AgentUpdateRequest: {
@@ -2869,6 +3389,41 @@ export interface components {
              * @example false
              */
             default?: boolean;
+            /**
+             * @description Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills.
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            skills?: string[];
+            delegation_policy?: components["schemas"]["DelegationPolicy"];
+            /**
+             * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear.
+             * @example alloy
+             */
+            voice?: string | null;
+            executor?: components["schemas"]["ExecutorConfig"];
+        };
+        /**
+         * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+         *     "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+         *     "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+         *     "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+         *     When absent the default is "native". Only "native" is functional in v0.1.0.
+         */
+        ExecutorConfig: {
+            /**
+             * @description Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+             * @example native
+             * @enum {string}
+             */
+            kind: "native" | "external-cli" | "remote-a2a";
+            /**
+             * @description The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+             * @example claude-code
+             * @enum {string}
+             */
+            cli?: "claude-code" | "codex" | "opencode";
         };
         /** @description Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly. */
         AgentSession: {
@@ -3013,7 +3568,24 @@ export interface components {
          * @description Stable identifier for a built-in channel.
          * @enum {string}
          */
-        ChannelId: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "onebot" | "irc" | "matrix" | "maixcam";
+        ChannelId: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "irc" | "matrix" | "google-chat" | "email";
+        /**
+         * ChannelIdentity
+         * @description Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
+         */
+        ChannelIdentity: {
+            /**
+             * @description Routing kind for this channel instance.
+             * @example agent
+             * @enum {string}
+             */
+            kind: "agent" | "user";
+            /**
+             * @description The agent ID when kind is "agent". Empty or omitted when kind is "user".
+             * @example mia
+             */
+            id?: string;
+        };
         /**
          * ChannelEntry
          * @description A communication channel entry returned by GET /api/v1/channels.
@@ -3025,6 +3597,11 @@ export interface components {
              */
             id: components["schemas"]["ChannelId"];
             /**
+             * @description The map key under which this instance is stored in config.json (currently equals the channel type in v0.1 cap-1). Included in responses so the SPA can address per-instance configure/enable/routing endpoints without hardcoding the key.
+             * @example telegram
+             */
+            instance_id?: string;
+            /**
              * @description Human-readable channel name.
              * @example Telegram
              */
@@ -3034,7 +3611,7 @@ export interface components {
              * @example webhook
              * @enum {string}
              */
-            transport: "websocket" | "webhook" | "bridge" | "tcp" | "http" | "serial";
+            transport: "websocket" | "webhook" | "bridge" | "native" | "tcp" | "http" | "serial" | "email";
             /**
              * @description Whether this channel is currently enabled.
              * @example false
@@ -3045,6 +3622,23 @@ export interface components {
              * @example Telegram Bot API
              */
             description: string;
+            /** @description Optional routing identity override for this channel instance. When set, messages from this channel are routed as the specified agent or as the default user, overriding the normal per-sender routing rules. */
+            identity?: components["schemas"]["ChannelIdentity"];
+            /**
+             * @description WhatsApp only: whether the native (whatsmeow) transport is compiled into this binary. False on a lite build or an architecture where it is excluded. Omitted for channels to which it does not apply. When false, clients MUST NOT offer native mode (the QR pairing flow cannot work).
+             * @example true
+             */
+            native_available?: boolean;
+            /**
+             * @description True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential). The channel is NOT serving despite enabled=true.
+             * @example false
+             */
+            degraded?: boolean;
+            /**
+             * @description Human-readable reason the channel is degraded. Present only when degraded is true.
+             * @example whatsapp native is not compiled into this build
+             */
+            degraded_reason?: string;
         };
         /**
          * RetentionConfig
@@ -3518,6 +4112,33 @@ export interface components {
              */
             version?: string;
         };
+        /**
+         * PerformanceSettings
+         * @description Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch.
+         */
+        PerformanceSettings: {
+            /**
+             * @description Maximum number of tasks/subagents that may run concurrently on the dispatch path. The runtime clamps the configured value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var.
+             * @example 4
+             */
+            max_parallel_agents?: number;
+            /**
+             * @description The clamped value actually in use (after applying CPU/RAM heuristics and env-var override). Always present in responses; absent in requests.
+             * @example 4
+             */
+            effective_max_parallel_agents?: number;
+        };
+        /**
+         * PerformanceSettingsUpdate
+         * @description Request body for PUT /api/v1/performance. Partial update — only supplied fields are modified.
+         */
+        PerformanceSettingsUpdate: {
+            /**
+             * @description New value for the maximum concurrent task/subagent dispatch cap. The runtime clamps the stored value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Set to 0 to restore the auto-detected default.
+             * @example 6
+             */
+            max_parallel_agents?: number;
+        };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {
             /**
@@ -3565,6 +4186,120 @@ export interface components {
              */
             error?: string;
         };
+        /** @description Body for POST /auth/reauth. Re-verifies the single user's one password before a sensitive settings change is permitted (FR-12.2). This is a consent primitive, NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). A successful re-auth mints a short-lived re-auth token the SPA attaches to the subsequent sensitive request. */
+        ReAuthRequest: {
+            /**
+             * @description The authenticated user's current password, re-typed for consent. Maximum 72 characters (bcrypt limit).
+             * @example mypassword
+             */
+            password: string;
+        };
+        /** @description Response from POST /auth/reauth. verified=true when the re-typed password matched; the token is a short-lived consent token (TTL seconds in expires_in) the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request. On a password mismatch the endpoint responds 401, not a verified=false body. */
+        ReAuthResponse: {
+            /**
+             * @description Whether the re-typed password matched.
+             * @example true
+             */
+            verified: boolean;
+            /**
+             * @description Short-lived consent token to replay in the X-Reauth-Token header on the next sensitive settings request. Opaque; single-use within its TTL.
+             * @example reauth_2f1a9c0b8d7e6f5a
+             */
+            token: string;
+            /**
+             * @description Time-to-live of the consent token in seconds.
+             * @example 300
+             */
+            expires_in: number;
+        };
+        /** @description A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available. */
+        IntegrationProvider: {
+            /**
+             * @description Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
+             * @example brave
+             */
+            id: string;
+            /**
+             * @description Whether this provider supplies web search or voice-input transcription.
+             * @example search
+             * @enum {string}
+             */
+            kind: "search" | "voice";
+            /**
+             * @description Human-readable provider name for UI presentation.
+             * @example Brave Search
+             */
+            display_name: string;
+            /**
+             * @description True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+             * @example true
+             */
+            configured: boolean;
+            /**
+             * @description Whether this provider needs an API key to function.
+             * @example true
+             */
+            requires_key: boolean;
+            /**
+             * @description True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
+             * @example true
+             */
+            active?: boolean;
+        };
+        /** @description Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs). */
+        IntegrationProvidersResponse: {
+            /** @description Configurable web-search providers. */
+            search: components["schemas"]["IntegrationProvider"][];
+            /** @description Configurable voice-input transcription providers. */
+            voice: components["schemas"]["IntegrationProvider"][];
+            /**
+             * @description id of the currently active search provider, when one is selected.
+             * @example brave
+             */
+            active_search?: string;
+            /**
+             * @description id of the currently active voice transcriber, when one is configured.
+             * @example elevenlabs
+             */
+            active_voice?: string;
+        };
+        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Because integration edits are sensitive, the SPA must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid token are rejected 403. */
+        IntegrationProviderUpdateRequest: {
+            /**
+             * @description Whether this provider is a search engine or a voice transcriber.
+             * @example search
+             * @enum {string}
+             */
+            kind: "search" | "voice";
+            /**
+             * @description API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider.
+             * @example BSA-abc123
+             */
+            api_key?: string;
+            /**
+             * @description When true, select this provider as the active one for its kind.
+             * @example true
+             */
+            active?: boolean;
+        };
+        /** @description Response from POST /api/v1/voice/transcribe. Returns the text transcribed from an uploaded audio clip by the active Transcriber (FR-12.1, composer mic). 503 when no transcriber is configured. */
+        TranscribeResponse: {
+            /**
+             * @description The transcribed text.
+             * @example schedule a meeting for tomorrow at noon
+             */
+            text: string;
+            /**
+             * @description Detected language code, when the transcriber reports one.
+             * @example en
+             */
+            language?: string;
+            /**
+             * @description Audio duration in seconds, when reported.
+             * @example 3.2
+             */
+            duration?: number;
+        };
         /** @description A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata. */
         Skill: {
             /**
@@ -3578,7 +4313,7 @@ export interface components {
              */
             name: string;
             /**
-             * @description Semantic version string (e.g. "1.2.3"). Must follow semver format.
+             * @description Version string as declared by the skill's SKILL.md or its source registry. Often semver ("1.2.3") but NOT required to be — community/ClawHub skills use arbitrary version strings ("1.0", "v2", a date, etc.). Defaults to "0.0.0" when the skill declares no version. Treated as an opaque display label.
              * @example 1.2.3
              */
             version: string;
@@ -3592,6 +4327,12 @@ export interface components {
              * @example Omnipus Community
              */
             author?: string;
+            /**
+             * @description Skill origin: "builtin" = pre-installed/system skill (cannot be deleted), "global"/"workspace" = user-installed (community/3rd-party).
+             * @example builtin
+             * @enum {string}
+             */
+            source?: "builtin" | "global" | "workspace";
             /**
              * @description True when the skill has been verified by the Omnipus team. Unverified skills require explicit trust grant before use.
              * @example true
@@ -3822,6 +4563,13 @@ export interface components {
              * @example 2026-05-16T10:05:30Z
              */
             completed_at?: string;
+            /**
+             * @description List of task IDs that must reach "completed" status before this task is eligible for dispatch. The Orchestrator coordinator (task_executor.onTaskComplete) advances tasks whose blocked_by set is fully satisfied. Absent when empty.
+             * @example [
+             *       "550e8400-e29b-41d4-a716-446655440001"
+             *     ]
+             */
+            blocked_by?: string[];
         };
         /**
          * McpServer
@@ -3866,7 +4614,7 @@ export interface components {
         };
         /**
          * McpServerCreate
-         * @description Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
+         * @description Request body for POST /mcp-servers. Adds a new MCP server to the gateway config. For stdio transport, `command` is required. For sse/http transport, `url` is required. Exactly one of `command` or `url` must be supplied depending on the transport.
          */
         McpServerCreate: {
             /**
@@ -3875,12 +4623,17 @@ export interface components {
              */
             name: string;
             /**
-             * @description Command to start the MCP server process (stdio transport).
+             * @description Command to start the MCP server process. Required when transport is "stdio". Must be omitted or empty when transport is "sse" or "http".
              * @example npx @modelcontextprotocol/server-everything
              */
-            command: string;
+            command?: string;
             /**
-             * @description Command-line arguments to pass to the server process.
+             * @description Endpoint URL for remote MCP servers. Required when transport is "sse" or "http". Must be an https:// URL, or http:// for loopback addresses only (localhost, 127.x.x.x, or ::1). Any other http:// URL is rejected with 422 by both the SPA and the backend. Must be omitted when transport is "stdio".
+             * @example https://mcp.example.com/sse
+             */
+            url?: string;
+            /**
+             * @description Command-line arguments to pass to the server process. Only applicable for stdio transport.
              * @example [
              *       "--port",
              *       "3000"
@@ -4452,11 +5205,43 @@ export interface components {
             /** @description Per-tool effective policy entries. */
             tools: components["schemas"]["AgentToolEntry"][];
             /**
-             * @description Agent classification: "core", "system", or "custom". Informs the UI whether policy editing is allowed.
+             * @description Agent classification: "core", "system", "custom", or "worker". Informs the UI whether policy editing is allowed.
              * @example custom
              * @enum {string}
              */
-            agent_type?: "core" | "system" | "custom";
+            agent_type?: "core" | "system" | "custom" | "worker";
+        };
+        /**
+         * RunnerTestResponse
+         * @description Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
+         */
+        RunnerTestResponse: {
+            /**
+             * @description True when the CLI is present, authenticated, and the version handshake succeeded.
+             * @example true
+             */
+            ok: boolean;
+            /**
+             * @description Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+             * @example
+             * @enum {string}
+             */
+            reason: "" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli" | "not-external-cli";
+            /**
+             * @description Human-readable description of the result (success detail or failure reason + remedy).
+             * @example "claude-code" ready: binary /usr/local/bin/claude present, v1.2.3, authenticated
+             */
+            message: string;
+            /**
+             * @description The external CLI name that was tested (the agent's executor.cli value).
+             * @example claude-code
+             */
+            cli?: string;
+            /**
+             * @description Detected CLI version string when the handshake succeeded; empty otherwise.
+             * @example 1.2.3
+             */
+            cli_version?: string;
         };
         /**
          * ChannelEnabledResponse
@@ -4724,6 +5509,13 @@ export interface components {
              * @example Summarize the last 7 days.
              */
             description?: string;
+            /**
+             * @description Task IDs that must complete before this task is dispatched. Validated at creation time: each ID must exist and must not create a cycle.
+             * @example [
+             *       "550e8400-e29b-41d4-a716-446655440001"
+             *     ]
+             */
+            blocked_by?: string[];
         };
         /**
          * TaskUpdateRequest
@@ -4815,14 +5607,85 @@ export interface components {
         };
         /**
          * SkillInstallRequest
-         * @description Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by name.
+         * @description Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
          */
         SkillInstallRequest: {
             /**
-             * @description Skill name to install from the ClawHub registry.
+             * @description Slug of the skill to install from the ClawHub registry.
              * @example web-search
              */
-            name: string;
+            slug: string;
+            /**
+             * @description Optional version to pin. When omitted the latest published version is installed.
+             * @example 1.4.0
+             */
+            version?: string;
+        };
+        /**
+         * SkillSearchResult
+         * @description A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
+         */
+        SkillSearchResult: {
+            /**
+             * @description Stable registry identifier for the skill. This is the value passed to POST /skills/install to install the skill.
+             * @example web-search
+             */
+            slug: string;
+            /**
+             * @description Human-readable skill name (e.g. "Web Search").
+             * @example Web Search
+             */
+            display_name?: string;
+            /**
+             * @description Short one-line description of what the skill does.
+             * @example Search the web and extract page content.
+             */
+            summary?: string;
+            /**
+             * @description Latest published version of the skill (free-form; may be empty).
+             * @example 1.4.0
+             */
+            version?: string;
+            /**
+             * Format: double
+             * @description Relevance score assigned by the registry for this query (higher is better).
+             * @example 0.92
+             */
+            score?: number;
+            /**
+             * @description Name of the registry that produced this result (e.g. "clawhub").
+             * @example clawhub
+             */
+            registry_name?: string;
+            /**
+             * @description Handle of the skill's publisher/owner on the registry, when available.
+             * @example octofleet
+             */
+            owner_handle?: string;
+        };
+        /**
+         * SkillMarketplaceStatus
+         * @description Reports whether any skill marketplace registry is enabled, returned by GET /api/v1/skills/marketplace. The SPA gates its skill-browse UI on this: when enabled is false, search/install-by-slug are unavailable (the endpoints return 409) and the UI offers only "install from file". A registry is the ClawHub marketplace or a configured GitHub registry.
+         */
+        SkillMarketplaceStatus: {
+            /**
+             * @description True when at least one skill marketplace registry is enabled (search/install-by-slug available).
+             * @example true
+             */
+            enabled: boolean;
+            /** @description Per-registry enablement, one entry per known registry. */
+            registries: {
+                /**
+                 * @description Registry identifier (e.g. "clawhub", "github").
+                 * @example clawhub
+                 */
+                name: string;
+                /**
+                 * @description Whether this specific registry is enabled.
+                 * @example true
+                 */
+                enabled: boolean;
+            }[];
         };
         /**
          * SseChatRequest
@@ -4887,8 +5750,8 @@ export interface components {
         };
         /**
          * BearerToken
-         * @description Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
-         * @example omnipus_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+         * @description Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+         * @example omnipus_0123abcd_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
          */
         BearerToken: string;
         /**
@@ -4896,6 +5759,10 @@ export interface components {
          * @description Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
          */
         ChannelConfigureRequest: {
+            /** @description Optional: the instance map key to configure. In v0.1 (cap-1/type) this equals the channel type and can be omitted. Reserved for v0.3 multi-instance support — the backend ignores this field today (the URL {id} is the key). */
+            instance_id?: string;
+            /** @description Optional routing identity override for this channel instance. Persisted per instance; wired into ResolveRoute for inbound messages on this channel. */
+            identity?: components["schemas"]["ChannelIdentity"];
             /** @description Channel authentication token (e.g. Telegram bot token, Discord bot token). */
             token?: string;
             /** @description Alias for token used by some channels. */
@@ -4906,6 +5773,33 @@ export interface components {
             app_secret?: string;
             /** @description HMAC secret for verifying incoming webhook payloads. */
             webhook_secret?: string;
+            /**
+             * @description IMAP server hostname (email channel). TLS required.
+             * @example imap.gmail.com
+             */
+            imap_host?: string;
+            /**
+             * @description IMAP server port (email channel). Defaults to 993 (IMAPS).
+             * @example 993
+             */
+            imap_port?: number;
+            /**
+             * @description SMTP server hostname for outbound email (email channel). TLS required.
+             * @example smtp.gmail.com
+             */
+            smtp_host?: string;
+            /**
+             * @description SMTP server port (email channel). Defaults to 587 (STARTTLS) or 465 (SMTPS).
+             * @example 587
+             */
+            smtp_port?: number;
+            /**
+             * @description Login username for IMAP and SMTP authentication (email channel).
+             * @example bot@example.com
+             */
+            username?: string;
+            /** @description Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses. */
+            password?: string;
         } & {
             [key: string]: unknown;
         };
@@ -4981,6 +5875,730 @@ export interface components {
              */
             error?: string;
         };
+        /**
+         * ScheduleTrigger
+         * @description When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
+         */
+        ScheduleTrigger: {
+            /** @enum {string} */
+            kind: "at" | "every" | "cron";
+            /** @description Cron expression (5/6 fields). Required when kind=cron. */
+            cron_expr?: string;
+            /**
+             * Format: int64
+             * @description Interval in milliseconds. Required when kind=every.
+             */
+            every_ms?: number;
+            /**
+             * Format: int64
+             * @description Unix epoch milliseconds for a one-shot run. Required when kind=at.
+             */
+            at_ms?: number;
+        };
+        /**
+         * ScheduleRunRecord
+         * @description One execution of a schedule (#264). The last 20 are retained inline on a Schedule; full history is reachable via the linked session_id.
+         */
+        ScheduleRunRecord: {
+            /**
+             * Format: int64
+             * @description Unix epoch milliseconds when the run started.
+             */
+            ran_at_ms: number;
+            /**
+             * @description ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+             * @enum {string}
+             */
+            status: "ok" | "error" | "skipped" | "timeout";
+            /** @description Failure reason when status is error or timeout. */
+            error?: string;
+            /** @description The scheduled session this run executed in (links to the transcript). */
+            session_id?: string;
+            /**
+             * Format: int64
+             * @description Wall-clock duration of the run in milliseconds.
+             */
+            duration_ms?: number;
+        };
+        /**
+         * ScheduleState
+         * @description Runtime state of a schedule (#264). All fields are server-maintained.
+         */
+        ScheduleState: {
+            /**
+             * Format: int64
+             * @description Unix epoch milliseconds of the next computed run, if enabled.
+             */
+            next_run_at_ms?: number;
+            /**
+             * Format: int64
+             * @description Unix epoch milliseconds of the most recent run.
+             */
+            last_run_at_ms?: number;
+            /** @description Status of the most recent run (ok/error/skipped/timeout), empty if never run. */
+            last_status?: string;
+            /** @description Error from the most recent failed run. */
+            last_error?: string;
+            /** @description Number of consecutive failed runs; resets to 0 after a success. */
+            consecutive_failures?: number;
+            /** @description True while a run of this schedule is currently in progress (overlap guard). */
+            running?: boolean;
+        };
+        /**
+         * Schedule
+         * @description A scheduled instruction for an agent (#264) — the wire projection of a cron job. When it fires, the owning agent runs the message in the chosen session mode under guardrails. Read model returned by the /schedules endpoints.
+         */
+        Schedule: {
+            /** @description Stable schedule id (the underlying cron job id). */
+            id: string;
+            name: string;
+            /** @description When false, the scheduler does not fire it (paused). */
+            enabled: boolean;
+            /** @description The agent that runs this schedule. Pinned; never falls back to the default agent. */
+            owner_agent_id: string;
+            /** @description Username that created the schedule (for notification routing). */
+            created_by?: string;
+            trigger: components["schemas"]["ScheduleTrigger"];
+            /** @description The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true). */
+            message: string;
+            /** @description true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy). */
+            deliver: boolean;
+            /**
+             * @description isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
+             * @enum {string}
+             */
+            session_mode: "isolated" | "continue" | "main";
+            /** @description Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default. */
+            timeout_seconds: number;
+            /** @description For continue/main modes, the persistent session id this schedule runs in. */
+            session_id?: string;
+            /** @description Channel for deliver=true sends and the run's outbound context. */
+            channel?: string;
+            /** @description Chat/peer id within the channel for deliver=true sends. */
+            chat_id?: string;
+            state: components["schemas"]["ScheduleState"];
+            /** @description The most recent runs (newest first), capped at 20. */
+            runs?: components["schemas"]["ScheduleRunRecord"][];
+            /** Format: int64 */
+            created_at_ms: number;
+            /** Format: int64 */
+            updated_at_ms: number;
+        };
+        /**
+         * ScheduleCreate
+         * @description Request body to create a schedule (#264). The owner must be an agent the caller is permitted to use (AuthorizeAgentAccess). Omitted optional fields take their documented defaults.
+         */
+        ScheduleCreate: {
+            name: string;
+            owner_agent_id: string;
+            trigger: components["schemas"]["ScheduleTrigger"];
+            message: string;
+            /** @description Default false (agent processes it). */
+            deliver?: boolean;
+            /**
+             * @description Default isolated.
+             * @enum {string}
+             */
+            session_mode?: "isolated" | "continue" | "main";
+            /** @description Per-run deadline; default 0 = use the global default. */
+            timeout_seconds?: number;
+            /** @description Default true. */
+            enabled?: boolean;
+            channel?: string;
+            chat_id?: string;
+        };
+        /**
+         * ScheduleUpdate
+         * @description Request body to update a schedule (#264). All fields optional; only provided fields are changed. Changing owner_agent_id is re-authorized.
+         */
+        ScheduleUpdate: {
+            name?: string;
+            owner_agent_id?: string;
+            trigger?: components["schemas"]["ScheduleTrigger"];
+            message?: string;
+            deliver?: boolean;
+            /** @enum {string} */
+            session_mode?: "isolated" | "continue" | "main";
+            timeout_seconds?: number;
+            enabled?: boolean;
+            channel?: string;
+            chat_id?: string;
+        };
+        /**
+         * ScheduleList
+         * @description List of schedules (#264).
+         */
+        ScheduleList: {
+            schedules: components["schemas"]["Schedule"][];
+        };
+        /**
+         * ScheduleRunResult
+         * @description Result of a run-now request (#264).
+         */
+        ScheduleRunResult: {
+            schedule_id: string;
+            /**
+             * @description skipped when the schedule's previous run is still in progress or the lane is full.
+             * @enum {string}
+             */
+            status: "ok" | "error" | "skipped" | "timeout";
+            /** @description The session the run executed in, when one was created. */
+            session_id?: string;
+            error?: string;
+        };
+        /**
+         * Notification
+         * @description A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+         */
+        Notification: {
+            id: string;
+            /**
+             * @description The event class. Extensible; consumers must tolerate unknown values.
+             * @enum {string}
+             */
+            type: "schedule_failed";
+            title: string;
+            /** @description Optional detail (e.g. the failure reason). */
+            body?: string;
+            /** @enum {string} */
+            severity: "info" | "warning" | "error";
+            /** @description Per-user read state. */
+            read: boolean;
+            /** Format: int64 */
+            created_at_ms: number;
+            /**
+             * Format: int64
+             * @description Set when a coalesced notification is updated (e.g. repeated schedule failure).
+             */
+            updated_at_ms?: number;
+            /** @description Click-through target when the notification concerns a schedule. */
+            schedule_id?: string;
+            /** @description Click-through target when the notification concerns a run's session. */
+            session_id?: string;
+            /** @description The agent the notification concerns. */
+            agent_id?: string;
+        };
+        /**
+         * NotificationList
+         * @description The authenticated user's notifications plus the unread count (#264).
+         */
+        NotificationList: {
+            /** @description Newest first. */
+            notifications: components["schemas"]["Notification"][];
+            /** @description Number of unread notifications for the badge. */
+            unread_count: number;
+        };
+        /** @description A Level 1 workspace record. Workspaces are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate. */
+        Workspace: {
+            /**
+             * @description UUID workspace identifier
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            id: string;
+            /**
+             * @description Human-readable workspace name. Not unique.
+             * @example website-api
+             */
+            name: string;
+            /**
+             * @description Optional free-text description.
+             * @example Main REST API service
+             */
+            description?: string;
+            /**
+             * @description Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
+             * @example active
+             * @enum {string}
+             */
+            status: "active" | "archived";
+            /**
+             * @description Whether this workspace is pinned to the top of the sidebar.
+             * @example false
+             */
+            pinned: boolean;
+            /**
+             * @description Ascending sort position among pinned workspaces. 0 for unpinned workspaces. Last-writer-wins; tiebreak by created_at ascending.
+             * @example 0
+             */
+            pin_order: number;
+            /**
+             * @description Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time. Max 20 entries.
+             * @example [
+             *       "mia",
+             *       "jim"
+             *     ]
+             */
+            core_team?: string[];
+            /**
+             * @description Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
+             * @example https://github.com/org/repo
+             */
+            repository?: string;
+            /**
+             * @description Number of GTD board tasks with this workspace_id. Computed at read time from ~/.omnipus/tasks/. Never stored in the workspace JSON file.
+             * @example 3
+             */
+            task_count: number;
+            /**
+             * @description True only for the auto-created default workspace. The default workspace cannot be deleted and always appears first in the sidebar.
+             * @example false
+             */
+            is_default?: boolean;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC creation timestamp
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC last-update timestamp
+             * @example 2026-06-08T15:00:00Z
+             */
+            updated_at: string;
+            /**
+             * @description Username of the user who created this workspace. Set server-side at creation; read-only. Attribution only — not an access gate.
+             * @example alice
+             */
+            owner?: string;
+        };
+        /** @description Request body for POST /workspaces */
+        WorkspaceCreateRequest: {
+            /** @description Workspace name. Required. Not unique. */
+            name: string;
+            /** @description Optional description. */
+            description?: string;
+            /** @description Optional default agent roster. Deduplicated at write time. */
+            core_team?: string[];
+            /** @description Optional git repository URL. */
+            repository?: string;
+        };
+        /** @description Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged. */
+        WorkspaceUpdateRequest: {
+            name?: string;
+            description?: string;
+            /**
+             * @description Archive or restore a workspace.
+             * @enum {string}
+             */
+            status?: "active" | "archived";
+            pinned?: boolean;
+            pin_order?: number;
+            core_team?: string[];
+            repository?: string;
+        };
+        /**
+         * @description GTD board task status.
+         * @enum {string}
+         */
+        GTDBoardTaskStatus: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
+        /**
+         * @description GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
+         * @enum {string}
+         */
+        BoardTaskUpdateStatus: "inbox" | "next" | "waiting" | "done" | "failed";
+        /** @description A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics. */
+        BoardTask: {
+            /**
+             * @description UUID task identifier
+             * @example b2c3d4e5-f6a7-8901-bcde-f12345678901
+             */
+            id: string;
+            /**
+             * @description Task name.
+             * @example Fix login bug
+             */
+            name: string;
+            /** @description Optional task description. */
+            description?: string;
+            status: components["schemas"]["GTDBoardTaskStatus"];
+            /**
+             * @description Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            workspace_id?: string;
+            /**
+             * @description Optional agent responsible for this task.
+             * @example mia
+             */
+            agent_id?: string;
+            /** @description Optional agent prompt attached to the task. */
+            prompt?: string;
+            /** @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified. */
+            priority?: number;
+            /** @description Optional milestone this task belongs to. */
+            milestone_id?: string;
+            /** @description Optional session linked to this task. */
+            session_id?: string;
+            /** @description Optional task result or output. */
+            result?: string;
+            /**
+             * Format: date-time
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @example 2026-06-08T15:00:00Z
+             */
+            updated_at: string;
+            /**
+             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
+             * @example alice
+             */
+            owner?: string;
+            /**
+             * Format: date-time
+             * @description Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+             * @example 2026-07-01T09:00:00Z
+             */
+            start?: string;
+            /**
+             * Format: date-time
+             * @description Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
+             * @example FREQ=WEEKLY;BYDAY=MO
+             */
+            recurrence?: string;
+            /**
+             * @description Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
+             * @example [
+             *       "01J1A2B3C4D5E6F7G8H9I0J1K2",
+             *       "01J1A2B3C4D5E6F7G8H9I0J1K3"
+             *     ]
+             */
+            blocked_by?: string[];
+        };
+        /** @description A single item in the board task list response. Equivalent to BoardTask. Defined as a plain object (not allOf) so that oapi-codegen emits []BoardTaskListItem rather than an inline anonymous struct in BoardTaskListResponse. */
+        BoardTaskListItem: {
+            /**
+             * @description UUID task identifier
+             * @example b2c3d4e5-f6a7-8901-bcde-f12345678901
+             */
+            id: string;
+            /**
+             * @description Task name.
+             * @example Fix login bug
+             */
+            name: string;
+            /** @description Optional task description. */
+            description?: string;
+            status: components["schemas"]["GTDBoardTaskStatus"];
+            /**
+             * @description Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            workspace_id?: string;
+            /**
+             * @description Optional agent responsible for this task.
+             * @example mia
+             */
+            agent_id?: string;
+            /** @description Optional agent prompt attached to the task. */
+            prompt?: string;
+            /** @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified. */
+            priority?: number;
+            /** @description Optional milestone this task belongs to. */
+            milestone_id?: string;
+            /** @description Optional session linked to this task. */
+            session_id?: string;
+            /** @description Optional task result or output. */
+            result?: string;
+            /**
+             * Format: date-time
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @example 2026-06-08T15:00:00Z
+             */
+            updated_at: string;
+            /**
+             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
+             * @example alice
+             */
+            owner?: string;
+            /**
+             * Format: date-time
+             * @description Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+             * @example 2026-07-01T09:00:00Z
+             */
+            start?: string;
+            /**
+             * Format: date-time
+             * @description Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
+             * @example FREQ=WEEKLY;BYDAY=MO
+             */
+            recurrence?: string;
+            /**
+             * @description Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
+             * @example [
+             *       "01J1A2B3C4D5E6F7G8H9I0J1K2",
+             *       "01J1A2B3C4D5E6F7G8H9I0J1K3"
+             *     ]
+             */
+            blocked_by?: string[];
+        };
+        /** @description Paginated list response for GET /board/tasks */
+        BoardTaskListResponse: {
+            items: components["schemas"]["BoardTaskListItem"][];
+            /**
+             * @description Total number of tasks matching the filter (before pagination).
+             * @example 42
+             */
+            total: number;
+        };
+        BoardTaskCreateRequest: {
+            name: string;
+            description?: string;
+            status?: components["schemas"]["GTDBoardTaskStatus"];
+            workspace_id?: string;
+            agent_id?: string;
+            prompt?: string;
+            priority?: number;
+            milestone_id?: string;
+            /**
+             * Format: date-time
+             * @description Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+             * @example 2026-07-01T09:00:00Z
+             */
+            start?: string;
+            /**
+             * Format: date-time
+             * @description Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+             * @example FREQ=WEEKLY;BYDAY=MO
+             */
+            recurrence?: string;
+            /**
+             * @description Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Max depth 50.
+             * @example []
+             */
+            blocked_by?: string[];
+        };
+        BoardTaskUpdateRequest: {
+            name?: string;
+            description?: string;
+            status?: components["schemas"]["BoardTaskUpdateStatus"];
+            workspace_id?: string;
+            agent_id?: string;
+            prompt?: string;
+            priority?: number;
+            milestone_id?: string;
+            session_id?: string;
+            result?: string;
+            /**
+             * Format: date-time
+             * @description Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+             * @example 2026-07-01T09:00:00Z
+             */
+            start?: string;
+            /**
+             * Format: date-time
+             * @description Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+             * @example FREQ=WEEKLY;BYDAY=MO
+             */
+            recurrence?: string;
+            /**
+             * @description Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Replaces the current blocked_by list atomically. Max depth 50.
+             * @example []
+             */
+            blocked_by?: string[];
+        };
+        /** @description A session that has been auto-linked to a workspace via tool use. */
+        WorkspaceSessionLink: {
+            /**
+             * @description Session identifier.
+             * @example sess_abc123
+             */
+            session_id: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC timestamp when the link was first created.
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+        };
+        Milestone: {
+            /**
+             * @description UUID milestone identifier
+             * @example c3d4e5f6-a7b8-9012-cdef-123456789012
+             */
+            id: string;
+            /**
+             * @description Workspace this milestone belongs to.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            workspace_id: string;
+            /**
+             * @description Human-readable milestone name.
+             * @example v1.0 Launch
+             */
+            name: string;
+            /** @description Optional free-text description. */
+            description?: string;
+            /**
+             * @description Optional due date (ISO 8601 date string or null).
+             * @example 2026-12-31
+             */
+            due_date?: string | null;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC creation timestamp.
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC last-update timestamp.
+             * @example 2026-06-08T15:00:00Z
+             */
+            updated_at: string;
+            /**
+             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
+             * @example alice
+             */
+            owner?: string;
+            /**
+             * @description Completion fraction (0–1) computed server-side at read time as done/total over the milestone's GTD board tasks. 0 when no tasks are associated. Read-only; never accepted on create/update.
+             * @example 0.5
+             */
+            readonly progress?: number;
+        };
+        MilestoneCreateRequest: {
+            /** @description Milestone name. Required. */
+            name: string;
+            /** @description Optional free-text description. */
+            description?: string;
+            /** @description Optional due date (ISO 8601 date string or null). */
+            due_date?: string | null;
+        };
+        MilestoneUpdateRequest: {
+            /** @description Milestone name. */
+            name?: string;
+            /** @description Optional free-text description. */
+            description?: string;
+            /** @description Optional due date (ISO 8601 date string or null). */
+            due_date?: string | null;
+        };
+        /** @description List response for GET /workspaces/{id}/milestones */
+        MilestoneListResponse: {
+            milestones: components["schemas"]["Milestone"][];
+            /** @description Total number of milestones for this workspace. */
+            total: number;
+        };
+        /** @description Per-agent token usage entry within a TokenUsageSummary. */
+        AgentTokenEntry: {
+            /** @example mia */
+            agent_id: string;
+            /** @example Mia */
+            agent_name: string;
+            /** @example 12345 */
+            tokens_in: number;
+            /** @example 6789 */
+            tokens_out: number;
+            /** @example 19134 */
+            tokens_total: number;
+        };
+        /** @description Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files. */
+        TokenUsageSummary: {
+            agents: components["schemas"]["AgentTokenEntry"][];
+            /**
+             * Format: date-time
+             * @description Start of the aggregation period (inclusive), UTC.
+             * @example 2026-06-01T00:00:00Z
+             */
+            period_start: string;
+            /**
+             * Format: date-time
+             * @description End of the aggregation period (exclusive), UTC.
+             * @example 2026-07-01T00:00:00Z
+             */
+            period_end: string;
+        };
+        /**
+         * @description Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+         *     The canonical "to" field unifies the three legacy allowlists:
+         *       - AgentConfig.CanDelegateTo (per-agent, task delegation)
+         *       - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+         *       - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+         *
+         *     Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+         *     "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+         */
+        DelegationPolicy: {
+            /** @description List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent. */
+            to?: {
+                /**
+                 * @description The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+                 * @example local
+                 * @enum {string}
+                 */
+                kind: "local" | "remote-a2a";
+                /**
+                 * @description Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+                 * @example ray
+                 */
+                id: string;
+            }[];
+            /** @description PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped. */
+            accept_from?: {
+                /**
+                 * @example local
+                 * @enum {string}
+                 */
+                kind: "local" | "remote-a2a";
+                /** @example jim */
+                id: string;
+            }[];
+            /**
+             * @description Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+             * @example [
+             *       "await",
+             *       "background",
+             *       "task"
+             *     ]
+             */
+            modes?: ("await" | "background" | "task")[];
+            /**
+             * @description Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+             * @example 3
+             */
+            depth?: number;
+            /** @description PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary. */
+            budget?: {
+                /**
+                 * Format: double
+                 * @description Maximum USD spend allowed for delegated work.
+                 * @example 1
+                 */
+                max_cost_usd?: number;
+                /**
+                 * @description Maximum token count allowed for delegated work.
+                 * @example 100000
+                 */
+                max_tokens?: number;
+            };
+        };
     };
     responses: {
         /** @description Bad request — missing or invalid field. */
@@ -5050,6 +6668,15 @@ export interface components {
         };
         /** @description Internal server error. */
         "500InternalServerError": {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error. */
+        "502BadGateway": {
             headers: {
                 [name: string]: unknown;
             };
@@ -5198,6 +6825,121 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             500: components["responses"]["500InternalServerError"];
+        };
+    };
+    reAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReAuthRequest"];
+            };
+        };
+        responses: {
+            /** @description Password re-verified; a consent token is returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReAuthResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getIntegrationProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The integration provider catalogue. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationProvidersResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    updateIntegrationProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Provider identifier (e.g. "brave", "elevenlabs"). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationProviderUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Provider configured; the updated catalogue is returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationProvidersResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    transcribeAudio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description The recorded audio clip (webm/ogg/wav/mp3).
+                     */
+                    audio: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Transcription succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscribeResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     completeOnboarding: {
@@ -5864,6 +7606,36 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    testAgentRunner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Agent ID.
+                 * @example jim
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connection test result (the test ran; ok indicates pass/fail). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerTestResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             500: components["responses"]["500InternalServerError"];
         };
@@ -6851,6 +8623,77 @@ export interface operations {
             };
             /** @description Sweep already in progress. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getPerformanceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current performance settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PerformanceSettings"];
+                };
+            };
+            /** @description Admin role required. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updatePerformanceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PerformanceSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated performance settings (including effective value). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PerformanceSettings"];
+                };
+            };
+            /** @description Invalid value. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7872,6 +9715,62 @@ export interface operations {
             };
         };
     };
+    searchSkills: {
+        parameters: {
+            query: {
+                /**
+                 * @description Search query. Must be non-empty.
+                 * @example web search
+                 */
+                q: string;
+                /**
+                 * @description Maximum number of results to return (default 20, capped at 50).
+                 * @example 20
+                 */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of skill marketplace search results (may be empty). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillSearchResult"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            409: components["responses"]["409Conflict"];
+            502: components["responses"]["502BadGateway"];
+        };
+    };
+    getSkillMarketplaceStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Skill marketplace status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillMarketplaceStatus"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
     installSkill: {
         parameters: {
             query?: never;
@@ -7896,15 +9795,9 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
-            /** @description Not yet implemented. */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            502: components["responses"]["502BadGateway"];
         };
     };
     postChat: {
@@ -8611,6 +10504,723 @@ export interface operations {
             };
         };
     };
+    listSchedules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Schedules. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleList"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    createSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleCreate"];
+            };
+        };
+        responses: {
+            /** @description Schedule created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Schedule"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Schedule"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    updateSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Schedule"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    runSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleRunResult"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    pauseSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Schedule"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listNotifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notifications + unread count. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationList"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    markAllNotificationsRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All marked read. No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    markNotificationRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Marked read. No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listWorkspaces: {
+        parameters: {
+            query?: {
+                /** @description Filter by workspace status. Defaults to active. */
+                status?: "active" | "archived" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workspace"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    createWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Workspace created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workspace"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workspace"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    updateWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated workspace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workspace"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listWorkspaceSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Linked sessions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSessionLink"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listWorkspaceMilestones: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Milestone list with total count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MilestoneListResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    createWorkspaceMilestone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MilestoneCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created milestone */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Milestone"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    getWorkspaceMilestone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+                /** @description Milestone ID. */
+                milestoneId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Milestone */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Milestone"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    updateWorkspaceMilestone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+                /** @description Milestone ID. */
+                milestoneId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MilestoneUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated milestone */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Milestone"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteWorkspaceMilestone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+                /** @description Milestone ID. */
+                milestoneId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listBoardTasks: {
+        parameters: {
+            query?: {
+                /** @description Filter by workspace ID. */
+                workspace_id?: string;
+                /** @description Filter by GTD status. */
+                status?: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
+                /** @description Filter by agent ID. */
+                agent_id?: string;
+                /** @description Filter by milestone ID. */
+                milestone_id?: string;
+                /** @description Maximum items to return. */
+                limit?: number;
+                /** @description Pagination offset. */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Board task list with total count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardTaskListResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    createBoardTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BoardTaskCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created board task */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardTask"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getBoardTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Board task */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardTask"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    updateBoardTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BoardTaskUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated board task (full object) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardTask"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteBoardTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    startBoardTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Task started; session_id and status=active set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardTask"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
+    getTokenStats: {
+        parameters: {
+            query?: {
+                /** @description Aggregation period. */
+                period?: "month";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Token usage summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenUsageSummary"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
 }
 
 // ── Named type re-exports from components.schemas ────────────────────────────
@@ -8651,6 +11261,7 @@ export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
 export type AgentCreateRequest = components["schemas"]["AgentCreateRequest"];
 export type AgentUpdateRequest = components["schemas"]["AgentUpdateRequest"];
+export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
 export type AgentSession = components["schemas"]["AgentSession"];
 export type SessionScopeRequest = components["schemas"]["SessionScopeRequest"];
 export type SessionScopeResponse = components["schemas"]["SessionScopeResponse"];
@@ -8659,6 +11270,7 @@ export type AgentToolEntry = components["schemas"]["AgentToolEntry"];
 export type ToolPolicy = components["schemas"]["ToolPolicy"];
 export type GlobalToolPolicies = components["schemas"]["GlobalToolPolicies"];
 export type ChannelId = components["schemas"]["ChannelId"];
+export type ChannelIdentity = components["schemas"]["ChannelIdentity"];
 export type ChannelEntry = components["schemas"]["ChannelEntry"];
 export type RetentionConfig = components["schemas"]["RetentionConfig"];
 export type RetentionSweepResult = components["schemas"]["RetentionSweepResult"];
@@ -8675,7 +11287,15 @@ export type PendingRestartEntry = components["schemas"]["PendingRestartEntry"];
 export type AboutResponse = components["schemas"]["AboutResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type GatewayStatus = components["schemas"]["GatewayStatus"];
+export type PerformanceSettings = components["schemas"]["PerformanceSettings"];
+export type PerformanceSettingsUpdate = components["schemas"]["PerformanceSettingsUpdate"];
 export type Provider = components["schemas"]["Provider"];
+export type ReAuthRequest = components["schemas"]["ReAuthRequest"];
+export type ReAuthResponse = components["schemas"]["ReAuthResponse"];
+export type IntegrationProvider = components["schemas"]["IntegrationProvider"];
+export type IntegrationProvidersResponse = components["schemas"]["IntegrationProvidersResponse"];
+export type IntegrationProviderUpdateRequest = components["schemas"]["IntegrationProviderUpdateRequest"];
+export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
 export type Skill = components["schemas"]["Skill"];
 export type ActivityEvent = components["schemas"]["ActivityEvent"];
 export type UploadedFile = components["schemas"]["UploadedFile"];
@@ -8706,6 +11326,7 @@ export type RateLimitsUpdateResponse = components["schemas"]["RateLimitsUpdateRe
 export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpdateResponse"];
 export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];
 export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
+export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
@@ -8726,6 +11347,8 @@ export type TaskUpdateRequest = components["schemas"]["TaskUpdateRequest"];
 export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
+export type SkillSearchResult = components["schemas"]["SkillSearchResult"];
+export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStatus"];
 export type SseChatRequest = components["schemas"]["SseChatRequest"];
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];
@@ -8737,3 +11360,30 @@ export type RetentionUpdateRequest = components["schemas"]["RetentionUpdateReque
 export type McpToolsListResponse = components["schemas"]["McpToolsListResponse"];
 export type McpToolCallRequest = components["schemas"]["McpToolCallRequest"];
 export type McpToolCallResponse = components["schemas"]["McpToolCallResponse"];
+export type ScheduleTrigger = components["schemas"]["ScheduleTrigger"];
+export type ScheduleRunRecord = components["schemas"]["ScheduleRunRecord"];
+export type ScheduleState = components["schemas"]["ScheduleState"];
+export type Schedule = components["schemas"]["Schedule"];
+export type ScheduleCreate = components["schemas"]["ScheduleCreate"];
+export type ScheduleUpdate = components["schemas"]["ScheduleUpdate"];
+export type ScheduleList = components["schemas"]["ScheduleList"];
+export type ScheduleRunResult = components["schemas"]["ScheduleRunResult"];
+export type Notification = components["schemas"]["Notification"];
+export type NotificationList = components["schemas"]["NotificationList"];
+export type Workspace = components["schemas"]["Workspace"];
+export type WorkspaceCreateRequest = components["schemas"]["WorkspaceCreateRequest"];
+export type WorkspaceUpdateRequest = components["schemas"]["WorkspaceUpdateRequest"];
+export type GTDBoardTaskStatus = components["schemas"]["GTDBoardTaskStatus"];
+export type BoardTaskUpdateStatus = components["schemas"]["BoardTaskUpdateStatus"];
+export type BoardTask = components["schemas"]["BoardTask"];
+export type BoardTaskListItem = components["schemas"]["BoardTaskListItem"];
+export type BoardTaskListResponse = components["schemas"]["BoardTaskListResponse"];
+export type BoardTaskCreateRequest = components["schemas"]["BoardTaskCreateRequest"];
+export type BoardTaskUpdateRequest = components["schemas"]["BoardTaskUpdateRequest"];
+export type WorkspaceSessionLink = components["schemas"]["WorkspaceSessionLink"];
+export type Milestone = components["schemas"]["Milestone"];
+export type MilestoneCreateRequest = components["schemas"]["MilestoneCreateRequest"];
+export type MilestoneUpdateRequest = components["schemas"]["MilestoneUpdateRequest"];
+export type MilestoneListResponse = components["schemas"]["MilestoneListResponse"];
+export type AgentTokenEntry = components["schemas"]["AgentTokenEntry"];
+export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];

@@ -5,9 +5,12 @@
 import type { Plugin } from 'unified'
 import type { Root, Element, Text, RootContent } from 'hast'
 import { visit } from 'unist-util-visit'
+import type { PhosphorIconName } from '@/lib/phosphor-emoji-icons'
 
-// Emoji → Phosphor icon name map
-const EMOJI_MAP: Record<string, string> = {
+// Emoji → Phosphor icon name map. Values are typed `PhosphorIconName` (the key
+// union of PHOSPHOR_EMOJI_ICONS), so adding an emoji whose target icon is not in
+// that allow-list is a COMPILE error — a drift guard at the type level.
+export const EMOJI_MAP: Record<string, PhosphorIconName> = {
   '✅': 'CheckCircle',
   '✓': 'CheckCircle',
   '☑': 'CheckCircle',

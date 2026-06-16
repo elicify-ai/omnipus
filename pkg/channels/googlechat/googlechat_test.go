@@ -12,9 +12,75 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/credentials"
 )
 
 func newSS(s string) config.SecureString { return *config.NewSecureString(s) }
+
+// TestNewGoogleChatChannel_WebhookResolvedFromBundle is the MAJ-1 constructor
+// guard: when webhook_url_ref is set, the channel must resolve the real webhook
+// URL from the SecretBundle (not from any inline config), mirroring telegram's
+// token_ref flow. config.json carries no plaintext secret.
+func TestNewGoogleChatChannel_WebhookResolvedFromBundle(t *testing.T) {
+	const realURL = "https://chat.googleapis.com/v1/spaces/AAA/messages?key=KKK&token=TTT"
+	cfg := config.GoogleChatConfig{
+		Enabled:       true,
+		Mode:          "webhook",
+		WebhookURLRef: "channel_google-chat_webhook_url",
+		// No inline WebhookURL — the secret lives only in the bundle.
+	}
+	secrets := credentials.SecretBundle{
+		credentials.SecretRef("channel_google-chat_webhook_url"): realURL,
+	}
+	ch, err := NewGoogleChatChannel(cfg, secrets, bus.NewMessageBus())
+	if err != nil {
+		t.Fatalf("NewGoogleChatChannel() = %v", err)
+	}
+	if got := ch.config.WebhookURL.String(); got != realURL {
+		t.Errorf("resolved WebhookURL = %q, want %q", got, realURL)
+	}
+}
+
+// TestNewGoogleChatChannel_ServiceAccountResolvedFromBundle proves the
+// service-account-JSON ref path now lands in a real struct field and resolves —
+// the path that was effectively broken before MAJ-1.
+func TestNewGoogleChatChannel_ServiceAccountResolvedFromBundle(t *testing.T) {
+	const saJSON = `{"client_email":"bot@proj.iam.gserviceaccount.com","private_key":"PK"}`
+	cfg := config.GoogleChatConfig{
+		Enabled:               true,
+		Mode:                  "bot",
+		ServiceAccountJSONRef: "channel_google-chat_service_account_json",
+	}
+	secrets := credentials.SecretBundle{
+		credentials.SecretRef("channel_google-chat_service_account_json"): saJSON,
+	}
+	ch, err := NewGoogleChatChannel(cfg, secrets, bus.NewMessageBus())
+	if err != nil {
+		t.Fatalf("NewGoogleChatChannel() = %v", err)
+	}
+	if got := ch.config.ServiceAccountJSON.String(); got != saJSON {
+		t.Errorf("resolved ServiceAccountJSON = %q, want %q", got, saJSON)
+	}
+}
+
+// TestNewGoogleChatChannel_InlineFallbackWhenNoRef confirms env-injected /
+// backward-compat configs (inline SecureString, no *Ref) still construct — the
+// fallback path that keeps the legacy tests green.
+func TestNewGoogleChatChannel_InlineFallbackWhenNoRef(t *testing.T) {
+	cfg := config.GoogleChatConfig{
+		Enabled:    true,
+		Mode:       "webhook",
+		WebhookURL: newSS("https://chat.googleapis.com/inline/legacy"),
+		// No WebhookURLRef and an empty (nil) bundle.
+	}
+	ch, err := NewGoogleChatChannel(cfg, nil, bus.NewMessageBus())
+	if err != nil {
+		t.Fatalf("NewGoogleChatChannel() = %v", err)
+	}
+	if got := ch.config.WebhookURL.String(); got != "https://chat.googleapis.com/inline/legacy" {
+		t.Errorf("inline fallback WebhookURL = %q", got)
+	}
+}
 
 func TestNewGoogleChatChannel_WebhookMode(t *testing.T) {
 	cfg := config.GoogleChatConfig{
@@ -23,7 +89,7 @@ func TestNewGoogleChatChannel_WebhookMode(t *testing.T) {
 		WebhookURL: newSS("https://chat.googleapis.com/webhook/123"),
 	}
 	msgBus := bus.NewMessageBus()
-	ch, err := NewGoogleChatChannel(cfg, msgBus)
+	ch, err := NewGoogleChatChannel(cfg, nil, msgBus)
 	if err != nil {
 		t.Fatalf("NewGoogleChatChannel() = %v", err)
 	}
@@ -46,7 +112,7 @@ func TestNewGoogleChatChannel_BotModeWithJSON(t *testing.T) {
 		}`),
 	}
 	msgBus := bus.NewMessageBus()
-	ch, err := NewGoogleChatChannel(cfg, msgBus)
+	ch, err := NewGoogleChatChannel(cfg, nil, msgBus)
 	if err != nil {
 		t.Fatalf("NewGoogleChatChannel() = %v", err)
 	}
@@ -61,7 +127,7 @@ func TestNewGoogleChatChannel_NoCredentials(t *testing.T) {
 		Mode:    "webhook",
 	}
 	msgBus := bus.NewMessageBus()
-	_, err := NewGoogleChatChannel(cfg, msgBus)
+	_, err := NewGoogleChatChannel(cfg, nil, msgBus)
 	if err == nil {
 		t.Error("expected error for missing credentials")
 	}
@@ -85,7 +151,7 @@ func TestGoogleChatChannel_SendWebhook(t *testing.T) {
 		WebhookURL: newSS(server.URL),
 	}
 	msgBus := bus.NewMessageBus()
-	ch, _ := NewGoogleChatChannel(cfg, msgBus)
+	ch, _ := NewGoogleChatChannel(cfg, nil, msgBus)
 	ch.client = server.Client()
 	ch.ctx = context.Background()
 	ch.cancel = func() {}
@@ -205,7 +271,7 @@ func TestGoogleChatChannel_GroupTrigger_ORLogic(t *testing.T) {
 				},
 			}
 			msgBus := bus.NewMessageBus()
-			ch, err := NewGoogleChatChannel(cfg, msgBus)
+			ch, err := NewGoogleChatChannel(cfg, nil, msgBus)
 			if err != nil {
 				t.Fatalf("NewGoogleChatChannel() = %v", err)
 			}

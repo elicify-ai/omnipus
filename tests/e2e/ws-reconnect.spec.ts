@@ -109,31 +109,15 @@ test(
     })
 
     // Step 3: Assert the reconnect banner is visible.
-    // The banner must be a persistent UI element (not a transient toast) so the
-    // user can see the disconnected state without waiting for a toast to appear.
-    //
-    // This test is intentionally honest-red if the persistent banner doesn't exist.
-    // The expected banner text is one of:
-    //   - "Reconnecting..." / "Connecting..." / "Connection lost" / "Disconnected"
-    // We use a broad locator to cover whatever text the implementation uses.
-    //
-    // If the banner doesn't exist at all, this assertion fails with a clear message.
-    const reconnectBanner = page
-      .locator('[data-testid="reconnect-banner"]')
-      .or(page.locator('text=Reconnecting'))
-      .or(page.locator('text=Connecting to gateway'))
-      .or(page.locator('text=Connection lost'))
-      .or(page.locator('text=Disconnected'))
-      .first()
+    // The banner is a persistent UI element (not a transient toast) anchored by
+    // data-testid="reconnect-banner" in ChatScreen.tsx. It stays visible while
+    // the WS is disconnected and clears once the connection is restored.
+    const reconnectBanner = page.getByTestId('reconnect-banner').first()
 
     // Wait up to 8 s for the banner to appear
     await expect(
       reconnectBanner,
-      [
-        'A persistent reconnect banner must be visible after the WS was killed.',
-        'This is not a transient toast — it must persist until the connection is restored.',
-        'If this fails, the persistent banner feature has not been implemented.',
-      ].join(' '),
+      'reconnect banner must be visible while the WS is disconnected',
     ).toBeVisible({ timeout: 8_000 })
 
     // Step 4: Wait 5 s (the typical auto-dismiss window for toasts) and assert
@@ -142,10 +126,7 @@ test(
 
     await expect(
       reconnectBanner,
-      [
-        'The reconnect banner must still be visible after 5 s — it must not auto-dismiss like a toast.',
-        'If this fails, the UI is using a toast instead of a persistent banner.',
-      ].join(' '),
+      'reconnect banner must remain visible after 5 s — it must not auto-dismiss',
     ).toBeVisible()
 
     // Step 5: Restore the real WebSocket constructor and force the in-flight

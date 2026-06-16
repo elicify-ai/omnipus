@@ -8,6 +8,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,22 +28,23 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
+	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/dingtalk"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/discord"
+	_ "github.com/dapicom-ai/omnipus/pkg/channels/email"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/feishu"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/googlechat"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/irc"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/line"
-	_ "github.com/dapicom-ai/omnipus/pkg/channels/onebot"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/qq"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/slack"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/telegram"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/wecom"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/weixin"
-	_ "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
@@ -55,10 +57,12 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/heartbeat"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/dapicom-ai/omnipus/pkg/notifications"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	"github.com/dapicom-ai/omnipus/pkg/policy"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/dapicom-ai/omnipus/pkg/skills"
 	"github.com/dapicom-ai/omnipus/pkg/state"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
@@ -75,10 +79,50 @@ const (
 	logFile   = "gateway.log"
 )
 
+// configSelfWriteRegistry tracks sha256 hashes of config.json contents that
+// were written by the app itself (via safeUpdateConfigJSON). The config file
+// watcher consults this to distinguish internal writes from genuine external
+// operator edits, suppressing spurious full-service reloads on every login,
+// settings change, or channel config write.
+//
+// Concurrency: all methods are safe for concurrent use. The mu protects the
+// hashes map. The poller goroutine and HTTP handler goroutines access this
+// concurrently.
+type configSelfWriteRegistry struct {
+	mu     sync.Mutex
+	hashes map[[32]byte]struct{}
+}
+
+// register records a sha256 hash as an app-initiated write. Called by
+// safeUpdateConfigJSON immediately after a successful atomic write.
+func (r *configSelfWriteRegistry) register(h [32]byte) {
+	r.mu.Lock()
+	r.hashes[h] = struct{}{}
+	r.mu.Unlock()
+}
+
+// consume checks whether h is a known app-initiated write. If it is, the
+// entry is removed and true is returned. The entire set is also cleared of
+// any older accumulated hashes (the file can only have one current content,
+// so any hash that is not the current one is stale). Returns false for
+// hashes that were not registered (external edits).
+func (r *configSelfWriteRegistry) consume(h [32]byte) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, known := r.hashes[h]
+	// Always clear all accumulated hashes on any check: older hashes from
+	// previous writes can never match the current file content again.
+	r.hashes = make(map[[32]byte]struct{})
+	return known
+}
+
 type services struct {
 	CronService      *cron.CronService
 	HeartbeatService *heartbeat.HeartbeatService
 	MediaStore       media.MediaStore
+	// notifStore backs schedule-failure notifications and the header
+	// notification center (#264). Created once at boot, reused across reloads.
+	notifStore *notifications.Store
 	// ChannelManager is read-only to HTTP handlers (they access it via the
 	// agent loop's GetChannelManager). It is written only during executeReload,
 	// which is single-flighted by the reloading atomic.Bool. No handler reads
@@ -121,6 +165,19 @@ type services struct {
 	servedSubdirs *agent.ServedSubdirs
 	devServers    *sandbox.DevServerRegistry
 	egressProxy   *sandbox.EgressProxy
+
+	// restAPIRef holds a pointer to the restAPI constructed by setupAndStartServices.
+	// Used by RunContextWithOptions to update builtinRegistry after live-deps are wired
+	// (the M16 live-deps re-population in RunContextWithOptions creates a fresh
+	// *BuiltinRegistry that must reach the already-constructed restAPI; storing the
+	// ref here avoids a larger refactor of setupAndStartServices).
+	restAPIRef *restAPI
+
+	// selfWriteReg is the shared registry of config.json content hashes that
+	// were written by the app itself. Created in setupAndStartServices when the
+	// restAPI is constructed; passed to setupConfigWatcherPolling so the poller
+	// can suppress reload on app-initiated writes.
+	selfWriteReg *configSelfWriteRegistry
 }
 
 type startupBlockedProvider struct {
@@ -148,31 +205,30 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 // APIKeyRef misses are already fatal via InjectFromConfig.
 func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 	m := make(map[string]bool)
-	ch := cfg.Channels
-
-	type channelRef struct {
-		enabled bool
-		refs    []string
-	}
-	entries := []channelRef{
-		{ch.Telegram.Enabled, []string{ch.Telegram.TokenRef}},
-		{ch.Discord.Enabled, []string{ch.Discord.TokenRef}},
-		{ch.Slack.Enabled, []string{ch.Slack.BotTokenRef, ch.Slack.AppTokenRef}},
-		{ch.Feishu.Enabled, []string{ch.Feishu.AppSecretRef, ch.Feishu.EncryptKeyRef, ch.Feishu.VerificationTokenRef}},
-		{ch.QQ.Enabled, []string{ch.QQ.AppSecretRef}},
-		{ch.DingTalk.Enabled, []string{ch.DingTalk.ClientSecretRef}},
-		{ch.Matrix.Enabled, []string{ch.Matrix.AccessTokenRef, ch.Matrix.CryptoPassphraseRef}},
-		{ch.LINE.Enabled, []string{ch.LINE.ChannelSecretRef, ch.LINE.ChannelAccessTokenRef}},
-		{ch.OneBot.Enabled, []string{ch.OneBot.AccessTokenRef}},
-		{ch.WeCom.Enabled, []string{ch.WeCom.SecretRef}},
-		{ch.Weixin.Enabled, []string{ch.Weixin.TokenRef}},
-		{ch.IRC.Enabled, []string{ch.IRC.PasswordRef, ch.IRC.NickServPasswordRef, ch.IRC.SASLPasswordRef}},
-	}
-	for _, e := range entries {
-		if !e.enabled {
+	for _, inst := range cfg.Channels {
+		if !inst.Enabled {
 			continue
 		}
-		for _, ref := range e.refs {
+		// Collect all *_ref fields that are non-empty for this enabled instance.
+		for _, ref := range []string{
+			inst.TokenRef,
+			inst.BotTokenRef,
+			inst.AppTokenRef,
+			inst.AppSecretRef,
+			inst.EncryptKeyRef,
+			inst.VerificationTokenRef,
+			inst.ClientSecretRef,
+			inst.AccessTokenRef,
+			inst.CryptoPassphraseRef,
+			inst.ChannelSecretRef,
+			inst.ChannelAccessTokenRef,
+			inst.SecretRef,
+			inst.WebhookURLRef,
+			inst.ServiceAccountJSONRef,
+			inst.PasswordRef,
+			inst.NickServPasswordRef,
+			inst.SASLPasswordRef,
+		} {
 			if ref != "" {
 				m[ref] = true
 			}
@@ -422,7 +478,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	if allowGodMode && !sandbox.GodModeAvailable {
 		return fmt.Errorf(
 			"gateway: god mode unavailable in this build (compiled with nogodmode); " +
-				"remove --allow-god-mode and restart")
+				"remove --allow-god-mode and restart",
+		)
 	}
 	// Emit a persistent WARN so operators cannot claim they were not warned.
 	if allowGodMode {
@@ -508,6 +565,21 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		})
 	}
 
+	// Spec-4 FR-5.3 (M-4): GC orphaned external-CLI run directories left behind by
+	// a prior process (crash / SIGKILL / power loss). Runs ONCE at boot, BEFORE any
+	// new external-cli sub-agent run can be dispatched, so every run dir present is
+	// safely an orphan. Non-fatal: a reaper failure must not block boot.
+	{
+		reapCtx, reapCancel := context.WithTimeout(ctx, 60*time.Second)
+		if reapRes, reapErr := runner.ReapOrphans(reapCtx); reapErr != nil {
+			slog.Warn("gateway: external-runner orphan reaper failed (non-fatal)", "error", reapErr)
+		} else if reapRes.Removed > 0 || len(reapRes.Errors) > 0 {
+			slog.Info("gateway: external-runner orphan reaper swept",
+				"scanned", reapRes.Scanned, "removed", reapRes.Removed, "errors", len(reapRes.Errors))
+		}
+		reapCancel()
+	}
+
 	// Boot Order step 4 (FR-062 / M7): validate per-agent tool policies before
 	// the sandbox applies. Ava-equivalent core agents abort boot on violation;
 	// custom agents log and continue.
@@ -559,7 +631,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// source of truth for mode resolution (CLI > config > default); any
 	// discrepancy between the applied mode and the config file is already
 	// visible via result.ApplyState in /api/v1/security/sandbox-status.
-	slog.Info("gateway: sandbox applied",
+	slog.Info(
+		"gateway: sandbox applied",
 		"applied_mode", string(sandboxResult.Mode),
 		"backend", sandboxResult.BackendName,
 		"landlock_enforced", sandboxResult.ApplyState.LandlockEnforced,
@@ -607,12 +680,23 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 
 	// M16 (FR-001/FR-002): pre-instantiate central registries.
 	// BuiltinRegistry is populated here with nil deps (for name/description metadata only).
+	// System.* tools are registered with nil deps; general builtins are registered as
+	// metadata-only instances (deps-free, never executed — per ADR-018 D-A1).
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.
 	// MCPRegistry starts empty; MCP servers populate it at connection time.
 	centralBuiltinReg := tools.NewBuiltinRegistry()
 	for _, t := range systools.AllTools(nil, nil) {
 		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
 			slog.Warn("gateway: central builtin registry pre-population skipped duplicate",
+				"tool", t.Name(), "error", regErr)
+		}
+	}
+	// Register general-builtin metadata (SC-108 / Issue #350): these instances
+	// expose Name/Description/Category for /api/v1/tools but are NEVER Execute()d.
+	// Constructor errors are logged and skipped per the log-and-skip invariant.
+	for _, t := range tools.GeneralBuiltinMetadata() {
+		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
+			slog.Warn("gateway: central builtin registry general-builtin skipped",
 				"tool", t.Name(), "error", regErr)
 		}
 	}
@@ -667,6 +751,77 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// tools that trigger hot-reload (e.g., system.agent.create).
 	// WireSysagentDeps immediately registers all 41 system.* tools on every agent
 	// in the current registry and stashes deps for re-application on hot-reload.
+
+	// Build skill engine components for the sysagent tool deps (Spec-6 U1).
+	//
+	// SkillsLoader: workspace > global (~/.omnipus/skills) > builtin (CWD/skills
+	// or OMNIPUS_BUILTIN_SKILLS). Priority order follows context.go::NewContextBuilder.
+	skillsBuiltinDir := strings.TrimSpace(os.Getenv(config.EnvBuiltinSkills))
+	if skillsBuiltinDir == "" {
+		wd, wdErr := os.Getwd()
+		if wdErr != nil {
+			slog.Warn("gateway: os.Getwd failed; builtin skills dir unavailable", "error", wdErr)
+			wd = homePath
+		}
+		skillsBuiltinDir = filepath.Join(wd, "skills")
+	}
+	skillsWorkspace := cfg.WorkspacePath()
+	skillsGlobalDir := filepath.Join(homePath, "skills")
+
+	// First-boot seed of the embedded default skill set (Spec-6 U3, FR-9.3).
+	// SeedDefaults is idempotent: it only fills in skills that are missing from
+	// the global skills dir and never overwrites existing (possibly user-edited)
+	// skills. A fresh install therefore ships with summarize, skill-authoring,
+	// plan, and daily-briefing without any external files.
+	if seedRes, seedErr := skills.SeedDefaults(skillsGlobalDir); seedErr != nil {
+		slog.Warn("gateway: failed to seed default skills from embed", "error", seedErr)
+	} else if len(seedRes.Seeded) > 0 {
+		slog.Info("gateway: seeded default skills from embed",
+			"seeded", seedRes.Seeded, "skipped", seedRes.Skipped)
+	}
+
+	sysSkillsLoader := skills.NewSkillsLoader(skillsWorkspace, skillsGlobalDir, skillsBuiltinDir)
+	// SkillWriter authors/versions skills into the global skills dir so editing a
+	// built-in produces a user override rather than mutating the shipped built-in.
+	sysSkillWriter := skills.NewSkillWriter(skillsGlobalDir)
+
+	// RegistryManager: fans out search/install to all configured registries.
+	// The SSRF checker (nil when SSRF is disabled) is injected into the ClawHub
+	// HTTP client so outbound registry traffic honors the SSRF policy (SEC-24).
+	clawHubCfg := cfg.Tools.Skills.Registries.ClawHub
+	regCfg := skills.RegistryConfig{
+		ClawHub: skills.ClawHubConfig{
+			Enabled:         clawHubCfg.Enabled,
+			BaseURL:         clawHubCfg.BaseURL,
+			AuthToken:       bundle.GetString(clawHubCfg.AuthTokenRef),
+			SearchPath:      clawHubCfg.SearchPath,
+			SkillsPath:      clawHubCfg.SkillsPath,
+			DownloadPath:    clawHubCfg.DownloadPath,
+			Timeout:         clawHubCfg.Timeout,
+			MaxZipSize:      clawHubCfg.MaxZipSize,
+			MaxResponseSize: clawHubCfg.MaxResponseSize,
+		},
+		MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
+	}
+	ssrfChecker := agent.GetSSRFChecker(agentLoop)
+	if ssrfChecker != nil {
+		regCfg.ClawHub.HTTPClient = ssrfChecker.SafeClient()
+	}
+	sysRegistryManager := skills.NewRegistryManagerFromConfig(regCfg)
+
+	// SkillInstaller: downloads and installs skills into the operator workspace.
+	// GitHub token from credentials (optional; nil → unauthenticated API calls).
+	githubToken := bundle.GetString(cfg.Tools.Skills.Github.TokenRef)
+	githubProxy := cfg.Tools.Skills.Github.Proxy
+	sysSkillInstaller, err := skills.NewSkillInstallerWithSSRF(
+		skillsWorkspace, githubToken, githubProxy, ssrfChecker,
+	)
+	if err != nil {
+		slog.Warn("gateway: could not create skill installer; system.skill.install unavailable",
+			"error", err)
+		sysSkillInstaller = nil
+	}
+
 	sysAgentDeps := &systools.Deps{
 		Home:         homePath,
 		ConfigPath:   configPath,
@@ -675,8 +830,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		SaveConfigLocked: func(c *config.Config) error {
 			return config.SaveConfig(configPath, c)
 		},
-		CredStore:  credStore,
-		ReloadFunc: reloadTrigger,
+		CredStore:       credStore,
+		ReloadFunc:      reloadTrigger,
+		SkillsLoader:    sysSkillsLoader,
+		RegistryManager: sysRegistryManager,
+		SkillInstaller:  sysSkillInstaller,
+		SkillWriter:     sysSkillWriter,
 	}
 	agentLoop.WireSysagentDeps(sysAgentDeps)
 
@@ -685,6 +844,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// (if ever routed through the central registry) have valid deps.
 	// The registry created before setupAndStartServices used nil deps for
 	// the shape/name/description metadata only; swap to real deps here.
+	//
+	// Fix #350 (SC-108): also re-register general-builtin metadata and propagate
+	// the updated registry to restAPI.builtinRegistry. Without this the restAPI
+	// (constructed inside setupAndStartServices) would retain the pre-sysAgentDeps
+	// registry. The restAPIRef field was stored by setupAndStartServices exactly
+	// for this late-wire step.
 	centralBuiltinReg = tools.NewBuiltinRegistry()
 	for _, t := range systools.AllTools(sysAgentDeps, nil) {
 		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
@@ -692,8 +857,26 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 				"tool", t.Name(), "error", err)
 		}
 	}
+	// Re-register general-builtin metadata in the live-deps registry (metadata-only,
+	// never executed; duplicates skipped). These instances expose correct
+	// Name/Description/Category for /api/v1/tools without executing anything.
+	generalBuiltinsRegistered := 0
+	for _, t := range tools.GeneralBuiltinMetadata() {
+		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
+			slog.Warn("gateway: central builtin registry general-builtin re-population skipped",
+				"tool", t.Name(), "error", err)
+		} else {
+			generalBuiltinsRegistered++
+		}
+	}
+	// Propagate the updated registry to the already-constructed restAPI (SC-108 fix).
+	if runningServices.restAPIRef != nil {
+		runningServices.restAPIRef.builtinRegistry = centralBuiltinReg
+	}
 	slog.Info("gateway: central BuiltinRegistry re-populated with live deps",
-		"count", centralBuiltinReg.Count())
+		"system_tools", centralBuiltinReg.Count()-generalBuiltinsRegistered,
+		"general_builtins", generalBuiltinsRegistered,
+		"total", centralBuiltinReg.Count())
 
 	fmt.Printf("✓ Gateway started on %s:%d\n", cfg.Gateway.Host, cfg.Gateway.Port)
 	fmt.Println("Press Ctrl+C to stop")
@@ -776,7 +959,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	var configReloadChan <-chan *config.Config
 	stopWatch := func() {}
 	if cfg.Gateway.HotReload {
-		configReloadChan, stopWatch = setupConfigWatcherPolling(configPath, debug, credStore)
+		configReloadChan, stopWatch = setupConfigWatcherPolling(
+			configPath,
+			debug,
+			credStore,
+			runningServices.selfWriteReg,
+		)
 		logger.Info("Config hot reload enabled")
 	}
 	defer stopWatch()
@@ -801,11 +989,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			newCfg, err := config.LoadConfigWithStore(configPath, credStore)
 			if err != nil {
 				logger.Errorf("Error loading config for manual reload: %v", err)
+				agentLoop.ClearReloadPending()
 				runningServices.reloading.Store(false)
 				continue
 			}
 			if err = newCfg.ValidateProviders(); err != nil {
 				logger.Errorf("Config validation failed: %v", err)
+				agentLoop.ClearReloadPending()
 				runningServices.reloading.Store(false)
 				continue
 			}
@@ -859,7 +1049,13 @@ func executeReload(
 	msgBus *bus.MessageBus,
 	allowEmptyStartup bool,
 ) error {
+	// Defers run LIFO: ClearReloadPending fires first (unblocks triggerReloadAndWait pollers),
+	// then reloading fires (allows the next CAS to succeed). A concurrent TriggerReload
+	// that races between these two defers gets ErrReloadAlreadyInProgress and polls — safe
+	// because triggerReloadAndWait polls through ErrReloadAlreadyInProgress so the pending
+	// flag is never cleared prematurely.
 	defer runningServices.reloading.Store(false)
+	defer agentLoop.ClearReloadPending()
 
 	// Snapshot all service fields that restartServices mutates so they can be
 	// restored atomically if the reload fails. bundle and ChannelManager are
@@ -964,15 +1160,17 @@ func setupAndStartServices(
 ) (*services, error) {
 	runningServices := &services{credStore: credStore, bundle: bundle, sandboxResult: sandboxResult}
 
-	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
+	// Per-user notification store (#264). Backs schedule-failure notifications and
+	// the header notification center.
+	runningServices.notifStore = notifications.NewStore(filepath.Join(homePath, "notifications"))
+
 	var err error
 	runningServices.CronService, err = setupCronTool(
 		agentLoop,
 		msgBus,
 		cfg.WorkspacePath(),
-		cfg.Agents.Defaults.RestrictToWorkspace,
-		execTimeout,
 		cfg,
+		runningServices.notifStore,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error setting up cron service: %w", err)
@@ -1027,10 +1225,11 @@ func setupAndStartServices(
 
 	agentLoop.SetChannelManager(runningServices.ChannelManager)
 	agentLoop.SetMediaStore(runningServices.MediaStore)
-	// Wire the agent loop as the CancelInterceptor so Tier B channels can fire
-	// /cancel via text-parsing (FR-2). Must happen after SetChannelManager so
-	// the Manager already has its channels map populated.
-	runningServices.ChannelManager.SetCancelInterceptor(agentLoop)
+	// Wire all observer callbacks (CancelInterceptor, PairingObserver, …) via
+	// the shared helper so this path stays in sync with restartServices.
+	// Must happen after SetChannelManager so the Manager's channels map is
+	// already populated when SetCancelInterceptor is called.
+	wireChannelManager(runningServices.ChannelManager, agentLoop)
 
 	if transcriber := voice.DetectTranscriber(cfg, runningServices.bundle); transcriber != nil {
 		agentLoop.SetTranscriber(transcriber)
@@ -1102,7 +1301,8 @@ func setupAndStartServices(
 					scheme = "https"
 				}
 			}
-			gatewayPreviewBaseURL = fmt.Sprintf("%s://%s",
+			gatewayPreviewBaseURL = fmt.Sprintf(
+				"%s://%s",
 				scheme,
 				net.JoinHostPort(previewHost, strconv.Itoa(previewPort)),
 			)
@@ -1260,6 +1460,36 @@ func setupAndStartServices(
 	// Wire god-mode opt-in into the agent loop for runtime coercion.
 	agentLoop.SetAllowGodMode(allowGodMode)
 
+	// selfWriteReg is shared between safeUpdateConfigJSON (registers hashes of
+	// app-initiated writes) and setupConfigWatcherPolling (suppresses reload for
+	// those writes). Created here so both can reference the same instance.
+	selfWriteReg := &configSelfWriteRegistry{
+		hashes: make(map[[32]byte]struct{}),
+	}
+	runningServices.selfWriteReg = selfWriteReg
+
+	// ClawHub marketplace registry backing GET /api/v1/skills/search and
+	// install-by-slug. Built with the SSRF-safe HTTP client (SEC-24) so outbound
+	// registry traffic honors the SSRF policy. The client defaults BaseURL to
+	// https://clawhub.ai when unset. Auth token (optional) is resolved from the
+	// credential bundle.
+	skillSearchCfg := cfg.Tools.Skills.Registries.ClawHub
+	skillRegistryCfg := skills.ClawHubConfig{
+		Enabled:         skillSearchCfg.Enabled,
+		BaseURL:         skillSearchCfg.BaseURL,
+		AuthToken:       bundle.GetString(skillSearchCfg.AuthTokenRef),
+		SearchPath:      skillSearchCfg.SearchPath,
+		SkillsPath:      skillSearchCfg.SkillsPath,
+		DownloadPath:    skillSearchCfg.DownloadPath,
+		Timeout:         skillSearchCfg.Timeout,
+		MaxZipSize:      skillSearchCfg.MaxZipSize,
+		MaxResponseSize: skillSearchCfg.MaxResponseSize,
+	}
+	if restSSRF := agent.GetSSRFChecker(agentLoop); restSSRF != nil {
+		skillRegistryCfg.HTTPClient = restSSRF.SafeClient()
+	}
+	skillRegistry := skills.NewClawHubRegistry(skillRegistryCfg)
+
 	api := &restAPI{
 		agentLoop:       agentLoop,
 		allowedOrigin:   allowedOrigin,
@@ -1277,8 +1507,18 @@ func setupAndStartServices(
 		approvalReg:     approvalReg,                     // in-process tool-approval registry (FR-016)
 		builtinRegistry: builtinReg,                      // M16: central builtin registry (FR-001)
 		mcpRegistry:     mcpReg,                          // M16: central MCP registry (FR-001)
+		skillRegistry:   skillRegistry,                   // ClawHub marketplace (search + install-by-slug)
 		allowGodMode:    allowGodMode,                    // god-mode latch (2)
+		notifStore:      runningServices.notifStore,      // #264: notification center
+		auditor:         agentLoop.AuditLogger(),         // shared audit logger for REST mutations
+		selfWriteReg:    selfWriteReg,                    // suppress watcher reload on app-initiated writes
+		taskLock:        boardtask.TaskFileLock,          // shared striped lock for board task RMW
 	}
+	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	// Stash the api ref so RunContextWithOptions can update builtinRegistry
+	// after the M16 live-deps re-population (which creates a fresh *BuiltinRegistry
+	// that would otherwise not reach the already-constructed api).
+	runningServices.restAPIRef = api
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", api.withAuth(api.HandleSessions))
 	// /api/v1/sessions/ handles: sessions CRUD AND the tool-results sub-resource
 	// GET /api/v1/sessions/{session_id}/tool-results/{ref} (dispatched inside HandleSessions).
@@ -1292,6 +1532,27 @@ func setupAndStartServices(
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/skills", api.withAuth(api.HandleSkills))
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/skills/", api.withAuth(api.HandleSkills))
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/doctor", api.withAuth(api.HandleDoctor))
+
+	// Ensure the default workspace exists (FR-1.6). Best-effort: a failure
+	// is logged but does not abort gateway startup.
+	// ownerUsername is taken from the first configured user (empty on fresh install — that is fine).
+	ownerUsername := ""
+	if len(cfg.Gateway.Users) > 0 {
+		ownerUsername = cfg.Gateway.Users[0].Username
+	}
+	if wsErr := ensureDefaultWorkspace(homePath, ownerUsername); wsErr != nil {
+		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
+	}
+
+	// Recover board tasks left "active" by a crashed/abandoned previous process.
+	// Runs before the HTTP listener accepts connections (StartAll, below), so no
+	// /start handler can race reconciliation.
+	api.reconcileStuckBoardTasks()
+
+	// Drop blocked_by edges pointing at task files that no longer exist, so the
+	// dependency graph self-heals on boot (a waiting task gated only on an orphan
+	// would otherwise never advance). Same pre-listener safety window as above.
+	api.reconcileOrphanBlockedByEdges()
 
 	// Register additional endpoints for frontend features.
 	// These return proper JSON responses instead of letting the SPA catch-all
@@ -1533,6 +1794,38 @@ func handleConfigReload(
 	return nil
 }
 
+// wireChannelManager consolidates all observer wiring that must be (re-)applied
+// whenever a ChannelManager becomes active.  It is called once at initial boot
+// (in setupAndStartServices) and twice per reload (in restartServices):
+//
+//  1. Before ChannelManager.Reload() — so channels whose Start() runs inside
+//     Reload already have the CancelInterceptor and PairingObserver set when
+//     they first emit events.
+//
+//  2. After ChannelManager.Reload() — because Reload may recreate channel
+//     instances (new struct value with nil fields), which clears the observer
+//     pointer set in the pre-Reload call.  Re-wiring guarantees the observers
+//     are always live after the reload completes.
+//
+// Callers are responsible for calling SetChannelManager on the agent loop
+// before invoking this helper, because SetCancelInterceptor requires that the
+// Manager's channels map is already populated.
+func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
+	// Wire the agent loop as the CancelInterceptor so Tier B channels can fire
+	// /cancel via text-parsing (FR-2).
+	cm.SetCancelInterceptor(al)
+	// #283 / #368: bridge WhatsApp native pairing (QR/status) → agent event bus
+	// so the per-connection WS forwarder broadcasts a whatsapp_pairing frame to
+	// the SPA.  Re-wiring on reload ensures the observer survives channel restarts
+	// (the Manager creates new channel instances on Reload, which clears the old
+	// observer pointer).
+	cm.SetPairingObserver(
+		func(channelID string, status channels.PairingStatus, qr, message string) {
+			al.EmitWhatsAppPairing(channelID, status, qr, message)
+		},
+	)
+}
+
 func restartServices(
 	al *agent.AgentLoop,
 	runningServices *services,
@@ -1540,21 +1833,35 @@ func restartServices(
 ) error {
 	cfg := al.GetConfig()
 
-	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
+	if runningServices.notifStore == nil {
+		// Derive the home dir from the workspace path (workspace == <home>/workspace).
+		runningServices.notifStore = notifications.NewStore(
+			filepath.Join(filepath.Dir(cfg.WorkspacePath()), "notifications"),
+		)
+	}
 	var err error
 	runningServices.CronService, err = setupCronTool(
 		al,
 		msgBus,
 		cfg.WorkspacePath(),
-		cfg.Agents.Defaults.RestrictToWorkspace,
-		execTimeout,
 		cfg,
+		runningServices.notifStore,
 	)
 	if err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
 	}
 	if err = runningServices.CronService.Start(); err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
+	}
+	// Re-point the restAPI's cronService field to the newly started instance.
+	// restAPI.cronService is assigned once at construction time
+	// (setupAndStartServices). On each reload, restartServices replaces
+	// runningServices.CronService with a new instance whose laneCtx is live;
+	// without this update the restAPI holds a stale pointer whose laneCtx was
+	// canceled by the previous Stop(), causing "turn not started: context
+	// canceled" on every RunNow call (#412).
+	if runningServices.restAPIRef != nil {
+		runningServices.restAPIRef.cronService.Store(runningServices.CronService)
 	}
 	fmt.Println("  ✓ Cron service restarted")
 
@@ -1611,11 +1918,19 @@ func restartServices(
 	}
 
 	al.SetChannelManager(runningServices.ChannelManager)
-	runningServices.ChannelManager.SetCancelInterceptor(al)
+	// Pre-Reload wire: set observers before Reload() so that channels whose
+	// Start() runs *inside* Reload() already have the CancelInterceptor and
+	// PairingObserver set when they first emit events.
+	wireChannelManager(runningServices.ChannelManager, al)
 
 	if err = runningServices.ChannelManager.Reload(context.Background(), cfg, runningServices.bundle); err != nil {
 		return fmt.Errorf("error reload channels: %w", err)
 	}
+	// Post-Reload re-wire: Reload() may have recreated channel instances (new
+	// struct value with nil fields), which clears the observer pointer set
+	// above.  Re-wiring here ensures the observers are always live once the
+	// reload completes, regardless of whether instances were recreated.
+	wireChannelManager(runningServices.ChannelManager, al)
 	fmt.Println("  ✓ Channels restarted.")
 
 	enabledChannels := runningServices.ChannelManager.GetEnabledChannels()
@@ -1661,10 +1976,21 @@ func restartServices(
 	return nil
 }
 
+// setupConfigWatcherPolling starts a background goroutine that polls
+// configPath every 2 s for mtime/size changes and emits the new *config.Config
+// on the returned channel.
+//
+// selfWriteReg (may be nil) is consulted to suppress reloads for writes that
+// the app itself made via safeUpdateConfigJSON. When the detected change is
+// identified as an app-initiated write its hash is consumed from the registry
+// and the reload is skipped, preventing spurious full-service restarts on every
+// login, settings change, or channel-config write. Only genuine external edits
+// (hashes not present in the registry) proceed to executeReload.
 func setupConfigWatcherPolling(
 	configPath string,
 	debug bool,
 	credStore *credentials.Store,
+	selfWriteReg *configSelfWriteRegistry,
 ) (chan *config.Config, func()) {
 	configChan := make(chan *config.Config, 1)
 	stop := make(chan struct{})
@@ -1691,10 +2017,29 @@ func setupConfigWatcherPolling(
 						logger.Debugf("🔍 Config file change detected")
 					}
 
+					// 500 ms debounce: let concurrent rapid writes settle so
+					// we read the final state rather than a transient version.
 					time.Sleep(500 * time.Millisecond)
 
-					lastModTime = currentModTime
-					lastSize = currentSize
+					// Re-stat after the debounce; the file may have changed again.
+					lastModTime = getFileModTime(configPath)
+					lastSize = getFileSize(configPath)
+
+					// Read current file content to compute identity hash.
+					fileBytes, readErr := os.ReadFile(configPath)
+					if readErr != nil {
+						logger.Errorf("⚠ Could not read config for change check: %v", readErr)
+						continue
+					}
+					currentHash := sha256.Sum256(fileBytes)
+
+					// Suppress reload when the change was made by the app itself.
+					if selfWriteReg != nil && selfWriteReg.consume(currentHash) {
+						if debug {
+							logger.Debugf("Config file change is app-initiated — skipping reload")
+						}
+						continue
+					}
 
 					newCfg, err := config.LoadConfigWithStore(configPath, credStore)
 					if err != nil {
@@ -1709,7 +2054,7 @@ func setupConfigWatcherPolling(
 						continue
 					}
 
-					logger.Info("✓ Config file validated and loaded")
+					logger.Info("✓ Config file validated and loaded (external edit)")
 
 					select {
 					case configChan <- newCfg:
@@ -1753,30 +2098,77 @@ func setupCronTool(
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
 	workspace string,
-	restrict bool,
-	execTimeout time.Duration,
 	cfg *config.Config,
+	notifStore *notifications.Store,
 ) (*cron.CronService, error) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
-	cronService := cron.NewCronService(cronStorePath, nil)
+	cronService := cron.NewCronService(cronStorePath)
 
 	// Cron tool — always registered. Policy controls whether an agent can invoke it.
-	cronTool, err := tools.NewCronTool(cronService, agentLoop, msgBus, workspace, restrict, execTimeout, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("critical error during CronTool initialization: %w", err)
-	}
+	cronTool := tools.NewCronTool(cronService, cfg)
 	agentLoop.RegisterTool(cronTool)
 
-	if cronTool != nil {
-		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
-			result := cronTool.ExecuteJob(context.Background(), job)
-			return result, nil
-		})
+	// Owner-aware autonomous fire path (#264). The runner wakes a fired
+	// schedule's OWNING agent (never the default), bounded by the per-run
+	// deadline, and raises a notification + channel alert on failure. It is the
+	// only fire path — the cron service records a no-op when no runner is set.
+	// An owner is available only when it is registered AND enabled (HIGH:
+	// disabled-but-registered owner must not run). The registry registers all
+	// agents regardless of Enabled, so we additionally consult the agent's
+	// config IsActive() flag — a disabled owner is treated as unavailable.
+	checker := agentCheckerFunc(func(agentID string) bool {
+		if _, ok := agentLoop.GetRegistry().GetAgent(agentID); !ok {
+			return false
+		}
+		ac := findAgentConfig(agentLoop.GetConfig(), agentID)
+		if ac == nil {
+			// Registered in the runtime registry but absent from config (e.g. the
+			// generic default instance) — treat as available for back-compat.
+			return true
+		}
+		return ac.IsActive()
+	})
+	runner := newScheduledRunner(agentLoop, checker, msgBus, notifStore, agentLoop.GetConfig)
+	// M2: resolve the channel registry lazily — the channel manager is wired onto
+	// the agent loop after this runner is built (SetChannelManager during service
+	// start), so the runner re-fetches it at delivery time. A nil manager makes
+	// channelIsActive degrade to the legacy non-empty check.
+	runner.setChannelChecker(func() channelChecker {
+		if cm := agentLoop.GetChannelManager(); cm != nil {
+			return cm
+		}
+		return nil
+	})
+	// Best-effort per-run child-process cleanup (FR-011). The minimal per-session
+	// registry tracks PIDs the run spawns (via the tracker installed on the run
+	// context, reported by the exec/shell tools) and terminates them on
+	// completion — success, error, or timeout.
+	procReg := newScheduledProcRegistry()
+	runner.setProcessTracker(procReg.Track)
+	runner.setProcessCleanup(procReg.Cleanup)
+	cronService.SetRunner(runner)
+
+	// Default agent id used only to migrate owner-less legacy jobs on load (W-8).
+	defaultAgentID := ""
+	if def := agentLoop.GetRegistry().GetDefaultAgent(); def != nil {
+		defaultAgentID = def.ID
+	}
+	cronService.SetDefaultAgentID(defaultAgentID)
+
+	if cfg != nil {
+		cronService.SetMaxConcurrentRuns(cfg.Schedules.MaxConcurrentRuns)
+		cronService.SetRetryBackoff(cfg.Schedules.RetryBackoffMs)
 	}
 
 	return cronService, nil
 }
+
+// agentCheckerFunc adapts a func to the agentChecker interface used by the
+// scheduled runner.
+type agentCheckerFunc func(agentID string) bool
+
+func (f agentCheckerFunc) IsRegistered(agentID string) bool { return f(agentID) }
 
 // shouldWarnPreviewOrigin returns true when the preview listener is bound on a
 // wildcard address (0.0.0.0 or "::") and gateway.preview_origin is empty.
@@ -1813,28 +2205,21 @@ func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, ch
 // per-agent ToolPolicyCfg. This single-shot boot warning prompts operators to
 // review agent policies.
 func emitGHSARemovalWarn(cfg *config.Config) {
-	// Gather enabled remote channel IDs from config.
+	// Gather enabled remote channel types from the instance map.
+	remoteChannelTypes := map[string]bool{
+		"telegram":    true,
+		"discord":     true,
+		"slack":       true,
+		"matrix":      true,
+		"irc":         true,
+		"google-chat": true,
+		"whatsapp":    true,
+	}
 	enabledRemoteChannels := make(map[string]bool)
-	if cfg.Channels.Telegram.Enabled {
-		enabledRemoteChannels["telegram"] = true
-	}
-	if cfg.Channels.Discord.Enabled {
-		enabledRemoteChannels["discord"] = true
-	}
-	if cfg.Channels.Slack.Enabled {
-		enabledRemoteChannels["slack"] = true
-	}
-	if cfg.Channels.Matrix.Enabled {
-		enabledRemoteChannels["matrix"] = true
-	}
-	if cfg.Channels.IRC.Enabled {
-		enabledRemoteChannels["irc"] = true
-	}
-	if cfg.Channels.GoogleChat.Enabled {
-		enabledRemoteChannels["google-chat"] = true
-	}
-	if cfg.Channels.WhatsApp.Enabled {
-		enabledRemoteChannels["whatsapp"] = true
+	for _, inst := range cfg.Channels {
+		if inst.Enabled && remoteChannelTypes[inst.Type] {
+			enabledRemoteChannels[inst.Type] = true
+		}
 	}
 	if len(enabledRemoteChannels) == 0 {
 		return
@@ -1862,9 +2247,10 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 	for ch := range enabledRemoteChannels {
 		channels = append(channels, ch)
 	}
-	slog.Warn("exec tool no longer blocked at the channel layer (was GHSA-pv8c-p6jf-3fpp). "+
-		"Agents with remote channels and non-deny exec policy: ["+strings.Join(flagged, ", ")+
-		"]. Review per-agent ToolPolicyCfg or set sandbox_profile.",
+	slog.Warn(
+		"exec tool no longer blocked at the channel layer (was GHSA-pv8c-p6jf-3fpp). "+
+			"Agents with remote channels and non-deny exec policy: ["+strings.Join(flagged, ", ")+
+			"]. Review per-agent ToolPolicyCfg or set sandbox_profile.",
 		"remote_channels", channels,
 		"flagged_agents", flagged,
 	)

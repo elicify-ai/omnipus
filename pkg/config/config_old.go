@@ -106,28 +106,190 @@ type channelsConfigV0 struct {
 	Slack    slackConfigV0    `json:"slack"`
 	Matrix   matrixConfigV0   `json:"matrix"`
 	LINE     lineConfigV0     `json:"line"`
-	OneBot   onebotConfigV0   `json:"onebot"`
 	WeCom    wecomConfigV0    `json:"wecom"    envPrefix:"OMNIPUS_CHANNELS_WECOM_"`
 	IRC      ircConfigV0      `json:"irc"`
 }
 
-func (v *channelsConfigV0) ToChannelsConfig() ChannelsConfig {
-	return ChannelsConfig{
-		WhatsApp: v.WhatsApp,
-		Telegram: v.Telegram.ToTelegramConfig(),
-		Feishu:   v.Feishu.ToFeishuConfig(),
-		Discord:  v.Discord.ToDiscordConfig(),
+// ToChannelsConfig converts the v0 typed channel config into the new
+// map[string]ChannelInstanceConfig format. Each channel type is seeded as an
+// instance keyed by its type name (cap-1 invariant holds since v0 had one
+// instance per type by definition).
+func (v *channelsConfigV0) ToChannelsConfig() map[string]ChannelInstanceConfig {
+	m := make(map[string]ChannelInstanceConfig)
 
-		QQ:       v.QQ.ToQQConfig(),
-		Weixin:   v.Weixin.ToWeiXinConfig(),
-		DingTalk: v.DingTalk.ToDingTalkConfig(),
-		Slack:    v.Slack.ToSlackConfig(),
-		Matrix:   v.Matrix.ToMatrixConfig(),
-		LINE:     v.LINE.ToLINEConfig(),
-		OneBot:   v.OneBot.ToOneBotConfig(),
-		WeCom:    v.WeCom.ToWeComConfig(),
-		IRC:      v.IRC.ToIRCConfig(),
+	wa := v.WhatsApp
+	m["whatsapp"] = ChannelInstanceConfig{
+		Type:             "whatsapp",
+		Enabled:          wa.Enabled,
+		SessionStorePath: wa.SessionStorePath,
+		AllowFrom:        wa.AllowFrom,
 	}
+
+	tg := v.Telegram.ToTelegramConfig()
+	m["telegram"] = ChannelInstanceConfig{
+		Type:               "telegram",
+		Enabled:            tg.Enabled,
+		TokenRef:           tg.TokenRef,
+		BaseURL:            tg.BaseURL,
+		Proxy:              tg.Proxy,
+		AllowFrom:          tg.AllowFrom,
+		GroupTrigger:       tg.GroupTrigger,
+		Typing:             tg.Typing,
+		Placeholder:        tg.Placeholder,
+		Streaming:          tg.Streaming,
+		ReasoningChannelID: tg.ReasoningChannelID,
+		UseMarkdownV2:      tg.UseMarkdownV2,
+	}
+
+	fs := v.Feishu.ToFeishuConfig()
+	m["feishu"] = ChannelInstanceConfig{
+		Type:                 "feishu",
+		Enabled:              fs.Enabled,
+		AppID:                fs.AppID,
+		AppSecretRef:         fs.AppSecretRef,
+		EncryptKeyRef:        fs.EncryptKeyRef,
+		VerificationTokenRef: fs.VerificationTokenRef,
+		AllowFrom:            fs.AllowFrom,
+		GroupTrigger:         fs.GroupTrigger,
+		Placeholder:          fs.Placeholder,
+		ReasoningChannelID:   fs.ReasoningChannelID,
+		RandomReactionEmoji:  fs.RandomReactionEmoji,
+		IsLark:               fs.IsLark,
+	}
+
+	dc := v.Discord.ToDiscordConfig()
+	m["discord"] = ChannelInstanceConfig{
+		Type:               "discord",
+		Enabled:            dc.Enabled,
+		TokenRef:           dc.TokenRef,
+		Proxy:              dc.Proxy,
+		AllowFrom:          dc.AllowFrom,
+		MentionOnly:        dc.MentionOnly,
+		GroupTrigger:       dc.GroupTrigger,
+		Typing:             dc.Typing,
+		Placeholder:        dc.Placeholder,
+		ReasoningChannelID: dc.ReasoningChannelID,
+	}
+
+	qq := v.QQ.ToQQConfig()
+	m["qq"] = ChannelInstanceConfig{
+		Type:                 "qq",
+		Enabled:              qq.Enabled,
+		AppID:                qq.AppID,
+		AppSecretRef:         qq.AppSecretRef,
+		AllowFrom:            qq.AllowFrom,
+		GroupTrigger:         qq.GroupTrigger,
+		MaxMessageLength:     qq.MaxMessageLength,
+		MaxBase64FileSizeMiB: qq.MaxBase64FileSizeMiB,
+		SendMarkdown:         qq.SendMarkdown,
+		ReasoningChannelID:   qq.ReasoningChannelID,
+	}
+
+	wx := v.Weixin.ToWeiXinConfig()
+	m["weixin"] = ChannelInstanceConfig{
+		Type:               "weixin",
+		Enabled:            wx.Enabled,
+		TokenRef:           wx.TokenRef,
+		AccountID:          wx.AccountID,
+		BaseURL:            wx.BaseURL,
+		CDNBaseURL:         wx.CDNBaseURL,
+		Proxy:              wx.Proxy,
+		AllowFrom:          wx.AllowFrom,
+		ReasoningChannelID: wx.ReasoningChannelID,
+	}
+
+	dt := v.DingTalk.ToDingTalkConfig()
+	m["dingtalk"] = ChannelInstanceConfig{
+		Type:               "dingtalk",
+		Enabled:            dt.Enabled,
+		ClientID:           dt.ClientID,
+		ClientSecretRef:    dt.ClientSecretRef,
+		AllowFrom:          dt.AllowFrom,
+		GroupTrigger:       dt.GroupTrigger,
+		ReasoningChannelID: dt.ReasoningChannelID,
+	}
+
+	sl := v.Slack.ToSlackConfig()
+	m["slack"] = ChannelInstanceConfig{
+		Type:               "slack",
+		Enabled:            sl.Enabled,
+		BotTokenRef:        sl.BotTokenRef,
+		AppTokenRef:        sl.AppTokenRef,
+		AllowFrom:          sl.AllowFrom,
+		GroupTrigger:       sl.GroupTrigger,
+		Typing:             sl.Typing,
+		Placeholder:        sl.Placeholder,
+		ReasoningChannelID: sl.ReasoningChannelID,
+	}
+
+	mx := v.Matrix.ToMatrixConfig()
+	m["matrix"] = ChannelInstanceConfig{
+		Type:                "matrix",
+		Enabled:             mx.Enabled,
+		Homeserver:          mx.Homeserver,
+		UserID:              mx.UserID,
+		AccessTokenRef:      mx.AccessTokenRef,
+		DeviceID:            mx.DeviceID,
+		JoinOnInvite:        mx.JoinOnInvite,
+		MessageFormat:       mx.MessageFormat,
+		AllowFrom:           mx.AllowFrom,
+		GroupTrigger:        mx.GroupTrigger,
+		Placeholder:         mx.Placeholder,
+		ReasoningChannelID:  mx.ReasoningChannelID,
+		CryptoDatabasePath:  mx.CryptoDatabasePath,
+		CryptoPassphraseRef: mx.CryptoPassphraseRef,
+	}
+
+	ln := v.LINE.ToLINEConfig()
+	m["line"] = ChannelInstanceConfig{
+		Type:                  "line",
+		Enabled:               ln.Enabled,
+		ChannelSecretRef:      ln.ChannelSecretRef,
+		ChannelAccessTokenRef: ln.ChannelAccessTokenRef,
+		WebhookHost:           ln.WebhookHost,
+		WebhookPort:           ln.WebhookPort,
+		WebhookPath:           ln.WebhookPath,
+		AllowFrom:             ln.AllowFrom,
+		GroupTrigger:          ln.GroupTrigger,
+		Typing:                ln.Typing,
+		Placeholder:           ln.Placeholder,
+		ReasoningChannelID:    ln.ReasoningChannelID,
+	}
+
+	wc := v.WeCom.ToWeComConfig()
+	m["wecom"] = ChannelInstanceConfig{
+		Type:                "wecom",
+		Enabled:             wc.Enabled,
+		BotID:               wc.BotID,
+		SecretRef:           wc.SecretRef,
+		WebSocketURL:        wc.WebSocketURL,
+		SendThinkingMessage: wc.SendThinkingMessage,
+		AllowFrom:           wc.AllowFrom,
+		ReasoningChannelID:  wc.ReasoningChannelID,
+	}
+
+	irc := v.IRC.ToIRCConfig()
+	m["irc"] = ChannelInstanceConfig{
+		Type:                "irc",
+		Enabled:             irc.Enabled,
+		Server:              irc.Server,
+		TLS:                 irc.TLS,
+		Nick:                irc.Nick,
+		IRCUser:             irc.User,
+		RealName:            irc.RealName,
+		PasswordRef:         irc.PasswordRef,
+		NickServPasswordRef: irc.NickServPasswordRef,
+		SASLUser:            irc.SASLUser,
+		SASLPasswordRef:     irc.SASLPasswordRef,
+		IRCChannels:         irc.Channels,
+		RequestCaps:         irc.RequestCaps,
+		AllowFrom:           irc.AllowFrom,
+		GroupTrigger:        irc.GroupTrigger,
+		Typing:              irc.Typing,
+		ReasoningChannelID:  irc.ReasoningChannelID,
+	}
+
+	return m
 }
 
 type qqConfigV0 struct {
@@ -330,33 +492,6 @@ func (v *lineConfigV0) ToLINEConfig() LINEConfig {
 	}
 }
 
-type onebotConfigV0 struct {
-	Enabled            bool                `json:"enabled"                 env:"OMNIPUS_CHANNELS_ONEBOT_ENABLED"`
-	WSUrl              string              `json:"ws_url"                  env:"OMNIPUS_CHANNELS_ONEBOT_WS_URL"`
-	AccessToken        string              `json:"access_token"            env:"OMNIPUS_CHANNELS_ONEBOT_ACCESS_TOKEN"`
-	ReconnectInterval  int                 `json:"reconnect_interval"      env:"OMNIPUS_CHANNELS_ONEBOT_RECONNECT_INTERVAL"`
-	GroupTriggerPrefix []string            `json:"group_trigger_prefix"    env:"OMNIPUS_CHANNELS_ONEBOT_GROUP_TRIGGER_PREFIX"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"OMNIPUS_CHANNELS_ONEBOT_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	Typing             TypingConfig        `json:"typing,omitempty"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"OMNIPUS_CHANNELS_ONEBOT_REASONING_CHANNEL_ID"`
-}
-
-func (v *onebotConfigV0) ToOneBotConfig() OneBotConfig {
-	return OneBotConfig{
-		Enabled:            v.Enabled,
-		WSUrl:              v.WSUrl,
-		ReconnectInterval:  v.ReconnectInterval,
-		GroupTriggerPrefix: v.GroupTriggerPrefix,
-		AllowFrom:          v.AllowFrom,
-		GroupTrigger:       v.GroupTrigger,
-		Typing:             v.Typing,
-		Placeholder:        v.Placeholder,
-		ReasoningChannelID: v.ReasoningChannelID,
-	}
-}
-
 type wecomConfigV0 struct {
 	Enabled             bool                        `json:"enabled"                    env:"ENABLED"`
 	BotID               string                      `json:"bot_id"                     env:"BOT_ID"`
@@ -551,12 +686,6 @@ func (c *configV0) migrateChannelConfigs() {
 	if c.Channels.Discord.MentionOnly && !c.Channels.Discord.GroupTrigger.MentionOnly {
 		c.Channels.Discord.GroupTrigger.MentionOnly = true
 	}
-
-	// OneBot: group_trigger_prefix -> group_trigger.prefixes
-	if len(c.Channels.OneBot.GroupTriggerPrefix) > 0 &&
-		len(c.Channels.OneBot.GroupTrigger.Prefixes) == 0 {
-		c.Channels.OneBot.GroupTrigger.Prefixes = c.Channels.OneBot.GroupTriggerPrefix
-	}
 }
 
 // secretFieldPatterns is the set of JSON tag base-names that identify a field
@@ -663,77 +792,83 @@ func (c *configV0) MigrateWithStore(store CredentialStore) (*Config, error) {
 		return nil
 	}
 
-	// Channel secrets
+	// Channel secrets — each setter mutates a copy and re-assigns via the map key
+	// (map values are not addressable in Go, so we must use copy+assign).
+	setChannelRef := func(key, field string, setter func(inst *ChannelInstanceConfig, ref string)) func(ref string) {
+		return func(ref string) {
+			if inst, ok := cfg.Channels[key]; ok {
+				setter(&inst, ref)
+				cfg.Channels[key] = inst
+			}
+		}
+	}
+
 	if err := migrateSecret("TELEGRAM_TOKEN", c.Channels.Telegram.Token,
-		func(ref string) { cfg.Channels.Telegram.TokenRef = ref }); err != nil {
+		setChannelRef("telegram", "token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.TokenRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("DISCORD_TOKEN", c.Channels.Discord.Token,
-		func(ref string) { cfg.Channels.Discord.TokenRef = ref }); err != nil {
+		setChannelRef("discord", "token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.TokenRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("WECOM_SECRET", c.Channels.WeCom.Secret,
-		func(ref string) { cfg.Channels.WeCom.SecretRef = ref }); err != nil {
+		setChannelRef("wecom", "secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.SecretRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("SLACK_BOT_TOKEN", c.Channels.Slack.BotToken,
-		func(ref string) { cfg.Channels.Slack.BotTokenRef = ref }); err != nil {
+		setChannelRef("slack", "bot_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.BotTokenRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("SLACK_APP_TOKEN", c.Channels.Slack.AppToken,
-		func(ref string) { cfg.Channels.Slack.AppTokenRef = ref }); err != nil {
+		setChannelRef("slack", "app_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.AppTokenRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("FEISHU_APP_SECRET", c.Channels.Feishu.AppSecret,
-		func(ref string) { cfg.Channels.Feishu.AppSecretRef = ref }); err != nil {
+		setChannelRef("feishu", "app_secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.AppSecretRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("FEISHU_ENCRYPT_KEY", c.Channels.Feishu.EncryptKey,
-		func(ref string) { cfg.Channels.Feishu.EncryptKeyRef = ref }); err != nil {
+		setChannelRef("feishu", "encrypt_key_ref", func(inst *ChannelInstanceConfig, ref string) { inst.EncryptKeyRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("FEISHU_VERIFICATION_TOKEN", c.Channels.Feishu.VerificationToken,
-		func(ref string) { cfg.Channels.Feishu.VerificationTokenRef = ref }); err != nil {
+		setChannelRef("feishu", "verification_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.VerificationTokenRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("QQ_APP_SECRET", c.Channels.QQ.AppSecret,
-		func(ref string) { cfg.Channels.QQ.AppSecretRef = ref }); err != nil {
+		setChannelRef("qq", "app_secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.AppSecretRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("DINGTALK_CLIENT_SECRET", c.Channels.DingTalk.ClientSecret,
-		func(ref string) { cfg.Channels.DingTalk.ClientSecretRef = ref }); err != nil {
+		setChannelRef("dingtalk", "client_secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.ClientSecretRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("MATRIX_ACCESS_TOKEN", c.Channels.Matrix.AccessToken,
-		func(ref string) { cfg.Channels.Matrix.AccessTokenRef = ref }); err != nil {
+		setChannelRef("matrix", "access_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.AccessTokenRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("LINE_CHANNEL_SECRET", c.Channels.LINE.ChannelSecret,
-		func(ref string) { cfg.Channels.LINE.ChannelSecretRef = ref }); err != nil {
+		setChannelRef("line", "channel_secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.ChannelSecretRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("LINE_CHANNEL_ACCESS_TOKEN", c.Channels.LINE.ChannelAccessToken,
-		func(ref string) { cfg.Channels.LINE.ChannelAccessTokenRef = ref }); err != nil {
-		return nil, err
-	}
-	if err := migrateSecret("ONEBOT_ACCESS_TOKEN", c.Channels.OneBot.AccessToken,
-		func(ref string) { cfg.Channels.OneBot.AccessTokenRef = ref }); err != nil {
+		setChannelRef("line", "channel_access_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.ChannelAccessTokenRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("WEIXIN_TOKEN", c.Channels.Weixin.Token,
-		func(ref string) { cfg.Channels.Weixin.TokenRef = ref }); err != nil {
+		setChannelRef("weixin", "token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.TokenRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("IRC_PASSWORD", c.Channels.IRC.Password,
-		func(ref string) { cfg.Channels.IRC.PasswordRef = ref }); err != nil {
+		setChannelRef("irc", "password_ref", func(inst *ChannelInstanceConfig, ref string) { inst.PasswordRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("IRC_NICKSERV_PASSWORD", c.Channels.IRC.NickServPassword,
-		func(ref string) { cfg.Channels.IRC.NickServPasswordRef = ref }); err != nil {
+		setChannelRef("irc", "nickserv_password_ref", func(inst *ChannelInstanceConfig, ref string) { inst.NickServPasswordRef = ref })); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("IRC_SASL_PASSWORD", c.Channels.IRC.SASLPassword,
-		func(ref string) { cfg.Channels.IRC.SASLPasswordRef = ref }); err != nil {
+		setChannelRef("irc", "sasl_password_ref", func(inst *ChannelInstanceConfig, ref string) { inst.SASLPasswordRef = ref })); err != nil {
 		return nil, err
 	}
 

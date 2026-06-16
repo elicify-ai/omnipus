@@ -20,7 +20,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type {
   SkillTrustLevel,
   PromptInjectionLevel,
-  UserRole,
   DMScope,
 } from './api'
 import { ApiSchemaError, getApiSchemaErrorCount, resetApiSchemaErrorCount } from './api'
@@ -187,6 +186,17 @@ function makeOkResponse(body: unknown): Response {
 
 function make400Response(errText: string): Response {
   return new Response(errText, { status: 400 })
+}
+
+// make204Response builds a real HTTP 204 No Content response — no body, no
+// JSON content-type. This is what the gateway returns from DELETE/PUT handlers
+// that have nothing to send back. Calling .json() on such a Response throws
+// ("Unexpected end of JSON input"); the request() helper must short-circuit
+// before that throw so the mutation resolves successfully (C1).
+function make204Response(): Response {
+  // `new Response(null, { status: 204 })` is the spec-correct way to model a
+  // no-content response: the body is null and .json() would reject.
+  return new Response(null, { status: 204 })
 }
 
 describe('Security API helpers', () => {
@@ -536,129 +546,45 @@ describe('Security API helpers', () => {
     })
   })
 
-  // ── fetchUsers ────────────────────────────────────────────────────────────
+  // ── 204 No Content handling (C1) ──────────────────────────────────────────
+  //
+  // Successful DELETE/PUT handlers that return 204 have no body. The request()
+  // helper must resolve without calling res.json() (which would throw on an
+  // empty body and make the mutation appear to fail). These tests exercise the
+  // real production code path (not a mock of request()) with a real 204 Response.
 
-  describe('fetchUsers', () => {
-    it('GET /api/v1/users — returns user list', async () => {
-      const payload = [{ username: 'alice', role: 'admin' as UserRole, has_password: true, has_active_token: false }]
-      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
+  describe('204 No Content responses (C1)', () => {
+    it('deleteTask resolves successfully on a real 204 (no body)', async () => {
+      fetchSpy.mockResolvedValueOnce(make204Response())
 
-      const { fetchUsers } = await import('./api')
-      const result = await fetchUsers()
-
-      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users')
-      expect(result[0].username).toBe('alice')
-    })
-  })
-
-  // ── createUser ────────────────────────────────────────────────────────────
-
-  describe('createUser', () => {
-    it('POST /api/v1/users — sends CSRF and body, returns {username, role}', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'bob', role: 'user' }))
-
-      const { createUser } = await import('./api')
-      const result = await createUser({ username: 'bob', role: 'user', password: 'secret' })
+      const { deleteTask } = await import('./api')
+      // Must NOT throw "Unexpected end of JSON input" — a 204 is a success.
+      await expect(deleteTask('task-1')).resolves.toBeUndefined()
 
       const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users')
-      expect((init.method ?? '').toUpperCase()).toBe('POST')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ username: 'bob', role: 'user', password: 'secret' })
-      expect(result).toEqual({ username: 'bob', role: 'user' })
-    })
-
-    it('throws when server unexpectedly returns a token field', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'bob', role: 'user', token: 'oops' }))
-
-      const { createUser } = await import('./api')
-      await expect(createUser({ username: 'bob', role: 'user', password: 'secret' })).rejects.toThrow(
-        'unexpected token in create response',
-      )
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('username taken'))
-
-      const { createUser } = await import('./api')
-      await expect(createUser({ username: 'dup', role: 'user', password: 'x' })).rejects.toThrow('400')
-    })
-  })
-
-  // ── deleteUser ────────────────────────────────────────────────────────────
-
-  describe('deleteUser', () => {
-    it('DELETE /api/v1/users/{username} — sends CSRF', async () => {
-      // UserDeleteResponse requires {username, deleted} per contracts/openapi.yaml
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'alice', deleted: true }))
-
-      const { deleteUser } = await import('./api')
-      await deleteUser('alice')
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users/alice')
+      expect(url).toContain('/api/v1/tasks/task-1')
       expect((init.method ?? '').toUpperCase()).toBe('DELETE')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
     })
 
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('cannot delete last admin'))
+    it('deleteSkill resolves successfully on a real 204', async () => {
+      fetchSpy.mockResolvedValueOnce(make204Response())
 
-      const { deleteUser } = await import('./api')
-      await expect(deleteUser('alice')).rejects.toThrow('400')
-    })
-  })
-
-  // ── resetUserPassword ─────────────────────────────────────────────────────
-
-  describe('resetUserPassword', () => {
-    it('PUT /api/v1/users/{username}/password — sends CSRF and body', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'alice', password_reset: true }))
-
-      const { resetUserPassword } = await import('./api')
-      await resetUserPassword('alice', 'newpass')
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users/alice/password')
-      expect((init.method ?? '').toUpperCase()).toBe('PUT')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ password: 'newpass' })
+      const { deleteSkill } = await import('./api')
+      await expect(deleteSkill('my-skill')).resolves.toBeUndefined()
     })
 
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('weak password'))
+    it('deleteMcpServer resolves successfully on a real 204', async () => {
+      fetchSpy.mockResolvedValueOnce(make204Response())
 
-      const { resetUserPassword } = await import('./api')
-      await expect(resetUserPassword('alice', 'x')).rejects.toThrow('400')
-    })
-  })
-
-  // ── updateUserRole ────────────────────────────────────────────────────────
-
-  describe('updateUserRole', () => {
-    it('PATCH /api/v1/users/{username}/role — sends CSRF and role body', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'alice', role: 'admin' }))
-
-      const { updateUserRole } = await import('./api')
-      await updateUserRole('alice', 'admin')
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users/alice/role')
-      expect((init.method ?? '').toUpperCase()).toBe('PATCH')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ role: 'admin' })
+      const { deleteMcpServer } = await import('./api')
+      await expect(deleteMcpServer('srv-1')).resolves.toBeUndefined()
     })
 
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('invalid role'))
+    it('still throws a typed error when a delete returns 4xx', async () => {
+      fetchSpy.mockResolvedValueOnce(make400Response('task is running'))
 
-      const { updateUserRole } = await import('./api')
-      await expect(updateUserRole('alice', 'user')).rejects.toThrow('400')
+      const { deleteTask } = await import('./api')
+      await expect(deleteTask('task-1')).rejects.toThrow('400')
     })
   })
 
@@ -1111,6 +1037,44 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
     expect(messages[0].tool_calls![0].status).toBe('cancelled')
   })
 
+  it('carries per-message wire agent_id onto SPA message.agentId (handover replay)', async () => {
+    // Regression for the handover reload bug: cold-load (REST) transcripts must
+    // expose each message's authoring agent so the row renders under its true
+    // author. Mia's pre-handover turn stays Mia; Jim's post-handover turn is Jim.
+    const wirePayload = [
+      {
+        id: 'm-mia',
+        agent_id: 'mia',
+        role: 'assistant',
+        content: 'I will hand this to Jim.',
+        timestamp: '2026-05-18T10:00:00Z',
+        status: 'ok',
+      },
+      {
+        id: 'm-jim',
+        agent_id: 'jim',
+        role: 'assistant',
+        content: 'On it.',
+        timestamp: '2026-05-18T10:01:00Z',
+        status: 'ok',
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-handover')
+
+    expect(messages).toHaveLength(2)
+    expect(messages[0].agentId).toBe('mia')
+    expect(messages[1].agentId).toBe('jim')
+  })
+
   // Regression guards for the 2026-05-21 production bug: Message.yaml's
   // `type` enum was missing "tool_call" and "turn_canceled". A jim session
   // with 44 tool_call entries failed the SPA's Zod validation with
@@ -1241,7 +1205,7 @@ describe('updateConfig: sends wire shape to backend', () => {
     // Stub fetch to return a minimal valid raw config response (the server
     // echoes back the full config after applying the change).
     const rawConfigResponse = {
-      gateway: { host: '0.0.0.0', port: 8080, auth_mode: 'none' },
+      gateway: { host: '0.0.0.0', port: 8080 },
       security: { policy_mode: 'deny', exec_approval: 'ask' },
       storage: { retention: { session_days: 90 } },
     }
@@ -1254,7 +1218,7 @@ describe('updateConfig: sends wire shape to backend', () => {
     )
 
     const { updateConfig } = await import('./api')
-    await updateConfig({ gateway: { bind_address: '0.0.0.0', port: 8080, auth_mode: 'none' } })
+    await updateConfig({ gateway: { bind_address: '0.0.0.0', port: 8080 } })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -1268,7 +1232,7 @@ describe('updateConfig: sends wire shape to backend', () => {
 
   it('translates data.session_retention_days → storage.retention.session_days', async () => {
     const rawConfigResponse = {
-      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'none' },
+      gateway: { host: '127.0.0.1', port: 8080 },
       security: { policy_mode: 'deny', exec_approval: 'ask' },
       storage: { retention: { session_days: 30 } },
     }
@@ -1295,7 +1259,7 @@ describe('updateConfig: sends wire shape to backend', () => {
 
   it('does not include dev_mode_bypass in the PUT body (blocked server-side)', async () => {
     const rawConfigResponse = {
-      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'none' },
+      gateway: { host: '127.0.0.1', port: 8080 },
       security: { policy_mode: 'deny', exec_approval: 'ask' },
       storage: { retention: { session_days: 90 } },
     }
@@ -1309,7 +1273,7 @@ describe('updateConfig: sends wire shape to backend', () => {
 
     const { updateConfig } = await import('./api')
     await updateConfig({
-      gateway: { bind_address: '127.0.0.1', port: 8080, auth_mode: 'none', dev_mode_bypass: true },
+      gateway: { bind_address: '127.0.0.1', port: 8080, dev_mode_bypass: true },
     })
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -1480,6 +1444,216 @@ describe('enableChannel / disableChannel: ChannelEnabledResponse validation (fix
   })
 })
 
+// ── rawToFrontendConfig / frontendToRawConfig round-trip for model_name / provider ──
+//
+// Regression guard: agents.defaults.model_name and agents.defaults.provider were
+// previously not threaded through the mapping functions, causing them to be silently
+// dropped when settings were read from the backend or saved back.
+//
+// Traces to: hotfix/v0.1.1 Wave 4 — api round-trip
+
+describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal3(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal3() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookieLocal3('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal3()
+    vi.resetModules()
+  })
+
+  it('rawToFrontendConfig preserves agents.defaults.model_name and provider', async () => {
+    // Traces to: hotfix/v0.1.1 — agents.defaults fields must survive rawToFrontendConfig
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 90 } },
+      agents: {
+        defaults: {
+          model_name: 'claude-3-haiku',
+          provider: 'anthropic',
+        },
+      },
+    }
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig } = await import('./api')
+    const config = await fetchConfig()
+
+    expect(config.agents?.defaults?.model_name).toBe('claude-3-haiku')
+    expect(config.agents?.defaults?.provider).toBe('anthropic')
+  })
+
+  it('frontendToRawConfig round-trips model_name and provider without dropping them', async () => {
+    // Traces to: hotfix/v0.1.1 — agents.defaults must survive the full fetchConfig→updateConfig round-trip
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 90 } },
+      agents: {
+        defaults: {
+          model_name: 'claude-3-haiku',
+          provider: 'anthropic',
+        },
+      },
+    }
+
+    // Mock GET /config response
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    // Mock PUT /config response (echo back the same config)
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig, updateConfig } = await import('./api')
+    const fetchedConfig = await fetchConfig()
+
+    // Confirm the fetched config has the fields.
+    expect(fetchedConfig.agents?.defaults?.model_name).toBe('claude-3-haiku')
+    expect(fetchedConfig.agents?.defaults?.provider).toBe('anthropic')
+
+    // Send the config back via updateConfig — the round-trip must preserve the fields
+    // in the wire body sent to the backend.
+    await updateConfig({ agents: fetchedConfig.agents })
+
+    // Inspect the PUT request body (second fetch call).
+    const [, putInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    const putBody = JSON.parse(putInit.body as string) as Record<string, unknown>
+
+    // The wire body must contain agents.defaults with both fields intact.
+    const putAgents = putBody.agents as Record<string, unknown>
+    const putDefaults = putAgents?.defaults as Record<string, unknown>
+    expect(putDefaults?.model_name).toBe('claude-3-haiku')
+    expect(putDefaults?.provider).toBe('anthropic')
+  })
+})
+
+// ── rotateGatewayToken schema validation ──────────────────────────────────────
+//
+// Verifies that rotateGatewayToken() enforces the RotateTokenResponse Zod schema:
+// - rejects responses where `token` is the wrong type or malformed
+// - accepts a well-formed 72-character `omnipus_<hex64>` token
+//
+// Traces to: hotfix/v0.1.1 Wave 4 — rotateGatewayToken schema validates response
+
+describe('rotateGatewayToken: schema validation', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal4(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal4() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookieLocal4('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal4()
+    vi.resetModules()
+  })
+
+  it('rejects when token is a number (wrong type) — throws ApiSchemaError', async () => {
+    // { token: 123 } fails RotateTokenResponse — token must be a string.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ token: 123 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { rotateGatewayToken, ApiSchemaError: ApiSchemaErrorClass } = await import('./api')
+    await expect(rotateGatewayToken()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+  })
+
+  it('rejects when token field is missing — throws ApiSchemaError', async () => {
+    // {} fails RotateTokenResponse — token is required.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { rotateGatewayToken, ApiSchemaError: ApiSchemaErrorClass } = await import('./api')
+    await expect(rotateGatewayToken()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+  })
+
+  it('resolves with {token} when a valid 72-char omnipus_<hex64> token is returned', async () => {
+    // Valid token: 'omnipus_' (8 chars) + 64 lowercase hex chars = 72 chars total.
+    const validToken = 'omnipus_' + 'a'.repeat(64)
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ token: validToken }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { rotateGatewayToken } = await import('./api')
+    const result = await rotateGatewayToken()
+    expect(result.token).toBe(validToken)
+  })
+
+  it('rejects when token is a valid 72-char string but does not match omnipus_<hex64> pattern', async () => {
+    // Length 72, but wrong format: no "omnipus_" prefix and not lowercase hex.
+    const wrongFormat = 'X'.repeat(72)
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ token: wrongFormat }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { rotateGatewayToken, ApiSchemaError: ApiSchemaErrorClass } = await import('./api')
+    await expect(rotateGatewayToken()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+  })
+})
+
 // ── validEnum / _configCoercionCount integration tests ────────────────────────
 //
 // Verifies that rawToFrontendConfig calls validEnum which increments _configCoercionCount
@@ -1552,7 +1726,7 @@ describe('validEnum / _configCoercionCount', () => {
   it('increments counter once per invalid enum field — differentiation test', async () => {
     // Two different invalid enum values — counter should increment twice (once per field).
     const wireConfig = {
-      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'invalid_mode' },
+      gateway: { host: '127.0.0.1', port: 8080 },
       security: { policy_mode: 'invalid_policy', exec_approval: 'invalid_exec' },
     }
     fetchSpy.mockResolvedValueOnce(
@@ -1567,7 +1741,136 @@ describe('validEnum / _configCoercionCount', () => {
 
     await fetchConfig()
 
-    // Three invalid enum values should produce count ≥ 3.
-    expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(3)
+    // Two invalid enum values should produce count ≥ 2 (one per field).
+    expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(2)
+  })
+})
+
+// ── Skill marketplace: searchSkills / installSkillBySlug ─────────────────────
+
+describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookie('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookie()
+    vi.resetModules()
+  })
+
+  describe('fetchSkills (tolerant installed-skills list)', () => {
+    it('keeps valid skills and drops a malformed one (one bad skill must not hide the whole list)', async () => {
+      const payload = [
+        { id: 'good', name: 'Good', version: '2.1.0', verified: false, status: 'active', source: 'global' },
+        // Structurally invalid: missing required version/verified/status.
+        { id: 'bad', name: 'Bad' },
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
+
+      const { fetchSkills } = await import('./api')
+      const result = await fetchSkills()
+
+      // Must NOT throw; the valid skill survives, the bad one is dropped.
+      expect(result.map((s) => s.id)).toEqual(['good'])
+    })
+
+    it('accepts a non-semver version like "1.0" (ClawHub versions are arbitrary)', async () => {
+      const payload = [
+        { id: 'cw', name: 'ClawHub Skill', version: '1.0', verified: false, status: 'active', source: 'global' },
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
+
+      const { fetchSkills } = await import('./api')
+      const result = await fetchSkills()
+
+      expect(result).toHaveLength(1)
+      expect(result[0].version).toBe('1.0')
+    })
+  })
+
+  describe('searchSkills', () => {
+    it('GET /api/v1/skills/search — URL-encodes q and sends limit', async () => {
+      const payload = [
+        {
+          slug: 'web-search',
+          display_name: 'Web Search',
+          summary: 'Search the web.',
+          version: '1.4.0',
+          score: 0.9,
+          registry_name: 'clawhub',
+          owner_handle: 'acme',
+        },
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
+
+      const { searchSkills } = await import('./api')
+      const result = await searchSkills('web search', 5)
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/skills/search')
+      expect(url).toContain('q=web+search')
+      expect(url).toContain('limit=5')
+      expect((init.method ?? 'GET').toUpperCase()).toBe('GET')
+      expect(result).toEqual(payload)
+    })
+
+    it('defaults limit to 20 when omitted', async () => {
+      fetchSpy.mockResolvedValueOnce(makeOkResponse([]))
+      const { searchSkills } = await import('./api')
+      await searchSkills('files')
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('limit=20')
+    })
+
+    it('propagates a 502 as a typed ApiError', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('registry down', { status: 502 }))
+      const { searchSkills } = await import('./api')
+      await expect(searchSkills('web')).rejects.toThrow('502')
+    })
+  })
+
+  describe('installSkillBySlug', () => {
+    const okSkill = {
+      id: 'web-search',
+      name: 'web-search',
+      version: '1.4.0',
+      status: 'active',
+      verified: false,
+    }
+
+    it('POST /api/v1/skills/install — sends {slug} body + CSRF', async () => {
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(okSkill))
+      const { installSkillBySlug } = await import('./api')
+      const skill = await installSkillBySlug('web-search')
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/skills/install')
+      expect((init.method ?? '').toUpperCase()).toBe('POST')
+      const headers = new Headers(init.headers as HeadersInit)
+      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
+      expect(JSON.parse(init.body as string)).toEqual({ slug: 'web-search' })
+      expect(skill.id).toBe('web-search')
+    })
+
+    it('includes version when provided', async () => {
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(okSkill))
+      const { installSkillBySlug } = await import('./api')
+      await installSkillBySlug('web-search', '1.4.0')
+      const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(init.body as string)).toEqual({ slug: 'web-search', version: '1.4.0' })
+    })
+
+    it('propagates a 409 (already installed) as a typed ApiError', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('already installed', { status: 409 }))
+      const { installSkillBySlug } = await import('./api')
+      await expect(installSkillBySlug('web-search')).rejects.toThrow('409')
+    })
   })
 })

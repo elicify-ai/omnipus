@@ -29,9 +29,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { fetchSkills, fetchMcpServers, fetchTools } from '@/lib/api'
-import { Route } from '@/routes/_app/skills'
-
-const SkillsScreen = (Route as any).component as React.ComponentType
+// The skills route now lazy-loads its screen; import the screen module directly
+// so the test renders real content (not the route's Suspense fallback).
+import { SkillsScreen } from '@/components/screens/SkillsScreen'
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -127,15 +127,19 @@ describe('SkillsScreen — MCP servers tab (test #20)', () => {
   })
 })
 
-describe('SkillsScreen — built-in tools tab', () => {
-  it('shows built-in tool list including exec and web_search', async () => {
-    // Traces to: wave5a-wire-ui-spec.md — AC4: built-in tools are listed
+describe('SkillsScreen — built-in tools tab (US-E2 read-only overview)', () => {
+  it('shows the built-in tools tab and renders category groups (no raw tool IDs)', async () => {
+    // Traces to: wave5a-wire-ui-spec.md — AC4 updated for US-E2:
+    // Tools tab is now a by-category overview; raw IDs are hidden.
     const user = userEvent.setup()
     renderScreen()
     await screen.findByText('Skills & Tools')
     await user.click(screen.getByRole('tab', { name: /Built-in Tools/i }))
-    await screen.findByText('exec')
-    expect(screen.getByText('web_search')).toBeInTheDocument()
-    expect(screen.getByText('file.read')).toBeInTheDocument()
+    // Should show category groups by data-testid (robust, independent of text matching)
+    await screen.findByTestId('tool-category-web')
+    // Raw tool identifiers must NOT appear
+    expect(screen.queryByText('exec')).not.toBeInTheDocument()
+    expect(screen.queryByText('web_search')).not.toBeInTheDocument()
+    expect(screen.queryByText('file.read')).not.toBeInTheDocument()
   })
 })

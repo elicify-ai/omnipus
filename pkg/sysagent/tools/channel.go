@@ -7,7 +7,6 @@ package systools
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
@@ -50,7 +49,8 @@ func NewChannelEnableTool(d *Deps) *ChannelEnableTool { return &ChannelEnableToo
 func (t *ChannelEnableTool) Name() string             { return "system.channel.enable" }
 func (t *ChannelEnableTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *ChannelEnableTool) Description() string {
-	return "Enable a channel so it can be configured and connected.\nParameters: id (required)."
+	return "[NOT IMPLEMENTED] Enabling a channel from a tool is not yet wired to the channel manager. " +
+		"This tool always returns a NOT_IMPLEMENTED error. Use the Channels screen in the UI to enable a channel."
 }
 
 func (t *ChannelEnableTool) Parameters() map[string]any {
@@ -61,27 +61,10 @@ func (t *ChannelEnableTool) Parameters() map[string]any {
 	}
 }
 
-func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	id, _ := args["id"].(string)
-	if id == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
-	}
-	ch, ok := findChannel(id)
-	if !ok {
-		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND",
-			fmt.Sprintf("Unknown channel %q", id),
-			"Use system.channel.list to see available channels",
-		))
-	}
-	slog.Info("sysagent: stub tool invoked", "tool", "system.channel.enable", "id", id,
-		"channel_tier", ch.Tier, "channel_impl", ch.Implementation)
-	return tools.NewToolResult(successJSON(map[string]any{
-		"id":             id,
-		"tier":           ch.Tier,
-		"implementation": ch.Implementation,
-		"status":         "stub",
-		"note":           "not yet implemented — this is a placeholder response",
-	}))
+func (t *ChannelEnableTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
+		"system.channel.enable is not implemented: there is no tool-side path into the channel manager.",
+		"Enable channels via the Channels screen in the UI."))
 }
 
 // ---- system.channel.configure ----
@@ -147,7 +130,8 @@ func NewChannelDisableTool(d *Deps) *ChannelDisableTool { return &ChannelDisable
 func (t *ChannelDisableTool) Name() string              { return "system.channel.disable" }
 func (t *ChannelDisableTool) Scope() tools.ToolScope    { return tools.ScopeCore }
 func (t *ChannelDisableTool) Description() string {
-	return "Disable a channel. Parameters: id (required)."
+	return "[NOT IMPLEMENTED] Disabling a channel from a tool is not yet wired to the channel manager. " +
+		"This tool always returns a NOT_IMPLEMENTED error. Use the Channels screen in the UI to disable a channel."
 }
 
 func (t *ChannelDisableTool) Parameters() map[string]any {
@@ -158,21 +142,10 @@ func (t *ChannelDisableTool) Parameters() map[string]any {
 	}
 }
 
-func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	id, _ := args["id"].(string)
-	if id == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
-	}
-	if _, ok := findChannel(id); !ok {
-		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND",
-			fmt.Sprintf("Unknown channel %q", id), ""))
-	}
-	slog.Info("sysagent: stub tool invoked", "tool", "system.channel.disable", "id", id)
-	return tools.NewToolResult(successJSON(map[string]any{
-		"id":     id,
-		"status": "stub",
-		"note":   "not yet implemented — this is a placeholder response",
-	}))
+func (t *ChannelDisableTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
+		"system.channel.disable is not implemented: there is no tool-side path into the channel manager.",
+		"Disable channels via the Channels screen in the UI."))
 }
 
 // ---- system.channel.list ----
@@ -202,7 +175,8 @@ func NewChannelTestTool(d *Deps) *ChannelTestTool { return &ChannelTestTool{deps
 func (t *ChannelTestTool) Name() string           { return "system.channel.test" }
 func (t *ChannelTestTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ChannelTestTool) Description() string {
-	return "Test a channel connection. Parameters: id (required)."
+	return "[NOT IMPLEMENTED] Testing a channel connection from a tool is not yet wired to the channel manager. " +
+		"This tool always returns a NOT_IMPLEMENTED error. Use the Test button on the Channels screen in the UI."
 }
 
 func (t *ChannelTestTool) Parameters() map[string]any {
@@ -213,19 +187,8 @@ func (t *ChannelTestTool) Parameters() map[string]any {
 	}
 }
 
-func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	id, _ := args["id"].(string)
-	if id == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
-	}
-	if _, ok := findChannel(id); !ok {
-		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND",
-			fmt.Sprintf("Unknown channel %q", id), ""))
-	}
-	slog.Info("sysagent: stub tool invoked", "tool", "system.channel.test", "id", id)
-	return tools.NewToolResult(successJSON(map[string]any{
-		"id":     id,
-		"status": "stub",
-		"note":   "not yet implemented — this is a placeholder response",
-	}))
+func (t *ChannelTestTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
+		"system.channel.test is not implemented: there is no tool-side path into the channel manager.",
+		"Test channel connections via the Test button on the Channels screen in the UI."))
 }

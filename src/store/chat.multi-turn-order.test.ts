@@ -90,10 +90,12 @@ describe('chat store — multi-turn tool-call ordering (regression)', () => {
     })
     act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: 'sess-test' }) })
 
-    // Sanity: after turn 1, the live state has both tool calls under the
-    // single assistant message; toolCallOrder reflects insertion order.
+    // After done, tool calls are baked onto the assistant message immediately
+    // so VirtualAssistantMessageRow can render them. toolCallOrder is cleared.
     const afterTurn1 = useChatStore.getState()
-    expect(afterTurn1.toolCallOrder).toEqual(['tc_t1_a', 'tc_t1_b'])
+    const turn1Assistant = afterTurn1.messages.find((m) => m.role === 'assistant')
+    expect(turn1Assistant?.tool_calls?.map((tc) => tc.id)).toEqual(['tc_t1_a', 'tc_t1_b'])
+    expect(afterTurn1.toolCallOrder).toEqual([])
 
     // ── Turn 2 starts ────────────────────────────────────────────────────────
     act(() => { useChatStore.getState().sendMessage('second user message') })

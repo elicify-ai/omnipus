@@ -13,6 +13,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,11 @@ const (
 	janitorInterval = 10 * time.Second
 	typingStopTTL   = 5 * time.Minute
 	placeholderTTL  = 10 * time.Minute
+
+	// dropNoticePrefix tags user-facing drop notifications so that a
+	// notification which itself gets dropped (queue still full) is only logged
+	// and never re-notified — preventing an amplification loop.
+	dropNoticePrefix = "\x00omnipus-drop-notice\x00"
 )
 
 // typingEntry wraps a typing stop function with a creation timestamp for TTL eviction.
@@ -56,6 +62,14 @@ type reactionEntry struct {
 // placeholderEntry wraps a placeholder ID with a creation timestamp for TTL eviction.
 type placeholderEntry struct {
 	id        string
+	createdAt time.Time
+}
+
+// streamEntry marks that a stream finalized a message for a channel:chatID,
+// carrying a creation timestamp so the TTL janitor can evict stale markers that
+// were never consumed by preSend/preSendMedia (e.g. when the agent errors after
+// Finalize and never publishes an outbound message for the key).
+type streamEntry struct {
 	createdAt time.Time
 }
 
@@ -80,8 +94,12 @@ type channelWorker struct {
 }
 
 // ChannelInitError records an enabled channel that failed to construct.
+// Name is the registry identifier (e.g. "whatsapp_native") as passed to
+// recordChannelFailure; Channel is the human-readable display name
+// (e.g. "WhatsApp Native"). Both are populated on every failure.
 type ChannelInitError struct {
-	Channel string
+	Name    string // registry id, e.g. "whatsapp_native"
+	Channel string // human-readable display name, e.g. "WhatsApp Native"
 	Err     error
 }
 
@@ -107,18 +125,56 @@ type Manager struct {
 	previewMux        *dynamicServeMux
 	previewServer     *http.Server
 	mu                sync.RWMutex
-	placeholders      sync.Map           // "channel:chatID" → placeholderID (string)
-	typingStops       sync.Map           // "channel:chatID" → func()
+	placeholders      sync.Map           // "channel:chatID" → placeholderEntry
+	typingStops       sync.Map           // "channel:chatID" → typingEntry
 	reactionUndos     sync.Map           // "channel:chatID" → reactionEntry
-	streamActive      sync.Map           // "channel:chatID" → true (set when streamer.Finalize sent the message)
+	streamActive      sync.Map           // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
 	channelHashes     map[string]string  // channel name → config hash
 	streamFallback    bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
 	failedChannels    []ChannelInitError // enabled channels that failed to start
 	cancelInterceptor CancelInterceptor  // set after construction via SetCancelInterceptor; may be nil
+
+	// pairingObserver, if set before StartAll, is wired into every channel that
+	// implements PairingObservable so linked-device pairing updates (QR/status)
+	// reach the SPA (#283). channelID is the channel name (e.g. "whatsapp_native").
+	pairingObserver func(channelID string, status PairingStatus, qr, message string)
+}
+
+// SetPairingObserver registers a callback to receive linked-device pairing
+// updates (QR/status) from all PairingObservable channels and propagates it to
+// channels already initialized — mirroring SetCancelInterceptor, since the
+// channels map is populated during NewManager (#283).
+func (m *Manager) SetPairingObserver(fn func(channelID string, status PairingStatus, qr, message string)) {
+	m.mu.Lock()
+	m.pairingObserver = fn
+	for name, ch := range m.channels {
+		if obs, ok := ch.(PairingObservable); ok {
+			chName := name
+			obs.SetPairingObserver(func(status PairingStatus, qr, message string) {
+				fn(chName, status, qr, message)
+			})
+		}
+	}
+	m.mu.Unlock()
 }
 
 type asyncTask struct {
 	cancel context.CancelFunc
+}
+
+// ChannelRegistered reports whether a channel with the given name is currently
+// registered (constructed and tracked) on this manager. Used by the scheduled
+// runner to validate a deliver=true target before publishing, so a publish to a
+// channel nobody is subscribed to is recorded as a failure instead of a silent
+// success (M2).
+func (m *Manager) ChannelRegistered(name string) bool {
+	if name == "" {
+		return false
+	}
+	m.mu.RLock()
+	_, ok := m.channels[name]
+	m.mu.RUnlock()
+	return ok
 }
 
 // RecordPlaceholder registers a placeholder message for later editing.
@@ -300,7 +356,7 @@ func NewManager(
 	// Register as streaming delegate so the agent loop can obtain streamers
 	messageBus.SetStreamDelegate(m)
 
-	if err := m.initChannels(&cfg.Channels); err != nil {
+	if err := m.initChannels(cfg.Channels); err != nil {
 		return nil, err
 	}
 
@@ -308,6 +364,25 @@ func NewManager(
 	m.channelHashes = toChannelHashes(cfg)
 
 	return m, nil
+}
+
+// NewManagerForTesting creates a minimal Manager with pre-seeded ChannelInitError
+// entries accessible via FailedChannels(). No real channels are constructed and
+// no MessageBus or MediaStore is required.
+//
+// This constructor exists so integration tests in external packages (e.g.
+// pkg/gateway) can inject degraded state into a Manager without needing a live
+// credential store, network connectivity, or a real channel factory.  Production
+// code should use NewManager; callers of this function must only appear in
+// _test.go files.
+func NewManagerForTesting(failed []ChannelInitError) *Manager {
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		channelHashes: make(map[string]string),
+	}
+	m.failedChannels = append(m.failedChannels, failed...)
+	return m
 }
 
 // SetStreamFallback registers a fallback StreamDelegate for channels not managed
@@ -370,7 +445,7 @@ func (m *Manager) GetStreamer(ctx context.Context, channelName, chatID, sessionI
 	key := channelName + ":" + chatID
 	return &finalizeHookStreamer{
 		Streamer:   streamer,
-		onFinalize: func() { m.streamActive.Store(key, true) },
+		onFinalize: func() { m.streamActive.Store(key, streamEntry{createdAt: time.Now()}) },
 	}, true
 }
 
@@ -427,6 +502,16 @@ func (m *Manager) initChannel(name, displayName string) error {
 			setter.SetCancelInterceptor(m.cancelInterceptor)
 		}
 	}
+	// Inject pairing observer (#283) so QR/status updates reach the SPA. Capture
+	// the channel name so the observer can tag which channel emitted.
+	if m.pairingObserver != nil {
+		if obs, ok := ch.(PairingObservable); ok {
+			chName := name
+			obs.SetPairingObserver(func(status PairingStatus, qr, message string) {
+				m.pairingObserver(chName, status, qr, message)
+			})
+		}
+	}
 	m.channels[name] = ch
 	logger.InfoCF("channels", "Channel enabled successfully", map[string]any{
 		"channel": displayName,
@@ -434,9 +519,49 @@ func (m *Manager) initChannel(name, displayName string) error {
 	return nil
 }
 
+// notifyDrop surfaces user-facing feedback when an outbound message is dropped
+// due to backpressure (queue full). It publishes a short notice back through the
+// bus, tagged with dropNoticePrefix so that a notice which itself gets dropped is
+// only logged (see the dispatch enqueue callbacks) — preventing amplification.
+// The prefix is stripped by runWorker before the notice is delivered, so the user
+// never sees the sentinel.
+//
+// The publish MUST be non-blocking. notifyDrop runs synchronously inside the
+// dispatch loop, which is the SOLE consumer of the outbound channel. The drop
+// condition is "outbound buffer full", so a blocking publish here would wait for
+// a slot that only this same loop can drain — a self-deadlock. TryPublishOutbound
+// drops the notice (logged) rather than block when the buffer is still full.
+func (m *Manager) notifyDrop(channel, chatID, text string) {
+	if channel == "" || chatID == "" || m.bus == nil {
+		return
+	}
+	notice := bus.OutboundMessage{
+		Channel: channel,
+		ChatID:  chatID,
+		Content: dropNoticePrefix + text,
+	}
+	if !m.bus.TryPublishOutbound(notice) {
+		logger.WarnCF("channels", "Drop notice dropped (bus full or closed)", map[string]any{
+			"channel": channel,
+			"chat_id": chatID,
+		})
+	}
+}
+
+// warnMisconfigured logs a WARN when a channel is enabled in config but is
+// missing a required field, so it is silently skipped by the init if-ladder.
+// Without this an operator who enables a channel but forgets to set its token /
+// URL gets no feedback about why the channel never started.
+func warnMisconfigured(displayName, missing string) {
+	logger.WarnCF("channels", "Enabled channel skipped — required configuration missing", map[string]any{
+		"channel":        displayName,
+		"missing_fields": missing,
+	})
+}
+
 // recordChannelFailure records a failed enabled-channel init and logs it.
 func (m *Manager) recordChannelFailure(name, displayName string, err error) {
-	m.failedChannels = append(m.failedChannels, ChannelInitError{Channel: displayName, Err: err})
+	m.failedChannels = append(m.failedChannels, ChannelInitError{Name: name, Channel: displayName, Err: err})
 	logger.ErrorCF("channels", "Enabled channel failed to initialize", map[string]any{
 		"channel": displayName,
 		"error":   err.Error(),
@@ -454,103 +579,143 @@ func (m *Manager) FailedChannels() []ChannelInitError {
 	return out
 }
 
-func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
+// channelTypeToFactory maps a channel instance type to the factory name
+// registered via channels.RegisterFactory. For most channel types the factory
+// name equals the type; WhatsApp is the one exception (type="whatsapp",
+// factory="whatsapp_native" — the legacy bridge was removed and all builds use
+// whatsmeow).
+var channelTypeToFactory = map[string]string{
+	"whatsapp": "whatsapp_native",
+}
+
+// factoryNameForType returns the registered factory name for a channel type.
+func factoryNameForType(channelType string) string {
+	if name, ok := channelTypeToFactory[channelType]; ok {
+		return name
+	}
+	return channelType
+}
+
+// initChannels activates all enabled instances in the channels map. The
+// if-ladder over typed ChannelsConfig fields is replaced by a loop over the
+// instance map + a type→factory map (Spec-2 FR-2.4).
+func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig) error {
 	logger.InfoC("channels", "Initializing channel manager")
 
-	if channels.Telegram.Enabled && channels.Telegram.TokenRef != "" {
-		if err := m.initChannel("telegram", "Telegram"); err != nil {
-			m.recordChannelFailure("telegram", "Telegram", err)
+	for instanceID, inst := range channels {
+		if !inst.Enabled {
+			continue
 		}
-	}
+		// Normalize: if Type is unset, treat the map key as the type. This mirrors
+		// what normalizeChannelMap does at config-load time, but initChannels is also
+		// called with a synthesized subset map (toChannelConfig) whose entries may
+		// have been created from a zero-value ChannelInstanceConfig (e.g. a map-key
+		// lookup on an empty DefaultConfig().Channels, which skips normalizeChannelMap).
+		// Without this guard, inst.Type == "" falls through every check and produces
+		// a "factory not registered for channel """ error that aborts the reload.
+		if inst.Type == "" {
+			inst.Type = instanceID
+		}
+		factoryName := factoryNameForType(inst.Type)
+		displayName := inst.Type // factories use the type as display name
 
-	if channels.WhatsApp.Enabled {
-		waCfg := channels.WhatsApp
-		if waCfg.UseNative {
-			if err := m.initChannel("whatsapp_native", "WhatsApp Native"); err != nil {
-				m.recordChannelFailure("whatsapp_native", "WhatsApp Native", err)
+		if inst.Type == "whatsapp" {
+			// WhatsApp is always native (whatsmeow). The legacy bridge channel was
+			// removed; on a lite/stub build (or an architecture where
+			// modernc.org/sqlite is unavailable) whatsapp_native fails to construct
+			// and we record a clear failure rather than silently no-op.
+			if err := m.initChannel(factoryName, "WhatsApp Native"); err != nil {
+				wrapped := fmt.Errorf(
+					"WhatsApp requires the native build (bridge removed); "+
+						"unavailable on this build variant: %w",
+					err,
+				)
+				m.recordChannelFailure(factoryName, "WhatsApp Native", wrapped)
 			}
-		} else if waCfg.BridgeURL != "" {
-			if err := m.initChannel("whatsapp", "WhatsApp"); err != nil {
-				m.recordChannelFailure("whatsapp", "WhatsApp", err)
+			continue
+		}
+
+		// Per-type prerequisite checks (misconfiguration guard).
+		switch inst.Type {
+		case "telegram":
+			if inst.TokenRef == "" {
+				warnMisconfigured("Telegram", "token")
+				continue
+			}
+		case "discord":
+			if inst.TokenRef == "" {
+				warnMisconfigured("Discord", "token")
+				continue
+			}
+		case "dingtalk":
+			if inst.ClientID == "" {
+				warnMisconfigured("DingTalk", "client_id")
+				continue
+			}
+		case "slack":
+			if inst.BotTokenRef == "" {
+				warnMisconfigured("Slack", "bot_token")
+				continue
+			}
+		case "matrix":
+			// Validate THIS instance's matrix config (instanceID may differ from the
+			// "matrix" type key — a hardcoded m.config.Channels["matrix"] lookup would
+			// validate the wrong/absent instance and mis-gate a correctly-named one).
+			if inst.Homeserver == "" || inst.UserID == "" || inst.AccessTokenRef == "" {
+				warnMisconfigured("Matrix", "homeserver, user_id, access_token")
+				continue
+			}
+		case "line":
+			if inst.ChannelAccessTokenRef == "" {
+				warnMisconfigured("LINE", "channel_access_token")
+				continue
+			}
+		case "wecom":
+			if inst.BotID == "" || inst.SecretRef == "" {
+				warnMisconfigured("WeCom", "bot_id, secret")
+				continue
+			}
+		case "weixin":
+			if inst.TokenRef == "" {
+				warnMisconfigured("Weixin", "token")
+				continue
+			}
+		case "irc":
+			if inst.Server == "" {
+				warnMisconfigured("IRC", "server")
+				continue
+			}
+		case "google-chat":
+			gc := inst
+			if gc.WebhookURLRef == "" &&
+				gc.ServiceAccountJSONRef == "" &&
+				gc.WebhookURL.String() == "" &&
+				gc.ServiceAccountJSON.String() == "" &&
+				gc.ServiceAccountFile == "" {
+				warnMisconfigured("Google Chat", "webhook_url, service_account_json, or service_account_file")
+				continue
+			}
+		case "email":
+			if inst.IMAPHost == "" {
+				warnMisconfigured("Email", "imap_host")
+				continue
+			}
+			if inst.SMTPHost == "" {
+				warnMisconfigured("Email", "smtp_host")
+				continue
+			}
+			if inst.EmailUsername == "" {
+				warnMisconfigured("Email", "username")
+				continue
+			}
+			if inst.PasswordRef == "" {
+				warnMisconfigured("Email", "password")
+				continue
 			}
 		}
-	}
 
-	if channels.Feishu.Enabled {
-		if err := m.initChannel("feishu", "Feishu"); err != nil {
-			m.recordChannelFailure("feishu", "Feishu", err)
-		}
-	}
-
-	if channels.Discord.Enabled && channels.Discord.TokenRef != "" {
-		if err := m.initChannel("discord", "Discord"); err != nil {
-			m.recordChannelFailure("discord", "Discord", err)
-		}
-	}
-
-	if channels.QQ.Enabled {
-		if err := m.initChannel("qq", "QQ"); err != nil {
-			m.recordChannelFailure("qq", "QQ", err)
-		}
-	}
-
-	if channels.DingTalk.Enabled && channels.DingTalk.ClientID != "" {
-		if err := m.initChannel("dingtalk", "DingTalk"); err != nil {
-			m.recordChannelFailure("dingtalk", "DingTalk", err)
-		}
-	}
-
-	if channels.Slack.Enabled && channels.Slack.BotTokenRef != "" {
-		if err := m.initChannel("slack", "Slack"); err != nil {
-			m.recordChannelFailure("slack", "Slack", err)
-		}
-	}
-
-	if channels.Matrix.Enabled &&
-		m.config.Channels.Matrix.Homeserver != "" &&
-		m.config.Channels.Matrix.UserID != "" &&
-		m.config.Channels.Matrix.AccessTokenRef != "" {
-		if err := m.initChannel("matrix", "Matrix"); err != nil {
-			m.recordChannelFailure("matrix", "Matrix", err)
-		}
-	}
-
-	if channels.LINE.Enabled && channels.LINE.ChannelAccessTokenRef != "" {
-		if err := m.initChannel("line", "LINE"); err != nil {
-			m.recordChannelFailure("line", "LINE", err)
-		}
-	}
-
-	if channels.OneBot.Enabled && channels.OneBot.WSUrl != "" {
-		if err := m.initChannel("onebot", "OneBot"); err != nil {
-			m.recordChannelFailure("onebot", "OneBot", err)
-		}
-	}
-
-	if channels.WeCom.Enabled && channels.WeCom.BotID != "" && channels.WeCom.SecretRef != "" {
-		if err := m.initChannel("wecom", "WeCom"); err != nil {
-			m.recordChannelFailure("wecom", "WeCom", err)
-		}
-	}
-
-	if channels.Weixin.Enabled && channels.Weixin.TokenRef != "" {
-		if err := m.initChannel("weixin", "Weixin"); err != nil {
-			m.recordChannelFailure("weixin", "Weixin", err)
-		}
-	}
-
-	if channels.IRC.Enabled && channels.IRC.Server != "" {
-		if err := m.initChannel("irc", "IRC"); err != nil {
-			m.recordChannelFailure("irc", "IRC", err)
-		}
-	}
-
-	if channels.GoogleChat.Enabled &&
-		(channels.GoogleChat.WebhookURL.String() != "" ||
-			channels.GoogleChat.ServiceAccountJSON.String() != "" ||
-			channels.GoogleChat.ServiceAccountFile != "") {
-		if err := m.initChannel("google-chat", "Google Chat"); err != nil {
-			m.recordChannelFailure("google-chat", "Google Chat", err)
+		if err := m.initChannel(factoryName, displayName); err != nil {
+			m.recordChannelFailure(factoryName, displayName, err)
 		}
 	}
 
@@ -559,12 +724,36 @@ func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
 		"failed_channels":  len(m.failedChannels),
 	})
 
-	// If any enabled channel failed to construct, abort boot per deny-by-default policy.
-	if len(m.failedChannels) > 0 {
-		joinedErrs := make([]error, 0, len(m.failedChannels))
-		for i := range m.failedChannels {
-			joinedErrs = append(joinedErrs, &m.failedChannels[i])
+	// If any enabled channel failed to construct, abort boot per deny-by-default
+	// policy — with the whatsapp_native exception (see bootFatalError).
+	return bootFatalError(m.failedChannels)
+}
+
+// nonFatalChannels lists channels whose construction failure must NOT abort
+// gateway boot. whatsapp_native is non-fatal because on a lite/stub build (or an
+// arch where modernc.org/sqlite is unavailable) WhatsApp cannot construct, and
+// the legacy bridge fallback was removed. Aborting the whole gateway over it
+// would brick every other channel for an operator who left
+// channels.whatsapp.enabled=true. The failure is still recorded and surfaced as
+// degraded via FailedChannels, so status shows a clear "requires the native
+// build" message.
+var nonFatalChannels = map[string]struct{}{
+	"whatsapp_native": {},
+}
+
+// bootFatalError returns a joined error for the subset of failed channels whose
+// failure is boot-fatal, or nil if every failure is non-fatal (or there were
+// none). Non-fatal failures remain recorded in FailedChannels for degraded
+// status; they simply do not abort boot.
+func bootFatalError(failed []ChannelInitError) error {
+	joinedErrs := make([]error, 0, len(failed))
+	for i := range failed {
+		if _, nonFatal := nonFatalChannels[failed[i].Name]; nonFatal {
+			continue
 		}
+		joinedErrs = append(joinedErrs, &failed[i])
+	}
+	if len(joinedErrs) > 0 {
 		return errors.Join(joinedErrs...)
 	}
 	return nil
@@ -710,6 +899,32 @@ func (m *Manager) unregisterChannelHTTPHandler(name string, ch Channel) {
 	}
 }
 
+// newDispatchContext derives a fresh cancelable context from ctx and wires it
+// into m.dispatchTask and m.dispatchCtx. Both StartAll and Reload use it so that
+// the dispatch context (which RegisterChannel and post-start workers bind to) is
+// always refreshed in lockstep with m.dispatchTask — preventing the class of bug
+// where a reload canceled the old context but forgot to refresh m.dispatchCtx,
+// leaving newly-added channels bound to a dead context. Caller must hold m.mu.
+// Returns the new context and its cancel func (the caller is responsible for
+// calling cancel on an early-abort path, e.g. all channels failed to start).
+func (m *Manager) newDispatchContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	dispatchCtx, cancel := context.WithCancel(ctx)
+	m.dispatchTask = &asyncTask{cancel: cancel}
+	m.dispatchCtx = dispatchCtx
+	return dispatchCtx, cancel
+}
+
+// startDispatchers launches the long-lived dispatch goroutines (text + media
+// outbound dispatchers and the TTL janitor) bound to dispatchCtx. Both StartAll
+// and Reload call it so the janitor is never forgotten on a reload (its omission
+// previously leaked typing/placeholder/stream entries after a reload). Caller
+// must hold m.mu.
+func (m *Manager) startDispatchers(dispatchCtx context.Context) {
+	go m.dispatchOutbound(dispatchCtx)
+	go m.dispatchOutboundMedia(dispatchCtx)
+	go m.runTTLJanitor(dispatchCtx)
+}
+
 func (m *Manager) StartAll(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -720,9 +935,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 	logger.InfoC("channels", "Starting all channels")
 
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
-	m.dispatchCtx = dispatchCtx
+	dispatchCtx, cancel := m.newDispatchContext(ctx)
 
 	startedCount := 0
 	configuredCount := len(m.channels)
@@ -750,12 +963,8 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		return fmt.Errorf("channels: all %d configured channels failed to start", configuredCount)
 	}
 
-	// Start the dispatcher that reads from the bus and routes to workers
-	go m.dispatchOutbound(dispatchCtx)
-	go m.dispatchOutboundMedia(dispatchCtx)
-
-	// Start the TTL janitor that cleans up stale typing/placeholder entries
-	go m.runTTLJanitor(dispatchCtx)
+	// Start the bus dispatchers (text + media) and the TTL janitor.
+	m.startDispatchers(dispatchCtx)
 
 	// Start shared HTTP server if configured
 	if m.httpServer != nil {
@@ -934,6 +1143,13 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			if !ok {
 				return
 			}
+			// Strip the internal drop-notice sentinel before delivery so the
+			// user only sees the human-readable notice text. Capture whether this
+			// was a manager-injected notice first — once stripped, sendWithRetry
+			// can no longer detect it, so it relies on this flag to avoid a
+			// notice-of-a-failed-notice amplification loop.
+			isNotice := strings.HasPrefix(msg.Content, dropNoticePrefix)
+			msg.Content = strings.TrimPrefix(msg.Content, dropNoticePrefix)
 			maxLen := 0
 			if mlp, ok := w.ch.(MessageLengthProvider); ok {
 				maxLen = mlp.MaxMessageLength()
@@ -960,7 +1176,7 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			for _, chunk := range chunks {
 				chunkMsg := msg
 				chunkMsg.Content = chunk
-				m.sendWithRetry(ctx, name, w, chunkMsg)
+				m.sendWithRetry(ctx, name, w, chunkMsg, isNotice)
 			}
 		case <-ctx.Done():
 			return
@@ -981,7 +1197,20 @@ func splitByLength(content string, maxLen int) []string {
 //   - ErrNotRunning / ErrSendFailed: permanent, no retry
 //   - ErrRateLimit: fixed delay retry
 //   - ErrTemporary / unknown: exponential backoff retry
-func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWorker, msg bus.OutboundMessage) {
+//
+// sendWithRetry delivers msg, retrying transient errors. isNotice must be true
+// when msg is a manager-injected drop/failure notice (the dropNoticePrefix
+// sentinel is stripped before delivery, so the prefix can no longer be detected
+// from msg.Content here — the caller passes the flag instead). It gates the
+// terminal-failure fallback so a notice that itself fails to send does not
+// recurse into an unbounded notice storm.
+func (m *Manager) sendWithRetry(
+	ctx context.Context,
+	name string,
+	w *channelWorker,
+	msg bus.OutboundMessage,
+	isNotice bool,
+) {
 	// Rate limit: wait for token
 	if err := w.limiter.Wait(ctx); err != nil {
 		// ctx canceled, shutting down
@@ -1036,6 +1265,16 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 		"error":   lastErr.Error(),
 		"retries": maxRetries,
 	})
+
+	// Surface a short user-facing notice so a failed text send is not silent.
+	// Guard against re-notifying our own fallback (isNotice marks manager-injected
+	// notices, whose dropNoticePrefix sentinel runWorker already stripped) so a
+	// fallback that itself fails to send does not recurse into a notice storm. The
+	// publish is non-blocking (see notifyDrop) to avoid stalling the worker when
+	// the bus is saturated.
+	if !isNotice {
+		m.notifyDrop(name, msg.ChatID, "[message delivery failed]")
+	}
 }
 
 func dispatchLoop[M any](
@@ -1078,7 +1317,7 @@ func dispatchLoop[M any](
 			}
 
 			if wExists && w != nil {
-				if !enqueue(ctx, w, msg) {
+				if !safeEnqueue(ctx, w, msg, enqueue) {
 					return
 				}
 			} else if exists {
@@ -1088,21 +1327,67 @@ func dispatchLoop[M any](
 	}
 }
 
+// safeEnqueue invokes the per-message enqueue closure with a recover guard. The
+// enqueue closures send on a worker queue inside a select that also watches
+// ctx.Done(); during shutdown/reload the worker queue may be closed concurrently
+// (StopAll/Reload close(w.queue)). If the queue is closed AND the send case is
+// chosen before ctx.Done() is observed (Go selects randomly among ready cases),
+// the send panics with "send on closed channel". We recover from that, treat it
+// as "stop dispatching" (return false), and exit the loop cleanly instead of
+// crashing the process mid-shutdown.
+func safeEnqueue[M any](
+	ctx context.Context,
+	w *channelWorker,
+	msg M,
+	enqueue func(context.Context, *channelWorker, M) bool,
+) (cont bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.WarnCF("channels", "Enqueue panic recovered (queue closed during shutdown)",
+				map[string]any{"panic": fmt.Sprintf("%v", r)})
+			cont = false
+		}
+	}()
+	return enqueue(ctx, w, msg)
+}
+
+// enqueueOutbound attempts to hand a text message to the channel worker's queue.
+// It returns true to keep the dispatch loop running, false to stop it (ctx done).
+// On backpressure (queue full) it drops the message and publishes a user-facing
+// drop notice — unless the message is itself a drop notice (the dropNoticePrefix
+// guard), which would otherwise amplify notices on a saturated channel. Extracted
+// from the dispatchOutbound closure so the drop/notify decision is unit-testable
+// without a running dispatcher goroutine.
+func (m *Manager) enqueueOutbound(ctx context.Context, w *channelWorker, msg bus.OutboundMessage) bool {
+	select {
+	case w.queue <- msg:
+		return true
+	case <-ctx.Done():
+		// Shutting down/reloading: do not attempt the send (the worker
+		// queue may already be closed, which would panic). Exit the loop.
+		return false
+	default:
+		// Backpressure: the worker queue is full. Report the drop instead
+		// of silently swallowing it, and surface user-facing feedback the
+		// same way a failed media send does so the user is not left
+		// waiting on a reply that will never arrive.
+		logger.ErrorCF("channels", "Outbound queue full, message dropped",
+			map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID})
+		// Don't re-notify if a drop notice itself got dropped (avoids
+		// an amplification loop).
+		if !strings.HasPrefix(msg.Content, dropNoticePrefix) {
+			m.notifyDrop(msg.Channel, msg.ChatID, "[message dropped: channel is overloaded, please retry]")
+		}
+		return true
+	}
+}
+
 func (m *Manager) dispatchOutbound(ctx context.Context) {
 	dispatchLoop(
 		ctx, m,
 		m.bus.OutboundChan(),
 		func(msg bus.OutboundMessage) string { return msg.Channel },
-		func(_ context.Context, w *channelWorker, msg bus.OutboundMessage) bool {
-			select {
-			case w.queue <- msg:
-				return true
-			default:
-				logger.ErrorCF("channels", "Outbound queue full, message dropped",
-					map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID})
-				return true
-			}
-		},
+		m.enqueueOutbound,
 		"Outbound dispatcher started",
 		"Outbound dispatcher stopped",
 		"Unknown channel for outbound message",
@@ -1115,13 +1400,20 @@ func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
 		ctx, m,
 		m.bus.OutboundMediaChan(),
 		func(msg bus.OutboundMediaMessage) string { return msg.Channel },
-		func(_ context.Context, w *channelWorker, msg bus.OutboundMediaMessage) bool {
+		func(ctx context.Context, w *channelWorker, msg bus.OutboundMediaMessage) bool {
 			select {
 			case w.mediaQueue <- msg:
 				return true
+			case <-ctx.Done():
+				// Shutting down/reloading: do not attempt the send (the worker
+				// queue may already be closed, which would panic). Exit the loop.
+				return false
 			default:
+				// Backpressure: the media queue is full. Report the drop and
+				// surface user-facing feedback.
 				logger.ErrorCF("channels", "Outbound media queue full, message dropped",
 					map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID})
+				m.notifyDrop(msg.Channel, msg.ChatID, "[media dropped: channel is overloaded, please retry]")
 				return true
 			}
 		},
@@ -1239,9 +1531,11 @@ func (m *Manager) sendMediaWithRetry(
 	return lastErr
 }
 
-// runTTLJanitor periodically scans the typingStops and placeholders maps
-// and evicts entries that have exceeded their TTL. This prevents memory
-// accumulation when outbound paths fail to trigger preSend (e.g. LLM errors).
+// runTTLJanitor periodically scans the typingStops, reactionUndos, placeholders
+// and streamActive maps and evicts entries that have exceeded their TTL. This
+// prevents memory accumulation when outbound paths fail to trigger preSend
+// (e.g. LLM errors). The per-tick sweep is delegated to evictStale so it can be
+// unit-tested deterministically without a wall-clock timer.
 func (m *Manager) runTTLJanitor(ctx context.Context) {
 	ticker := time.NewTicker(janitorInterval)
 	defer ticker.Stop()
@@ -1251,36 +1545,55 @@ func (m *Manager) runTTLJanitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			m.typingStops.Range(func(key, value any) bool {
-				if entry, ok := value.(typingEntry); ok {
-					if now.Sub(entry.createdAt) > typingStopTTL {
-						if _, loaded := m.typingStops.LoadAndDelete(key); loaded {
-							entry.stop() // idempotent, safe
-						}
-					}
-				}
-				return true
-			})
-			m.reactionUndos.Range(func(key, value any) bool {
-				if entry, ok := value.(reactionEntry); ok {
-					if now.Sub(entry.createdAt) > typingStopTTL {
-						if _, loaded := m.reactionUndos.LoadAndDelete(key); loaded {
-							entry.undo() // idempotent, safe
-						}
-					}
-				}
-				return true
-			})
-			m.placeholders.Range(func(key, value any) bool {
-				if entry, ok := value.(placeholderEntry); ok {
-					if now.Sub(entry.createdAt) > placeholderTTL {
-						m.placeholders.Delete(key)
-					}
-				}
-				return true
-			})
+			m.evictStale(now)
 		}
 	}
+}
+
+// evictStale performs a single TTL sweep over all expiry-tracked maps, evicting
+// (and invoking the idempotent cleanup of) every entry older than its TTL as of
+// now. Extracted from runTTLJanitor so the eviction logic is testable without
+// relying on the ticker.
+func (m *Manager) evictStale(now time.Time) {
+	m.typingStops.Range(func(key, value any) bool {
+		if entry, ok := value.(typingEntry); ok {
+			if now.Sub(entry.createdAt) > typingStopTTL {
+				if _, loaded := m.typingStops.LoadAndDelete(key); loaded {
+					entry.stop() // idempotent, safe
+				}
+			}
+		}
+		return true
+	})
+	m.reactionUndos.Range(func(key, value any) bool {
+		if entry, ok := value.(reactionEntry); ok {
+			if now.Sub(entry.createdAt) > typingStopTTL {
+				if _, loaded := m.reactionUndos.LoadAndDelete(key); loaded {
+					entry.undo() // idempotent, safe
+				}
+			}
+		}
+		return true
+	})
+	m.placeholders.Range(func(key, value any) bool {
+		if entry, ok := value.(placeholderEntry); ok {
+			if now.Sub(entry.createdAt) > placeholderTTL {
+				m.placeholders.Delete(key)
+			}
+		}
+		return true
+	})
+	// Evict stale streamActive markers. A marker is normally consumed by
+	// preSend/preSendMedia, but if the agent errors after Finalize and
+	// never publishes an outbound message for the key, the marker leaks.
+	m.streamActive.Range(func(key, value any) bool {
+		if entry, ok := value.(streamEntry); ok {
+			if now.Sub(entry.createdAt) > placeholderTTL {
+				m.streamActive.Delete(key)
+			}
+		}
+		return true
+	})
 }
 
 func (m *Manager) GetChannel(name string) (Channel, bool) {
@@ -1345,6 +1658,19 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		n := name // local copy — prevents closure from capturing the loop variable
 		// Stop all channels
 		channel := m.channels[n]
+		// Defense-in-depth: a "removed" name that never resolved to a registered
+		// channel (e.g. it failed to construct on a prior boot/reload) leaves
+		// m.channels[n] nil. Calling Stop would panic and crash the gateway. Skip the
+		// Stop but still queue the unregister so any stale bookkeeping is cleaned up.
+		if channel == nil {
+			logger.WarnCF("channels", "Skipping stop for unregistered channel", map[string]any{
+				"channel": n,
+			})
+			deferFuncs = append(deferFuncs, func() {
+				m.unregisterChannelLocked(n)
+			})
+			continue
+		}
 		logger.InfoCF("channels", "Stopping channel", map[string]any{
 			"channel": n,
 		})
@@ -1358,8 +1684,11 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 			m.unregisterChannelLocked(n)
 		})
 	}
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
+	// Refresh the dispatch context (and m.dispatchCtx, used by RegisterChannel and
+	// post-reload workers) in lockstep with m.dispatchTask. Without this, dispatch
+	// goroutines for channels added after a reload run on the just-canceled context
+	// and silently drop messages.
+	dispatchCtx, cancel := m.newDispatchContext(ctx)
 	cc, err := toChannelConfig(cfg, added)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
@@ -1368,14 +1697,33 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		cancel()
 		return err
 	}
-	// Clear failed channels before re-init so that channels that previously
-	// failed but now succeed are no longer reported as degraded.
-	m.failedChannels = m.failedChannels[:0]
+	// Capture the current failure list before clearing so we can revert it if
+	// initChannels fails — preventing a false-positive degraded signal after a
+	// rolled-back reload.
+	oldFailed := append([]ChannelInitError(nil), m.failedChannels...)
+
+	// Scope the clear to only the channels being re-attempted (the added set).
+	// Entries for channels NOT in added are left intact so that an unchanged-but-
+	// still-failed channel continues to be reported as degraded. Entries in added
+	// are dropped here; initChannels will re-record a failure if they fail again.
+	addedNames := make(map[string]struct{}, len(added))
+	for _, n := range added {
+		addedNames[n] = struct{}{}
+	}
+	kept := m.failedChannels[:0]
+	for _, f := range m.failedChannels {
+		if _, inAdded := addedNames[f.Name]; !inAdded {
+			kept = append(kept, f)
+		}
+	}
+	m.failedChannels = kept
+
 	err = m.initChannels(cc)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("initChannels error: %v", err))
 		m.config = oldConfig
 		m.secrets = oldSecrets
+		m.failedChannels = oldFailed
 		cancel()
 		return err
 	}
@@ -1383,6 +1731,19 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	for _, name := range added {
 		n := name // local copy — prevents closure from capturing the loop variable
 		channel := m.channels[n]
+		// Defense-in-depth: if the diff produced an "added" name that does not resolve
+		// to a constructed channel (e.g. a config-key/registered-name mismatch, or an
+		// initChannels if-ladder that skipped a misconfigured channel), m.channels[n]
+		// is nil. Calling Start on it would panic and crash the entire gateway. Record
+		// a degraded failure, drop the hash so the channel is re-attempted on the next
+		// reload, and continue — a single missing channel must NEVER take down the bus.
+		if channel == nil {
+			m.recordChannelFailure(n, n, fmt.Errorf(
+				"reload: channel %q was marked for start but is not registered "+
+					"(config/registration name mismatch or skipped init)", n))
+			delete(list, n)
+			continue
+		}
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": n,
 		})
@@ -1408,10 +1769,11 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	// Commit hashes only for successfully started channels.
 	m.channelHashes = list
 
-	// Restart dispatch goroutines against the new dispatchCtx so outbound messages
-	// continue to be routed after the old context was canceled above.
-	go m.dispatchOutbound(dispatchCtx)
-	go m.dispatchOutboundMedia(dispatchCtx)
+	// Restart the bus dispatchers + TTL janitor against the new dispatchCtx so
+	// outbound routing and stale-entry eviction resume after the old context was
+	// canceled above. (Reload previously forgot the janitor here — startDispatchers
+	// keeps StartAll and Reload in lockstep so it can't be omitted again.)
+	m.startDispatchers(dispatchCtx)
 
 	// Restart workers for existing (unchanged) channels on the new dispatch context.
 	// Without this, unchanged channel workers retain the old (canceled) context
@@ -1439,16 +1801,25 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		go m.runMediaWorker(dispatchCtx, name, w)
 	}
 
-	// Fix 15: execute deferFuncs synchronously after releasing the lock, not in a goroutine.
-	// Running them in a goroutine while the mutex is still held causes a deadlock;
-	// running them in a goroutine after unlock races with subsequent Reload calls.
-	// We must manually unlock here so that RegisterChannel/UnregisterChannel can acquire the lock.
-	m.mu.Unlock()
+	// Execute the register/unregister mutations while STILL holding m.mu.
+	//
+	// These call registerChannelLocked / unregisterChannelLocked, which mutate the
+	// shared m.channels / m.workers / m.mux maps. Concurrent readers take m.mu.RLock
+	// (SendMessage, GetStatus, GetChannel, the dispatchLoop goroutines restarted by
+	// startDispatchers above) and a concurrent RegisterChannel takes m.mu.Lock, so
+	// mutating these maps with the lock released is a data race (and a concurrent
+	// map read+write panic). We therefore keep the lock held: the deferred
+	// m.mu.Unlock() at the top releases it on return.
+	//
+	// This is deadlock-free: unregisterChannelLocked blocks on <-w.done / <-w.mediaDone
+	// (and runs synchronously), but runWorker/runMediaWorker close those channels on
+	// ctx cancellation or queue close WITHOUT acquiring m.mu, so the wait cannot block
+	// on the lock we hold. The *Locked helpers must never acquire m.mu themselves
+	// (only their exported wrappers RegisterChannel/UnregisterChannel do) — calling
+	// them here while holding the lock relies on that invariant.
 	for _, f := range deferFuncs {
 		f()
 	}
-	// Re-acquire so that the deferred m.mu.Unlock() at the top of the function is balanced.
-	m.mu.Lock()
 	return nil
 }
 
@@ -1518,14 +1889,18 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 	if mlp, ok := w.ch.(MessageLengthProvider); ok {
 		maxLen = mlp.MaxMessageLength()
 	}
+	// The direct send path does not carry manager-injected notices (those flow
+	// via notifyDrop -> bus -> runWorker), but detect the sentinel defensively so
+	// the no-amplification guard holds here too.
+	isNotice := strings.HasPrefix(msg.Content, dropNoticePrefix)
 	if maxLen > 0 && len([]rune(msg.Content)) > maxLen {
 		for _, chunk := range SplitMessage(msg.Content, maxLen) {
 			chunkMsg := msg
 			chunkMsg.Content = chunk
-			m.sendWithRetry(ctx, msg.Channel, w, chunkMsg)
+			m.sendWithRetry(ctx, msg.Channel, w, chunkMsg, isNotice)
 		}
 	} else {
-		m.sendWithRetry(ctx, msg.Channel, w, msg)
+		m.sendWithRetry(ctx, msg.Channel, w, msg, isNotice)
 	}
 	return nil
 }

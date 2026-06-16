@@ -1,0 +1,78 @@
+title: Schedule
+description: >
+  A scheduled instruction for an agent (#264) — the wire projection of a cron
+  job. When it fires, the owning agent runs the message in the chosen session
+  mode under guardrails. Read model returned by the /schedules endpoints.
+type: object
+required:
+  - id
+  - name
+  - enabled
+  - owner_agent_id
+  - trigger
+  - message
+  - deliver
+  - session_mode
+  - timeout_seconds
+  - state
+  - created_at_ms
+  - updated_at_ms
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: Stable schedule id (the underlying cron job id).
+  name:
+    type: string
+    minLength: 1
+  enabled:
+    type: boolean
+    description: When false, the scheduler does not fire it (paused).
+  owner_agent_id:
+    type: string
+    minLength: 1
+    description: The agent that runs this schedule. Pinned; never falls back to the default agent.
+  created_by:
+    type: string
+    description: Username that created the schedule (for notification routing).
+  trigger:
+    $ref: ./ScheduleTrigger.yaml
+  message:
+    type: string
+    minLength: 1
+    description: The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true).
+  deliver:
+    type: boolean
+    description: true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy).
+  session_mode:
+    type: string
+    enum:
+      - isolated
+      - continue
+      - main
+    description: isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
+  timeout_seconds:
+    type: integer
+    description: Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default.
+  session_id:
+    type: string
+    description: For continue/main modes, the persistent session id this schedule runs in.
+  channel:
+    type: string
+    description: Channel for deliver=true sends and the run's outbound context.
+  chat_id:
+    type: string
+    description: Chat/peer id within the channel for deliver=true sends.
+  state:
+    $ref: ./ScheduleState.yaml
+  runs:
+    type: array
+    description: The most recent runs (newest first), capped at 20.
+    items:
+      $ref: ./ScheduleRunRecord.yaml
+  created_at_ms:
+    type: integer
+    format: int64
+  updated_at_ms:
+    type: integer
+    format: int64

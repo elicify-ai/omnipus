@@ -114,9 +114,11 @@ describe('SubagentBlock_Expanded_NestedToolCallsInOrder', () => {
     const badges = within(expanded).getAllByRole('button')
     // Each ToolCallBadge renders a button (the header row)
     expect(badges.length).toBe(2)
-    // Verify order: fs.list first, shell second
-    expect(badges[0]).toHaveTextContent('fs.list')
-    expect(badges[1]).toHaveTextContent('shell')
+    // Verify order: fs.list first, shell second. Collapsed chips show the
+    // humanized label (humanizeToolName: 'fs.list' -> 'List', 'shell' -> 'Shell');
+    // the raw id is preserved in the expanded chip view.
+    expect(badges[0]).toHaveTextContent('List')
+    expect(badges[1]).toHaveTextContent('Shell')
   })
 })
 

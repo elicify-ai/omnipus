@@ -185,6 +185,10 @@ var (
 	configLimiter = newAPIRateLimiter(30, 1*time.Minute)
 	// /api/v1/auth/register-admin — 3 requests/minute per IP (highly sensitive).
 	registerAdminLimiter = newAPIRateLimiter(3, 1*time.Minute)
+	// /api/v1/auth/reauth — 10 requests/minute per IP. A password re-verification
+	// (sensitive), but a legitimate user may mistype a few times; tighter than
+	// login, not punitive (Spec-6 FR-12.2).
+	reauthLimiter = newAPIRateLimiter(10, 1*time.Minute)
 )
 
 // clientIP extracts the client IP from the request, checking X-Forwarded-For first.
@@ -246,10 +250,11 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 		prefix := "Bearer "
 		if strings.HasPrefix(authHeader, prefix) {
 			rawToken := strings.TrimPrefix(authHeader, prefix)
-			// Check per-user list (token hash via bcrypt)
+			// Check per-user list (bearer-token SET via bcrypt — SEC-1).
 			if len(cfg.Gateway.Users) > 0 {
-				for _, user := range cfg.Gateway.Users {
-					if user.TokenHash.Verify(rawToken) == nil {
+				for i := range cfg.Gateway.Users {
+					user := cfg.Gateway.Users[i]
+					if user.VerifyToken(rawToken) == nil {
 						ctx := context.WithValue(r.Context(), RoleContextKey{}, user.Role)
 						ctx = context.WithValue(ctx, UserContextKey{}, &user)
 						a.setCORSHeaders(w, r)
@@ -317,7 +322,21 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-compute the bearer-token bcrypt hash and its embedded ID outside the
+	// config lock (bcrypt is intentionally slow; must not hold configMu).
+	// SEC-1: bcrypt only the secret body (config.TokenSecret) so the input stays
+	// under bcrypt's 72-byte ceiling — the ID prefix is non-secret routing data.
+	tokenHash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(token)), bcrypt.DefaultCost)
+	if err != nil {
+		slog.Error("auth: hash token failed", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "login failed")
+		return
+	}
+	tokenID := config.TokenIDFromRaw(token)
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+
 	var foundRole string
+	var evictedTokens int
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		gw, ok := m["gateway"].(map[string]any)
 		if !ok {
@@ -346,12 +365,12 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			if bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(body.Password)) != nil {
 				return ErrInvalidCredentials
 			}
-			// Update both token hashes atomically via safeUpdateConfigJSON.
-			tokenHash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.DefaultCost)
-			if err != nil {
-				return fmt.Errorf("token hash failed: %w", err)
-			}
-			userMap["token_hash"] = string(tokenHash)
+			// SEC-1 / UAT #399: APPEND to the bearer-token set — never overwrite.
+			// Existing tokens for other tabs/devices/clients stay valid; the cap
+			// evicts only the oldest entries beyond config.MaxUserTokens.
+			evictedTokens = appendUserToken(userMap, tokenID, string(tokenHash), createdAt)
+			// Session-cookie token remains single-slot (one browser session
+			// cookie per login is the existing contract); overwrite as before.
 			userMap["session_token_hash"] = string(sessionHash)
 			foundRole, _ = userMap["role"].(string)
 			return nil
@@ -374,12 +393,17 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload in-memory config so withAuth middleware picks up the new token hash.
-	// Reload failure is non-fatal for login — the token is on disk and will be
-	// picked up on the next config poll.
-	if err := a.awaitReload(); err != nil {
-		slog.Warn("auth: hot-reload after login failed; token active after next restart", "error", err)
+	if evictedTokens > 0 {
+		slog.Info("auth: evicted oldest bearer tokens over cap",
+			"username", body.Username, "evicted", evictedTokens, "cap", config.MaxUserTokens)
 	}
+
+	// The new token is already live in memory: safeUpdateConfigJSON above ran
+	// refreshConfigAndRewireServices → SwapConfig, so withAuth reads the updated
+	// Gateway.Users immediately. We deliberately do NOT call triggerReloadAndWait here: a
+	// full service reload for a token append needlessly restarts channels/cron
+	// and can cancel an in-flight scheduled run (#412 — every login churned a
+	// reload that canceled Run-now turns).
 
 	// Reset rate limit counter on successful login.
 	globalLoginLimiter.recordSuccess(ip, body.Username)
@@ -463,7 +487,9 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "could not register admin")
 		return
 	}
-	tokenHash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.DefaultCost)
+	// SEC-1: bcrypt only the secret body so the 81-byte ID-tagged token stays
+	// under bcrypt's 72-byte input ceiling.
+	tokenHash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(token)), bcrypt.DefaultCost)
 	if err != nil {
 		slog.Error("auth: hash token failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not register admin")
@@ -508,10 +534,16 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Append the new admin entry (all hashes already computed above).
+		// SEC-1: store the bearer token in the token SET, not the legacy
+		// single token_hash, so subsequent logins append rather than evict.
 		newUser := map[string]any{
-			"username":           body.Username,
-			"password_hash":      string(passwordHash),
-			"token_hash":         string(tokenHash),
+			"username":      body.Username,
+			"password_hash": string(passwordHash),
+			"tokens": []any{map[string]any{
+				"id":         config.TokenIDFromRaw(token),
+				"hash":       string(tokenHash),
+				"created_at": time.Now().UTC().Format(time.RFC3339),
+			}},
 			"session_token_hash": string(sessionHash),
 			"role":               string(config.UserRoleAdmin),
 		}
@@ -529,7 +561,7 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 
 	// Reload in-memory config so withAuth middleware picks up the new token hash immediately.
 	// Reload failure is non-fatal — token is on disk and active after next config poll.
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Warn("auth: hot-reload after register-admin failed; token active after next restart", "error", err)
 	}
 
@@ -555,8 +587,10 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleLogout handles POST /api/v1/auth/logout.
-// Invalidates the authenticated user's token by clearing token_hash and
-// session_token_hash in config.json, then revokes both browser-side cookies.
+// Revokes ONLY the caller's presented bearer token (SEC-1 / UAT #399) — the
+// user's other tokens stay valid, so concurrent sessions on other tabs/devices
+// are unaffected. It also clears the single-slot session_token_hash in
+// config.json and revokes both browser-side cookies (session + CSRF).
 func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -567,6 +601,15 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
+	// SEC-1 / UAT #399: revoke ONLY the caller's presented bearer token, not
+	// every token the user holds — concurrent sessions on other tabs/devices
+	// must remain valid. Recover the presented token from the Authorization
+	// header to locate its entry in the token set.
+	var presentedToken string
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		presentedToken = strings.TrimPrefix(auth, "Bearer ")
+	}
+	presentedID := config.TokenIDFromRaw(presentedToken)
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		gw, ok := m["gateway"].(map[string]any)
 		if !ok {
@@ -581,11 +624,14 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue
 			}
-			if um["username"] == user.Username {
-				um["token_hash"] = ""
-				um["session_token_hash"] = ""
-				return nil
+			if um["username"] != user.Username {
+				continue
 			}
+			revokeUserToken(um, presentedToken, presentedID)
+			// Always clear the single-slot session-cookie hash — logout ends
+			// this browser session regardless of the bearer-token path.
+			um["session_token_hash"] = ""
+			return nil
 		}
 		return fmt.Errorf("user not found in config")
 	}); err != nil {
@@ -593,9 +639,8 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "logout failed")
 		return
 	}
-	if err := a.awaitReload(); err != nil {
-		slog.Warn("auth: hot-reload after logout failed", "error", err)
-	}
+	// Token revocation is already live via safeUpdateConfigJSON → SwapConfig
+	// above; no full service reload needed (avoids channel/cron churn — #412).
 	// Revoke both browser-side cookies (session + CSRF). Defense-in-depth:
 	// the server-side hashes were already cleared above.
 	middleware.ClearSessionCookie(w, r)
@@ -661,6 +706,16 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 				return ErrInvalidCredentials
 			}
 			um["password_hash"] = string(newHash)
+			// Invalidate all existing sessions so the user must re-authenticate
+			// with the new password. SEC-1 / UAT #399: login now appends bearer
+			// tokens to the "tokens" set rather than the legacy single
+			// "token_hash" — clearing only the legacy field would leave every
+			// active bearer token in "tokens" live, so the password change would
+			// NOT log old sessions out. Clear the whole token set plus both
+			// legacy single-slot hashes.
+			um["tokens"] = []any{}
+			um["token_hash"] = ""
+			um["session_token_hash"] = ""
 			return nil
 		}
 		return ErrUserNotFound
@@ -677,38 +732,159 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "password change failed")
 		return
 	}
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Warn("auth: hot-reload after change-password failed", "error", err)
 	}
+	// Revoke the caller's browser-side cookies. Old bearer tokens and session
+	// cookies are now invalid (hashes cleared above). The SPA must redirect to
+	// login. Cookie-clearing headers must be written before the JSON body.
+	middleware.ClearSessionCookie(w, r)
+	middleware.ClearCSRFCookie(w, r)
 	jsonOK(w, gen.OperationResult{Success: true})
 }
 
 // generateUserToken creates a random bearer token for authentication.
+//
+// SEC-1 / UAT #399: the token embeds a short non-secret ID prefix
+// ("omnipus_<id>_<body>") so verification can index directly to the matching
+// hash in the user's token SET instead of bcrypt-looping every entry. Use
+// config.TokenIDFromRaw to recover the embedded ID and config.TokenSecret to
+// recover the bcrypt-hashed body when storing the token's hash in a token-set
+// entry. Token entropy is 256-bit (32 bytes) in the secret body, as before —
+// the 8-hex-char (32-bit) ID is non-secret routing metadata, not part of the
+// authentication secret.
+//
+// The signature accepts a (currently unused) username parameter so existing call
+// sites compile unchanged; the token is user-agnostic — the caller stamps the ID
+// after the fact via config.TokenIDFromRaw.
 func generateUserToken(_ string) (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
+	idBytes := make([]byte, 4) // 32-bit non-secret routing prefix
+	if _, err := rand.Read(idBytes); err != nil {
 		return "", fmt.Errorf("rand read failed: %w", err)
 	}
-	return "omnipus_" + hex.EncodeToString(bytes), nil
+	body := make([]byte, 32) // 256-bit secret body
+	if _, err := rand.Read(body); err != nil {
+		return "", fmt.Errorf("rand read failed: %w", err)
+	}
+	return "omnipus_" + hex.EncodeToString(idBytes) + "_" + hex.EncodeToString(body), nil
 }
 
-// awaitReload triggers a config reload and waits briefly for it to complete.
-// Returns an error when reload fails so callers can surface requires_restart to
-// the admin — disk write succeeded, but in-memory state is not yet updated.
+// appendUserToken adds a new token entry to a user's JSON token set (the
+// "tokens" array on the userMap), evicting the oldest entries beyond
+// config.MaxUserTokens. It returns the number of evicted entries so the caller
+// can log the eviction. Login appends, never evicts the caller's own token
+// unless the cap forces it.
+func appendUserToken(userMap map[string]any, id, hash, createdAt string) (evicted int) {
+	var tokens []any
+	if raw, ok := userMap["tokens"].([]any); ok {
+		tokens = raw
+	}
+	tokens = append(tokens, map[string]any{
+		"id":         id,
+		"hash":       hash,
+		"created_at": createdAt,
+	})
+	// Cap: keep the newest config.MaxUserTokens entries (slice is append-order,
+	// so the oldest are at the front).
+	if len(tokens) > config.MaxUserTokens {
+		evicted = len(tokens) - config.MaxUserTokens
+		tokens = tokens[evicted:]
+	}
+	userMap["tokens"] = tokens
+	return evicted
+}
+
+// revokeUserToken removes exactly ONE token entry — the one matching the
+// presented raw token — from a user's JSON token set, leaving every other
+// concurrent session intact (SEC-1 / UAT #399).
+//
+// Matching strategy:
+//   - When the presented token carries an embedded ID, remove the entry whose
+//     "id" equals it (and whose hash verifies, defending against a forged ID
+//     prefix that does not actually authenticate).
+//   - Otherwise (legacy token with no ID), bcrypt-scan the set and remove the
+//     first entry that verifies, and clear the legacy single token_hash if it
+//     verifies.
+//
+// A no-op (no matching live token) is acceptable — the cookies are still
+// cleared by the caller, so the browser session ends regardless.
+func revokeUserToken(userMap map[string]any, presentedToken, presentedID string) {
+	// Legacy single token_hash was computed over the FULL raw token; clear it
+	// if the presented token verifies.
+	if legacy, ok := userMap["token_hash"].(string); ok && legacy != "" {
+		if config.BcryptHash(legacy).Verify(presentedToken) == nil {
+			userMap["token_hash"] = ""
+		}
+	}
+
+	raw, ok := userMap["tokens"].([]any)
+	if !ok || len(raw) == 0 {
+		return
+	}
+	// Token-set entry hashes are computed over the secret body only (SEC-1).
+	secret := config.TokenSecret(presentedToken)
+	kept := make([]any, 0, len(raw))
+	removed := false
+	for _, e := range raw {
+		entry, ok := e.(map[string]any)
+		if !ok {
+			continue // drop malformed entries
+		}
+		if !removed {
+			entryID, _ := entry["id"].(string)
+			entryHash, _ := entry["hash"].(string)
+			match := false
+			if presentedID != "" && entryID == presentedID {
+				// ID matches — confirm with a bcrypt verify so a spoofed ID
+				// prefix on a non-matching body cannot revoke someone's token.
+				match = config.BcryptHash(entryHash).Verify(secret) == nil
+			} else if presentedID == "" {
+				// Legacy token (no ID): match by bcrypt verify over the body
+				// (which for a legacy token equals the full token).
+				match = config.BcryptHash(entryHash).Verify(secret) == nil
+			}
+			if match {
+				removed = true
+				continue // drop this entry
+			}
+		}
+		kept = append(kept, entry)
+	}
+	userMap["tokens"] = kept
+}
+
+// triggerReloadAndWait triggers a config reload and polls until
+// IsReloadPending() clears (indicating the in-memory config has been updated),
+// up to a 5-second deadline. Returns an error when the reload fails to start;
+// reload-completion timeout is treated as best-effort (we return nil so callers
+// are not blocked indefinitely).
 //
 // The special case "reload not configured" (reloadFunc == nil) is treated as a
 // no-op rather than an error: this condition is normal in unit tests where the
 // full gateway reload pipeline is not wired. Production always configures the
 // reload function during startup.
-func (a *restAPI) awaitReload() error {
+func (a *restAPI) triggerReloadAndWait() error {
 	if err := a.agentLoop.TriggerReload(); err != nil {
 		if errors.Is(err, agent.ErrReloadNotConfigured) {
 			// Unit-test environment — no reload pipeline wired; treat as no-op.
 			return nil
 		}
-		slog.Error("config reload failed", "error", err)
-		return err
+		if errors.Is(err, agent.ErrReloadAlreadyInProgress) {
+			// Another reload is in flight; poll until it completes rather than
+			// returning an error — the result will include our config change.
+			// Fall through to the polling loop below.
+		} else {
+			slog.Error("config reload failed", "error", err)
+			return err
+		}
 	}
-	time.Sleep(100 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !a.agentLoop.IsReloadPending() {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Reload may still be running; return nil so callers are not blocked indefinitely.
 	return nil
 }

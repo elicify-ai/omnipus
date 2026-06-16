@@ -107,7 +107,40 @@ var (
 	ctxKeyAgentID             = &toolCtxKey{"agentID"}
 	ctxKeySessionKey          = &toolCtxKey{"sessionKey"}
 	ctxKeyTranscriptSessionID = &toolCtxKey{"transcriptSessionID"}
+	ctxKeyProcTracker         = &toolCtxKey{"procTracker"}
+	ctxKeySessionOwner        = &toolCtxKey{"sessionOwner"}
+	ctxKeyWorkspaceID         = &toolCtxKey{"workspaceID"}
 )
+
+// ProcessTrackerFunc records a child PID spawned by a tool so a caller (e.g. the
+// scheduled-run lane, FR-011) can terminate it when the run finishes. It is
+// installed on the tool context by the caller via WithProcessTracker; tools call
+// TrackProcess after spawning a child. A nil tracker (the default for
+// interactive runs) makes TrackProcess a no-op, so normal chat sessions are
+// unaffected.
+type ProcessTrackerFunc func(pid int)
+
+// WithProcessTracker returns a child context carrying a child-process tracker.
+// The scheduled runner installs one keyed to the run's session so spawned
+// children can be cleaned up on completion (FR-011).
+func WithProcessTracker(ctx context.Context, fn ProcessTrackerFunc) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyProcTracker, fn)
+}
+
+// TrackProcess reports a spawned child PID to the context's process tracker, if
+// one is installed. No-op when no tracker is present (the common interactive
+// case) or pid <= 0.
+func TrackProcess(ctx context.Context, pid int) {
+	if pid <= 0 {
+		return
+	}
+	if fn, ok := ctx.Value(ctxKeyProcTracker).(ProcessTrackerFunc); ok && fn != nil {
+		fn(pid)
+	}
+}
 
 // WithToolContext returns a child context carrying channel and chatID.
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {
@@ -160,6 +193,33 @@ func WithAgentID(ctx context.Context, agentID string) context.Context {
 // ToolAgentID extracts the agent ID from ctx, or "" if unset.
 func ToolAgentID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyAgentID).(string)
+	return v
+}
+
+// WithSessionOwner returns a child context carrying the session owner username.
+// This is the authenticated user who created the session; empty string means
+// unowned/shared (agent-created or scheduled runs with no human creator).
+func WithSessionOwner(ctx context.Context, owner string) context.Context {
+	return context.WithValue(ctx, ctxKeySessionOwner, owner)
+}
+
+// ToolSessionOwner extracts the session owner username from ctx, or "" if unset.
+func ToolSessionOwner(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeySessionOwner).(string)
+	return v
+}
+
+// WithWorkspaceID returns a child context carrying the workspace ID.
+// The workspace ID identifies which per-workspace shared memory room to use (FR-7.1).
+func WithWorkspaceID(ctx context.Context, workspaceID string) context.Context {
+	return context.WithValue(ctx, ctxKeyWorkspaceID, workspaceID)
+}
+
+// ToolWorkspaceID extracts the workspace ID from ctx, or "" if unset.
+// An empty workspace ID means the agent turn is not associated with a Spec-1
+// Workspace; the memory store falls back to the private room only.
+func ToolWorkspaceID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyWorkspaceID).(string)
 	return v
 }
 

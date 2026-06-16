@@ -118,8 +118,21 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       // we use 30s to give the real LLM time as well.
       const replyTimeout = 30_000
 
-      // Wait for first assistant message in tab 1.
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: replyTimeout })
+      // The contract under test is "both sessions are serviced concurrently"
+      // (no session starvation). The assertion MUST wait for a SETTLED reply, not
+      // the optimistic empty assistant placeholder the SPA renders synchronously
+      // on send (ChatScreen.tsx ~860 emits data-message-id + data-status="running"
+      // before any token arrives). Without the `:not([data-status="running"])`
+      // exclusion the test would go green the instant Enter is pressed — even under
+      // total session starvation, the exact bug it guards. So we reuse the
+      // `assistantMessages` helper (selectors.ts), which excludes running
+      // placeholders. This STILL tolerates a provider-interrupted reply: an
+      // interrupted/incomplete message has data-status "incomplete"/"interrupted",
+      // NOT "running", so it is still admitted as a serviced reply.
+      const anyAssistantReply = (p: typeof page) => assistantMessages(p)
+
+      // Wait for at least one settled assistant reply in tab 1.
+      await expect(anyAssistantReply(page).first()).toBeVisible({ timeout: replyTimeout })
         .catch((e) => {
           throw new Error(
             `BUG-3: Tab 1 did not receive a reply within ${replyTimeout / 1000}s. ` +
@@ -128,8 +141,8 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
           )
         })
 
-      // Wait for first assistant message in tab 2.
-      await expect(assistantMessages(page2)).toHaveCount(1, { timeout: replyTimeout })
+      // Wait for at least one assistant reply in tab 2.
+      await expect(anyAssistantReply(page2).first()).toBeVisible({ timeout: replyTimeout })
         .catch((e) => {
           throw new Error(
             `BUG-3: Tab 2 did not receive a reply within ${replyTimeout / 1000}s. ` +

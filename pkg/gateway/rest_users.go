@@ -74,7 +74,7 @@ func (a *restAPI) HandleUsersList(w http.ResponseWriter, r *http.Request) {
 			Username:       u.Username,
 			Role:           gen.UserRole(u.Role),
 			HasPassword:    u.PasswordHash != "",
-			HasActiveToken: !u.TokenHash.IsZero(),
+			HasActiveToken: u.HasActiveToken(),
 		})
 	}
 	jsonOK(w, out)
@@ -170,7 +170,7 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		emitUserAudit(r, a, "gateway.users."+body.Username, nil, map[string]any{
 			"username": body.Username,
 			"role":     string(body.Role),
@@ -282,7 +282,7 @@ func (a *restAPI) HandleUserDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if reloadErr := a.awaitReload(); reloadErr != nil {
+	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
 		// Old value contains {username, role} only — no hash fields.
 		emitUserAudit(r, a, "gateway.users."+username, map[string]any{
 			"username": username,
@@ -380,7 +380,7 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if reloadErr := a.awaitReload(); reloadErr != nil {
+	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
 		emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(body.Role))
 		slog.Info(
 			"rest: user role changed (restart required)",
@@ -465,7 +465,11 @@ func (a *restAPI) HandleUserResetPassword(w http.ResponseWriter, r *http.Request
 			u["password_hash"] = string(newHash)
 			// Zero token_hash in the SAME transaction so the target
 			// user's currently-issued bearer 401s after the refresh.
+			// SEC-1 / UAT #399: also clear the whole bearer-token SET so ALL of
+			// this user's sessions are revoked, not just the legacy token_hash.
+			// Scoped to this one user (reset invalidates every session).
 			u["token_hash"] = ""
+			u["tokens"] = []any{}
 			return nil
 		})
 	}); updErr != nil {
@@ -478,7 +482,7 @@ func (a *restAPI) HandleUserResetPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if reloadErr := a.awaitReload(); reloadErr != nil {
+	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
 		emitUserAudit(r, a, "gateway.users."+username+".password",
 			map[string]any{"password": ""},
 			map[string]any{"password": body.Password},

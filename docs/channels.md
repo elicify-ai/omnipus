@@ -2,7 +2,7 @@
 
 > Back to [docs index](README.md)
 
-Talk to your Omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, OneBot, or Google Chat. **The web app is the primary way to set channels up.** Editing `config.json` by hand (shown in each [per-platform section](#per-platform-credentials)) is an optional alternative for headless or automated deployments.
+Talk to your Omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, or Google Chat. **The web app is the primary way to set channels up.** Editing `config.json` by hand (shown in each [per-platform section](#per-platform-credentials)) is an optional alternative for headless or automated deployments.
 
 ## Configure a channel in the app
 
@@ -25,13 +25,13 @@ Click **Save & Enable** to connect the channel and start routing — no file edi
 
 Each platform's section below tells you where to obtain the credentials you paste into **Configure** (bot tokens, app secrets, webhooks, etc.). Each section also shows the equivalent **`config.json`** snippet — the manual alternative for headless/automated setups.
 
-> **Note**: Channels that rely on HTTP callbacks share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`). Socket/stream-based channels such as Feishu, DingTalk, and WeCom do not rely on the shared webhook server for inbound delivery.
+> **Note**: Channels that rely on HTTP callbacks share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:5000`). Socket/stream-based channels such as Feishu, DingTalk, and WeCom do not rely on the shared webhook server for inbound delivery.
 
 | Channel              | Difficulty         | Description                                           | Documentation                                                                                                    |
 | -------------------- | ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Telegram**         | ⭐ Easy            | Recommended, voice-to-text, long polling (no public IP needed) | [Docs](channels/telegram.md)                                                                  |
 | **Discord**          | ⭐ Easy            | Socket Mode, group/DM support, rich bot ecosystem     | [Docs](channels/discord.md)                                                                           |
-| **WhatsApp**         | ⭐ Easy            | Native (QR scan) or Bridge URL                        | [Docs](channels/whatsapp.md) / [Native](channels/whatsapp_native.md)                              |
+| **WhatsApp**         | ⭐ Easy            | Native QR scan (whatsmeow)                            | [Native](channels/whatsapp_native.md)                                                          |
 | **Weixin**           | ⭐ Easy            | Native QR scan (Tencent iLink API)                    | [Docs](#weixin)                                                                            |
 | **Slack**            | ⭐ Easy            | **Socket Mode** (no public IP needed), enterprise     | [Docs](channels/slack.md)                                                                             |
 | **Matrix**           | ⭐⭐ Medium        | Federated protocol, self-hosting supported            | [Docs](channels/matrix.md)                                                                            |
@@ -40,8 +40,8 @@ Each platform's section below tells you where to obtain the credentials you past
 | **LINE**             | ⭐⭐⭐ Advanced    | HTTPS Webhook required                                | [Docs](channels/line.md)                                                                              |
 | **WeCom (企业微信)** | ⭐⭐⭐ Advanced    | Official AI Bot over WebSocket, streaming + media     | [Docs](channels/wecom.md) |
 | **Feishu (飞书)**    | ⭐⭐⭐ Advanced    | Enterprise collaboration, feature-rich                | [Docs](channels/feishu.md)                                                                            |
+| **Google Chat**      | ⭐⭐⭐ Advanced    | Bot mode (full interactive) or webhook (send only)    | [Docs](channels/google-chat.md)                                                                    |
 | **IRC**              | ⭐⭐ Medium        | Server + TLS configuration                            | [Docs](channels/irc.md)                                                                                  |
-| **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](channels/onebot.md)                                                                            |
 
 <a id="telegram"></a>
 <details>
@@ -58,7 +58,7 @@ Open Telegram, search for `@BotFather`, send `/newbot`, follow the prompts, and 
   "channels": {
     "telegram": {
       "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
+      "token_ref": "telegram_bot_token",
       "allow_from": ["YOUR_USER_ID"],
       "use_markdown_v2": false
     }
@@ -111,7 +111,7 @@ Go to Discord Settings → Advanced, enable **Developer Mode**, then right-click
   "channels": {
     "discord": {
       "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
+      "token_ref": "discord_bot_token",
       "allow_from": ["YOUR_USER_ID"]
     }
   }
@@ -162,9 +162,7 @@ omnipus start
 
 Omnipus can connect to WhatsApp in two ways.
 
-**Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Set `"use_native": true` and leave `bridge_url` empty. On first run, scan the QR code with WhatsApp (Linked Devices). Session is stored under your workspace (e.g. `workspace/whatsapp/`). The native channel is **optional** to keep the default binary small; build with `-tags whatsapp_native` (e.g. `make build-whatsapp-native` or `go build -tags whatsapp_native ./cmd/...`).
-
-**Bridge:** Connect to an external WebSocket bridge. Set `bridge_url` (e.g. `ws://localhost:3001`) and keep `use_native` false.
+**Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Open **Channels → Configure** on the WhatsApp card, turn on **Native Mode** and **Save & Enable** — the pairing QR renders live in the panel; scan it with WhatsApp → **Linked Devices** → **Link a Device** (see [Native docs](channels/whatsapp_native.md#pair-in-the-app-recommended)). Session is stored under your workspace (e.g. `workspace/whatsapp/`). Native WhatsApp is included in the **default build** (and every official release) — no build tag needed. (A smaller `lite` build that omits it is available via `make build-lite`; on a lite build the native channel fails to start.)
 
 **Configure (native)**
 
@@ -173,7 +171,6 @@ Omnipus can connect to WhatsApp in two ways.
   "channels": {
     "whatsapp": {
       "enabled": true,
-      "use_native": true,
       "session_store_path": "",
       "allow_from": []
     }
@@ -181,7 +178,7 @@ Omnipus can connect to WhatsApp in two ways.
 }
 ```
 
-If `session_store_path` is empty, the session is stored in `<workspace>/whatsapp/`. Run `omnipus start`; on first run, scan the QR code printed in the terminal with WhatsApp → Linked Devices.
+If `session_store_path` is empty, the session is stored in `<workspace>/whatsapp/`. After enabling the channel, scan the pairing QR — it renders live in the **Channels → Configure** panel (recommended), and is also printed to the terminal on first run for headless setups. Scan with WhatsApp → **Linked Devices** → **Link a Device**.
 
 </details>
 
@@ -207,7 +204,7 @@ Scan the printed QR code with your WeChat mobile app. On success, the token is s
   "channels": {
     "weixin": {
       "enabled": true,
-      "token": "YOUR_TOKEN",
+      "token_ref": "weixin_token",
       "allow_from": ["YOUR_USER_ID"]
     }
   }
@@ -239,7 +236,7 @@ QQ Open Platform provides a one-click setup page for OpenClaw-compatible bots:
     "qq": {
       "enabled": true,
       "app_id": "YOUR_APP_ID",
-      "app_secret": "YOUR_APP_SECRET",
+      "app_secret_ref": "qq_app_secret",
       "allow_from": []
     }
   }
@@ -274,7 +271,7 @@ Go to [Open Platform](https://open.dingtalk.com/), create an internal app, and c
     "dingtalk": {
       "enabled": true,
       "client_id": "YOUR_CLIENT_ID",
-      "client_secret": "YOUR_CLIENT_SECRET",
+      "client_secret_ref": "dingtalk_client_secret",
       "allow_from": []
     }
   }
@@ -339,8 +336,8 @@ Go to [LINE Developers Console](https://developers.line.biz/), create a provider
   "channels": {
     "line": {
       "enabled": true,
-      "channel_secret": "YOUR_CHANNEL_SECRET",
-      "channel_access_token": "YOUR_CHANNEL_ACCESS_TOKEN",
+      "channel_secret_ref": "line_channel_secret",
+      "channel_access_token_ref": "line_channel_access_token",
       "webhook_path": "/webhook/line",
       "allow_from": []
     }
@@ -348,15 +345,15 @@ Go to [LINE Developers Console](https://developers.line.biz/), create a provider
 }
 ```
 
-> LINE webhook is served on the shared Gateway server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`).
+> LINE webhook is served on the shared Gateway server (`gateway.host`:`gateway.port`, default `127.0.0.1:5000`).
 
 **3. Set up Webhook URL**
 
 LINE requires HTTPS for webhooks. Use a reverse proxy or tunnel:
 
 ```bash
-# Example with ngrok (gateway default port is 18790)
-ngrok http 18790
+# Example with ngrok (gateway default port is 5000)
+ngrok http 5000
 ```
 
 Then set the Webhook URL in LINE Developers Console to `https://your-domain/webhook/line` and enable **Use webhook**.
@@ -397,7 +394,7 @@ This command shows a QR code, waits for approval in WeCom, and writes `bot_id` a
     "wecom": {
       "enabled": true,
       "bot_id": "YOUR_BOT_ID",
-      "secret": "YOUR_SECRET",
+      "secret_ref": "wecom_secret",
       "websocket_url": "wss://openws.work.weixin.qq.com",
       "send_thinking_message": true,
       "allow_from": [],
@@ -435,7 +432,7 @@ Go to [Feishu Open Platform](https://open.feishu.cn/) and create an application.
     "feishu": {
       "enabled": true,
       "app_id": "cli_xxx",
-      "app_secret": "YOUR_APP_SECRET",
+      "app_secret_ref": "feishu_app_secret",
       "allow_from": []
     }
   }
@@ -471,8 +468,8 @@ Go to [Slack API](https://api.slack.com/apps) and create a new app. Under **OAut
   "channels": {
     "slack": {
       "enabled": true,
-      "bot_token": "xoxb-YOUR-BOT-TOKEN",
-      "app_token": "xapp-YOUR-APP-TOKEN",
+      "bot_token_ref": "slack_bot_token",
+      "app_token_ref": "slack_app_token",
       "allow_from": []
     }
   }
@@ -521,41 +518,57 @@ The bot will connect to the IRC server and join the specified channels.
 
 </details>
 
-<a id="onebot"></a>
+<a id="google-chat"></a>
 <details>
-<summary><b>OneBot (QQ via OneBot protocol)</b></summary>
+<summary><b>Google Chat</b></summary>
 
-OneBot is an open protocol for QQ bots. Omnipus connects to any OneBot v11 compatible implementation (e.g., [Lagrange](https://github.com/LagrangeDev/Lagrange.Core), [NapCat](https://github.com/NapNeko/NapCatQQ)) via WebSocket.
+Omnipus supports Google Chat via two modes: **webhook** (outbound only, simple setup) and **bot** (full interactive — receives and sends messages).
 
-**1. Set up a OneBot implementation**
+**1. Configure**
 
-Install and run a OneBot v11 compatible QQ bot framework. Enable its WebSocket server.
-
-**2. Configure**
+Webhook mode (outbound only):
 
 ```json
 {
   "channels": {
-    "onebot": {
+    "google-chat": {
       "enabled": true,
-      "ws_url": "ws://127.0.0.1:8080",
-      "access_token": "",
+      "mode": "webhook",
+      "webhook_url": "https://chat.googleapis.com/v1/spaces/SPACE_ID/messages?key=...",
       "allow_from": []
     }
   }
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `ws_url` | WebSocket URL of the OneBot implementation |
-| `access_token` | Access token for authentication (if configured in OneBot) |
-| `reconnect_interval` | Reconnect interval in seconds (default: 5) |
+Bot mode (full interactive):
 
-**3. Run**
+```json
+{
+  "channels": {
+    "google-chat": {
+      "enabled": true,
+      "mode": "bot",
+      "service_account_json": "{...}",
+      "space": "spaces/abc123",
+      "bot_user": "bot@your-project.iam.gserviceaccount.com",
+      "allow_from": [],
+      "group_trigger": {
+        "mention_only": false,
+        "prefixes": ["/ask"]
+      },
+      "reasoning_channel_id": ""
+    }
+  }
+}
+```
+
+**2. Run**
 
 ```bash
 omnipus start
 ```
+
+For full options, see [Google Chat Configuration Guide](channels/google-chat.md).
 
 </details>

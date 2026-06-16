@@ -36,11 +36,15 @@ properties:
       - core
       - custom
       - system
+      - worker
     description: >
       Agent classification. "core" = compiled-in identity locked agent.
       "custom" = user-defined agent. "system" = legacy operator-supplied entry
       (config.AgentTypeSystem survives in the API contract for backwards compatibility
       but SeedConfig does NOT create these — they only appear if config.json contains one).
+      "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a
+      chat target, has no heartbeat, is never the default, and carries an executor
+      (see Agent.executor). The FE sections the roster by type==='worker'.
     example: "core"
   locked:
     type: boolean
@@ -179,3 +183,29 @@ properties:
       Whether this agent is the global default that handles inbound messages
       with no more-specific routing rule. At most one agent is default.
     example: false
+  skills:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+    description: >
+      List of skill IDs granted to this agent. Only skills in this list are
+      available during this agent's runs. When no skills are granted the field
+      is omitted entirely from the response (the backend does not emit an empty
+      array). Absence of the field and an empty array are semantically identical
+      (opt-in, default none).
+    example:
+      - "web-research"
+  delegation_policy:
+    $ref: './DelegationPolicy.yaml'
+  voice:
+    type: string
+    nullable: true
+    description: >
+      Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID).
+      Distinct from the global VoiceConfig engine settings (which hold the TTS/STT
+      provider and API key). This field is schema-pinned but NOT used until v0.2.0
+      TTS feature delivery. Absent when not configured.
+    example: "alloy"
+  executor:
+    $ref: './ExecutorConfig.yaml'

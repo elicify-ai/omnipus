@@ -56,8 +56,35 @@ type MemoryAccess interface {
 	MemorySearcher
 }
 
-// RememberTool appends a fact, decision, reference, or lesson to MEMORY.md.
-// FR-013.
+// RoomMemoryWriter extends MemoryWriter with room-aware write (MIN-002 / FR-7.3).
+// pkg/agent.MemoryStoreAdapter satisfies this via AppendLongTermToRoom +
+// SetWorkspaceID. Tools type-assert to this interface to route by room.
+// Using a string scope ("private" | "shared" | "both") avoids importing
+// pkg/memrooms into pkg/tools (cycle prevention).
+type RoomMemoryWriter interface {
+	MemoryWriter
+	// AppendLongTermToRoom writes to the room identified by scope string.
+	// Accepted values: "private" | "shared" | "both" (both→ private for writes).
+	AppendLongTermToRoom(content, category, scope string) error
+	// SetWorkspaceID wires the shared room for the current turn.
+	SetWorkspaceID(workspaceID string)
+}
+
+// RoomMemorySearcher extends MemorySearcher with room-aware read (MIN-002 / FR-7.3).
+type RoomMemorySearcher interface {
+	MemorySearcher
+	// SearchEntriesInRoom searches the specified room scope.
+	SearchEntriesInRoom(query string, limit int, scope string) ([]MemoryEntry, error)
+}
+
+// RoomMemoryAccess combines room-aware write + search.
+type RoomMemoryAccess interface {
+	RoomMemoryWriter
+	RoomMemorySearcher
+}
+
+// RememberTool appends a fact, decision, reference, or lesson to a memory room.
+// FR-7.3 (re-point to rooms), FR-013 (original tool).
 type RememberTool struct {
 	BaseTool
 	store       MemoryAccess
@@ -90,10 +117,12 @@ func (t *RememberTool) SetMemoryRateLimiter(limiter *MemoryRateLimiter) {
 func (t *RememberTool) Name() string     { return "remember" }
 func (t *RememberTool) Scope() ToolScope { return ScopeGeneral }
 func (t *RememberTool) Description() string {
-	return "Persist a fact, decision, reference, or lesson to long-term memory (MEMORY.md). " +
+	return "Persist a fact, decision, reference, or lesson to long-term memory. " +
 		"Use category 'key_decision' for decisions made, 'reference' for reference information, " +
-		"or 'lesson_learned' for retrospective lessons. Content is appended — do not use write_file " +
-		"on MEMORY.md directly as that would overwrite all existing memory."
+		"or 'lesson_learned' for retrospective lessons. Each memory is stored as a structured " +
+		"file with full metadata. Use room='shared' to write to the workspace shared room (visible " +
+		"to all agents in this workspace), 'private' for agent-only memory. Default: shared when " +
+		"in a workspace session, private otherwise."
 }
 
 func (t *RememberTool) Parameters() map[string]any {
@@ -109,6 +138,12 @@ func (t *RememberTool) Parameters() map[string]any {
 				"enum":        []string{"key_decision", "reference", "lesson_learned"},
 				"description": "Category: key_decision, reference, or lesson_learned.",
 			},
+			"room": map[string]any{
+				"type": "string",
+				"enum": []string{"private", "shared"},
+				"description": "Room to write to: 'private' (agent-only) or 'shared' (workspace-wide). " +
+					"Default: shared when in a workspace session, private otherwise.",
+			},
 		},
 		"required": []string{"content", "category"},
 	}
@@ -117,9 +152,11 @@ func (t *RememberTool) Parameters() map[string]any {
 func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	content, _ := args["content"].(string)
 	category, _ := args["category"].(string)
+	roomParam, _ := args["room"].(string)
 
 	agentID := ToolAgentID(ctx)
 	sessionID := ToolTranscriptSessionID(ctx)
+	workspaceID := ToolWorkspaceID(ctx)
 
 	if strings.TrimSpace(content) == "" {
 		t.logAudit(agentID, sessionID, "error_invalid", category, content)
@@ -127,26 +164,35 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// FR-019: enforce the 4096-character content cap at the tool boundary.
-	// AppendLongTerm also checks this, but checking here returns a clear error
-	// result to the LLM rather than relying on a model-layer invariant.
 	if len([]rune(strings.TrimSpace(content))) > 4096 {
 		t.logAudit(agentID, sessionID, "error_invalid", category, content)
 		return ErrorResult("remember: content exceeds 4096 characters; shorten the entry and try again")
 	}
 
-	// v0.2 #155 item 6: rate-limit memory writes. The gate runs AFTER the
-	// content-validity checks so a malformed-input error is reported with
-	// its specific reason rather than being masked as a rate-limit deny.
-	// The gate runs BEFORE AppendLongTerm so a flood does not contend on
-	// the FS write lock.
+	// v0.2 #155 item 6: rate-limit memory writes.
 	if decision := t.checkRateLimit(ctx, agentID); !decision.Allowed {
 		t.logRateLimited(agentID, sessionID, callerIdentity(ctx), category, content, decision)
 		return rateLimitedResult("remember", decision)
 	}
 
-	if err := t.store.AppendLongTerm(content, category); err != nil {
-		t.logAudit(agentID, sessionID, "error_io", category, content)
-		return ErrorResult(fmt.Sprintf("remember: %v", err))
+	// Route to the correct room (FR-7.1, MIN-002).
+	// Type-assert to RoomMemoryWriter if the store supports room-aware writes.
+	if rw, ok := t.store.(RoomMemoryWriter); ok {
+		// Wire the workspace ID for this turn so the store can resolve the shared room.
+		rw.SetWorkspaceID(workspaceID)
+
+		// Resolve the scope: explicit param > default (shared if workspace, else private).
+		scope := resolveRoomScope(roomParam, workspaceID)
+		if err := rw.AppendLongTermToRoom(content, category, scope); err != nil {
+			t.logAudit(agentID, sessionID, "error_io", category, content)
+			return ErrorResult(fmt.Sprintf("remember: %v", err))
+		}
+	} else {
+		// Fallback for plain MemoryAccess stores (e.g., test doubles).
+		if err := t.store.AppendLongTerm(content, category); err != nil {
+			t.logAudit(agentID, sessionID, "error_io", category, content)
+			return ErrorResult(fmt.Sprintf("remember: %v", err))
+		}
 	}
 
 	t.logAudit(agentID, sessionID, "ok", category, content)
@@ -262,9 +308,10 @@ func NewRecallMemoryTool(store MemorySearcher) *RecallMemoryTool {
 func (t *RecallMemoryTool) Name() string     { return "recall_memory" }
 func (t *RecallMemoryTool) Scope() ToolScope { return ScopeGeneral }
 func (t *RecallMemoryTool) Description() string {
-	return "Search your durable long-term memory (MEMORY.md), recent session recaps (LAST_SESSION.md), " +
-		"and structured retrospectives. Returns matching entries newest-first. " +
-		"Use this when you need to recall a past decision, reference, or lesson."
+	return "Search durable long-term memory. Returns matching entries newest-first. " +
+		"Use this when you need to recall a past decision, reference, or lesson. " +
+		"Use room='both' (default) to search all available rooms, 'private' for agent-only, " +
+		"'shared' for workspace-wide memories."
 }
 
 func (t *RecallMemoryTool) Parameters() map[string]any {
@@ -278,6 +325,11 @@ func (t *RecallMemoryTool) Parameters() map[string]any {
 			"limit": map[string]any{
 				"type":        "number",
 				"description": "Maximum number of results (default 20, max 50).",
+			},
+			"room": map[string]any{
+				"type":        "string",
+				"enum":        []string{"private", "shared", "both"},
+				"description": "Room scope: 'private' (agent-only), 'shared' (workspace), or 'both' (default).",
 			},
 		},
 		"required": []string{"query"},
@@ -300,15 +352,39 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 		}
 	}
 
+	roomParam, _ := args["room"].(string)
+	workspaceID := ToolWorkspaceID(ctx)
+
+	// Wire workspace_id and use room-aware search when the store supports it.
+	if rs, ok := t.store.(RoomMemorySearcher); ok {
+		// Also wire the workspace ID on the write side if it implements RoomMemoryWriter.
+		if rw, ok2 := t.store.(RoomMemoryWriter); ok2 {
+			rw.SetWorkspaceID(workspaceID)
+		}
+		// Recall default: both rooms (the broader the better for recall).
+		scope := roomParam
+		if scope == "" {
+			scope = "both"
+		}
+		entries, err := rs.SearchEntriesInRoom(query, limit, scope)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("recall_memory: %v", err))
+		}
+		return formatRecallResult(entries)
+	}
+
+	// Fallback for plain MemorySearcher (test doubles etc.).
 	entries, err := t.store.SearchEntries(query, limit)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("recall_memory: %v", err))
 	}
+	return formatRecallResult(entries)
+}
 
+func formatRecallResult(entries []MemoryEntry) *ToolResult {
 	if len(entries) == 0 {
 		return NewToolResult("no matching entries")
 	}
-
 	var sb strings.Builder
 	for i, e := range entries {
 		if i > 0 {
@@ -317,7 +393,6 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 		ts := e.Timestamp.UTC().Format("2006-01-02T15:04:05Z")
 		fmt.Fprintf(&sb, "[%s | %s]\n%s", ts, e.Category, e.Content)
 	}
-
 	return NewToolResult(sb.String())
 }
 
@@ -492,6 +567,20 @@ func (t *RetrospectiveTool) logAudit(agentID, sessionID, outcome string, r Memor
 			"error", err,
 		)
 	}
+}
+
+// resolveRoomScope determines the effective room scope string for a write operation.
+// roomParam is the explicit param from the LLM (may be ""); workspaceID is from ctx.
+// Logic: if explicit param is given, use it; else default to "shared" when a workspace
+// session is active, "private" otherwise.
+func resolveRoomScope(roomParam, workspaceID string) string {
+	if roomParam == "private" || roomParam == "shared" {
+		return roomParam
+	}
+	if workspaceID != "" {
+		return "shared"
+	}
+	return "private"
 }
 
 // callerIdentity derives a stable string identifying the originating
