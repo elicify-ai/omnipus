@@ -263,28 +263,29 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       <DialogPrimitive.Portal>
         <SheetContent
           side="right"
-          className="w-full sm:max-w-lg flex flex-col gap-0 p-0"
+          widthClass="w-full sm:max-w-3xl"
+          className="flex flex-col gap-0 p-0"
         >
-          <SheetHeader className="px-6 pt-6 pb-4 shrink-0">
+          <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
             <SheetTitle
               data-testid={formCopy.testId}
-              className="font-headline text-lg font-bold text-[var(--color-secondary)]"
+              className="font-headline text-xl font-bold text-[var(--color-secondary)] tracking-tight"
             >
               {formCopy.title}
             </SheetTitle>
-            <SheetDescription className="text-sm text-[var(--color-muted)] mt-1">
+            <SheetDescription className="text-sm text-[var(--color-muted)] mt-1.5 leading-relaxed">
               {formCopy.description}
             </SheetDescription>
           </SheetHeader>
 
           <Tabs defaultValue="general" className="flex-1 min-h-0 flex flex-col">
-            <TabsList className="shrink-0 mb-3">
+            <TabsList className="shrink-0 px-8 mb-4 mt-2">
               <TabsTrigger value="general">General</TabsTrigger>
               <TabsTrigger value="tools">Tools &amp; Permissions</TabsTrigger>
             </TabsList>
 
             <TabsContent value="general" className="flex-1 overflow-y-auto min-h-0 mt-0">
-              <div className="space-y-4 pr-1">
+              <div className="space-y-5 px-8 pb-8">
                 {/* Avatar preview + color + icon */}
                 <div>
                   <label className="text-xs font-medium text-[var(--color-muted)] mb-2 block">
@@ -518,7 +519,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
               </div>
             </TabsContent>
 
-            <TabsContent value="tools" className="flex-1 overflow-y-auto min-h-0 mt-0 pr-1">
+            <TabsContent value="tools" className="flex-1 overflow-y-auto min-h-0 mt-0 px-8 pb-8">
               {/* #334 (US-D1): shared ToolPolicyEditor with Balanced default.
                   Tool list from registry — new agent has no agentId yet. */}
               <CreateAgentToolsTab
@@ -529,7 +530,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
           </Tabs>
 
           {/* Sticky footer actions (slideout-friendly) */}
-          <div className="flex justify-end gap-2 px-6 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0">
+          <div className="flex justify-end gap-3 px-8 py-5 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0">
             <Button
               variant="outline"
               onClick={() => { handleClose(); resetForm() }}
