@@ -40,7 +40,7 @@ func newOnboardingTestAPI(t *testing.T, tmpDir string, al *agent.AgentLoop) *res
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 		credStore:     credStore,
 	}
 }
@@ -117,7 +117,7 @@ func TestHandleCompleteOnboarding_AlreadyComplete(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboardingMgr,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// Mark onboarding as complete
@@ -442,7 +442,14 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 	require.True(t, ok, "user must be a map")
 	assert.Equal(t, "admin", user["username"])
 	assert.NotEmpty(t, user["password_hash"], "password_hash must be set")
-	assert.NotEmpty(t, user["token_hash"], "token_hash must be set")
+	// SEC-1 / UAT #399: onboarding now issues the admin's bearer token into the
+	// token SET, not the legacy single token_hash.
+	tokens, ok := user["tokens"].([]any)
+	require.True(t, ok, "tokens set must be written by onboarding")
+	require.Len(t, tokens, 1, "onboarding issues exactly one bearer token")
+	entry := tokens[0].(map[string]any)
+	assert.NotEmpty(t, entry["hash"], "token entry hash must be set")
+	assert.NotEmpty(t, entry["id"], "token entry id must be set")
 	assert.Equal(t, "admin", user["role"])
 }
 
@@ -621,7 +628,7 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboardingMgr,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 		credStore:     credStore,
 	}
 
@@ -694,7 +701,7 @@ func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 		credStore:     credStore,
 	}
 

@@ -1,0 +1,42 @@
+title: SkillSearchResult
+description: >
+  A single skill returned by GET /api/v1/skills/search — a hit from a skill
+  marketplace registry (e.g. ClawHub). Distinct from Skill, which models an
+  already-installed local skill. A search result is installed by its slug via
+  POST /api/v1/skills/install.
+type: object
+additionalProperties: false
+required:
+  - slug
+properties:
+  slug:
+    type: string
+    description: >
+      Stable registry identifier for the skill. This is the value passed to
+      POST /skills/install to install the skill.
+    example: "web-search"
+  display_name:
+    type: string
+    description: Human-readable skill name (e.g. "Web Search").
+    example: "Web Search"
+  summary:
+    type: string
+    description: Short one-line description of what the skill does.
+    example: "Search the web and extract page content."
+  version:
+    type: string
+    description: Latest published version of the skill (free-form; may be empty).
+    example: "1.4.0"
+  score:
+    type: number
+    format: double
+    description: Relevance score assigned by the registry for this query (higher is better).
+    example: 0.92
+  registry_name:
+    type: string
+    description: Name of the registry that produced this result (e.g. "clawhub").
+    example: "clawhub"
+  owner_handle:
+    type: string
+    description: Handle of the skill's publisher/owner on the registry, when available.
+    example: "octofleet"

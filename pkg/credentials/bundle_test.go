@@ -24,131 +24,141 @@ func TestResolveBundle_AllChannelRefs(t *testing.T) {
 		setOnCfg func(cfg *config.Config, refName string)
 	}
 
+	// setInst is a helper that safely mutates a map entry using copy-assign.
+	setInst := func(cfg *config.Config, key string, fn func(*config.ChannelInstanceConfig)) {
+		if cfg.Channels == nil {
+			cfg.Channels = make(map[string]config.ChannelInstanceConfig)
+		}
+		inst := cfg.Channels[key]
+		fn(&inst)
+		cfg.Channels[key] = inst
+	}
+
 	cases := []refCase{
 		{
 			refName: "TELEGRAM_TOKEN",
 			want:    "tg-bot-secret",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Telegram.TokenRef = ref
+				setInst(cfg, "telegram", func(inst *config.ChannelInstanceConfig) { inst.TokenRef = ref })
 			},
 		},
 		{
 			refName: "DISCORD_TOKEN",
 			want:    "discord-secret",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Discord.TokenRef = ref
+				setInst(cfg, "discord", func(inst *config.ChannelInstanceConfig) { inst.TokenRef = ref })
 			},
 		},
 		{
 			refName: "SLACK_BOT_TOKEN",
 			want:    "xoxb-bot-token",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Slack.BotTokenRef = ref
+				setInst(cfg, "slack", func(inst *config.ChannelInstanceConfig) { inst.BotTokenRef = ref })
 			},
 		},
 		{
 			refName: "SLACK_APP_TOKEN",
 			want:    "xapp-app-token",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Slack.AppTokenRef = ref
+				setInst(cfg, "slack", func(inst *config.ChannelInstanceConfig) { inst.AppTokenRef = ref })
 			},
 		},
 		{
 			refName: "FEISHU_APP_SECRET",
 			want:    "feishu-app-secret",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Feishu.AppSecretRef = ref
+				setInst(cfg, "feishu", func(inst *config.ChannelInstanceConfig) { inst.AppSecretRef = ref })
 			},
 		},
 		{
 			refName: "FEISHU_ENCRYPT_KEY",
 			want:    "feishu-encrypt-key",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Feishu.EncryptKeyRef = ref
+				setInst(cfg, "feishu", func(inst *config.ChannelInstanceConfig) { inst.EncryptKeyRef = ref })
 			},
 		},
 		{
 			refName: "FEISHU_VERIFICATION_TOKEN",
 			want:    "feishu-verification-token",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Feishu.VerificationTokenRef = ref
+				setInst(cfg, "feishu", func(inst *config.ChannelInstanceConfig) { inst.VerificationTokenRef = ref })
 			},
 		},
 		{
 			refName: "QQ_APP_SECRET",
 			want:    "qq-app-secret",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.QQ.AppSecretRef = ref
+				setInst(cfg, "qq", func(inst *config.ChannelInstanceConfig) { inst.AppSecretRef = ref })
 			},
 		},
 		{
 			refName: "DINGTALK_CLIENT_SECRET",
 			want:    "dingtalk-client-secret",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.DingTalk.ClientSecretRef = ref
+				setInst(cfg, "dingtalk", func(inst *config.ChannelInstanceConfig) { inst.ClientSecretRef = ref })
 			},
 		},
 		{
 			refName: "MATRIX_ACCESS_TOKEN",
 			want:    "matrix-access-token",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Matrix.AccessTokenRef = ref
+				setInst(cfg, "matrix", func(inst *config.ChannelInstanceConfig) { inst.AccessTokenRef = ref })
 			},
 		},
 		{
 			refName: "MATRIX_CRYPTO_PASSPHRASE",
 			want:    "matrix-passphrase",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Matrix.CryptoPassphraseRef = ref
+				setInst(cfg, "matrix", func(inst *config.ChannelInstanceConfig) { inst.CryptoPassphraseRef = ref })
 			},
 		},
 		{
 			refName: "LINE_CHANNEL_SECRET",
 			want:    "line-channel-secret",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.LINE.ChannelSecretRef = ref
+				setInst(cfg, "line", func(inst *config.ChannelInstanceConfig) { inst.ChannelSecretRef = ref })
 			},
 		},
 		{
 			refName: "LINE_ACCESS_TOKEN",
 			want:    "line-access-token",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.LINE.ChannelAccessTokenRef = ref
+				setInst(cfg, "line", func(inst *config.ChannelInstanceConfig) { inst.ChannelAccessTokenRef = ref })
 			},
 		},
 		{
 			refName: "WECOM_SECRET",
 			want:    "wecom-secret",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.WeCom.SecretRef = ref
+				setInst(cfg, "wecom", func(inst *config.ChannelInstanceConfig) { inst.SecretRef = ref })
 			},
 		},
 		{
 			refName: "WEIXIN_TOKEN",
 			want:    "weixin-token",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.Weixin.TokenRef = ref
+				setInst(cfg, "weixin", func(inst *config.ChannelInstanceConfig) { inst.TokenRef = ref })
 			},
 		},
 		{
 			refName: "IRC_PASSWORD",
 			want:    "irc-password",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.IRC.PasswordRef = ref
+				setInst(cfg, "irc", func(inst *config.ChannelInstanceConfig) { inst.PasswordRef = ref })
 			},
 		},
 		{
 			refName: "IRC_NICKSERV_PASSWORD",
 			want:    "irc-nickserv-password",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.IRC.NickServPasswordRef = ref
+				setInst(cfg, "irc", func(inst *config.ChannelInstanceConfig) { inst.NickServPasswordRef = ref })
 			},
 		},
 		{
 			refName: "IRC_SASL_PASSWORD",
 			want:    "irc-sasl-password",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.IRC.SASLPasswordRef = ref
+				setInst(cfg, "irc", func(inst *config.ChannelInstanceConfig) { inst.SASLPasswordRef = ref })
 			},
 		},
 		{

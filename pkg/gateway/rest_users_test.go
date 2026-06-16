@@ -32,12 +32,14 @@ import (
 
 // canonicalTokenRE enforces the generateUserToken() format contract:
 //
-//	"omnipus_" + hex-encode(32 random bytes)
+//	"omnipus_" + hex-encode(4 random id bytes) + "_" + hex-encode(32 random body bytes)
 //
-// Any test that claims "login returns a canonical token" must verify
-// against this pattern, not just non-emptiness. Violating the prefix or
-// hex length is a regression.
-var canonicalTokenRE = regexp.MustCompile(`^omnipus_[0-9a-f]{64}$`)
+// SEC-1 / UAT #399: tokens now embed a non-secret 8-hex-char ID prefix so
+// verification can index directly to the matching hash in the user's token
+// SET. Any test that claims "login returns a canonical token" must verify
+// against this pattern, not just non-emptiness. Violating the prefix, the ID
+// segment, or the body length is a regression.
+var canonicalTokenRE = regexp.MustCompile(`^omnipus_[0-9a-f]{8}_[0-9a-f]{64}$`)
 
 // newUserMgmtAPI builds a restAPI with:
 //   - Tmp dir with config.json seeded with the supplied user list.
@@ -94,7 +96,7 @@ func newUserMgmtAPI(t *testing.T, users []any) (*restAPI, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(filepath.Join(tmpDir, "tasks")),
+		taskStore:     taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
 	}
 	return api, tmpDir
 }

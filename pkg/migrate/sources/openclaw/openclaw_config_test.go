@@ -683,15 +683,15 @@ func TestToStandardConfig(t *testing.T) {
 		t.Errorf("expected empty api key after migration (secrets not migrated), got '%s'", foundAPIKey)
 	}
 
-	if !stdCfg.Channels.Telegram.Enabled {
+	if !stdCfg.Channels["telegram"].Enabled {
 		t.Error("telegram should be enabled")
 	}
 	// Secrets are not migrated from OpenClaw; users must re-enter them via
 	// `omnipus credentials set TELEGRAM_TOKEN <value>` and set token_ref in config.
-	if stdCfg.Channels.Telegram.TokenRef != "" {
+	if stdCfg.Channels["telegram"].TokenRef != "" {
 		t.Errorf(
 			"expected empty token_ref after migration (secrets not migrated), got %q",
-			stdCfg.Channels.Telegram.TokenRef,
+			stdCfg.Channels["telegram"].TokenRef,
 		)
 	}
 

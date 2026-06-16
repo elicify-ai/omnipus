@@ -1,0 +1,21 @@
+type: object
+description: >
+  Response from POST /api/v1/voice/transcribe. Returns the text transcribed from
+  an uploaded audio clip by the active Transcriber (FR-12.1, composer mic). 503
+  when no transcriber is configured.
+required:
+  - text
+additionalProperties: false
+properties:
+  text:
+    type: string
+    description: The transcribed text.
+    example: "schedule a meeting for tomorrow at noon"
+  language:
+    type: string
+    description: Detected language code, when the transcriber reports one.
+    example: "en"
+  duration:
+    type: number
+    description: Audio duration in seconds, when reported.
+    example: 3.2

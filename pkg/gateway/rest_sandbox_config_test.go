@@ -35,7 +35,9 @@ func sandboxConfigPUT(t *testing.T, api *restAPI, body string) *httptest.Respons
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
+	// withReAuthAdmin supplies the admin user/role AND the re-auth consent token
+	// required by the FR-12.2 gate on putSandboxConfig.
+	r = withReAuthAdmin(t, api, r)
 	api.HandleSandboxConfig(w, r)
 	return w
 }
@@ -270,6 +272,12 @@ func TestHandleSandboxConfig_SSRFAllowInternal_WildcardLogged(t *testing.T) {
 		strings.NewReader(`{"ssrf":{"allow_internal":["0.0.0.0/0"]}}`))
 	r.Header.Set("Content-Type", "application/json")
 	r = r.WithContext(ctx)
+	// Supply a valid re-auth consent token for "alice" so the FR-12.2 gate on
+	// putSandboxConfig passes (this test asserts the wildcard-accept audit log,
+	// not the gate itself).
+	token, err := api.reauthStoreOrInit().mint("alice")
+	require.NoError(t, err)
+	r.Header.Set(reAuthHeader, token)
 	api.HandleSandboxConfig(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())

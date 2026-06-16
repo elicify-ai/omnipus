@@ -537,3 +537,60 @@ describe('ScheduleFormSheet — #321 US-A3: session model (D18)', () => {
     expect(screen.getByText(/each run starts fresh/i)).toBeInTheDocument()
   })
 })
+
+// Workers (type:'worker') have no heartbeat and the backend rejects a scheduled
+// run owned by a worker, so the owner picker must exclude them — neither offered
+// as an option nor auto-selected as the default owner.
+describe('ScheduleFormSheet — workers excluded from the owner picker', () => {
+  const agentsWithWorker: Agent[] = [
+    { id: 'mia', name: 'Mia', type: 'core', default: false },
+    { id: 'builder', name: 'Builder Worker', type: 'worker', default: false },
+  ] as unknown as Agent[]
+
+  it('does not list a worker as an owner option; lists base agents', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker)
+    // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
+    Element.prototype.scrollIntoView = vi.fn()
+
+    renderForm()
+    await screen.findByText('New schedule')
+
+    // The owner picker is the first combobox.
+    const ownerTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
+    fireEvent.click(ownerTrigger)
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      expect(options.some((t) => t.includes('Builder Worker'))).toBe(false)
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('auto-default owner skips a worker even when the worker is default:true', async () => {
+    // A worker marked default:true must NOT become the schedule owner — the
+    // auto-selection only considers eligible (non-worker) agents.
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'builder', name: 'Builder Worker', type: 'worker', default: true },
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+    ] as unknown as Agent[])
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <ScheduleFormSheet open={true} onOpenChange={() => {}} />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('New schedule')
+    fireEvent.change(screen.getByPlaceholderText(/Daily PR summary/i), { target: { value: 'S' } })
+    fireEvent.change(screen.getByPlaceholderText(/Summarize today/i), { target: { value: 'M' } })
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }))
+
+    await waitFor(() => expect(createSchedule).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(createSchedule).mock.calls[0][0]
+    // The first non-worker agent (Mia) is chosen, NOT the default:true worker.
+    expect(body.owner_agent_id).toBe('mia')
+  })
+})

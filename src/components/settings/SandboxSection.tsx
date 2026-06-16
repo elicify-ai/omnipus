@@ -36,6 +36,7 @@ import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 import { SandboxProfileSelector } from '@/components/agents/SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from '@/components/agents/ShellDenyPatternsEditor'
+import { useReAuthGate } from './useReAuthGate'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -489,6 +490,16 @@ export function SandboxSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
+  // PUT /api/v1/security/sandbox-config is re-auth gated (Spec-6 FR-12.2). Every
+  // sandbox-config mutation (mode toggle, agent-defaults autosave, paths/SSRF
+  // save) routes its PUT through runGated, which replays a single-use consent
+  // token via updateSandboxConfig's header arg when the server demands re-auth —
+  // same dialog/copy as IntegrationsSection.
+  const { runGated: runGatedSandbox, dialog: reAuthDialog } = useReAuthGate({
+    title: 'Confirm to change sandbox',
+    description: 'Re-type your password to change the sandbox security configuration.',
+  })
+
   // ── Status query ───────────────────────────────────────────────────────────
   const [statusExpanded, setStatusExpanded] = useState(false)
   const {
@@ -530,10 +541,12 @@ export function SandboxSection(): React.ReactElement {
       // Persist via PUT /api/v1/security/sandbox-config under the canonical
       // backend keys (default_profile, shell_deny_patterns) defined in
       // pkg/gateway/rest_sandbox_config.go::sandboxConfigPutBody.
-      await updateSandboxConfig({
-        default_profile: data.sandbox_profile,
-        shell_deny_patterns: data.shell_deny_patterns,
-      })
+      await runGatedSandbox((token) =>
+        updateSandboxConfig({
+          default_profile: data.sandbox_profile,
+          shell_deny_patterns: data.shell_deny_patterns,
+        }, token),
+      )
     },
     onMutate: () => setAgentDefaultsSaving(true),
     onSuccess: () => {
@@ -653,7 +666,8 @@ export function SandboxSection(): React.ReactElement {
 
   // ── Mode save mutation ────────────────────────────────────────────────────
   const { mutate: doSaveMode } = useMutation({
-    mutationFn: updateSandboxConfig,
+    mutationFn: (body: Parameters<typeof updateSandboxConfig>[0]) =>
+      runGatedSandbox((token) => updateSandboxConfig(body, token)),
     onMutate: () => setSaveState('saving'),
     onSuccess: (saved) => {
       setSaveState('saved')
@@ -672,7 +686,8 @@ export function SandboxSection(): React.ReactElement {
 
   // ── Paths/SSRF save mutation ──────────────────────────────────────────────
   const saveMutation = useMutation({
-    mutationFn: (body: Parameters<typeof updateSandboxConfig>[0]) => updateSandboxConfig(body),
+    mutationFn: (body: Parameters<typeof updateSandboxConfig>[0]) =>
+      runGatedSandbox((token) => updateSandboxConfig(body, token)),
     onMutate: () => setSaveState('saving'),
     onSuccess: (resp) => {
       setSaveState('saved')
@@ -1246,6 +1261,8 @@ export function SandboxSection(): React.ReactElement {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {reAuthDialog}
     </section>
   )
 }

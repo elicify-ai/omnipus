@@ -20,7 +20,9 @@ import (
 // OMNIPUS_HOME is set and one code path skips the env check.
 //
 // Resolution order:
-//  1. $OMNIPUS_HOME (the user's explicit override — trusted verbatim)
+//  1. $OMNIPUS_HOME (the user's explicit override — always resolved to an
+//     absolute path so runtime files never end up inside the source tree
+//     when the process CWD is the repo root)
 //  2. $HOME/.omnipus (the conventional fallback)
 //  3. A user-private temp directory (0700, randomly-suffixed) if HOME is
 //     unreadable — keeps the install working without silently sharing data
@@ -31,7 +33,27 @@ import (
 // any subsystem that needs a stable value should capture it at init.
 func OmnipusHomeDir() string {
 	if override := os.Getenv(EnvHome); override != "" {
-		return override
+		// Resolve relative paths against the process CWD. The previous
+		// "trusted verbatim" behaviour landed runtime files (cost.json,
+		// state.json) inside the source tree when the gateway was started
+		// from the repo root with `OMNIPUS_HOME=pkg/gateway` (or any
+		// relative override). Normalising to an absolute path keeps the
+		// home directory stable across CWD changes and the cost-tracker
+		// pointing at the right location. A warning is logged so a future
+		// operator who set a relative value by accident notices the
+		// resolution and can switch to an absolute path.
+		if !filepath.IsAbs(override) {
+			abs, absErr := filepath.Abs(override)
+			if absErr == nil {
+				logger.WarnCF("config", "OMNIPUS_HOME was relative; resolved against CWD",
+					map[string]any{"original": override, "resolved": abs})
+				return filepath.Clean(abs)
+			}
+			logger.WarnCF("config", "OMNIPUS_HOME is relative and could not be resolved to an absolute path; using verbatim",
+				map[string]any{"original": override, "error": absErr.Error()})
+			return filepath.Clean(override)
+		}
+		return filepath.Clean(override)
 	}
 	userHome, err := os.UserHomeDir()
 	if err != nil {

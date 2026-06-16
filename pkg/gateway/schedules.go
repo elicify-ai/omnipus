@@ -133,6 +133,18 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		return "", err
 	}
 
+	// Workers are not chat targets and have no heartbeat: they execute one
+	// delegated task at a time and are invoked ONLY via delegation, never on a
+	// schedule/heartbeat cadence. A scheduled/heartbeat run whose owner is a
+	// worker is rejected with no fallback so worker autonomy can never fire.
+	if cfg := r.getConfig(); cfg != nil {
+		if oc := findAgentConfig(cfg, owner); oc != nil && oc.IsWorker() {
+			err := fmt.Errorf("owner unavailable: agent %q is a worker (workers have no heartbeat and run only via delegation)", owner)
+			r.onFailure(job, "", err)
+			return "", err
+		}
+	}
+
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
 
@@ -230,6 +242,15 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	r.cleanupRunProcesses(job, sessionID)
 
 	if runErr != nil {
+		// Always log the raw error before any wrapping so the real cause lands in
+		// gateway.log regardless of what the channel-alert path surfaces.
+		logger.ErrorCF("gateway", "scheduled run failed",
+			map[string]any{
+				"schedule_id": job.ID,
+				"session_id":  sessionID,
+				"owner":       owner,
+				"error":       runErr.Error(),
+			})
 		// Surface the deadline as a context.DeadlineExceeded error so the cron
 		// lane classifies the run record Status as "timeout" (errors.Is). The
 		// underlying agent error is wrapped so it stays inspectable.
@@ -432,6 +453,33 @@ func isTransientRunError(err error) bool {
 	return false
 }
 
+// stampScheduledSessionOwner sets the user-owner on a scheduled session from
+// job.CreatedBy. Only stamps when the session has no owner yet (new or
+// explicitly unowned). Errors are non-fatal and logged as warnings — a missing
+// owner on a scheduled session degrades gracefully to the shared/unowned
+// behavior rather than aborting the run (SEC-2/#406).
+func (r *scheduledRunner) stampScheduledSessionOwner(store *session.UnifiedStore, sessionID, userOwner string) {
+	if userOwner == "" {
+		return
+	}
+	meta, err := store.GetMeta(sessionID)
+	if err != nil {
+		logger.WarnCF("gateway", "scheduled run: could not read session meta for owner stamp",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
+	}
+	// Only stamp on sessions that have no owner yet to avoid clobbering an
+	// existing owner on continue/main sessions that already carry one.
+	if meta.Owner != "" {
+		return
+	}
+	ownerCopy := userOwner
+	if setErr := store.SetMeta(sessionID, session.MetaPatch{Owner: &ownerCopy}); setErr != nil {
+		logger.WarnCF("gateway", "scheduled run: could not stamp session owner",
+			map[string]any{"session_id": sessionID, "owner": userOwner, "error": setErr.Error()})
+	}
+}
+
 // pickSession resolves the session id for the run per session mode (W-2). The
 // session is created/looked up BEFORE the run so ProcessScheduled can register
 // the cancellable turn under it. On a pruned continue-session, it falls back to
@@ -447,6 +495,11 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		mode = cron.SessionModeIsolated
 	}
 
+	// userOwner is the authenticated user who created the schedule; used to
+	// stamp the session owner so sysagent tools inherit the correct owner
+	// during the run (SEC-2/#406, Rule-2). Distinct from owner (agentID).
+	userOwner := job.CreatedBy
+
 	switch mode {
 	case cron.SessionModeContinue:
 		id := job.SessionID
@@ -458,6 +511,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 				return "", fmt.Errorf("continue session create: %w", err)
 			}
 			job.SessionID = fresh.ID
+			r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
 			return fresh.ID, nil
 		}
 		meta, err := store.GetOrCreateScheduledSession(id, owner)
@@ -469,8 +523,10 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 			if ferr != nil {
 				return "", fmt.Errorf("continue fallback create: %w", ferr)
 			}
+			r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
 			return fresh.ID, nil
 		}
+		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
 		return meta.ID, nil
 
 	case cron.SessionModeMain:
@@ -479,6 +535,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		if err != nil {
 			return "", fmt.Errorf("main session create: %w", err)
 		}
+		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
 		return meta.ID, nil
 
 	default: // isolated
@@ -486,6 +543,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		if err != nil {
 			return "", fmt.Errorf("isolated session create: %w", err)
 		}
+		r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
 		return fresh.ID, nil
 	}
 }
@@ -762,9 +820,15 @@ func toSchedule(job cron.CronJob) gen.Schedule {
 	return s
 }
 
+// cronSvc safely loads the current cron service pointer.
+// Returns nil when the schedules service has not been configured.
+func (a *restAPI) cronSvc() *cron.CronService {
+	return a.cronService.Load()
+}
+
 // HandleSchedules dispatches /api/v1/schedules and /api/v1/schedules/{id}[/run|/pause].
 func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
-	if a.cronService == nil {
+	if a.cronSvc() == nil {
 		jsonErr(w, http.StatusServiceUnavailable, "schedules service unavailable")
 		return
 	}
@@ -818,7 +882,7 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) handleListSchedules(w http.ResponseWriter, user *config.UserConfig) {
-	jobs := a.cronService.ListJobs(true)
+	jobs := a.cronSvc().ListJobs(true)
 	// Build a slice of the generated Schedule type, then round-trip the whole
 	// list into gen.ScheduleList. The ScheduleList element is structurally
 	// identical to gen.Schedule, so the JSON marshal/unmarshal maps cleanly
@@ -847,7 +911,7 @@ func (a *restAPI) handleListSchedules(w http.ResponseWriter, user *config.UserCo
 }
 
 func (a *restAPI) handleGetSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -867,6 +931,23 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 	}
 	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Message) == "" || req.OwnerAgentId == "" {
 		jsonErr(w, http.StatusBadRequest, "name, message, and owner_agent_id are required")
+		return
+	}
+
+	// Write-time guard: a worker is not a chat target and never runs on a
+	// schedule cadence — workers execute one delegated task at a time. Reject
+	// creating a schedule whose owner is a worker at the write gate so the
+	// call never lands a runnable job that the fire path would only reject
+	// at execution time. Mirrors the in-flight guard in
+	// RunScheduled and the default/chat guards elsewhere. Fired BEFORE the
+	// owner-authz check so a non-admin who names a worker owner gets the
+	// actionable 400 (the owner-validity problem) rather than a 403 (a
+	// permissions problem) — the operator cannot schedule for this agent
+	// at all, regardless of who owns it, and surfacing that 400 first
+	// short-circuits the leak.
+	if owner := findAgentConfig(a.agentLoop.GetConfig(), req.OwnerAgentId); owner != nil && owner.IsWorker() {
+		jsonErr(w, http.StatusBadRequest,
+			"a worker cannot own a schedule (workers are not chat targets and run only via delegation)")
 		return
 	}
 
@@ -904,7 +985,7 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 	// atomic write via AddJobFull. The previous AddJob+UpdateJob pair briefly
 	// persisted an owner-less job that could fire and die between the two writes.
 	deliver := derefBool(req.Deliver, false)
-	job, err := a.cronService.AddJobFull(cron.JobSpec{
+	job, err := a.cronSvc().AddJobFull(cron.JobSpec{
 		Name:           req.Name,
 		Schedule:       schedule,
 		Message:        req.Message,
@@ -925,7 +1006,7 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 }
 
 func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -944,6 +1025,19 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 
 	// Re-authorize when the owner changes (PUT re-authorizes owner if changed).
 	if req.OwnerAgentId != nil && *req.OwnerAgentId != job.AgentID {
+		// Write-time guard: a worker is not a chat target and never runs on
+		// a schedule cadence — block ownership reassignment to a worker the
+		// same way the create gate does. The fire path also rejects worker
+		// owners at run time; failing here keeps the API consistent and
+		// surfaces the reason to the operator before any persistence. Fired
+		// BEFORE the owner re-authz so a non-admin who targets a worker gets
+		// the actionable 400 (the owner-validity problem) rather than a 403
+		// (a permissions problem).
+		if newOwner := findAgentConfig(a.agentLoop.GetConfig(), *req.OwnerAgentId); newOwner != nil && newOwner.IsWorker() {
+			jsonErr(w, http.StatusBadRequest,
+				"a worker cannot own a schedule (workers are not chat targets and run only via delegation)")
+			return
+		}
 		if code, msg := a.authorizeScheduleOwner(user, *req.OwnerAgentId); code != 0 {
 			jsonErr(w, code, msg)
 			return
@@ -997,7 +1091,7 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 		job.Schedule = schedule
 	}
 
-	if err := a.cronService.UpdateJob(&job); err != nil {
+	if err := a.cronSvc().UpdateJob(&job); err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to update schedule")
 		return
 	}
@@ -1005,7 +1099,7 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 }
 
 func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1014,7 +1108,7 @@ func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, user *config.UserC
 		jsonErr(w, code, msg)
 		return
 	}
-	if !a.cronService.RemoveJob(id) {
+	if !a.cronSvc().RemoveJob(id) {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
 	}
@@ -1022,7 +1116,7 @@ func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, user *config.UserC
 }
 
 func (a *restAPI) handleRunSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1031,7 +1125,7 @@ func (a *restAPI) handleRunSchedule(w http.ResponseWriter, user *config.UserConf
 		jsonErr(w, code, msg)
 		return
 	}
-	status, sessionID, runErr := a.cronService.RunNow(id)
+	status, sessionID, runErr := a.cronSvc().RunNow(id)
 	if status == "" && runErr != nil {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1051,7 +1145,7 @@ func (a *restAPI) handleRunSchedule(w http.ResponseWriter, user *config.UserConf
 }
 
 func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1060,7 +1154,7 @@ func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, user *config.UserCo
 		jsonErr(w, code, msg)
 		return
 	}
-	updated := a.cronService.EnableJob(id, !job.Enabled)
+	updated := a.cronSvc().EnableJob(id, !job.Enabled)
 	if updated == nil {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return

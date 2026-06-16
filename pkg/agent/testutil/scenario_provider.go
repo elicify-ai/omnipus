@@ -54,6 +54,52 @@ func (s *ScenarioProvider) WithText(content string) *ScenarioProvider {
 	return s
 }
 
+// WithUsage attaches token usage to the MOST RECENTLY appended step. It sets
+// LLMResponse.Usage so the agent loop accumulates turn-level token/cost stats
+// (the #411 path: ts.AddTurnStats fires when response.Usage != nil), which lets
+// tests assert that intermediate assistant entries carry 0 tokens while the
+// final entry carries the turn total — i.e. no double-counting.
+//
+// Panics if called before any step has been appended (a test-authoring bug).
+func (s *ScenarioProvider) WithUsage(promptTokens, completionTokens int) *ScenarioProvider {
+	if len(s.steps) == 0 {
+		panic("scenario provider: WithUsage called before any step was appended")
+	}
+	last := &s.steps[len(s.steps)-1]
+	if last.resp == nil {
+		panic("scenario provider: WithUsage on an error step (no response to annotate)")
+	}
+	last.resp.Usage = &providers.UsageInfo{
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      promptTokens + completionTokens,
+	}
+	return s
+}
+
+// WithTextAndToolCall appends a response that carries both a narration text
+// segment AND a single tool call. This mirrors the real-model pattern where the
+// LLM writes a sentence ("Okay, I've saved your name.") and then requests a tool
+// in the same response — the scenario used to reproduce bug #416.
+func (s *ScenarioProvider) WithTextAndToolCall(text, name, argsJSON string) *ScenarioProvider {
+	fc := providers.FunctionCall{
+		Name:      name,
+		Arguments: argsJSON,
+	}
+	s.steps = append(s.steps, scenarioStep{
+		resp: &providers.LLMResponse{
+			Content: text,
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:       name + "-0",
+					Function: &fc,
+				},
+			},
+		},
+	})
+	return s
+}
+
 // WithToolCall appends a response that invokes a single tool with the given JSON args.
 func (s *ScenarioProvider) WithToolCall(name, argsJSON string) *ScenarioProvider {
 	fc := providers.FunctionCall{

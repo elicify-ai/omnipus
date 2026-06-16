@@ -13,19 +13,39 @@
 //   Deny    → POST /api/v1/tool-approvals/{id} {action:"deny"}
 //   Cancel  → POST /api/v1/tool-approvals/{id} {action:"cancel"}
 //
+// Accessibility (C2 — this is a SECURITY-CRITICAL control):
+//   - Built on the shadcn/Radix Dialog primitive, which provides a focus trap,
+//     focus restoration on close, role="dialog", aria-modal="true", and
+//     labelled/described associations (DialogTitle / DialogDescription).
+//   - Default keyboard focus lands on the DENY button — the SAFE default. An
+//     inadvertent Enter keypress on open therefore DENIES the tool call; it
+//     never auto-approves.
+//   - Escape and overlay/outside interaction map to the safe default: they
+//     submit a DENY (when the approval can still be acted on), never an
+//     approval and never a silent dismissal that would leave the agent
+//     hanging. The only exception is the expired state, where the decision is
+//     already made server-side and Escape merely dismisses the notice.
+//   - Every button carries visible text, so each has an accessible name.
+//
 // Error handling:
 //   401 → re-auth toast (user must log in again)
 //   403 → "you must be an admin to approve this tool" toast
 //   410 → "this approval has already been resolved" → dismiss modal entry
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { CheckCircle, XCircle, ProhibitInset, Shield } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { postToolApproval, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { cn } from '@/lib/utils'
 
 function useCountdown(expiresAt: number): { remainingMs: number; progressPct: number; totalMs: number } {
   const [remainingMs, setRemainingMs] = useState(() => Math.max(0, expiresAt - Date.now()))
@@ -79,6 +99,9 @@ function ToolApprovalCard({
   const addToast = useUiStore((s) => s.addToast)
   const [submitting, setSubmitting] = useState(false)
   const { remainingMs, progressPct } = useCountdown(expiresAt)
+  // Default-focus target: the Deny button (the safe default). Focusing Deny
+  // means a stray Enter on open denies rather than approves.
+  const denyButtonRef = useRef<HTMLButtonElement>(null)
 
   const hasExpired = remainingMs <= 0
 
@@ -124,46 +147,75 @@ function ToolApprovalCard({
     [approvalId, dequeue, addToast, submitting],
   )
 
+  // Safe-default handler for Escape / overlay-click / X close. The Dialog
+  // primitive requests a close; we translate that into the SAFE decision:
+  //   - not expired  → submit a DENY (never an approve, never a no-op dismiss
+  //     that would leave the agent hanging on a pending approval).
+  //   - expired      → the decision is already made server-side; just dismiss
+  //     the notice from the local queue.
+  const handleDismissRequest = useCallback(() => {
+    if (submitting) return
+    if (hasExpired) {
+      dequeue(approvalId)
+    } else {
+      void handleAction('deny')
+    }
+  }, [submitting, hasExpired, dequeue, approvalId, handleAction])
+
   const argsJson = JSON.stringify(args, null, 2)
+  const titleId = `tool-approval-title-${approvalId}`
+  const descId = `tool-approval-desc-${approvalId}`
 
   return (
-    <div
-      className={cn(
-        'fixed inset-0 z-50 flex items-center justify-center p-4',
-        'bg-black/60 backdrop-blur-sm',
-      )}
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        // The dialog only ever transitions open→closed here (Escape, overlay
+        // click, or the X button). Route every such close through the safe
+        // default rather than letting Radix dismiss silently.
+        if (!next) handleDismissRequest()
+      }}
     >
-      <div
-        className={cn(
-          'w-full max-w-lg rounded-xl border shadow-2xl',
-          'bg-[var(--color-surface-1)] border-[var(--color-warning)]/40',
-          'flex flex-col gap-0 overflow-hidden',
-        )}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Approve tool call: ${toolName}`}
+      <DialogContent
+        className="max-w-lg border-[var(--color-warning)]/40 p-0 overflow-hidden gap-0"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        // Land focus on Deny (safe default) instead of Radix's first-focusable
+        // heuristic (which would be the X close button).
+        onOpenAutoFocus={(e) => {
+          if (denyButtonRef.current) {
+            e.preventDefault()
+            denyButtonRef.current.focus()
+          }
+        }}
+        // Escape and outside-pointer both resolve through onOpenChange above;
+        // no special-casing needed here beyond letting the default close fire.
       >
         {/* Header */}
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-[var(--color-border)]">
+        <DialogHeader className="flex flex-row items-center gap-3 space-y-0 px-5 py-4 border-b border-[var(--color-border)] text-left">
           <Shield
             size={20}
             weight="bold"
             className="text-[var(--color-warning)] shrink-0"
+            aria-hidden="true"
           />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-[var(--color-secondary)]">
+            <DialogTitle
+              id={titleId}
+              className="text-sm font-semibold text-[var(--color-secondary)] font-headline"
+            >
               Tool Approval Required
-            </p>
-            <p className="text-xs text-[var(--color-muted)] truncate">
-              Agent: <span className="font-mono">{agentId}</span>
-            </p>
+            </DialogTitle>
+            <DialogDescription id={descId} className="text-xs text-[var(--color-muted)] truncate">
+              Agent <span className="font-mono">{agentId}</span> is requesting permission to run a tool.
+            </DialogDescription>
           </div>
           {queueLength > 1 && (
             <span className="shrink-0 text-[10px] bg-[var(--color-surface-2)] text-[var(--color-muted)] px-2 py-0.5 rounded-full">
               +{queueLength - 1} more
             </span>
           )}
-        </div>
+        </DialogHeader>
 
         {/* Tool info */}
         <div className="px-5 py-4 space-y-3">
@@ -188,7 +240,7 @@ function ToolApprovalCard({
         <div className="px-5 pb-3">
           {hasExpired ? (
             <p className="text-xs text-[var(--color-error)] flex items-center gap-1">
-              <XCircle size={13} weight="fill" />
+              <XCircle size={13} weight="fill" aria-hidden="true" />
               Approval expired — the agent will receive a denial.
             </p>
           ) : (
@@ -217,17 +269,18 @@ function ToolApprovalCard({
               disabled={submitting}
               className="h-8 text-xs flex-1 sm:flex-none"
             >
-              <CheckCircle size={14} weight="bold" />
+              <CheckCircle size={14} weight="bold" aria-hidden="true" />
               Approve
             </Button>
             <Button
+              ref={denyButtonRef}
               size="sm"
               variant="outline"
               onClick={() => handleAction('deny')}
               disabled={submitting}
               className="h-8 text-xs flex-1 sm:flex-none"
             >
-              <XCircle size={14} weight="bold" />
+              <XCircle size={14} weight="bold" aria-hidden="true" />
               Deny
             </Button>
             <Button
@@ -237,7 +290,7 @@ function ToolApprovalCard({
               disabled={submitting}
               className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] ml-auto"
             >
-              <ProhibitInset size={14} />
+              <ProhibitInset size={14} aria-hidden="true" />
               Cancel
             </Button>
           </div>
@@ -255,8 +308,8 @@ function ToolApprovalCard({
             </Button>
           </div>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

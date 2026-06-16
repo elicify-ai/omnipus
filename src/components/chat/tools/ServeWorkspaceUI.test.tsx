@@ -44,6 +44,10 @@ vi.mock('@/lib/api', () => ({
   fetchAboutInfo: vi.fn().mockResolvedValue({}),
 }))
 
+vi.mock('@assistant-ui/react', () => ({
+  makeAssistantToolUI: (config: Record<string, unknown>) => config,
+}))
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -58,9 +62,6 @@ beforeEach(() => {
 describe('ServeWorkspaceUI — module structure', () => {
   it('exports ServeWorkspaceUI as a defined value (AssistantUI tool component)', async () => {
     // Traces to: chat-served-iframe-preview-spec.md — Scenario: serve_workspace registers as AssistantUI tool
-    vi.mock('@assistant-ui/react', () => ({
-      makeAssistantToolUI: (config: Record<string, unknown>) => config,
-    }))
     const mod = await import('./ServeWorkspaceUI')
     expect(mod.ServeWorkspaceUI).toBeDefined()
   })

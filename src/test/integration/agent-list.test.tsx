@@ -8,12 +8,23 @@ import { useUiStore } from '@/store/ui'
 // test_agent_list_fetch (test #26)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Agent cards render in responsive grid
 
-// AgentCard uses useNavigate, so we need to mock TanStack Router
+// AgentCard uses useNavigate and AgentListScreen renders a <Link>, so we mock
+// TanStack Router. The real <Link> calls useLinkProps → useRouter, which throws
+// without a RouterProvider; stub it with a plain anchor so the screen renders
+// in isolation (these tests assert content, not navigation behaviour).
 const mockNavigate = vi.fn()
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  return { ...actual, useNavigate: () => mockNavigate }
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    Link: ({ children, to, ...rest }: { children?: React.ReactNode; to?: string } & Record<string, unknown>) => (
+      <a href={typeof to === 'string' ? to : '#'} {...(rest as Record<string, unknown>)}>
+        {children}
+      </a>
+    ),
+  }
 })
 
 vi.mock('@/lib/api', async (importOriginal) => {

@@ -4,6 +4,16 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
+// Package agent provides the agent memory store backed by the two-room topology.
+//
+// FR-7.1: Two rooms —
+//   - Private per-agent room:   agents/<id>/.omnipus/
+//   - Shared workspace room:    workspaces/<id>/.omnipus/
+//
+// Per-memory files follow FR-7.2 (full frontmatter, every field present).
+// The 3 tools (remember/recall_memory/retrospective) are re-pointed here.
+//
+// GREENFIELD: old MEMORY.md data is not migrated (FR-7.6 / operator D2 decision).
 package agent
 
 import (
@@ -15,48 +25,33 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/dapicom-ai/omnipus/pkg/memrooms"
+	memindex "github.com/dapicom-ai/omnipus/pkg/memrooms/index"
+	"github.com/dapicom-ai/omnipus/pkg/memrooms/minhash"
 	"github.com/dapicom-ai/omnipus/pkg/validation"
 )
 
-// MemoryStore manages persistent memory for the agent.
-// - Long-term memory: memory/MEMORY.md
-// - Daily notes: memory/YYYYMM/YYYYMMDD.md
-// - Last session: memory/sessions/LAST_SESSION.md
-// - Retrospectives: memory/sessions/YYYY-MM-DD/<sessionID>_retro.md
-type MemoryStore struct {
-	workspace  string
-	memoryDir  string
-	memoryFile string
-
-	// mu protects the mtime-keyed entry cache.
-	mu              sync.Mutex
-	entryCacheMtime time.Time
-	entryCache      []LongTermEntry
-}
-
 // MemoryCategory is the closed set of categories an agent may tag a long-term
-// memory entry with. Keeping it typed (rather than a free-form string) makes
-// the domain explicit at every call site and catches drift at compile time.
+// memory entry with. Retained for backward compat with the MemoryStoreAdapter
+// interface surface and existing tests.
 type MemoryCategory string
 
 const (
 	CategoryKeyDecision   MemoryCategory = "key_decision"
 	CategoryReference     MemoryCategory = "reference"
 	CategoryLessonLearned MemoryCategory = "lesson_learned"
-	// CategoryLegacy is assigned to entries parsed from pre-structured
-	// MEMORY.md files (no ts/cat header). Not valid on write.
-	CategoryLegacy MemoryCategory = "legacy"
-	// CategoryLastSession / CategoryRetro are synthetic categories applied
-	// to entries surfaced through SearchEntries from non-MEMORY.md sources.
-	CategoryLastSession MemoryCategory = "last_session"
-	CategoryRetro       MemoryCategory = "retro"
+	CategoryLegacy        MemoryCategory = "legacy"
+	CategoryLastSession   MemoryCategory = "last_session"
+	CategoryRetro         MemoryCategory = "retro"
 )
 
 // ParseMemoryCategory validates and returns a typed category from a string.
-// Accepts only the three AppendLongTerm-legal values; anything else is an
-// error so callers can't silently persist "garbage" as cat=garbage.
+// Accepts the three AppendLongTerm-legal values + maps them to the Spec-5
+// MemoryType enum for storage.
 func ParseMemoryCategory(s string) (MemoryCategory, error) {
 	switch MemoryCategory(s) {
 	case CategoryKeyDecision, CategoryReference, CategoryLessonLearned:
@@ -65,9 +60,21 @@ func ParseMemoryCategory(s string) (MemoryCategory, error) {
 	return "", fmt.Errorf("invalid category %q (expected one of: key_decision, reference, lesson_learned)", s)
 }
 
-// RecapTrigger is the closed set of triggers recorded on a Retro. Keeping this
-// typed means a future refactor cannot quietly introduce a fourth source
-// without the type system noticing.
+// categoryToMemoryType maps the legacy 3-category input to the Spec-5 8-type enum.
+func categoryToMemoryType(cat MemoryCategory) memrooms.MemoryType {
+	switch cat {
+	case CategoryKeyDecision:
+		return memrooms.MemoryTypeDecision
+	case CategoryReference:
+		return memrooms.MemoryTypeReference
+	case CategoryLessonLearned:
+		return memrooms.MemoryTypeLesson
+	default:
+		return memrooms.MemoryTypeNote
+	}
+}
+
+// RecapTrigger is the closed set of triggers recorded on a Retro.
 type RecapTrigger string
 
 const (
@@ -78,7 +85,7 @@ const (
 	TriggerJoined    RecapTrigger = "joined"
 )
 
-// LongTermEntry is a single parsed entry from MEMORY.md.
+// LongTermEntry is the common result type for memory reads (tools interface).
 type LongTermEntry struct {
 	Timestamp time.Time
 	Category  MemoryCategory
@@ -96,66 +103,413 @@ type Retro struct {
 	NeedsImprovement []string
 }
 
-// NewMemoryStore creates a new MemoryStore with the given workspace path.
-// It ensures the memory directory exists.
-func NewMemoryStore(workspace string) *MemoryStore {
-	memoryDir := filepath.Join(workspace, "memory")
-	memoryFile := filepath.Join(memoryDir, "MEMORY.md")
+// MemoryStore manages persistent memory for the agent using the two-room topology.
+//
+// The private room is always available (agents/<id>/.omnipus/).
+// The shared room is set at run-time per turn (workspaces/<id>/.omnipus/).
+//
+// Thread safety: AppendLongTerm / AppendRetro use per-file flocks via
+// fileutil.WriteFileAtomic + pkg/fileutil.AppendJSONL (which is POSIX-safe).
+// SearchEntries reads are safe to call concurrently.
+//
+// Bleve integration (FR-7.4): a per-room scorch index is lazily opened on first
+// use and cached by room-root path. The index cache is protected by indexMu.
+// MinHash dedup (FR-7.5 / M-5): signatures of known memories are kept in sigCache;
+// a near-dup write appends a NearDupRecord to minhash.jsonl (non-destructive).
+type MemoryStore struct {
+	// privateRoom is the per-agent private room. Never nil after NewMemoryStore.
+	privateRoom memrooms.Room
 
-	// Ensure memory directory exists
-	if mkErr := os.MkdirAll(memoryDir, 0o755); mkErr != nil {
-		// Non-fatal: the agent can still operate without the memory dir;
-		// reads will return empty and writes will fail with a clear error.
-		logger.WarnCF("agent", "Failed to create memory directory",
-			map[string]any{"memory_dir": memoryDir, "error": mkErr.Error()})
+	// omnipusHome is the resolved $OMNIPUS_HOME used to build workspace room paths.
+	omnipusHome string
+
+	// sharedMu guards sharedRoom. SetWorkspaceID (writer, called per turn) races
+	// concurrent readers (rooms / resolveWriteRoom / SearchEntriesInScope /
+	// SharedRoom); an unsynchronised write here could leak one workspace's shared
+	// room into another's reads. All access to sharedRoom MUST hold sharedMu.
+	sharedMu   sync.RWMutex
+	sharedRoom *memrooms.Room
+
+	// indexMu protects indexCache and sigCache maps.
+	indexMu sync.Mutex
+	// indexCache maps room.Root → open bleve RoomIndex. Lazily populated.
+	indexCache map[string]*memindex.RoomIndex
+	// sigCache maps room.Root → slice of known MinHash signatures for dedup.
+	// In-memory only; rebuilt from .md files on next access after restart.
+	sigCache map[string][]minhash.Signature
+	// sigIDs maps room.Root → memory ID parallel to sigCache entries (same indices).
+	sigIDs map[string][]string
+	// indexedDirMtime maps room.MemoriesDir → the directory mtime observed the
+	// last time the bleve index and sigCache for that room were known to be in
+	// sync with the on-disk .md files. When the directory mtime advances (a new
+	// or removed .md file — including memories written directly to disk, e.g. by
+	// a peer agent process or a test, NOT via AppendLongTermToScope), the cached
+	// bleve index is stale: a Search() would miss the new file and the substring
+	// scan fallback never fires (it only runs when the cached index is nil). We
+	// then rebuild the bleve index and drop this room's sigCache so the next
+	// access rescans the .md sources. A missing key means "never synced" → force
+	// a refresh on first access.
+	indexedDirMtime map[string]time.Time
+
+	// now returns the current time used to stamp dedup links (minhash.jsonl) and
+	// access events (counters.jsonl). Defaults to time.Now().UTC(). It is an
+	// injectable clock so tests can assert exact, deterministic timestamps on
+	// persisted records instead of depending on wall-clock time at write (M6).
+	// Always returns UTC. Set via SetClock; never nil after NewMemoryStore.
+	now func() time.Time
+}
+
+// SetClock overrides the clock used to stamp persisted memory records
+// (minhash.jsonl dedup links, counters.jsonl access events) and retention
+// windows. Intended for deterministic tests. The supplied function's result is
+// normalised to UTC. Passing nil restores the default time.Now clock.
+func (ms *MemoryStore) SetClock(now func() time.Time) {
+	if now == nil {
+		ms.now = func() time.Time { return time.Now().UTC() }
+		return
 	}
+	ms.now = func() time.Time { return now().UTC() }
+}
 
+// NewMemoryStore creates a MemoryStore with the given agent workspace directory.
+// agentWorkspace is the agent's workspace dir (e.g., $OMNIPUS_HOME/agents/<id>/).
+// omnipusHome is the $OMNIPUS_HOME data directory.
+func NewMemoryStore(agentWorkspace, omnipusHome string) *MemoryStore {
+	private := memrooms.MustEnsureRoom(
+		memrooms.ResolveAgentPrivateRoom(agentWorkspace),
+		"agent:"+filepath.Base(agentWorkspace),
+	)
 	return &MemoryStore{
-		workspace:  workspace,
-		memoryDir:  memoryDir,
-		memoryFile: memoryFile,
+		privateRoom:     private,
+		omnipusHome:     omnipusHome,
+		indexCache:      make(map[string]*memindex.RoomIndex),
+		sigCache:        make(map[string][]minhash.Signature),
+		sigIDs:          make(map[string][]string),
+		indexedDirMtime: make(map[string]time.Time),
+		now:             func() time.Time { return time.Now().UTC() },
 	}
 }
 
-// getTodayFile returns the path to today's daily note file (memory/YYYYMM/YYYYMMDD.md).
-func (ms *MemoryStore) getTodayFile() string {
-	today := time.Now().Format("20060102") // YYYYMMDD
-	monthDir := today[:6]                  // YYYYMM
-	filePath := filepath.Join(ms.memoryDir, monthDir, today+".md")
-	return filePath
-}
-
-// ReadLongTerm reads the long-term memory (MEMORY.md).
-// Returns empty string if the file doesn't exist.
-func (ms *MemoryStore) ReadLongTerm() string {
-	if data, err := os.ReadFile(ms.memoryFile); err == nil {
-		return string(data)
+// Close releases all open bleve indexes held by this store.
+// Safe to call more than once. After Close, the store must not be used.
+func (ms *MemoryStore) Close() {
+	ms.indexMu.Lock()
+	defer ms.indexMu.Unlock()
+	for root, ri := range ms.indexCache {
+		if err := ri.Close(); err != nil {
+			logger.WarnCF("agent.memory", "Close: failed to close bleve index",
+				map[string]any{"room_root": root, "error": err.Error()})
+		}
 	}
-	return ""
+	ms.indexCache = make(map[string]*memindex.RoomIndex)
 }
 
-// WriteLongTerm writes content to the long-term memory file (MEMORY.md).
-func (ms *MemoryStore) WriteLongTerm(content string) error {
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	// Using 0o600 (owner read/write only) for secure default permissions.
-	return fileutil.WriteFileAtomic(ms.memoryFile, []byte(content), 0o600)
+// memoriesDirMtime returns the mtime of a room's memories directory, or the
+// zero time when it cannot be stat'd (e.g. not yet created). The directory
+// mtime advances when a .md file is added to or removed from it, which is how a
+// memory written directly to disk — bypassing AppendLongTermToScope, and thus
+// never handed to ri.Index() — becomes observable to a long-lived process whose
+// bleve index and sigCache were built while the directory was in an older state.
+func memoriesDirMtime(memoriesDir string) time.Time {
+	info, err := os.Stat(memoriesDir)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
-// AppendLongTerm appends a new entry to MEMORY.md under advisory flock.
-// FR-001: category must be one of key_decision | reference | lesson_learned.
-// FR-002: content must be non-empty, ≤ 4096 runes, and must not contain "<!--".
-// FR-003: NUL bytes are stripped silently.
+// syncRoomToDiskLocked detects whether the room's memories directory has changed
+// on disk since the bleve index / sigCache were last synced, and if so:
+//   - rebuilds the bleve index from the .md sources (so Search() sees new files;
+//     otherwise it returns zero hits and the substring-scan fallback never runs
+//     because that fallback only fires when the cached index is nil), and
+//   - drops this room's sigCache so the next dedup check rescans the .md sources.
+//
+// It then records the observed directory mtime as the new sync baseline.
+//
+// Crucially, when nothing changed (mtime equals the recorded baseline) it is a
+// no-op and does NOT touch the sigCache — so the append path, which records the
+// baseline while (re)building the sigCache *before* it reaches the bleve index
+// call, never has its freshly built sigCache dropped. This preserves the
+// round-2 single-append invariant (no double sig-append on first write) while
+// still picking up externally written memory files.
+//
+// MUST be called with ms.indexMu held. ri may be nil (index unavailable); the
+// sigCache drop still happens so dedup stays correct.
+func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.RoomIndex) {
+	current := memoriesDirMtime(room.MemoriesDir)
+	baseline, seen := ms.indexedDirMtime[room.MemoriesDir]
+	if seen && current.Equal(baseline) {
+		return // in sync; nothing to do
+	}
+
+	// Directory changed (or first sync). Rebuild the bleve index from the .md
+	// sources so externally written memories become searchable.
+	if ri != nil {
+		if err := ri.Rebuild(); err != nil {
+			logger.WarnCF("agent.memory", "syncRoomToDisk: bleve rebuild failed; recall may miss new files until next open",
+				map[string]any{"room_root": room.Root, "error": err.Error()})
+		}
+	}
+
+	// Drop the sigCache so the next dedup check rescans the .md sources and picks
+	// up any externally written memories. ensureSigCacheLocked then rebuilds it.
+	delete(ms.sigCache, room.Root)
+	delete(ms.sigIDs, room.Root)
+
+	ms.indexedDirMtime[room.MemoriesDir] = current
+}
+
+// roomIndex returns the bleve RoomIndex for room, lazily opening it.
+// MUST be called with ms.indexMu held.
+//
+// Before returning, it reconciles the index with the on-disk memories directory
+// via syncRoomToDiskLocked: if a .md file was added or removed since the index
+// was last synced (including memories written directly to disk by a peer process
+// or a test), the index is rebuilt so a subsequent Search() observes the change.
+func (ms *MemoryStore) roomIndexLocked(room memrooms.Room) *memindex.RoomIndex {
+	ri, ok := ms.indexCache[room.Root]
+	if ok {
+		ms.syncRoomToDiskLocked(room, ri)
+		return ri
+	}
+	var openErr error
+	ri, openErr = memindex.OpenOrCreate(room)
+	if openErr != nil {
+		logger.WarnCF("agent.memory", "roomIndex: failed to open bleve index; BM25 disabled for room",
+			map[string]any{"room_root": room.Root, "error": openErr.Error()})
+		return nil
+	}
+	ms.indexCache[room.Root] = ri
+	// OpenOrCreate already built the index from the current .md sources, so seed
+	// the sync baseline to the current directory mtime to avoid an immediate
+	// redundant rebuild on the very next access.
+	ms.indexedDirMtime[room.MemoriesDir] = memoriesDirMtime(room.MemoriesDir)
+	return ri
+}
+
+// ensureSigCache lazily loads the MinHash signature cache for room.
+// Scans all .md files the first time; afterwards incremental via addSigLocked.
+// A directory-mtime change (a new/removed .md file) drops the cache via
+// syncRoomToDiskLocked so the scan below re-runs against the current sources.
+// MUST be called with ms.indexMu held.
+func (ms *MemoryStore) ensureSigCacheLocked(room memrooms.Room) {
+	// Reconcile with disk first: if the memories dir changed since the last
+	// sync, this drops a stale sigCache so we rescan below. Pass the cached
+	// bleve index (if any) so it is rebuilt in the same pass. nil is fine.
+	ms.syncRoomToDiskLocked(room, ms.indexCache[room.Root])
+	if _, ok := ms.sigCache[room.Root]; ok {
+		return
+	}
+	memories, err := memrooms.ScanMemories(room.MemoriesDir)
+	if err != nil {
+		logger.WarnCF("agent.memory", "ensureSigCache: scan failed",
+			map[string]any{"room_root": room.Root, "error": err.Error()})
+		ms.sigCache[room.Root] = nil
+		ms.sigIDs[room.Root] = nil
+		return
+	}
+	sigs := make([]minhash.Signature, 0, len(memories))
+	ids := make([]string, 0, len(memories))
+	for _, mf := range memories {
+		sig := minhash.Compute(memorySigText(mf.Frontmatter.Title, mf.Body), minhash.DefaultNumPerm)
+		sigs = append(sigs, sig)
+		ids = append(ids, mf.Frontmatter.ID)
+	}
+	ms.sigCache[room.Root] = sigs
+	ms.sigIDs[room.Root] = ids
+}
+
+// memorySigText composes the canonical text a memory's MinHash signature is
+// computed over. The SAME composition MUST be used everywhere a signature is
+// derived (cache build AND write-time check); otherwise the cached signature
+// (title+body) and the freshly computed check signature would shingle over
+// different inputs, so a re-derived signature could never match its own cache
+// entry — dedup would silently never fire (the title/body asymmetry bug, M2).
+func memorySigText(title, body string) string {
+	title = strings.TrimSpace(title)
+	body = strings.TrimSpace(body)
+	if title == "" {
+		return body
+	}
+	if body == "" {
+		return title
+	}
+	return title + " " + body
+}
+
+// checkAndRegisterSig checks if a memory (title+body) is a near-duplicate of any
+// known memory in room. If it is, appends a NearDupRecord to minhash.jsonl and
+// returns true. If not, registers the new signature and returns false.
+// MUST be called with ms.indexMu held.
+//
+// The signature is computed over memorySigText(title, body) — the SAME
+// composition used to build the cache (ensureSigCacheLocked) so the inputs are
+// symmetric (M2: title/body asymmetry fix).
+//
+// A degenerate (all-zero) signature — produced for memories whose combined
+// title+body has fewer than 3 words — is never compared against the cache nor
+// registered for future comparison: every all-zero signature Jaccard-matches
+// every other all-zero signature at 1.0, which would falsely link unrelated
+// short memories (M2: all-zero signature fix).
+func (ms *MemoryStore) checkAndRegisterSigLocked(room memrooms.Room, id, title, body string) bool {
+	ms.ensureSigCacheLocked(room)
+
+	newSig := minhash.Compute(memorySigText(title, body), minhash.DefaultNumPerm)
+	sigs := ms.sigCache[room.Root]
+	ids := ms.sigIDs[room.Root]
+
+	// Degenerate signatures (too-short text) carry no discriminating information.
+	// Skip dedup entirely and do not pollute the cache with an all-zero entry that
+	// would later false-match other short memories.
+	if newSig.IsZero() {
+		return false
+	}
+
+	for i, existing := range sigs {
+		// Never compare a memory against itself. The .md file is written to disk
+		// (AppendLongTermToScope) BEFORE this dedup check, and ensureSigCacheLocked
+		// builds the cache by scanning the memories dir — so on the first write of
+		// a room the just-written memory is already in the cache and would match
+		// itself at Jaccard 1.0, spuriously logging a self near-dup link (M2).
+		if ids[i] == id {
+			continue
+		}
+		if existing.IsZero() {
+			// A previously-registered short memory; never a meaningful match.
+			continue
+		}
+		if minhash.IsNearDup(newSig, existing, minhash.DefaultThreshold) {
+			existingID := ids[i]
+			j := minhash.Jaccard(newSig, existing)
+			rec := minhash.NearDupRecord{
+				TS:         ms.now(),
+				NewID:      id,
+				ExistingID: existingID,
+				Jaccard:    j,
+				RoomRoot:   room.Root,
+			}
+			mhPath := filepath.Join(room.Root, ".index", minhash.MinHashJSONLFile)
+			if appendErr := minhash.AppendNearDupRecord(mhPath, rec); appendErr != nil {
+				logger.WarnCF("agent.memory", "checkAndRegisterSig: failed to append minhash record",
+					map[string]any{"room_root": room.Root, "new_id": id, "existing_id": existingID, "error": appendErr.Error()})
+			}
+			logger.WarnCF("agent.memory", "near-duplicate memory detected (non-destructive link written)",
+				map[string]any{"new_id": id, "existing_id": existingID, "jaccard": j})
+			// Still register the new sig so we track it for future dedup.
+			ms.registerSigLocked(room, id, newSig)
+			return true
+		}
+	}
+
+	// Not a near-dup — register the signature.
+	ms.registerSigLocked(room, id, newSig)
+	return false
+}
+
+// registerSigLocked appends (sig, id) to the room's MinHash signature cache,
+// but only if id is not already cached. This prevents a double sig-append on
+// the first write to a room: AppendLongTermToScope writes the .md file BEFORE
+// the dedup check, and ensureSigCacheLocked's initial dir scan already picks up
+// the just-written file — so an unconditional append would cache the same
+// memory's signature twice (slow, unbounded cache bloat). On subsequent writes
+// the cache already exists (no rescan), the just-written file is not yet
+// cached, and the append proceeds normally.
+//
+// MUST be called with ms.indexMu held.
+func (ms *MemoryStore) registerSigLocked(room memrooms.Room, id string, sig minhash.Signature) {
+	for _, existingID := range ms.sigIDs[room.Root] {
+		if existingID == id {
+			return // already cached (scan picked up the just-written file)
+		}
+	}
+	ms.sigCache[room.Root] = append(ms.sigCache[room.Root], sig)
+	ms.sigIDs[room.Root] = append(ms.sigIDs[room.Root], id)
+}
+
+// SetWorkspaceID wires the shared workspace room for the active turn.
+// Called by the adapter when workspace_id is available in tool context.
+// workspaceID must be a valid entity ID (no path traversal).
+// Passing "" clears the shared room (reverts to private-only).
+func (ms *MemoryStore) SetWorkspaceID(workspaceID string) {
+	if workspaceID == "" {
+		ms.sharedMu.Lock()
+		ms.sharedRoom = nil
+		ms.sharedMu.Unlock()
+		return
+	}
+	// Guard against path-traversal via crafted workspace IDs.
+	if err := validation.EntityID(workspaceID); err != nil {
+		logger.WarnCF("agent.memory", "SetWorkspaceID: invalid workspace ID; ignoring",
+			map[string]any{"workspace_id": workspaceID, "error": err.Error()})
+		ms.sharedMu.Lock()
+		ms.sharedRoom = nil
+		ms.sharedMu.Unlock()
+		return
+	}
+	// MustEnsureRoom touches the filesystem; do it before taking the lock to keep
+	// the critical section to the pointer swap only.
+	room := memrooms.MustEnsureRoom(
+		memrooms.ResolveWorkspaceSharedRoom(ms.omnipusHome, workspaceID),
+		"workspace:"+workspaceID,
+	)
+	ms.sharedMu.Lock()
+	ms.sharedRoom = &room
+	ms.sharedMu.Unlock()
+}
+
+// currentSharedRoom returns a snapshot of the active shared room pointer under
+// the read lock. The returned pointer is stable (SetWorkspaceID swaps the
+// pointer rather than mutating the pointee), so callers may use it lock-free.
+func (ms *MemoryStore) currentSharedRoom() *memrooms.Room {
+	ms.sharedMu.RLock()
+	defer ms.sharedMu.RUnlock()
+	return ms.sharedRoom
+}
+
+// rooms returns the Rooms value for the current state.
+func (ms *MemoryStore) rooms() memrooms.Rooms {
+	return memrooms.Rooms{
+		Private: ms.privateRoom,
+		Shared:  ms.currentSharedRoom(),
+	}
+}
+
+// resolveWriteRoom returns the target room for a write operation given a scope.
+// When scope is "shared" but no shared room is set, falls back to private and logs WARN.
+func (ms *MemoryStore) resolveWriteRoom(scope memrooms.RoomScope) memrooms.Room {
+	switch scope {
+	case memrooms.RoomScopeShared:
+		if shared := ms.currentSharedRoom(); shared != nil {
+			return *shared
+		}
+		logger.WarnCF("agent.memory", "write requested shared room but no workspace_id set; falling back to private",
+			map[string]any{"private_root": ms.privateRoom.Root})
+		return ms.privateRoom
+	default:
+		return ms.privateRoom
+	}
+}
+
+// AppendLongTerm appends a new per-memory .md file to the target room.
+// content must be non-empty, ≤ 4096 runes, no NUL bytes.
+// category must be one of key_decision | reference | lesson_learned.
+//
+// The scope follows the session: if a shared room is active (workspace session),
+// writes to shared; otherwise private. Callers can override via the room param
+// in the tool (handled by the adapter layer).
 func (ms *MemoryStore) AppendLongTerm(content, category string) error {
-	// Validate category (FR-001) via the typed enum parser so callers can
-	// never smuggle a freeform "cat=garbage" onto disk.
-	if _, err := ParseMemoryCategory(category); err != nil {
+	return ms.AppendLongTermToScope(content, category, ms.rooms().DefaultRoomScope())
+}
+
+// AppendLongTermToScope writes to the specified room scope.
+func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope memrooms.RoomScope) error {
+	cat, err := ParseMemoryCategory(category)
+	if err != nil {
 		return err
 	}
 
-	// Strip NUL bytes silently (FR-003).
 	content = strings.ReplaceAll(content, "\x00", "")
-
-	// Validate content (FR-002).
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return fmt.Errorf("content must not be empty")
@@ -167,186 +521,62 @@ func (ms *MemoryStore) AppendLongTerm(content, category string) error {
 		return fmt.Errorf("content must not contain HTML comment markers")
 	}
 
-	// Ensure memory directory exists before acquiring flock.
-	if err := os.MkdirAll(ms.memoryDir, 0o700); err != nil {
-		return fmt.Errorf("memory: create memory dir: %w", err)
+	room := ms.resolveWriteRoom(scope)
+
+	// Generate a new memory ID. We use a UUID-based ID so no external dep is needed.
+	// The brief does not mandate ULIDs; a UUID is fine for v0.1.0.
+	id := uuid.New().String()
+
+	mf := memrooms.MemoryFile{
+		Frontmatter: memrooms.MemoryFrontmatter{
+			ID:         id,
+			Title:      truncateTitle(trimmed, 80),
+			Type:       categoryToMemoryType(cat),
+			Tags:       []string{},
+			Confidence: 0,
+			Status:     memrooms.MemoryStatusActive,
+			Supersedes: "",
+			Author:     ms.resolveAuthor(),
+			BornIn:     ms.resolveBornIn(),
+		},
+		Body: trimmed,
 	}
 
-	ts := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	// Write the .md file first (FR-7.2 / FR-7.3).
+	if err := memrooms.WriteMemoryFile(room.MemoriesDir, mf); err != nil {
+		return err
+	}
 
-	return fileutil.WithFlock(ms.memoryFile, func() error {
-		// Check whether file is non-empty so we can emit the separator.
-		var needsSeparator bool
-		if info, err := os.Stat(ms.memoryFile); err == nil && info.Size() > 0 {
-			needsSeparator = true
+	// MinHash dedup check (FR-7.5 / M-5): non-destructive — links written to
+	// minhash.jsonl even if near-dup detected; the .md file is already written.
+	// Acquire indexMu to serialise sig cache + bleve index updates AND to guard
+	// the bleve index against a concurrent Close(): if we released indexMu before
+	// ri.Index(), Close() could close ri underneath us (use-after-close). Holding
+	// the lock across the index call keeps ri valid for its whole lifetime here.
+	ms.indexMu.Lock()
+	isDup := ms.checkAndRegisterSigLocked(room, id, mf.Frontmatter.Title, trimmed)
+	// Wire into bleve index (FR-7.4): index unconditionally — even near-dups
+	// are indexed (we keep all .md files).
+	if ri := ms.roomIndexLocked(room); ri != nil {
+		if idxErr := ri.Index(mf); idxErr != nil {
+			// Non-fatal: .md file is already written; bleve index will be rebuilt on next open.
+			logger.WarnCF("agent.memory", "AppendLongTermToScope: bleve index failed (will rebuild on next open)",
+				map[string]any{"id": id, "room_root": room.Root, "error": idxErr.Error()})
 		}
+	}
+	ms.indexMu.Unlock()
 
-		f, err := os.OpenFile(ms.memoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("memory: open MEMORY.md for append: %w", err)
-		}
+	if isDup {
+		logger.WarnCF("agent.memory", "near-duplicate memory written (dedup link in minhash.jsonl)",
+			map[string]any{"id": id, "room_root": room.Root})
+	}
 
-		var writeErr error
-		if needsSeparator {
-			if _, err := fmt.Fprintf(f, "<!-- next -->\n\n"); err != nil {
-				f.Close()
-				return fmt.Errorf("memory: write separator: %w", err)
-			}
-		}
-
-		_, writeErr = fmt.Fprintf(f, "<!-- ts=%s cat=%s -->\n%s\n", ts, category, trimmed)
-		if writeErr != nil {
-			f.Close()
-			return fmt.Errorf("memory: write entry: %w", writeErr)
-		}
-
-		if err := f.Sync(); err != nil {
-			f.Close()
-			return fmt.Errorf("memory: sync MEMORY.md: %w", err)
-		}
-		return f.Close()
-	})
+	return nil
 }
 
-// ReadLongTermEntries parses MEMORY.md into typed LongTermEntry values.
-// Results are cached mtime-keyed; the cache is reused when the file has not changed.
-// FR-004: returns newest-first.
-// FR-006: legacy MEMORY.md (no separators) → single entry with cat=legacy, ts=<file mtime>.
-func (ms *MemoryStore) ReadLongTermEntries() ([]LongTermEntry, error) {
-	info, err := os.Stat(ms.memoryFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("memory: stat MEMORY.md: %w", err)
-	}
-
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	// Cache hit: mtime has not advanced. Return a copy so callers cannot race
-	// on the shared slice (H4 fix — shared mutable slice race).
-	if !ms.entryCacheMtime.IsZero() && !info.ModTime().After(ms.entryCacheMtime) {
-		out := make([]LongTermEntry, len(ms.entryCache))
-		copy(out, ms.entryCache)
-		return out, nil
-	}
-
-	data, err := os.ReadFile(ms.memoryFile)
-	if err != nil {
-		return nil, fmt.Errorf("memory: read MEMORY.md: %w", err)
-	}
-
-	entries := parseLongTermEntries(string(data), info.ModTime())
-
-	// Store newest-first.
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
-	}
-
-	ms.entryCache = entries
-	ms.entryCacheMtime = info.ModTime()
-	// Return a copy so callers cannot race on the shared cache slice.
-	out := make([]LongTermEntry, len(entries))
-	copy(out, entries)
-	return out, nil
-}
-
-// parseLongTermEntries splits raw MEMORY.md content into individual LongTermEntry values.
-// Handles both the structured format (<!-- next --> + <!-- ts= cat= -->) and legacy
-// free-form content (no separators → single entry with cat=legacy, ts=fileMtime).
-func parseLongTermEntries(content string, fileMtime time.Time) []LongTermEntry {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return nil
-	}
-
-	// Split by "<!-- next -->" separator.
-	blocks := strings.Split(content, "<!-- next -->")
-	var entries []LongTermEntry
-	isLegacy := true
-
-	for _, block := range blocks {
-		block = strings.TrimSpace(block)
-		if block == "" {
-			continue
-		}
-
-		// Attempt to parse the header line: <!-- ts=... cat=... -->
-		entry, ok := parseEntryBlock(block)
-		if ok {
-			isLegacy = false
-			entries = append(entries, entry)
-		} else if isLegacy {
-			// Legacy entry: no structured header anywhere in the file.
-			entries = append(entries, LongTermEntry{
-				Timestamp: fileMtime,
-				Category:  CategoryLegacy,
-				Content:   block,
-			})
-		} else {
-			// A structured file should not carry unparseable blocks. A dropped
-			// entry silently shrinks user memory, which is the kind of
-			// regression that must show up in logs. DEBUG rather than WARN
-			// because a corrupted block is rare and each one fires at read time.
-			logger.DebugCF("agent.memory", "Skipping unparseable MEMORY.md block",
-				map[string]any{"block_bytes": len(block)})
-		}
-	}
-
-	return entries
-}
-
-// parseEntryBlock attempts to extract a structured entry from a single block.
-// Returns the entry and true on success.
-func parseEntryBlock(block string) (LongTermEntry, bool) {
-	// Header format: <!-- ts=<ISO8601> cat=<category> -->
-	if !strings.HasPrefix(block, "<!--") {
-		return LongTermEntry{}, false
-	}
-	headerEnd := strings.Index(block, "-->")
-	if headerEnd < 0 {
-		return LongTermEntry{}, false
-	}
-	header := block[4:headerEnd] // content between <!-- and -->
-	header = strings.TrimSpace(header)
-
-	var ts time.Time
-	var category string
-
-	for _, field := range strings.Fields(header) {
-		if strings.HasPrefix(field, "ts=") {
-			raw := strings.TrimPrefix(field, "ts=")
-			parsed, err := time.Parse("2006-01-02T15:04:05.000Z", raw)
-			if err == nil {
-				ts = parsed
-			}
-		}
-		if strings.HasPrefix(field, "cat=") {
-			category = strings.TrimPrefix(field, "cat=")
-		}
-	}
-
-	if ts.IsZero() && category == "" {
-		return LongTermEntry{}, false
-	}
-
-	contentStart := headerEnd + 3 // skip past "-->"
-	bodyContent := strings.TrimSpace(block[contentStart:])
-
-	return LongTermEntry{
-		Timestamp: ts,
-		Category:  MemoryCategory(category),
-		Content:   bodyContent,
-	}, true
-}
-
-// SearchEntries performs a case-insensitive literal substring search across:
-// - MEMORY.md entries
-// - LAST_SESSION.md (as a single entry with cat=last_session)
-// - retrospectives from the last 30 days
-// Results are newest-first. limit defaults to 20 if ≤ 0, max 50.
-// FR-005: no regex — literal substring match only.
+// SearchEntries performs a case-insensitive literal substring search across
+// the in-scope room(s). scope defaults to RoomScopeBoth when a shared room
+// is available, private otherwise.
 func (ms *MemoryStore) SearchEntries(query string, limit int) ([]LongTermEntry, error) {
 	if limit <= 0 {
 		limit = 20
@@ -354,148 +584,251 @@ func (ms *MemoryStore) SearchEntries(query string, limit int) ([]LongTermEntry, 
 	if limit > 50 {
 		limit = 50
 	}
+	return ms.SearchEntriesInScope(query, limit, memrooms.RoomScopeBoth)
+}
 
-	lowerQuery := strings.ToLower(query)
-
-	var candidates []LongTermEntry
-
-	// 1. Long-term memory entries.
-	memEntries, err := ms.ReadLongTermEntries()
-	if err != nil {
-		return nil, fmt.Errorf("memory: search: read long-term entries: %w", err)
+// SearchEntriesInScope searches the specified room scope for query using bleve BM25 (FR-7.4).
+// Falls back to substring scan when the bleve index is unavailable.
+// On each successful recall, appends a CounterRecord (op=access) to counters.jsonl (FR-7.5).
+func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memrooms.RoomScope) ([]LongTermEntry, error) {
+	if limit <= 0 {
+		limit = 20
 	}
-	candidates = append(candidates, memEntries...)
+	if limit > 50 {
+		limit = 50
+	}
 
-	// 2. LAST_SESSION.md as a single entry.
-	lastSession, err := ms.ReadLastSession()
-	if err == nil && strings.TrimSpace(lastSession) != "" {
-		// Stat for timestamp.
-		lsPath := filepath.Join(ms.memoryDir, "sessions", "LAST_SESSION.md")
-		var lsTime time.Time
-		if info, statErr := os.Stat(lsPath); statErr == nil {
-			lsTime = info.ModTime()
+	// Resolve which rooms to search.
+	type roomAndIndex struct {
+		room memrooms.Room
+		ri   *memindex.RoomIndex // nil if unavailable
+	}
+	var targets []roomAndIndex
+
+	// Snapshot the shared room once under its read lock so the scope branches below
+	// observe a consistent value (a concurrent SetWorkspaceID must not swap it mid-read).
+	shared := ms.currentSharedRoom()
+
+	ms.indexMu.Lock()
+	switch scope {
+	case memrooms.RoomScopePrivate:
+		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
+	case memrooms.RoomScopeShared:
+		if shared != nil {
+			targets = []roomAndIndex{{room: *shared, ri: ms.roomIndexLocked(*shared)}}
 		} else {
-			lsTime = time.Now().UTC()
+			targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
 		}
-		candidates = append(candidates, LongTermEntry{
-			Timestamp: lsTime,
-			Category:  CategoryLastSession,
-			Content:   lastSession,
-		})
-	}
-
-	// 3. Retrospectives from the last 30 days. A read failure silently
-	// shrinks recall results — operators must see it in logs so a permission
-	// regression on the retros directory doesn't hide every past session.
-	retros, retrosErr := ms.ReadRetros(30)
-	if retrosErr != nil {
-		logger.WarnCF("agent.memory", "SearchEntries: ReadRetros failed; recall will be incomplete",
-			map[string]any{"error": retrosErr.Error()})
-	} else {
-		for _, r := range retros {
-			retroContent := formatRetroForSearch(r)
-			candidates = append(candidates, LongTermEntry{
-				Timestamp: r.Timestamp,
-				Category:  CategoryRetro,
-				Content:   retroContent,
-			})
+	default: // RoomScopeBoth
+		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
+		if shared != nil {
+			targets = append(targets, roomAndIndex{room: *shared, ri: ms.roomIndexLocked(*shared)})
 		}
 	}
+	ms.indexMu.Unlock()
 
-	// Sort candidates newest-first.
-	sortEntriesNewestFirst(candidates)
+	// Collect results: bleve hits when index available, else substring scan.
+	type scoredMemory struct {
+		mf    memrooms.MemoryFile
+		score float64
+	}
+	var scored []scoredMemory
+	seenIDs := make(map[string]bool)
 
-	// Deduplicate by timestamp (same-millisecond duplicates can arise when
-	// LAST_SESSION and a retro share an mtime).
-	seen := make(map[time.Time]bool, len(candidates))
-	var deduped []LongTermEntry
-	for _, e := range candidates {
-		if seen[e.Timestamp] {
+	for _, t := range targets {
+		if t.ri != nil {
+			// BM25 path (FR-7.4). Hold indexMu across the Search() call to guard
+			// the bleve index against a concurrent Close(): Close() closes every
+			// RoomIndex under indexMu, so releasing the lock before t.ri.Search()
+			// would risk a use-after-close. This mirrors the append path
+			// (AppendLongTermToScope), which holds indexMu across ri.Index().
+			ms.indexMu.Lock()
+			hits, err := t.ri.Search(query, limit)
+			ms.indexMu.Unlock()
+			if err != nil {
+				logger.WarnCF("agent.memory", "SearchEntriesInScope: bleve search failed; falling back to scan",
+					map[string]any{"room_root": t.room.Root, "query": query, "error": err.Error()})
+				// Fall through to scan.
+			} else {
+				agentID := ms.resolveAuthor()
+				for _, hit := range hits {
+					if seenIDs[hit.ID] {
+						continue
+					}
+					mf, readErr := readMemoryByID(t.room.MemoriesDir, hit.ID)
+					if readErr != nil {
+						// File may have been deleted externally; skip.
+						logger.WarnCF("agent.memory", "SearchEntriesInScope: read memory file failed",
+							map[string]any{"id": hit.ID, "error": readErr.Error()})
+						continue
+					}
+					seenIDs[hit.ID] = true
+					scored = append(scored, scoredMemory{mf: mf, score: hit.Score})
+					// Append counters.jsonl access event (FR-7.5) only for memories
+					// actually surfaced — not for deduped or unreadable hits, which
+					// would over-count access frequency.
+					rec := memrooms.CounterRecord{
+						TS:       ms.now(),
+						MemoryID: hit.ID,
+						Op:       memrooms.CounterOpAccess,
+						By:       agentID,
+					}
+					if appendErr := memrooms.AppendCounterRecord(t.room.CountersPath, rec); appendErr != nil {
+						logger.WarnCF("agent.memory", "SearchEntriesInScope: counter append failed",
+							map[string]any{"memory_id": hit.ID, "error": appendErr.Error()})
+					}
+				}
+				continue
+			}
+		}
+
+		// Substring-scan fallback (when bleve index is nil or errored).
+		found, scanErr := memrooms.SearchMemories(t.room.MemoriesDir, query)
+		if scanErr != nil {
+			logger.WarnCF("agent.memory", "SearchEntriesInScope: scan failed",
+				map[string]any{"dir": t.room.MemoriesDir, "error": scanErr.Error()})
 			continue
 		}
-		seen[e.Timestamp] = true
-		deduped = append(deduped, e)
-	}
-
-	// Filter by query substring match.
-	var results []LongTermEntry
-	for _, e := range deduped {
-		if strings.Contains(strings.ToLower(e.Content), lowerQuery) ||
-			strings.Contains(strings.ToLower(string(e.Category)), lowerQuery) {
-			results = append(results, e)
-			if len(results) >= limit {
-				break
+		agentIDScan := ms.resolveAuthor()
+		for _, mf := range found {
+			if !seenIDs[mf.Frontmatter.ID] {
+				seenIDs[mf.Frontmatter.ID] = true
+				scored = append(scored, scoredMemory{mf: mf, score: 0})
+				// Append access counter record for scan-fallback results (FR-7.5).
+				rec := memrooms.CounterRecord{
+					TS:       ms.now(),
+					MemoryID: mf.Frontmatter.ID,
+					Op:       memrooms.CounterOpAccess,
+					By:       agentIDScan,
+				}
+				if appendErr := memrooms.AppendCounterRecord(t.room.CountersPath, rec); appendErr != nil {
+					logger.WarnCF("agent.memory", "SearchEntriesInScope: counter append failed (scan fallback)",
+						map[string]any{"memory_id": mf.Frontmatter.ID, "error": appendErr.Error()})
+				}
 			}
 		}
 	}
 
+	// Sort by BM25 score descending (ties: newest-first by mtime).
+	dirs := make([]string, 0, len(targets))
+	for _, t := range targets {
+		dirs = append(dirs, t.room.MemoriesDir)
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		// Equal scores: return false to satisfy strict-weak-ordering. The stable
+		// sort then preserves insertion order (mtime-sorted scan) for ties.
+		return false
+	})
+
+	// When all scores are 0 (scan fallback), sort by mtime.
+	allZero := true
+	for _, s := range scored {
+		if s.score != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		all := make([]memrooms.MemoryFile, len(scored))
+		for i, s := range scored {
+			all[i] = s.mf
+		}
+		sortMemoriesNewestFirst(dirs, all)
+		for i, mf := range all {
+			scored[i].mf = mf
+		}
+	}
+
+	// Resolve each memory's real stored creation time (its file mtime) so the
+	// recalled entry reports when the memory was actually written, NOT
+	// wall-clock-at-recall. memoryFileToEntry falls back to ms.now() when no
+	// mtime is available (e.g. the file was removed between search and build).
+	mtimes := memoryFileMtimes(dirs)
+
+	// Build the result list up to limit.
+	var results []LongTermEntry
+	for i, s := range scored {
+		if i >= limit {
+			break
+		}
+		ts, ok := mtimes[s.mf.Frontmatter.ID]
+		if !ok {
+			ts = ms.now()
+		}
+		results = append(results, memoryFileToEntry(s.mf, ts))
+	}
 	return results, nil
 }
 
-// formatRetroForSearch renders a Retro as a plain text block for substring matching.
-func formatRetroForSearch(r Retro) string {
-	var sb strings.Builder
-	sb.WriteString(r.Recap)
-	for _, w := range r.WentWell {
-		sb.WriteString("\n+ ")
-		sb.WriteString(w)
+// readMemoryByID resolves a bleve hit ID to its MemoryFile. The fast path is the
+// canonical <memoriesDir>/<id>.md layout. When that file is absent — e.g. a
+// memory file whose name does NOT equal its frontmatter ID (an externally
+// authored .md, where the bleve index keys on the frontmatter ID but the file on
+// disk has a different name) — it falls back to scanning the directory for the
+// memory whose frontmatter ID matches. Without this fallback such a hit would be
+// silently dropped and its content would never surface in recall, even though
+// the index correctly found it.
+func readMemoryByID(memoriesDir, id string) (memrooms.MemoryFile, error) {
+	mf, err := memrooms.ReadMemoryFile(memoriesDir, id)
+	if err == nil {
+		return mf, nil
 	}
-	for _, n := range r.NeedsImprovement {
-		sb.WriteString("\n- ")
-		sb.WriteString(n)
+	// Filename ≠ frontmatter ID: locate by scanning. ScanMemories tolerates
+	// individual unreadable files, so one bad .md does not abort the lookup.
+	memories, scanErr := memrooms.ScanMemories(memoriesDir)
+	if scanErr != nil {
+		return memrooms.MemoryFile{}, err // surface the original read error
 	}
-	return sb.String()
-}
-
-// sortEntriesNewestFirst sorts LongTermEntry slice in descending timestamp order.
-func sortEntriesNewestFirst(entries []LongTermEntry) {
-	sort.SliceStable(entries, func(i, j int) bool {
-		return entries[i].Timestamp.After(entries[j].Timestamp)
-	})
-}
-
-// WriteLastSession atomically writes content to memory/sessions/LAST_SESSION.md.
-// FR-007.
-func (ms *MemoryStore) WriteLastSession(content string) error {
-	sessionsDir := filepath.Join(ms.memoryDir, "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
-		return fmt.Errorf("memory: create sessions dir: %w", err)
-	}
-	lsPath := filepath.Join(sessionsDir, "LAST_SESSION.md")
-	return fileutil.WriteFileAtomic(lsPath, []byte(content), 0o600)
-}
-
-// ReadLastSession returns the contents of LAST_SESSION.md, or empty string if absent.
-// FR-008.
-func (ms *MemoryStore) ReadLastSession() (string, error) {
-	lsPath := filepath.Join(ms.memoryDir, "sessions", "LAST_SESSION.md")
-	data, err := os.ReadFile(lsPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
+	for _, candidate := range memories {
+		if candidate.Frontmatter.ID == id {
+			return candidate, nil
 		}
-		return "", fmt.Errorf("memory: read LAST_SESSION.md: %w", err)
 	}
-	return string(data), nil
+	return memrooms.MemoryFile{}, err
 }
 
-// AppendRetro writes a structured retrospective to
-// memory/sessions/<YYYY-MM-DD>/<sessionID>_retro.md.
-// FR-009: uses advisory flock. sessionID is validated via validation.EntityID.
+// memoryFileMtimes builds an ID→mtime map by scanning each memories directory.
+// The mtime of a memory's .md file is its real stored creation/modification
+// time. Per-directory and per-file errors are skipped (a missing mtime falls
+// back to the caller's clock), so this never aborts a recall.
+func memoryFileMtimes(dirs []string) map[string]time.Time {
+	mtimes := make(map[string]time.Time)
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			info, infoErr := e.Info()
+			if infoErr != nil {
+				continue
+			}
+			mtimes[strings.TrimSuffix(e.Name(), ".md")] = info.ModTime().UTC()
+		}
+	}
+	return mtimes
+}
+
+// AppendRetro writes a retrospective to the private room's retro directory.
+// (Retrospectives are always private — they capture agent reflection, not shared facts.)
 func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
-	// Validate sessionID via pkg/validation (FR-009, spec v7 FR-062).
 	if err := validation.EntityID(sessionID); err != nil {
 		return fmt.Errorf("memory: invalid session ID: %w", err)
 	}
 
 	dateStr := r.Timestamp.UTC().Format("2006-01-02")
-	retroDir := filepath.Join(ms.memoryDir, "sessions", dateStr)
+	retroDir := filepath.Join(ms.privateRoom.Root, "retros", dateStr)
 	if err := os.MkdirAll(retroDir, 0o700); err != nil {
 		return fmt.Errorf("memory: create retro dir: %w", err)
 	}
 
 	retroPath := filepath.Join(retroDir, sessionID+"_retro.md")
-
 	ts := r.Timestamp.UTC().Format("2006-01-02T15:04:05.000Z")
 	fallbackStr := "false"
 	if r.Fallback {
@@ -522,7 +855,6 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 		if err != nil {
 			return fmt.Errorf("memory: open retro file: %w", err)
 		}
-
 		if _, err := f.WriteString(content); err != nil {
 			f.Close()
 			return fmt.Errorf("memory: write retro: %w", err)
@@ -535,9 +867,137 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 	})
 }
 
-// ReadRetros returns structured Retro records from the last daysBack days.
-// Clamps daysBack to 1..365. Files that don't parse are silently skipped.
-// FR-010.
+// WriteLastSession atomically writes content to the private room's last-session.md.
+func (ms *MemoryStore) WriteLastSession(content string) error {
+	return fileutil.WriteFileAtomic(ms.privateRoom.LastSessionPath, []byte(content), 0o600)
+}
+
+// ReadLastSession returns the contents of last-session.md, or "" if absent.
+func (ms *MemoryStore) ReadLastSession() (string, error) {
+	data, err := os.ReadFile(ms.privateRoom.LastSessionPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("memory: read last-session.md: %w", err)
+	}
+	return string(data), nil
+}
+
+// GetMemoryContext returns a formatted memory context string for the system prompt.
+// Reads last-session.md + the most recent N memories from the default scope.
+func (ms *MemoryStore) GetMemoryContext() string {
+	var sb strings.Builder
+
+	lastSession, err := ms.ReadLastSession()
+	if err == nil && strings.TrimSpace(lastSession) != "" {
+		sb.WriteString("## Last Session\n")
+		sb.WriteString(lastSession)
+	}
+
+	entries, err := ms.SearchEntries("", 20)
+	if err == nil && len(entries) > 0 {
+		if sb.Len() > 0 {
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString("## Long-term memory\n")
+		for i, e := range entries {
+			if i > 0 {
+				sb.WriteString("\n\n")
+			}
+			ts := e.Timestamp.UTC().Format("2006-01-02T15:04:05Z")
+			fmt.Fprintf(&sb, "[%s | %s]\n%s", ts, e.Category, e.Content)
+		}
+	}
+
+	return sb.String()
+}
+
+// PrivateRoom returns the private room (for adapter/tool access).
+func (ms *MemoryStore) PrivateRoom() memrooms.Room {
+	return ms.privateRoom
+}
+
+// SharedRoom returns the shared room, or nil if no workspace_id is set.
+func (ms *MemoryStore) SharedRoom() *memrooms.Room {
+	return ms.currentSharedRoom()
+}
+
+// --- helpers ---------------------------------------------------------------
+
+// resolveAuthor returns the agent ID to record as the memory author.
+// Since MemoryStore doesn't carry the agent ID directly, we read the directory name.
+func (ms *MemoryStore) resolveAuthor() string {
+	return filepath.Base(filepath.Dir(ms.privateRoom.Root))
+}
+
+// resolveBornIn returns the session ID for the born_in frontmatter field.
+// In v0.1.0 this is empty — the adapter layer could set it but it's not
+// plumbed yet. The field is present in the frontmatter as NFR-7 requires.
+func (ms *MemoryStore) resolveBornIn() string {
+	return ""
+}
+
+// truncateTitle extracts a short title from content (first line, max maxLen runes).
+func truncateTitle(content string, maxLen int) string {
+	line := strings.SplitN(content, "\n", 2)[0]
+	runes := []rune(line)
+	if len(runes) > maxLen {
+		return string(runes[:maxLen])
+	}
+	return line
+}
+
+// memoryFileToEntry converts a MemoryFile to a LongTermEntry for the tools
+// interface. ts is the memory's real stored creation time (its file mtime);
+// callers pass their injectable clock as the fallback when no mtime is
+// available, so the recalled timestamp is deterministic and reflects when the
+// memory was actually written rather than wall-clock-at-recall.
+func memoryFileToEntry(mf memrooms.MemoryFile, ts time.Time) LongTermEntry {
+	return LongTermEntry{
+		Timestamp: ts.UTC(),
+		Category:  memoryTypeToCategory(mf.Frontmatter.Type),
+		Content:   mf.Body,
+	}
+}
+
+// memoryTypeToCategory maps the Spec-5 MemoryType back to the legacy MemoryCategory
+// used by the tools interface.
+func memoryTypeToCategory(t memrooms.MemoryType) MemoryCategory {
+	switch t {
+	case memrooms.MemoryTypeDecision:
+		return CategoryKeyDecision
+	case memrooms.MemoryTypeReference:
+		return CategoryReference
+	case memrooms.MemoryTypeLesson:
+		return CategoryLessonLearned
+	default:
+		return CategoryLegacy
+	}
+}
+
+// sortMemoriesNewestFirst sorts MemoryFile slice by file mtime descending.
+// Falls back to ID sort when mtime is unavailable.
+func sortMemoriesNewestFirst(dirs []string, memories []memrooms.MemoryFile) {
+	mtimes := memoryFileMtimes(dirs)
+
+	sort.SliceStable(memories, func(i, j int) bool {
+		ti := mtimes[memories[i].Frontmatter.ID]
+		tj := mtimes[memories[j].Frontmatter.ID]
+		if ti.IsZero() && tj.IsZero() {
+			return memories[i].Frontmatter.ID > memories[j].Frontmatter.ID
+		}
+		if ti.IsZero() {
+			return false
+		}
+		if tj.IsZero() {
+			return true
+		}
+		return ti.After(tj)
+	})
+}
+
+// ReadRetros returns structured Retro records from the last daysBack days (private room).
 func (ms *MemoryStore) ReadRetros(daysBack int) ([]Retro, error) {
 	if daysBack < 1 {
 		daysBack = 1
@@ -545,45 +1005,34 @@ func (ms *MemoryStore) ReadRetros(daysBack int) ([]Retro, error) {
 	if daysBack > 365 {
 		daysBack = 365
 	}
-
-	sessionsDir := filepath.Join(ms.memoryDir, "sessions")
-	cutoff := time.Now().UTC().AddDate(0, 0, -daysBack)
-
+	retrosBase := filepath.Join(ms.privateRoom.Root, "retros")
+	now := ms.now()
+	cutoff := now.AddDate(0, 0, -daysBack)
 	var retros []Retro
 
 	for i := range daysBack {
-		date := time.Now().UTC().AddDate(0, 0, -i)
+		date := now.AddDate(0, 0, -i)
 		dateStr := date.Format("2006-01-02")
-		dayDir := filepath.Join(sessionsDir, dateStr)
-
+		dayDir := filepath.Join(retrosBase, dateStr)
 		entries, err := os.ReadDir(dayDir)
 		if err != nil {
-			// Missing day dirs are normal (no retros that day). Other errors
-			// (permission, I/O) indicate a real problem that would otherwise
-			// silently shrink recall results.
 			if !os.IsNotExist(err) {
 				logger.WarnCF("agent.memory", "ReadRetros: cannot read day dir",
 					map[string]any{"dir": dayDir, "error": err.Error()})
 			}
 			continue
 		}
-
 		for _, entry := range entries {
-			if entry.IsDir() {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_retro.md") {
 				continue
 			}
-			name := entry.Name()
-			if !strings.HasSuffix(name, "_retro.md") {
-				continue
-			}
-			retroFilePath := filepath.Join(dayDir, name)
-			data, err := os.ReadFile(retroFilePath)
+			retroPath := filepath.Join(dayDir, entry.Name())
+			data, err := os.ReadFile(retroPath)
 			if err != nil {
-				logger.DebugCF("agent.memory", "ReadRetros: skipping unreadable retro",
-					map[string]any{"path": retroFilePath, "error": err.Error()})
+				logger.WarnCF("agent.memory", "ReadRetros: skipping unreadable retro file",
+					map[string]any{"path": retroPath, "error": err.Error()})
 				continue
 			}
-
 			fileRetros := parseRetroFile(string(data))
 			for _, r := range fileRetros {
 				if !r.Timestamp.IsZero() && r.Timestamp.After(cutoff) {
@@ -596,12 +1045,60 @@ func (ms *MemoryStore) ReadRetros(daysBack int) ([]Retro, error) {
 	sort.SliceStable(retros, func(i, j int) bool {
 		return retros[i].Timestamp.After(retros[j].Timestamp)
 	})
-
 	return retros, nil
 }
 
-// parseRetroFile parses one or more retro blocks from a retro file.
-// Blocks are separated by "<!-- next -->" lines. Invalid blocks are skipped.
+// SweepRetros deletes retro files older than retentionDays.
+func (ms *MemoryStore) SweepRetros(retentionDays int) (int, error) {
+	if retentionDays < 0 {
+		retentionDays = 0
+	}
+	retrosBase := filepath.Join(ms.privateRoom.Root, "retros")
+	cutoff := ms.now().AddDate(0, 0, -retentionDays)
+
+	entries, err := os.ReadDir(retrosBase)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("memory: sweep retros: read retros dir: %w", err)
+	}
+
+	deleted := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirDate, parseErr := time.Parse("2006-01-02", entry.Name())
+		if parseErr != nil {
+			continue
+		}
+		if !dirDate.Before(cutoff) {
+			continue
+		}
+		dayDir := filepath.Join(retrosBase, entry.Name())
+		retroEntries, readErr := os.ReadDir(dayDir)
+		if readErr != nil {
+			continue
+		}
+		for _, retroEntry := range retroEntries {
+			if retroEntry.IsDir() || !strings.HasSuffix(retroEntry.Name(), "_retro.md") {
+				continue
+			}
+			retroPath := filepath.Join(dayDir, retroEntry.Name())
+			if rmErr := os.Remove(retroPath); rmErr == nil {
+				deleted++
+			} else {
+				logger.WarnCF("agent", "SweepRetros: failed to delete retro file",
+					map[string]any{"path": retroPath, "error": rmErr.Error()})
+			}
+		}
+	}
+	return deleted, nil
+}
+
+// --- retro parsing (unchanged from original) --------------------------------
+
 func parseRetroFile(content string) []Retro {
 	blocks := strings.Split(content, "<!-- next -->")
 	var retros []Retro
@@ -618,7 +1115,6 @@ func parseRetroFile(content string) []Retro {
 	return retros
 }
 
-// parseRetroBlock parses a single retro block. Returns the Retro and true on success.
 func parseRetroBlock(block string) (Retro, bool) {
 	if !strings.HasPrefix(block, "<!--") {
 		return Retro{}, false
@@ -652,7 +1148,6 @@ func parseRetroBlock(block string) (Retro, bool) {
 
 	body := block[headerEnd+3:]
 	lines := strings.Split(body, "\n")
-
 	section := ""
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -675,209 +1170,5 @@ func parseRetroBlock(block string) (Retro, bool) {
 			}
 		}
 	}
-
 	return r, true
-}
-
-// SweepRetros deletes retro files whose enclosing date directory is older
-// than retentionDays days. Returns the count of deleted files.
-// FR-031.
-func (ms *MemoryStore) SweepRetros(retentionDays int) (int, error) {
-	if retentionDays < 0 {
-		retentionDays = 0
-	}
-	sessionsDir := filepath.Join(ms.memoryDir, "sessions")
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
-
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("memory: sweep retros: read sessions dir: %w", err)
-	}
-
-	deleted := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		// Parse the directory name as YYYY-MM-DD.
-		dirDate, parseErr := time.Parse("2006-01-02", entry.Name())
-		if parseErr != nil {
-			// Not a date directory; skip.
-			continue
-		}
-		if !dirDate.Before(cutoff) {
-			// Within retention window; skip.
-			continue
-		}
-
-		dayDir := filepath.Join(sessionsDir, entry.Name())
-		retroEntries, readErr := os.ReadDir(dayDir)
-		if readErr != nil {
-			continue
-		}
-		for _, retroEntry := range retroEntries {
-			if retroEntry.IsDir() || !strings.HasSuffix(retroEntry.Name(), "_retro.md") {
-				continue
-			}
-			retroPath := filepath.Join(dayDir, retroEntry.Name())
-			if rmErr := os.Remove(retroPath); rmErr == nil {
-				deleted++
-			} else {
-				logger.WarnCF("agent", "SweepRetros: failed to delete retro file",
-					map[string]any{"path": retroPath, "error": rmErr.Error()})
-			}
-		}
-	}
-
-	return deleted, nil
-}
-
-// ReadToday reads today's daily note.
-// Returns empty string if the file doesn't exist.
-func (ms *MemoryStore) ReadToday() string {
-	todayFile := ms.getTodayFile()
-	if data, err := os.ReadFile(todayFile); err == nil {
-		return string(data)
-	}
-	return ""
-}
-
-// AppendToday appends content to today's daily note.
-// If the file doesn't exist, it creates a new file with a date header.
-func (ms *MemoryStore) AppendToday(content string) error {
-	todayFile := ms.getTodayFile()
-
-	// Ensure month directory exists
-	monthDir := filepath.Dir(todayFile)
-	if err := os.MkdirAll(monthDir, 0o755); err != nil {
-		return err
-	}
-
-	var existingContent string
-	if data, err := os.ReadFile(todayFile); err == nil {
-		existingContent = string(data)
-	}
-
-	var newContent string
-	if existingContent == "" {
-		// Add header for new day
-		header := fmt.Sprintf("# %s\n\n", time.Now().Format("2006-01-02"))
-		newContent = header + content
-	} else {
-		// Append to existing content
-		newContent = existingContent + "\n" + content
-	}
-
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	return fileutil.WriteFileAtomic(todayFile, []byte(newContent), 0o600)
-}
-
-// GetRecentDailyNotes returns daily notes from the last N days.
-// Contents are joined with "---" separator.
-func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
-	var sb strings.Builder
-	first := true
-
-	for i := range days {
-		date := time.Now().AddDate(0, 0, -i)
-		dateStr := date.Format("20060102") // YYYYMMDD
-		monthDir := dateStr[:6]            // YYYYMM
-		filePath := filepath.Join(ms.memoryDir, monthDir, dateStr+".md")
-
-		if data, err := os.ReadFile(filePath); err == nil {
-			if !first {
-				sb.WriteString("\n\n---\n\n")
-			}
-			sb.Write(data)
-			first = false
-		}
-	}
-
-	return sb.String()
-}
-
-// GetMemoryContext returns formatted memory context for the agent system prompt.
-// FR-019: includes LAST_SESSION.md before long-term memory.
-// FR-020: budgets MEMORY.md content at 12000 runes; falls back to newest N entries.
-func (ms *MemoryStore) GetMemoryContext() string {
-	var sb strings.Builder
-
-	// Section 1: Last session.
-	lastSession, err := ms.ReadLastSession()
-	if err == nil && strings.TrimSpace(lastSession) != "" {
-		sb.WriteString("## Last Session\n")
-		sb.WriteString(lastSession)
-	}
-
-	// Section 2: Long-term memory from MEMORY.md.
-	entries, entryErr := ms.ReadLongTermEntries()
-	if entryErr == nil && len(entries) > 0 {
-		// Build the full memory text from all entries (already newest-first).
-		fullMemory := buildFullMemoryText(entries)
-
-		if sb.Len() > 0 {
-			sb.WriteString("\n\n")
-		}
-		sb.WriteString("## Long-term memory\n")
-
-		const runesBudget = 12000
-		if len([]rune(fullMemory)) <= runesBudget {
-			// Fits in budget: emit entire memory.
-			sb.WriteString(fullMemory)
-		} else {
-			// Budget exceeded: emit newest N entries totalling ≤ 12000 runes (min N=10).
-			sb.WriteString(buildBudgetedMemoryText(entries, runesBudget))
-			sb.WriteString("\n\nolder entries available via recall_memory")
-		}
-	}
-
-	return sb.String()
-}
-
-// buildFullMemoryText serializes all entries to a human-readable block (newest-first).
-// Entries are separated by a blank line.
-func buildFullMemoryText(entries []LongTermEntry) string {
-	var sb strings.Builder
-	for i, e := range entries {
-		if i > 0 {
-			sb.WriteString("\n\n")
-		}
-		ts := e.Timestamp.UTC().Format("2006-01-02T15:04:05Z")
-		fmt.Fprintf(&sb, "[%s | %s]\n%s", ts, e.Category, e.Content)
-	}
-	return sb.String()
-}
-
-// buildBudgetedMemoryText emits the N newest entries whose total rune count ≤ budget.
-// Always emits at least min(10, len(entries)) entries regardless of budget.
-func buildBudgetedMemoryText(entries []LongTermEntry, budget int) string {
-	const minEntries = 10
-
-	var included []LongTermEntry
-	runeCount := 0
-
-	for i, e := range entries {
-		text := fmt.Sprintf("[%s | %s]\n%s",
-			e.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
-			e.Category,
-			e.Content,
-		)
-		entryRunes := len([]rune(text))
-
-		if i < minEntries {
-			// Always include the first minEntries entries.
-			included = append(included, e)
-			runeCount += entryRunes
-		} else if runeCount+entryRunes <= budget {
-			included = append(included, e)
-			runeCount += entryRunes
-		} else {
-			break
-		}
-	}
-
-	return buildFullMemoryText(included)
 }

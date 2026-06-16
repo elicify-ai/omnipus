@@ -45,8 +45,12 @@ type AgentInstance struct {
 	ContextBuilder            *ContextBuilder
 	Tools                     *tools.ToolRegistry
 	Subagents                 *config.SubagentsConfig
-	SkillsFilter              []string
-	Candidates                []providers.FallbackCandidate
+	// DelegationPolicy is the canonical unified delegation policy for this agent.
+	// When non-nil, it takes precedence over Subagents.AllowAgents in CanSpawnSubagent.
+	// Nil means fall back to legacy Subagents.AllowAgents check.
+	DelegationPolicy *config.DelegationPolicy
+	SkillsFilter     []string
+	Candidates       []providers.FallbackCandidate
 
 	// TimeoutSeconds is the per-turn hard timeout. 0 = disabled.
 	// Populated from AgentDefaults.TimeoutSeconds; per-agent override if available.
@@ -134,11 +138,15 @@ func NewAgentInstance(
 	var subagents *config.SubagentsConfig
 	var skillsFilter []string
 
+	var delegationPolicy *config.DelegationPolicy
 	if agentCfg != nil {
 		agentID = routing.NormalizeAgentID(agentCfg.ID)
 		agentName = agentCfg.Name
 		subagents = agentCfg.Subagents
 		skillsFilter = agentCfg.Skills
+		delegationPolicy = agentCfg.DelegationPolicy
+		// Emit startup WARN for inert delegation policy fields (accept_from, budget).
+		delegationPolicy.WarnIfInertFieldsSet(agentCfg.ID)
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
@@ -154,6 +162,11 @@ func NewAgentInstance(
 
 	if agentCfg != nil {
 		contextBuilder.WithAgentInfo(agentID, agentName)
+		// FR-9.4: install the per-agent skill allowlist so it is enforced at
+		// skill-resolution time (default-DENY). agentCfg.Skills is nil when the
+		// agent declares no allowlist → unrestricted; a non-nil list restricts
+		// resolution and progressive disclosure to exactly those skills.
+		contextBuilder.WithSkillAllowlist(agentCfg.Skills)
 	}
 
 	// Memory tools (FR-016, FR-017): register remember, recall_memory, and
@@ -261,13 +274,17 @@ func NewAgentInstance(
 	resolvedAgentType := "custom"
 	if agentCfg != nil {
 		switch agentCfg.Type {
-		case config.AgentTypeCore, config.AgentTypeSystem:
+		case config.AgentTypeCore, config.AgentTypeSystem, config.AgentTypeWorker:
 			resolvedAgentType = string(agentCfg.Type)
 		case config.AgentTypeCustom:
 			resolvedAgentType = "custom"
 		}
 	}
-	isRoutingDefault := agentCfg != nil && agentCfg.Default
+	// A worker is never the routing default — it is not a chat target. Even if a
+	// tampered config marked a worker Default=true, refuse to carry that into the
+	// runtime so GetDefaultAgent can never select it (defense in depth; the
+	// config-load repair and the PUT handler also reject it).
+	isRoutingDefault := agentCfg != nil && agentCfg.Default && !agentCfg.IsWorker()
 	inst := &AgentInstance{
 		ID:                        agentID,
 		Name:                      agentName,
@@ -294,6 +311,7 @@ func NewAgentInstance(
 		TimeoutSeconds:            timeoutSeconds,
 		AgentType:                 resolvedAgentType,
 		IsRoutingDefault:          isRoutingDefault,
+		DelegationPolicy:          delegationPolicy,
 	}
 	if agentCfg != nil && agentCfg.Tools != nil {
 		inst.toolPolicy.Store(agentToolsCfgToPolicy(agentCfg.Tools))
@@ -341,6 +359,14 @@ func agentToolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
 // runtime-seeded core agents (e.g., Ava, Main) that may not have Type set in config.
 func (a *AgentInstance) SetAgentType(agentType string) {
 	a.AgentType = agentType
+}
+
+// IsWorker reports whether this instance is a sub-agent worker (the delegation-only
+// labour tier). A worker is never a chat target and must never be resolved as the
+// routing default. Single predicate so worker checks don't hand-roll the type-string
+// comparison (config.AgentTypeWorker) at each call site.
+func (a *AgentInstance) IsWorker() bool {
+	return a.AgentType == string(config.AgentTypeWorker)
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.

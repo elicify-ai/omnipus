@@ -637,26 +637,6 @@ func (r *ToolRegistry) Count() int {
 	return len(r.tools)
 }
 
-// GetSummaries returns human-readable summaries of all registered tools.
-// Returns a slice of "name - description" strings.
-func (r *ToolRegistry) GetSummaries() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	sorted := r.sortedToolNames()
-	summaries := make([]string, 0, len(sorted))
-	for _, name := range sorted {
-		entry := r.tools[name]
-
-		if !entry.IsCore && entry.TTL <= 0 {
-			continue
-		}
-
-		summaries = append(summaries, fmt.Sprintf("- `%s` - %s", entry.Tool.Name(), entry.Tool.Description()))
-	}
-	return summaries
-}
-
 // GetAll returns all registered tools (both core and non-core with TTL > 0).
 // Used by SubTurn to inherit parent's tool set.
 func (r *ToolRegistry) GetAll() []Tool {

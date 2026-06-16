@@ -150,6 +150,54 @@ func TestExecApprovalManager_PersistPattern(t *testing.T) {
 	})
 }
 
+// TestExecApprovalManager_BinaryAllowanceCoversBareInvocation validates the C6
+// consent-loss fix: an "always allow" decision for a binary must be honored for
+// BOTH the bare invocation ("git") and the argument form ("git status"), and a
+// no-argument command ("htop") must not re-prompt after being always-allowed.
+//
+// Regression: the previous implementation persisted "<binary> *" and matched
+// only via glob, so the bare invocation never matched ("git *" cannot consume
+// the missing space) and the user's granted consent was silently dropped,
+// re-prompting on the next run.
+func TestExecApprovalManager_BinaryAllowanceCoversBareInvocation(t *testing.T) {
+	t.Run("bare-binary allowance covers args and no-args", func(t *testing.T) {
+		mgr := security.NewExecApprovalManager(security.ExecApprovalConfig{Mode: "ask"})
+		// Exactly what the "always allow" prompt branch now persists.
+		mgr.PersistPattern("git")
+
+		for _, cmd := range []string{"git", "git status", "git push origin main"} {
+			res := mgr.CheckApproval(cmd)
+			assert.True(t, res.Approved, "always-allowed binary must auto-approve %q", cmd)
+			assert.True(t, res.AutoApproved, "must be auto-approved (no prompt) for %q", cmd)
+		}
+	})
+
+	t.Run("no-argument command does not re-prompt", func(t *testing.T) {
+		mgr := security.NewExecApprovalManager(security.ExecApprovalConfig{Mode: "ask"})
+		mgr.PersistPattern("htop")
+		res := mgr.CheckApproval("htop")
+		assert.True(t, res.Approved, "no-arg command must stay approved after always-allow")
+		assert.True(t, res.AutoApproved)
+	})
+
+	t.Run("legacy glob pattern still covers bare binary (back-compat)", func(t *testing.T) {
+		mgr := security.NewExecApprovalManager(security.ExecApprovalConfig{Mode: "ask"})
+		// A pre-existing allowlist file may contain the old "<binary> *" form.
+		mgr.PersistPattern("npm *")
+		res := mgr.CheckApproval("npm")
+		assert.True(t, res.Approved, "legacy 'npm *' must also cover the bare 'npm' invocation")
+		assert.True(t, res.AutoApproved)
+	})
+
+	t.Run("argument-form command still matches the glob path", func(t *testing.T) {
+		mgr := security.NewExecApprovalManager(security.ExecApprovalConfig{Mode: "ask"})
+		mgr.PersistPattern("npm run *")
+		res := mgr.CheckApproval("npm run build")
+		assert.True(t, res.Approved)
+		assert.True(t, res.AutoApproved)
+	})
+}
+
 // TestExecApprovalManager_AllowlistFilePersistence validates that persisted patterns
 // survive across manager instances via the JSON allowlist file.
 // Traces to: wave2-security-layer-spec.md line 787 (TestExecApproval_FileLoad)

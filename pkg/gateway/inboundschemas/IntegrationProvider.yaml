@@ -1,0 +1,47 @@
+type: object
+description: >
+  A single configurable non-LLM integration provider as surfaced in Settings →
+  Integrations (FR-12.1). Covers web-search providers (SearchProvider) and
+  voice-input transcription providers (Transcriber). API keys are stored
+  encrypted in credentials.json (via api_key_ref) — never returned in plaintext;
+  configured is true when a key (or, for keyless providers like DuckDuckGo, the
+  provider itself) is available.
+required:
+  - id
+  - kind
+  - display_name
+  - configured
+  - requires_key
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
+    example: "brave"
+  kind:
+    type: string
+    enum:
+      - search
+      - voice
+    description: Whether this provider supplies web search or voice-input transcription.
+    example: "search"
+  display_name:
+    type: string
+    description: Human-readable provider name for UI presentation.
+    example: "Brave Search"
+  configured:
+    type: boolean
+    description: >
+      True when this provider is usable — an API key is present (or, for keyless
+      providers such as DuckDuckGo, always true).
+    example: true
+  requires_key:
+    type: boolean
+    description: Whether this provider needs an API key to function.
+    example: true
+  active:
+    type: boolean
+    description: >
+      True when this provider is the one currently selected for its kind (the
+      active search engine or the active transcriber).
+    example: true

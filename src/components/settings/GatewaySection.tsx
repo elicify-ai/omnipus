@@ -1,10 +1,11 @@
 /**
  * GatewaySection — Settings → Gateway tab.
  *
- * FR-107: auth_mode UI option removed (token auth is the only mode; backend
- *   capability preserved — do NOT re-add the 'none' control).
- * FR-107b: when backend reports auth_mode=none OR dev_mode_bypass=true, a
- *   loud persistent banner warns the operator.
+ * FR-107: token auth is the only mode — there is NO auth_mode control. The
+ *   legacy auth_mode field was removed entirely (backend never had it; the
+ *   frontend default-coerced it to "none"). Do NOT re-add a "none" mode.
+ * FR-107b: a loud persistent banner warns the operator when dev_mode_bypass=true
+ *   — the only setting that actually disables authentication.
  * US-B2 / #328:
  * - bind_address 0.0.0.0 wrapped in RiskySettingControl (safe = '127.0.0.1').
  * - Standing badge derives from persisted config values (fetchConfig → ['config'] query).
@@ -20,7 +21,7 @@ import { Input } from '@/components/ui/input'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, fetchAgents, isApiError, type Config } from '@/lib/api'
+import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, isApiError, type Config } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -39,15 +40,17 @@ const BIND_ADDRESS_COPY = {
 // ── UnauthenticatedBanner (FR-107b) ───────────────────────────────────────────
 
 interface UnauthBannerProps {
-  authModeNone: boolean
   devModeBypass: boolean
 }
 
-function UnauthenticatedBanner({ authModeNone, devModeBypass }: UnauthBannerProps) {
-  if (!authModeNone && !devModeBypass) return null
-  const reason = authModeNone
-    ? 'auth_mode is set to "none" in config.json'
-    : 'dev_mode_bypass is enabled in config.json'
+// The banner warns ONLY about the genuinely-insecure state: dev_mode_bypass=true,
+// which makes the gateway accept any request as admin. The legacy `auth_mode`
+// field is NOT consulted — token auth is the only mode (FR-107), so an unset
+// auth_mode (serialized as "none") does NOT disable auth; access is still gated
+// by the configured user + bearer token. Keying the banner off auth_mode==="none"
+// produced a false "unauthenticated access" alarm on every normal install.
+function UnauthenticatedBanner({ devModeBypass }: UnauthBannerProps) {
+  if (!devModeBypass) return null
   return (
     <div
       role="alert"
@@ -60,11 +63,8 @@ function UnauthenticatedBanner({ authModeNone, devModeBypass }: UnauthBannerProp
           Unauthenticated access is enabled
         </p>
         <p className="text-xs text-[var(--color-error)]/80">
-          Anyone who can reach this server has admin access ({reason}). To fix this, set
-          <code className="mx-1 font-mono text-[10px] bg-[var(--color-error)]/10 px-1 rounded">
-            gateway.auth_mode: token
-          </code>
-          and
+          Anyone who can reach this server has admin access (dev_mode_bypass is enabled in
+          config.json). To fix this, set
           <code className="mx-1 font-mono text-[10px] bg-[var(--color-error)]/10 px-1 rounded">
             gateway.dev_mode_bypass: false
           </code>
@@ -98,12 +98,6 @@ export function GatewaySection() {
   const [bindAddress, setBindAddress] = useState('127.0.0.1')
   const [port, setPort] = useState('8080')
   const [logLevel, setLogLevel] = useState('info')
-  const [defaultAgentId, setDefaultAgentId] = useState('')
-
-  const { data: agents } = useQuery({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-  })
 
   useEffect(() => {
     if (!config) return
@@ -111,20 +105,18 @@ export function GatewaySection() {
     setBindAddress(config.gateway.bind_address)
     setPort(config.gateway.port.toString())
     setLogLevel(config.gateway.log_level ?? 'info')
-    setDefaultAgentId(config.agents?.defaults?.default_agent_id ?? '')
   }, [config])
 
   const gatewayFormData = useMemo(() => ({
     bind_address: bindAddress,
     port,
     log_level: logLevel,
-    default_agent_id: defaultAgentId,
-  }), [bindAddress, port, logLevel, defaultAgentId])
+  }), [bindAddress, port, logLevel])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     gatewayFormData,
     async () => {
-      // FR-107: auth_mode is intentionally not sent — the UI no longer controls it.
+      // FR-107: token auth is the only mode — there is no auth_mode field to send.
       // FR-106: hot_reload is intentionally not sent — always-on backend-side.
       // We cast to satisfy the Partial<Config> signature; frontendToRawConfig
       // guards each field with `!== undefined` so absent fields are skipped.
@@ -134,11 +126,6 @@ export function GatewaySection() {
           port: parseInt(port, 10),
           log_level: logLevel,
         } as unknown as Config['gateway'],
-        agents: {
-          defaults: {
-            default_agent_id: defaultAgentId || undefined,
-          },
-        },
       })
       isDirtyRef.current = false
       queryClient.invalidateQueries({ queryKey: ['config'] })
@@ -186,14 +173,14 @@ export function GatewaySection() {
   // US-B2: badges derive from the PERSISTED config values (not local draft state).
   const persistedBindAddress = config?.gateway.bind_address ?? '127.0.0.1'
 
-  // FR-107b: unauth conditions from persisted config
-  const authModeNone = config?.gateway.auth_mode === 'none'
+  // FR-107b: the only genuinely-unauthenticated state is dev_mode_bypass=true.
+  // (auth_mode is legacy/vestigial — token auth is enforced regardless of it.)
   const devModeBypass = config?.gateway.dev_mode_bypass === true
 
   return (
     <div className="space-y-6">
-      {/* FR-107b: persistent unauthenticated-access banner */}
-      <UnauthenticatedBanner authModeNone={authModeNone} devModeBypass={devModeBypass} />
+      {/* FR-107b: persistent unauthenticated-access banner (dev_mode_bypass only) */}
+      <UnauthenticatedBanner devModeBypass={devModeBypass} />
 
       <div className="flex items-center justify-between">
         <div>
@@ -238,24 +225,6 @@ export function GatewaySection() {
             value={port}
             onChange={(e) => { markDirty(); setPort(e.target.value) }}
             className="w-24 h-8 text-xs font-mono"
-          />
-        </div>
-
-        {/* Default Agent */}
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-[var(--color-secondary)]">Default Agent</p>
-            <p className="text-xs text-[var(--color-muted)]">The agent that handles messages when no specific routing applies</p>
-          </div>
-          <SmartSelect
-            value={defaultAgentId || '__none__'}
-            onValueChange={(v) => { markDirty(); setDefaultAgentId(v === '__none__' ? '' : v) }}
-            triggerClassName="w-[180px] h-8 text-xs"
-            placeholder="(none set)"
-            items={[
-              { value: '__none__', label: '(none set)' },
-              ...(agents ?? []).map((a) => ({ value: a.id, label: a.name })),
-            ]}
           />
         </div>
 

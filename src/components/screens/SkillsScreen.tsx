@@ -117,18 +117,30 @@ export function SkillsScreen() {
 
         {/* Installed Skills */}
         <TabsContent value="skills">
-          <div className="flex justify-end mb-3">
-            <Button size="sm" className="gap-1.5" onClick={() => setSkillBrowserOpen(true)}>
-              <MagnifyingGlass size={13} /> Browse Skills
-            </Button>
-          </div>
           {skillsError ? (
             <ErrorState message="Could not load skills." />
           ) : skillsLoading ? (
             <SkeletonList />
           ) : skills.length === 0 ? (
-            <EmptyState icon={<PuzzlePiece size={40} weight="thin" />} message="No skills installed." />
+            <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+              <div className="text-[var(--color-border)]">
+                <PuzzlePiece size={40} weight="thin" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm text-[var(--color-muted)]">No skills installed.</p>
+                <p className="text-xs text-[var(--color-muted)]/70">Browse the skill registry to add capabilities to your agents.</p>
+              </div>
+              <Button size="sm" className="gap-1.5 mt-1" onClick={() => setSkillBrowserOpen(true)}>
+                <MagnifyingGlass size={13} /> Browse Skills
+              </Button>
+            </div>
           ) : (
+            <>
+              <div className="flex justify-end mb-3">
+                <Button size="sm" className="gap-1.5" onClick={() => setSkillBrowserOpen(true)}>
+                  <MagnifyingGlass size={13} /> Browse Skills
+                </Button>
+              </div>
             <div className="space-y-2">
               {skills.map((skill) => (
                 <div
@@ -138,7 +150,19 @@ export function SkillsScreen() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm text-[var(--color-secondary)]">{skill.name}</span>
-                      <span className="font-mono text-[10px] text-[var(--color-muted)]">v{skill.version}</span>
+                      {skill.version && skill.version !== '0.0.0' && (
+                        <span className="font-mono text-[10px] text-[var(--color-muted)]">v{skill.version}</span>
+                      )}
+                      {skill.source === 'builtin' && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          Built-in
+                        </Badge>
+                      )}
+                      {(skill.source === 'global' || skill.source === 'workspace') && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          Community
+                        </Badge>
+                      )}
                       {skill.verified && (
                         <Badge variant="success" className="gap-1 text-[10px]">
                           <Shield size={9} weight="fill" /> Verified
@@ -153,21 +177,24 @@ export function SkillsScreen() {
                     </div>
                     <p className="text-xs text-[var(--color-muted)] mt-1">{skill.description}</p>
                     <div className="flex items-center gap-3 mt-1.5 text-[10px] text-[var(--color-muted)]">
-                      <span>by {skill.author}</span>
+                      {skill.author && <span>by {skill.author}</span>}
                       {skill.agent_assignment && <span>→ {skill.agent_assignment}</span>}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDeleteSkill(skill.name)}
-                    className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-1 rounded shrink-0"
-                    aria-label={`Remove ${skill.name}`}
-                  >
-                    <Trash size={14} />
-                  </button>
+                  {skill.source !== 'builtin' && (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteSkill(skill.name)}
+                      className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-1 rounded shrink-0"
+                      aria-label={`Remove ${skill.name}`}
+                    >
+                      <Trash size={14} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
+            </>
           )}
         </TabsContent>
 

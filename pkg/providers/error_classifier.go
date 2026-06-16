@@ -53,6 +53,33 @@ var (
 		substr("context deadline exceeded"),
 	}
 
+	// connectionDropPatterns match transient transport/connection failures —
+	// the upstream provider hung up or the socket died mid-stream. These are
+	// NOT application-level rejections (4xx) and are NOT a clean end-of-stream
+	// (io.EOF after a complete response). They are equivalent to a 5xx in that
+	// the safe action is to retry the same request, so they are classified as
+	// FailoverTimeout (the only reason the agent loop retries inline with
+	// exponential backoff — pkg/agent/loop.go:4494).
+	//
+	// These are matched LAST among the message patterns (see classifyByMessage)
+	// so that a genuinely-fatal classification (auth/format/context-overflow)
+	// always wins when a message contains both a fatal phrase and a transport
+	// phrase.
+	//
+	// IMPORTANT: only "unexpected EOF" is matched, never a bare "EOF". A clean
+	// io.EOF marks normal stream completion and must not be treated as an error.
+	connectionDropPatterns = []errorPattern{
+		substr("http2: response body closed"),
+		substr("unexpected eof"),
+		substr("connection reset by peer"),
+		substr("broken pipe"),
+		substr("stream error:"),
+		substr("connection closed"),
+		substr("use of closed network connection"),
+		substr("server closed idle connection"),
+		substr("read: connection timed out"),
+	}
+
 	billingPatterns = []errorPattern{
 		rxp(`\b402\b`),
 		substr("payment required"),
@@ -232,6 +259,17 @@ func classifyByMessage(msg string) FailoverReason {
 	}
 	if matchesAny(msg, contextOverflowPatterns) {
 		return FailoverContextOverflow
+	}
+	// Transient connection drops (mid-stream disconnects) are retried inline like
+	// timeouts. Checked LAST among the message patterns so that any genuinely-fatal
+	// classification (auth, bad-request format, context overflow) wins when a message
+	// happens to contain both a fatal phrase and a transport-drop phrase
+	// (e.g. "context_length_exceeded ... connection closed"). It remains after
+	// rate-limit/overloaded/billing/timeout, which is correct — those are also
+	// retriable or more specific. 4xx status codes are already resolved by
+	// extractHTTPStatus before this function runs.
+	if matchesAny(msg, connectionDropPatterns) {
+		return FailoverTimeout
 	}
 	return ""
 }

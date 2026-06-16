@@ -265,8 +265,9 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
           <div className="flex-1 py-4 space-y-4">
             {/* Server name */}
             <div className="space-y-1">
-              <label className="text-xs text-[var(--color-muted)]">Name</label>
+              <label htmlFor="mcp-name" className="text-xs text-[var(--color-muted)]">Name</label>
               <Input
+                id="mcp-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="my-mcp-server"
@@ -275,12 +276,13 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
             </div>
 
             {/* Connect mode */}
-            <div className="space-y-2">
-              <label className="text-xs text-[var(--color-muted)]">Connect via</label>
+            <div className="space-y-2" role="group" aria-labelledby="mcp-connect-mode-label">
+              <span id="mcp-connect-mode-label" className="block text-xs text-[var(--color-muted)]">Connect via</span>
               <div className="flex gap-2">
                 <button
                   type="button"
                   data-testid="mode-network"
+                  aria-pressed={mode === 'network'}
                   onClick={() => handleModeSelect('network')}
                   className={[
                     'flex items-center gap-1.5 px-3 py-2 rounded-md border text-xs font-medium flex-1 justify-center transition-colors',
@@ -295,6 +297,7 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
                 <button
                   type="button"
                   data-testid="mode-local"
+                  aria-pressed={mode === 'local'}
                   onClick={() => handleModeSelect('local')}
                   className={[
                     'flex items-center gap-1.5 px-3 py-2 rounded-md border text-xs font-medium flex-1 justify-center transition-colors',
@@ -324,10 +327,11 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
             {/* Network mode: URL field */}
             {mode === 'network' && (
               <div className="space-y-1">
-                <label className="text-xs text-[var(--color-muted)]">
+                <label htmlFor="mcp-url" className="text-xs text-[var(--color-muted)]">
                   Server URL
                 </label>
                 <Input
+                  id="mcp-url"
                   data-testid="network-url"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
@@ -365,10 +369,11 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
               >
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <label className="text-xs text-[var(--color-muted)]">
+                    <label htmlFor="mcp-command" className="text-xs text-[var(--color-muted)]">
                       Command
                     </label>
                     <Input
+                      id="mcp-command"
                       data-testid="local-command"
                       value={command}
                       onChange={(e) => setCommand(e.target.value)}
@@ -378,10 +383,11 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-xs text-[var(--color-muted)]">
+                    <label htmlFor="mcp-args" className="text-xs text-[var(--color-muted)]">
                       Args (comma-separated, optional)
                     </label>
                     <Input
+                      id="mcp-args"
                       value={args}
                       onChange={(e) => setArgs(e.target.value)}
                       placeholder="--port, 3000, --verbose"
@@ -390,10 +396,11 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-xs text-[var(--color-muted)]">
+                    <label htmlFor="mcp-env" className="text-xs text-[var(--color-muted)]">
                       Environment variables (KEY=value, one per line, optional)
                     </label>
                     <textarea
+                      id="mcp-env"
                       value={env}
                       onChange={(e) => setEnv(e.target.value)}
                       placeholder={"API_KEY=abc123\nDEBUG=true"}

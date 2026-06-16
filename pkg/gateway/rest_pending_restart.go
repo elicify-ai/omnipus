@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"reflect"
 	"strings"
 
@@ -39,6 +38,9 @@ var RestartGatedKeys = []config.ConfigKey{
 	config.SandboxAuditLog,
 	config.SandboxAllowedPaths,
 	config.SessionDMScope,
+	// Changing the bind host re-binds the listener (like the port), which can
+	// only happen safely on restart — so it is restart-gated like gateway.port.
+	config.GatewayHost,
 	config.GatewayPort,
 	// Preview listener fields require restart because changing a listener's bind
 	// address or port mid-process races with active connections (FR-027b, MR-02).
@@ -70,14 +72,42 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := os.ReadFile(a.configPath())
+	// Load the on-disk config through the SAME path boot used to produce
+	// appliedConfig, so restart-gated fields that get a computed default at boot
+	// but are absent from config.json on disk do NOT surface as phantom diffs on
+	// a clean install (regression: session.dm_scope, gateway.preview_host,
+	// gateway.preview_port, tools.run_in_workspace.warmup_timeout_seconds).
+	//
+	// LoadConfig starts from DefaultConfig() (which seeds Session.DMScope =
+	// "per-channel-peer") and unmarshals the JSON over it with omitempty tags, so
+	// the dm_scope default is already applied here exactly as at boot. The
+	// gateway-specific normalization (preview defaults, warmup timeout) is applied
+	// separately at boot (gateway.go ~1248-1252) and is mirrored below.
+	//
+	// LoadConfig (not LoadConfigWithStore) is correct: every RestartGatedKey is a
+	// non-secret field. Post-boot the on-disk config is already at CurrentVersion,
+	// so LoadConfig takes the `case CurrentVersion` branch and does NOT defer a
+	// migration SaveConfig (only the legacy `case 0` path does) — reading is
+	// side-effect-free.
+	persistedCfg, err := config.LoadConfig(a.configPath())
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to read persisted config")
 		return
 	}
+	// Mirror the boot-time gateway normalization that produced appliedConfig.
+	if err := persistedCfg.Gateway.ValidateAndApplyPreviewDefaults(); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "failed to normalize persisted config")
+		return
+	}
+	persistedCfg.Tools.ApplyWarmupTimeoutDefault()
 
+	persistedRaw, err := json.Marshal(persistedCfg)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "failed to serialize persisted config")
+		return
+	}
 	var persisted map[string]any
-	if err := json.Unmarshal(raw, &persisted); err != nil {
+	if err := json.Unmarshal(persistedRaw, &persisted); err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to parse persisted config")
 		return
 	}

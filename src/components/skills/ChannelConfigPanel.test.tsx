@@ -895,6 +895,51 @@ describe('ChannelConfigPanel — test result badge cleared on save (F7)', () => 
   })
 })
 
+// Workers (type:'worker') are delegation-only labour agents and can't be a
+// channel routing default (the backend 400s). The routing "Default agent" picker
+// must therefore omit them.
+describe('ChannelConfigPanel — routing picker excludes workers', () => {
+  afterEach(() => {
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('does not offer a worker agent as a channel default; offers base agents', async () => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
+    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core' },
+      { id: 'builder', name: 'Builder Worker', type: 'worker' },
+    ] as never)
+
+    // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
+    Element.prototype.scrollIntoView = vi.fn()
+
+    renderPanel('telegram', 'Telegram')
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeInTheDocument()
+    })
+
+    // Open the routing default-agent listbox.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('combobox'))
+    })
+
+    // The options render into a Radix portal on document.body.
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      // Base agent is offered.
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      // Worker is NOT offered.
+      expect(options.some((t) => t.includes('Builder Worker'))).toBe(false)
+    })
+  })
+})
+
 // F8: routingDebounceRef cleanup — unmounting cancels the pending routing auto-save
 describe('ChannelConfigPanel — RoutingDebounce', () => {
   afterEach(() => {

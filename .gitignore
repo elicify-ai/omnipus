@@ -88,10 +88,15 @@ gateway.pid
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 
-# Runtime state written by the agent loop's cost tracker when a test (or
-# manual run) configures a workspace under pkg/agent/. Auto-mutates daily
-# (date rollover) and pollutes git status; not seed data.
-pkg/agent/system/cost.json
+# Runtime state written by the agent loop's cost tracker at <OMNIPUS_HOME>/system/cost.json.
+# Auto-mutates daily (date rollover) and pollutes git status; not seed data.
+# The wildcard covers both the conventional home (default $HOME/.omnipus/system)
+# AND stray runtime dirs that a prior gateway run may have created inside
+# the source tree if OMNIPUS_HOME was set to a relative path against the
+# repo CWD (see pkg/config/home.go — relative overrides are now normalised
+# to absolute, but pre-existing stray files may still be present until
+# cleaned up).
+pkg/**/system/cost.json
 
 # Contract codegen temp files
 *.generated.tmp.*

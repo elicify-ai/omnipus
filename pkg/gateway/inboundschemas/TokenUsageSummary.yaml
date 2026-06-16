@@ -1,0 +1,23 @@
+type: object
+description: >
+  Per-agent token usage summary for a given time period.
+  Aggregated from SessionMeta.Stats across all session files.
+required:
+  - agents
+  - period_start
+  - period_end
+properties:
+  agents:
+    type: array
+    items:
+      $ref: './AgentTokenEntry.yaml'
+  period_start:
+    type: string
+    format: date-time
+    description: Start of the aggregation period (inclusive), UTC.
+    example: "2026-06-01T00:00:00Z"
+  period_end:
+    type: string
+    format: date-time
+    description: End of the aggregation period (exclusive), UTC.
+    example: "2026-07-01T00:00:00Z"

@@ -1,0 +1,296 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UI Changes · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  .rel{display:inline-block;padding:1px 8px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;border:1px solid}
+  .r1{color:var(--gold);border-color:var(--gold-dim)}
+  .r2{color:#fbbf24;border-color:#fbbf24}
+  .r3{color:var(--green);border-color:var(--green)}
+  .r4{color:var(--purple);border-color:var(--purple)}
+  .r5{color:var(--blue);border-color:var(--blue)}
+  table.scr th:nth-child(3),table.scr td:nth-child(3){white-space:nowrap}
+  table.scr td{font-size:.86rem}
+  pre.wire{background:#0c0c0f;border:1px solid var(--line);border-radius:12px;padding:14px 16px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:.72rem;line-height:1.45;color:#cdd3de;margin:10px 0;white-space:pre}
+  pre.wire .h{color:var(--gold)} pre.wire .m{color:var(--faint)} pre.wire .g{color:var(--green)} pre.wire .b{color:var(--blue)} pre.wire .p{color:var(--purple)}
+  .wlabel{font-family:'JetBrains Mono',monospace;font-size:.7rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase;margin:14px 0 0}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html" class="active">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / UI Changes · screen by screen</div>
+  <div class="eyebrow">As-is → to-be · every surface</div>
+  <h1>Every UI change, screen by screen</h1>
+  <p class="lede">Where each screen stands <b style="color:#fff">today</b>, where it's <b style="color:#fff">going</b> — with a <b style="color:#fff">to-be wireframe</b> for every surface, and the whole <b style="color:#fff">app shell</b> up top. The transformation is additive — each surface evolves in place, never gets thrown away.</p>
+  <div class="pillrow" style="align-items:center">
+    <span class="rel r1">v0.1.0</span><span class="rel r2">v0.2.0</span><span class="rel r3">v0.3.0</span><span class="rel r4">v0.4.0</span><span class="rel r5">v1.0.0</span>
+    <span class="note" style="margin:0 0 0 6px">release chips · and inside each row: <span class="tag t-have">exists</span> <span class="tag t-part">partial</span> <span class="tag t-new">greenfield</span></span>
+  </div>
+</div></div>
+
+<!-- APP SHELL WIREFRAME -->
+<section><div class="wrap">
+  <div class="eyebrow">The to-be · at a glance</div>
+  <h2>The app shell — how it looks</h2>
+  <p class="sub">Left: the <b>workspace switcher</b> + the <b>base agents / sub workers</b> roster + nav. Centre: chat, with the delegation <b>call-tree</b>, generated images, a <b>play</b> button (agent voice) and a <b>mic</b>. Right: a live <b>activity</b> rail. Everything below is a zoom into one region.</p>
+  <pre class="wire"><span class="h">┌──────────────┬─────────────────────────────────────────────┬──────────────┐</span>
+<span class="h">│</span> Omnipus      <span class="h">│</span> Chat · <span class="b">My Workspace</span>          <span class="m">search   You v</span> <span class="h">│</span>  ACTIVITY    <span class="h">│</span>
+<span class="h">├──────────────┤</span>                                             <span class="h">├──────────────┤</span>
+<span class="h">│</span> <span class="m">Workspace v</span>  <span class="h">│</span>  You:  draft the competitor brief           <span class="h">│</span> <span class="g">> Ray</span>  task   <span class="h">│</span>
+<span class="h">│</span> <span class="b">· My Work...</span>   <span class="h">│</span>                                             <span class="h">│</span>   -> 40 jobs   <span class="h">│</span>
+<span class="h">│</span> <span class="m">· Acme</span>       <span class="h">│</span>  <span class="p">PA</span> > on it — delegating to Ray      <span class="h">│</span> <span class="g">> sub</span>  await  <span class="h">│</span>
+<span class="h">│</span> <span class="m">· Q3 Launch</span>  <span class="h">│</span>     <span class="m">[ > Ray · task · running        ]</span>       <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span>              <span class="h">│</span>     <span class="m">[ > generate_image · logo.png ]</span> img   <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> <span class="g">BASE</span>         <span class="h">│</span>  <span class="p">PA</span> > here's the brief + a logo.   <span class="g">> vox</span>    <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span>  Mia·Asst *  <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span>  Jim·Orch    <span class="h">│</span> ─────────────────────────────────────────── <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span>  Ray·Scout   <span class="h">│</span>  <span class="g">( mic )</span> Type or speak...               <span class="g">send</span> <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span>  Ava·Builder <span class="h">│</span>  <span class="m">+ image · workspace: My Workspace</span>          <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> <span class="m">SUB</span>          <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span>  <span class="m">worker(s)</span>   <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">├──────────────┤</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Chat · Tasks <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Calendar     <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Automations  <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Connectors   <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Memory · Set.<span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">└──────────────┴─────────────────────────────────────────────┴──────────────┘</span></pre>
+  <p class="note"><b>New vs today:</b> the workspace switcher + base-agents / sub-workers split (left), the unified call-tree + generated image + the <b>voice playback</b> + <b>mic</b> (centre), and the activity rail (right).</p>
+</div></section>
+
+<!-- 1 · GLOBAL SHELL -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 1 · the frame</div>
+  <h2>Global shell &amp; navigation</h2>
+  <p class="sub">The top-level surface map binds context to the <b>existing sidebar workspace switcher</b>, adds a few renames that reflect the new model, and two new shells.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Top-level screens: Chat, Agents, Channels, Skills, Tools, Monitor (with Schedules + Token Usage), Tasks/Projects, Command Center, Settings.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">Context comes from the <b>existing sidebar workspace switcher</b> — My Workspace (default) vs a named workspace — not a new mode. <span class="mono">Channels</span> → <b>Connectors</b>. <span class="mono">Monitor/Schedules</span> reframed as <b>Automations</b>. A new <b>Calendar</b> surface. Settings gains tabs.</p></div>
+  </div>
+  <p class="note" style="margin-top:10px"><b>When:</b> workspace-switcher context + renames + Calendar/Automations shells = <span class="rel r1">v0.1.0</span></p>
+</div></section>
+
+<!-- 1b · ONBOARDING -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 1b · first run</div>
+  <h2>Onboarding</h2>
+  <p class="sub">A single-user first-run flow that ends by introducing the agent that's yours.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Technical bring-up: a <span class="mono">bearer-token</span> / admin-bypass path (<span class="mono">--allow-empty</span>, <span class="mono">dev_mode_bypass</span>) — no guided setup, no password, no first agent.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">A <b>3-step</b> guided flow: <b>1.</b> "What should I call you?" (your name) → <b>2.</b> set <b>one password</b> → <b>3.</b> add a <b>model key</b>. Then it <b>auto-provisions your Assistant</b> in My Workspace — <b>"meet your Assistant"</b>. Single user, one password throughout.</p></div>
+  </div>
+  <pre class="wire">        ┌────────────────────────────────────────┐
+        │            Welcome to Omnipus           │
+        │  ────────────────────────────────────  │
+        │  1   What should I call you?            │
+        │      [ Sam___________________ ]         │
+        │  2   Set your password                  │
+        │      [ ••••••••• ]                       │
+        │  3   Add a model key                    │
+        │      OpenRouter v  [ sk-•••• ]    Test  │
+        │  ────────────────────────────────────  │
+        │             [  Continue ->  ]            │
+        └────────────────────────────────────────┘
+              > then:  "Meet your Assistant"</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> guided 3-step onboarding + auto-provisioned Assistant = <span class="rel r1">v0.1.0</span></p>
+</div></section>
+
+<!-- 2 · CHAT -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 2 · the home surface</div>
+  <h2>Chat</h2>
+  <p class="sub">Chat-first stays. The fragmented run indicators collapse into one timeline.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Chat-first. A handoff agent-switch indicator; spawned subagents render as a collapsible <span class="mono">SubagentBlock</span>; tool calls visible &amp; collapsible.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">A unified <b>call-tree activity view</b> — handover + delegation + tasks in one timeline. The current <a href="spaces.html">workspace</a> in context. Plus <b>multimodal</b>: a <b>mic</b> (voice-in), a <b>▶ play</b> per agent message (its <a href="tools.html">own voice</a>), and inline <b>generated images</b>.</p></div>
+  </div>
+  <p class="note" style="margin-top:10px"><b>When:</b> basic activity view (surfacing what exists) <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; richer <span class="rel r5">v1.0.0</span></p>
+</div></section>
+
+<!-- 3 · AGENTS -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 3 · the roster</div>
+  <h2>Agents</h2>
+  <p class="sub">The roster splits into base agents vs sub-agent workers — and, for the first time, a place to see and edit who delegates to whom.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Agent list, create, profile, ★ default. <b>No delegation UI at all.</b></p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">Two roster sections. <b>Base agents</b> — the 4 cores (<a href="agents.html">Mia·Assistant⭐ · Jim·Orchestrator · Ray·Scout · Ava·Builder</a>) + your custom agents (chat targets, own connection, heartbeat, durable memory); specialists / Maker arrive via <b>marketplace packs</b>. <b>Sub agents</b> — the seeded general-purpose worker + your custom workers, in a separate section: <b>no heartbeat · no own connection · ephemeral memory · depth-limited · leaner model · not chat targets</b> (the test-run button is the exception). Plus a <b>Delegation tab</b> in the profile (who I can delegate to + modes + accept-from) and a read-only <b>trust-graph</b> matrix.</p></div>
+  </div>
+  <pre class="wire">Agents                                      + New agent v
+────────────────────────────────────────────────────────
+BASE                               chat · heartbeat · memory
+  * Mia·Assistant   Jim·Orchestrator   Ray·Scout   Ava·Builder
+                              + specialists / Maker via packs
+SUB AGENTS                   delegation only · no heartbeat
+  general-purpose worker             + custom worker
+────────────────────────────────────────────────────────
+Profile · Ray     [ Persona │ Tools │ Delegation │ Voice ]
+  Delegation >  can delegate to (to):  worker +
+                accept_from:  <span class="m">[ later — v0.1.0 enforces to+modes ]</span>
+                trust-graph:  Mia -> Jim -> Ray   (matrix)
+  Voice >  ElevenLabs · "Rachel" v   speed 1.0     > test</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> base / sub roster sections + Delegation tab + trust-graph + seed sub agent + the auto-provisioned Assistant = <span class="rel r1">v0.1.0</span></p>
+</div></section>
+
+<!-- 4 · CONNECTORS -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 4 · the renamed surface</div>
+  <h2>Channels → <span class="gold">Connectors</span></h2>
+  <p class="sub">From a singleton config per channel type to a list of named <b>connections</b>, each with its own identity and binding.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">One config panel per channel <b>type</b> (system-wide singleton). Secrets are credential-routed.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">An <b>instance list</b> ("Connections") with <b>Add connection</b>. Each connection carries an <b>identity</b> (agent or user) + an <b>agent binding</b>. One instance per type initially; multi later.</p></div>
+  </div>
+  <pre class="wire">Connectors                                + Add connection
+────────────────────────────────────────────────────────
+  Telegram   @TeamBot         -> Jim           o connected
+  Email      you@imap.com     identity: you   -> Assistant
+  Slack      —                + add
+────────────────────────────────────────────────────────
+  one per type (v0.1.0) · identity = agent│you · binding v</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> instance-list UI (one per type) + <b>basic IMAP/SMTP email</b> = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; multi-instance + provider-OAuth email + Webhook channels = <span class="rel r3">v0.3.0</span> &nbsp;·&nbsp; user-identity connections = <span class="rel r4">v0.4.0</span></p>
+</div></section>
+
+<!-- 5 · TASKS / PROJECTS -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 5 · the board</div>
+  <h2>Tasks / Projects</h2>
+  <p class="sub">The board gains time, dependencies and a plan view — the surface where <a href="delegation.html">delegation</a> becomes orchestration.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">A board; <span class="mono">agent_id</span> assignee; <span class="mono">milestone_id</span>; workspace. <b>No dates, no dependencies.</b></p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>start / due / repeat</b> fields; <span class="mono">blocked_by</span> <b>dependencies</b>; a <b>plan (DAG) view</b>; a <b>workspace</b> scope selector; <b>delegated-by</b> + assignee shown.</p></div>
+  </div>
+  <pre class="wire">Tasks · My Workspace          [ Board │ Plan ]      + Task
+────────────────────────────────────────────────────────
+ PLAN  (DAG)
+    ┌ Research A -> Ray ┐
+    │                  ├-> Draft brief -> Jim -> Schedule -> automation
+    └ Research B -> Ray ┘         ^ blocked_by
+ Task "Draft brief"    start []   due []   repeat []    -> Jim</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> additive fields + workspace scope (shapes) = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; functional dates/recurrence/deps + basic plans = <span class="rel r2">v0.2.0</span> &nbsp;·&nbsp; full plan / coordinator = <span class="rel r5">v1.0.0</span></p>
+</div></section>
+
+<!-- 6 · AUTOMATIONS -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 6 · the reframed surface</div>
+  <h2>Monitor / Schedules → <span class="gold">Automations</span></h2>
+  <p class="sub">A cron list becomes a trigger → action rule builder; schedules become one kind of trigger.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">A schedules list (cron); Monitor token-usage.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">A <b>trigger → action</b> rule builder; a <b>system automations</b> filter (heartbeat shown as system); schedules become <b>time-triggers</b>.</p></div>
+  </div>
+  <pre class="wire">Automations                                   + New rule
+────────────────────────────────────────────────────────
+  WHEN  task done v           ->    THEN  notify v
+  WHEN  every Mon 9am v       ->    THEN  run agent: Ray v
+  WHEN  email received v      ->    THEN  create task v
+  ───────────  > System:  heartbeat · Dreamcatcher ──────</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> reframed read-only surface = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; functional engine + rule builder = <span class="rel r2">v0.2.0</span> &nbsp;·&nbsp; webhook-out + external integration = <span class="rel r5">v1.0.0</span></p>
+</div></section>
+
+<!-- 7 · CALENDAR -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 7 · new surface</div>
+  <h2>Calendar <span class="tag t-new">greenfield</span></h2>
+  <p class="sub">A brand-new surface that unifies tasks, schedules and milestones on a timeline, scoped per workspace.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-new">greenfield</span></h4><p class="note">None. There is no calendar surface today.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>per-workspace (incl. My Workspace)</b> (via the sidebar workspace switcher); <b>All + 4 category filters</b> (System events · Calendar events · Milestones · Scheduled tasks); import via <b>iCal → provider OAuth → CalDAV</b>.</p></div>
+  </div>
+  <pre class="wire">Calendar · My Workspace v   [All][System][Events][Miles][Tasks]
+────────────────────────────────────────────────────────
+  Mon        Tue        Wed        Thu        Fri
+  # Report              o Google (import)        * Milestone
+  o Heartbeat                       # Task due
+                  + Add iCal subscription</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> surface showing real tasks/schedules/milestones = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; iCal subscribe + real scheduling = <span class="rel r2">v0.2.0</span> &nbsp;·&nbsp; provider OAuth two-way = <span class="rel r5">v1.0.0</span></p>
+</div></section>
+
+<!-- 8 · SETTINGS -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 8 · the config surface</div>
+  <h2>Settings</h2>
+  <p class="sub">Two halves: a top-right <b>Profile menu</b> for personal settings, and <b>Settings</b> for the app's config (sensitive sections <b>re-type the password</b>). User management collapses — single user.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Tabs include providers, credential vault, <b>user management</b> (add/remove users + roles) — personal and system settings mixed together.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>Settings = the app's config</b> (sensitive sections <b>re-type the password</b>): <b>Providers</b> · <b>Integrations</b> (<a href="tools.html">tool providers</a> — search / voice / image) · <b>Connectors</b> · <b>Performance → Max parallel agents</b> · Security · Data. <b>Personal settings move to a top-right <span class="gold">Profile menu</span></b> — your name, change password, appearance, devices, log out. <b>User management is gone</b> (single user) — the only account action is <b>password reset</b>, in Profile.</p></div>
+  </div>
+  <p class="wlabel">profile menu · top-right</p>
+  <pre class="wire">  [ You v ]
+ ────────────────────────────────
+   Your name         Sam
+   Change password
+   Appearance         Dark
+   Devices / sessions
+   ──────────────
+   Log out</pre>
+  <pre class="wire">Settings > Performance                  [ re-type password ]
+────────────────────────────────────────────────────────
+  Max parallel agents   [ 6 ]    8 cores · 16 GB -> rec. 6
+                                 ! above rec. may slow / OOM
+Settings > Integrations
+  Web search Tavily v    Voice-in Groq v   Voice-out 11L v
+  Image  Flux v          each:  key · test · o local-sidecar</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> Profile menu + reduced user mgmt (password reset) + Performance + tool-provider Integrations = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; Connected accounts = <span class="rel r4">v0.4.0</span> &nbsp;·&nbsp; API keys + external integrations = <span class="rel r5">v1.0.0</span></p>
+</div></section>
+
+<!-- 9 · MEMORY -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 9 · new surface</div>
+  <h2>Memory <span class="tag t-new">greenfield</span></h2>
+  <p class="sub">The backend-only memory system finally gets a two-room view — and a place to review what the agent learned overnight.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-part">backend-only</span></h4><p class="note">Memory already spans 4 artifacts (<span class="mono">MEMORY.md</span> · daily notes · last-session · retros) with an idle-time LLM recap (<span class="mono">pkg/agent/memory.go</span>) — but it's <b>backend-only</b>, no dedicated UI.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">A <b>two-room memory view</b> — the agent's <b>private room</b> (agent-global) + the <b>current project's shared room</b> — with an Obsidian-style <b>graph / backlinks</b>, a <b>Dreamcatcher proposals review</b> surface (accept / reject distilled memories), and <b>search</b> (bleve, no embeddings). <span class="mono">recall</span> composes private + current project.</p></div>
+  </div>
+  <pre class="wire">Memory · Ray                  [ Private │ Acme (shared) ]
+────────────────────────────────────────────────────────
+   graph   o──o──o        memories · learnings · o search
+           \  /
+            o            > Dreamcatcher proposals (3)   + x
+                          "JWT in transit..."     conf 0.85</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> basic two-room view = <span class="rel r1">v0.1.0</span>/<span class="rel r2">v0.2.0</span> &nbsp;·&nbsp; Dreamcatcher review + graph = <span class="rel r2">v0.2.0</span> &nbsp;·&nbsp; see <a href="learning.html">Learning</a></p>
+</div></section>
+
+<!-- SUMMARY TABLE -->
+<section><div class="wrap">
+  <div class="eyebrow">At a glance</div>
+  <h2>Every surface, one table</h2>
+  <table class="scr">
+    <tr><th>Screen</th><th>The headline change</th><th>First lands</th></tr>
+    <tr><td><b>Global shell</b></td><td>Workspace switcher (existing sidebar) · Channels→Connectors · Monitor→Automations · +Calendar</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td><b>Onboarding</b></td><td>3 steps (name · one password · model key) → auto-provision your Assistant ("meet your Assistant")</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td><b>Chat</b></td><td>Unified call-tree activity view · workspace in context</td><td><span class="rel r1">v0.1.0</span> <span class="rel r5">v1.0.0</span></td></tr>
+    <tr><td><b>Agents</b></td><td>4-base roster (Mia⭐·Jim·Ray·Ava) + sub workers · Delegation tab · trust-graph · seed sub agent · Assistant</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td><b>Connectors</b></td><td>Instance list · identity + agent binding</td><td><span class="rel r1">v0.1.0</span> <span class="rel r3">v0.3.0</span> <span class="rel r4">v0.4.0</span></td></tr>
+    <tr><td><b>Tasks / Projects</b></td><td>Dates · dependencies · plan (DAG) view · workspace scope</td><td><span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span> <span class="rel r5">v1.0.0</span></td></tr>
+    <tr><td><b>Automations</b></td><td>Trigger→action rule builder · system filter</td><td><span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span> <span class="rel r5">v1.0.0</span></td></tr>
+    <tr><td><b>Calendar</b></td><td>New surface · per-workspace scope (incl. My Workspace) · All + 4 filters · iCal/OAuth/CalDAV</td><td><span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span> <span class="rel r5">v1.0.0</span></td></tr>
+    <tr><td><b>Settings</b> + <b>Profile</b></td><td>Top-right Profile menu (name · password · appearance · log out) · user mgmt → password reset only · Settings = app config · Max parallel agents · password re-type on sensitive · tool-provider Integrations</td><td><span class="rel r1">v0.1.0</span> <span class="rel r4">v0.4.0</span> <span class="rel r5">v1.0.0</span></td></tr>
+    <tr><td><b>Memory</b></td><td>Two-room view (private + project) · graph/backlinks · Dreamcatcher review · bleve search (no embeddings)</td><td><span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span></td></tr>
+    <tr><td><b><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a> / Integrations</b></td><td>Provider-picker per tool (search · voice · image) · per-agent voice · image-gen · mic + ▶ playback in chat</td><td><span class="rel r1">v0.1.0</span> <span class="rel r5">v1.0.0</span></td></tr>
+  </table>
+</div></section>
+
+<!-- CLOSING -->
+<section><div class="wrap">
+  <div class="eyebrow">The point</div>
+  <h2>What ships in <span class="gold">v0.1.0</span> is real, not placeholder</h2>
+  <p class="sub">Every v0.1.0 row above sits on actual data — because v0.1.0 lands the structural <b>shapes</b> first, the UI is never thrown away later.</p>
+  <div class="callout g"><b>v0.1.0 lands the data shapes the rest builds on:</b>
+    <ul class="clean" style="margin-top:8px">
+      <li>The <b>Workspace scoping key</b> threaded through tasks, memory, calendar and connections.</li>
+      <li>The <b>Connection-as-instance</b> model — capped at one per type, but the instance shape is real.</li>
+      <li>The agent <span class="mono">tier</span> field (base / sub) — the two-section roster.</li>
+      <li>The <b>delegation-policy</b> contract type (to · modes · accept_from).</li>
+      <li>The additive <b>task fields</b> (start / due / repeat / <span class="mono">blocked_by</span>).</li>
+    </ul>
+  </div>
+  <p class="note">Because the shapes are correct on day one, the v0.1.0 UI sits on real data and is <b>not</b> reshaped later — later releases add <b>behavior</b> (functional recurrence, OAuth, rule engines, multi-instance), not new structure. See <a href="roadmap.html">the roadmap</a> for the release sequence and <a href="blueprint.html">the blueprint</a> for the underlying data model.</p>
+</div></section>
+
+<footer><div class="wrap"><p><a href="time.html" style="color:var(--muted)">← Calendar &amp; Automations</a> &nbsp;·&nbsp; Next: <a href="impact.html">Impact →</a></p></div></footer>
+</body></html>

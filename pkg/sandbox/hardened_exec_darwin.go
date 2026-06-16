@@ -1,7 +1,7 @@
 //go:build darwin
 
-// Darwin platform hardening for hardened_exec children. Per we
-// document this platform as best-effort: there is no kernel isolation
+// Darwin platform hardening for hardened_exec children. We document this
+// platform as best-effort: there is no kernel isolation
 // primitive equivalent to Landlock or AppContainer that we can use without
 // CGo. The child runs under the OS's normal user permissions; the only
 // active controls are Setpgid (so the parent can SIGTERM the whole tree

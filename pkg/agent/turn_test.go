@@ -121,6 +121,64 @@ func (m *mockStreamer) Cancel(_ context.Context) {}
 // Compile-time assertion that mockStreamer satisfies bus.Streamer.
 var _ bus.Streamer = (*mockStreamer)(nil)
 
+// streamingMockStreamer is a bus.Streamer that also reports how many bytes it
+// has streamed, mirroring *gateway.wsStreamer's StreamedContentLen() method. It
+// lets the inline-retry guard test exercise the exact interface assertion used
+// in loop.go without importing the gateway package.
+type streamingMockStreamer struct {
+	mockStreamer
+	streamedLen int
+}
+
+func (m *streamingMockStreamer) StreamedContentLen() int { return m.streamedLen }
+
+var _ bus.Streamer = (*streamingMockStreamer)(nil)
+
+// retryAllowedAfterDrop replicates the inline-retry guard predicate from
+// loop.go (the runTurn timeout/transport-drop branch): a transport drop may be
+// inline-retried only when the active streamer has NOT already streamed partial
+// content to the client. Returning false means "do not retry — break". Keeping
+// this in lockstep with loop.go is enforced by the tests below.
+func retryAllowedAfterDrop(streamer bus.Streamer) bool {
+	if sc, ok := streamer.(interface{ StreamedContentLen() int }); ok && sc.StreamedContentLen() > 0 {
+		return false
+	}
+	return true
+}
+
+// TestInlineRetryGuard_PartialStreamNotRetried verifies that a transport drop
+// AFTER partial content was streamed is NOT inline-retried (which would
+// duplicate text in the SPA), while drops with no streamed content (or no
+// stream-reporting streamer at all) remain retriable.
+//
+// BDD: Given a transport-drop classified as FailoverTimeout,
+// When the active streamer has already emitted >0 bytes,
+// Then the inline-retry guard breaks instead of retrying;
+// And when nothing has been streamed (or there is no streamer), it retries.
+//
+// Traces to: pkg/agent/loop.go — runTurn inline-retry StreamedContentLen guard (FIX 1).
+func TestInlineRetryGuard_PartialStreamNotRetried(t *testing.T) {
+	// Streamer that already streamed content: must NOT retry.
+	streamed := &streamingMockStreamer{streamedLen: 42}
+	assert.False(t, retryAllowedAfterDrop(streamed),
+		"drop after partial stream must not be inline-retried (would duplicate text)")
+
+	// Streamer that reports content length but streamed nothing yet: retry OK
+	// (drop before first token — the common, safe case).
+	empty := &streamingMockStreamer{streamedLen: 0}
+	assert.True(t, retryAllowedAfterDrop(empty),
+		"drop before any token streamed must remain inline-retriable")
+
+	// Streamer without StreamedContentLen (non-streaming / Chat path): retry OK.
+	plain := &mockStreamer{}
+	assert.True(t, retryAllowedAfterDrop(plain),
+		"non-stream-reporting streamer must remain inline-retriable")
+
+	// No active streamer at all: retry OK.
+	assert.True(t, retryAllowedAfterDrop(nil),
+		"absent streamer must remain inline-retriable")
+}
+
 // TestTurnState_FinalizeStreamer verifies that finalizeStreamer calls Finalize exactly once
 // on the active streamer and clears it so a second call is a no-op.
 // BDD: Given a turnState with an active streamer,

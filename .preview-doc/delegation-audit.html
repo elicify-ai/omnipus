@@ -1,0 +1,191 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Delegation · as-is audit · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  .spectrum{margin:14px 0 6px}
+  .mech{display:grid;grid-template-columns:130px 1fr;gap:0;border:1px solid #23232a;border-radius:12px;overflow:hidden;margin-bottom:12px}
+  .mech>.mh{background:#101014;padding:16px;display:flex;flex-direction:column;gap:6px;justify-content:center;border-right:1px solid #23232a}
+  .mech>.mh .mt{font-family:Outfit,sans-serif;font-weight:700;font-size:15px}
+  .mech>.mb{padding:14px 16px}
+  .mech ul{margin:6px 0 0}
+  .matrix{border-collapse:collapse;margin-top:10px;font-size:13px}
+  .matrix th,.matrix td{border:1px solid #23232a;padding:8px 12px;text-align:center}
+  .matrix th{background:#101014;color:#cdd3de;font-family:JetBrains Mono;font-size:11.5px;font-weight:600}
+  .matrix td.src{background:#0e0e12;text-align:left;color:#E2E8F0;font-weight:600}
+  .yes{color:#34d399;font-weight:700}.no{color:#5f5f6b}
+  .cov td:first-child{text-align:left}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html" class="active">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / <a href="delegation.html">Delegation</a> / as-is audit</div>
+  <div class="eyebrow">As-is audit · grounded in code</div>
+  <h1>How agents engage other agents <span style="font-size:.5em;color:var(--muted);font-weight:400">— today</span></h1>
+  <p class="lede">Four mechanisms already exist in the binary — from <b style="color:#fff">handing off</b> a conversation to <b style="color:#fff">spawning a subagent</b>. There's even a <b style="color:#fff">permission rule engine</b> deciding who may delegate to whom. The gap isn't capability — it's that the rules are <b style="color:#fff">invisible</b> (no UI) and <b style="color:#fff">inconsistently enforced</b>.</p>
+  <p class="note" style="margin-top:8px">This page is the evidence. For the redesign it motivates, see <a href="delegation.html"><b>how it should work →</b></a></p>
+</div></div>
+
+<!-- THE FOUR -->
+<section><div class="wrap">
+  <div class="eyebrow">Validated · the four mechanisms</div>
+  <h2>One axis: <span class="gold">give up control</span> → <span class="gold">keep control</span></h2>
+  <p class="sub">Handover <i>moves the conversation</i> to another agent. The other three <i>farm out work</i> while the caller stays in charge — differing only in sync/async and ephemeral/durable.</p>
+  <div class="fig">
+  <svg viewBox="0 0 980 232" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b8b97"/></marker></defs>
+    <line x1="40" y1="206" x2="940" y2="206" stroke="#2a2a31" stroke-width="2"/>
+    <text x="60" y="226" fill="#5f5f6b" font-size="11">transfer (let go)</text>
+    <text x="930" y="226" fill="#5f5f6b" font-size="11" text-anchor="end">keep control</text>
+    <!-- 1 Handover -->
+    <g><rect x="40" y="28" width="210" height="150" rx="12" fill="#101014" stroke="#a78bfa"/>
+      <text x="145" y="52" text-anchor="middle" fill="#a78bfa" font-family="Outfit" font-weight="700" font-size="14">1 · Handover</text>
+      <text x="145" y="72" text-anchor="middle" fill="#8b8b97" font-size="10.5" font-family="JetBrains Mono">handoff tool</text>
+      <text x="145" y="98" text-anchor="middle" fill="#cdd3de" font-size="11">conversation MOVES</text>
+      <text x="145" y="116" text-anchor="middle" fill="#cdd3de" font-size="11">to the new agent</text>
+      <text x="145" y="142" text-anchor="middle" fill="#f87171" font-size="10.5">caller stops · one-way</text>
+      <circle cx="145" cy="206" r="6" fill="#a78bfa"/></g>
+    <!-- 2 Task -->
+    <g><rect x="270" y="28" width="210" height="150" rx="12" fill="#101014" stroke="#fbbf24"/>
+      <text x="375" y="52" text-anchor="middle" fill="#fbbf24" font-family="Outfit" font-weight="700" font-size="14">2 · Task-for-agent</text>
+      <text x="375" y="72" text-anchor="middle" fill="#8b8b97" font-size="10.5" font-family="JetBrains Mono">task_create + agent_id</text>
+      <text x="375" y="98" text-anchor="middle" fill="#cdd3de" font-size="11">queue durable work</text>
+      <text x="375" y="116" text-anchor="middle" fill="#cdd3de" font-size="11">target runs it later</text>
+      <text x="375" y="142" text-anchor="middle" fill="#34d399" font-size="10.5">async · survives restart</text>
+      <circle cx="375" cy="206" r="6" fill="#fbbf24"/></g>
+    <!-- 3 Spawn -->
+    <g><rect x="500" y="28" width="210" height="150" rx="12" fill="#101014" stroke="#34d399"/>
+      <text x="605" y="52" text-anchor="middle" fill="#34d399" font-family="Outfit" font-weight="700" font-size="14">3 · Spawn</text>
+      <text x="605" y="72" text-anchor="middle" fill="#8b8b97" font-size="10.5" font-family="JetBrains Mono">spawn tool</text>
+      <text x="605" y="98" text-anchor="middle" fill="#cdd3de" font-size="11">fire a subagent</text>
+      <text x="605" y="116" text-anchor="middle" fill="#cdd3de" font-size="11">result returns via channel</text>
+      <text x="605" y="142" text-anchor="middle" fill="#34d399" font-size="10.5">async · ephemeral child</text>
+      <circle cx="605" cy="206" r="6" fill="#34d399"/></g>
+    <!-- 4 Subagent -->
+    <g><rect x="730" y="28" width="210" height="150" rx="12" fill="#101014" stroke="#60a5fa"/>
+      <text x="835" y="52" text-anchor="middle" fill="#60a5fa" font-family="Outfit" font-weight="700" font-size="14">4 · Subagent</text>
+      <text x="835" y="72" text-anchor="middle" fill="#8b8b97" font-size="10.5" font-family="JetBrains Mono">subagent tool</text>
+      <text x="835" y="98" text-anchor="middle" fill="#cdd3de" font-size="11">call &amp; BLOCK</text>
+      <text x="835" y="116" text-anchor="middle" fill="#cdd3de" font-size="11">get the answer back</text>
+      <text x="835" y="142" text-anchor="middle" fill="#60a5fa" font-size="10.5">sync · ephemeral child</text>
+      <circle cx="835" cy="206" r="6" fill="#60a5fa"/></g>
+  </svg>
+  <div class="figcap">3 &amp; 4 are the <b>same engine</b> (<span class="mono">spawnSubTurn</span>) — the <span class="mono">Async</span> flag is the only difference. A "subagent" is an ephemeral child turn, not a separate concept.</div>
+  </div>
+</div></section>
+
+<!-- DETAIL CARDS -->
+<section><div class="wrap">
+  <div class="eyebrow">Each one, grounded</div>
+  <h2>What the code actually does</h2>
+
+  <div class="mech"><div class="mh" style="border-left:3px solid #a78bfa"><div class="mt" style="color:#a78bfa">1 · Handover</div><span class="tag t-have">works</span><span class="tag t-info">not delegation</span></div>
+    <div class="mb">
+      <p style="margin:0 0 4px">The <span class="mono">handoff</span> tool (ScopeCore, every agent has it) <b>transfers the live session</b> to a specialist. It validates the target, atomically flips <span class="mono">session.ActiveAgentID</span>, copies ~50% of the token budget of recent context, writes an audit entry, and emits an <span class="mono">agent_switched</span> WS frame.</p>
+      <ul class="clean">
+        <li>One-way: the caller's turn ends; the user's <b>next message</b> routes to the new agent. <span class="muted mono">pkg/tools/handoff.go · session/unified.go:362</span></li>
+        <li>Mia (the guide) is told to hand off <b>mandatorily</b> for anything beyond platform help; <span class="mono">return_to_default</span> reverts. <span class="muted mono">coreagent/core.go:548</span></li>
+        <li>UI exists — the active-agent indicator updates on the frame. <span class="muted mono">src/store/chat.ts</span></li>
+      </ul>
+    </div></div>
+
+  <div class="mech"><div class="mh" style="border-left:3px solid #fbbf24"><div class="mt" style="color:#fbbf24">2 · Task-for-agent</div><span class="tag t-have">works</span><span class="tag t-part">durable async</span></div>
+    <div class="mb">
+      <p style="margin:0 0 4px">An agent calls <span class="mono">task_create</span> with an <span class="mono">agent_id</span> → the task is stored <span class="mono">status=queued</span> with <span class="mono">CreatedBy</span>=caller. The <b>heartbeat</b> polls <span class="mono">CheckQueuedTasks</span>, groups by agent, and <span class="mono">ExecuteTask</span> dispatches to the target via <span class="mono">processTaskDirect</span> in that agent's own session.</p>
+      <ul class="clean">
+        <li>Fully wired execution — not just a label. <span class="muted mono">tools/task.go · agent/task_executor.go · heartbeat/service.go</span></li>
+        <li><b>Gated</b> by the <span class="mono">CanDelegateTo</span> allowlist (see rule engine below).</li>
+        <li>This is the spine the <a href="agents.html">Personal Assistant</a> rides — Jim "delegates to Ava/Max" this way.</li>
+        <li>UI: agent picker in the Create-Task slide-over. <span class="muted mono">src/components/projects/CreateTaskSlideOver.tsx</span></li>
+      </ul>
+    </div></div>
+
+  <div class="mech"><div class="mh" style="border-left:3px solid #34d399"><div class="mt" style="color:#34d399">3 · Spawn</div><span class="tag t-have">works</span><span class="tag t-part">async ephemeral</span></div>
+    <div class="mb">
+      <p style="margin:0 0 4px">The <span class="mono">spawn</span> tool starts an ephemeral child turn (<span class="mono">spawnSubTurn</span>, <span class="mono">Async=true</span>) for background work; the caller keeps going and the result is delivered back over a channel when ready.</p>
+      <ul class="clean">
+        <li>Depth limit <b>3</b>, max <b>5</b> concurrent, 5-min timeout; children get the parent's tools <b>minus</b> spawn/subagent/handoff — a one-level recursion guard. <span class="muted mono">agent/subturn.go:20,314,414</span></li>
+        <li><b>Gated</b> by <span class="mono">Subagents.AllowAgents</span> via <span class="mono">CanSpawnSubagent</span>. <span class="muted mono">agent/registry.go:125</span></li>
+        <li>UI: collapsible <span class="mono">SubagentBlock</span> in chat. <span class="muted mono">src/components/chat/SubagentBlock.tsx</span></li>
+      </ul>
+    </div></div>
+
+  <div class="mech"><div class="mh" style="border-left:3px solid #60a5fa"><div class="mt" style="color:#60a5fa">4 · Subagent</div><span class="tag t-have">works</span><span class="tag t-part">sync ephemeral</span></div>
+    <div class="mb">
+      <p style="margin:0 0 4px">The <span class="mono">subagent</span> tool runs the <b>same</b> <span class="mono">spawnSubTurn</span> with <span class="mono">Async=false</span> — the caller <b>blocks</b> until the child finishes and the result returns directly into the conversation as a tool result.</p>
+      <ul class="clean">
+        <li>Same depth/recursion guards as spawn.</li>
+        <li><b style="color:var(--red)">NOT permission-gated</b> — no allowlist checker is attached to the sync tool. <span class="muted mono">agent/loop.go:1487 (no SetAllowlistChecker)</span></li>
+        <li>UI: same <span class="mono">SubagentBlock</span>.</li>
+      </ul>
+    </div></div>
+
+  <div class="callout b"><b>Subagent vs. task — the real distinction:</b> a <b>subagent</b> is <i>ephemeral</i> (in-memory child turn, no persistent identity, dies with the parent), best for "go figure this out and report back within this turn". A <b>task</b> is <i>durable</i> (persisted, survives restart, runs in the named agent's own session), best for "someone owns this piece of work". Handover is neither — it's a baton pass.</div>
+</div></section>
+
+<!-- RULE ENGINE -->
+<section><div class="wrap">
+  <div class="eyebrow">The rule engine · validated</div>
+  <h2>Who may delegate to whom</h2>
+  <p class="sub">Your recollection is right — there <b>is</b> a permission engine. But it's actually <b>two separate allowlists</b>, default-deny, wildcard-aware, configured only in JSON.</p>
+  <div class="grid g2" style="margin-top:6px">
+    <div class="defcard"><div class="defword" style="color:#fbbf24">can_delegate_to</div><div><p style="margin:0">Per-agent (or <span class="mono">Agents.Defaults</span>) list of agent IDs this agent may create <b>tasks</b> for. Enforced in <span class="mono">task_create</span> via <span class="mono">buildDelegateChecker</span>. <span class="muted mono">config.go:663 · loop.go:1592 (func), wired :1502</span></p></div></div>
+    <div class="defcard"><div class="defword" style="color:#34d399">subagents.allow_agents</div><div><p style="margin:0">Per-agent list of agent IDs this agent may <b>spawn</b>. Enforced via <span class="mono">CanSpawnSubagent</span>. Empty ⇒ cannot spawn at all. <span class="muted mono">registry.go:125</span></p></div></div>
+  </div>
+  <p class="note" style="margin-top:12px">Both accept <span class="mono">"*"</span> (allow-all) and default to <b>deny</b> when empty. Core agents don't seed either — they inherit the (usually empty) global default; custom agents set them via <span class="mono">system.agent.create/update</span>.</p>
+
+  <h3 style="margin-top:22px">What an admin <i>wants</i> to see — a delegation matrix</h3>
+  <p class="note">This is the mental model the engine encodes, but which the product never shows:</p>
+  <div class="callout"><b>These are today's seeded core IDs.</b> The to-be base roster re-casts them by role — <b>Mia → the Assistant ⭐ · Jim → the Orchestrator · Ray → the Scout · Ava → the Builder · Max retired</b> (automation = platform surface) — see <a href="agents.html">Agents</a> / <a href="decisions.html">Decisions</a>.</div>
+  <table class="matrix">
+    <tr><th>from ↓ &nbsp; to →</th><th>Mia</th><th>Jim</th><th>Ava</th><th>Ray</th><th>Max</th><th>custom-x</th></tr>
+    <tr><td class="src">Mia</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✕</td></tr>
+    <tr><td class="src">Jim</td><td class="no">✕</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✕</td></tr>
+    <tr><td class="src">Ava</td><td class="no">✕</td><td class="no">✕</td><td class="no">—</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td></tr>
+    <tr><td class="src">custom-x</td><td class="no">✕</td><td class="yes">✓</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td><td class="no">—</td></tr>
+  </table>
+  <div class="figcap">Illustrative. Today this lives only as two string arrays in <span class="mono">config.json</span> — there is no screen, no API field, no visualization.</div>
+</div></section>
+
+<!-- ASSESSMENT -->
+<section><div class="wrap">
+  <div class="eyebrow">As-is assessment</div>
+  <h2>Capability is here; governance is half-wired &amp; invisible</h2>
+  <table class="cov">
+    <tr><th>Path</th><th>Mechanism</th><th>Permission-gated?</th><th>UI to configure?</th><th>UI to observe?</th></tr>
+    <tr><td><b>Handover</b></td><td><span class="mono">handoff</span></td><td><span class="tag t-new">no gate</span> any agent → any agent</td><td><span class="tag t-new">none</span></td><td><span class="tag t-have">agent_switched</span></td></tr>
+    <tr><td><b>Task-for-agent</b></td><td><span class="mono">task_create</span></td><td><span class="tag t-have">yes · can_delegate_to</span></td><td><span class="tag t-new">none</span> (JSON only)</td><td><span class="tag t-part">task agent field</span></td></tr>
+    <tr><td><b>Spawn</b> (async)</td><td><span class="mono">spawn</span></td><td><span class="tag t-have">yes · allow_agents</span></td><td><span class="tag t-new">none</span> (JSON only)</td><td><span class="tag t-have">SubagentBlock</span></td></tr>
+    <tr><td><b>Subagent</b> (sync)</td><td><span class="mono">subagent</span></td><td><span class="tag t-new">NOT gated</span> — checker missing</td><td><span class="tag t-new">none</span></td><td><span class="tag t-have">SubagentBlock</span></td></tr>
+  </table>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card" style="border-color:rgba(248,113,113,.3)"><h3>Gap 1 · Inconsistent enforcement</h3><p class="note">Two of four paths are gated; sync <span class="mono">subagent</span> and <span class="mono">handoff</span> bypass the rules entirely. An agent blocked from spawning can still call a subagent synchronously.</p></div>
+    <div class="card" style="border-color:rgba(248,113,113,.3)"><h3>Gap 2 · Two models, one concept</h3><p class="note">"Who may agent X engage" is split across <span class="mono">can_delegate_to</span> and <span class="mono">subagents.allow_agents</span> with different defaults and code paths. Should be one delegation policy.</p></div>
+    <div class="card" style="border-color:rgba(248,113,113,.3)"><h3>Gap 3 · No surface at all</h3><p class="note">Neither allowlist is in the Agent contract or any screen. An operator can't see or edit the trust graph without hand-editing JSON. The matrix above doesn't exist in the product.</p></div>
+  </div>
+</div></section>
+
+<!-- RECOMMENDATION -->
+<section><div class="wrap">
+  <div class="eyebrow">Recommendation</div>
+  <h2>Unify into one delegation policy + a visible trust graph</h2>
+  <div class="grid g2">
+    <div class="card"><h3>Model</h3><ul class="clean">
+      <li>One per-agent <b>delegation policy</b> — collapse the two arrays into <span class="mono">delegation: { to, accept_from, modes, depth, budget }</span>, where <span class="mono">modes</span> = await / background / task. <b>Handover stays open/ungated by design</b> — it re-routes the conversation, never farms out work, so it's not in the delegation policy. <a href="delegation.html">See the full model →</a></li>
+      <li>Gate the two ungated <b>work-paths</b> (sync <span class="mono">subagent</span> + spawn/<span class="mono">task</span>) through the policy; leave handover open.</li>
+      <li>Add it to the Agent contract (Constraint #8) so it has a generated type.</li>
+    </ul></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>Surface (the missing UI)</h3><ul class="clean">
+      <li>Agent profile → <b>Delegation</b> tab: pick allowed targets + modes.</li>
+      <li>A read-only <b>trust-graph matrix</b> (the table above) at the team/project level.</li>
+      <li>Observe runs: handover trail + SubagentBlock already exist — link them into one "agent activity" view.</li>
+    </ul></div>
+  </div>
+  <div class="callout">Sequencing: the <b>UI + contract field + unify/close-the-gaps</b> is mostly additive and safe — a strong fit for <a href="roadmap.html"><b>v0.1.0 (R1)</b></a> IA-lock work (make the existing engine visible) with the enforcement unification landing alongside the workspace tenancy pass. It does <b>not</b> depend on the multi-instance connections rock.</div>
+</div></section>
+
+<footer><div class="wrap"><p><a href="agents.html" style="color:var(--muted)">← Agents</a> &nbsp;·&nbsp; Next: <a href="delegation.html">How it should work →</a></p></div></footer>
+</body></html>

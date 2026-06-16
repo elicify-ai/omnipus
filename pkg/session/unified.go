@@ -51,6 +51,9 @@ type MetaPatch struct {
 	Title  *string
 	Status *SessionStatus
 	TaskID *string
+	// Owner stamps the authenticated user who created the session.
+	// Only written when non-nil; empty string is a valid value (clears ownership).
+	Owner *string
 }
 
 // UnifiedMeta extends SessionMeta with the session type field.
@@ -344,6 +347,9 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	}
 	if patch.TaskID != nil {
 		meta.TaskID = *patch.TaskID
+	}
+	if patch.Owner != nil {
+		meta.Owner = *patch.Owner
 	}
 	meta.UpdatedAt = time.Now().UTC()
 	return us.writeMetaLocked(sessionID, meta)

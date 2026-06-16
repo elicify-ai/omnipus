@@ -11,7 +11,8 @@ func init() {
 	channels.RegisterFactory(
 		"discord",
 		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			return NewDiscordChannel(cfg.Channels.Discord, secrets, b)
+			inst := cfg.Channels["discord"]
+			return NewDiscordChannel(config.InstanceToDiscord(inst), secrets, b)
 		},
 	)
 }

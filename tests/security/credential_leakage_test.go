@@ -156,7 +156,27 @@ func TestCredentialLeakage(t *testing.T) {
 		"api_key": injectedAPIKey,
 		"model":   "claude-sonnet-4-6",
 	})
-	exercise(http.MethodPut, "/api/v1/providers/anthropic", updateBody)
+	// PUT /providers/{id} is re-auth-gated (Spec-6 FR-12.2): without a single-use
+	// consent token the handler 403s BEFORE decoding the body, so the injected
+	// key would never traverse the handler and the leakage check on this path
+	// would be vacuous. Mint a token (the onboarded leakadmin has a password) and
+	// replay it so the key actually flows through the handler under test.
+	{
+		rt := mintReAuthToken(t, gw.HTTPClient, gw.URL, gw.URL, token, "securepass123")
+		r, rerr := http.NewRequest(http.MethodPut, gw.URL+"/api/v1/providers/anthropic",
+			bytes.NewReader(updateBody))
+		require.NoError(t, rerr)
+		r.Header.Set("Origin", gw.URL)
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set(reAuthHeader, rt)
+		if rp, derr := gw.HTTPClient.Do(r); derr == nil {
+			pbuf := new(bytes.Buffer)
+			_, _ = pbuf.ReadFrom(rp.Body)
+			collectedResponses = append(collectedResponses, pbuf.Bytes())
+			_ = rp.Body.Close()
+		}
+	}
 	// Churn via a deliberately-rejected auth request carrying the bearer
 	// sentinel — if anything echoes the Authorization header verbatim, this
 	// catches it.

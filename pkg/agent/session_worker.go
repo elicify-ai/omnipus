@@ -236,6 +236,43 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		}()
 		if finalResponse != "" && !published {
 			al.publishResponseIfNeeded(ctx, activeAgent, publishChannel, publishChatID, finalResponse)
+			published = true
+		}
+	}()
+
+	// C8 (chat-stream-hang): guarantee a terminal frame on EVERY exit path —
+	// success, provider error, ctx cancel, AND panic-recover. processMessage →
+	// runAgentLoop → runTurn can panic (e.g. a provider/tool nil-deref that
+	// escapes the inner recovers). When it does, finalResponse is still "" and
+	// no streamer may have been set as ts.lastStreamer, so finalizeStreamer
+	// emits no "done" frame either — leaving the SPA stuck "thinking" forever.
+	// This recover synthesizes an error response and publishes it so the client
+	// receives a terminal frame (publishResponseIfNeeded → webchatChannel.Send →
+	// token + done).
+	//
+	// Registered AFTER the response guard above so that — defers being LIFO —
+	// THIS recover runs FIRST during panic unwinding, catches the panic, sets
+	// finalResponse, and marks published=true. The response guard then runs and
+	// is a no-op (published already true). It re-panics so runLoop's recover
+	// still logs the worker-level event and the worker exits cleanly.
+	defer func() {
+		if r := recover(); r != nil {
+			logger.ErrorCF("agent.worker", "Panic in processTurn — emitting terminal error frame",
+				map[string]any{"panic": r, "scope": w.scope, "stack": string(debug.Stack())})
+			if finalResponse == "" {
+				finalResponse = "Error processing message: the agent turn failed unexpectedly. Please try again."
+			}
+			if finalResponse != "" && !published {
+				// ctx may be canceled during panic unwinding; use a fresh,
+				// short-lived context so the terminal frame still reaches the client.
+				termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				al.publishResponseIfNeeded(termCtx, activeAgent, publishChannel, publishChatID, finalResponse)
+				termCancel()
+				published = true
+			}
+			// Re-panic so runLoop's recover logs the worker-level event and the
+			// worker exits cleanly (a fresh worker is spawned on the next message).
+			panic(r)
 		}
 	}()
 

@@ -28,6 +28,14 @@ type SubTurnConfig struct {
 	Timeout            time.Duration // 0 = use default (5 minutes)
 	MaxContextRunes    int           // 0 = auto, -1 = no limit, >0 = explicit limit
 	ActualSystemPrompt string
+	// TargetAgentID, when non-empty, is the configured agent the sub-turn is
+	// delegating TO (e.g., a worker). When set, subturn.go resolves the
+	// delegate's soul (AgentConfig.Soul or, for seeded base agents, the
+	// compiled coreagent.GetPrompt) and uses it as the ActualSystemPrompt so
+	// the child turn runs with system=soul + user=task, uniformly across the
+	// native and external-cli executors. Empty means "delegate the parent's
+	// own agent" — the parent's own soul applies.
+	TargetAgentID      string
 	InitialMessages    []providers.Message
 	InitialTokenBudget *atomic.Int64 // Shared token budget for team members; nil if no budget
 	// TaskLabel is the optional human-readable label for the sub-turn task (FR-H-004).
@@ -312,6 +320,17 @@ type SubagentTool struct {
 	defaultModel string
 	maxTokens    int
 	temperature  float64
+	// delegateChecker, when non-nil, gates whether the calling agent is
+	// permitted to spawn any synchronous subagent at all. Called with an
+	// empty string because the sync subagent tool has no explicit target agent.
+	// Returns false → tool returns a policy-deny error.
+	delegateChecker func() bool
+	// delegationDeny, when non-nil, applies the full delegation policy (trust
+	// set + modes + depth — FR-6.2) for the synchronous "await" mode. It receives
+	// the call ctx (for current delegation depth) and returns a non-empty reason
+	// to DENY or "" to ALLOW. Takes precedence over delegateChecker so the LLM
+	// sees *why* the delegation was rejected.
+	delegationDeny func(ctx context.Context) string
 }
 
 func NewSubagentTool(manager *SubagentManager) *SubagentTool {
@@ -328,6 +347,22 @@ func NewSubagentTool(manager *SubagentManager) *SubagentTool {
 // SetSpawner sets the SubTurnSpawner for direct sub-turn execution.
 func (t *SubagentTool) SetSpawner(spawner SubTurnSpawner) {
 	t.spawner = spawner
+}
+
+// SetDelegateChecker sets the delegation gate for the sync subagent tool.
+// The checker returns true if the calling agent is permitted to spawn any
+// synchronous subagent (the tool has no explicit target agent).
+// When nil, the tool is ungated (legacy behaviour — not recommended).
+func (t *SubagentTool) SetDelegateChecker(check func() bool) {
+	t.delegateChecker = check
+}
+
+// SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2):
+// trust set + modes ("await") + depth. Returns a non-empty reason to DENY or ""
+// to ALLOW. When set, it takes precedence over the boolean delegateChecker so a
+// rejected sync delegation surfaces a clear reason to the LLM.
+func (t *SubagentTool) SetDelegationDenyChecker(check func(ctx context.Context) string) {
+	t.delegationDeny = check
 }
 
 func (t *SubagentTool) Name() string {
@@ -358,6 +393,19 @@ func (t *SubagentTool) Parameters() map[string]any {
 }
 
 func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Delegation policy gate (FR-6.2): trust set + modes ("await") + depth.
+	// The full-policy checker takes precedence and surfaces a specific reason.
+	if t.delegationDeny != nil {
+		if reason := t.delegationDeny(ctx); reason != "" {
+			return ErrorResult("delegation denied: " + reason).
+				WithError(fmt.Errorf("delegation policy denied (subagent): %s", reason))
+		}
+	} else if t.delegateChecker != nil && !t.delegateChecker() {
+		// Backward-compat: legacy boolean trust-only gate.
+		return ErrorResult("delegation not allowed: no target agent is permitted by this agent's delegation policy").
+			WithError(fmt.Errorf("delegation policy denied: agent has no delegation targets in its 'to' allowlist"))
+	}
+
 	task, ok := args["task"].(string)
 	if !ok {
 		return ErrorResult("task is required").WithError(fmt.Errorf("task parameter is required"))
@@ -365,30 +413,21 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	label, _ := args["label"].(string)
 
-	// Build system prompt for subagent
-	systemPrompt := fmt.Sprintf(
-		`You are a subagent. Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
-		task,
-	)
-
-	if label != "" {
-		systemPrompt = fmt.Sprintf(
-			`You are a subagent labeled "%s". Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
-			label,
-			task,
-		)
-	}
-
 	// Use spawner if available (direct SpawnSubTurn call)
+	//
+	// The task is the first USER message; the delegate's soul (worker / configured
+	// agent) is resolved inside spawnSubTurn and used as the system role. The
+	// legacy "You are a subagent" wrapper is REMOVED — the subagent tool does
+	// not pre-inject any persona, so a configured delegate exposes its own soul
+	// and a soul-less worker runs with an empty system role (worker souls are
+	// OPTIONAL by design). The label, when set, is preserved as the task label
+	// for the WS subTurn_start frame.
 	if t.spawner != nil {
 		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 			Model:        t.defaultModel,
 			Tools:        nil, // Will inherit from parent via context
-			SystemPrompt: systemPrompt,
+			SystemPrompt: task,
+			TaskLabel:    label,
 			MaxTokens:    t.maxTokens,
 			Temperature:  t.temperature,
 			Async:        false, // Synchronous execution

@@ -18,6 +18,7 @@ import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
 import type { ClientTruncatedResult } from '@/store/chat'
 import { useQuery } from '@tanstack/react-query'
 import { fetchToolResult } from '@/lib/api'
+import { humanizeToolName } from '@/lib/humanizeToolName'
 
 interface GenericToolCallProps {
   toolName: string
@@ -223,7 +224,9 @@ export function GenericToolCall({
         disabled={!hasDetail}
       >
         <Wrench size={13} className="text-[var(--color-muted)] shrink-0" />
-        <span className="text-[var(--color-secondary)] font-medium">{toolName}</span>
+        <span className="text-[var(--color-secondary)] font-medium">
+          {humanizeToolName(toolName)}
+        </span>
         <span className="flex items-center gap-1 ml-1">
           {statusConfig.icon}
           <span className="text-[var(--color-muted)]">{statusConfig.label}</span>
@@ -238,6 +241,10 @@ export function GenericToolCall({
       {/* Expanded detail */}
       {expanded && hasDetail && (
         <div className="border-t border-[var(--color-border)] px-3 py-2 space-y-2">
+          <div>
+            <div className="text-[var(--color-muted)] mb-1 font-sans">Tool</div>
+            <code className="text-[10px] text-[var(--color-secondary)] break-all">{toolName}</code>
+          </div>
           {args !== undefined && (
             <div>
               <div className="text-[var(--color-muted)] mb-1 font-sans">Parameters</div>

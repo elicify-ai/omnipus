@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -26,21 +27,58 @@ type TaskExecutor struct {
 	mu            sync.Mutex
 	running       map[string]context.CancelFunc
 	maxConcurrent int
+	// dispatchSema gates the total number of concurrently dispatched tasks
+	// across all agents. It is driven by MaxParallelAgents from cfg.Performance
+	// and is independent from AdmissionController (which only gates inbound
+	// user-message session workers).
+	dispatchSema *DispatchSemaphore
+
+	// parentFollowUp, when non-nil, is invoked (synchronously) in place of the
+	// real "resume the parent agent" goroutine after a follow-up is successfully
+	// claimed. It is a test seam ONLY — production leaves it nil and uses
+	// processTaskDirect. It lets tests observe exactly how many parent follow-ups
+	// fire under concurrent sibling completion without standing up a full AgentLoop.
+	parentFollowUp func(parentID string)
 }
 
 // newTaskExecutor creates a TaskExecutor.
+// The dispatchSema capacity is set to cfg.Performance.EffectiveMaxParallelAgents()
+// so the fan-out cap is live from boot.
 func newTaskExecutor(al *AgentLoop, store *taskstore.TaskStore) *TaskExecutor {
+	cap := defaultMaxConcurrentTasksPerAgent
+	if al.cfg != nil {
+		if eff := al.cfg.Performance.EffectiveMaxParallelAgents(); eff > 0 {
+			cap = eff
+		}
+	}
 	return &TaskExecutor{
 		agentLoop:     al,
 		store:         store,
 		running:       make(map[string]context.CancelFunc),
 		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
+		dispatchSema:  newDispatchSemaphore(cap),
 	}
 }
 
 // ExecuteTask starts executing the task identified by taskID.
-// It updates the task's status to "running" and dispatches it to the agent in a goroutine.
+// It atomically claims the task (queued→running via ClaimForRun) and dispatches
+// it to the agent in a goroutine.
+//
+// The dispatch is gated by two concurrency controls:
+//  1. Per-agent cap (maxConcurrent) — prevents a single agent from being flooded.
+//  2. Global DispatchSemaphore (dispatchSema) — enforces the MaxParallelAgents
+//     fan-out ceiling across ALL agents. TryAcquire is used so the call never
+//     blocks; a failed acquire returns an error and the heartbeat will retry.
+//
+// The queued→running transition is performed via ClaimForRun, which holds the
+// store mutex across the read+write, eliminating the TOCTOU race between the
+// heartbeat and advanceBlockedTasks. If the task has already been claimed by a
+// concurrent caller, ClaimForRun returns ErrAlreadyClaimed and ExecuteTask
+// returns without dispatching a duplicate goroutine.
 func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
+	// Peek at the task before acquiring resources, so we can check deps and the
+	// agent cap without holding any lock. The actual status transition is done
+	// atomically by ClaimForRun below.
 	task, err := te.store.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("task_executor: get task %q: %w", taskID, err)
@@ -49,20 +87,46 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 		return fmt.Errorf("task_executor: task %q is %s, not queued", taskID, task.Status)
 	}
 
+	// Guard: do not dispatch a task that still has unsatisfied dependencies.
+	if len(task.BlockedBy) > 0 {
+		for _, depID := range task.BlockedBy {
+			dep, depErr := te.store.Get(depID)
+			if depErr != nil || dep.Status != "completed" {
+				return fmt.Errorf("task_executor: task %q is blocked by %q (not completed)", taskID, depID)
+			}
+		}
+	}
+
+	// Global dispatch semaphore — gate the total fan-out across all agents.
+	// Checked early (before registry lookup) so capacity limits are enforced
+	// without touching agent state. TryAcquire is non-blocking: the heartbeat
+	// retries on the next tick when the cap is reached.
+	ok, release := te.dispatchSema.TryAcquire()
+	if !ok {
+		return fmt.Errorf(
+			"task_executor: global dispatch cap reached (%d/%d in flight), retry later",
+			te.dispatchSema.InFlight(), te.dispatchSema.Cap(),
+		)
+	}
+
 	registry := te.agentLoop.GetRegistry()
 	if _, ok := registry.GetAgent(task.AgentID); !ok {
+		release()
 		logger.ErrorCF("task_executor", "Agent not found, failing task",
 			map[string]any{"task_id": taskID, "agent_id": task.AgentID})
 		te.failTask(taskID, fmt.Sprintf("agent %q not found", task.AgentID))
 		return fmt.Errorf("task_executor: agent %q not found", task.AgentID)
 	}
 
-	// Count running tasks for this specific agent via the store.
+	// Count running tasks for this specific agent via the store (per-agent cap).
 	runningTasks, err := te.store.List(taskstore.TaskFilter{Status: "running", AgentID: task.AgentID})
 	if err != nil {
+		// Release the semaphore slot — we won't start.
+		release()
 		return fmt.Errorf("task_executor: list running tasks for agent %q: %w", task.AgentID, err)
 	}
 	if len(runningTasks) >= te.maxConcurrent {
+		release()
 		return fmt.Errorf(
 			"task_executor: concurrency limit reached for agent %q (%d running)",
 			task.AgentID,
@@ -70,28 +134,37 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 		)
 	}
 
-	// Transition to running.
+	// Atomically claim the task (queued→running) under the store mutex.
+	// This is the single critical section that eliminates the TOCTOU race:
+	// if a concurrent caller (heartbeat or advanceBlockedTasks) already claimed
+	// this task, ClaimForRun returns ErrAlreadyClaimed and we abort without
+	// spawning a duplicate goroutine.
 	now := time.Now().UTC()
-	updated, err := te.store.Update(taskID, taskstore.TaskPatch{
-		Status:    ptrStr("running"),
-		StartedAt: &now,
-	})
+	claimed, err := te.store.ClaimForRun(taskID, now)
 	if err != nil {
-		return fmt.Errorf("task_executor: update task %q to running: %w", taskID, err)
+		release()
+		if errors.Is(err, taskstore.ErrAlreadyClaimed) {
+			// Another goroutine won the race — not an error worth logging at Warn.
+			return fmt.Errorf("task_executor: task %q already claimed by concurrent dispatch", taskID)
+		}
+		return fmt.Errorf("task_executor: claim task %q for run: %w", taskID, err)
 	}
-	task = updated
+	task = claimed
 
 	taskCtx, cancel := context.WithCancel(ctx)
 	te.mu.Lock()
 	te.running[taskID] = cancel
 	te.mu.Unlock()
 
-	go te.runTask(taskCtx, task, cancel)
+	go te.runTask(taskCtx, task, cancel, release)
 	return nil
 }
 
 // runTask executes the agent prompt and updates the task on completion.
-func (te *TaskExecutor) runTask(ctx context.Context, task *taskstore.TaskEntity, cancel context.CancelFunc) {
+// release is the DispatchSemaphore release function — it MUST be called exactly
+// once when the task goroutine exits (via the deferred call below).
+func (te *TaskExecutor) runTask(ctx context.Context, task *taskstore.TaskEntity, cancel context.CancelFunc, release func()) {
+	defer release()
 	defer cancel()
 	defer func() {
 		te.mu.Lock()
@@ -302,39 +375,66 @@ func (te *TaskExecutor) buildPrompt(task *taskstore.TaskEntity) string {
 	return sb.String()
 }
 
-// onTaskComplete handles post-completion logic: parent notification.
-func (te *TaskExecutor) onTaskComplete(task *taskstore.TaskEntity) {
-	if task.ParentTaskID == "" {
-		return
-	}
-
-	siblings, err := te.store.List(taskstore.TaskFilter{ParentTaskID: task.ParentTaskID})
+// onTaskComplete handles post-completion logic:
+//  1. Parent notification (all siblings done → resume parent agent).
+//  2. Orchestrator advance: find tasks whose blocked_by list is now fully
+//     satisfied (every dep has status "completed") and dispatch them.
+//
+// This is the sole wiring point for the Orchestrator coordinator — it is
+// called by TaskUpdateTool.SetOnComplete (loop.go:1487) and by the
+// auto-complete path at the bottom of runTask. There is no separate
+// task_status_changed WS subscription because no such emitter exists.
+// notifyParentIfAllSiblingsDone resumes the parent agent once every child task
+// of parentID has reached a terminal state. It is safe under concurrent sibling
+// completions: the parent follow-up is launched at most once, guarded by an
+// atomic FollowedUp claim (ClaimParentFollowUp) — without it two siblings could
+// each see allDone and each spawn a duplicate resume goroutine.
+func (te *TaskExecutor) notifyParentIfAllSiblingsDone(parentID string) {
+	siblings, err := te.store.List(taskstore.TaskFilter{ParentTaskID: parentID})
 	if err != nil {
 		logger.WarnCF("task_executor", "Could not list siblings",
-			map[string]any{"parent_id": task.ParentTaskID, "error": err.Error()})
+			map[string]any{"parent_id": parentID, "error": err.Error()})
 		return
 	}
 	for _, s := range siblings {
 		if s.Status == "queued" || s.Status == "running" {
-			return
+			return // not all siblings terminal yet
 		}
 	}
 
-	// All siblings done — notify the parent agent.
-	parent, err := te.store.Get(task.ParentTaskID)
+	parent, err := te.store.Get(parentID)
 	if err != nil {
 		logger.WarnCF("task_executor", "Could not load parent task",
-			map[string]any{"parent_id": task.ParentTaskID, "error": err.Error()})
+			map[string]any{"parent_id": parentID, "error": err.Error()})
 		return
 	}
 	if parent.Status != "running" {
 		return
 	}
 
+	// Race guard: concurrent sibling completions can both observe allDone and both
+	// reach here. Atomically claim the follow-up so exactly one caller launches the
+	// parent resume goroutine; losers (and any later re-entry) skip silently.
+	claimed, claimErr := te.store.ClaimParentFollowUp(parent.ID)
+	if claimErr != nil {
+		logger.WarnCF("task_executor", "Could not claim parent follow-up",
+			map[string]any{"parent_id": parent.ID, "error": claimErr.Error()})
+		return
+	}
+	if !claimed {
+		return
+	}
+
+	// Test seam: when wired, observe the (single) claimed follow-up without the
+	// real agent dispatch. Production leaves this nil.
+	if te.parentFollowUp != nil {
+		te.parentFollowUp(parent.ID)
+		return
+	}
+
 	summary := te.buildChildSummary(siblings)
 	sessionKey := fmt.Sprintf("agent:%s:task:%s", parent.AgentID, parent.ID)
 	followUp := fmt.Sprintf("All child tasks of task %q have completed.\n\n%s", parent.ID, summary)
-
 	parentChatID := "task:" + parent.ID
 	go func() {
 		defer func() {
@@ -351,6 +451,76 @@ func (te *TaskExecutor) onTaskComplete(task *taskstore.TaskEntity) {
 				map[string]any{"parent_id": parent.ID, "error": ferr.Error()})
 		}
 	}()
+}
+
+func (te *TaskExecutor) onTaskComplete(task *taskstore.TaskEntity) {
+	// ── 1. Parent notification ──────────────────────────────────────────────
+	if task.ParentTaskID != "" {
+		te.notifyParentIfAllSiblingsDone(task.ParentTaskID)
+	}
+
+	// ── 2. Orchestrator advance — only when the completed task is "completed"
+	//       (not "failed": failed deps should not unblock downstream tasks). ──
+	if task.Status != "completed" {
+		return
+	}
+	te.advanceBlockedTasks(context.Background(), task.ID)
+}
+
+// readyBlockedCandidates returns the IDs of all queued tasks that list
+// completedTaskID as a blocker AND whose ENTIRE blocked_by dependency set is now
+// in "completed" status. These are the tasks the Orchestrator should dispatch.
+//
+// This is the pure decision half of advanceBlockedTasks (no dispatch, no agent
+// loop) so the gating logic — "only advance when every dep, not just the one that
+// just completed, is done; a failed/queued dep does NOT satisfy" — is directly
+// unit-testable. Returns a nil slice (not an error) when the scan fails so the
+// caller degrades gracefully; the underlying error is logged here.
+func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string {
+	candidates, err := te.store.List(taskstore.TaskFilter{
+		Status:      "queued",
+		BlockedByID: completedTaskID,
+	})
+	if err != nil {
+		logger.WarnCF("task_executor", "Orchestrator: could not scan blocked tasks",
+			map[string]any{"completed_task_id": completedTaskID, "error": err.Error()})
+		return nil
+	}
+
+	var ready []string
+	for i := range candidates {
+		t := &candidates[i]
+		// Verify ALL dependencies of this candidate are now completed (not just
+		// the one that triggered this call). A failed or still-queued dep blocks.
+		allSatisfied := true
+		for _, depID := range t.BlockedBy {
+			dep, depErr := te.store.Get(depID)
+			if depErr != nil || dep.Status != "completed" {
+				allSatisfied = false
+				break
+			}
+		}
+		if allSatisfied {
+			ready = append(ready, t.ID)
+		}
+	}
+	return ready
+}
+
+// advanceBlockedTasks finds all queued tasks that list completedTaskID in their
+// blocked_by field and attempts to dispatch those whose full dependency set is
+// now satisfied. This implements the Orchestrator coordinator seam.
+func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
+	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
+		// All deps satisfied — attempt to dispatch.
+		if err := te.ExecuteTask(ctx, taskID); err != nil {
+			logger.WarnCF("task_executor", "Orchestrator: advance dispatch failed",
+				map[string]any{"task_id": taskID, "error": err.Error()})
+		} else {
+			logger.InfoCF("task_executor", "Orchestrator: advanced blocked task",
+				map[string]any{"task_id": taskID, "unblocked_by": completedTaskID})
+		}
+	}
 }
 
 // buildChildSummary produces a markdown summary of all child task results.
@@ -380,6 +550,20 @@ func (te *TaskExecutor) failTask(taskID, reason string) {
 	}
 }
 
+// ResizeDispatchSema updates the global dispatch semaphore capacity.
+// Called by the gateway performance PUT handler after a config update so the
+// new value takes effect immediately without a restart.
+func (te *TaskExecutor) ResizeDispatchSema(newCap int) {
+	te.dispatchSema.Resize(newCap)
+	logger.InfoCF("task_executor", "Dispatch semaphore resized",
+		map[string]any{"new_cap": te.dispatchSema.Cap(), "in_flight": te.dispatchSema.InFlight()})
+}
+
+// DispatchSemaCap returns the current dispatch semaphore capacity.
+func (te *TaskExecutor) DispatchSemaCap() int {
+	return te.dispatchSema.Cap()
+}
+
 // Stop cancels all running task goroutines.
 func (te *TaskExecutor) Stop() {
 	te.mu.Lock()
@@ -390,8 +574,13 @@ func (te *TaskExecutor) Stop() {
 	te.running = make(map[string]context.CancelFunc)
 }
 
-// CheckQueuedTasks picks up the highest-priority queued task per agent and starts it.
-// Called by the heartbeat service.
+// CheckQueuedTasks picks the highest-priority *dispatchable* queued task per
+// agent and starts it. Called by the heartbeat service.
+//
+// "Dispatchable" means all tasks in the task's blocked_by list are in
+// "completed" status. Tasks that are still blocked by incomplete dependencies
+// are skipped in priority order until a ready task is found, preventing a
+// high-priority blocked task from starving lower-priority ready tasks.
 func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 	queued, err := te.store.List(taskstore.TaskFilter{Status: "queued"})
 	if err != nil {
@@ -403,20 +592,46 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 		return
 	}
 
-	// Group by agent_id; pick the first (lowest priority number = highest priority) per agent.
-	byAgent := make(map[string]*taskstore.TaskEntity)
+	// List is already sorted by priority ASC then created_at ASC (see store.List).
+	// Group by agent_id in that order; for each agent pick the first task whose
+	// blocked_by dependencies are all satisfied (skip blocked heads).
+	type agentState struct {
+		picked bool
+	}
+	agentDone := make(map[string]agentState)
+
 	for i := range queued {
 		t := &queued[i]
-		if _, exists := byAgent[t.AgentID]; !exists {
-			byAgent[t.AgentID] = t
+		if agentDone[t.AgentID].picked {
+			// Already dispatched one task for this agent this tick.
+			continue
 		}
-	}
 
-	for _, t := range byAgent {
+		// Check whether all deps of this task are completed.
+		depsSatisfied := true
+		for _, depID := range t.BlockedBy {
+			dep, depErr := te.store.Get(depID)
+			if depErr != nil || dep.Status != "completed" {
+				depsSatisfied = false
+				break
+			}
+		}
+		if !depsSatisfied {
+			// This task is blocked — skip it and try the next queued task for
+			// the same agent (which has lower priority but may be dispatchable).
+			logger.WarnCF("task_executor", "Heartbeat: skipping blocked task, trying next",
+				map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
+			continue
+		}
+
 		if err := te.ExecuteTask(ctx, t.ID); err != nil {
 			logger.WarnCF("task_executor", "Heartbeat: could not start task",
 				map[string]any{"task_id": t.ID, "error": err.Error()})
+			// Even if dispatch failed (e.g. cap reached), mark this agent as
+			// done for this tick so we don't attempt more tasks for it and
+			// amplify load.
 		}
+		agentDone[t.AgentID] = agentState{picked: true}
 	}
 }
 

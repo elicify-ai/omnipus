@@ -1,0 +1,3 @@
+{"type":"item.completed","thread_id":"thread-1","item":{"id":"item-1","type":"agent_message","text":"Processing your request."}}
+{"type":"item.completed","thread_id":"thread-1","item":{"id":"item-2","type":"tool_call","command":"ls /tmp","status":"pending"}}
+{"type":"turn.completed","usage":{"input_tokens":80,"cached_input_tokens":0,"output_tokens":30}}

@@ -62,10 +62,14 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	}
 	rawToken := strings.TrimPrefix(auth, prefix)
 
-	// 1. Check per-user list (RBAC — token hash lookup with bcrypt).
+	// 1. Check per-user list (RBAC — bearer-token SET lookup with bcrypt).
+	// SEC-1 / UAT #399: each user may hold several concurrent tokens; the
+	// presented token's embedded ID indexes directly to the right hash, with a
+	// scan fallback for legacy tokens (see UserConfig.VerifyToken).
 	if len(cfg.Gateway.Users) > 0 {
-		for _, user := range cfg.Gateway.Users {
-			if user.TokenHash.Verify(rawToken) == nil {
+		for i := range cfg.Gateway.Users {
+			user := cfg.Gateway.Users[i]
+			if user.VerifyToken(rawToken) == nil {
 				// Token matches this user.
 				return AuthResult{Authenticated: true, Role: user.Role, User: &user}
 			}

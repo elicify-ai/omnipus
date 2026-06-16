@@ -16,72 +16,43 @@ import (
 // fields are plain strings (*Ref), they survive JSON marshal/unmarshal without any
 // special handling.
 
-// configKeyToChannelName maps a channels config JSON key to the channel name that
-// initChannels registers in m.channels (and that StartAll iterates). For almost all
-// channels the config key IS the registered name, so the map only needs the divergent
-// cases. WhatsApp is the one mismatch: its config lives under the "whatsapp" key
-// (config.ChannelsConfig.WhatsApp `json:"whatsapp"`), but initChannels registers the
-// always-native whatsmeow implementation under "whatsapp_native" (initChannel(
-// "whatsapp_native", ...)). Without this remap, a Reload that enables WhatsApp produces
-// added=["whatsapp"] while m.channels only has "whatsapp_native" — so the Reload
-// added-start loop dereferences a nil channel and crashes the gateway.
+// configKeyToChannelName maps a channel instance id (= map key in Config.Channels)
+// to the factory name registered via channels.RegisterFactory. For almost all
+// channels the instance id IS the registered factory name; WhatsApp is the one
+// exception: instance id "whatsapp" → factory "whatsapp_native".
 //
-// Keeping channelHashes / compareChannels / toChannelConfig all keyed by the REGISTERED
-// name means StartAll and Reload agree, and m.channels[name] always resolves.
+// Keeping channelHashes / compareChannels / toChannelConfig all keyed by the
+// REGISTERED name means StartAll and Reload agree, and m.channels[name] resolves.
 var configKeyToChannelName = map[string]string{
 	"whatsapp": "whatsapp_native",
 }
 
-// channelNameForConfigKey returns the registered channel name for a channels config
-// JSON key, applying configKeyToChannelName. Keys without an entry map to themselves.
-func channelNameForConfigKey(configKey string) string {
-	if name, ok := configKeyToChannelName[configKey]; ok {
+// channelNameForConfigKey returns the registered channel name for a channel
+// instance id, applying configKeyToChannelName. Keys without an entry map to
+// themselves.
+func channelNameForConfigKey(instanceID string) string {
+	if name, ok := configKeyToChannelName[instanceID]; ok {
 		return name
 	}
-	return configKey
+	return instanceID
 }
 
 func toChannelHashes(cfg *config.Config) map[string]string {
 	result := make(map[string]string)
-	ch := cfg.Channels
-	marshal, err := json.Marshal(ch)
-	if err != nil {
-		logger.ErrorCF(
-			"channels",
-			"toChannelHashes: failed to marshal channel config",
-			map[string]any{"error": err.Error()},
-		)
-		return result
-	}
-	var channelConfig map[string]map[string]any
-	if err := json.Unmarshal(marshal, &channelConfig); err != nil {
-		logger.ErrorCF(
-			"channels",
-			"toChannelHashes: failed to unmarshal channel config",
-			map[string]any{"error": err.Error()},
-		)
-		return result
-	}
-
-	for key, value := range channelConfig {
-		enabled, _ := value["enabled"].(bool)
-		if !enabled {
+	for instanceID, inst := range cfg.Channels {
+		if !inst.Enabled {
 			continue
 		}
-		valueBytes, err := json.Marshal(value)
+		valueBytes, err := json.Marshal(inst)
 		if err != nil {
-			logger.WarnCF("channels", "toChannelHashes: failed to marshal channel config",
-				map[string]any{"channel": key, "error": err.Error()})
+			logger.WarnCF("channels", "toChannelHashes: failed to marshal channel instance",
+				map[string]any{"instance_id": instanceID, "error": err.Error()})
 			valueBytes = []byte("{}")
 		}
 		hash := md5.Sum(valueBytes)
-		// Key the hash map by the REGISTERED channel name, not the raw config key,
-		// so compareChannels' added/removed lists (and m.channelHashes) line up with
-		// m.channels — which initChannels populates under the registered name. For all
-		// channels except WhatsApp these are identical; see channelNameForConfigKey.
-		result[channelNameForConfigKey(key)] = hex.EncodeToString(hash[:])
+		// Key by the REGISTERED factory name so compareChannels and m.channels agree.
+		result[channelNameForConfigKey(instanceID)] = hex.EncodeToString(hash[:])
 	}
-
 	return result
 }
 
@@ -104,35 +75,15 @@ func compareChannels(old, news map[string]string) (added, removed []string) {
 	return added, removed
 }
 
-func toChannelConfig(cfg *config.Config, list []string) (*config.ChannelsConfig, error) {
-	result := &config.ChannelsConfig{}
-	ch := cfg.Channels
-	marshal, err := json.Marshal(ch)
-	if err != nil {
-		logger.ErrorCF(
-			"channels",
-			"toChannelConfig: failed to marshal channel config",
-			map[string]any{"error": err.Error()},
-		)
-		return nil, fmt.Errorf("toChannelConfig: marshal: %w", err)
-	}
-	var channelConfig map[string]map[string]any
-	if unmarshalErr := json.Unmarshal(marshal, &channelConfig); unmarshalErr != nil {
-		logger.ErrorCF(
-			"channels",
-			"toChannelConfig: failed to unmarshal channel config",
-			map[string]any{"error": unmarshalErr.Error()},
-		)
-		return nil, fmt.Errorf("toChannelConfig: unmarshal: %w", unmarshalErr)
-	}
-	temp := make(map[string]map[string]any, 0)
-
-	for key, value := range channelConfig {
-		// `list` holds REGISTERED channel names (the output of toChannelHashes /
-		// compareChannels), while `key` is the config JSON key. Translate the key to
-		// its registered name before matching so a list entry like "whatsapp_native"
-		// still selects the "whatsapp" config block. See channelNameForConfigKey.
-		registeredName := channelNameForConfigKey(key)
+// toChannelConfig returns the subset of cfg.Channels whose registered factory
+// names appear in list. The returned map is passed to initChannels on hot-reload.
+func toChannelConfig(cfg *config.Config, list []string) (map[string]config.ChannelInstanceConfig, error) {
+	result := make(map[string]config.ChannelInstanceConfig, len(list))
+	for instanceID, inst := range cfg.Channels {
+		if !inst.Enabled {
+			continue
+		}
+		registeredName := channelNameForConfigKey(instanceID)
 		found := false
 		for _, s := range list {
 			if registeredName == s {
@@ -140,23 +91,29 @@ func toChannelConfig(cfg *config.Config, list []string) (*config.ChannelsConfig,
 				break
 			}
 		}
-		chEnabled, _ := value["enabled"].(bool)
-		if !found || !chEnabled {
+		if !found {
 			continue
 		}
-		temp[key] = value
+		result[instanceID] = inst
 	}
-
-	marshal, err = json.Marshal(temp)
-	if err != nil {
-		logger.Errorf("marshal error: %v", err)
-		return nil, err
-	}
-	err = json.Unmarshal(marshal, result)
-	if err != nil {
-		logger.Errorf("unmarshal error: %v", err)
-		return nil, err
-	}
-
 	return result, nil
+}
+
+// toChannelConfigForMarshal is a compatibility shim used by tests that still
+// need the legacy JSON-marshal path. It serialises the config subset and returns
+// a flat map for inspection.
+func toChannelConfigForMarshal(cfg *config.Config, list []string) (map[string]any, error) {
+	subset, err := toChannelConfig(cfg, list)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(subset)
+	if err != nil {
+		return nil, fmt.Errorf("toChannelConfigForMarshal: marshal: %w", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("toChannelConfigForMarshal: unmarshal: %w", err)
+	}
+	return m, nil
 }

@@ -559,10 +559,11 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
-	// 1. Check per-user list (RBAC — bcrypt token hash lookup).
+	// 1. Check per-user list (RBAC — bearer-token SET lookup, SEC-1).
 	if len(cfg.Gateway.Users) > 0 {
-		for _, user := range cfg.Gateway.Users {
-			if user.TokenHash.Verify(rawToken) == nil {
+		for i := range cfg.Gateway.Users {
+			user := cfg.Gateway.Users[i]
+			if user.VerifyToken(rawToken) == nil {
 				wc.role = user.Role
 				wc.userID = user.Username // FR-073: needed for session_state user scoping
 				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -903,7 +904,30 @@ func (h *WSHandler) handleChatMessage(
 ) {
 	targetAgentID := agentID
 	if targetAgentID == "" {
-		targetAgentID = "main"
+		if reg := h.agentLoop.GetRegistry(); reg != nil {
+			if def := reg.GetDefaultAgent(); def != nil {
+				targetAgentID = def.ID
+			}
+		}
+		if targetAgentID == "" {
+			// Fall back to the first enabled agent (mirrors handleBoardTaskStart /
+			// resolveDefaultAgentID in pkg/routing/route.go). firstEnabledAgentID
+			// already skips workers, so this fallback never lands on one.
+			targetAgentID = firstEnabledAgentID(h.agentLoop.GetConfig())
+		}
+	} else if isWorkerAgentID(h.agentLoop.GetConfig(), targetAgentID) {
+		// An explicit agent_id that resolves to a worker is illegitimate: a worker
+		// is a delegation-only labour tier, never a chat target. Refuse to mint a
+		// live chat session for it. Mirror the error-frame pattern used for an
+		// unknown/invalid session below.
+		slog.Warn("ws: rejecting chat frame addressed to a worker agent",
+			"agent_id", targetAgentID, "chat_id", chatID,
+			"reason", "worker is invoked via delegation, not as a chat target")
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "this agent is a worker and cannot be a chat target — workers are invoked via delegation",
+		})
+		return
 	}
 
 	sessionID := frameSessionID
@@ -972,8 +996,11 @@ func (h *WSHandler) handleChatMessage(
 			} else {
 				title = content
 			}
-			if err := store.SetMeta(meta.ID, session.MetaPatch{Title: &title}); err != nil {
-				slog.Warn("ws: could not set session title", "session_id", meta.ID, "error", err)
+			// Stamp the session owner from the authenticated WebSocket user (SEC-2/#406).
+			// wc.userID is set at auth time (FR-073); empty on dev-mode bypass.
+			ownerCopy := wc.userID
+			if err := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, Owner: &ownerCopy}); err != nil {
+				slog.Warn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
 			}
 			// Ack the new session_id so the SPA can associate all subsequent frames.
 			startedFrame := generated.SessionStartedFrame{
@@ -2362,6 +2389,39 @@ type wsStreamer struct {
 	statsTokens   int64
 	statsCostUSD  float64
 	statsDuration time.Duration
+
+	// transcriptPersisted records that the agent loop already wrote this
+	// streamer's narration to the transcript via
+	// appendIntermediateAssistantTranscript (#416). When set, Finalize must NOT
+	// append the accumulated content again — it would create a duplicate
+	// assistant entry on replay when the turn exits via max_tool_iterations
+	// exhaustion (the last executed round is a tool-call round whose streamer is
+	// the lastStreamer that gets finalized). Guarded by statsMu, which Finalize
+	// already holds while reading stats.
+	transcriptPersisted bool
+}
+
+// SuppressTranscriptWrite marks this streamer so its Finalize skips the
+// transcript-append block. The agent loop calls this (via the inline
+// SuppressTranscriptWrite interface) after it has already persisted the round's
+// narration through appendIntermediateAssistantTranscript (#416 gate fix).
+func (s *wsStreamer) SuppressTranscriptWrite() {
+	s.statsMu.Lock()
+	s.transcriptPersisted = true
+	s.statsMu.Unlock()
+}
+
+// StreamedContentLen reports how many bytes of streamed content this streamer
+// has already emitted to the client for the current attempt. The agent loop's
+// inline-retry guard uses this to avoid re-streaming a full response onto a
+// partially-streamed bubble after a mid-stream transport drop (which would
+// visibly duplicate text in the SPA, since the dropped attempt sent no `done`
+// frame). Guarded by statsMu — the same mutex Update holds when it appends to
+// accumulated — so the read is race-free across goroutines.
+func (s *wsStreamer) StreamedContentLen() int {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	return s.accumulated.Len()
 }
 
 // SetTurnStats is called by the agent loop's finalizeStreamer just before
@@ -2405,7 +2465,13 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 		slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", s.agentID)
 		return fmt.Errorf("ws: token channel full, token dropped")
 	}
+	// Guarded by statsMu so StreamedContentLen() (read by the agent loop's
+	// inline-retry guard, possibly from a different goroutine) observes a
+	// consistent length. Finalize reads accumulated only after streaming has
+	// completed, so it remains lock-free there.
+	s.statsMu.Lock()
 	s.accumulated.WriteString(content)
+	s.statsMu.Unlock()
 	// Cross-browser session attach (#133): also forward the token to every
 	// other connection bound to the same session. The originating chat
 	// already received the frame above; secondary tabs see the live stream
@@ -2461,6 +2527,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	tokensF := float64(s.statsTokens)
 	costF := s.statsCostUSD
 	durF := float64(s.statsDuration.Milliseconds())
+	transcriptAlreadyPersisted := s.transcriptPersisted
 	s.statsMu.Unlock()
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
@@ -2484,8 +2551,15 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	if s.channel != nil && s.accumulated.Len() > 0 {
 		s.channel.markStreamed(s.chatID)
 	}
-	// Record the full assistant response to the session transcript.
-	if s.agentStore != nil && s.sessionID != "" {
+	// Record the full assistant response to the session transcript — unless the
+	// agent loop already persisted this round's narration via
+	// appendIntermediateAssistantTranscript (#416 gate fix). This happens when
+	// the turn exits via max_tool_iterations exhaustion: the last executed round
+	// is a tool-call round whose streamer (this one) becomes the lastStreamer.
+	// Writing here too would duplicate the assistant bubble on replay. We still
+	// sent the done frame, fan-out, and markStreamed above — only the append is
+	// suppressed.
+	if s.agentStore != nil && s.sessionID != "" && !transcriptAlreadyPersisted {
 		content := s.accumulated.String()
 		// Fallback: when accumulated is empty (every Update() call silently
 		// failed because the client WS was already closed), use the
@@ -2502,6 +2576,8 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				AgentID:   s.agentID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
+				Tokens:    int(tokensF),
+				Cost:      costF,
 			}
 			if err := s.agentStore.AppendTranscript(s.sessionID, entry); err != nil {
 				slog.Warn("ws: could not record streamed assistant message", "session_id", s.sessionID, "error", err)

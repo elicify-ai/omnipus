@@ -58,6 +58,105 @@ func (e ActivityEventsResponseEventsType) Valid() bool {
 	}
 }
 
+// Defines values for AgentDelegationPolicyAcceptFromKind.
+const (
+	AgentDelegationPolicyAcceptFromKindLocal     AgentDelegationPolicyAcceptFromKind = "local"
+	AgentDelegationPolicyAcceptFromKindRemoteA2a AgentDelegationPolicyAcceptFromKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentDelegationPolicyAcceptFromKind enum.
+func (e AgentDelegationPolicyAcceptFromKind) Valid() bool {
+	switch e {
+	case AgentDelegationPolicyAcceptFromKindLocal:
+		return true
+	case AgentDelegationPolicyAcceptFromKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDelegationPolicyModes.
+const (
+	AgentDelegationPolicyModesAwait      AgentDelegationPolicyModes = "await"
+	AgentDelegationPolicyModesBackground AgentDelegationPolicyModes = "background"
+	AgentDelegationPolicyModesTask       AgentDelegationPolicyModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the AgentDelegationPolicyModes enum.
+func (e AgentDelegationPolicyModes) Valid() bool {
+	switch e {
+	case AgentDelegationPolicyModesAwait:
+		return true
+	case AgentDelegationPolicyModesBackground:
+		return true
+	case AgentDelegationPolicyModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDelegationPolicyToKind.
+const (
+	AgentDelegationPolicyToKindLocal     AgentDelegationPolicyToKind = "local"
+	AgentDelegationPolicyToKindRemoteA2a AgentDelegationPolicyToKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentDelegationPolicyToKind enum.
+func (e AgentDelegationPolicyToKind) Valid() bool {
+	switch e {
+	case AgentDelegationPolicyToKindLocal:
+		return true
+	case AgentDelegationPolicyToKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentExecutorCli.
+const (
+	AgentExecutorCliClaudeCode AgentExecutorCli = "claude-code"
+	AgentExecutorCliCodex      AgentExecutorCli = "codex"
+	AgentExecutorCliOpencode   AgentExecutorCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the AgentExecutorCli enum.
+func (e AgentExecutorCli) Valid() bool {
+	switch e {
+	case AgentExecutorCliClaudeCode:
+		return true
+	case AgentExecutorCliCodex:
+		return true
+	case AgentExecutorCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentExecutorKind.
+const (
+	AgentExecutorKindExternalCli AgentExecutorKind = "external-cli"
+	AgentExecutorKindNative      AgentExecutorKind = "native"
+	AgentExecutorKindRemoteA2a   AgentExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentExecutorKind enum.
+func (e AgentExecutorKind) Valid() bool {
+	switch e {
+	case AgentExecutorKindExternalCli:
+		return true
+	case AgentExecutorKindNative:
+		return true
+	case AgentExecutorKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentSandboxProfile.
 const (
 	AgentSandboxProfileHost         AgentSandboxProfile = "host"
@@ -153,6 +252,7 @@ const (
 	AgentTypeCore   AgentType = "core"
 	AgentTypeCustom AgentType = "custom"
 	AgentTypeSystem AgentType = "system"
+	AgentTypeWorker AgentType = "worker"
 )
 
 // Valid indicates whether the value is a known member of the AgentType enum.
@@ -163,6 +263,107 @@ func (e AgentType) Valid() bool {
 	case AgentTypeCustom:
 		return true
 	case AgentTypeSystem:
+		return true
+	case AgentTypeWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestDelegationPolicyAcceptFromKind.
+const (
+	AgentCreateRequestDelegationPolicyAcceptFromKindLocal     AgentCreateRequestDelegationPolicyAcceptFromKind = "local"
+	AgentCreateRequestDelegationPolicyAcceptFromKindRemoteA2a AgentCreateRequestDelegationPolicyAcceptFromKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestDelegationPolicyAcceptFromKind enum.
+func (e AgentCreateRequestDelegationPolicyAcceptFromKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestDelegationPolicyAcceptFromKindLocal:
+		return true
+	case AgentCreateRequestDelegationPolicyAcceptFromKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestDelegationPolicyModes.
+const (
+	AgentCreateRequestDelegationPolicyModesAwait      AgentCreateRequestDelegationPolicyModes = "await"
+	AgentCreateRequestDelegationPolicyModesBackground AgentCreateRequestDelegationPolicyModes = "background"
+	AgentCreateRequestDelegationPolicyModesTask       AgentCreateRequestDelegationPolicyModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestDelegationPolicyModes enum.
+func (e AgentCreateRequestDelegationPolicyModes) Valid() bool {
+	switch e {
+	case AgentCreateRequestDelegationPolicyModesAwait:
+		return true
+	case AgentCreateRequestDelegationPolicyModesBackground:
+		return true
+	case AgentCreateRequestDelegationPolicyModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestDelegationPolicyToKind.
+const (
+	AgentCreateRequestDelegationPolicyToKindLocal     AgentCreateRequestDelegationPolicyToKind = "local"
+	AgentCreateRequestDelegationPolicyToKindRemoteA2a AgentCreateRequestDelegationPolicyToKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestDelegationPolicyToKind enum.
+func (e AgentCreateRequestDelegationPolicyToKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestDelegationPolicyToKindLocal:
+		return true
+	case AgentCreateRequestDelegationPolicyToKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestExecutorCli.
+const (
+	AgentCreateRequestExecutorCliClaudeCode AgentCreateRequestExecutorCli = "claude-code"
+	AgentCreateRequestExecutorCliCodex      AgentCreateRequestExecutorCli = "codex"
+	AgentCreateRequestExecutorCliOpencode   AgentCreateRequestExecutorCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestExecutorCli enum.
+func (e AgentCreateRequestExecutorCli) Valid() bool {
+	switch e {
+	case AgentCreateRequestExecutorCliClaudeCode:
+		return true
+	case AgentCreateRequestExecutorCliCodex:
+		return true
+	case AgentCreateRequestExecutorCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestExecutorKind.
+const (
+	AgentCreateRequestExecutorKindExternalCli AgentCreateRequestExecutorKind = "external-cli"
+	AgentCreateRequestExecutorKindNative      AgentCreateRequestExecutorKind = "native"
+	AgentCreateRequestExecutorKindRemoteA2a   AgentCreateRequestExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestExecutorKind enum.
+func (e AgentCreateRequestExecutorKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestExecutorKindExternalCli:
+		return true
+	case AgentCreateRequestExecutorKindNative:
+		return true
+	case AgentCreateRequestExecutorKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -205,6 +406,24 @@ func (e AgentCreateRequestToolsCfgBuiltinPolicies) Valid() bool {
 	case AgentCreateRequestToolsCfgBuiltinPoliciesAsk:
 		return true
 	case AgentCreateRequestToolsCfgBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestType.
+const (
+	AgentCreateRequestTypeCustom AgentCreateRequestType = "custom"
+	AgentCreateRequestTypeWorker AgentCreateRequestType = "worker"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestType enum.
+func (e AgentCreateRequestType) Valid() bool {
+	switch e {
+	case AgentCreateRequestTypeCustom:
+		return true
+	case AgentCreateRequestTypeWorker:
 		return true
 	default:
 		return false
@@ -258,6 +477,7 @@ const (
 	AgentToolsResponseAgentTypeCore   AgentToolsResponseAgentType = "core"
 	AgentToolsResponseAgentTypeCustom AgentToolsResponseAgentType = "custom"
 	AgentToolsResponseAgentTypeSystem AgentToolsResponseAgentType = "system"
+	AgentToolsResponseAgentTypeWorker AgentToolsResponseAgentType = "worker"
 )
 
 // Valid indicates whether the value is a known member of the AgentToolsResponseAgentType enum.
@@ -268,6 +488,8 @@ func (e AgentToolsResponseAgentType) Valid() bool {
 	case AgentToolsResponseAgentTypeCustom:
 		return true
 	case AgentToolsResponseAgentTypeSystem:
+		return true
+	case AgentToolsResponseAgentTypeWorker:
 		return true
 	default:
 		return false
@@ -418,6 +640,105 @@ func (e AgentToolsUpdateRequestBuiltinPolicies) Valid() bool {
 	}
 }
 
+// Defines values for AgentUpdateRequestDelegationPolicyAcceptFromKind.
+const (
+	AgentUpdateRequestDelegationPolicyAcceptFromKindLocal     AgentUpdateRequestDelegationPolicyAcceptFromKind = "local"
+	AgentUpdateRequestDelegationPolicyAcceptFromKindRemoteA2a AgentUpdateRequestDelegationPolicyAcceptFromKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestDelegationPolicyAcceptFromKind enum.
+func (e AgentUpdateRequestDelegationPolicyAcceptFromKind) Valid() bool {
+	switch e {
+	case AgentUpdateRequestDelegationPolicyAcceptFromKindLocal:
+		return true
+	case AgentUpdateRequestDelegationPolicyAcceptFromKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestDelegationPolicyModes.
+const (
+	AgentUpdateRequestDelegationPolicyModesAwait      AgentUpdateRequestDelegationPolicyModes = "await"
+	AgentUpdateRequestDelegationPolicyModesBackground AgentUpdateRequestDelegationPolicyModes = "background"
+	AgentUpdateRequestDelegationPolicyModesTask       AgentUpdateRequestDelegationPolicyModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestDelegationPolicyModes enum.
+func (e AgentUpdateRequestDelegationPolicyModes) Valid() bool {
+	switch e {
+	case AgentUpdateRequestDelegationPolicyModesAwait:
+		return true
+	case AgentUpdateRequestDelegationPolicyModesBackground:
+		return true
+	case AgentUpdateRequestDelegationPolicyModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestDelegationPolicyToKind.
+const (
+	AgentUpdateRequestDelegationPolicyToKindLocal     AgentUpdateRequestDelegationPolicyToKind = "local"
+	AgentUpdateRequestDelegationPolicyToKindRemoteA2a AgentUpdateRequestDelegationPolicyToKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestDelegationPolicyToKind enum.
+func (e AgentUpdateRequestDelegationPolicyToKind) Valid() bool {
+	switch e {
+	case AgentUpdateRequestDelegationPolicyToKindLocal:
+		return true
+	case AgentUpdateRequestDelegationPolicyToKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestExecutorCli.
+const (
+	AgentUpdateRequestExecutorCliClaudeCode AgentUpdateRequestExecutorCli = "claude-code"
+	AgentUpdateRequestExecutorCliCodex      AgentUpdateRequestExecutorCli = "codex"
+	AgentUpdateRequestExecutorCliOpencode   AgentUpdateRequestExecutorCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestExecutorCli enum.
+func (e AgentUpdateRequestExecutorCli) Valid() bool {
+	switch e {
+	case AgentUpdateRequestExecutorCliClaudeCode:
+		return true
+	case AgentUpdateRequestExecutorCliCodex:
+		return true
+	case AgentUpdateRequestExecutorCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestExecutorKind.
+const (
+	AgentUpdateRequestExecutorKindExternalCli AgentUpdateRequestExecutorKind = "external-cli"
+	AgentUpdateRequestExecutorKindNative      AgentUpdateRequestExecutorKind = "native"
+	AgentUpdateRequestExecutorKindRemoteA2a   AgentUpdateRequestExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestExecutorKind enum.
+func (e AgentUpdateRequestExecutorKind) Valid() bool {
+	switch e {
+	case AgentUpdateRequestExecutorKindExternalCli:
+		return true
+	case AgentUpdateRequestExecutorKindNative:
+		return true
+	case AgentUpdateRequestExecutorKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentUpdateRequestSandboxProfile.
 const (
 	AgentUpdateRequestSandboxProfileHost         AgentUpdateRequestSandboxProfile = "host"
@@ -529,10 +850,173 @@ func (e AuditEntryDecision) Valid() bool {
 	}
 }
 
+// Defines values for BoardTaskStatus.
+const (
+	BoardTaskStatusActive  BoardTaskStatus = "active"
+	BoardTaskStatusDone    BoardTaskStatus = "done"
+	BoardTaskStatusFailed  BoardTaskStatus = "failed"
+	BoardTaskStatusInbox   BoardTaskStatus = "inbox"
+	BoardTaskStatusNext    BoardTaskStatus = "next"
+	BoardTaskStatusWaiting BoardTaskStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the BoardTaskStatus enum.
+func (e BoardTaskStatus) Valid() bool {
+	switch e {
+	case BoardTaskStatusActive:
+		return true
+	case BoardTaskStatusDone:
+		return true
+	case BoardTaskStatusFailed:
+		return true
+	case BoardTaskStatusInbox:
+		return true
+	case BoardTaskStatusNext:
+		return true
+	case BoardTaskStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BoardTaskCreateRequestStatus.
+const (
+	BoardTaskCreateRequestStatusActive  BoardTaskCreateRequestStatus = "active"
+	BoardTaskCreateRequestStatusDone    BoardTaskCreateRequestStatus = "done"
+	BoardTaskCreateRequestStatusFailed  BoardTaskCreateRequestStatus = "failed"
+	BoardTaskCreateRequestStatusInbox   BoardTaskCreateRequestStatus = "inbox"
+	BoardTaskCreateRequestStatusNext    BoardTaskCreateRequestStatus = "next"
+	BoardTaskCreateRequestStatusWaiting BoardTaskCreateRequestStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the BoardTaskCreateRequestStatus enum.
+func (e BoardTaskCreateRequestStatus) Valid() bool {
+	switch e {
+	case BoardTaskCreateRequestStatusActive:
+		return true
+	case BoardTaskCreateRequestStatusDone:
+		return true
+	case BoardTaskCreateRequestStatusFailed:
+		return true
+	case BoardTaskCreateRequestStatusInbox:
+		return true
+	case BoardTaskCreateRequestStatusNext:
+		return true
+	case BoardTaskCreateRequestStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BoardTaskListItemStatus.
+const (
+	BoardTaskListItemStatusActive  BoardTaskListItemStatus = "active"
+	BoardTaskListItemStatusDone    BoardTaskListItemStatus = "done"
+	BoardTaskListItemStatusFailed  BoardTaskListItemStatus = "failed"
+	BoardTaskListItemStatusInbox   BoardTaskListItemStatus = "inbox"
+	BoardTaskListItemStatusNext    BoardTaskListItemStatus = "next"
+	BoardTaskListItemStatusWaiting BoardTaskListItemStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the BoardTaskListItemStatus enum.
+func (e BoardTaskListItemStatus) Valid() bool {
+	switch e {
+	case BoardTaskListItemStatusActive:
+		return true
+	case BoardTaskListItemStatusDone:
+		return true
+	case BoardTaskListItemStatusFailed:
+		return true
+	case BoardTaskListItemStatusInbox:
+		return true
+	case BoardTaskListItemStatusNext:
+		return true
+	case BoardTaskListItemStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BoardTaskUpdateRequestStatus.
+const (
+	BoardTaskUpdateRequestStatusDone    BoardTaskUpdateRequestStatus = "done"
+	BoardTaskUpdateRequestStatusFailed  BoardTaskUpdateRequestStatus = "failed"
+	BoardTaskUpdateRequestStatusInbox   BoardTaskUpdateRequestStatus = "inbox"
+	BoardTaskUpdateRequestStatusNext    BoardTaskUpdateRequestStatus = "next"
+	BoardTaskUpdateRequestStatusWaiting BoardTaskUpdateRequestStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the BoardTaskUpdateRequestStatus enum.
+func (e BoardTaskUpdateRequestStatus) Valid() bool {
+	switch e {
+	case BoardTaskUpdateRequestStatusDone:
+		return true
+	case BoardTaskUpdateRequestStatusFailed:
+		return true
+	case BoardTaskUpdateRequestStatusInbox:
+		return true
+	case BoardTaskUpdateRequestStatusNext:
+		return true
+	case BoardTaskUpdateRequestStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BoardTaskUpdateStatus.
+const (
+	BoardTaskUpdateStatusDone    BoardTaskUpdateStatus = "done"
+	BoardTaskUpdateStatusFailed  BoardTaskUpdateStatus = "failed"
+	BoardTaskUpdateStatusInbox   BoardTaskUpdateStatus = "inbox"
+	BoardTaskUpdateStatusNext    BoardTaskUpdateStatus = "next"
+	BoardTaskUpdateStatusWaiting BoardTaskUpdateStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the BoardTaskUpdateStatus enum.
+func (e BoardTaskUpdateStatus) Valid() bool {
+	switch e {
+	case BoardTaskUpdateStatusDone:
+		return true
+	case BoardTaskUpdateStatusFailed:
+		return true
+	case BoardTaskUpdateStatusInbox:
+		return true
+	case BoardTaskUpdateStatusNext:
+		return true
+	case BoardTaskUpdateStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelConfigureRequestIdentityKind.
+const (
+	ChannelConfigureRequestIdentityKindAgent ChannelConfigureRequestIdentityKind = "agent"
+	ChannelConfigureRequestIdentityKindUser  ChannelConfigureRequestIdentityKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureRequestIdentityKind enum.
+func (e ChannelConfigureRequestIdentityKind) Valid() bool {
+	switch e {
+	case ChannelConfigureRequestIdentityKindAgent:
+		return true
+	case ChannelConfigureRequestIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelEnabledResponseId.
 const (
 	ChannelEnabledResponseIdDingtalk   ChannelEnabledResponseId = "dingtalk"
 	ChannelEnabledResponseIdDiscord    ChannelEnabledResponseId = "discord"
+	ChannelEnabledResponseIdEmail      ChannelEnabledResponseId = "email"
 	ChannelEnabledResponseIdFeishu     ChannelEnabledResponseId = "feishu"
 	ChannelEnabledResponseIdGoogleChat ChannelEnabledResponseId = "google-chat"
 	ChannelEnabledResponseIdIrc        ChannelEnabledResponseId = "irc"
@@ -553,6 +1037,8 @@ func (e ChannelEnabledResponseId) Valid() bool {
 	case ChannelEnabledResponseIdDingtalk:
 		return true
 	case ChannelEnabledResponseIdDiscord:
+		return true
+	case ChannelEnabledResponseIdEmail:
 		return true
 	case ChannelEnabledResponseIdFeishu:
 		return true
@@ -587,6 +1073,7 @@ func (e ChannelEnabledResponseId) Valid() bool {
 const (
 	ChannelEntryIdDingtalk   ChannelEntryId = "dingtalk"
 	ChannelEntryIdDiscord    ChannelEntryId = "discord"
+	ChannelEntryIdEmail      ChannelEntryId = "email"
 	ChannelEntryIdFeishu     ChannelEntryId = "feishu"
 	ChannelEntryIdGoogleChat ChannelEntryId = "google-chat"
 	ChannelEntryIdIrc        ChannelEntryId = "irc"
@@ -607,6 +1094,8 @@ func (e ChannelEntryId) Valid() bool {
 	case ChannelEntryIdDingtalk:
 		return true
 	case ChannelEntryIdDiscord:
+		return true
+	case ChannelEntryIdEmail:
 		return true
 	case ChannelEntryIdFeishu:
 		return true
@@ -637,9 +1126,28 @@ func (e ChannelEntryId) Valid() bool {
 	}
 }
 
+// Defines values for ChannelEntryIdentityKind.
+const (
+	ChannelEntryIdentityKindAgent ChannelEntryIdentityKind = "agent"
+	ChannelEntryIdentityKindUser  ChannelEntryIdentityKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the ChannelEntryIdentityKind enum.
+func (e ChannelEntryIdentityKind) Valid() bool {
+	switch e {
+	case ChannelEntryIdentityKindAgent:
+		return true
+	case ChannelEntryIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelEntryTransport.
 const (
 	ChannelEntryTransportBridge    ChannelEntryTransport = "bridge"
+	ChannelEntryTransportEmail     ChannelEntryTransport = "email"
 	ChannelEntryTransportHttp      ChannelEntryTransport = "http"
 	ChannelEntryTransportNative    ChannelEntryTransport = "native"
 	ChannelEntryTransportSerial    ChannelEntryTransport = "serial"
@@ -652,6 +1160,8 @@ const (
 func (e ChannelEntryTransport) Valid() bool {
 	switch e {
 	case ChannelEntryTransportBridge:
+		return true
+	case ChannelEntryTransportEmail:
 		return true
 	case ChannelEntryTransportHttp:
 		return true
@@ -674,6 +1184,7 @@ func (e ChannelEntryTransport) Valid() bool {
 const (
 	Dingtalk   ChannelId = "dingtalk"
 	Discord    ChannelId = "discord"
+	Email      ChannelId = "email"
 	Feishu     ChannelId = "feishu"
 	GoogleChat ChannelId = "google-chat"
 	Irc        ChannelId = "irc"
@@ -694,6 +1205,8 @@ func (e ChannelId) Valid() bool {
 	case Dingtalk:
 		return true
 	case Discord:
+		return true
+	case Email:
 		return true
 	case Feishu:
 		return true
@@ -718,6 +1231,24 @@ func (e ChannelId) Valid() bool {
 	case Weixin:
 		return true
 	case Whatsapp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelIdentityKind.
+const (
+	ChannelIdentityKindAgent ChannelIdentityKind = "agent"
+	ChannelIdentityKindUser  ChannelIdentityKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the ChannelIdentityKind enum.
+func (e ChannelIdentityKind) Valid() bool {
+	switch e {
+	case ChannelIdentityKindAgent:
+		return true
+	case ChannelIdentityKindUser:
 		return true
 	default:
 		return false
@@ -802,6 +1333,78 @@ func (e DoctorResultIssuesSeverity) Valid() bool {
 	}
 }
 
+// Defines values for ExecutorConfigCli.
+const (
+	ExecutorConfigCliClaudeCode ExecutorConfigCli = "claude-code"
+	ExecutorConfigCliCodex      ExecutorConfigCli = "codex"
+	ExecutorConfigCliOpencode   ExecutorConfigCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the ExecutorConfigCli enum.
+func (e ExecutorConfigCli) Valid() bool {
+	switch e {
+	case ExecutorConfigCliClaudeCode:
+		return true
+	case ExecutorConfigCliCodex:
+		return true
+	case ExecutorConfigCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ExecutorConfigKind.
+const (
+	ExternalCli ExecutorConfigKind = "external-cli"
+	Native      ExecutorConfigKind = "native"
+	RemoteA2a   ExecutorConfigKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the ExecutorConfigKind enum.
+func (e ExecutorConfigKind) Valid() bool {
+	switch e {
+	case ExternalCli:
+		return true
+	case Native:
+		return true
+	case RemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GTDBoardTaskStatus.
+const (
+	GTDBoardTaskStatusActive  GTDBoardTaskStatus = "active"
+	GTDBoardTaskStatusDone    GTDBoardTaskStatus = "done"
+	GTDBoardTaskStatusFailed  GTDBoardTaskStatus = "failed"
+	GTDBoardTaskStatusInbox   GTDBoardTaskStatus = "inbox"
+	GTDBoardTaskStatusNext    GTDBoardTaskStatus = "next"
+	GTDBoardTaskStatusWaiting GTDBoardTaskStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the GTDBoardTaskStatus enum.
+func (e GTDBoardTaskStatus) Valid() bool {
+	switch e {
+	case GTDBoardTaskStatusActive:
+		return true
+	case GTDBoardTaskStatusDone:
+		return true
+	case GTDBoardTaskStatusFailed:
+		return true
+	case GTDBoardTaskStatusInbox:
+		return true
+	case GTDBoardTaskStatusNext:
+		return true
+	case GTDBoardTaskStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GlobalToolPoliciesDefaultPolicy.
 const (
 	GlobalToolPoliciesDefaultPolicyAllow GlobalToolPoliciesDefaultPolicy = "allow"
@@ -853,6 +1456,42 @@ const (
 func (e HealthResponseStatus) Valid() bool {
 	switch e {
 	case HealthResponseStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IntegrationProviderKind.
+const (
+	IntegrationProviderKindSearch IntegrationProviderKind = "search"
+	IntegrationProviderKindVoice  IntegrationProviderKind = "voice"
+)
+
+// Valid indicates whether the value is a known member of the IntegrationProviderKind enum.
+func (e IntegrationProviderKind) Valid() bool {
+	switch e {
+	case IntegrationProviderKindSearch:
+		return true
+	case IntegrationProviderKindVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IntegrationProviderUpdateRequestKind.
+const (
+	IntegrationProviderUpdateRequestKindSearch IntegrationProviderUpdateRequestKind = "search"
+	IntegrationProviderUpdateRequestKindVoice  IntegrationProviderUpdateRequestKind = "voice"
+)
+
+// Valid indicates whether the value is a known member of the IntegrationProviderUpdateRequestKind enum.
+func (e IntegrationProviderUpdateRequestKind) Valid() bool {
+	switch e {
+	case IntegrationProviderUpdateRequestKindSearch:
+		return true
+	case IntegrationProviderUpdateRequestKindVoice:
 		return true
 	default:
 		return false
@@ -921,19 +1560,19 @@ func (e McpServerTransport) Valid() bool {
 
 // Defines values for McpServerCreateTransport.
 const (
-	Http  McpServerCreateTransport = "http"
-	Sse   McpServerCreateTransport = "sse"
-	Stdio McpServerCreateTransport = "stdio"
+	McpServerCreateTransportHttp  McpServerCreateTransport = "http"
+	McpServerCreateTransportSse   McpServerCreateTransport = "sse"
+	McpServerCreateTransportStdio McpServerCreateTransport = "stdio"
 )
 
 // Valid indicates whether the value is a known member of the McpServerCreateTransport enum.
 func (e McpServerCreateTransport) Valid() bool {
 	switch e {
-	case Http:
+	case McpServerCreateTransportHttp:
 		return true
-	case Sse:
+	case McpServerCreateTransportSse:
 		return true
-	case Stdio:
+	case McpServerCreateTransportStdio:
 		return true
 	default:
 		return false
@@ -1423,6 +2062,36 @@ func (e ProviderStatus) Valid() bool {
 	}
 }
 
+// Defines values for RunnerTestResponseReason.
+const (
+	RunnerTestResponseReasonEmpty           RunnerTestResponseReason = ""
+	RunnerTestResponseReasonHandshakeFailed RunnerTestResponseReason = "handshake-failed"
+	RunnerTestResponseReasonMissingBinary   RunnerTestResponseReason = "missing-binary"
+	RunnerTestResponseReasonNotExternalCli  RunnerTestResponseReason = "not-external-cli"
+	RunnerTestResponseReasonUnauthenticated RunnerTestResponseReason = "unauthenticated"
+	RunnerTestResponseReasonUnknownCli      RunnerTestResponseReason = "unknown-cli"
+)
+
+// Valid indicates whether the value is a known member of the RunnerTestResponseReason enum.
+func (e RunnerTestResponseReason) Valid() bool {
+	switch e {
+	case RunnerTestResponseReasonEmpty:
+		return true
+	case RunnerTestResponseReasonHandshakeFailed:
+		return true
+	case RunnerTestResponseReasonMissingBinary:
+		return true
+	case RunnerTestResponseReasonNotExternalCli:
+		return true
+	case RunnerTestResponseReasonUnauthenticated:
+		return true
+	case RunnerTestResponseReasonUnknownCli:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SandboxConfigDefaultProfile.
 const (
 	SandboxConfigDefaultProfileEmpty        SandboxConfigDefaultProfile = ""
@@ -1506,19 +2175,19 @@ func (e SandboxConfigUpdateDefaultProfile) Valid() bool {
 
 // Defines values for SandboxConfigUpdateMode.
 const (
-	SandboxConfigUpdateModeEnforce    SandboxConfigUpdateMode = "enforce"
-	SandboxConfigUpdateModeOff        SandboxConfigUpdateMode = "off"
-	SandboxConfigUpdateModePermissive SandboxConfigUpdateMode = "permissive"
+	Enforce    SandboxConfigUpdateMode = "enforce"
+	Off        SandboxConfigUpdateMode = "off"
+	Permissive SandboxConfigUpdateMode = "permissive"
 )
 
 // Valid indicates whether the value is a known member of the SandboxConfigUpdateMode enum.
 func (e SandboxConfigUpdateMode) Valid() bool {
 	switch e {
-	case SandboxConfigUpdateModeEnforce:
+	case Enforce:
 		return true
-	case SandboxConfigUpdateModeOff:
+	case Off:
 		return true
-	case SandboxConfigUpdateModePermissive:
+	case Permissive:
 		return true
 	default:
 		return false
@@ -2083,6 +2752,27 @@ func (e SessionScopeResponseDmScope) Valid() bool {
 	}
 }
 
+// Defines values for SkillSource.
+const (
+	SkillSourceBuiltin   SkillSource = "builtin"
+	SkillSourceGlobal    SkillSource = "global"
+	SkillSourceWorkspace SkillSource = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the SkillSource enum.
+func (e SkillSource) Valid() bool {
+	switch e {
+	case SkillSourceBuiltin:
+		return true
+	case SkillSourceGlobal:
+		return true
+	case SkillSourceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SkillStatus.
 const (
 	SkillStatusActive   SkillStatus = "active"
@@ -2412,16 +3102,16 @@ func (e ToolRegistryEntryScope) Valid() bool {
 
 // Defines values for ToolRegistryEntrySource.
 const (
-	Builtin ToolRegistryEntrySource = "builtin"
-	Mcp     ToolRegistryEntrySource = "mcp"
+	ToolRegistryEntrySourceBuiltin ToolRegistryEntrySource = "builtin"
+	ToolRegistryEntrySourceMcp     ToolRegistryEntrySource = "mcp"
 )
 
 // Valid indicates whether the value is a known member of the ToolRegistryEntrySource enum.
 func (e ToolRegistryEntrySource) Valid() bool {
 	switch e {
-	case Builtin:
+	case ToolRegistryEntrySourceBuiltin:
 		return true
-	case Mcp:
+	case ToolRegistryEntrySourceMcp:
 		return true
 	default:
 		return false
@@ -2536,6 +3226,129 @@ func (e ValidateTokenResponseRole) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceStatus.
+const (
+	WorkspaceStatusActive   WorkspaceStatus = "active"
+	WorkspaceStatusArchived WorkspaceStatus = "archived"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceStatus enum.
+func (e WorkspaceStatus) Valid() bool {
+	switch e {
+	case WorkspaceStatusActive:
+		return true
+	case WorkspaceStatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceUpdateRequestStatus.
+const (
+	WorkspaceUpdateRequestStatusActive   WorkspaceUpdateRequestStatus = "active"
+	WorkspaceUpdateRequestStatusArchived WorkspaceUpdateRequestStatus = "archived"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceUpdateRequestStatus enum.
+func (e WorkspaceUpdateRequestStatus) Valid() bool {
+	switch e {
+	case WorkspaceUpdateRequestStatusActive:
+		return true
+	case WorkspaceUpdateRequestStatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListBoardTasksParamsStatus.
+const (
+	ListBoardTasksParamsStatusActive  ListBoardTasksParamsStatus = "active"
+	ListBoardTasksParamsStatusDone    ListBoardTasksParamsStatus = "done"
+	ListBoardTasksParamsStatusFailed  ListBoardTasksParamsStatus = "failed"
+	ListBoardTasksParamsStatusInbox   ListBoardTasksParamsStatus = "inbox"
+	ListBoardTasksParamsStatusNext    ListBoardTasksParamsStatus = "next"
+	ListBoardTasksParamsStatusWaiting ListBoardTasksParamsStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the ListBoardTasksParamsStatus enum.
+func (e ListBoardTasksParamsStatus) Valid() bool {
+	switch e {
+	case ListBoardTasksParamsStatusActive:
+		return true
+	case ListBoardTasksParamsStatusDone:
+		return true
+	case ListBoardTasksParamsStatusFailed:
+		return true
+	case ListBoardTasksParamsStatusInbox:
+		return true
+	case ListBoardTasksParamsStatusNext:
+		return true
+	case ListBoardTasksParamsStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateBoardTaskJSONBodyStatus.
+const (
+	CreateBoardTaskJSONBodyStatusActive  CreateBoardTaskJSONBodyStatus = "active"
+	CreateBoardTaskJSONBodyStatusDone    CreateBoardTaskJSONBodyStatus = "done"
+	CreateBoardTaskJSONBodyStatusFailed  CreateBoardTaskJSONBodyStatus = "failed"
+	CreateBoardTaskJSONBodyStatusInbox   CreateBoardTaskJSONBodyStatus = "inbox"
+	CreateBoardTaskJSONBodyStatusNext    CreateBoardTaskJSONBodyStatus = "next"
+	CreateBoardTaskJSONBodyStatusWaiting CreateBoardTaskJSONBodyStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the CreateBoardTaskJSONBodyStatus enum.
+func (e CreateBoardTaskJSONBodyStatus) Valid() bool {
+	switch e {
+	case CreateBoardTaskJSONBodyStatusActive:
+		return true
+	case CreateBoardTaskJSONBodyStatusDone:
+		return true
+	case CreateBoardTaskJSONBodyStatusFailed:
+		return true
+	case CreateBoardTaskJSONBodyStatusInbox:
+		return true
+	case CreateBoardTaskJSONBodyStatusNext:
+		return true
+	case CreateBoardTaskJSONBodyStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateBoardTaskJSONBodyStatus.
+const (
+	Done    UpdateBoardTaskJSONBodyStatus = "done"
+	Failed  UpdateBoardTaskJSONBodyStatus = "failed"
+	Inbox   UpdateBoardTaskJSONBodyStatus = "inbox"
+	Next    UpdateBoardTaskJSONBodyStatus = "next"
+	Waiting UpdateBoardTaskJSONBodyStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the UpdateBoardTaskJSONBodyStatus enum.
+func (e UpdateBoardTaskJSONBodyStatus) Valid() bool {
+	switch e {
+	case Done:
+		return true
+	case Failed:
+		return true
+	case Inbox:
+		return true
+	case Next:
+		return true
+	case Waiting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeleteCredential200JSONResponseBodyStatus.
 const (
 	Removed DeleteCredential200JSONResponseBodyStatus = "removed"
@@ -2602,6 +3415,21 @@ func (e ClearAllSessions200JSONResponseBodyStatus) Valid() bool {
 	}
 }
 
+// Defines values for GetTokenStatsParamsPeriod.
+const (
+	Month GetTokenStatsParamsPeriod = "month"
+)
+
+// Valid indicates whether the value is a known member of the GetTokenStatsParamsPeriod enum.
+func (e GetTokenStatsParamsPeriod) Valid() bool {
+	switch e {
+	case Month:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListTasksParamsStatus.
 const (
 	ListTasksParamsStatusAssigned  ListTasksParamsStatus = "assigned"
@@ -2623,6 +3451,27 @@ func (e ListTasksParamsStatus) Valid() bool {
 	case ListTasksParamsStatusQueued:
 		return true
 	case ListTasksParamsStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListWorkspacesParamsStatus.
+const (
+	Active   ListWorkspacesParamsStatus = "active"
+	All      ListWorkspacesParamsStatus = "all"
+	Archived ListWorkspacesParamsStatus = "archived"
+)
+
+// Valid indicates whether the value is a known member of the ListWorkspacesParamsStatus enum.
+func (e ListWorkspacesParamsStatus) Valid() bool {
+	switch e {
+	case Active:
+		return true
+	case All:
+		return true
+	case Archived:
 		return true
 	default:
 		return false
@@ -2730,8 +3579,61 @@ type Agent struct {
 	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default.
 	Default *bool `json:"default,omitempty"`
 
+	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+	// The canonical "to" field unifies the three legacy allowlists:
+	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
+	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+	//
+	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+	DelegationPolicy *struct {
+		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
+		AcceptFrom *[]struct {
+			Id   string                              `json:"id"`
+			Kind AgentDelegationPolicyAcceptFromKind `json:"kind"`
+		} `json:"accept_from,omitempty"`
+
+		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
+		Budget *struct {
+			// MaxCostUsd Maximum USD spend allowed for delegated work.
+			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+
+			// MaxTokens Maximum token count allowed for delegated work.
+			MaxTokens *int `json:"max_tokens,omitempty"`
+		} `json:"budget,omitempty"`
+
+		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+		Depth *int `json:"depth,omitempty"`
+
+		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+		Modes *[]AgentDelegationPolicyModes `json:"modes,omitempty"`
+
+		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
+		To *[]struct {
+			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+			Id string `json:"id"`
+
+			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+			Kind AgentDelegationPolicyToKind `json:"kind"`
+		} `json:"to,omitempty"`
+	} `json:"delegation_policy,omitempty"`
+
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
+
+	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+	// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+	// When absent the default is "native". Only "native" is functional in v0.1.0.
+	Executor *struct {
+		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+		Cli *AgentExecutorCli `json:"cli,omitempty"`
+
+		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+		Kind AgentExecutorKind `json:"kind"`
+	} `json:"executor,omitempty"`
 
 	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
 	FallbackModels *[]string `json:"fallback_models,omitempty"`
@@ -2862,12 +3764,30 @@ type Agent struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one).
+	// Type Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
 	Type AgentType `json:"type"`
+
+	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured.
+	Voice *string `json:"voice,omitempty"`
 
 	// Warning Non-fatal advisory (e.g. config reload failed after create/update).
 	Warning *string `json:"warning,omitempty"`
 }
+
+// AgentDelegationPolicyAcceptFromKind defines model for Agent.DelegationPolicy.AcceptFrom.Kind.
+type AgentDelegationPolicyAcceptFromKind string
+
+// AgentDelegationPolicyModes defines model for Agent.DelegationPolicy.Modes.
+type AgentDelegationPolicyModes string
+
+// AgentDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+type AgentDelegationPolicyToKind string
+
+// AgentExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+type AgentExecutorCli string
+
+// AgentExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+type AgentExecutorKind string
 
 // AgentSandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot).
 type AgentSandboxProfile string
@@ -2881,16 +3801,69 @@ type AgentToolsCfgBuiltinDefaultPolicy string
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
-// AgentType Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one).
+// AgentType Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
 type AgentType string
 
-// AgentCreateRequest Body for POST /agents. Creates a new custom agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet).
+// AgentCreateRequest Body for POST /agents. Creates a new agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet).
 type AgentCreateRequest struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
 
+	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+	// The canonical "to" field unifies the three legacy allowlists:
+	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
+	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+	//
+	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+	DelegationPolicy *struct {
+		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
+		AcceptFrom *[]struct {
+			Id   string                                           `json:"id"`
+			Kind AgentCreateRequestDelegationPolicyAcceptFromKind `json:"kind"`
+		} `json:"accept_from,omitempty"`
+
+		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
+		Budget *struct {
+			// MaxCostUsd Maximum USD spend allowed for delegated work.
+			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+
+			// MaxTokens Maximum token count allowed for delegated work.
+			MaxTokens *int `json:"max_tokens,omitempty"`
+		} `json:"budget,omitempty"`
+
+		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+		Depth *int `json:"depth,omitempty"`
+
+		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+		Modes *[]AgentCreateRequestDelegationPolicyModes `json:"modes,omitempty"`
+
+		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
+		To *[]struct {
+			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+			Id string `json:"id"`
+
+			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+			Kind AgentCreateRequestDelegationPolicyToKind `json:"kind"`
+		} `json:"to,omitempty"`
+	} `json:"delegation_policy,omitempty"`
+
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
+
+	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+	// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+	// When absent the default is "native". Only "native" is functional in v0.1.0.
+	Executor *struct {
+		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+		Cli *AgentCreateRequestExecutorCli `json:"cli,omitempty"`
+
+		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+		Kind AgentCreateRequestExecutorKind `json:"kind"`
+	} `json:"executor,omitempty"`
 
 	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
 	FallbackModels *[]string `json:"fallback_models,omitempty"`
@@ -2934,6 +3907,9 @@ type AgentCreateRequest struct {
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
+	// Soul Initial SOUL.md content. When omitted, the new agent starts in "draft" with an empty soul (the profile edit flow writes it later). Worker-tier agents (type=worker) treat this as the optional task prompt; empty is valid for workers per the locked concept.
+	Soul *string `json:"soul,omitempty"`
+
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
@@ -2957,13 +3933,37 @@ type AgentCreateRequest struct {
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
+
+	// Type Agent tier to create. "custom" = a user-defined chat colleague (default for the existing POST /agents flow). "worker" = a sub-agent worker: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and must carry an executor (see Agent.executor). When omitted, the server creates a "custom" agent. The "core" and "system" types are reserved and cannot be created via this endpoint.
+	Type *AgentCreateRequestType `json:"type,omitempty"`
+
+	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+	Voice *string `json:"voice,omitempty"`
 }
+
+// AgentCreateRequestDelegationPolicyAcceptFromKind defines model for AgentCreateRequest.DelegationPolicy.AcceptFrom.Kind.
+type AgentCreateRequestDelegationPolicyAcceptFromKind string
+
+// AgentCreateRequestDelegationPolicyModes defines model for AgentCreateRequest.DelegationPolicy.Modes.
+type AgentCreateRequestDelegationPolicyModes string
+
+// AgentCreateRequestDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+type AgentCreateRequestDelegationPolicyToKind string
+
+// AgentCreateRequestExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+type AgentCreateRequestExecutorCli string
+
+// AgentCreateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+type AgentCreateRequestExecutorKind string
 
 // AgentCreateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
 type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
 
 // AgentCreateRequestToolsCfgBuiltinPolicies defines model for AgentCreateRequest.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestToolsCfgBuiltinPolicies string
+
+// AgentCreateRequestType Agent tier to create. "custom" = a user-defined chat colleague (default for the existing POST /agents flow). "worker" = a sub-agent worker: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and must carry an executor (see Agent.executor). When omitted, the server creates a "custom" agent. The "core" and "system" types are reserved and cannot be created via this endpoint.
+type AgentCreateRequestType string
 
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
 type AgentModelParams struct {
@@ -3049,6 +4049,15 @@ type AgentStats struct {
 	TotalTokens int `json:"total_tokens"`
 }
 
+// AgentTokenEntry Per-agent token usage entry within a TokenUsageSummary.
+type AgentTokenEntry struct {
+	AgentId     string `json:"agent_id"`
+	AgentName   string `json:"agent_name"`
+	TokensIn    int    `json:"tokens_in"`
+	TokensOut   int    `json:"tokens_out"`
+	TokensTotal int    `json:"tokens_total"`
+}
+
 // AgentToolEntry Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective (post-fence) policy so the SPA can display policy downgrades.
 type AgentToolEntry struct {
 	// ConfiguredPolicy The policy as written in the agent's config (before fence application).
@@ -3099,7 +4108,7 @@ type AgentToolsCfg struct {
 
 // AgentToolsResponse Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
 type AgentToolsResponse struct {
-	// AgentType Agent classification: "core", "system", or "custom". Informs the UI whether policy editing is allowed.
+	// AgentType Agent classification: "core", "system", "custom", or "worker". Informs the UI whether policy editing is allowed.
 	AgentType *AgentToolsResponseAgentType `json:"agent_type,omitempty"`
 
 	// Config Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
@@ -3145,7 +4154,7 @@ type AgentToolsResponse struct {
 	} `json:"tools"`
 }
 
-// AgentToolsResponseAgentType Agent classification: "core", "system", or "custom". Informs the UI whether policy editing is allowed.
+// AgentToolsResponseAgentType Agent classification: "core", "system", "custom", or "worker". Informs the UI whether policy editing is allowed.
 type AgentToolsResponseAgentType string
 
 // AgentToolsResponseConfigBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
@@ -3207,8 +4216,61 @@ type AgentUpdateRequest struct {
 	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged.
 	Default *bool `json:"default,omitempty"`
 
+	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+	// The canonical "to" field unifies the three legacy allowlists:
+	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
+	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+	//
+	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+	DelegationPolicy *struct {
+		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
+		AcceptFrom *[]struct {
+			Id   string                                           `json:"id"`
+			Kind AgentUpdateRequestDelegationPolicyAcceptFromKind `json:"kind"`
+		} `json:"accept_from,omitempty"`
+
+		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
+		Budget *struct {
+			// MaxCostUsd Maximum USD spend allowed for delegated work.
+			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+
+			// MaxTokens Maximum token count allowed for delegated work.
+			MaxTokens *int `json:"max_tokens,omitempty"`
+		} `json:"budget,omitempty"`
+
+		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+		Depth *int `json:"depth,omitempty"`
+
+		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+		Modes *[]AgentUpdateRequestDelegationPolicyModes `json:"modes,omitempty"`
+
+		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
+		To *[]struct {
+			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+			Id string `json:"id"`
+
+			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+			Kind AgentUpdateRequestDelegationPolicyToKind `json:"kind"`
+		} `json:"to,omitempty"`
+	} `json:"delegation_policy,omitempty"`
+
 	// Description New description. Rejected on locked agents. Empty string removes it.
 	Description *string `json:"description,omitempty"`
+
+	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+	// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+	// When absent the default is "native". Only "native" is functional in v0.1.0.
+	Executor *struct {
+		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+		Cli *AgentUpdateRequestExecutorCli `json:"cli,omitempty"`
+
+		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+		Kind AgentUpdateRequestExecutorKind `json:"kind"`
+	} `json:"executor,omitempty"`
 
 	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
 	FallbackModels *[]string `json:"fallback_models,omitempty"`
@@ -3312,7 +4374,25 @@ type AgentUpdateRequest struct {
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
+
+	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear.
+	Voice *string `json:"voice,omitempty"`
 }
+
+// AgentUpdateRequestDelegationPolicyAcceptFromKind defines model for AgentUpdateRequest.DelegationPolicy.AcceptFrom.Kind.
+type AgentUpdateRequestDelegationPolicyAcceptFromKind string
+
+// AgentUpdateRequestDelegationPolicyModes defines model for AgentUpdateRequest.DelegationPolicy.Modes.
+type AgentUpdateRequestDelegationPolicyModes string
+
+// AgentUpdateRequestDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+type AgentUpdateRequestDelegationPolicyToKind string
+
+// AgentUpdateRequestExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+type AgentUpdateRequestExecutorCli string
+
+// AgentUpdateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+type AgentUpdateRequestExecutorKind string
 
 // AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
 type AgentUpdateRequestSandboxProfile string
@@ -3452,8 +4532,191 @@ type BackupEntry struct {
 	SizeBytes int64 `json:"size_bytes"`
 }
 
-// BearerToken Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+// BearerToken Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 type BearerToken = string
+
+// BoardTask A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics.
+type BoardTask struct {
+	// AgentId Optional agent responsible for this task.
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Description Optional task description.
+	Description *string `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
+	Due *time.Time `json:"due,omitempty"`
+
+	// Id UUID task identifier
+	Id string `json:"id"`
+
+	// MilestoneId Optional milestone this task belongs to.
+	MilestoneId *string `json:"milestone_id,omitempty"`
+
+	// Name Task name.
+	Name string `json:"name"`
+
+	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
+	Owner *string `json:"owner,omitempty"`
+
+	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
+	Priority *int `json:"priority,omitempty"`
+
+	// Prompt Optional agent prompt attached to the task.
+	Prompt *string `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
+	Recurrence *string `json:"recurrence,omitempty"`
+
+	// Result Optional task result or output.
+	Result *string `json:"result,omitempty"`
+
+	// SessionId Optional session linked to this task.
+	SessionId *string `json:"session_id,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
+
+	// Status GTD board task status.
+	Status    BoardTaskStatus `json:"status"`
+	UpdatedAt time.Time       `json:"updated_at"`
+
+	// WorkspaceId Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// BoardTaskStatus GTD board task status.
+type BoardTaskStatus string
+
+// BoardTaskCreateRequest defines model for BoardTaskCreateRequest.
+type BoardTaskCreateRequest struct {
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Max depth 50.
+	BlockedBy   *[]string `json:"blocked_by,omitempty"`
+	Description *string   `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+	Due         *time.Time `json:"due,omitempty"`
+	MilestoneId *string    `json:"milestone_id,omitempty"`
+	Name        string     `json:"name"`
+	Priority    *int       `json:"priority,omitempty"`
+	Prompt      *string    `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+	Recurrence *string `json:"recurrence,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
+
+	// Status GTD board task status.
+	Status      *BoardTaskCreateRequestStatus `json:"status,omitempty"`
+	WorkspaceId *string                       `json:"workspace_id,omitempty"`
+}
+
+// BoardTaskCreateRequestStatus GTD board task status.
+type BoardTaskCreateRequestStatus string
+
+// BoardTaskListItem A single item in the board task list response. Equivalent to BoardTask. Defined as a plain object (not allOf) so that oapi-codegen emits []BoardTaskListItem rather than an inline anonymous struct in BoardTaskListResponse.
+type BoardTaskListItem struct {
+	// AgentId Optional agent responsible for this task.
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Description Optional task description.
+	Description *string `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
+	Due *time.Time `json:"due,omitempty"`
+
+	// Id UUID task identifier
+	Id string `json:"id"`
+
+	// MilestoneId Optional milestone this task belongs to.
+	MilestoneId *string `json:"milestone_id,omitempty"`
+
+	// Name Task name.
+	Name string `json:"name"`
+
+	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
+	Owner *string `json:"owner,omitempty"`
+
+	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
+	Priority *int `json:"priority,omitempty"`
+
+	// Prompt Optional agent prompt attached to the task.
+	Prompt *string `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
+	Recurrence *string `json:"recurrence,omitempty"`
+
+	// Result Optional task result or output.
+	Result *string `json:"result,omitempty"`
+
+	// SessionId Optional session linked to this task.
+	SessionId *string `json:"session_id,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
+
+	// Status GTD board task status.
+	Status    BoardTaskListItemStatus `json:"status"`
+	UpdatedAt time.Time               `json:"updated_at"`
+
+	// WorkspaceId Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// BoardTaskListItemStatus GTD board task status.
+type BoardTaskListItemStatus string
+
+// BoardTaskListResponse Paginated list response for GET /board/tasks
+type BoardTaskListResponse struct {
+	Items []BoardTaskListItem `json:"items"`
+
+	// Total Total number of tasks matching the filter (before pagination).
+	Total int `json:"total"`
+}
+
+// BoardTaskUpdateRequest defines model for BoardTaskUpdateRequest.
+type BoardTaskUpdateRequest struct {
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Replaces the current blocked_by list atomically. Max depth 50.
+	BlockedBy   *[]string `json:"blocked_by,omitempty"`
+	Description *string   `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+	Due         *time.Time `json:"due,omitempty"`
+	MilestoneId *string    `json:"milestone_id,omitempty"`
+	Name        *string    `json:"name,omitempty"`
+	Priority    *int       `json:"priority,omitempty"`
+	Prompt      *string    `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+	Recurrence *string `json:"recurrence,omitempty"`
+	Result     *string `json:"result,omitempty"`
+	SessionId  *string `json:"session_id,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
+
+	// Status GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
+	Status      *BoardTaskUpdateRequestStatus `json:"status,omitempty"`
+	WorkspaceId *string                       `json:"workspace_id,omitempty"`
+}
+
+// BoardTaskUpdateRequestStatus GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
+type BoardTaskUpdateRequestStatus string
+
+// BoardTaskUpdateStatus GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
+type BoardTaskUpdateStatus string
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
 type ChangePasswordRequest struct {
@@ -3475,13 +4738,46 @@ type ChannelConfigureRequest struct {
 	// BotToken Alias for token used by some channels.
 	BotToken *string `json:"bot_token,omitempty"`
 
+	// Identity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
+	Identity *struct {
+		// Id The agent ID when kind is "agent". Empty or omitted when kind is "user".
+		Id *string `json:"id,omitempty"`
+
+		// Kind Routing kind for this channel instance.
+		Kind ChannelConfigureRequestIdentityKind `json:"kind"`
+	} `json:"identity,omitempty"`
+
+	// ImapHost IMAP server hostname (email channel). TLS required.
+	ImapHost *string `json:"imap_host,omitempty"`
+
+	// ImapPort IMAP server port (email channel). Defaults to 993 (IMAPS).
+	ImapPort *int `json:"imap_port,omitempty"`
+
+	// InstanceId Optional: the instance map key to configure. In v0.1 (cap-1/type) this equals the channel type and can be omitted. Reserved for v0.3 multi-instance support — the backend ignores this field today (the URL {id} is the key).
+	InstanceId *string `json:"instance_id,omitempty"`
+
+	// Password Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses.
+	Password *string `json:"password,omitempty"`
+
+	// SmtpHost SMTP server hostname for outbound email (email channel). TLS required.
+	SmtpHost *string `json:"smtp_host,omitempty"`
+
+	// SmtpPort SMTP server port (email channel). Defaults to 587 (STARTTLS) or 465 (SMTPS).
+	SmtpPort *int `json:"smtp_port,omitempty"`
+
 	// Token Channel authentication token (e.g. Telegram bot token, Discord bot token).
 	Token *string `json:"token,omitempty"`
+
+	// Username Login username for IMAP and SMTP authentication (email channel).
+	Username *string `json:"username,omitempty"`
 
 	// WebhookSecret HMAC secret for verifying incoming webhook payloads.
 	WebhookSecret        *string                `json:"webhook_secret,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
+
+// ChannelConfigureRequestIdentityKind Routing kind for this channel instance.
+type ChannelConfigureRequestIdentityKind string
 
 // ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
 type ChannelEnabledResponse struct {
@@ -3512,6 +4808,18 @@ type ChannelEntry struct {
 	// Id Stable identifier for a built-in channel.
 	Id ChannelEntryId `json:"id"`
 
+	// Identity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
+	Identity *struct {
+		// Id The agent ID when kind is "agent". Empty or omitted when kind is "user".
+		Id *string `json:"id,omitempty"`
+
+		// Kind Routing kind for this channel instance.
+		Kind ChannelEntryIdentityKind `json:"kind"`
+	} `json:"identity,omitempty"`
+
+	// InstanceId The map key under which this instance is stored in config.json (currently equals the channel type in v0.1 cap-1). Included in responses so the SPA can address per-instance configure/enable/routing endpoints without hardcoding the key.
+	InstanceId *string `json:"instance_id,omitempty"`
+
 	// Name Human-readable channel name.
 	Name string `json:"name"`
 
@@ -3525,11 +4833,26 @@ type ChannelEntry struct {
 // ChannelEntryId Stable identifier for a built-in channel.
 type ChannelEntryId string
 
+// ChannelEntryIdentityKind Routing kind for this channel instance.
+type ChannelEntryIdentityKind string
+
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
 
 // ChannelId Stable identifier for a built-in channel.
 type ChannelId string
+
+// ChannelIdentity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
+type ChannelIdentity struct {
+	// Id The agent ID when kind is "agent". Empty or omitted when kind is "user".
+	Id *string `json:"id,omitempty"`
+
+	// Kind Routing kind for this channel instance.
+	Kind ChannelIdentityKind `json:"kind"`
+}
+
+// ChannelIdentityKind Routing kind for this channel instance.
+type ChannelIdentityKind string
 
 // ChannelRouting Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
 type ChannelRouting struct {
@@ -3747,6 +5070,28 @@ type ExecProxyStatus struct {
 	Running bool `json:"running"`
 }
 
+// ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+// When absent the default is "native". Only "native" is functional in v0.1.0.
+type ExecutorConfig struct {
+	// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+	Cli *ExecutorConfigCli `json:"cli,omitempty"`
+
+	// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+	Kind ExecutorConfigKind `json:"kind"`
+}
+
+// ExecutorConfigCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+type ExecutorConfigCli string
+
+// ExecutorConfigKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+type ExecutorConfigKind string
+
+// GTDBoardTaskStatus GTD board task status.
+type GTDBoardTaskStatus string
+
 // GatewayStatus Gateway runtime status as returned by GET /status (polled by the frontend StatusBar every 15 seconds). Summarises the number of configured agents and channels plus a daily cost accumulator.
 type GatewayStatus struct {
 	// AgentCount Total number of configured agents (core + custom), including the implicit system agent.
@@ -3789,6 +5134,60 @@ type HealthResponse struct {
 // HealthResponseStatus Always "ok" when the gateway is healthy.
 type HealthResponseStatus string
 
+// IntegrationProvider A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available.
+type IntegrationProvider struct {
+	// Active True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
+	Active *bool `json:"active,omitempty"`
+
+	// Configured True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+	Configured bool `json:"configured"`
+
+	// DisplayName Human-readable provider name for UI presentation.
+	DisplayName string `json:"display_name"`
+
+	// Id Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
+	Id string `json:"id"`
+
+	// Kind Whether this provider supplies web search or voice-input transcription.
+	Kind IntegrationProviderKind `json:"kind"`
+
+	// RequiresKey Whether this provider needs an API key to function.
+	RequiresKey bool `json:"requires_key"`
+}
+
+// IntegrationProviderKind Whether this provider supplies web search or voice-input transcription.
+type IntegrationProviderKind string
+
+// IntegrationProviderUpdateRequest Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Because integration edits are sensitive, the SPA must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid token are rejected 403.
+type IntegrationProviderUpdateRequest struct {
+	// Active When true, select this provider as the active one for its kind.
+	Active *bool `json:"active,omitempty"`
+
+	// ApiKey API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider.
+	ApiKey *string `json:"api_key,omitempty"`
+
+	// Kind Whether this provider is a search engine or a voice transcriber.
+	Kind IntegrationProviderUpdateRequestKind `json:"kind"`
+}
+
+// IntegrationProviderUpdateRequestKind Whether this provider is a search engine or a voice transcriber.
+type IntegrationProviderUpdateRequestKind string
+
+// IntegrationProvidersResponse Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs).
+type IntegrationProvidersResponse struct {
+	// ActiveSearch id of the currently active search provider, when one is selected.
+	ActiveSearch *string `json:"active_search,omitempty"`
+
+	// ActiveVoice id of the currently active voice transcriber, when one is configured.
+	ActiveVoice *string `json:"active_voice,omitempty"`
+
+	// Search Configurable web-search providers.
+	Search []IntegrationProvider `json:"search"`
+
+	// Voice Configurable voice-input transcription providers.
+	Voice []IntegrationProvider `json:"voice"`
+}
+
 // LoginRequest Credentials for authenticating an existing user.
 type LoginRequest struct {
 	// Password The user's password. Maximum 72 characters (bcrypt limit).
@@ -3803,7 +5202,7 @@ type LoginResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role LoginResponseRole `json:"role"`
 
-	// Token Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -4036,6 +5435,68 @@ type MessageToolCallsStatus string
 // MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type MessageType string
 
+// Milestone defines model for Milestone.
+type Milestone struct {
+	// CreatedAt RFC3339 UTC creation timestamp.
+	CreatedAt time.Time `json:"created_at"`
+
+	// Description Optional free-text description.
+	Description *string `json:"description,omitempty"`
+
+	// DueDate Optional due date (ISO 8601 date string or null).
+	DueDate *string `json:"due_date,omitempty"`
+
+	// Id UUID milestone identifier
+	Id string `json:"id"`
+
+	// Name Human-readable milestone name.
+	Name string `json:"name"`
+
+	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
+	Owner *string `json:"owner,omitempty"`
+
+	// Progress Completion fraction (0–1) computed server-side at read time as done/total over the milestone's GTD board tasks. 0 when no tasks are associated. Read-only; never accepted on create/update.
+	Progress *float32 `json:"progress,omitempty"`
+
+	// UpdatedAt RFC3339 UTC last-update timestamp.
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// WorkspaceId Workspace this milestone belongs to.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MilestoneCreateRequest defines model for MilestoneCreateRequest.
+type MilestoneCreateRequest struct {
+	// Description Optional free-text description.
+	Description *string `json:"description,omitempty"`
+
+	// DueDate Optional due date (ISO 8601 date string or null).
+	DueDate *string `json:"due_date,omitempty"`
+
+	// Name Milestone name. Required.
+	Name string `json:"name"`
+}
+
+// MilestoneListResponse List response for GET /workspaces/{id}/milestones
+type MilestoneListResponse struct {
+	Milestones []Milestone `json:"milestones"`
+
+	// Total Total number of milestones for this workspace.
+	Total int `json:"total"`
+}
+
+// MilestoneUpdateRequest defines model for MilestoneUpdateRequest.
+type MilestoneUpdateRequest struct {
+	// Description Optional free-text description.
+	Description *string `json:"description,omitempty"`
+
+	// DueDate Optional due date (ISO 8601 date string or null).
+	DueDate *string `json:"due_date,omitempty"`
+
+	// Name Milestone name.
+	Name *string `json:"name,omitempty"`
+}
+
 // Notification A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
 	// AgentId The agent the notification concerns.
@@ -4139,7 +5600,7 @@ type OnboardingCompleteResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role OnboardingCompleteResponseRole `json:"role"`
 
-	// Token Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -4177,6 +5638,21 @@ type PendingRestartEntry struct {
 
 	// PersistedValue Value currently on disk (what will be applied after restart).
 	PersistedValue interface{} `json:"persisted_value"`
+}
+
+// PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch.
+type PerformanceSettings struct {
+	// EffectiveMaxParallelAgents The clamped value actually in use (after applying CPU/RAM heuristics and env-var override). Always present in responses; absent in requests.
+	EffectiveMaxParallelAgents *int `json:"effective_max_parallel_agents,omitempty"`
+
+	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. The runtime clamps the configured value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var.
+	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
+}
+
+// PerformanceSettingsUpdate Request body for PUT /api/v1/performance. Partial update — only supplied fields are modified.
+type PerformanceSettingsUpdate struct {
+	// MaxParallelAgents New value for the maximum concurrent task/subagent dispatch cap. The runtime clamps the stored value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Set to 0 to restore the auto-detected default.
+	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
 }
 
 // ProbeProviderRequest Body for POST /onboarding/probe-provider. Tests an API key against a provider and returns available models. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete.
@@ -4357,6 +5833,24 @@ type RateLimitsUpdateResponse struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
+// ReAuthRequest Body for POST /auth/reauth. Re-verifies the single user's one password before a sensitive settings change is permitted (FR-12.2). This is a consent primitive, NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). A successful re-auth mints a short-lived re-auth token the SPA attaches to the subsequent sensitive request.
+type ReAuthRequest struct {
+	// Password The authenticated user's current password, re-typed for consent. Maximum 72 characters (bcrypt limit).
+	Password string `json:"password"`
+}
+
+// ReAuthResponse Response from POST /auth/reauth. verified=true when the re-typed password matched; the token is a short-lived consent token (TTL seconds in expires_in) the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request. On a password mismatch the endpoint responds 401, not a verified=false body.
+type ReAuthResponse struct {
+	// ExpiresIn Time-to-live of the consent token in seconds.
+	ExpiresIn int `json:"expires_in"`
+
+	// Token Short-lived consent token to replay in the X-Reauth-Token header on the next sensitive settings request. Opaque; single-use within its TTL.
+	Token string `json:"token"`
+
+	// Verified Whether the re-typed password matched.
+	Verified bool `json:"verified"`
+}
+
 // RegisterAdminRequest Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists).
 type RegisterAdminRequest struct {
 	// Password Password for the new admin account. Minimum 8 characters, maximum 72 (bcrypt limit).
@@ -4416,9 +5910,30 @@ type RetentionUpdateResponse struct {
 
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
 type RotateTokenResponse struct {
-	// Token Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 }
+
+// RunnerTestResponse Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
+type RunnerTestResponse struct {
+	// Cli The external CLI name that was tested (the agent's executor.cli value).
+	Cli *string `json:"cli,omitempty"`
+
+	// CliVersion Detected CLI version string when the handshake succeeded; empty otherwise.
+	CliVersion *string `json:"cli_version,omitempty"`
+
+	// Message Human-readable description of the result (success detail or failure reason + remedy).
+	Message string `json:"message"`
+
+	// Ok True when the CLI is present, authenticated, and the version handshake succeeded.
+	Ok bool `json:"ok"`
+
+	// Reason Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+	Reason RunnerTestResponseReason `json:"reason"`
+}
+
+// RunnerTestResponseReason Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+type RunnerTestResponseReason string
 
 // SandboxConfig Sandbox configuration returned by GET /api/v1/security/sandbox-config and as part of PUT /api/v1/security/sandbox-config responses.
 type SandboxConfig struct {
@@ -4928,9 +6443,6 @@ type Session struct {
 	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 	Partitions []string `json:"partitions"`
 
-	// ProjectId Associated project ID (optional, future v0.3 feature).
-	ProjectId *string `json:"project_id,omitempty"`
-
 	// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
 	Provider *string `json:"provider,omitempty"`
 
@@ -4969,6 +6481,9 @@ type Session struct {
 
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// WorkspaceId Associated workspace ID (optional, future v0.3 feature).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // SessionStatus Current lifecycle status of the session.
@@ -5119,9 +6634,6 @@ type SessionDetail struct {
 		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 		Partitions []string `json:"partitions"`
 
-		// ProjectId Associated project ID (optional, future v0.3 feature).
-		ProjectId *string `json:"project_id,omitempty"`
-
 		// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
 		Provider *string `json:"provider,omitempty"`
 
@@ -5160,6 +6672,9 @@ type SessionDetail struct {
 
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 		UpdatedAt time.Time `json:"updated_at"`
+
+		// WorkspaceId Associated workspace ID (optional, future v0.3 feature).
+		WorkspaceId *string `json:"workspace_id,omitempty"`
 	} `json:"session"`
 }
 
@@ -5264,23 +6779,71 @@ type Skill struct {
 	// Name Human-readable skill name.
 	Name string `json:"name"`
 
+	// Source Skill origin: "builtin" = pre-installed/system skill (cannot be deleted), "global"/"workspace" = user-installed (community/3rd-party).
+	Source *SkillSource `json:"source,omitempty"`
+
 	// Status "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 	Status SkillStatus `json:"status"`
 
 	// Verified True when the skill has been verified by the Omnipus team. Unverified skills require explicit trust grant before use.
 	Verified bool `json:"verified"`
 
-	// Version Semantic version string (e.g. "1.2.3"). Must follow semver format.
+	// Version Version string as declared by the skill's SKILL.md or its source registry. Often semver ("1.2.3") but NOT required to be — community/ClawHub skills use arbitrary version strings ("1.0", "v2", a date, etc.). Defaults to "0.0.0" when the skill declares no version. Treated as an opaque display label.
 	Version string `json:"version"`
 }
+
+// SkillSource Skill origin: "builtin" = pre-installed/system skill (cannot be deleted), "global"/"workspace" = user-installed (community/3rd-party).
+type SkillSource string
 
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
-// SkillInstallRequest Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by name.
+// SkillInstallRequest Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
 type SkillInstallRequest struct {
-	// Name Skill name to install from the ClawHub registry.
-	Name string `json:"name"`
+	// Slug Slug of the skill to install from the ClawHub registry.
+	Slug string `json:"slug"`
+
+	// Version Optional version to pin. When omitted the latest published version is installed.
+	Version *string `json:"version,omitempty"`
+}
+
+// SkillMarketplaceStatus Reports whether any skill marketplace registry is enabled, returned by GET /api/v1/skills/marketplace. The SPA gates its skill-browse UI on this: when enabled is false, search/install-by-slug are unavailable (the endpoints return 409) and the UI offers only "install from file". A registry is the ClawHub marketplace or a configured GitHub registry.
+type SkillMarketplaceStatus struct {
+	// Enabled True when at least one skill marketplace registry is enabled (search/install-by-slug available).
+	Enabled bool `json:"enabled"`
+
+	// Registries Per-registry enablement, one entry per known registry.
+	Registries []struct {
+		// Enabled Whether this specific registry is enabled.
+		Enabled bool `json:"enabled"`
+
+		// Name Registry identifier (e.g. "clawhub", "github").
+		Name string `json:"name"`
+	} `json:"registries"`
+}
+
+// SkillSearchResult A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
+type SkillSearchResult struct {
+	// DisplayName Human-readable skill name (e.g. "Web Search").
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// OwnerHandle Handle of the skill's publisher/owner on the registry, when available.
+	OwnerHandle *string `json:"owner_handle,omitempty"`
+
+	// RegistryName Name of the registry that produced this result (e.g. "clawhub").
+	RegistryName *string `json:"registry_name,omitempty"`
+
+	// Score Relevance score assigned by the registry for this query (higher is better).
+	Score *float64 `json:"score,omitempty"`
+
+	// Slug Stable registry identifier for the skill. This is the value passed to POST /skills/install to install the skill.
+	Slug string `json:"slug"`
+
+	// Summary Short one-line description of what the skill does.
+	Summary *string `json:"summary,omitempty"`
+
+	// Version Latest published version of the skill (free-form; may be empty).
+	Version *string `json:"version,omitempty"`
 }
 
 // SkillTrustResponse Skill trust level returned by GET /api/v1/security/skill-trust.
@@ -5354,6 +6917,9 @@ type Task struct {
 	// Artifacts Paths to output files or artifact references produced by the task.
 	Artifacts *[]string `json:"artifacts,omitempty"`
 
+	// BlockedBy List of task IDs that must reach "completed" status before this task is eligible for dispatch. The Orchestrator coordinator (task_executor.onTaskComplete) advances tasks whose blocked_by set is fully satisfied. Absent when empty.
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
+
 	// CompletedAt RFC3339 timestamp when the task completed or failed. Absent while running.
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
@@ -5417,6 +6983,9 @@ type TaskCreateRequest struct {
 	// AgentId Agent to assign the task to.
 	AgentId *string `json:"agent_id,omitempty"`
 
+	// BlockedBy Task IDs that must complete before this task is dispatched. Validated at creation time: each ID must exist and must not create a cycle.
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
+
 	// Description Backward-compat alias for prompt.
 	Description *string `json:"description,omitempty"`
 
@@ -5477,6 +7046,23 @@ type TaskUpdateRequest struct {
 
 // TaskUpdateRequestStatus New task status.
 type TaskUpdateRequestStatus string
+
+// TokenUsageSummary Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files.
+type TokenUsageSummary struct {
+	Agents []struct {
+		AgentId     string `json:"agent_id"`
+		AgentName   string `json:"agent_name"`
+		TokensIn    int    `json:"tokens_in"`
+		TokensOut   int    `json:"tokens_out"`
+		TokensTotal int    `json:"tokens_total"`
+	} `json:"agents"`
+
+	// PeriodEnd End of the aggregation period (exclusive), UTC.
+	PeriodEnd time.Time `json:"period_end"`
+
+	// PeriodStart Start of the aggregation period (inclusive), UTC.
+	PeriodStart time.Time `json:"period_start"`
+}
 
 // ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it. For tools with RequiresAdminAsk=true the caller must hold the admin role (FR-015).
 type ToolApprovalActionRequest struct {
@@ -5558,6 +7144,18 @@ type ToolRegistryEntryScope string
 
 // ToolRegistryEntrySource Origin of the tool registration. "builtin" = compiled-in Go tool; "mcp" = MCP server tool.
 type ToolRegistryEntrySource string
+
+// TranscribeResponse Response from POST /api/v1/voice/transcribe. Returns the text transcribed from an uploaded audio clip by the active Transcriber (FR-12.1, composer mic). 503 when no transcriber is configured.
+type TranscribeResponse struct {
+	// Duration Audio duration in seconds, when reported.
+	Duration *float32 `json:"duration,omitempty"`
+
+	// Language Detected language code, when the transcriber reports one.
+	Language *string `json:"language,omitempty"`
+
+	// Text The transcribed text.
+	Text string `json:"text"`
+}
 
 // UploadFilesResponse Response from POST /api/v1/upload (HTTP 201). Returns the list of uploaded files with their metadata.
 type UploadFilesResponse struct {
@@ -5730,6 +7328,91 @@ type VersionResponse struct {
 	Version string `json:"version"`
 }
 
+// Workspace A Level 1 workspace record. Workspaces are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate.
+type Workspace struct {
+	// CoreTeam Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time. Max 20 entries.
+	CoreTeam *[]string `json:"core_team,omitempty"`
+
+	// CreatedAt RFC3339 UTC creation timestamp
+	CreatedAt time.Time `json:"created_at"`
+
+	// Description Optional free-text description.
+	Description *string `json:"description,omitempty"`
+
+	// Id UUID workspace identifier
+	Id string `json:"id"`
+
+	// IsDefault True only for the auto-created default workspace. The default workspace cannot be deleted and always appears first in the sidebar.
+	IsDefault *bool `json:"is_default,omitempty"`
+
+	// Name Human-readable workspace name. Not unique.
+	Name string `json:"name"`
+
+	// Owner Username of the user who created this workspace. Set server-side at creation; read-only. Attribution only — not an access gate.
+	Owner *string `json:"owner,omitempty"`
+
+	// PinOrder Ascending sort position among pinned workspaces. 0 for unpinned workspaces. Last-writer-wins; tiebreak by created_at ascending.
+	PinOrder int `json:"pin_order"`
+
+	// Pinned Whether this workspace is pinned to the top of the sidebar.
+	Pinned bool `json:"pinned"`
+
+	// Repository Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
+	Repository *string `json:"repository,omitempty"`
+
+	// Status Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
+	Status WorkspaceStatus `json:"status"`
+
+	// TaskCount Number of GTD board tasks with this workspace_id. Computed at read time from ~/.omnipus/tasks/. Never stored in the workspace JSON file.
+	TaskCount int `json:"task_count"`
+
+	// UpdatedAt RFC3339 UTC last-update timestamp
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// WorkspaceStatus Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
+type WorkspaceStatus string
+
+// WorkspaceCreateRequest Request body for POST /workspaces
+type WorkspaceCreateRequest struct {
+	// CoreTeam Optional default agent roster. Deduplicated at write time.
+	CoreTeam *[]string `json:"core_team,omitempty"`
+
+	// Description Optional description.
+	Description *string `json:"description,omitempty"`
+
+	// Name Workspace name. Required. Not unique.
+	Name string `json:"name"`
+
+	// Repository Optional git repository URL.
+	Repository *string `json:"repository,omitempty"`
+}
+
+// WorkspaceSessionLink A session that has been auto-linked to a workspace via tool use.
+type WorkspaceSessionLink struct {
+	// CreatedAt RFC3339 UTC timestamp when the link was first created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// SessionId Session identifier.
+	SessionId string `json:"session_id"`
+}
+
+// WorkspaceUpdateRequest Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged.
+type WorkspaceUpdateRequest struct {
+	CoreTeam    *[]string `json:"core_team,omitempty"`
+	Description *string   `json:"description,omitempty"`
+	Name        *string   `json:"name,omitempty"`
+	PinOrder    *int      `json:"pin_order,omitempty"`
+	Pinned      *bool     `json:"pinned,omitempty"`
+	Repository  *string   `json:"repository,omitempty"`
+
+	// Status Archive or restore a workspace.
+	Status *WorkspaceUpdateRequestStatus `json:"status,omitempty"`
+}
+
+// WorkspaceUpdateRequestStatus Archive or restore a workspace.
+type WorkspaceUpdateRequestStatus string
+
 // N400BadRequest Standard error envelope returned by all non-2xx responses.
 type N400BadRequest = ErrorResponse
 
@@ -5754,11 +7437,98 @@ type N429TooManyRequests = ErrorResponse
 // N500InternalServerError Standard error envelope returned by all non-2xx responses.
 type N500InternalServerError = ErrorResponse
 
+// N502BadGateway Standard error envelope returned by all non-2xx responses.
+type N502BadGateway = ErrorResponse
+
 // N503ServiceUnavailable Standard error envelope returned by all non-2xx responses.
 type N503ServiceUnavailable = ErrorResponse
 
 // bearerAuthContextKey is the context key for BearerAuth security scheme
 type bearerAuthContextKey string
+
+// ListBoardTasksParams defines parameters for ListBoardTasks.
+type ListBoardTasksParams struct {
+	// WorkspaceId Filter by workspace ID.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+
+	// Status Filter by GTD status.
+	Status *ListBoardTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// AgentId Filter by agent ID.
+	AgentId *string `form:"agent_id,omitempty" json:"agent_id,omitempty"`
+
+	// MilestoneId Filter by milestone ID.
+	MilestoneId *string `form:"milestone_id,omitempty" json:"milestone_id,omitempty"`
+
+	// Limit Maximum items to return.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Pagination offset.
+	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// ListBoardTasksParamsStatus defines parameters for ListBoardTasks.
+type ListBoardTasksParamsStatus string
+
+// CreateBoardTaskJSONBody defines parameters for CreateBoardTask.
+type CreateBoardTaskJSONBody struct {
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Max depth 50.
+	BlockedBy   *[]string `json:"blocked_by,omitempty"`
+	Description *string   `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+	Due         *time.Time `json:"due,omitempty"`
+	MilestoneId *string    `json:"milestone_id,omitempty"`
+	Name        string     `json:"name"`
+	Priority    *int       `json:"priority,omitempty"`
+	Prompt      *string    `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+	Recurrence *string `json:"recurrence,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
+
+	// Status GTD board task status.
+	Status      *CreateBoardTaskJSONBodyStatus `json:"status,omitempty"`
+	WorkspaceId *string                        `json:"workspace_id,omitempty"`
+}
+
+// CreateBoardTaskJSONBodyStatus defines parameters for CreateBoardTask.
+type CreateBoardTaskJSONBodyStatus string
+
+// UpdateBoardTaskJSONBody defines parameters for UpdateBoardTask.
+type UpdateBoardTaskJSONBody struct {
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Replaces the current blocked_by list atomically. Max depth 50.
+	BlockedBy   *[]string `json:"blocked_by,omitempty"`
+	Description *string   `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+	Due         *time.Time `json:"due,omitempty"`
+	MilestoneId *string    `json:"milestone_id,omitempty"`
+	Name        *string    `json:"name,omitempty"`
+	Priority    *int       `json:"priority,omitempty"`
+	Prompt      *string    `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+	Recurrence *string `json:"recurrence,omitempty"`
+	Result     *string `json:"result,omitempty"`
+	SessionId  *string `json:"session_id,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
+
+	// Status GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
+	Status      *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`
+	WorkspaceId *string                        `json:"workspace_id,omitempty"`
+}
+
+// UpdateBoardTaskJSONBodyStatus defines parameters for UpdateBoardTask.
+type UpdateBoardTaskJSONBodyStatus string
 
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
 type ConfigureChannelJSONBody map[string]interface{}
@@ -5805,6 +7575,24 @@ type ListSessions200JSONResponseBody struct {
 // ClearAllSessions200JSONResponseBodyStatus defines parameters for ClearAllSessions.
 type ClearAllSessions200JSONResponseBodyStatus string
 
+// SearchSkillsParams defines parameters for SearchSkills.
+type SearchSkillsParams struct {
+	// Q Search query. Must be non-empty.
+	Q string `form:"q" json:"q"`
+
+	// Limit Maximum number of results to return (default 20, capped at 50).
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetTokenStatsParams defines parameters for GetTokenStats.
+type GetTokenStatsParams struct {
+	// Period Aggregation period.
+	Period *GetTokenStatsParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+}
+
+// GetTokenStatsParamsPeriod defines parameters for GetTokenStats.
+type GetTokenStatsParamsPeriod string
+
 // ListTasksParams defines parameters for ListTasks.
 type ListTasksParams struct {
 	// Status Filter tasks by status.
@@ -5829,6 +7617,21 @@ type UploadFilesParams struct {
 	SessionId *string `form:"session_id,omitempty" json:"session_id,omitempty"`
 }
 
+// TranscribeAudioMultipartBody defines parameters for TranscribeAudio.
+type TranscribeAudioMultipartBody struct {
+	// Audio The recorded audio clip (webm/ogg/wav/mp3).
+	Audio openapi_types.File `json:"audio"`
+}
+
+// ListWorkspacesParams defines parameters for ListWorkspaces.
+type ListWorkspacesParams struct {
+	// Status Filter by workspace status. Defaults to active.
+	Status *ListWorkspacesParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ListWorkspacesParamsStatus defines parameters for ListWorkspaces.
+type ListWorkspacesParamsStatus string
+
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
 
@@ -5847,8 +7650,17 @@ type ChangePasswordJSONRequestBody = ChangePasswordRequest
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
+// ReAuthJSONRequestBody defines body for ReAuth for application/json ContentType.
+type ReAuthJSONRequestBody = ReAuthRequest
+
 // RegisterAdminJSONRequestBody defines body for RegisterAdmin for application/json ContentType.
 type RegisterAdminJSONRequestBody = RegisterAdminRequest
+
+// CreateBoardTaskJSONRequestBody defines body for CreateBoardTask for application/json ContentType.
+type CreateBoardTaskJSONRequestBody CreateBoardTaskJSONBody
+
+// UpdateBoardTaskJSONRequestBody defines body for UpdateBoardTask for application/json ContentType.
+type UpdateBoardTaskJSONRequestBody UpdateBoardTaskJSONBody
 
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
@@ -5862,6 +7674,9 @@ type PostChatJSONRequestBody = SseChatRequest
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest
 
+// UpdateIntegrationProviderJSONRequestBody defines body for UpdateIntegrationProvider for application/json ContentType.
+type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest
+
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
 
@@ -5870,6 +7685,9 @@ type CompleteOnboardingJSONRequestBody = OnboardingCompleteRequest
 
 // ProbeProviderJSONRequestBody defines body for ProbeProvider for application/json ContentType.
 type ProbeProviderJSONRequestBody = ProbeProviderRequest
+
+// UpdatePerformanceSettingsJSONRequestBody defines body for UpdatePerformanceSettings for application/json ContentType.
+type UpdatePerformanceSettingsJSONRequestBody = PerformanceSettingsUpdate
 
 // UpdateProviderJSONRequestBody defines body for UpdateProvider for application/json ContentType.
 type UpdateProviderJSONRequestBody = ProviderUpdateRequest
@@ -5949,6 +7767,21 @@ type ResetUserPasswordJSONRequestBody = UserResetPasswordRequest
 // ChangeUserRoleJSONRequestBody defines body for ChangeUserRole for application/json ContentType.
 type ChangeUserRoleJSONRequestBody = UserRoleChangeRequest
 
+// TranscribeAudioMultipartRequestBody defines body for TranscribeAudio for multipart/form-data ContentType.
+type TranscribeAudioMultipartRequestBody TranscribeAudioMultipartBody
+
+// CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
+type CreateWorkspaceJSONRequestBody = WorkspaceCreateRequest
+
+// UpdateWorkspaceJSONRequestBody defines body for UpdateWorkspace for application/json ContentType.
+type UpdateWorkspaceJSONRequestBody = WorkspaceUpdateRequest
+
+// CreateWorkspaceMilestoneJSONRequestBody defines body for CreateWorkspaceMilestone for application/json ContentType.
+type CreateWorkspaceMilestoneJSONRequestBody = MilestoneCreateRequest
+
+// UpdateWorkspaceMilestoneJSONRequestBody defines body for UpdateWorkspaceMilestone for application/json ContentType.
+type UpdateWorkspaceMilestoneJSONRequestBody = MilestoneUpdateRequest
+
 // Getter for additional properties for ChannelConfigureRequest. Returns the specified
 // element and whether it was found
 func (a ChannelConfigureRequest) Get(fieldName string) (value interface{}, found bool) {
@@ -5998,12 +7831,76 @@ func (a *ChannelConfigureRequest) UnmarshalJSON(b []byte) error {
 		delete(object, "bot_token")
 	}
 
+	if raw, found := object["identity"]; found {
+		err = json.Unmarshal(raw, &a.Identity)
+		if err != nil {
+			return fmt.Errorf("error reading 'identity': %w", err)
+		}
+		delete(object, "identity")
+	}
+
+	if raw, found := object["imap_host"]; found {
+		err = json.Unmarshal(raw, &a.ImapHost)
+		if err != nil {
+			return fmt.Errorf("error reading 'imap_host': %w", err)
+		}
+		delete(object, "imap_host")
+	}
+
+	if raw, found := object["imap_port"]; found {
+		err = json.Unmarshal(raw, &a.ImapPort)
+		if err != nil {
+			return fmt.Errorf("error reading 'imap_port': %w", err)
+		}
+		delete(object, "imap_port")
+	}
+
+	if raw, found := object["instance_id"]; found {
+		err = json.Unmarshal(raw, &a.InstanceId)
+		if err != nil {
+			return fmt.Errorf("error reading 'instance_id': %w", err)
+		}
+		delete(object, "instance_id")
+	}
+
+	if raw, found := object["password"]; found {
+		err = json.Unmarshal(raw, &a.Password)
+		if err != nil {
+			return fmt.Errorf("error reading 'password': %w", err)
+		}
+		delete(object, "password")
+	}
+
+	if raw, found := object["smtp_host"]; found {
+		err = json.Unmarshal(raw, &a.SmtpHost)
+		if err != nil {
+			return fmt.Errorf("error reading 'smtp_host': %w", err)
+		}
+		delete(object, "smtp_host")
+	}
+
+	if raw, found := object["smtp_port"]; found {
+		err = json.Unmarshal(raw, &a.SmtpPort)
+		if err != nil {
+			return fmt.Errorf("error reading 'smtp_port': %w", err)
+		}
+		delete(object, "smtp_port")
+	}
+
 	if raw, found := object["token"]; found {
 		err = json.Unmarshal(raw, &a.Token)
 		if err != nil {
 			return fmt.Errorf("error reading 'token': %w", err)
 		}
 		delete(object, "token")
+	}
+
+	if raw, found := object["username"]; found {
+		err = json.Unmarshal(raw, &a.Username)
+		if err != nil {
+			return fmt.Errorf("error reading 'username': %w", err)
+		}
+		delete(object, "username")
 	}
 
 	if raw, found := object["webhook_secret"]; found {
@@ -6054,10 +7951,66 @@ func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.Identity != nil {
+		object["identity"], err = json.Marshal(a.Identity)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'identity': %w", err)
+		}
+	}
+
+	if a.ImapHost != nil {
+		object["imap_host"], err = json.Marshal(a.ImapHost)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'imap_host': %w", err)
+		}
+	}
+
+	if a.ImapPort != nil {
+		object["imap_port"], err = json.Marshal(a.ImapPort)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'imap_port': %w", err)
+		}
+	}
+
+	if a.InstanceId != nil {
+		object["instance_id"], err = json.Marshal(a.InstanceId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'instance_id': %w", err)
+		}
+	}
+
+	if a.Password != nil {
+		object["password"], err = json.Marshal(a.Password)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'password': %w", err)
+		}
+	}
+
+	if a.SmtpHost != nil {
+		object["smtp_host"], err = json.Marshal(a.SmtpHost)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'smtp_host': %w", err)
+		}
+	}
+
+	if a.SmtpPort != nil {
+		object["smtp_port"], err = json.Marshal(a.SmtpPort)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'smtp_port': %w", err)
+		}
+	}
+
 	if a.Token != nil {
 		object["token"], err = json.Marshal(a.Token)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'token': %w", err)
+		}
+	}
+
+	if a.Username != nil {
+		object["username"], err = json.Marshal(a.Username)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'username': %w", err)
 		}
 	}
 

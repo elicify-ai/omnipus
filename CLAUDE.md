@@ -15,6 +15,7 @@ Active development. Most of the system is implemented and running on `main`: age
 - `docs/internal/architecture/plugin-extensibility-assessment.md` — plugin/extension status.
 - `docs/internal/architecture/ADR-*.md` — accepted decisions.
 - `docs/internal/BRD/` — original intent (Main BRD, Appendices A–E, competitive analysis); useful for context but superseded by code/as-is where they conflict.
+- `.preview-doc/` — **the current v0.3 direction** (Workspaces redesign concept, 16 pages): the 4-base roster re-cast, delegation + Orchestrator, plugins & marketplaces, MCP/ACP/A2A protocol hooks, skills authoring + procedural memory, memory rooms, foundation-first roadmap. Discussion-stage / pre-ADR, but it **supersedes the `docs/internal/design/*-2026-05` drafts in intent** — see the Release Strategy note below.
 
 ## Release Strategy (v0.1 → v0.2 → v0.3)
 
@@ -22,9 +23,9 @@ Three-phase plan locked 2026-05-03.
 
 - **v0.1 — Stabilize `feature/iframe-preview-tier13`.** Ship `web_serve` unification, kernel-enforced bind-port allow-list, sandbox-aware `exec`, iframe preview as one PR. Plan: `/home/Daniel/.claude/plans/quizzical-marinating-frog.md`. No memory/projects creep.
 - **v0.2 — Security hardening (pentest quick wins).** Issue [#155](https://github.com/dapicom-ai/omnipus/issues/155). Quick fixes only: env var allowlist (`pkg/sandbox/hardened_exec.go::allowedChildEnvKeys`), `master.key` 0600 check, shell-guard hardening, internal-CIDR egress blocking, audit HMAC chain, auth-endpoint rate limiting. Structural fixes → v0.3.
-- **v0.3 / 1.0 — "Rooms" redesign (memory + projects + tasks + sandbox topology).** Issue [#156](https://github.com/dapicom-ai/omnipus/issues/156). Fresh-build, no back-compat. Five locked design docs in `docs/internal/design/`: `sandbox-redesign-2026-05.md` (two-room topology), `memory-redesign-2026-05.md` (4-tier memory, remember/recall/retrospective, Dreamcatcher, bleve+JSONL+MinHash, no embeddings), `tasks-redesign-2026-05.md` (per-room tasks, cascade-delete), `projects-ui-2026-05.md` (3 SPA surfaces), `settings-notifications-2026-05.md`.
+- **v0.3 / 1.0 — Workspaces redesign (memory + tasks + agents + plugins + sandbox topology).** Issue [#156](https://github.com/dapicom-ai/omnipus/issues/156). Fresh-build, no back-compat. **The direction has evolved past the original "Rooms" framing — the current v0.3 direction is the concept in `.preview-doc/` (pre-ADR).** ⚠️ The five `docs/internal/design/*-2026-05.md` drafts (`sandbox-redesign`, `memory-redesign`, `tasks-redesign`, `projects-ui`, `settings-notifications`) are **pre-ADR background, being SUPERSEDED** — they still use the old **"Rooms / project room / 5-core (Mia·Jim·Ava·Ray·Max) + Primary·Sub tiers"** vocabulary, now re-cast to **Workspaces / workspace room / 4-base roster (Mia·Assistant ⭐ · Jim·Orchestrator · Ray·Scout · Ava·Builder; Max retired, automation = platform; specialists = marketplace packs)**. Do **not** implement from the design drafts without checking the `.preview-doc/` concept and the forthcoming ADR. (Memory's no-embeddings/bleve/MinHash/Dreamcatcher core and the remember/recall/retrospective tools still hold; the structure-vs-behaviour split and naming are in the concept.)
 
-**Routing rule:** when new work comes up, ask which phase it belongs to first. Pentest findings → v0.2 unless structural (→ v0.3). Memory/projects/tasks/room-topology → v0.3. Anything else not completing v0.1 → flag the scope question.
+**Routing rule:** when new work comes up, ask which phase it belongs to first. Pentest findings → v0.2 unless structural (→ v0.3). Memory / tasks / agents / workspaces / plugins / marketplaces / room-topology → v0.3. Anything else not completing v0.1 → flag the scope question.
 
 ## Merging to main (MANDATORY)
 

@@ -1,0 +1,14 @@
+type: object
+description: Paginated list response for GET /board/tasks
+required:
+  - items
+  - total
+properties:
+  items:
+    type: array
+    items:
+      $ref: ./BoardTaskListItem.yaml
+  total:
+    type: integer
+    description: Total number of tasks matching the filter (before pagination).
+    example: 42

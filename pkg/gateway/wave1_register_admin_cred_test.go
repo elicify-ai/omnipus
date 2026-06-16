@@ -65,7 +65,7 @@ func newTestAPIWithHome(t *testing.T) (*restAPI, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 	return api, tmpDir
 }
@@ -105,7 +105,7 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 	return api, tmpDir, hexKey
 }
@@ -174,7 +174,8 @@ func TestHandleRegisterAdmin_PersistsCorrectFields(t *testing.T) {
 	token, ok := resp["token"].(string)
 	require.True(t, ok, "token must be a string")
 	assert.NotEmpty(t, token, "token must be non-empty")
-	assert.True(t, strings.HasPrefix(token, "omnipus_"), "token must start with 'omnipus_'")
+	assert.Regexp(t, `^omnipus_[0-9a-f]{8}_[0-9a-f]{64}$`, token,
+		"token must match SEC-1 id-tagged format omnipus_<id>_<body>")
 	assert.Equal(t, string(config.UserRoleAdmin), resp["role"], "role must be 'admin'")
 	assert.Equal(t, "alpha", resp["username"], "username must match the request")
 
@@ -199,12 +200,20 @@ func TestHandleRegisterAdmin_PersistsCorrectFields(t *testing.T) {
 	require.NotEmpty(t, passwordHash, "password_hash must be non-empty")
 	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte("alph4pass")),
 		"persisted password_hash must match the submitted password")
-	// token_hash must be a valid bcrypt hash of the returned token.
-	tokenHash, ok := userMap["token_hash"].(string)
-	require.True(t, ok, "token_hash must be a string")
-	require.NotEmpty(t, tokenHash, "token_hash must be non-empty")
-	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(token)),
-		"persisted token_hash must match the returned token")
+	// SEC-1 / UAT #399: the bearer token is persisted in the token SET; the
+	// entry hash is bcrypt of the token's secret BODY (config.TokenSecret),
+	// not the full token (which would exceed bcrypt's 72-byte ceiling).
+	tokens, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set must be a JSON array")
+	require.Len(t, tokens, 1, "register-admin issues exactly one bearer token")
+	entry := tokens[0].(map[string]any)
+	tokenHash, ok := entry["hash"].(string)
+	require.True(t, ok, "token entry hash must be a string")
+	require.NotEmpty(t, tokenHash, "token entry hash must be non-empty")
+	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(config.TokenSecret(token))),
+		"persisted token entry hash must match the returned token's secret body")
+	assert.Equal(t, config.TokenIDFromRaw(token), entry["id"],
+		"persisted token entry id must match the issued token's embedded id")
 }
 
 // TestHandleRegisterAdmin_DifferentUsersDifferentTokens verifies that two calls
@@ -416,7 +425,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	w := httptest.NewRecorder()
@@ -574,6 +583,11 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/anthropic"
 	req = injectUser(req, "admin", config.UserRoleAdmin)
+	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
+	// consent token (mint one for the injected "admin" user).
+	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")
+	require.NoError(t, provTokErr)
+	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
 	api.HandleProviders(w, req)
@@ -650,6 +664,11 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/openai"
 	req = injectUser(req, "admin", config.UserRoleAdmin)
+	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
+	// consent token (mint one for the injected "admin" user).
+	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")
+	require.NoError(t, provTokErr)
+	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
 	api.HandleProviders(w, req)
@@ -724,7 +743,7 @@ func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// Step 4: GET /api/v1/providers — must include openai as connected.

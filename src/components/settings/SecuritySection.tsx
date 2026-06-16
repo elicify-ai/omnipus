@@ -9,7 +9,6 @@
  * Risky controls wrapped in RiskySettingControl (US-B2 / #328):
  *   - policyMode (safe = 'deny')
  *   - bind_address (in GatewaySection — not here; done there)
- *   - auth_mode (in GatewaySection — not here; done there)
  *
  * Global Tool Access via ToolPolicyEditor (US-B3 / #329):
  *   - Replaces GlobalToolPoliciesSection entirely.
@@ -66,6 +65,7 @@ import { SandboxSection } from './SandboxSection'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
+import { useReAuthGate } from './useReAuthGate'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -90,6 +90,15 @@ function GlobalToolPoliciesSection() {
   })
   const [isDraftReady, setIsDraftReady] = useState(false)
 
+  // PUT /api/v1/security/tool-policies is re-auth gated (Spec-3 FR-3.3 / Spec-6
+  // FR-12.2). The auto-save fires the PUT directly; the gate replays a single-use
+  // consent token via updateGlobalToolPolicies's header arg when the server
+  // demands re-auth — same dialog/copy as IntegrationsSection.
+  const { runGated, dialog: reAuthDialog } = useReAuthGate({
+    title: 'Confirm to change tool access',
+    description: 'Re-type your password to change the global tool policy.',
+  })
+
   useEffect(() => {
     if (!globalPolicies || isDraftReady) return
     setToolPolicyValue({
@@ -102,7 +111,7 @@ function GlobalToolPoliciesSection() {
   const { status: saveStatus, error: saveError } = useAutoSave(
     toolPolicyValue,
     async (cfg) => {
-      await updateGlobalToolPolicies(cfg)
+      await runGated((token) => updateGlobalToolPolicies(cfg, token))
       queryClient.invalidateQueries({ queryKey: ['global-tool-policies'] })
     },
     { disabled: !isDraftReady },
@@ -146,6 +155,7 @@ function GlobalToolPoliciesSection() {
           {Object.keys(toolPolicyValue.policies).length} override{Object.keys(toolPolicyValue.policies).length !== 1 ? 's' : ''} | Default: {toolPolicyValue.default_policy}
         </span>
       </div>
+      {reAuthDialog}
     </div>
   )
 }

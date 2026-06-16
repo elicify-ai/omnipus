@@ -144,8 +144,17 @@ export function SchedulesList({ agentId }: SchedulesListProps) {
 
   const { mutate: doDelete } = useMutation({
     mutationFn: (id: string) => deleteSchedule(id),
-    onSuccess: () => {
-      invalidate()
+    onSuccess: (_data, id) => {
+      // Remove the deleted schedule from the list cache immediately so no
+      // per-id GET refetch fires for a resource that no longer exists (prevents
+      // 404 console errors from stale refetch/retry of the deleted item).
+      queryClient.setQueryData<Schedule[]>(['schedules'], (prev) =>
+        prev ? prev.filter((s) => s.id !== id) : prev,
+      )
+      // Invalidate the list so it resyncs with the server on next focus/mount.
+      // We do NOT invalidate a per-id query key here — there is no per-id GET
+      // registered in this component, and the list key covers everything.
+      queryClient.invalidateQueries({ queryKey: ['schedules'] })
       addToast({ message: 'Schedule deleted', variant: 'success' })
     },
     onError: (err: unknown) =>

@@ -21,14 +21,31 @@ import (
 // ErrNotFound is returned when a task ID does not exist on disk.
 var ErrNotFound = errors.New("task not found")
 
-// TaskEntity is the persistent shape for one task stored at ~/.omnipus/tasks/<id>.json.
+// ErrCycle is returned when a parent_task_id edge would create a cycle in the
+// task dependency graph (e.g. A→B→A), or when the parent chain exceeds
+// maxParentDepth. The task graph must remain a DAG.
+var ErrCycle = errors.New("task parent edge would create a cycle")
+
+// maxParentDepth bounds how far Create walks the parent chain before treating
+// the graph as malformed. It also acts as a backstop against an extremely deep
+// (or, on a corrupt store, looping) chain. Mirrors the executor's maxTaskDepth.
+const maxParentDepth = 10
+
+// TaskEntity is the persistent shape for one workflow task stored at
+// ~/.omnipus/workflow-tasks/<id>.json.
 type TaskEntity struct {
-	ID            string     `json:"id"`
-	Title         string     `json:"title"`
-	Prompt        string     `json:"prompt"`
-	AgentID       string     `json:"agent_id"`
-	CreatedBy     string     `json:"created_by"`
-	ParentTaskID  string     `json:"parent_task_id,omitempty"`
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Prompt       string `json:"prompt"`
+	AgentID      string `json:"agent_id"`
+	CreatedBy    string `json:"created_by"`
+	ParentTaskID string `json:"parent_task_id,omitempty"`
+	// BlockedBy is a DAG-dependency list: this task will not be dispatched
+	// until every task in BlockedBy has reached "completed" status.
+	// The Orchestrator coordinator (task_executor.onTaskComplete) scans tasks
+	// with non-empty BlockedBy after each terminal state transition and dispatches
+	// those whose dependency set is now fully satisfied.
+	BlockedBy     []string   `json:"blocked_by,omitempty"`
 	Priority      int        `json:"priority"`
 	Status        string     `json:"status"`
 	Result        string     `json:"result,omitempty"`
@@ -40,32 +57,38 @@ type TaskEntity struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	// FollowedUp is set true (via ClaimParentFollowUp) once the parent follow-up
+	// notification has been launched for this task. It exists solely to make the
+	// "all siblings done → resume parent" follow-up fire exactly once: concurrent
+	// sibling completions both observe allDone and would otherwise both spawn the
+	// parent follow-up goroutine. The flag is on the PARENT task, claimed atomically.
+	FollowedUp bool `json:"followed_up,omitempty"`
 }
 
-// legacyRaw is used only to detect and migrate old GTD-format task files.
-type legacyRaw struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	Status      string    `json:"status"`
-	AgentID     string    `json:"agent_id,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-
-	// New fields — may be zero in old files.
+// workflowRaw is a superset of TaskEntity used to parse files from the
+// workflow-tasks directory.  Extra fields (e.g. "name" from a mistakenly
+// placed GTD file) are silently ignored via omitempty — the load function
+// validates that the result is actually a workflow task before returning it.
+type workflowRaw struct {
+	ID            string     `json:"id"`
 	Title         string     `json:"title,omitempty"`
 	Prompt        string     `json:"prompt,omitempty"`
+	AgentID       string     `json:"agent_id,omitempty"`
 	CreatedBy     string     `json:"created_by,omitempty"`
 	ParentTaskID  string     `json:"parent_task_id,omitempty"`
+	BlockedBy     []string   `json:"blocked_by,omitempty"`
 	Priority      int        `json:"priority,omitempty"`
+	Status        string     `json:"status"`
 	Result        string     `json:"result,omitempty"`
 	Artifacts     []string   `json:"artifacts,omitempty"`
 	SessionID     string     `json:"session_id,omitempty"`
 	TriggerType   string     `json:"trigger_type,omitempty"`
 	SourceChannel string     `json:"source_channel,omitempty"`
 	SourceChatID  string     `json:"source_chat_id,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	FollowedUp    bool       `json:"followed_up,omitempty"`
 }
 
 // TaskFilter filters the result of List.  All fields are optional (zero = skip filter).
@@ -74,6 +97,10 @@ type TaskFilter struct {
 	AgentID      string
 	CreatedBy    string
 	ParentTaskID string
+	// BlockedByID, when non-empty, returns only tasks whose BlockedBy list
+	// contains the given task ID. Used by the Orchestrator coordinator to find
+	// tasks that are waiting on a just-completed task.
+	BlockedByID string
 }
 
 // TaskPatch is a partial update applied by Update.
@@ -81,6 +108,7 @@ type TaskPatch struct {
 	Status        *string
 	Result        *string
 	Artifacts     *[]string
+	BlockedBy     *[]string
 	SessionID     *string
 	StartedAt     *time.Time
 	CompletedAt   *time.Time
@@ -97,7 +125,9 @@ type TaskStore struct {
 	mu  sync.Mutex
 }
 
-// New creates a TaskStore rooted at dir (e.g. ~/.omnipus/tasks).
+// New creates a TaskStore rooted at dir.
+// The canonical workflow-task directory is ~/.omnipus/workflow-tasks/;
+// callers should pass that path rather than the GTD tasks/ directory.
 func New(dir string) *TaskStore {
 	return &TaskStore{dir: dir}
 }
@@ -118,7 +148,10 @@ func (s *TaskStore) path(id string) string {
 	return filepath.Join(s.dir, id+".json")
 }
 
-// load reads and (if needed) lazily migrates a task file.
+// load reads a workflow task file.  It never rewrites the file on read.
+// Files that do not parse as a valid TaskEntity (e.g. a GTD task accidentally
+// placed in the workflow-tasks directory) are skipped by returning ErrNotFound
+// so callers can log a warning and move on without corrupting GTD data.
 func (s *TaskStore) load(id string) (*TaskEntity, error) {
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {
@@ -128,82 +161,61 @@ func (s *TaskStore) load(id string) (*TaskEntity, error) {
 		return nil, fmt.Errorf("taskstore: read %q: %w", id, err)
 	}
 
-	var raw legacyRaw
+	var raw workflowRaw
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("taskstore: parse %q: %w", id, err)
 	}
 
-	// If the file already uses the new format (has Title), return as-is.
-	if raw.Title != "" || raw.Name == "" {
-		t := &TaskEntity{
-			ID:            raw.ID,
-			Title:         raw.Title,
-			Prompt:        raw.Prompt,
-			AgentID:       raw.AgentID,
-			CreatedBy:     raw.CreatedBy,
-			ParentTaskID:  raw.ParentTaskID,
-			Priority:      raw.Priority,
-			Status:        raw.Status,
-			Result:        raw.Result,
-			Artifacts:     raw.Artifacts,
-			SessionID:     raw.SessionID,
-			TriggerType:   raw.TriggerType,
-			SourceChannel: raw.SourceChannel,
-			SourceChatID:  raw.SourceChatID,
-			CreatedAt:     raw.CreatedAt,
-			StartedAt:     raw.StartedAt,
-			CompletedAt:   raw.CompletedAt,
-		}
-		if t.Priority == 0 {
-			t.Priority = 3
-		}
-		if t.TriggerType == "" {
-			t.TriggerType = "manual"
-		}
-		if t.CreatedBy == "" {
-			t.CreatedBy = "user"
-		}
-		return t, nil
+	// A valid workflow file must have a non-empty Title and a workflow status.
+	// Files that look like GTD tasks (have no Title, or have a GTD status) are
+	// not owned by this store — skip them rather than mutating them.
+	// WARN when a present file is structurally rejected so corruption is visible
+	// in operator logs (a silent 404 would hide a corrupt or misplaced file).
+	if raw.Title == "" {
+		slog.Warn("taskstore: rejecting file — no title field (possible GTD task or corrupt file)",
+			"id", id, "path", s.path(id))
+		return nil, fmt.Errorf("taskstore: %w: file %q has no title field (not a workflow task)", ErrNotFound, id)
+	}
+	if !validStatuses[raw.Status] {
+		slog.Warn("taskstore: rejecting file — unrecognized workflow status (possible GTD task or corrupt file)",
+			"id", id, "status", raw.Status, "path", s.path(id))
+		return nil, fmt.Errorf("taskstore: %w: file %q has non-workflow status %q", ErrNotFound, id, raw.Status)
 	}
 
-	// Lazy migration from GTD format.
 	t := &TaskEntity{
-		ID:          raw.ID,
-		Title:       raw.Name,
-		Prompt:      raw.Description,
-		AgentID:     raw.AgentID,
-		CreatedBy:   "user",
-		Priority:    3,
-		TriggerType: "manual",
-		CreatedAt:   raw.CreatedAt,
-		// Preserve new-format fields that may be present even in legacy files.
+		ID:            raw.ID,
+		Title:         raw.Title,
+		Prompt:        raw.Prompt,
+		AgentID:       raw.AgentID,
+		CreatedBy:     raw.CreatedBy,
+		ParentTaskID:  raw.ParentTaskID,
+		BlockedBy:     raw.BlockedBy,
+		Priority:      raw.Priority,
+		Status:        raw.Status,
 		Result:        raw.Result,
 		Artifacts:     raw.Artifacts,
 		SessionID:     raw.SessionID,
+		TriggerType:   raw.TriggerType,
 		SourceChannel: raw.SourceChannel,
 		SourceChatID:  raw.SourceChatID,
+		CreatedAt:     raw.CreatedAt,
 		StartedAt:     raw.StartedAt,
 		CompletedAt:   raw.CompletedAt,
+		FollowedUp:    raw.FollowedUp,
 	}
-	// Migrate GTD statuses to execution statuses.
-	switch raw.Status {
-	case "inbox", "next", "waiting":
-		t.Status = "queued"
-	case "active":
-		t.Status = "running"
-	case "done":
-		t.Status = "completed"
-	default:
-		t.Status = "queued"
+	if t.Priority == 0 {
+		t.Priority = 3
 	}
-	// Persist the migrated entity (best-effort; non-fatal if the write fails).
-	if werr := s.write(t); werr != nil {
-		slog.Warn("taskstore: lazy migration write failed", "id", t.ID, "error", werr)
+	if t.TriggerType == "" {
+		t.TriggerType = "manual"
+	}
+	if t.CreatedBy == "" {
+		t.CreatedBy = "user"
 	}
 	return t, nil
 }
 
-// write persists a TaskEntity atomically.
+// write persists a TaskEntity atomically with an advisory flock.
 func (s *TaskStore) write(t *TaskEntity) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return fmt.Errorf("taskstore: create dir: %w", err)
@@ -212,7 +224,10 @@ func (s *TaskStore) write(t *TaskEntity) error {
 	if err != nil {
 		return fmt.Errorf("taskstore: marshal %q: %w", t.ID, err)
 	}
-	return fileutil.WriteFileAtomic(s.path(t.ID), data, 0o600)
+	p := s.path(t.ID)
+	return fileutil.WithFlock(p, func() error {
+		return fileutil.WriteFileAtomic(p, data, 0o600)
+	})
 }
 
 // List returns all tasks matching filter, sorted by priority ASC then created_at ASC.
@@ -246,6 +261,9 @@ func (s *TaskStore) List(filter TaskFilter) ([]TaskEntity, error) {
 			continue
 		}
 		if filter.ParentTaskID != "" && t.ParentTaskID != filter.ParentTaskID {
+			continue
+		}
+		if filter.BlockedByID != "" && !containsString(t.BlockedBy, filter.BlockedByID) {
 			continue
 		}
 		result = append(result, *t)
@@ -318,9 +336,56 @@ func (s *TaskStore) Create(entity *TaskEntity) error {
 	if entity.CreatedBy == "" {
 		entity.CreatedBy = "user"
 	}
+	// Reject a parent edge that would create a cycle or exceed the depth bound.
+	// The task graph (parent_task_id edges) must remain a DAG so the executor's
+	// parent-walk and result-aggregation terminate.
+	if entity.ParentTaskID != "" {
+		if err := s.checkParentAcyclic(entity.ID, entity.ParentTaskID); err != nil {
+			return err
+		}
+	}
 	entity.CreatedAt = time.Now().UTC()
 
 	return s.write(entity)
+}
+
+// checkParentAcyclic walks the parent chain starting at parentID and rejects the
+// edge newID → parentID if it would form a cycle. An edge creates a cycle when
+// the chain from parentID reaches back to newID (the task being created) or
+// revisits any node already seen on the walk. It also rejects chains deeper than
+// maxParentDepth. A missing parent is rejected so callers cannot point at a
+// non-existent task.
+//
+// Caller must hold s.mu (Create does).
+func (s *TaskStore) checkParentAcyclic(newID, parentID string) error {
+	if parentID == newID {
+		return fmt.Errorf("%w: task %q cannot be its own parent", ErrCycle, newID)
+	}
+	visited := map[string]bool{}
+	if newID != "" {
+		// Seed the visited set with the node being created so that any chain
+		// looping back to it is caught even before it is written to disk.
+		visited[newID] = true
+	}
+	cur := parentID
+	for depth := 0; cur != ""; depth++ {
+		if depth >= maxParentDepth {
+			return fmt.Errorf("%w: parent chain exceeds max depth %d", ErrCycle, maxParentDepth)
+		}
+		if visited[cur] {
+			return fmt.Errorf("%w: parent edge %q → %q closes a loop at %q", ErrCycle, newID, parentID, cur)
+		}
+		visited[cur] = true
+		parent, err := s.load(cur)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return fmt.Errorf("%w: parent task %q does not exist", ErrNotFound, cur)
+			}
+			return fmt.Errorf("taskstore: walk parent chain at %q: %w", cur, err)
+		}
+		cur = parent.ParentTaskID
+	}
+	return nil
 }
 
 // Update applies patch to the task identified by id and persists the result.
@@ -380,11 +445,178 @@ func (s *TaskStore) Update(id string, patch TaskPatch) (*TaskEntity, error) {
 	if patch.SourceChatID != nil {
 		t.SourceChatID = *patch.SourceChatID
 	}
+	if patch.BlockedBy != nil {
+		t.BlockedBy = *patch.BlockedBy
+	}
 
 	if err := s.write(t); err != nil {
 		return nil, err
 	}
 	return t, nil
+}
+
+// containsString reports whether slice contains s.
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateBlockedBy checks that all IDs in blockedBy exist, none are equal to
+// selfID (trivial self-cycle), and that the proposed edges would not close a
+// cycle in the blocked_by DAG of any length (multi-hop: A→B→A, A→B→C→A, …).
+//
+// Cycle detection is a DFS from each proposed dependency back through the
+// existing blocked_by graph: if selfID is reachable from any dep, adding the
+// edge selfID→dep would create a cycle, so it is rejected. The walk is bounded
+// by maxParentDepth so a (pre-existing, corrupt) cycle in stored data cannot
+// loop forever; on-disk I/O errors fail closed rather than being silently
+// skipped.
+//
+// When selfID is empty (the Create path, where the task is not yet on disk and
+// therefore has no inbound edges) no cycle through selfID is possible, but the
+// existence/self-edge checks still run.
+func (s *TaskStore) ValidateBlockedBy(selfID string, blockedBy []string) error {
+	for _, dep := range blockedBy {
+		if dep == selfID {
+			return fmt.Errorf("task cannot block itself: %q", dep)
+		}
+		if err := validateID(dep); err != nil {
+			return fmt.Errorf("blocked_by contains invalid ID %q: %w", dep, err)
+		}
+		if _, err := s.Get(dep); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return fmt.Errorf("blocked_by task %q not found", dep)
+			}
+			return fmt.Errorf("blocked_by: could not verify task %q: %w", dep, err)
+		}
+	}
+
+	// Multi-hop cycle detection: if selfID is reachable from any proposed dep
+	// through the existing blocked_by edges, the new edge closes a cycle.
+	if selfID == "" {
+		return nil
+	}
+	visited := map[string]bool{}
+	for _, dep := range blockedBy {
+		if err := s.blockedByReaches(dep, selfID, visited, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// blockedByReaches performs a DFS from startID over the blocked_by graph,
+// looking for targetID. If targetID is reachable, adding an edge
+// targetID→startID would create a cycle, so it returns ErrCycle.
+//
+// visited tracks already-explored nodes across the whole walk (the graph is a
+// DAG, so a node need only be explored once). depth bounds the walk by
+// maxParentDepth to defend against a pre-existing on-disk cycle.
+//
+// A missing task (ErrNotFound) is an orphan reference and is skipped — it
+// cannot be part of a cycle. Any OTHER load error fails closed (propagated)
+// rather than being treated as an orphan, so a transient I/O error cannot let
+// a real cycle slip past validation.
+func (s *TaskStore) blockedByReaches(startID, targetID string, visited map[string]bool, depth int) error {
+	if depth >= maxParentDepth {
+		return fmt.Errorf("%w: blocked_by chain exceeds max depth %d", ErrCycle, maxParentDepth)
+	}
+	if visited[startID] {
+		return nil
+	}
+	visited[startID] = true
+
+	t, err := s.load(startID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil // orphan reference — not a cycle
+		}
+		return fmt.Errorf("blocked_by: cycle check: loading task %q: %w", startID, err)
+	}
+	for _, dep := range t.BlockedBy {
+		if dep == targetID {
+			return fmt.Errorf("%w: blocked_by edge %q → %q closes a loop via %q", ErrCycle, targetID, startID, dep)
+		}
+		if err := s.blockedByReaches(dep, targetID, visited, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ErrAlreadyClaimed is returned by ClaimForRun when the task is not in queued
+// status (either already running, completed, failed, or claimed by a concurrent caller).
+var ErrAlreadyClaimed = errors.New("task already claimed")
+
+// ClaimForRun atomically transitions a task from "queued" to "running" under
+// the store mutex, making the transition a single critical section.
+//
+// This prevents the TOCTOU race where two concurrent callers (e.g. the
+// heartbeat and advanceBlockedTasks) both pass a "status==queued" guard and
+// both reach Update, resulting in two runTask goroutines for one task.
+//
+// Returns (updated entity, nil) on success.
+// Returns (nil, ErrAlreadyClaimed) if the task is not "queued" when the lock is held.
+// Returns (nil, ErrNotFound) if the task does not exist.
+// Returns (nil, err) for I/O or validation errors.
+func (s *TaskStore) ClaimForRun(id string, startedAt time.Time) (*TaskEntity, error) {
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if t.Status != "queued" {
+		return nil, fmt.Errorf("taskstore: %w: task %q is %q, not queued", ErrAlreadyClaimed, id, t.Status)
+	}
+	t.Status = "running"
+	t.StartedAt = &startedAt
+	if err := s.write(t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// ClaimParentFollowUp atomically claims the right to launch the "all children
+// done → resume parent" follow-up for the parent task id, returning true to
+// exactly one caller.
+//
+// Concurrent sibling completions can each observe that every sibling is done and
+// would otherwise each spawn the parent follow-up goroutine, producing duplicate
+// resume messages to the parent agent. This CAS-style claim (mirroring
+// ClaimForRun) closes that race: it sets FollowedUp=true under the store mutex
+// and persists it, so only the first caller sees the flag flip from false→true.
+//
+// Returns (true, nil) when this caller won the claim (and must run the follow-up).
+// Returns (false, nil) when the follow-up was already claimed (caller must skip).
+// Returns (false, ErrNotFound) if the task does not exist, or (false, err) on I/O.
+func (s *TaskStore) ClaimParentFollowUp(id string) (bool, error) {
+	if err := validateID(id); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, err := s.load(id)
+	if err != nil {
+		return false, err
+	}
+	if t.FollowedUp {
+		return false, nil
+	}
+	t.FollowedUp = true
+	if err := s.write(t); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Delete removes the task file for id.

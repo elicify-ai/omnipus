@@ -1,0 +1,5 @@
+{"type":"message.start","message":{"id":"msg-oc-1","role":"assistant","model":"claude-opus-4-5"}}
+{"type":"content.delta","delta":{"type":"text_delta","text":"Let me help with that."}}
+{"type":"tool.start","tool":{"id":"tool-oc-1","name":"read_file","input":{"path":"/tmp/example.txt"}}}
+{"type":"content.delta","delta":{"type":"text_delta","text":" Done!"}}
+{"type":"session.complete","session_id":"sess-oc-abc","usage":{"input_tokens":120,"output_tokens":45}}

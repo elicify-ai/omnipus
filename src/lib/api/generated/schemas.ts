@@ -20,7 +20,7 @@ type Session = {
   model?: string | undefined;
   provider?: string | undefined;
   stats: SessionStats;
-  project_id?: string | undefined;
+  workspace_id?: string | undefined;
   task_id?: string | undefined;
   channel: string;
   partitions: Array<string>;
@@ -83,7 +83,7 @@ type ToolCall = {
 type Agent = {
   id: string;
   name: string;
-  type: "core" | "custom" | "system";
+  type: "core" | "custom" | "system" | "worker";
   locked: boolean;
   color?: string | undefined;
   icon?: string | undefined;
@@ -111,6 +111,26 @@ type Agent = {
   stats?: AgentStats | undefined;
   default?: boolean | undefined;
   skills?: Array<string> | undefined;
+  delegation_policy?:
+    | Partial<{
+        to: Array<{
+          kind: "local" | "remote-a2a";
+          id: string;
+        }>;
+        accept_from: Array<{
+          kind: "local" | "remote-a2a";
+          id: string;
+        }>;
+        modes: Array<"await" | "background" | "task">;
+        depth: number;
+        budget: Partial<{
+          max_cost_usd: number;
+          max_tokens: number;
+        }>;
+      }>
+    | undefined;
+  voice?: (string | null) | undefined;
+  executor?: ExecutorConfig | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: Partial<{
@@ -145,8 +165,13 @@ type AgentStats = {
   total_cost: number;
   last_active?: string | undefined;
 };
+type ExecutorConfig = {
+  kind: "native" | "external-cli" | "remote-a2a";
+  cli?: ("claude-code" | "codex" | "opencode") | undefined;
+};
 type AgentCreateRequest = {
   name: string;
+  type?: ("custom" | "worker") | undefined;
   description?: string | undefined;
   model?: string | undefined;
   color?: string | undefined;
@@ -169,7 +194,27 @@ type AgentCreateRequest = {
       }>
     | undefined;
   skills?: Array<string> | undefined;
+  soul?: string | undefined;
+  delegation_policy?: delegation_policy | undefined;
+  voice?: (string | null) | undefined;
+  executor?: ExecutorConfig | undefined;
 };
+type delegation_policy = Partial<{
+  to: Array<{
+    kind: "local" | "remote-a2a";
+    id: string;
+  }>;
+  accept_from: Array<{
+    kind: "local" | "remote-a2a";
+    id: string;
+  }>;
+  modes: Array<"await" | "background" | "task">;
+  depth: number;
+  budget: Partial<{
+    max_cost_usd: number;
+    max_tokens: number;
+  }>;
+}>;
 type AgentUpdateRequest = Partial<{
   name: string;
   description: string;
@@ -205,9 +250,13 @@ type AgentUpdateRequest = Partial<{
   tools_cfg: AgentToolsCfg;
   default: boolean;
   skills: Array<string>;
+  delegation_policy: delegation_policy;
+  voice: string | null;
+  executor: ExecutorConfig;
 }>;
 type ChannelEntry = {
   id: ChannelId;
+  instance_id?: string | undefined;
   name: string;
   transport:
     | "websocket"
@@ -216,9 +265,11 @@ type ChannelEntry = {
     | "native"
     | "tcp"
     | "http"
-    | "serial";
+    | "serial"
+    | "email";
   enabled: boolean;
   description: string;
+  identity?: ChannelIdentity | undefined;
   native_available?: boolean | undefined;
   degraded?: boolean | undefined;
   degraded_reason?: string | undefined;
@@ -237,7 +288,26 @@ type ChannelId =
   | "qq"
   | "irc"
   | "matrix"
-  | "google-chat";
+  | "google-chat"
+  | "email";
+type ChannelIdentity = {
+  kind: "agent" | "user";
+  id?: string | undefined;
+};
+type IntegrationProvidersResponse = {
+  search: Array<IntegrationProvider>;
+  voice: Array<IntegrationProvider>;
+  active_search?: string | undefined;
+  active_voice?: string | undefined;
+};
+type IntegrationProvider = {
+  id: string;
+  kind: "search" | "voice";
+  display_name: string;
+  configured: boolean;
+  requires_key: boolean;
+  active?: boolean | undefined;
+};
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -275,7 +345,7 @@ type DevicePaired = {
 type AgentToolsResponse = {
   config: AgentToolsCfg;
   tools: Array<AgentToolEntry>;
-  agent_type?: ("core" | "system" | "custom") | undefined;
+  agent_type?: ("core" | "system" | "custom" | "worker") | undefined;
 };
 type AgentToolEntry = {
   name: string;
@@ -313,6 +383,25 @@ type ActivityEvent = {
 type RotateTokenResponse = {
   token: BearerToken;
 };
+type ChannelConfigureRequest = Partial<
+  {
+    instance_id: string;
+    identity: ChannelIdentity;
+    token: string;
+    bot_token: string;
+    app_id: string;
+    app_secret: string;
+    webhook_secret: string;
+    imap_host: string;
+    imap_port: number;
+    smtp_host: string;
+    smtp_port: number;
+    username: string;
+    password: string;
+  } & {
+    [key: string]: any;
+  }
+>;
 type Schedule = {
   id: string;
   name: string;
@@ -397,6 +486,115 @@ type Notification = {
   session_id?: string | undefined;
   agent_id?: string | undefined;
 };
+type BoardTask = {
+  id: string;
+  name: string;
+  description?: string | undefined;
+  status: GTDBoardTaskStatus;
+  workspace_id?: string | undefined;
+  agent_id?: string | undefined;
+  prompt?: string | undefined;
+  priority?: number | undefined;
+  milestone_id?: string | undefined;
+  session_id?: string | undefined;
+  result?: string | undefined;
+  created_at: string;
+  updated_at: string;
+  owner?: string | undefined;
+  start?: string | undefined;
+  due?: string | undefined;
+  recurrence?: string | undefined;
+  blocked_by?: Array<string> | undefined;
+};
+type GTDBoardTaskStatus =
+  | "inbox"
+  | "next"
+  | "active"
+  | "waiting"
+  | "done"
+  | "failed";
+type BoardTaskListItem = {
+  id: string;
+  name: string;
+  description?: string | undefined;
+  status: GTDBoardTaskStatus;
+  workspace_id?: string | undefined;
+  agent_id?: string | undefined;
+  prompt?: string | undefined;
+  priority?: number | undefined;
+  milestone_id?: string | undefined;
+  session_id?: string | undefined;
+  result?: string | undefined;
+  created_at: string;
+  updated_at: string;
+  owner?: string | undefined;
+  start?: string | undefined;
+  due?: string | undefined;
+  recurrence?: string | undefined;
+  blocked_by?: Array<string> | undefined;
+};
+type BoardTaskListResponse = {
+  items: Array<BoardTaskListItem>;
+  total: number;
+};
+type BoardTaskCreateRequest = {
+  name: string;
+  description?: string | undefined;
+  status?: GTDBoardTaskStatus | undefined;
+  workspace_id?: string | undefined;
+  agent_id?: string | undefined;
+  prompt?: string | undefined;
+  priority?: number | undefined;
+  milestone_id?: string | undefined;
+  start?: string | undefined;
+  due?: string | undefined;
+  recurrence?: string | undefined;
+  blocked_by?: Array<string> | undefined;
+};
+type BoardTaskUpdateRequest = Partial<{
+  name: string;
+  description: string;
+  status: BoardTaskUpdateStatus;
+  workspace_id: string;
+  agent_id: string;
+  prompt: string;
+  priority: number;
+  milestone_id: string;
+  session_id: string;
+  result: string;
+  start: string;
+  due: string;
+  recurrence: string;
+  blocked_by: Array<string>;
+}>;
+type BoardTaskUpdateStatus = "inbox" | "next" | "waiting" | "done" | "failed";
+type MilestoneListResponse = {
+  milestones: Array<Milestone>;
+  total: number;
+};
+type Milestone = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description?: string | undefined;
+  due_date?: (string | null) | undefined;
+  created_at: string;
+  updated_at: string;
+  owner?: string | undefined;
+  progress?: number | undefined;
+};
+type TokenUsageSummary = {
+  agents: Array<AgentTokenEntry>;
+  period_start: string;
+  period_end: string;
+};
+type AgentTokenEntry = {
+  agent_id: string;
+  agent_name: string;
+  tokens_in: number;
+  tokens_out: number;
+  tokens_total: number;
+};
 
 export const LoginRequest = z.object({
   username: z.string().min(1),
@@ -405,8 +603,8 @@ export const LoginRequest = z.object({
 export const BearerToken = z.string();
 export const LoginResponse: z.ZodType<LoginResponse> = z.object({
   token: BearerToken.min(72)
-    .max(72)
-    .regex(/^omnipus_[a-f0-9]{64}$/),
+    .max(81)
+    .regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/),
   role: z.enum(["admin", "user"]),
   username: z.string(),
   warning: z.string().optional(),
@@ -436,6 +634,37 @@ export const ChangePasswordRequest = z.object({
 export const OperationResult = z.object({
   success: z.boolean(),
   error: z.string().optional(),
+});
+export const ReAuthRequest = z.object({ password: z.string().min(1).max(72) });
+export const ReAuthResponse = z.object({
+  verified: z.boolean(),
+  token: z.string(),
+  expires_in: z.number().int(),
+});
+export const IntegrationProvider: z.ZodType<IntegrationProvider> = z.object({
+  id: z.string(),
+  kind: z.enum(["search", "voice"]),
+  display_name: z.string(),
+  configured: z.boolean(),
+  requires_key: z.boolean(),
+  active: z.boolean().optional(),
+});
+export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersResponse> =
+  z.object({
+    search: z.array(IntegrationProvider),
+    voice: z.array(IntegrationProvider),
+    active_search: z.string().optional(),
+    active_voice: z.string().optional(),
+  });
+export const IntegrationProviderUpdateRequest = z.object({
+  kind: z.enum(["search", "voice"]),
+  api_key: z.string().optional(),
+  active: z.boolean().optional(),
+});
+export const TranscribeResponse = z.object({
+  text: z.string(),
+  language: z.string().optional(),
+  duration: z.number().optional(),
 });
 export const OnboardingCompleteRequest = z.object({
   provider: z
@@ -536,7 +765,7 @@ export const Session: z.ZodType<Session> = z.object({
   model: z.string().optional(),
   provider: z.string().optional(),
   stats: SessionStats,
-  project_id: z.string().optional(),
+  workspace_id: z.string().optional(),
   task_id: z.string().optional(),
   channel: z.string(),
   partitions: z.array(z.string()).max(3650),
@@ -710,11 +939,15 @@ export const AgentStats: z.ZodType<AgentStats> = z
     last_active: z.string().datetime({ offset: true }).optional(),
   })
   .passthrough();
+export const ExecutorConfig: z.ZodType<ExecutorConfig> = z.object({
+  kind: z.enum(["native", "external-cli", "remote-a2a"]),
+  cli: z.enum(["claude-code", "codex", "opencode"]).optional(),
+});
 export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
     name: z.string().min(1).max(100),
-    type: z.enum(["core", "custom", "system"]),
+    type: z.enum(["core", "custom", "system", "worker"]),
     locked: z.boolean(),
     color: z
       .string()
@@ -745,10 +978,44 @@ export const Agent: z.ZodType<Agent> = z
     stats: AgentStats.optional(),
     default: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
+    delegation_policy: z
+      .object({
+        to: z.array(
+          z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
+        ),
+        accept_from: z.array(
+          z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
+        ),
+        modes: z.array(z.enum(["await", "background", "task"])),
+        depth: z.number().int().gte(0),
+        budget: z
+          .object({ max_cost_usd: z.number(), max_tokens: z.number().int() })
+          .partial(),
+      })
+      .partial()
+      .optional(),
+    voice: z.string().nullish(),
+    executor: ExecutorConfig.optional(),
   })
   .passthrough();
+export const delegation_policy: z.ZodType<delegation_policy> = z
+  .object({
+    to: z.array(
+      z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
+    ),
+    accept_from: z.array(
+      z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
+    ),
+    modes: z.array(z.enum(["await", "background", "task"])),
+    depth: z.number().int().gte(0),
+    budget: z
+      .object({ max_cost_usd: z.number(), max_tokens: z.number().int() })
+      .partial(),
+  })
+  .partial();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   name: z.string().min(1),
+  type: z.enum(["custom", "worker"]).optional().default("custom"),
   description: z.string().optional(),
   model: z.string().optional(),
   color: z.string().optional(),
@@ -775,6 +1042,10 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
     .passthrough()
     .optional(),
   skills: z.array(z.string()).optional(),
+  soul: z.string().optional(),
+  delegation_policy: delegation_policy.optional(),
+  voice: z.string().nullish(),
+  executor: ExecutorConfig.optional(),
 });
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
   .object({
@@ -821,6 +1092,9 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     tools_cfg: AgentToolsCfg,
     default: z.boolean(),
     skills: z.array(z.string()),
+    delegation_policy: delegation_policy,
+    voice: z.string().nullable(),
+    executor: ExecutorConfig,
   })
   .partial();
 export const AgentOwnershipUpdateRequest = z
@@ -843,7 +1117,7 @@ export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
 export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
   config: AgentToolsCfg,
   tools: z.array(AgentToolEntry),
-  agent_type: z.enum(["core", "system", "custom"]).optional(),
+  agent_type: z.enum(["core", "system", "custom", "worker"]).optional(),
 });
 export const AgentToolsUpdateRequest = z
   .object({
@@ -868,6 +1142,20 @@ export const AgentToolsUpdateRequest = z
       .passthrough(),
   })
   .partial();
+export const RunnerTestResponse = z.object({
+  ok: z.boolean(),
+  reason: z.enum([
+    "",
+    "missing-binary",
+    "handshake-failed",
+    "unauthenticated",
+    "unknown-cli",
+    "not-external-cli",
+  ]),
+  message: z.string(),
+  cli: z.string().optional(),
+  cli_version: z.string().optional(),
+});
 export const SessionScopeResponse = z
   .object({
     dm_scope: z.enum([
@@ -1116,6 +1404,15 @@ export const RetentionSweepResult = z
     skipped_reason: z.string().optional(),
   })
   .passthrough();
+export const PerformanceSettings = z
+  .object({
+    max_parallel_agents: z.number().int().gte(2).lte(16),
+    effective_max_parallel_agents: z.number().int().gte(2).lte(16),
+  })
+  .partial();
+export const PerformanceSettingsUpdate = z
+  .object({ max_parallel_agents: z.number().int().gte(2).lte(16) })
+  .partial();
 export const ChannelId = z.enum([
   "webchat",
   "telegram",
@@ -1131,9 +1428,15 @@ export const ChannelId = z.enum([
   "irc",
   "matrix",
   "google-chat",
+  "email",
 ]);
+export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
+  kind: z.enum(["agent", "user"]),
+  id: z.string().optional(),
+});
 export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   id: ChannelId,
+  instance_id: z.string().optional(),
   name: z.string(),
   transport: z.enum([
     "websocket",
@@ -1143,9 +1446,11 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
     "tcp",
     "http",
     "serial",
+    "email",
   ]),
   enabled: z.boolean(),
   description: z.string(),
+  identity: ChannelIdentity.optional(),
   native_available: z.boolean().optional(),
   degraded: z.boolean().optional(),
   degraded_reason: z.string().optional(),
@@ -1160,8 +1465,8 @@ export const ChannelRouting = z
   .partial();
 export const RotateTokenResponse: z.ZodType<RotateTokenResponse> = z.object({
   token: BearerToken.min(72)
-    .max(72)
-    .regex(/^omnipus_[a-f0-9]{64}$/),
+    .max(81)
+    .regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/),
 });
 export const PendingRestartEntry = z
   .object({
@@ -1212,19 +1517,34 @@ export const ProviderUpdateRequest = z
 export const Skill = z.object({
   id: z.string(),
   name: z.string(),
-  version: z.string().regex(/^\d+\.\d+\.\d+(?:[-+].*)?$/),
+  version: z.string(),
   description: z.string().optional(),
   author: z.string().optional(),
+  source: z.enum(["builtin", "global", "workspace"]).optional(),
   verified: z.boolean(),
   status: z.enum(["active", "disabled", "inactive", "error"]),
   agent_assignment: z.string().optional(),
 });
+export const SkillSearchResult = z.object({
+  slug: z.string(),
+  display_name: z.string().optional(),
+  summary: z.string().optional(),
+  version: z.string().optional(),
+  score: z.number().optional(),
+  registry_name: z.string().optional(),
+  owner_handle: z.string().optional(),
+});
+export const SkillMarketplaceStatus = z.object({
+  enabled: z.boolean(),
+  registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
+});
 export const SkillInstallRequest = z.object({
-  name: z
+  slug: z
     .string()
     .min(1)
     .max(128)
     .regex(/^[a-z0-9][a-z0-9._-]*$/),
+  version: z.string().max(64).optional(),
 });
 export const SseChatRequest = z.object({ message: z.string() });
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
@@ -1317,6 +1637,7 @@ export const Task = z
     created_at: z.string().datetime({ offset: true }).optional(),
     started_at: z.string().datetime({ offset: true }).optional(),
     completed_at: z.string().datetime({ offset: true }).optional(),
+    blocked_by: z.array(z.string()).optional(),
   })
   .passthrough();
 export const TaskCreateRequest = z.object({
@@ -1328,6 +1649,7 @@ export const TaskCreateRequest = z.object({
   trigger_type: z.enum(["manual", "time", "event"]).optional(),
   name: z.string().optional(),
   description: z.string().optional(),
+  blocked_by: z.array(z.string()).optional(),
 });
 export const TaskUpdateRequest = z
   .object({
@@ -1479,6 +1801,193 @@ export const NotificationList: z.ZodType<NotificationList> = z.object({
   notifications: z.array(Notification),
   unread_count: z.number().int(),
 });
+export const Workspace = z
+  .object({
+    id: z.string(),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    status: z.enum(["active", "archived"]),
+    pinned: z.boolean(),
+    pin_order: z.number().int(),
+    core_team: z.array(z.string()).max(20).optional(),
+    repository: z.string().optional(),
+    task_count: z.number().int(),
+    is_default: z.boolean().optional(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+    owner: z.string().optional(),
+  })
+  .passthrough();
+export const WorkspaceCreateRequest = z
+  .object({
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
+    core_team: z.array(z.string()).max(20).optional(),
+    repository: z.string().optional(),
+  })
+  .passthrough();
+export const WorkspaceUpdateRequest = z
+  .object({
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000),
+    status: z.enum(["active", "archived"]),
+    pinned: z.boolean(),
+    pin_order: z.number().int(),
+    core_team: z.array(z.string()).max(20),
+    repository: z.string(),
+  })
+  .partial()
+  .passthrough();
+export const WorkspaceSessionLink = z
+  .object({
+    session_id: z.string(),
+    created_at: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
+export const Milestone: z.ZodType<Milestone> = z
+  .object({
+    id: z.string(),
+    workspace_id: z.string(),
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
+    due_date: z.string().nullish(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+    owner: z.string().optional(),
+    progress: z.number().gte(0).lte(1).optional(),
+  })
+  .passthrough();
+export const MilestoneListResponse: z.ZodType<MilestoneListResponse> = z
+  .object({ milestones: z.array(Milestone), total: z.number().int() })
+  .passthrough();
+export const MilestoneCreateRequest = z
+  .object({
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
+    due_date: z.string().nullish(),
+  })
+  .passthrough();
+export const MilestoneUpdateRequest = z
+  .object({
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000),
+    due_date: z.string().nullable(),
+  })
+  .partial()
+  .passthrough();
+export const GTDBoardTaskStatus = z.enum([
+  "inbox",
+  "next",
+  "active",
+  "waiting",
+  "done",
+  "failed",
+]);
+export const BoardTaskListItem: z.ZodType<BoardTaskListItem> = z
+  .object({
+    id: z.string(),
+    name: z.string().min(1),
+    description: z.string().max(2000).optional(),
+    status: GTDBoardTaskStatus,
+    workspace_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    prompt: z.string().max(10000).optional(),
+    priority: z.number().int().gte(1).lte(5).optional(),
+    milestone_id: z.string().optional(),
+    session_id: z.string().optional(),
+    result: z.string().max(50000).optional(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+    owner: z.string().optional(),
+    start: z.string().datetime({ offset: true }).optional(),
+    due: z.string().datetime({ offset: true }).optional(),
+    recurrence: z.string().optional(),
+    blocked_by: z.array(z.string()).optional(),
+  })
+  .passthrough();
+export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
+  .object({ items: z.array(BoardTaskListItem), total: z.number().int() })
+  .passthrough();
+export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
+  .object({
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
+    status: GTDBoardTaskStatus.optional(),
+    workspace_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    prompt: z.string().max(10000).optional(),
+    priority: z.number().int().gte(1).lte(5).optional(),
+    milestone_id: z.string().optional(),
+    start: z.string().datetime({ offset: true }).optional(),
+    due: z.string().datetime({ offset: true }).optional(),
+    recurrence: z.string().optional(),
+    blocked_by: z.array(z.string()).optional(),
+  })
+  .passthrough();
+export const BoardTask: z.ZodType<BoardTask> = z
+  .object({
+    id: z.string(),
+    name: z.string().min(1),
+    description: z.string().max(2000).optional(),
+    status: GTDBoardTaskStatus,
+    workspace_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    prompt: z.string().max(10000).optional(),
+    priority: z.number().int().gte(1).lte(5).optional(),
+    milestone_id: z.string().optional(),
+    session_id: z.string().optional(),
+    result: z.string().max(50000).optional(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+    owner: z.string().optional(),
+    start: z.string().datetime({ offset: true }).optional(),
+    due: z.string().datetime({ offset: true }).optional(),
+    recurrence: z.string().optional(),
+    blocked_by: z.array(z.string()).optional(),
+  })
+  .passthrough();
+export const BoardTaskUpdateStatus = z.enum([
+  "inbox",
+  "next",
+  "waiting",
+  "done",
+  "failed",
+]);
+export const BoardTaskUpdateRequest: z.ZodType<BoardTaskUpdateRequest> = z
+  .object({
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000),
+    status: BoardTaskUpdateStatus,
+    workspace_id: z.string(),
+    agent_id: z.string(),
+    prompt: z.string().max(10000),
+    priority: z.number().int().gte(1).lte(5),
+    milestone_id: z.string(),
+    session_id: z.string(),
+    result: z.string().max(50000),
+    start: z.string().datetime({ offset: true }),
+    due: z.string().datetime({ offset: true }),
+    recurrence: z.string(),
+    blocked_by: z.array(z.string()),
+  })
+  .partial()
+  .passthrough();
+export const AgentTokenEntry: z.ZodType<AgentTokenEntry> = z
+  .object({
+    agent_id: z.string(),
+    agent_name: z.string(),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+    tokens_total: z.number().int(),
+  })
+  .passthrough();
+export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
+  .object({
+    agents: z.array(AgentTokenEntry),
+    period_start: z.string().datetime({ offset: true }),
+    period_end: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
 export const AgentSession = z
@@ -1511,13 +2020,21 @@ export const OnboardingStatusResponse = z
   .passthrough();
 export const ActivityEventsResponse: z.ZodType<ActivityEventsResponse> =
   z.object({ events: z.array(ActivityEvent), warning: z.string().optional() });
-export const ChannelConfigureRequest = z
+export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
   .object({
+    instance_id: z.string(),
+    identity: ChannelIdentity,
     token: z.string(),
     bot_token: z.string(),
     app_id: z.string(),
     app_secret: z.string(),
     webhook_secret: z.string(),
+    imap_host: z.string(),
+    imap_port: z.number().int(),
+    smtp_host: z.string(),
+    smtp_port: z.number().int(),
+    username: z.string(),
+    password: z.string(),
   })
   .partial()
   .passthrough();
@@ -1738,6 +2255,44 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 403,
         description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/agents/:id/runner/test",
+    alias: "testAgentRunner",
+    description: `Connection/health check for the agent&#x27;s configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason &quot;not-external-cli&quot; when the agent&#x27;s executor is native/remote-a2a (no runner to test).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: RunnerTestResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -1986,6 +2541,44 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "post",
+    path: "/auth/reauth",
+    alias: "reAuth",
+    description: `Single-user consent primitive (FR-12.2). Re-verifies the authenticated user&#x27;s one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ password: z.string().min(1).max(72) }),
+      },
+    ],
+    response: ReAuthResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/auth/register-admin",
     alias: "registerAdmin",
     description: `Creates the first admin user. Returns 409 if any admin already exists. The check-create sequence is atomic (TOCTOU-safe via safeUpdateConfigJSON). Issues bearer token, session cookie, and CSRF cookie on success. CSRF-exempt. Rate-limited: 3 requests per IP per minute.
@@ -2079,6 +2672,216 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/board/tasks",
+    alias: "listBoardTasks",
+    description: `Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by workspace_id and status. Default limit 200, max 1000.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "status",
+        type: "Query",
+        schema: z
+          .enum(["inbox", "next", "active", "waiting", "done", "failed"])
+          .optional(),
+      },
+      {
+        name: "agent_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "milestone_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().lte(1000).optional().default(200),
+      },
+      {
+        name: "offset",
+        type: "Query",
+        schema: z.number().int().optional().default(0),
+      },
+    ],
+    response: BoardTaskListResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/board/tasks",
+    alias: "createBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: BoardTaskCreateRequest,
+      },
+    ],
+    response: BoardTask,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/board/tasks/:id",
+    alias: "getBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: BoardTask,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/board/tasks/:id",
+    alias: "updateBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: BoardTaskUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: BoardTask,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/board/tasks/:id",
+    alias: "deleteBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/board/tasks/:id/start",
+    alias: "startBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: BoardTask,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
         schema: ErrorResponse,
       },
     ],
@@ -2528,6 +3331,70 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "get",
+    path: "/integrations/providers",
+    alias: "getIntegrationProviders",
+    description: `Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+`,
+    requestFormat: "json",
+    response: IntegrationProvidersResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/integrations/providers/:id",
+    alias: "updateIntegrationProvider",
+    description: `Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: IntegrationProviderUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: IntegrationProvidersResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/mcp-servers",
     alias: "listMcpServers",
     description: `Returns all configured MCP servers and their connection status.`,
@@ -2806,6 +3673,52 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 409,
         description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/performance",
+    alias: "getPerformanceSettings",
+    description: `Returns the max-parallel-agents cap and the effective (clamped) value currently in use. Admin-only.
+`,
+    requestFormat: "json",
+    response: PerformanceSettings,
+    errors: [
+      {
+        status: 403,
+        description: `Admin role required.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/performance",
+    alias: "updatePerformanceSettings",
+    description: `Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT). Admin-only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z
+          .object({ max_parallel_agents: z.number().int().gte(2).lte(16) })
+          .partial(),
+      },
+    ],
+    response: PerformanceSettings,
+    errors: [
+      {
+        status: 400,
+        description: `Invalid value.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Admin role required.`,
         schema: ErrorResponse,
       },
     ],
@@ -3972,20 +4885,14 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "post",
     path: "/skills/install",
     alias: "installSkill",
-    description: `Installs a skill by name from the ClawHub registry. Currently returns 501 Not Implemented while the registry integration is in progress.
+    description: `Installs a skill by its slug from the ClawHub registry. The slug is the identifier returned in a SkillSearchResult. An optional version pins the installed version; when omitted the latest version is installed.
 `,
     requestFormat: "json",
     parameters: [
       {
         name: "body",
         type: "Body",
-        schema: z.object({
-          name: z
-            .string()
-            .min(1)
-            .max(128)
-            .regex(/^[a-z0-9][a-z0-9._-]*$/),
-        }),
+        schema: SkillInstallRequest,
       },
     ],
     response: Skill,
@@ -4001,8 +4908,77 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
-        status: 501,
-        description: `Not yet implemented.`,
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/skills/marketplace",
+    alias: "getSkillMarketplaceStatus",
+    description: `Reports whether any skill marketplace registry is enabled. The SPA gates its skill-browse UI on this: when enabled is false, search and install-by-slug are unavailable (those endpoints return 409) and the UI offers only &quot;install from file&quot;.
+`,
+    requestFormat: "json",
+    response: SkillMarketplaceStatus,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/skills/search",
+    alias: "searchSkills",
+    description: `Searches configured skill registries (e.g. ClawHub) for skills matching the query. Returns an array of marketplace results (not installed skills). Install a result by its slug via POST /skills/install.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "q",
+        type: "Query",
+        schema: z.string().min(1).max(256),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().gte(1).lte(50).optional().default(20),
+      },
+    ],
+    response: z.array(SkillSearchResult),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
         schema: ErrorResponse,
       },
     ],
@@ -4038,6 +5014,34 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       },
     ],
     response: AppState,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/stats/tokens",
+    alias: "getTokenStats",
+    description: `Aggregates token usage from SessionMeta.Stats across all session files for the requested period. period&#x3D;month means the current calendar month UTC. No dollar estimates — token counts only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "period",
+        type: "Query",
+        schema: z.literal("month").optional().default("month"),
+      },
+    ],
+    response: TokenUsageSummary,
     errors: [
       {
         status: 400,
@@ -4811,6 +5815,44 @@ Returns HTTP 201 on success.
     ],
   },
   {
+    method: "post",
+    path: "/voice/transcribe",
+    alias: "transcribeAudio",
+    description: `Accepts a multipart/form-data audio file (field &quot;audio&quot;) captured by the chat composer mic and returns the transcribed text via the active Transcriber (FR-12.1). Responds 503 when no transcriber is configured. Requires authentication.
+`,
+    requestFormat: "form-data",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ audio: z.instanceof(File) }).passthrough(),
+      },
+    ],
+    response: TranscribeResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/workspace/:agent_id/:path",
     alias: "getWorkspaceFile",
@@ -4858,6 +5900,356 @@ Returns HTTP 201 on success.
       },
     ],
   },
+  {
+    method: "get",
+    path: "/workspaces",
+    alias: "listWorkspaces",
+    description: `Returns all workspaces, newest-first. Excludes archived workspaces by default. Use ?status&#x3D;archived to list archived workspaces or ?status&#x3D;all for everything. task_count is computed live from the GTD task store.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "status",
+        type: "Query",
+        schema: z.enum(["active", "archived", "all"]).optional(),
+      },
+    ],
+    response: z.array(Workspace),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces",
+    alias: "createWorkspace",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: WorkspaceCreateRequest,
+      },
+    ],
+    response: Workspace,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id",
+    alias: "getWorkspace",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Workspace,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/workspaces/:id",
+    alias: "updateWorkspace",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: WorkspaceUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Workspace,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/workspaces/:id",
+    alias: "deleteWorkspace",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/milestones",
+    alias: "listWorkspaceMilestones",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MilestoneListResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/milestones",
+    alias: "createWorkspaceMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MilestoneCreateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Milestone,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/milestones/:milestoneId",
+    alias: "getWorkspaceMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "milestoneId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Milestone,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/workspaces/:id/milestones/:milestoneId",
+    alias: "updateWorkspaceMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MilestoneUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "milestoneId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Milestone,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/workspaces/:id/milestones/:milestoneId",
+    alias: "deleteWorkspaceMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "milestoneId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/sessions",
+    alias: "listWorkspaceSessions",
+    description: `Returns sessions that were auto-linked when an agent created or updated a GTD task with this workspace_id. Returns 200 with empty array when workspace exists but has no links. Returns 404 when workspace does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(WorkspaceSessionLink),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
 ]);
 
 export const api = new Zodios(endpoints);
@@ -4876,7 +6268,7 @@ export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_r
 export const AuthFrame = z
   .object({
     type: z.literal("auth"),
-    token: z.string().min(8).max(72).regex(/^omnipus_[a-f0-9]{64}$/),
+    token: z.string().min(72).max(81).regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/),
   })
   .strict();
 

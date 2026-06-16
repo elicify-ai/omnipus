@@ -1,0 +1,53 @@
+type: object
+required:
+  - name
+properties:
+  name:
+    type: string
+    minLength: 1
+    maxLength: 200
+  description:
+    type: string
+    maxLength: 2000
+  status:
+    $ref: './GTDBoardTaskStatus.yaml'
+  workspace_id:
+    type: string
+  agent_id:
+    type: string
+  prompt:
+    type: string
+    maxLength: 10000
+  priority:
+    type: integer
+    minimum: 1
+    maximum: 5
+  milestone_id:
+    type: string
+  start:
+    type: string
+    format: date-time
+    description: >
+      Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling
+      engine runs in v0.1.0 (shell only — engine is v0.2.0).
+    example: "2026-07-01T09:00:00Z"
+  due:
+    type: string
+    format: date-time
+    description: >
+      Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+    example: "2026-07-31T17:00:00Z"
+  recurrence:
+    type: string
+    description: >
+      Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g.
+      "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+    example: "FREQ=WEEKLY;BYDAY=MO"
+  blocked_by:
+    type: array
+    description: >
+      Optional list of task IDs this task is blocked by. Write-time DAG
+      validator rejects self-edges and cycles. Max depth 50.
+    items:
+      type: string
+    example: []

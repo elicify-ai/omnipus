@@ -160,6 +160,23 @@ func (si *SkillInstaller) InstallFromGitHub(ctx context.Context, repo string) er
 		return si.downloadRaw(ctx, ref.Owner, ref.RepoName, ref.Ref, ref.SubPath, skillDirectory)
 	}
 
+	// Bundle gate (FR-10.2): if the installed directory carries a bundle
+	// manifest (omnipus-plugin.json), it is an installable bundle, not a bare
+	// skill — validate the manifest against the required shape and reject a
+	// malformed bundle cleanly before it is used. A directory without a
+	// manifest is a plain SKILL.md skill and keeps the legacy contract.
+	if _, statErr := os.Stat(filepath.Join(skillDirectory, BundleManifestFilename)); statErr == nil {
+		if _, mErr := LoadBundleManifest(skillDirectory); mErr != nil {
+			// Remove the partially-installed bundle so a bad manifest never
+			// leaves a half-installed directory behind.
+			if rmErr := os.RemoveAll(skillDirectory); rmErr != nil {
+				return fmt.Errorf("%w (cleanup failed: %v)", mErr, rmErr)
+			}
+			return mErr
+		}
+		return nil
+	}
+
 	if _, err := os.Stat(filepath.Join(skillDirectory, "SKILL.md")); err != nil {
 		return fmt.Errorf("SKILL.md not found in repository")
 	}

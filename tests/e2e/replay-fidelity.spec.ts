@@ -477,7 +477,7 @@ test(
     // ── Step 2: open session and send a long-form prompt on page1 ──
     // The unique nonce forces a verbatim echo we can match exactly. The
     // 600-word body prefix ensures the response streams for several seconds
-    // (typically 4-12s on glm-5v-turbo) so page2 can attach mid-turn.
+    // (typically 4-12s on gemini-2.5-flash) so page2 can attach mid-turn.
     await openSession(page, sessionTitle)
     await waitForReplayDone(page)
 

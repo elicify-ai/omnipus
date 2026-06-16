@@ -33,7 +33,7 @@ func DiscoverAllTools(loader *SkillsLoader) []DiscoveredTool {
 				continue
 			}
 			discovered = append(discovered, DiscoveredTool{
-				SkillName: info.Name,
+				SkillName: info.ID,
 				ToolName:  tool,
 				Source:    info.Source,
 			})

@@ -62,12 +62,13 @@ func (*PinListTool) RequiresAdminAsk() bool   { return true }
 func (*PinCreateTool) RequiresAdminAsk() bool { return true }
 func (*PinDeleteTool) RequiresAdminAsk() bool { return true }
 
-// Project tools
+// Workspace tools
 
-func (*ProjectCreateTool) RequiresAdminAsk() bool { return true }
-func (*ProjectUpdateTool) RequiresAdminAsk() bool { return true }
-func (*ProjectDeleteTool) RequiresAdminAsk() bool { return true }
-func (*ProjectListTool) RequiresAdminAsk() bool   { return true }
+func (*WorkspaceCreateTool) RequiresAdminAsk() bool { return true }
+func (*WorkspaceUpdateTool) RequiresAdminAsk() bool { return true }
+func (*WorkspaceDeleteTool) RequiresAdminAsk() bool { return true }
+func (*WorkspaceListTool) RequiresAdminAsk() bool   { return true }
+func (*WorkspaceGetTool) RequiresAdminAsk() bool    { return true }
 
 // Provider tools
 
@@ -82,6 +83,11 @@ func (*SkillInstallTool) RequiresAdminAsk() bool { return true }
 func (*SkillRemoveTool) RequiresAdminAsk() bool  { return true }
 func (*SkillSearchTool) RequiresAdminAsk() bool  { return true }
 func (*SkillListTool) RequiresAdminAsk() bool    { return true }
+
+// Skill authoring writes mutate the skills tree — they always require admin
+// approval when policy is "ask" (consent gate, FR-9.2).
+func (*SkillCreateTool) RequiresAdminAsk() bool { return true }
+func (*SkillEditTool) RequiresAdminAsk() bool   { return true }
 
 // System task tools
 

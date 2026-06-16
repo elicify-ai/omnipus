@@ -40,7 +40,7 @@ func init() {
 	channels.RegisterFactory(
 		"weixin",
 		func(cfg *config.Config, secrets credentials.SecretBundle, bus *bus.MessageBus) (channels.Channel, error) {
-			return NewWeixinChannel(cfg.Channels.Weixin, secrets, bus)
+			return NewWeixinChannel(config.InstanceToWeixin(cfg.Channels["weixin"]), secrets, bus)
 		},
 	)
 }

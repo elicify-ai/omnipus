@@ -1,0 +1,22 @@
+title: ChannelIdentity
+description: >
+  Identifies whether an inbound channel connection acts on behalf of a specific
+  agent ("agent" kind) or routes as the default user ("user" kind). Persisted
+  per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
+type: object
+required:
+  - kind
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    description: Routing kind for this channel instance.
+    enum:
+      - agent
+      - user
+    example: agent
+  id:
+    type: string
+    description: >
+      The agent ID when kind is "agent". Empty or omitted when kind is "user".
+    example: "mia"

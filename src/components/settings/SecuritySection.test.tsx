@@ -33,6 +33,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     runDoctor: vi.fn(),
     fetchSkillTrust: vi.fn(),
     updateSkillTrust: vi.fn(),
+    reAuth: vi.fn(),
   }
 })
 
@@ -54,12 +55,25 @@ import {
   fetchCredentials,
   fetchBuiltinTools,
   fetchGlobalToolPolicies,
+  updateGlobalToolPolicies,
   fetchDoctorResults,
   fetchSkillTrust,
+  reAuth,
+  ApiError,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SecuritySection } from './SecuritySection'
 import type { RegistryTool } from '@/lib/api'
+
+// reAuth403 is the exact 403 the backend's requireReAuth gate returns. The
+// useReAuthGate hook detects it by body match and opens the consent dialog.
+function reAuth403() {
+  return new ApiError(
+    403,
+    "You don't have permission to perform this action.",
+    { body: '{"error":"this change requires re-typing your password — call POST /api/v1/auth/reauth first"}' },
+  )
+}
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -79,7 +93,6 @@ const MINIMAL_CONFIG = {
   gateway: {
     bind_address: '127.0.0.1',
     port: 5000,
-    auth_mode: 'token' as const,
     token: 'test-token',
     hot_reload: false,
     log_level: 'info',
@@ -440,6 +453,50 @@ describe('SecuritySection — #340 SkillTrustSection mounted', () => {
     await waitFor(() => {
       const radios = screen.getAllByRole('radio')
       expect(radios.length).toBeGreaterThanOrEqual(3)
+    })
+  })
+})
+
+// ── Re-auth gate for global tool policies (Spec-3 FR-3.3 / Spec-6 FR-12.2) ──────
+
+describe('SecuritySection — global tool-policy re-auth gate', () => {
+  it('opens the re-auth dialog when the gated PUT returns 403, then replays the token', async () => {
+    // First auto-save attempt (no consent token) is rejected by the re-auth
+    // gate; the replay (with the minted token) succeeds.
+    vi.mocked(updateGlobalToolPolicies)
+      .mockRejectedValueOnce(reAuth403())
+      .mockResolvedValueOnce({ default_policy: 'allow', policies: {} } as never)
+    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+
+    renderSection()
+
+    // Expand Advanced to reveal the ToolPolicyEditor.
+    await waitFor(() => {
+      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-balanced')).toBeInTheDocument()
+    })
+
+    // Switch the default policy ask → allow; this triggers the debounced PUT.
+    fireEvent.click(screen.getByTestId('preset-balanced'))
+
+    // The first PUT (token '') fired and 403'd → consent dialog appears.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+    expect(vi.mocked(updateGlobalToolPolicies).mock.calls[0][1]).toBe('')
+
+    // Re-authenticate; the PUT is replayed with the consent token.
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(reAuth).toHaveBeenCalledWith('mypassword')
+      expect(updateGlobalToolPolicies).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(updateGlobalToolPolicies).mock.calls[1][1]).toBe('reauth_tok')
     })
   })
 })

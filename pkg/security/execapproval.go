@@ -207,7 +207,7 @@ func (m *ExecApprovalManager) CheckApproval(command string) ApprovalResult {
 	m.mu.RUnlock()
 
 	for _, pat := range patterns {
-		if policy.MatchGlob(pat, command) {
+		if matchAllowlistPattern(pat, command) {
 			return ApprovalResult{
 				AutoApproved: true,
 				Approved:     true,
@@ -218,6 +218,44 @@ func (m *ExecApprovalManager) CheckApproval(command string) ApprovalResult {
 
 	// Interactive prompt
 	return m.prompt(command)
+}
+
+// matchAllowlistPattern reports whether command is covered by a persisted
+// approval pattern.
+//
+// C6 (exec-approval consent loss): a wildcard-free pattern is treated as a
+// BINARY ALLOWANCE — it matches when it equals the command's first token
+// (i.e. "this binary, with any arguments or none"). This is what a user means
+// when they pick "always allow" for a command: the previous implementation
+// persisted "<binary> *" and matched only via policy.MatchGlob, but the glob
+// "git *" does NOT match the bare invocation "git" (the literal space before
+// the star has nothing to consume). So a user who approved "always allow" for
+// "git status" was re-prompted on the next bare "git", and a user who approved
+// a no-argument command like "htop" was re-prompted every single time — the
+// granted consent was silently lost.
+//
+// Persisting the bare binary token (e.g. "git") and matching it against the
+// command's first token honours the consent for both "git" and "git status"
+// without the over-broad "git*" form (which would also match "github").
+// Patterns that DO contain a wildcard keep their existing glob semantics, so
+// hand-written or legacy "git *" / "npm run *" entries still work — and, for
+// back-compat, a legacy "<binary> *" entry now also covers the bare binary.
+func matchAllowlistPattern(pattern, command string) bool {
+	// Glob patterns (and exact-string patterns) keep their existing semantics.
+	if policy.MatchGlob(pattern, command) {
+		return true
+	}
+	// Wildcard-free pattern → binary allowance: match the command's first token.
+	if !strings.ContainsAny(pattern, "*?") {
+		return policy.FirstToken(pattern) == policy.FirstToken(command)
+	}
+	// Back-compat: a legacy "<binary> *" pattern should also cover the bare
+	// binary invocation ("git" for a persisted "git *"), which plain MatchGlob
+	// misses because the literal space cannot be consumed by the trailing star.
+	if base, ok := strings.CutSuffix(pattern, " *"); ok {
+		return policy.FirstToken(base) == policy.FirstToken(command)
+	}
+	return false
 }
 
 // prompt shows a CLI approval prompt and returns the user's decision.
@@ -246,14 +284,18 @@ func (m *ExecApprovalManager) prompt(command string) ApprovalResult {
 			PolicyRule: "exec approval: allowed once by user",
 		}
 	case "a", "always", "always allow": // Always allow
-		// Build a glob pattern from the first token (binary name + *)
+		// C6: persist the bare binary token as a binary allowance. Matching
+		// (matchAllowlistPattern) treats a wildcard-free pattern as "this
+		// binary with any arguments or none", so this single entry covers both
+		// the bare invocation ("git") and the argument form ("git status").
+		// The previous "<binary> *" glob form silently failed to match the bare
+		// invocation, re-prompting the user despite their "always allow" choice.
 		binary := policy.FirstToken(command)
-		pattern := binary + " *"
-		m.PersistPattern(pattern)
+		m.PersistPattern(binary)
 		return ApprovalResult{
 			AutoApproved: true,
 			Approved:     true,
-			PolicyRule:   fmt.Sprintf("exec approval: always allow pattern %q added", pattern),
+			PolicyRule:   fmt.Sprintf("exec approval: always allow binary %q added", binary),
 		}
 	default: // 'd' or anything else → deny
 		return ApprovalResult{
