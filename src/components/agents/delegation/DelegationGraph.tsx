@@ -46,6 +46,8 @@ const MODE_CHIP_CLASS: Record<DelegationMode, string> = {
 // ── Node / edge data carried into React Flow ─────────────────────────────────
 export interface AgentNodeData extends Record<string, unknown> {
   model: GraphNodeModel
+  /** Present on non-ghost nodes — see AgentNode. */
+  onOpenAgent?: (agentId: string) => void
 }
 export interface DelegationEdgeData extends Record<string, unknown> {
   model: GraphEdgeModel
@@ -147,16 +149,39 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
     <div
       data-testid={`delegation-node-${model.id}`}
       data-can-source={canBeSource ? 'true' : 'false'}
+      // Keyboard a11y: when the host screen provides onOpenAgent, make the
+      // node a focusable button-like target (role/tabIndex/onKeyDown) so
+      // keyboard / screen-reader users can open the edit sheet without
+      // needing a mouse. React Flow's drag handler is pointer-based, so it
+      // does not interfere with Enter/Space.
+      role={data.onOpenAgent ? 'button' : undefined}
+      tabIndex={data.onOpenAgent ? 0 : undefined}
+      onClick={data.onOpenAgent ? (e) => {
+        // Skip clicks that landed on a connection Handle — a source-dot click
+        // would otherwise both start a connection AND open the sheet.
+        // [data-handleid] is the public @xyflow/react data attribute (stable
+        // across CSS-class renames).
+        if ((e.target as HTMLElement).closest('[data-handleid]')) return
+        data.onOpenAgent?.(id)
+      } : undefined}
+      onKeyDown={data.onOpenAgent ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          data.onOpenAgent?.(id)
+        }
+      } : undefined}
       className={cn(
         'group relative w-[220px] cursor-grab rounded-xl border bg-[var(--color-surface-1)] px-3 py-2.5 shadow-sm transition-colors active:cursor-grabbing',
         'border-[var(--color-border)] hover:border-[var(--color-accent)]/50',
+        // Focus ring (matches the agent-card focus ring in the rest of the app).
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-primary)]',
         // Drop-target affordance during an in-progress connection.
         isTarget && 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/70',
       )}
       title={
         model.isWorker
-          ? "Workers are delegation leaves — they receive work but never delegate onward"
-          : `Drag the yellow dot on ${model.name} onto another agent to delegate. Drag the body to reposition.`
+          ? "Workers are delegation leaves — they receive work but never delegate onward. Click to edit."
+          : `Click to edit ${model.name}, or drag the yellow dot onto another agent to delegate. Drag the body to reposition.`
       }
     >
       {/* Full-node TARGET handle: drop ANYWHERE on this shape to connect TO it.
@@ -433,6 +458,8 @@ export interface DelegationGraphProps {
   onDeleteEdge: (source: string, target: string) => void
   /** Surface a human reason when a connection is rejected (tooltip/toast). */
   onRejectConnection: (reason: string) => void
+  /** Click a non-ghost node → open the edit slide-over for that agent. */
+  onOpenAgent?: (agentId: string) => void
 }
 
 const REJECTION_MESSAGE: Record<string, string> = {
@@ -453,6 +480,7 @@ function DelegationGraphInner({
   onSetDepth,
   onDeleteEdge,
   onRejectConnection,
+  onOpenAgent,
 }: DelegationGraphProps) {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
 
@@ -474,13 +502,13 @@ function DelegationGraphInner({
         id: model.id,
         type: 'agent' as const,
         position: model.position,
-        data: { model },
+        data: { model, onOpenAgent },
         // `connectable` stays true for every node so each can at least RECEIVE an
         // edge (full-node target handle); the worker/ghost source block is
         // enforced by omitting their source dot + onConnectStart/isValidConnection.
         connectable: true,
       })),
-    [nodes],
+    [nodes, onOpenAgent],
   )
 
   // Controlled node state so positions can be DRAGGED (via onNodesChange) while

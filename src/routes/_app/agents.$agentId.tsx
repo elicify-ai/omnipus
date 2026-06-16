@@ -1,20 +1,20 @@
-import { lazy, Suspense } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
-import { RouteFallback } from '@/components/shared/RouteFallback'
+import { useEffect } from 'react'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { useUiStore } from '@/store/ui'
 
-// Code-split: AgentProfile (accordion, tools/permissions panels) is heavy and
-// only needed on this detail route — lazy-load it into its own chunk.
-const AgentProfile = lazy(() =>
-  import('@/components/agents/AgentProfile').then((m) => ({ default: m.AgentProfile })),
-)
-
+// Deep-link → open the slide-over and replace history to /agents so the back
+// button doesn't surface this transient URL.
 function AgentProfileRoute() {
   const { agentId } = Route.useParams()
-  return (
-    <Suspense fallback={<RouteFallback />}>
-      <AgentProfile agentId={agentId} />
-    </Suspense>
-  )
+  const openEditAgentSlideOver = useUiStore((s) => s.openEditAgentSlideOver)
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    openEditAgentSlideOver(agentId)
+    navigate({ to: '/agents', replace: true })
+  }, [agentId, openEditAgentSlideOver, navigate])
+
+  return null
 }
 
 export const Route = createFileRoute('/_app/agents/$agentId')({

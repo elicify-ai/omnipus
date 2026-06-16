@@ -47,6 +47,7 @@ function buildWorkerIds(agents: Agent[]): Set<string> {
 export function TrustGraphScreen() {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
+  const openEditAgentSlideOver = useUiStore((s) => s.openEditAgentSlideOver)
 
   const {
     data: agents = [],
@@ -273,6 +274,8 @@ export function TrustGraphScreen() {
             onSetDepth={handleSetDepth}
             onDeleteEdge={handleDeleteEdge}
             onRejectConnection={handleReject}
+            // node click → open the edit slide-over (mounted at the agents layout level)
+            onOpenAgent={openEditAgentSlideOver}
           />
         )}
       </div>

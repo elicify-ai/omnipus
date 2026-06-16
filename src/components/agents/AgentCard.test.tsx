@@ -1,18 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { act } from 'react'
 import { AgentCard } from './AgentCard'
+import { useUiStore } from '@/store/ui'
 import type { Agent } from '@/lib/api'
 
 // test_agent_card_component (test #12)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Agent cards render in responsive grid
-//             wave5a-wire-ui-spec.md — Scenario: Agent card navigation to profile
-
-const mockNavigate = vi.fn()
-
-vi.mock('@tanstack/react-router', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  return { ...actual, useNavigate: () => mockNavigate }
-})
+//             wave5a-wire-ui-spec.md — Scenario: Agent card opens the edit slide-over
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   return {
@@ -37,7 +32,9 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 }
 
 beforeEach(() => {
-  mockNavigate.mockClear()
+  act(() => {
+    useUiStore.setState({ editAgentId: null })
+  })
 })
 
 describe('AgentCard — rendering (test #12)', () => {
@@ -88,15 +85,22 @@ describe('AgentCard — rendering (test #12)', () => {
   })
 })
 
-describe('AgentCard — navigation (test #12)', () => {
-  it('navigates to /agents/$agentId when card is clicked', () => {
-    // Traces to: wave5a-wire-ui-spec.md — Scenario: Agent card navigation to profile (AC3)
+describe('AgentCard — slide-over open (test #12)', () => {
+  it('opens the edit slide-over via the UI store when the card is clicked', () => {
+    // Traces to: wave5a-wire-ui-spec.md — Scenario: Agent card opens the edit slide-over (AC3)
     render(<AgentCard agent={makeAgent({ id: 'general-assistant' })} />)
     fireEvent.click(screen.getByRole('button'))
-    expect(mockNavigate).toHaveBeenCalledWith({
-      to: '/agents/$agentId',
-      params: { agentId: 'general-assistant' },
-    })
+    expect(useUiStore.getState().editAgentId).toBe('general-assistant')
+  })
+
+  it('uses the explicit onClick override when provided', () => {
+    // The override REPLACES the default store action — parent that wants a
+    // different click behaviour gets it without patching the component.
+    const onClick = vi.fn()
+    render(<AgentCard agent={makeAgent({ id: 'a' })} onClick={onClick} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(useUiStore.getState().editAgentId).toBeNull()
   })
 })
 

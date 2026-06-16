@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useMemo, KeyboardEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft,
   Robot,
   Brain,
   Lightbulb,
@@ -22,7 +21,6 @@ import {
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
-import { useNavigate } from '@tanstack/react-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -39,6 +37,7 @@ import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields } from './AgentFormFields'
 import { SchedulesList } from '@/components/command-center/SchedulesList'
 import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
   fetchAppState,
@@ -55,6 +54,7 @@ import {
   type Skill,
   type ExecutorConfig,
 } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { AVATAR_COLORS } from '@/lib/constants'
 
@@ -82,17 +82,26 @@ function getIconComponent(name: string | undefined) {
 }
 
 interface AgentProfileProps {
-  agentId: string
+  /**
+   * Explicit agent id (wins over the store-driven `editAgentId`). Used by
+   * tests and direct renders; the primary path is the UI store.
+   */
+  agentId?: string
 }
 
-export function AgentProfile({ agentId }: AgentProfileProps) {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const { addToast } = useUiStore()
+export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
+  const editAgentId = useUiStore((s) => s.editAgentId)
+  const closeEditAgentSlideOver = useUiStore((s) => s.closeEditAgentSlideOver)
+  const addToast = useUiStore((s) => s.addToast)
+  const agentId = agentIdProp ?? editAgentId
+  const isOpen = agentId !== null
 
-  const { data: agent, isLoading, isError } = useQuery({
+  const queryClient = useQueryClient()
+
+  const { data: agent, isLoading, isError, error: agentError, refetch: refetchAgent } = useQuery({
     queryKey: ['agent', agentId],
-    queryFn: () => fetchAgent(agentId),
+    queryFn: () => fetchAgent(agentId as string),
+    enabled: agentId !== null,
   })
 
   const { data: providers = [], isError: providersError } = useQuery({
@@ -102,7 +111,8 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
 
   const { data: agentSessions = [], isError: sessionsError } = useQuery({
     queryKey: ['agent-sessions', agentId],
-    queryFn: () => fetchAgentSessions(agentId),
+    queryFn: () => fetchAgentSessions(agentId as string),
+    enabled: agentId !== null,
   })
 
   const { data: allActivity = [], isError: activityError } = useQuery({
@@ -277,9 +287,12 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
   const { status: saveStatus, error: saveError } = useAutoSave(
     formData,
     async (data) => {
-      // Guard: do not save before the server data has been hydrated into state.
-      // Saving before hydration would overwrite real data with empty defaults.
+      // Do not save before the server data has been hydrated into state —
+      // saving before hydration would overwrite real data with empty defaults.
       if (!hasHydrated.current) return
+      // Form is mounted at the layout level; its state can outlive a
+      // closed sheet. Refuse a save with no id rather than PUT /null.
+      if (agentId === null) return
       // Locked agents: strip every field the backend treats as immutable for
       // the locked roster (Mia/Jim/Ava/Ray/Max). Identity fields plus the
       // sandbox profile, shell policy, tools_cfg, and skills are all built-in
@@ -359,25 +372,57 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full text-[var(--color-muted)] text-sm">
-        Loading agent...
-      </div>
+      <ProfileSheet isOpen={isOpen} onClose={closeEditAgentSlideOver} title="Edit agent">
+        <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
+          Loading agent...
+        </div>
+      </ProfileSheet>
     )
   }
 
   if (isError || !agent) {
+    // Distinguish "this agent does not exist" (404) from transient errors so
+    // the user gets the right copy and the right path forward. The previous
+    // version lumped every error into "Agent not found", which misled users
+    // on 500s / 401s / 502s and gave them no retry affordance.
+    const isNotFound = isApiError(agentError) && agentError.status === 404
+    const title = isNotFound ? 'Agent not found' : "Couldn't load agent"
+    const detail = isNotFound
+      ? 'This agent may have been deleted.'
+      : isApiError(agentError)
+        ? agentError.userMessage
+        : agentError instanceof Error
+          ? agentError.message
+          : 'Check your connection and try again.'
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4">
-        <p className="text-[var(--color-muted)] text-sm">Agent not found</p>
-        <a href="/#/agents" className="text-sm text-[var(--color-muted)] underline hover:text-[var(--color-secondary)]">
-          Back to Agents
-        </a>
-      </div>
+      <ProfileSheet
+        isOpen={isOpen}
+        onClose={closeEditAgentSlideOver}
+        title={isNotFound ? 'Agent not found' : "Couldn't load agent"}
+      >
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+          <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
+          <p className="text-xs text-[var(--color-muted)] max-w-sm">{detail}</p>
+          <div className="flex gap-2">
+            {!isNotFound && (
+              <Button variant="outline" size="sm" onClick={() => refetchAgent()}>
+                Retry
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={closeEditAgentSlideOver}>
+              Back to Agents
+            </Button>
+          </div>
+        </div>
+      </ProfileSheet>
     )
   }
 
   const isLocked = agent.locked === true
   const canEdit = !isLocked
+  // Past the early returns, `agent` is non-null and `agentId` is the id used
+  // to fetch it. Narrow once for child components that take `string`.
+  const resolvedAgentId = agentId as string
   // Tier-branched form. Workers are delegation-only labour agents: never a chat
   // target, no heartbeat, never the default, and carry an executor (the worker's
   // defining property). Base agents (core/custom/system) run native/in-process
@@ -389,24 +434,12 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
   const isWorkerAgent = isWorker(agent)
 
   return (
-    <div className="absolute inset-0 overflow-y-auto">
-    <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate({ to: '/agents' })}
-          className="gap-1 text-[var(--color-muted)]"
-        >
-          <ArrowLeft size={14} /> Agents
-        </Button>
-      </div>
-
-      <div className="flex items-center gap-4">
-        <div
-          className="w-14 h-14 rounded-full flex items-center justify-center shrink-0"
-          style={{ backgroundColor: selectedColor ?? 'var(--color-surface-3)' }}
+    <ProfileSheet isOpen={isOpen} onClose={closeEditAgentSlideOver} title={`Edit ${agent.name}`}>
+      <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
+          <div className="flex items-center gap-4">
+            <div
+              className="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
+              style={{ backgroundColor: selectedColor ?? 'var(--color-surface-3)' }}
         >
           <AvatarIcon size={22} className="text-[var(--color-primary)]" />
         </div>
@@ -428,9 +461,11 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           <AutoSaveIndicator status={saveStatus} error={saveError} />
         </div>
       </div>
+        </SheetHeader>
 
-      <Separator />
-
+      {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-2xl mx-auto px-8 py-6 space-y-4">
       <Accordion
         type="multiple"
         defaultValue={['identity']}
@@ -615,7 +650,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
               <div className="px-4">
                 <ExecutorSelector
                   value={executor}
-                  agentId={agentId}
+                  agentId={resolvedAgentId}
                   disabled={isLocked}
                   onChange={(next) => { markDirty(); setExecutor(next) }}
                 />
@@ -1097,7 +1132,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                     New schedule
                   </button>
                 </div>
-                <SchedulesList agentId={agentId} />
+                <SchedulesList agentId={resolvedAgentId} />
               </div>
             </AccordionContent>
           </AccordionItem>
@@ -1147,19 +1182,69 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           </AccordionContent>
         </AccordionItem>
       </Accordion>
+        </div>
+      </div>
+
+      {/* Sticky footer — always present so the user has an explicit dismiss
+          affordance; the Radix X in the top-right is also wired here via
+          SheetContent's onOpenChange. */}
+      <div className="px-8 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-3">
+        <AutoSaveIndicator status={saveStatus} error={saveError} />
+        <Button
+          variant="outline"
+          onClick={closeEditAgentSlideOver}
+          data-testid="agent-profile-close"
+        >
+          Close
+        </Button>
+      </div>
 
       {/* New schedule slide-over — owner pre-filled to this agent (#264) */}
       {creatingSchedule && (
         <ScheduleFormSheet
           open={true}
-          defaultOwnerAgentId={agentId}
+          defaultOwnerAgentId={resolvedAgentId}
           onOpenChange={(open) => {
             if (!open) setCreatingSchedule(false)
           }}
         />
       )}
-    </div>
-    </div>
+    </ProfileSheet>
+  )
+}
+
+/** Local wrapper for the slide-over primitives. Keeps the three call sites
+ *  (loading / not-found / main) in sync on `open`, `onOpenChange`, side, and
+ *  the column layout that lets the body and footer stick inside the sheet. */
+function ProfileSheet({
+  isOpen,
+  onClose,
+  title,
+  children,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  /**
+   * Accessible title for screen readers. Rendered as a visually-hidden
+   * SheetTitle so Radix Dialog's aria-labelledby points at something
+   * meaningful — the visible h1 in the body is a sibling, not the
+   * Dialog.Title, so without this sr-only label the dialog opens
+   * with no announced name.
+   */
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <Sheet open={isOpen} onOpenChange={(o) => { if (!o) onClose() }}>
+      <SheetContent
+        side="right"
+        widthClass="w-full sm:max-w-3xl"
+        className="flex flex-col gap-0 p-0"
+      >
+        <SheetTitle className="sr-only">{title}</SheetTitle>
+        {children}
+      </SheetContent>
+    </Sheet>
   )
 }
 

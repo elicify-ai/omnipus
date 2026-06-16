@@ -22,6 +22,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { fetchAgent, fetchSkills, updateAgent } from '@/lib/api'
+import { ApiError } from '@/lib/api-error'
 
 const mockCoreAgent: Agent = {
   id: 'general-assistant',
@@ -114,12 +115,32 @@ describe('AgentProfile — loading state', () => {
 })
 
 describe('AgentProfile — error state', () => {
-  it('shows error message when fetch fails', async () => {
-    // Traces to: wave5a-wire-ui-spec.md — US-7: profile shows error state
+  it('shows the generic "couldn\'t load" error + retry when fetch fails with a non-404', async () => {
+    // After the slide-over refactor the error path distinguishes 404 from
+    // other failures so the user gets the right copy and a retry affordance
+    // for transient errors. A plain `Error` (not an `ApiError` with a 404
+    // status) lands in the generic branch.
     vi.mocked(fetchAgent).mockRejectedValue(new Error('Not found'))
     renderProfile('bad-id')
-    const errorMsg = await screen.findByText(/agent not found/i)
-    expect(errorMsg).toBeInTheDocument()
+    // The body shows the new "Couldn't load agent" copy. The sr-only
+    // SheetTitle uses the same string for the non-404 branch, so multiple
+    // matches are expected; assert at least one is present and the retry
+    // button is offered for the user to recover from a transient failure.
+    const matches = await screen.findAllByText(/couldn't load agent/i)
+    expect(matches.length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+  })
+
+  it('shows "Agent not found" with no retry for a 404 ApiError', async () => {
+    // 404 is a "this agent is gone" signal — retrying won't help, so the
+    // generic copy is replaced and the retry button is hidden.
+    vi.mocked(fetchAgent).mockRejectedValue(new ApiError(404, 'Agent not found'))
+    renderProfile('bad-id')
+    // The body shows "Agent not found" and the sr-only SheetTitle also
+    // matches; assert on the visible body (the <p> in the centred panel).
+    const matches = await screen.findAllByText(/agent not found/i)
+    expect(matches.length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument()
   })
 })
 
@@ -149,15 +170,13 @@ describe('AgentProfile — core agent sections (test #13)', () => {
     expect(screen.getByText('Sessions')).toBeInTheDocument()
   })
 
-  it('shows AutoSaveIndicator (not a Save button) for core (editable) agent', async () => {
-    // Traces to: wave5a-wire-ui-spec.md — US-7 AC2: editable sections for core
-    // DELETED: The original test asserted a "Save" button that no longer exists.
-    // AgentProfile uses auto-save (AutoSaveIndicator) instead of an explicit Save button.
-    // We verify the component renders editable fields as a proxy for editability.
+  it('shows the slide-over footer (Close button) when the profile is fully rendered', async () => {
+    // Traces to: wave5a-wire-ui-spec.md — US-7 AC2: editable sections for core.
+    // The in-page back button is gone after the slide-over refactor; assert
+    // on the explicit data-testid to disambiguate from the Radix sr-only X.
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    // Back button is present — component is fully rendered
-    expect(screen.getByRole('button', { name: /agents/i })).toBeInTheDocument()
+    expect(screen.getByTestId('agent-profile-close')).toBeInTheDocument()
   })
 
   it('shows tools & permissions section when tools are present', async () => {

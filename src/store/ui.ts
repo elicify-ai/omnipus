@@ -28,6 +28,11 @@ interface UiStore {
   openCreateAgentModal: (type?: 'custom' | 'worker') => void
   closeCreateAgentModal: () => void
 
+  // Edit/view agent slide-over; null = closed.
+  editAgentId: string | null
+  openEditAgentSlideOver: (agentId: string) => void
+  closeEditAgentSlideOver: () => void
+
   // Notification center panel (#264)
   notificationPanelOpen: boolean
   openNotificationPanel: () => void
@@ -62,6 +67,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set({ createAgentModalOpen: true, createAgentModalType: type ?? 'custom' }),
   closeCreateAgentModal: () =>
     set({ createAgentModalOpen: false, createAgentModalType: 'custom' }),
+
+  editAgentId: null,
+  openEditAgentSlideOver: (agentId) => set({ editAgentId: agentId }),
+  closeEditAgentSlideOver: () => set({ editAgentId: null }),
 
   notificationPanelOpen: false,
   openNotificationPanel: () => set({ notificationPanelOpen: true }),

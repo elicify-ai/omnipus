@@ -1,12 +1,14 @@
 import { Circle, Star } from '@phosphor-icons/react'
-import { useNavigate } from '@tanstack/react-router'
 import { Badge } from '@/components/ui/badge'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { Agent } from '@/lib/api'
+import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 
 interface AgentCardProps {
   agent: Agent
+  /** Override the click handler. When omitted, opens the edit slide-over. */
+  onClick?: () => void
   /** Called when the user clicks "Set as default". Provided by the parent screen. */
   onSetDefault?: () => void
 }
@@ -18,15 +20,16 @@ const typeBadgeVariant = {
   worker: 'secondary',
 } as const
 
-export function AgentCard({ agent, onSetDefault }: AgentCardProps) {
-  const navigate = useNavigate()
+export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
+  const openEditAgentSlideOver = useUiStore((s) => s.openEditAgentSlideOver)
+  const handleOpen = onClick ?? (() => openEditAgentSlideOver(agent.id))
 
   return (
     <div className="relative group/card">
       <button
         type="button"
         data-testid={`agent-card-${agent.id}`}
-        onClick={() => navigate({ to: '/agents/$agentId', params: { agentId: agent.id } })}
+        onClick={handleOpen}
         className={cn(
           'w-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
