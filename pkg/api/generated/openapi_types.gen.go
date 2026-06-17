@@ -5413,6 +5413,10 @@ type Message struct {
 	// Summary Compaction summary text (present only on type=compaction entries).
 	Summary *string `json:"summary,omitempty"`
 
+	// Synthetic Indicates this message was machine-generated for context-compression (e.g. the switch-time summary produced by summarizeDroppedTurns). The UI may render these distinctly from user/assistant messages.
+	// In-memory only by default (`omitempty`) — Go's `Message.Synthetic` field is not persisted to the JSONL transcript; the field is set on the in-memory struct before being passed to the LLM provider and cleared on read-back. See Wave 3 / FR-012.
+	Synthetic *bool `json:"synthetic,omitempty"`
+
 	// Timestamp RFC3339 timestamp when this entry was recorded.
 	Timestamp time.Time `json:"timestamp"`
 
@@ -6600,6 +6604,10 @@ type SessionDetail struct {
 
 		// Summary Compaction summary text (present only on type=compaction entries).
 		Summary *string `json:"summary,omitempty"`
+
+		// Synthetic Indicates this message was machine-generated for context-compression (e.g. the switch-time summary produced by summarizeDroppedTurns). The UI may render these distinctly from user/assistant messages.
+		// In-memory only by default (`omitempty`) — Go's `Message.Synthetic` field is not persisted to the JSONL transcript; the field is set on the in-memory struct before being passed to the LLM provider and cleared on read-back. See Wave 3 / FR-012.
+		Synthetic *bool `json:"synthetic,omitempty"`
 
 		// Timestamp RFC3339 timestamp when this entry was recorded.
 		Timestamp time.Time `json:"timestamp"`

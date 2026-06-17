@@ -2762,6 +2762,12 @@ export interface components {
              * @example z-ai/glm-5.2
              */
             model?: string;
+            /**
+             * @description Indicates this message was machine-generated for context-compression (e.g. the switch-time summary produced by summarizeDroppedTurns). The UI may render these distinctly from user/assistant messages.
+             *     In-memory only by default (`omitempty`) — Go's `Message.Synthetic` field is not persisted to the JSONL transcript; the field is set on the in-memory struct before being passed to the LLM provider and cleared on read-back. See Wave 3 / FR-012.
+             * @example true
+             */
+            synthetic?: boolean;
         };
         /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
         ToolCall: {

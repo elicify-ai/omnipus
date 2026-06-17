@@ -65,6 +65,7 @@ type Message = {
   cancel_method?: ("graceful" | "hard") | undefined;
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
+  synthetic?: boolean | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -827,6 +828,7 @@ export const Message: z.ZodType<Message> = z.object({
   cancel_method: z.enum(["graceful", "hard"]).optional(),
   descendants_canceled: z.array(z.string()).optional(),
   model: z.string().optional(),
+  synthetic: z.boolean().optional(),
 });
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
