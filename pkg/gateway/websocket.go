@@ -2384,8 +2384,9 @@ type wsStreamer struct {
 	// producedModel is the model string that produced this streamed response.
 	// Set by the agent loop via SetProducedModel before Finalize so the
 	// transcript entry written by Finalize carries the per-turn Model field
-	// (FR-013 / Phase 1B). Empty when the agent loop didn't push a value
-	// (legacy callers) — the UI shows "(model not recorded)" for those.
+	// (FR-013). Empty when the agent loop didn't push a value (legacy
+	// callers) — the UI omits the model span entirely for those (FR-014);
+	// there is no "(model not recorded)" placeholder rendered.
 	producedModel string
 
 	// Turn-level stats set by the agent loop via SetTurnStats before Finalize.
@@ -2411,7 +2412,8 @@ type wsStreamer struct {
 // SetProducedModel stamps the model string that produced this streamed
 // response. Called by the agent loop before Finalize so the assistant
 // transcript entry carries the per-turn Model field (FR-013). Empty model
-// is treated as "not recorded" by the UI.
+// is treated as "not recorded" by the UI; the UI omits the model span
+// entirely per FR-014 (no placeholder).
 func (s *wsStreamer) SetProducedModel(model string) {
 	s.statsMu.Lock()
 	s.producedModel = strings.TrimSpace(model)

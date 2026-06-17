@@ -671,6 +671,10 @@ func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
 //  3. Any configured provider is a passthrough (openrouter / vivgrid) →
 //     that passthrough provider.
 //  4. Otherwise empty string (apply-time resolver will error out).
+//
+// Step 3 cannot call providers.IsPassthroughProvider directly — pkg/providers
+// already imports pkg/config, so the reverse direction would be a cycle. The
+// 3-line check below mirrors that helper byte-for-byte; keep them in sync.
 func resolveFallbackProvider(cfg *Config, slug string) string {
 	if cfg == nil {
 		return ""
@@ -698,22 +702,14 @@ func resolveFallbackProvider(cfg *Config, slug string) string {
 		if p == nil {
 			continue
 		}
-		if isPassthroughProviderName(p.Provider, p.APIBase) {
+		provName := strings.ToLower(strings.TrimSpace(p.Provider))
+		if provName == "openrouter" || provName == "vivgrid" ||
+			strings.Contains(strings.ToLower(p.APIBase), "openrouter.ai") {
 			return strings.TrimSpace(p.Provider)
 		}
 	}
 
 	return ""
-}
-
-// isPassthroughProviderName reports whether the given provider name routes
-// arbitrary model slugs through its backend (OpenRouter, Vivgrid).
-func isPassthroughProviderName(name, apiBase string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "openrouter", "vivgrid":
-		return true
-	}
-	return strings.Contains(strings.ToLower(apiBase), "openrouter.ai")
 }
 
 type AgentConfig struct {
