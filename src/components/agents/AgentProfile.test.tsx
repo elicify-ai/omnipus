@@ -492,7 +492,7 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
 // editor tracks it 1:1 and emits the same shape on save (no projection in
 // or out). The provider field is what makes US-3 (rate-limit on primary's
 // provider doesn't poison the fallback's provider) possible.
-describe('AgentProfile — provider-aware fallback editor (FIX-4)', () => {
+describe('AgentProfile — provider-aware fallback editor', () => {
   // The Model Configuration accordion must be opened before the fallback
   // editor is visible. Helper that mounts the profile and opens the
   // accordion, returning the underlying container.

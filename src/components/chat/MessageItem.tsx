@@ -3,6 +3,7 @@ import remarkGfm from 'remark-gfm'
 import { User, Robot } from '@phosphor-icons/react'
 import { useQuery } from '@tanstack/react-query'
 import { ToolCallBadge } from './ToolCallBadge'
+import { ModelFooter } from './ModelFooter'
 import type { ChatMessage } from '@/store/chat'
 import { useChatStore } from '@/store/chat'
 import { fetchAgents } from '@/lib/api'
@@ -184,19 +185,7 @@ export function MessageItem({ message }: MessageItemProps) {
           {message.cost != null && message.cost > 0 && (
             <span className="text-[10px] text-[var(--color-muted)]">{formatCost(message.cost)}</span>
           )}
-          {/* FR-014: per-turn model record. Only rendered when the
-              turn has a non-empty `model` field. Legacy turns without one
-              must NOT show any model info (spec §18 Q6: no placeholder
-              text, no "(model not recorded)" string). The span uses
-              font-mono so the model slug stays readable at small sizes. */}
-          {message.role === 'assistant' && typeof message.model === 'string' && message.model.trim().length > 0 && (
-            <span
-              data-testid="message-model"
-              className="text-[10px] font-mono text-[var(--color-muted)] truncate max-w-[160px]"
-            >
-              {message.model.trim()}
-            </span>
-          )}
+          {message.role === 'assistant' && <ModelFooter model={message.model} />}
         </div>
       </div>
     </div>

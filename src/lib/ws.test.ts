@@ -585,6 +585,127 @@ describe('WsConnection onmessage — strict parsing', () => {
   })
 })
 
+// ── Dev-only metadata drift detector ─────────────────────────────────────────
+//
+// MessageFrame.metadata is .passthrough() (forward-compat extension channel).
+// Strict validation can NEVER catch new optional metadata keys the server
+// starts sending — the SPA accepts them silently. To make the drift
+// grep-able in dev, _parseServerFrame logs [ws-debug] listing any extras.
+// Tests below assert the dev-debug fires for extra keys AND is silent for
+// the well-known key set.
+
+describe('_parseServerFrame — metadata drift detector (W4-5)', () => {
+  beforeEach(() => {
+    vi.stubEnv('DEV', true)
+    vi.stubEnv('MODE', 'development')
+    resetDroppedFrameCount()
+    resetUnknownFrameTypeCount()
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('logs [ws-debug] when a frame carries metadata keys beyond model_name', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // type:"message" is a client→server frame, so the direction filter drops
+    // it after the dev-debug fires. We don't assert onFrame here — we only
+    // assert that the drift was detected before the drop.
+    lastWsInstance.onmessage?.({
+      data: JSON.stringify({
+        type: 'message',
+        content: 'hello',
+        metadata: {
+          model_name: 'z-ai/glm-5-turbo',
+          request_id: 'req-abc-123',
+          traceparent: '00-trace-span-01',
+        },
+      }),
+    })
+
+    expect(debugSpy).toHaveBeenCalled()
+    const matched = debugSpy.mock.calls.find(
+      (args) =>
+        typeof args[0] === 'string' &&
+        args[0].includes('[ws-debug]') &&
+        args[0].includes('extra metadata keys')
+    )
+    expect(matched).toBeDefined()
+    const extras = (matched?.[0] as string) ?? ''
+    expect(extras).toContain('request_id')
+    expect(extras).toContain('traceparent')
+    // model_name is known — must NOT appear in the extras list
+    expect(extras).not.toContain('model_name')
+
+    conn.disconnect()
+    debugSpy.mockRestore()
+  })
+
+  it('does NOT log [ws-debug] when metadata contains only model_name', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    lastWsInstance.onmessage?.({
+      data: JSON.stringify({
+        type: 'message',
+        content: 'hello',
+        metadata: { model_name: 'z-ai/glm-5-turbo' },
+      }),
+    })
+
+    const driftCalls = debugSpy.mock.calls.filter(
+      (args) =>
+        typeof args[0] === 'string' &&
+        args[0].includes('[ws-debug]') &&
+        args[0].includes('extra metadata keys')
+    )
+    expect(driftCalls).toHaveLength(0)
+
+    conn.disconnect()
+    debugSpy.mockRestore()
+  })
+
+  it('does NOT log [ws-debug] in production builds (DEV=false)', () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    lastWsInstance.onmessage?.({
+      data: JSON.stringify({
+        type: 'message',
+        content: 'hello',
+        metadata: {
+          model_name: 'z-ai/glm-5-turbo',
+          request_id: 'req-abc-123',
+        },
+      }),
+    })
+
+    const driftCalls = debugSpy.mock.calls.filter(
+      (args) =>
+        typeof args[0] === 'string' &&
+        args[0].includes('[ws-debug]') &&
+        args[0].includes('extra metadata keys')
+    )
+    expect(driftCalls).toHaveLength(0)
+
+    conn.disconnect()
+    debugSpy.mockRestore()
+  })
+})
+
 // ── getUnknownFrameTypeCount / resetUnknownFrameTypeCount ─────────────────────
 
 describe('getUnknownFrameTypeCount / resetUnknownFrameTypeCount', () => {

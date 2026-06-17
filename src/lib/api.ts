@@ -154,13 +154,13 @@ export function resetApiSchemaErrorCount(): void {
   _apiSchemaErrorCount = 0
 }
 
-// W2-36: increment the API-schema-error counter AND emit a production
-// telemetry event. Rate-limited inside logError so a contract-drift
-// flood doesn't spam the log collector. Dev builds skip telemetry
-// (they already get the dev toast).
+// Increment the API-schema-error counter AND emit a production telemetry
+// event. Rate-limited inside logError so a contract-drift flood doesn't
+// spam the log collector. Dev builds skip telemetry (they already get the
+// dev toast).
 function _recordApiSchemaError(endpoint: string, issueCount: number): void {
   _apiSchemaErrorCount++
-  if (!import.meta.env.DEV) {
+  if (!import.meta.env.DEV && import.meta.env.MODE !== 'test') {
     logError({
       event: 'apiSchemaError',
       endpoint,
