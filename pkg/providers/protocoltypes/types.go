@@ -70,6 +70,11 @@ type Message struct {
 	SystemParts      []ContentBlock `json:"system_parts,omitempty"` // structured system blocks for cache-aware adapters
 	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	// Synthetic marks messages that were inserted by the loop itself rather
+	// than by a user or LLM (e.g. the switch-time compression summary).
+	// Not serialized across the wire by default — the UI may use it to
+	// render system messages distinctly. See Wave 3 / FR-012.
+	Synthetic bool `json:"synthetic,omitempty"`
 }
 
 type ToolDefinition struct {
