@@ -524,6 +524,198 @@ func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
 	return json.Marshal(raw{Primary: m.Primary, Fallbacks: m.Fallbacks})
 }
 
+// FallbackModel is one entry in an agent's fallback chain. It carries its
+// own provider so a fallback can route through a different provider than
+// the primary (FR-007). FR-005 pins the wire format to [{model, provider}]
+// going forward; FR-006 accepts the legacy [string] form during migration —
+// see FallbackModel.UnmarshalJSON.
+type FallbackModel struct {
+	// Model is the model slug the fallback will use (e.g. "claude-sonnet-4.6"
+	// or "openrouter/anthropic/claude-opus-4.7").
+	Model string `json:"model"`
+	// Provider is the routing key (e.g. "openrouter", "anthropic",
+	// "openai"). Distinct from any "provider/" prefix embedded in Model —
+	// Provider is the credential/endpoint selection key.
+	Provider string `json:"provider,omitempty"`
+}
+
+// FallbackModelSlice is the JSON wire shape for an agent's fallback chain.
+// It accepts both the new [{model, provider}] form (FR-005) and the legacy
+// [string] form (FR-006). Legacy strings are stored as
+// {Model: <string>, Provider: ""} at unmarshal time; the empty Provider is
+// filled in by NormalizeFallbacks after the parent *Config is available.
+type FallbackModelSlice []FallbackModel
+
+// UnmarshalJSON decodes either form (FR-005 + FR-006).
+//
+// Examples accepted:
+//   - ["claude-sonnet-4.6", "gpt-4o-mini"]
+//   - [{"model":"claude-sonnet-4.6","provider":"anthropic"}]
+//   - ["openrouter/foo", {"model":"claude-sonnet-4.6","provider":"anthropic"}]
+//
+// Empty / missing / null decodes to a nil slice (semantically identical to
+// "no fallback configured").
+func (f *FallbackModelSlice) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*f = nil
+		return nil
+	}
+
+	// 1) Try the homogeneous []FallbackModel form first.
+	var objs []FallbackModel
+	if err := json.Unmarshal(data, &objs); err == nil {
+		*f = objs
+		return nil
+	}
+
+	// 2) Try []string for the legacy wire form.
+	var legacy []string
+	if err := json.Unmarshal(data, &legacy); err == nil {
+		out := make(FallbackModelSlice, len(legacy))
+		for i, s := range legacy {
+			out[i] = FallbackModel{Model: s}
+		}
+		*f = out
+		return nil
+	}
+
+	// 3) Mixed form: an array of either strings or objects. Walk element by
+	// element so we preserve order in a mixed legacy + new payload.
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("fallback_models must be a JSON array of strings or {model, provider} objects: %w", err)
+	}
+	out := make(FallbackModelSlice, 0, len(raw))
+	for i, r := range raw {
+		var s string
+		if err := json.Unmarshal(r, &s); err == nil {
+			out = append(out, FallbackModel{Model: s})
+			continue
+		}
+		var fb FallbackModel
+		if err := json.Unmarshal(r, &fb); err != nil {
+			return fmt.Errorf("fallback_models[%d]: must be a string or an object: %w", i, err)
+		}
+		out = append(out, fb)
+	}
+	*f = out
+	return nil
+}
+
+// MarshalJSON writes the canonical object form (FR-005). Always emits
+// [{"model":"...","provider":"..."}]; the legacy string-only form is never
+// emitted on write — loaders see only the normalized object form on
+// round-trip.
+func (f FallbackModelSlice) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Model    string `json:"model"`
+		Provider string `json:"provider,omitempty"`
+	}
+	if len(f) == 0 {
+		return []byte("[]"), nil
+	}
+	out := make([]wire, len(f))
+	for i, fb := range f {
+		out[i] = wire{Model: fb.Model, Provider: fb.Provider}
+	}
+	return json.Marshal(out)
+}
+
+// NormalizeFallbacks is the single entry-point used at config load to
+// resolve fallback entries that arrived without a provider field (legacy
+// strings, or empty-providers on legacy objects). The resolver mirrors the
+// chat-side `buildModelListResolver` passthrough logic: any slug that
+// matches a configured provider entry is taken verbatim; any slug that
+// doesn't match but where a passthrough provider (openrouter, vivgrid)
+// is configured is routed through the passthrough provider; otherwise the
+// entry is left with an empty provider (the resolver above will fail
+// closed at apply time).
+//
+// Order is preserved (FR-006). nil input → nil output. Already-resolved
+// entries (Provider != "") are passed through unchanged.
+//
+// Traces to: spec §11 Dataset 2 / FR-006 / FR-007.
+func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]FallbackModel, len(in))
+	for i, fb := range in {
+		if strings.TrimSpace(fb.Model) == "" {
+			continue // drop empty entries
+		}
+		if strings.TrimSpace(fb.Provider) != "" {
+			out[i] = fb // already resolved
+			continue
+		}
+		// Legacy string entry — resolve provider.
+		out[i] = FallbackModel{
+			Model:    fb.Model,
+			Provider: resolveFallbackProvider(cfg, fb.Model),
+		}
+	}
+	return out
+}
+
+// resolveFallbackProvider picks a provider for a fallback model slug when
+// the caller didn't pin one. Mirrors the passthrough logic in
+// pkg/agent/model_resolution.go::buildModelListResolver (kept duplicated
+// here to avoid a config→agent import cycle — pkg/agent already imports
+// pkg/config).
+//
+// Resolution order:
+//  1. Exact match against any configured provider's ModelName → that
+//     provider's Provider field.
+//  2. Exact match against any configured provider's Model (the slug)
+//     → that provider's Provider field.
+//  3. Any configured provider is a passthrough (openrouter / vivgrid) →
+//     that passthrough provider.
+//  4. Otherwise empty string (apply-time resolver will error out).
+func resolveFallbackProvider(cfg *Config, slug string) string {
+	if cfg == nil {
+		return ""
+	}
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return ""
+	}
+
+	// 1 & 2: match against provider entries.
+	for _, p := range cfg.Providers {
+		if p == nil {
+			continue
+		}
+		if strings.TrimSpace(p.ModelName) == slug {
+			return strings.TrimSpace(p.Provider)
+		}
+		if strings.TrimSpace(p.Model) == slug {
+			return strings.TrimSpace(p.Provider)
+		}
+	}
+
+	// 3: passthrough fallback (openrouter, vivgrid).
+	for _, p := range cfg.Providers {
+		if p == nil {
+			continue
+		}
+		if isPassthroughProviderName(p.Provider, p.APIBase) {
+			return strings.TrimSpace(p.Provider)
+		}
+	}
+
+	return ""
+}
+
+// isPassthroughProviderName reports whether the given provider name routes
+// arbitrary model slugs through its backend (OpenRouter, Vivgrid).
+func isPassthroughProviderName(name, apiBase string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "openrouter", "vivgrid":
+		return true
+	}
+	return strings.Contains(strings.ToLower(apiBase), "openrouter.ai")
+}
+
 type AgentConfig struct {
 	ID            string            `json:"id"`
 	Default       bool              `json:"default,omitempty"`
@@ -534,6 +726,22 @@ type AgentConfig struct {
 	Skills        []string          `json:"skills,omitempty"`
 	Subagents     *SubagentsConfig  `json:"subagents,omitempty"`
 	CanDelegateTo []string          `json:"can_delegate_to,omitempty"`
+	// FallbackModels is the ordered fallback chain tried when the primary
+	// model returns an error. Each entry carries its own provider so a
+	// fallback can route through a different provider than the primary (e.g.
+	// when the primary's provider is rate-limited, the fallback can use a
+	// different provider's API key and credentials — FR-007).
+	//
+	// Wire format (preferred, FR-005):
+	//   [{ "model": "claude-sonnet-4.6", "provider": "anthropic" }]
+	//
+	// Wire format (legacy, accepted during migration; FR-006):
+	//   ["claude-sonnet-4.6"]
+	//
+	// Legacy entries are normalized at config-load time via NormalizeFallbacks,
+	// which resolves each string against the configured providers using the
+	// same passthrough lookup the chat-side model resolver uses.
+	FallbackModels FallbackModelSlice `json:"fallback_models,omitempty"`
 	// DelegationPolicy is the canonical unified delegation policy.
 	// When set, it takes precedence over CanDelegateTo and Subagents.AllowAgents.
 	// Nil means "unset — fall back to legacy fields for backward compatibility".
@@ -2801,6 +3009,16 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 
 	// Expand multi-key configs into separate entries for key-level failover
 	cfg.Providers = expandMultiKeyModels(cfg.Providers)
+
+	// Phase 1B FR-006: normalize legacy `fallback_models: [string]` entries
+	// into the new `[{model, provider}]` form. Provider resolution mirrors
+	// the chat-side passthrough lookup (openrouter / vivgrid).
+	for i := range cfg.Agents.List {
+		if len(cfg.Agents.List[i].FallbackModels) == 0 {
+			continue
+		}
+		cfg.Agents.List[i].FallbackModels = NormalizeFallbacks(cfg, cfg.Agents.List[i].FallbackModels)
+	}
 
 	// Migrate legacy channel config fields to new unified structures
 	cfg.migrateChannelConfigs()

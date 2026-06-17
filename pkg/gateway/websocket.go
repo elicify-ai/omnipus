@@ -2381,6 +2381,13 @@ type wsStreamer struct {
 	channel     *webchatChannel       // to mark streaming complete and suppress duplicate Send()
 	accumulated strings.Builder       // accumulates full response text
 
+	// producedModel is the model string that produced this streamed response.
+	// Set by the agent loop via SetProducedModel before Finalize so the
+	// transcript entry written by Finalize carries the per-turn Model field
+	// (FR-013 / Phase 1B). Empty when the agent loop didn't push a value
+	// (legacy callers) — the UI shows "(model not recorded)" for those.
+	producedModel string
+
 	// Turn-level stats set by the agent loop via SetTurnStats before Finalize.
 	// Populates the "done" frame so the chat UI shows real token counts and
 	// cost instead of zeros (issue #12). Mutex-protected because SetTurnStats
@@ -2399,6 +2406,16 @@ type wsStreamer struct {
 	// the lastStreamer that gets finalized). Guarded by statsMu, which Finalize
 	// already holds while reading stats.
 	transcriptPersisted bool
+}
+
+// SetProducedModel stamps the model string that produced this streamed
+// response. Called by the agent loop before Finalize so the assistant
+// transcript entry carries the per-turn Model field (FR-013). Empty model
+// is treated as "not recorded" by the UI.
+func (s *wsStreamer) SetProducedModel(model string) {
+	s.statsMu.Lock()
+	s.producedModel = strings.TrimSpace(model)
+	s.statsMu.Unlock()
 }
 
 // SuppressTranscriptWrite marks this streamer so its Finalize skips the
@@ -2528,6 +2545,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	costF := s.statsCostUSD
 	durF := float64(s.statsDuration.Milliseconds())
 	transcriptAlreadyPersisted := s.transcriptPersisted
+	producedModel := s.producedModel
 	s.statsMu.Unlock()
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
@@ -2578,6 +2596,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				Timestamp: time.Now().UTC(),
 				Tokens:    int(tokensF),
 				Cost:      costF,
+				Model:     producedModel,
 			}
 			if err := s.agentStore.AppendTranscript(s.sessionID, entry); err != nil {
 				slog.Warn("ws: could not record streamed assistant message", "session_id", s.sessionID, "error", err)
