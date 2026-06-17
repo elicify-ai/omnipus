@@ -157,17 +157,6 @@ func buildModelListResolver(cfg *config.Config) func(raw string) (string, bool) 
 	}
 }
 
-// isPassthroughProvider reports whether the given provider type forwards model
-// slugs to its backend without per-slug registration. OpenRouter is the
-// canonical example.
-func isPassthroughProvider(provider, apiBase string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "openrouter", "vivgrid":
-		return true
-	}
-	return strings.Contains(strings.ToLower(apiBase), "openrouter.ai")
-}
-
 // knownProviderPrefixes is the conservative list of slash-prefixes that mean
 // "explicit provider request" (not a model slug). When the input is
 // "<prefix>/<model>" and the prefix matches one of these (case-insensitive),
