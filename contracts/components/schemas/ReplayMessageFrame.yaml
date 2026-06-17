@@ -53,5 +53,6 @@ properties:
       Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014).
       Populated from TranscriptEntry.Model by the server when the entry was written
       with a model field. Omitted for legacy entries written before per-turn model
-      recording landed (the UI renders "(model not recorded)" for those).
+      recording landed (the UI omits the model field entirely for those — no
+      placeholder text, no "(model not recorded)" string).
     maxLength: 256

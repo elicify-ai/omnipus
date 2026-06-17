@@ -204,26 +204,3 @@ func splitHistoryAtTurnMidpoint(history []providers.Message) (dropped, kept []pr
 	}
 	return append([]providers.Message(nil), history[:mid]...), append([]providers.Message(nil), history[mid:]...), true
 }
-
-// truncateHistoryToBudget aggressively trims history until its token estimate
-// fits within windowTokens. It always preserves index 0 (so callers can pin
-// an anchor message — e.g. the synthetic switch message — at the head), then
-// sheds older messages from the tail backwards. The minimum result is
-// [history[0]] — we never produce an empty slice (the new model would have no
-// anchor at all). When even the anchor overflows, the caller accepts the
-// overflow (forceCompression at the next LLM call is the last line of defence).
-func truncateHistoryToBudget(history []providers.Message, windowTokens int) []providers.Message {
-	if len(history) == 0 {
-		return history
-	}
-	for estimateHistoryTokens(history) > windowTokens && len(history) > 1 {
-		if len(history) <= 2 {
-			// Two messages (anchor + one real). Drop the real one; keep
-			// only the anchor. If even the anchor overflows, accept it.
-			history = history[:1]
-			break
-		}
-		history = history[:len(history)-1]
-	}
-	return history
-}

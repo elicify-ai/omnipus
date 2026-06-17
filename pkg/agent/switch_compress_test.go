@@ -149,31 +149,6 @@ func TestSwitchTimeCompress_SmallerToLarger_NoOp(t *testing.T) {
 		"switching to a larger-window model must not trigger compress")
 }
 
-// TestBuildSyntheticSwitchMessage_Wording verifies the synthetic system
-// message exactly matches the agreed wording from spec Q4.
-//
-// Spec Q4: "Conversation moved to {new_model} from {old_model} on {timestamp}.
-// The prior turns have been compressed to fit the new context window.
-// Summary: {summary}".
-func TestBuildSyntheticSwitchMessage_Wording(t *testing.T) {
-	ts := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
-	msg := buildSyntheticSwitchMessage("z-ai/glm-5.2", "gpt-4o", "decisions: A, B; open: C", ts)
-
-	assert.Equal(t, "system", msg.Role, "synthetic switch message must be a system message")
-	assert.True(t, msg.Synthetic, "synthetic switch message must carry Synthetic=true")
-
-	const wantPrefix = "Conversation moved to gpt-4o from z-ai/glm-5.2 on 2026-06-17 12:00:00 UTC."
-	require.True(t, len(msg.Content) > len(wantPrefix),
-		"message must include the agreed prefix")
-	assert.Equal(t, wantPrefix, msg.Content[:len(wantPrefix)])
-
-	const wantTail = "Summary: decisions: A, B; open: C"
-	assert.Contains(t, msg.Content, wantTail,
-		"message must include the agreed summary section")
-	assert.Contains(t, msg.Content, "compressed to fit the new context window",
-		"message must explain why the prior turns were compressed")
-}
-
 // TestSummarizeDroppedTurns_FallsBackOnLLMError verifies that when the
 // summarization LLM call fails, the function returns the error to the caller
 // (the caller then falls back to forceCompression — see spec FR-011).
@@ -335,10 +310,6 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	// Strategy B has no synthetic message in history; only the kept real
 	// turns remain, trimmed to fit.
 	history := updatedAgent.Sessions.GetHistory(sessionKey)
-	for _, m := range history {
-		assert.False(t, m.Synthetic,
-			"strategy B: no synthetic system message must be inserted into history")
-	}
 	total := 0
 	for _, m := range history {
 		total += estimateMessageTokens(m)
@@ -393,10 +364,9 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	require.NotNil(t, updatedAgent)
 
 	history := updatedAgent.Sessions.GetHistory(sessionKey)
-	for _, m := range history {
-		assert.False(t, m.Synthetic,
-			"empty session must not produce a synthetic system message")
-	}
+	// Strategy B: the empty-session path leaves history empty (no synthetic
+	// anchor in history; the summarization LLM is not invoked).
+	assert.Empty(t, history, "empty session switch must leave history empty (Strategy B)")
 	assert.Equal(t, newModel, updatedAgent.Model,
 		"empty session switch still updates agent.Model")
 	assert.Empty(t, recProv.chatCalls,
@@ -476,13 +446,12 @@ func TestSwitchTime_LLMReceivesSyntheticSummary(t *testing.T) {
 		"the LLM system prompt must contain the switch summary text — FR-012 regression guard")
 
 	// Also confirm the summary is not present in history (Strategy B stores
-	// it in summary, not in history messages).
-	for _, m := range messages {
-		if m.Role == "system" {
-			continue
-		}
-		assert.False(t, m.Synthetic,
-			"no message outside the system prompt must carry Synthetic=true")
+	// it in summary, not in history messages). The system prompt itself is
+	// messages[0]; any other system message in `messages` would indicate
+	// the summary leaked into history.
+	for _, m := range messages[1:] {
+		assert.NotEqual(t, "system", m.Role,
+			"summary must not appear in history as a system message (Strategy B)")
 	}
 }
 
