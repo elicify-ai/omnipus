@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 func makeCandidate(provider, model string) FallbackCandidate {
@@ -694,5 +698,134 @@ func TestFallbackExhaustedError_Message(t *testing.T) {
 	msg := e.Error()
 	if msg == "" {
 		t.Error("expected non-empty error message")
+	}
+}
+
+// TestResolveCandidatesWithLookup_UnknownBareSlug_Warns is the W2-25 contract:
+// when the model_list lookup doesn't recognize a fallback slug AND the slug
+// has no provider prefix to anchor on, addCandidate MUST emit a WARN so an
+// operator auditing the config load can spot the typo before it bites at
+// runtime (silent-failure-A #4). Without this, a typo'd model silently
+// routes through defaultProvider and the agent loop surfaces the failure
+// several stack frames later with no breadcrumb pointing to the bad config
+// value.
+//
+// The test captures the WARN by routing logger output to a temp file
+// (DisableConsole + EnableFileLogging) and asserting the message + fields
+// appear in the file. This is the standard logger test pattern in this repo
+// (see pkg/logger/logger_test.go).
+func TestResolveCandidatesWithLookup_UnknownBareSlug_Warns(t *testing.T) {
+	// Set up log capture to a temp file. DisableConsole silences stderr;
+	// EnableFileLogging routes log output to the file so the assertion can
+	// read it back.
+	tmpDir := t.TempDir()
+	logFile := tmpDir + "/providers-warn.log"
+
+	prevLevel := logger.GetLevel()
+
+	// DisableConsole disables stdout; EnableFileLogging routes to a file at
+	// WARN-or-higher. SetLevel(WARN) ensures our WARN fires but INFO is
+	// suppressed.
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	if err := logger.EnableFileLogging(logFile); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		// Best-effort restore — we don't want to leak WARN level into
+		// other tests in the same package.
+		logger.SetLevel(prevLevel)
+	})
+
+	// A lookup that returns false for any unknown slug, and a config with
+	// a typo'd bare slug as a fallback (no provider prefix, no model_list
+	// match). Without the W2-25 fix, addCandidate silently accepts the
+	// typo'd slug and the operator has no breadcrumb.
+	lookup := func(raw string) (string, bool) {
+		// Intentionally always miss — the test asserts the WARN fires
+		// on a lookup miss for a bare slug.
+		return "", false
+	}
+	cfg := ModelConfig{
+		Primary:   "gpt-4",
+		Fallbacks: []string{"claude-opus-typo"}, // bare slug, no prefix, no match
+	}
+
+	candidates := ResolveCandidatesWithLookup(cfg, "openai", lookup)
+
+	// Behavior preservation: the typo'd slug still produces a candidate
+	// (routed through defaultProvider=openai) so the chat runtime is not
+	// broken. The fix is purely additive — the WARN.
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %d, want 2 (primary + typo'd fallback)", len(candidates))
+	}
+	if candidates[1].Provider != "openai" || candidates[1].Model != "claude-opus-typo" {
+		t.Errorf("candidates[1] = %s/%s, want openai/claude-opus-typo (behavior preservation)",
+			candidates[1].Provider, candidates[1].Model)
+	}
+
+	// The WARN must have been written to the file. Read it back.
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", logFile, err)
+	}
+	logged := string(data)
+	if !strings.Contains(logged, "addCandidate") {
+		t.Errorf("log file missing addCandidate warn entry; got:\n%s", logged)
+	}
+	if !strings.Contains(logged, "claude-opus-typo") {
+		t.Errorf("log file missing the typo'd slug; got:\n%s", logged)
+	}
+	if !strings.Contains(logged, "openai") {
+		t.Errorf("log file missing defaultProvider field; got:\n%s", logged)
+	}
+	if !strings.Contains(logged, `"level":"warn"`) {
+		t.Errorf("log file missing warn level; got:\n%s", logged)
+	}
+}
+
+// TestResolveCandidatesWithLookup_KnownBareSlug_NoWarn is the negative case:
+// when the lookup DOES resolve the slug (or it has a provider prefix), the
+// WARN MUST NOT fire. We don't want to spam the log on every legitimate
+// fallback that happens to be a bare slug already covered by the resolver.
+func TestResolveCandidatesWithLookup_KnownBareSlug_NoWarn(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := tmpDir + "/providers-nowarn.log"
+
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	if err := logger.EnableFileLogging(logFile); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	// Lookup that resolves the slug — no warn expected.
+	lookup := func(raw string) (string, bool) {
+		if raw == "claude-opus" {
+			return "anthropic/claude-opus", true
+		}
+		return "", false
+	}
+	cfg := ModelConfig{
+		Primary:   "gpt-4",
+		Fallbacks: []string{"claude-opus"},
+	}
+
+	candidates := ResolveCandidatesWithLookup(cfg, "openai", lookup)
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %d, want 2", len(candidates))
+	}
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", logFile, err)
+	}
+	if strings.Contains(string(data), "addCandidate") {
+		t.Errorf("log file unexpectedly contains addCandidate warn entry for a resolved slug; got:\n%s", string(data))
 	}
 }
