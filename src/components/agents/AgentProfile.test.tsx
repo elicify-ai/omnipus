@@ -119,8 +119,9 @@ beforeEach(() => {
   mockNavigate.mockClear()
   vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
   vi.mocked(fetchSkills).mockResolvedValue([])
-  // Default: two connected providers with model lists — Wave 2 fallback-editor
-  // tests need ≥2 provider groups to exercise the provider-grouped chip layout.
+  // Default: two connected providers with model lists — the provider-aware
+  // fallback editor needs ≥2 provider groups to exercise the provider-grouped
+  // chip layout (and the per-provider badge attribution).
   vi.mocked(fetchProviders).mockResolvedValue([
     { id: 'openrouter', name: 'openrouter', display_name: 'OpenRouter', status: 'connected', models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo'] },
     { id: 'anthropic', name: 'anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6', 'claude-opus-4-6'] },
@@ -484,20 +485,13 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
   })
 })
 
-// Wave 2 / FIX-4 / FR-005/006: provider-aware fallback editor.
+// Provider-aware fallback editor.
 //
-// The old editor was a free-text string[] of model slugs. The new editor
-// tracks provider alongside model so a fallback can route through a
-// different provider when the primary's provider is rate-limited
-// (US-3). Each chip shows provider name + model; the add UI is a
-// `<ModelSelector>` with provider grouping.
-//
-// Until Wave 1B lands (which will change the wire fallback_models shape
-// to `[{model, provider}]`), the saved payload still uses the legacy
-// `string[]` shape (model slugs only). The editor carries the provider
-// info locally so the chip layout is correct, and the saved payload
-// strips the provider on the way out. The local FallbackEntry[] type
-// is the only place the provider is held.
+// Each chip shows provider name + model; the add UI is a `<ModelSelector>`
+// with provider grouping. The wire payload is `[{model, provider}]` — the
+// editor tracks it 1:1 and emits the same shape on save (no projection in
+// or out). The provider field is what makes US-3 (rate-limit on primary's
+// provider doesn't poison the fallback's provider) possible.
 describe('AgentProfile — provider-aware fallback editor (FIX-4)', () => {
   // The Model Configuration accordion must be opened before the fallback
   // editor is visible. Helper that mounts the profile and opens the
@@ -570,11 +564,9 @@ describe('AgentProfile — provider-aware fallback editor (FIX-4)', () => {
     expect(screen.getByTestId('fallback-chip-provider-claude-sonnet-4-6')).toHaveTextContent(/anthropic/i)
   })
 
-  it('persists the fallback list (model slugs only) on save — the wire format is still string[]', async () => {
-    // Until Wave 1B's regen lands, the wire fallback_models shape is
-    // string[]. The new editor locally tracks {model, provider} but the
-    // save payload must remain a string[] of model slugs. The provider
-    // info is local-only; it's not part of the wire format yet.
+  it('persists the fallback list with model AND provider on save', async () => {
+    // The wire shape is [{model, provider}] — the save payload carries
+    // both fields for each entry, not just the slug.
     vi.mocked(updateAgent).mockResolvedValue(mockCoreAgent)
     vi.mocked(updateAgent).mockClear() // ignore earlier test's calls
     await openFallbackEditor({
@@ -604,12 +596,16 @@ describe('AgentProfile — provider-aware fallback editor (FIX-4)', () => {
     )
     const last = callsForAgent.at(-1)!
     expect(Array.isArray(last[1].fallback_models)).toBe(true)
-    // After removing z-ai/glm-5-turbo, only claude-sonnet-4-6 remains
-    expect(last[1].fallback_models).toEqual(['claude-sonnet-4-6'])
+    // After removing z-ai/glm-5-turbo, only claude-sonnet-4-6 remains —
+    // emitted with BOTH model and provider (the wire shape is object, not string).
+    expect(last[1].fallback_models).toEqual([
+      { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+    ])
   })
 
   it('hides the fallback editor entirely for locked core agents', async () => {
-    // Locked agents (Mia, Jim, Ava, Ray, Max) cannot edit their model
+    // Locked agents (see `.preview-doc/agents.html` for the current
+    // roster — Mia · Assistant ⭐, etc.) cannot edit their model
     // configuration — the editor is rendered in `canEdit` blocks and
     // must not surface for the locked roster. This guards against a
     // regression where the provider-aware editor leaks into the locked path.
