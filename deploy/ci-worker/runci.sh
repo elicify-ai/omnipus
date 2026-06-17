@@ -210,9 +210,13 @@ EOF
   # 9. Run the full Playwright matrix. The repo's playwright.config.ts already pins
   #    workers=1 (single gateway, shared credentials — concurrent writes are unsafe
   #    per CLAUDE.md concurrency model) and retries=3 in CI. We don't override.
+  #    Both OPENROUTER_API_KEY (alias for the gateway's api_key_ref) and
+  #    OPENROUTER_API_KEY_CI (required by tests/e2e/global-setup.ts preflight check
+  #    — see .github/workflows/pr.yml env block) are exported with the same value.
   log "e2e: run Playwright matrix"
   OMNIPUS_URL=http://localhost:6060 \
   OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
+  OPENROUTER_API_KEY_CI="$OPENROUTER_API_KEY" \
     npx playwright test
 
   # 10. Cleanup runs via the trap.
