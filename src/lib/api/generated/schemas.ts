@@ -6295,7 +6295,7 @@ export const MessageFrame = z
     .object({
       model_name: z.string().min(1).max(256).optional(),
     })
-    .strict().optional(),
+    .passthrough().optional(),
   })
   .strict();
 

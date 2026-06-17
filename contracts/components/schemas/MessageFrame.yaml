@@ -47,6 +47,11 @@ properties:
       maxLength: 256
   metadata:
     type: object
+    # additionalProperties: true — forward-compat. The metadata object
+    # is the wire's extension channel (currently model_name, but future
+    # fields like request_id, traceparent, etc. land here). strict()
+    # would silently reject future fields and break the SPA mid-rollout.
+    additionalProperties: true
     description: >
       Optional per-message metadata. Currently only `model_name` is
       surfaced (Phase 1, FR-010). When the user picks a model in the
@@ -54,7 +59,6 @@ properties:
       `metadata.model_name` so the server routes this turn to the
       chosen model. The server falls back to the agent's `model`
       config when this field is absent.
-    additionalProperties: false
     properties:
       model_name:
         type: string

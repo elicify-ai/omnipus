@@ -8,6 +8,7 @@ import { queryClient } from '@/lib/queryClient'
 import type { Message, ToolCall } from '@/lib/api'
 import type { WsReceiveFrame, WsExecApprovalRequestFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
 import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame, ExecApprovalExpiredFrame } from '@/lib/api/generated/asyncapi-types'
+import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
@@ -450,6 +451,8 @@ interface ChatStore {
   //   server honors it when present and falls back to the agent's `model`
   //   config when absent.
   sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string }) => void
+  /** W2-29: validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. */
+  _validateOutboundFrame: (payload: unknown) => void
   cancelStream: () => void
   respondToApproval: (id: string, decision: 'allow' | 'deny' | 'always') => void
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
@@ -1181,221 +1184,253 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
     },
 
-    sendMessage: (content, opts) => {
-      const mediaRefs = opts?.mediaRefs ?? []
-      const attachments = opts?.attachments ?? []
-      // Phase 1 / FR-010: per-turn model override. Trim and strip empty
-      // strings so absent and "" are equivalent (the WS frame is omitted
-      // entirely when no model was picked this session, per spec §18 Q3).
-      const modelNameRaw = opts?.model_name
-      const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
-      const modelNameFrame = modelName.length > 0 ? { metadata: { model_name: modelName } } : {}
-      // Clear the nextModel slot after the outgoing call so the next
-      // session reopen re-derives the default from transcript history
-      // or the agent's `model` config (per spec §18 Q3).
-      if (get().nextModel !== null) {
-        set({ nextModel: null })
-      }
-      const { connection, isConnected } = useConnectionStore.getState()
-      const { activeSessionId, activeAgentId } = useSessionStore.getState()
-      const { isStreaming } = get()
-
-      if (isStreaming) {
-        useConnectionStore.getState().setConnectionError('Please wait — a response is still generating.')
-        return
-      }
-      if (!connection || !isConnected) {
-        // WS is disconnected — buffer the message for when the connection
-        // recovers rather than losing it silently or showing a hard error.
-        const enqueued = get().enqueueOutboundMessage(content)
-        if (!enqueued) {
-          useConnectionStore.getState().setConnectionError(
-            'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
-          )
-        }
-        return
-      }
-
-      // When activeSessionId is null we do NOT render optimistically until
-      // session_started arrives and gives us a real bucket key. This avoids
-      // a temporary bucket that we'd have to migrate on the ack, at the cost
-      // of ~1 round-trip of perceived latency on the very first message.
-      if (activeSessionId !== null) {
-        const userMsg: ChatMessage = {
-          id: generateId(),
-          session_id: activeSessionId,
-          role: 'user',
-          content,
-          timestamp: new Date().toISOString(),
-          status: 'done',
-          ...(attachments.length > 0 ? { media: attachments } : {}),
-        }
-        const assistantMsg: ChatMessage = {
-          id: generateId(),
-          session_id: activeSessionId,
-          role: 'assistant',
-          content: '',
-          timestamp: new Date().toISOString(),
-          status: 'streaming',
-          isStreaming: true,
-        }
-
-        withBucket(activeSessionId, (b) => {
-          const msgs = getMessages(b)
-          let prevAssistantIdx = -1
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].role === 'assistant') { prevAssistantIdx = i; break }
-          }
-          let toolCallsAfterReset: typeof b.toolCalls = b.toolCalls
-          let toolCallOrderAfterReset: string[] = b.toolCallOrder
-          let finalMsgs = msgs
-
-          if (prevAssistantIdx !== -1) {
-            const prev = msgs[prevAssistantIdx]
-            const alreadySeen = new Set((prev.tool_calls ?? []).map((tc) => tc.id))
-            const liveIds = b.toolCallOrder.filter(
-              (id) => !alreadySeen.has(id) && b.toolCalls[id],
-            )
-            if (liveIds.length > 0) {
-              const baked = liveIds.map((id) => {
-                const tc = b.toolCalls[id]
-                return {
-                  id,
-                  tool: tc.tool,
-                  params: tc.params,
-                  result: tc.result,
-                  status: tc.status,
-                  duration_ms: tc.duration_ms,
-                  error: tc.error,
-                }
-              })
-              // Dedupe the merged tool_calls list by id so a re-bake (after
-              // an attach + replay, or any other path that revisits live
-              // ids) cannot leave duplicate ids on the message.
-              const mergedById = new Map<string, NonNullable<typeof prev.tool_calls>[number]>()
-              for (const tc of (prev.tool_calls ?? [])) mergedById.set(tc.id, tc)
-              for (const tc of baked) mergedById.set(tc.id, tc)
-              finalMsgs = [...msgs]
-              // #3: prev is guaranteed assistant (prevAssistantIdx only set for
-              // role:'assistant' entries above), so the role guard is defence-in-depth
-              // to prevent tool_calls — which is illegal on UserMessage/SystemMessage —
-              // being stamped if the invariant is ever broken by a future refactor.
-              if (prev.role === 'assistant') {
-                finalMsgs[prevAssistantIdx] = {
-                  ...prev,
-                  tool_calls: Array.from(mergedById.values()),
-                } as ChatMessage
-              }
-              const liveSet = new Set(liveIds)
-              const remainingCalls: typeof b.toolCalls = {}
-              for (const [k, v] of Object.entries(b.toolCalls)) {
-                if (!liveSet.has(k)) remainingCalls[k] = v
-              }
-              toolCallsAfterReset = remainingCalls
-              toolCallOrderAfterReset = b.toolCallOrder.filter((id) => !liveSet.has(id))
-            }
-          }
-
-          const allMsgs = [...finalMsgs, userMsg, assistantMsg]
-          const msgArrayPatch = applyMessageArray(allMsgs, { ...b, toolCalls: toolCallsAfterReset, toolCallOrder: toolCallOrderAfterReset })
-          return {
-            ...msgArrayPatch,
-            isStreaming: true,
-            // H1-FE: record when user last sent a message so the unknown-sid
-            // done handler can tell whether the active bucket is mid-stream.
-            lastUserMessageAt: Date.now(),
-          }
+    // W2-29: validate outbound MessageFrame against the generated Zod
+    // schema before we hand it to the WebSocket. We DO NOT block the
+    // send — that would freeze the composer on the first contract
+    // drift. Instead we log + bump the dev counter + emit a dev-mode
+    // toast (matches the inbound parseFrameSafe pattern in src/lib/ws.ts).
+    // A future required wire field would otherwise be silently omitted
+    // on the way out.
+    _validateOutboundFrame: (payload: unknown) => {
+      const result = MessageFrameSchema.safeParse(payload)
+      if (result.success) return
+      console.warn('[chat] outbound MessageFrame failed schema validation', result.error)
+      if (import.meta.env.DEV) {
+        useUiStore.getState().addToast({
+          message: `Outbound frame validation failed (dev): ${result.error.message}`,
+          variant: 'error',
         })
-
-        const sent = connection.send({
-          type: 'message',
-          content,
-          session_id: activeSessionId,
-          agent_id: activeAgentId ?? undefined,
-          ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
-          ...modelNameFrame,
-        })
-
-        if (!sent) {
-          // #253 (P0 data loss): the user turn must NEVER be silently dropped.
-          // Previously this rollback deleted BOTH the user and assistant
-          // bubbles, so a failed send wiped the message the user just typed.
-          // Now we KEEP the user bubble (re-marked as 'error' so the UI shows
-          // a failed state + Retry affordance) and only remove the empty
-          // streaming assistant placeholder. The error is also surfaced.
-          withBucket(activeSessionId, (b) => {
-            return produce(b, (draft) => {
-              // Drop the empty assistant placeholder.
-              const aIdx = draft.messageOrder.indexOf(assistantMsg.id)
-              if (aIdx !== -1) draft.messageOrder.splice(aIdx, 1)
-              delete draft.messagesById[assistantMsg.id]
-              // Keep the user message, but flag it as failed.
-              const um = draft.messagesById[userMsg.id]
-              if (um) { um.status = 'error' }
-              draft.isStreaming = false
-            }) as Partial<SessionChatState>
-          })
-          useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Your message was kept; press Retry to resend.')
-        }
-      } else {
-        // No active session — send without session_id; server will mint one
-        // and ack with session_started.
-        //
-        // #253(a): Render the user message optimistically in a temporary bucket
-        // so it is visible immediately. If the WS send fails, mark the message
-        // with status:'error' so the user sees a Retry affordance instead of a
-        // silent drop. The temporary bucket key '__pending' is replaced by the
-        // real session_id once session_started arrives (see handleFrame case
-        // 'session_started'). If the send succeeds, the message stays visible
-        // until session_started migrates the bucket.
-        const pendingSid = '__pending'
-        const userMsg: ChatMessage = {
-          id: generateId(),
-          session_id: pendingSid,
-          role: 'user',
-          content,
-          timestamp: new Date().toISOString(),
-          status: 'done',
-        }
-        const assistantMsg: ChatMessage = {
-          id: generateId(),
-          session_id: pendingSid,
-          role: 'assistant',
-          content: '',
-          timestamp: new Date().toISOString(),
-          status: 'streaming',
-          isStreaming: true,
-        }
-        // Render optimistically in the pending bucket and activate it.
-        withBucket(pendingSid, (b) => {
-          const allMsgs = [...getMessages(b), userMsg, assistantMsg]
-          return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
-        })
-        useSessionStore.getState().setActiveSession(pendingSid, activeAgentId)
-
-        const sent = connection.send({
-          type: 'message',
-          content,
-          agent_id: activeAgentId ?? undefined,
-          ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
-          ...modelNameFrame,
-        })
-        if (!sent) {
-          // #253(a): Mark the user message with status:'error' and remove the
-          // optimistic assistant placeholder. This preserves the typed content
-          // as a retriable error bubble rather than silently dropping the message.
-          withBucket(pendingSid, (b) => {
-            const msgs = getMessages(b).map((m) =>
-              // #3: UserMessage allows status:'error'; cast is safe because userMsg was created
-              // with role:'user'. The discriminated union prevents inline spread without cast.
-              m.id === userMsg.id ? ({ ...m, status: 'error' as const } as ChatMessage) : m
-            ).filter((m) => m.id !== assistantMsg.id)
-            return { ...applyMessageArray(msgs, b), isStreaming: false }
-          })
-          useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')
-        }
       }
     },
+
+    sendMessage: (content, opts) => {
+    const mediaRefs = opts?.mediaRefs ?? []
+    const attachments = opts?.attachments ?? []
+    // Phase 1 / FR-010: per-turn model override. Trim and strip empty
+    // strings so absent and "" are equivalent (the WS frame is omitted
+    // entirely when no model was picked this session, per spec §18 Q3).
+    const modelNameRaw = opts?.model_name
+    const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
+    const modelNameFrame = modelName.length > 0 ? { metadata: { model_name: modelName } } : {}
+    const { connection, isConnected } = useConnectionStore.getState()
+    const { activeSessionId, activeAgentId } = useSessionStore.getState()
+    const { isStreaming } = get()
+
+    if (isStreaming) {
+      useConnectionStore.getState().setConnectionError('Please wait — a response is still generating.')
+      return
+    }
+    if (!connection || !isConnected) {
+      // WS is disconnected — buffer the message for when the connection
+      // recovers rather than losing it silently or showing a hard error.
+      const enqueued = get().enqueueOutboundMessage(content)
+      if (!enqueued) {
+        useConnectionStore.getState().setConnectionError(
+          'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
+        )
+      }
+      return
+    }
+
+    // When activeSessionId is null we do NOT render optimistically until
+    // session_started arrives and gives us a real bucket key. This avoids
+    // a temporary bucket that we'd have to migrate on the ack, at the cost
+    // of ~1 round-trip of perceived latency on the very first message.
+    if (activeSessionId !== null) {
+      const userMsg: ChatMessage = {
+        id: generateId(),
+        session_id: activeSessionId,
+        role: 'user',
+        content,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+        ...(attachments.length > 0 ? { media: attachments } : {}),
+      }
+      const assistantMsg: ChatMessage = {
+        id: generateId(),
+        session_id: activeSessionId,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+        status: 'streaming',
+        isStreaming: true,
+      }
+
+      withBucket(activeSessionId, (b) => {
+        const msgs = getMessages(b)
+        let prevAssistantIdx = -1
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === 'assistant') { prevAssistantIdx = i; break }
+        }
+        let toolCallsAfterReset: typeof b.toolCalls = b.toolCalls
+        let toolCallOrderAfterReset: string[] = b.toolCallOrder
+        let finalMsgs = msgs
+
+        if (prevAssistantIdx !== -1) {
+          const prev = msgs[prevAssistantIdx]
+          const alreadySeen = new Set((prev.tool_calls ?? []).map((tc) => tc.id))
+          const liveIds = b.toolCallOrder.filter(
+            (id) => !alreadySeen.has(id) && b.toolCalls[id],
+          )
+          if (liveIds.length > 0) {
+            const baked = liveIds.map((id) => {
+              const tc = b.toolCalls[id]
+              return {
+                id,
+                tool: tc.tool,
+                params: tc.params,
+                result: tc.result,
+                status: tc.status,
+                duration_ms: tc.duration_ms,
+                error: tc.error,
+              }
+            })
+            // Dedupe the merged tool_calls list by id so a re-bake (after
+            // an attach + replay, or any other path that revisits live
+            // ids) cannot leave duplicate ids on the message.
+            const mergedById = new Map<string, NonNullable<typeof prev.tool_calls>[number]>()
+            for (const tc of (prev.tool_calls ?? [])) mergedById.set(tc.id, tc)
+            for (const tc of baked) mergedById.set(tc.id, tc)
+            finalMsgs = [...msgs]
+            // #3: prev is guaranteed assistant (prevAssistantIdx only set for
+            // role:'assistant' entries above), so the role guard is defence-in-depth
+            // to prevent tool_calls — which is illegal on UserMessage/SystemMessage —
+            // being stamped if the invariant is ever broken by a future refactor.
+            if (prev.role === 'assistant') {
+              finalMsgs[prevAssistantIdx] = {
+                ...prev,
+                tool_calls: Array.from(mergedById.values()),
+              } as ChatMessage
+            }
+            const liveSet = new Set(liveIds)
+            const remainingCalls: typeof b.toolCalls = {}
+            for (const [k, v] of Object.entries(b.toolCalls)) {
+              if (!liveSet.has(k)) remainingCalls[k] = v
+            }
+            toolCallsAfterReset = remainingCalls
+            toolCallOrderAfterReset = b.toolCallOrder.filter((id) => !liveSet.has(id))
+          }
+        }
+
+        const allMsgs = [...finalMsgs, userMsg, assistantMsg]
+        const msgArrayPatch = applyMessageArray(allMsgs, { ...b, toolCalls: toolCallsAfterReset, toolCallOrder: toolCallOrderAfterReset })
+        return {
+          ...msgArrayPatch,
+          isStreaming: true,
+          // H1-FE: record when user last sent a message so the unknown-sid
+          // done handler can tell whether the active bucket is mid-stream.
+          lastUserMessageAt: Date.now(),
+        }
+      })
+
+      const payload = {
+        type: 'message' as const,
+        content,
+        session_id: activeSessionId,
+        agent_id: activeAgentId ?? undefined,
+        ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+        ...modelNameFrame,
+      }
+      get()._validateOutboundFrame(payload)
+      const sent = connection.send(payload)
+
+      // W2-7c: clear the nextModel slot AFTER the WS send so a failed
+      // send leaves the user's pick intact (they can Retry without
+      // having to re-pick the model). Clearing before the send would
+      // silently lose the override on a transport rejection.
+      if (sent) {
+        set({ nextModel: null })
+      }
+
+      if (!sent) {
+        // #253 (P0 data loss): the user turn must NEVER be silently dropped.
+        // Previously this rollback deleted BOTH the user and assistant
+        // bubbles, so a failed send wiped the message the user just typed.
+        // Now we KEEP the user bubble (re-marked as 'error' so the UI shows
+        // a failed state + Retry affordance) and only remove the empty
+        // streaming assistant placeholder. The error is also surfaced.
+        withBucket(activeSessionId, (b) => {
+          return produce(b, (draft) => {
+            // Drop the empty assistant placeholder.
+            const aIdx = draft.messageOrder.indexOf(assistantMsg.id)
+            if (aIdx !== -1) draft.messageOrder.splice(aIdx, 1)
+            delete draft.messagesById[assistantMsg.id]
+            // Keep the user message, but flag it as failed.
+            const um = draft.messagesById[userMsg.id]
+            if (um) { um.status = 'error' }
+            draft.isStreaming = false
+          }) as Partial<SessionChatState>
+        })
+        useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Your message was kept; press Retry to resend.')
+      }
+    } else {
+      // No active session — send without session_id; server will mint one
+      // and ack with session_started.
+      //
+      // #253(a): Render the user message optimistically in a temporary bucket
+      // so it is visible immediately. If the WS send fails, mark the message
+      // with status:'error' so the user sees a Retry affordance instead of a
+      // silent drop. The temporary bucket key '__pending' is replaced by the
+      // real session_id once session_started arrives (see handleFrame case
+      // 'session_started'). If the send succeeds, the message stays visible
+      // until session_started migrates the bucket.
+      const pendingSid = '__pending'
+      const userMsg: ChatMessage = {
+        id: generateId(),
+        session_id: pendingSid,
+        role: 'user',
+        content,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      }
+      const assistantMsg: ChatMessage = {
+        id: generateId(),
+        session_id: pendingSid,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+        status: 'streaming',
+        isStreaming: true,
+      }
+      // Render optimistically in the pending bucket and activate it.
+      withBucket(pendingSid, (b) => {
+        const allMsgs = [...getMessages(b), userMsg, assistantMsg]
+        return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
+      })
+      useSessionStore.getState().setActiveSession(pendingSid, activeAgentId)
+
+      const payload2 = {
+        type: 'message' as const,
+        content,
+        agent_id: activeAgentId ?? undefined,
+        ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+        ...modelNameFrame,
+      }
+      get()._validateOutboundFrame(payload2)
+      const sent = connection.send(payload2)
+
+      // W2-7c: see comment in the active-session branch above — we
+      // clear AFTER the send so a transport rejection leaves the
+      // pick in place for Retry.
+      if (sent) {
+        set({ nextModel: null })
+      }
+      if (!sent) {
+        // #253(a): Mark the user message with status:'error' and remove the
+        // optimistic assistant placeholder. This preserves the typed content
+        // as a retriable error bubble rather than silently dropping the message.
+        withBucket(pendingSid, (b) => {
+          const msgs = getMessages(b).map((m) =>
+            // #3: UserMessage allows status:'error'; cast is safe because userMsg was created
+            // with role:'user'. The discriminated union prevents inline spread without cast.
+            m.id === userMsg.id ? ({ ...m, status: 'error' as const } as ChatMessage) : m
+          ).filter((m) => m.id !== assistantMsg.id)
+          return { ...applyMessageArray(msgs, b), isStreaming: false }
+        })
+        useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')
+      }
+    }
+  },
 
     cancelStream: () => {
       const { connection } = useConnectionStore.getState()
@@ -2244,6 +2279,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const messageId = replayFrame.id
           const messageTimestamp = replayFrame.timestamp
           const replayAgentId = replayFrame.agent_id
+          // W2-5: per-turn model record on replay. The field is optional
+          // on the wire (FIX-B's schema addition); we read it as
+          // `model?: string` so frames without it (legacy or non-model-
+          // producing turns) still parse. Trim and treat empty/whitespace
+          // as absent — matches the renderer trim guard.
+          const replayModelRaw = (replayFrame as { model?: string }).model
+          const replayModel = typeof replayModelRaw === 'string' ? replayModelRaw.trim() : ''
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
               // Cursor advancement is handled centrally before the switch (I1);
@@ -2304,6 +2346,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   m.status = 'done'
                   m.isStreaming = false
                   if (replayAgentId) m.agentId = replayAgentId
+                  // W2-5: stamp the per-turn model on the coalesced
+                  // assistant turn (FR-014). Only set when the frame
+                  // carried a non-empty model — legacy frames and
+                  // non-model-producing turns stay model-less.
+                  if (replayModel) (m as { model?: string }).model = replayModel
                   // Coalesce path: this empty placeholder was created by the
                   // turn's own tool_call_start frames, so any pending live tool
                   // calls belong to THIS assistant. Bake them in before the early
@@ -2352,6 +2399,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 timestamp: messageTimestamp ?? new Date().toISOString(),
                 status: 'done' as const,
                 ...(replayAgentId ? { agentId: replayAgentId } : {}),
+                // W2-5: per-turn model record. Only on assistant
+                // messages (user/system turns don't carry a producer
+                // model). Empty model is treated as absent so the
+                // renderer doesn't show a phantom footer.
+                ...(replayModel && role === 'assistant' ? { model: replayModel } : {}),
               }
               draft.messagesById[newMsg.id] = newMsg
               draft.messageOrder.push(newMsg.id)
