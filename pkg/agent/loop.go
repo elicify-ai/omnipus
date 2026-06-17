@@ -2767,10 +2767,16 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize model %q: %w", model, err)
 	}
-	nextCandidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent.Fallbacks)
+	nextCandidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent)
 	if len(nextCandidates) == 0 {
 		return "", fmt.Errorf("model %q did not resolve to any provider candidates", model)
 	}
+
+	// FR-007: rebuild the provider pool so the new model switch has every
+	// distinct provider pre-built. The agent's existing pool may carry stale
+	// entries for the previous primary's provider; rebuilding from the new
+	// candidate chain keeps ProviderPool coherent with Candidates.
+	newPool := buildProviderPool(cfg, nextCandidates)
 
 	agent.mu.Lock()
 	oldModel := agent.Model
@@ -2780,6 +2786,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	agent.Candidates = nextCandidates
 	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
 	agent.mu.Unlock()
+	agent.StoreProviderPool(newPool)
 
 	// Close the previous provider if it holds resources (e.g. a stateful
 	// session) and is actually being replaced.
@@ -4658,7 +4665,18 @@ turnLoop:
 					providerCtx,
 					activeCandidates,
 					func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
-						return activeProvider.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
+						// FR-007: look up the provider instance that matches
+						// this candidate's pinned Provider. Without this,
+						// every fallback routes through activeProvider (the
+						// primary's instance) — defeating the point of
+						// provider-aware fallbacks. Falls back to
+						// activeProvider when the candidate has no Provider
+						// pinned (legacy wire shape) or no pool entry.
+						p := ts.agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: provider, Model: model})
+						if p == nil {
+							p = activeProvider
+						}
+						return p.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
 					},
 				)
 				if fbErr != nil {
