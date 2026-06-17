@@ -1,0 +1,89 @@
+title: ReplayErrorFrame
+description: >
+  Server → client. Replay of a system-error transcript entry (Phase 1B,
+  FR-014). Emitted by the replay path when the server encounters a
+  TranscriptEntry with Type=system AND Status="error" — produced by
+  appendErrorTranscript for rate-limit denials (kind=rate_limit) and
+  provider LLM call failures (kind=error).
+
+  The SPA uses this frame's `kind` discriminant to render the rate-limit-denial
+  component or the generic error component instead of falling back to the
+  default "assistant" bubble render path. Without this typed frame, replay
+  treats the entry as a normal assistant message (the previous bug — empty
+  Role falls back to "assistant" via ReplayMessageFrame.Role, so the SPA
+  renders rate-limit text as a regular assistant message).
+type: object
+required:
+  - type
+  - session_id
+  - entry_id
+  - timestamp
+  - kind
+  - message
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: replay_error
+  session_id:
+    type: string
+    minLength: 1
+    description: Session being replayed.
+  entry_id:
+    type: string
+    description: >
+      Server-assigned transcript entry ID. Matches TranscriptEntry.ID from
+      the JSONL partition so the SPA can dedup against live entries on
+      WS reconnect.
+  timestamp:
+    type: string
+    format: date-time
+    description: ISO-8601 timestamp of the original error event.
+  kind:
+    type: string
+    enum:
+      - rate_limit
+      - error
+    description: >
+      Error category. The SPA renders a different component per kind:
+      "rate_limit" → rate-limit-denial banner with retry-after countdown,
+      "error" → generic error component. Add new kinds here as new error
+      categories are introduced (the enum keeps the wire contract tight).
+  message:
+    type: string
+    description: >
+      Human-readable error description (the same text previously written
+      to TranscriptEntry.Content). Kept verbatim for backward compat with
+      the existing replay_message rendering path.
+  agent_id:
+    type: string
+    description: Agent that was active when the error fired.
+  payload:
+    type: object
+    description: >
+      Optional structured error payload (rate-limit metadata, retry-after,
+      policy rule, etc.). The replay producer mirrors the structured event
+      payload that originally fired (RateLimitPayload for rate_limit,
+      ErrorPayload for error). Empty object when no structured payload was
+      persisted. additionalProperties: false so unknown fields are caught
+      at contract time rather than silently passed through.
+    additionalProperties: false
+    properties:
+      retry_after_seconds:
+        type: number
+        description: Seconds until the rate limit window expires (rate_limit only).
+      policy_rule:
+        type: string
+        description: Rate-limit policy rule that fired (rate_limit only).
+      scope:
+        type: string
+        description: Rate-limit scope: session | agent | global (rate_limit only).
+      resource:
+        type: string
+        description: Rate-limited resource identifier (rate_limit only).
+      tool:
+        type: string
+        description: Tool name when the rate limit applies per-tool (rate_limit only).
+      stage:
+        type: string
+        description: Pipeline stage where the error fired (error only, e.g. "llm").

@@ -205,11 +205,32 @@ type RateLimitFrame struct {
 	Type              string  `json:"type"`
 }
 
+// ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). The SPA renders this frame's `kind` discriminant to dispatch to the rate-limit banner or generic error component — without this typed frame the SPA previously rendered rate-limit text as a regular assistant message (Role="" fallback path).
+type ReplayErrorFrame struct {
+	AgentId *string `json:"agent_id,omitempty"`
+	EntryId string  `json:"entry_id"`
+	Kind    string  `json:"kind"`
+	Message string  `json:"message"`
+	Payload struct {
+		PolicyRule        *string  `json:"policy_rule,omitempty"`
+		Resource          *string  `json:"resource,omitempty"`
+		RetryAfterSeconds *float64 `json:"retry_after_seconds,omitempty"`
+		Scope             *string  `json:"scope,omitempty"`
+		Stage             *string  `json:"stage,omitempty"`
+		Tool              *string  `json:"tool,omitempty"`
+	} `json:"payload,omitempty"`
+	SessionId string `json:"session_id"`
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
+}
+
 // ReplayMessageFrame — Server → client replayed transcript entry.
 type ReplayMessageFrame struct {
-	AgentId   *string `json:"agent_id,omitempty"`
-	Content   string  `json:"content"`
-	Id        *string `json:"id,omitempty"`
+	AgentId *string `json:"agent_id,omitempty"`
+	Content string  `json:"content"`
+	Id      *string `json:"id,omitempty"`
+	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
+	Model     *string `json:"model,omitempty"`
 	Role      string  `json:"role"`
 	SessionId string  `json:"session_id"`
 	Timestamp *string `json:"timestamp,omitempty"`
@@ -411,6 +432,7 @@ const (
 	WsFrameTypeExecApprovalExpired      WsFrameType = "exec_approval_expired"
 	WsFrameTypeTaskStatusChanged        WsFrameType = "task_status_changed"
 	WsFrameTypeReplayMessage            WsFrameType = "replay_message"
+	WsFrameTypeReplayError              WsFrameType = "replay_error"
 	WsFrameTypeRateLimit                WsFrameType = "rate_limit"
 	WsFrameTypeMedia                    WsFrameType = "media"
 	WsFrameTypeAgentSwitched            WsFrameType = "agent_switched"

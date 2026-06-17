@@ -14,7 +14,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"strings"
+	"time"
 
 	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/media"
@@ -183,6 +185,17 @@ func streamReplay(
 
 		// FR-I-002: emit replay_message for non-empty content.
 		if entry.Content != "" {
+			// Phase 1B (FR-014): system-error entries (Type=system + Status="error")
+			// are emitted as ReplayErrorFrame so the SPA can render the typed
+			// rate-limit-denial or generic error component. Without this, the
+			// empty Role would fall through to the assistant render path and the
+			// rate-limit text would render as a regular assistant bubble.
+			if entry.Type == session.EntryTypeSystem && entry.Status == "error" {
+				if err2 := emitFrame(buildReplayErrorFrame(sessionID, entry)); err2 != nil {
+					return framesEmitted, err2
+				}
+				continue
+			}
 			msgFrame := generated.ReplayMessageFrame{
 				Type:      string(generated.WsFrameTypeReplayMessage),
 				SessionId: sessionID,
@@ -192,6 +205,14 @@ func streamReplay(
 			if entry.AgentID != "" {
 				agentIDCopy := entry.AgentID
 				msgFrame.AgentId = &agentIDCopy
+			}
+			// Phase 1B (FR-013/FR-014): surface per-turn model. Populated from
+			// TranscriptEntry.Model on every assistant message written via
+			// pkg/agent/turn.go since Phase 1B landed. Empty for legacy turns;
+			// the SPA renders "(model not recorded)" for those (FR-014).
+			if entry.Model != "" {
+				modelCopy := entry.Model
+				msgFrame.Model = &modelCopy
 			}
 			if err2 := emitFrame(msgFrame); err2 != nil {
 				return framesEmitted, err2
@@ -649,6 +670,83 @@ func resolveStatus(s string) string {
 		return "success"
 	}
 	return s
+}
+
+// resolveErrorKind maps an error transcript entry to the wire-level `kind`
+// discriminant consumed by the SPA's ReplayErrorFrame reducer.
+//
+// Transcript entries written by appendErrorTranscript currently do not carry
+// the originating EventKind ("error" vs "rate_limit") — only the human-readable
+// Content string is persisted. Until the producer is upgraded to write a typed
+// Status enum (tracked by W2-15), we infer the kind from the Content prefix
+// that the two paths use:
+//
+//   - "rate limit: …" → "rate_limit" (recordRateLimitDenial)
+//   - anything else   → "error"      (LLM call failure paths)
+//
+// The two producers are stable in pkg/agent/turn.go (appendErrorTranscript)
+// and pkg/agent/loop.go (recordRateLimitDenial + the two LLM call error
+// sites). The heuristic is documented at both ends so a future refactor that
+// adds a Kind field to TranscriptEntry can swap this for a direct lookup
+// without touching the wire contract.
+func resolveErrorKind(content string) string {
+	if strings.HasPrefix(content, "rate limit:") {
+		return "rate_limit"
+	}
+	return "error"
+}
+
+// buildReplayErrorFrame constructs a generated.ReplayErrorFrame from a
+// TranscriptEntry that the loop identified as a system-error entry
+// (Type=system + Status="error"). Phase 1B (FR-014) — replaces the previous
+// behaviour of emitting a ReplayMessageFrame with an empty Role, which the
+// SPA would render as a regular assistant bubble.
+func buildReplayErrorFrame(sessionID string, entry session.TranscriptEntry) generated.ReplayErrorFrame {
+	frame := generated.ReplayErrorFrame{
+		Type:      string(generated.WsFrameTypeReplayError),
+		SessionId: sessionID,
+		EntryId:   entry.ID,
+		// Format as RFC 3339 (matches AsyncAPI `format: date-time`); TranscriptEntry.Timestamp
+		// is a time.Time and JSON-marshals to RFC 3339 by default.
+		Timestamp: entry.Timestamp.UTC().Format(time.RFC3339Nano),
+		Kind:      resolveErrorKind(entry.Content),
+		Message:   entry.Content,
+	}
+	if entry.AgentID != "" {
+		agentIDCopy := entry.AgentID
+		frame.AgentId = &agentIDCopy
+	}
+	// Structured payload: for the rate-limit path, decode the trailing
+	// "(retry after Ns)" parenthetical into a typed retry_after_seconds so
+	// the SPA can render the countdown without re-parsing the message text.
+	// Anything beyond that scope is left to the Message field — the typed
+	// payload is intentionally minimal until W2-15 lands a typed Status enum.
+	if frame.Kind == "rate_limit" {
+		if retry := parseRetryAfterSeconds(entry.Content); retry != nil {
+			frame.Payload.RetryAfterSeconds = retry
+		}
+	}
+	return frame
+}
+
+// parseRetryAfterSeconds extracts a "(retry after Ns)" parenthetical from a
+// rate-limit error message. Returns nil when the parenthetical is absent or
+// unparseable so the SPA falls back to its default retry display.
+func parseRetryAfterSeconds(content string) *float64 {
+	open := strings.LastIndex(content, "(retry after ")
+	if open < 0 {
+		return nil
+	}
+	closeIdx := strings.Index(content[open:], "s)")
+	if closeIdx < 0 {
+		return nil
+	}
+	numStr := content[open+len("(retry after ") : open+closeIdx]
+	f, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return nil
+	}
+	return &f
 }
 
 // resolveTaskLabel extracts the task label from a spawn tool call's parameters.

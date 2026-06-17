@@ -103,6 +103,8 @@ channels:
         $ref: '#/components/messages/TaskStatusChangedFrame'
       ReplayMessageFrame:
         $ref: '#/components/messages/ReplayMessageFrame'
+      ReplayErrorFrame:
+        $ref: '#/components/messages/ReplayErrorFrame'
       RateLimitFrame:
         $ref: '#/components/messages/RateLimitFrame'
       MediaFrame:
@@ -347,6 +349,7 @@ operations:
       reconstructs the conversation from these frames.
     messages:
       - $ref: '#/channels/chat/messages/ReplayMessageFrame'
+      - $ref: '#/channels/chat/messages/ReplayErrorFrame'
 
   receiveRateLimit:
     action: receive
@@ -672,6 +675,20 @@ components:
       payload:
         $ref: '#/components/schemas/ReplayMessageFrame'
 
+    ReplayErrorFrame:
+      name: ReplayErrorFrame
+      title: replay_error
+      summary: >
+        Replayed system-error transcript entry (server → client). Emitted by
+        the replay path when the underlying TranscriptEntry is a system error
+        (Status="error"). The SPA renders a typed error component based on
+        the `kind` discriminant (rate_limit → rate-limit banner, error →
+        generic error component) instead of falling back to a regular
+        assistant message render (the previous bug).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ReplayErrorFrame'
+
     RateLimitFrame:
       name: RateLimitFrame
       title: rate_limit
@@ -818,6 +835,7 @@ components:
         - exec_approval_expired
         - task_status_changed
         - replay_message
+        - replay_error
         - rate_limit
         - media
         - agent_switched
@@ -1473,6 +1491,67 @@ components:
           format: date-time
         agent_id:
           type: string
+        model:
+          type: string
+          maxLength: 256
+          description: >
+            Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014).
+            Omitted for legacy entries written before per-turn model recording landed.
+
+    ReplayErrorFrame:
+      title: ReplayErrorFrame
+      description: >
+        Server → client. Replay of a system-error transcript entry (Phase 1B,
+        FR-014). The SPA renders this frame's `kind` discriminant to dispatch
+        to the rate-limit banner or generic error component — without this
+        typed frame the SPA previously rendered rate-limit text as a regular
+        assistant message (Role="" fallback path).
+      type: object
+      required:
+        - type
+        - session_id
+        - entry_id
+        - timestamp
+        - kind
+        - message
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: replay_error
+        session_id:
+          type: string
+          minLength: 1
+        entry_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum:
+            - rate_limit
+            - error
+        message:
+          type: string
+        agent_id:
+          type: string
+        payload:
+          type: object
+          additionalProperties: false
+          properties:
+            retry_after_seconds:
+              type: number
+            policy_rule:
+              type: string
+            scope:
+              type: string
+            resource:
+              type: string
+            tool:
+              type: string
+            stage:
+              type: string
 
     RateLimitFrame:
       title: RateLimitFrame
