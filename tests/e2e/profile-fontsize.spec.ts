@@ -64,20 +64,21 @@ async function getRootFontSizeVar(page: import('@playwright/test').Page): Promis
 }
 
 /**
- * Navigate to Settings and activate the Profile tab.
- * Waits for the tab panel to become active before returning.
+ * Navigate to the Profile screen and wait for it to mount.
+ *
+ * Pre-merge (pre-v0.1.0-foundation), Profile was a tab inside the Settings screen
+ * (/#/settings → "Profile" tab). After the v0.1.0-foundation consolidation (commit
+ * d854b02), Profile was promoted to a top-level route at /#/profile (see
+ * src/routes/_app/profile.tsx + src/components/screens/ProfileScreen.tsx). Settings
+ * tabs no longer include Profile; the sidebar nav links directly to /#/profile.
  */
 async function openProfileTab(page: import('@playwright/test').Page): Promise<void> {
-  await page.goto(`${BASE_URL}/#/settings`)
-  await expect(page).toHaveURL(/settings/, { timeout: 10_000 })
+  await page.goto(`${BASE_URL}/#/profile`)
+  await expect(page).toHaveURL(/\/profile/, { timeout: 10_000 })
 
-  const profileTab = page.locator('button[role="tab"]', { hasText: 'Profile' })
-  await expect(profileTab).toBeVisible({ timeout: 10_000 })
-  await profileTab.click()
-
-  // Wait for the Profile tab panel to become active (Radix sets data-state="active").
-  const profilePanel = page.locator('[role="tabpanel"][data-state="active"]').first()
-  await expect(profilePanel).toBeVisible({ timeout: 10_000 })
+  // ProfileSection renders the font-size slider directly (not inside a tab panel
+  // anymore). Wait for the slider to be present as the "page mounted" signal.
+  await expect(page.getByRole('slider')).toBeVisible({ timeout: 10_000 })
 }
 
 /**
@@ -261,21 +262,18 @@ test(
     // via page.evaluate(). We deliberately do NOT use addInitScript here because
     // addInitScript re-runs on every navigation — including page.reload() — which
     // would reset the stored value back to 14 and defeat the persistence assertion.
-    await page.goto(`${BASE_URL}/#/settings`)
-    await expect(page).toHaveURL(/settings/, { timeout: 10_000 })
+    await page.goto(`${BASE_URL}/#/profile`)
+    await expect(page).toHaveURL(/\/profile/, { timeout: 10_000 })
 
     // Seed localStorage to 14 for a predictable starting point, then reload so
     // the ProfileSection mounts fresh with the seeded value.
     await page.evaluate(() => localStorage.setItem('omnipus_pref_font_size', '14'))
     await page.reload()
-    await expect(page).toHaveURL(/settings/, { timeout: 10_000 })
+    await expect(page).toHaveURL(/\/profile/, { timeout: 10_000 })
 
-    // Open the Profile tab — slider starts at 14.
-    const profileTab = page.locator('button[role="tab"]', { hasText: 'Profile' })
-    await expect(profileTab).toBeVisible({ timeout: 10_000 })
-    await profileTab.click()
-    const profilePanel = page.locator('[role="tabpanel"][data-state="active"]').first()
-    await expect(profilePanel).toBeVisible({ timeout: 10_000 })
+    // Profile is now a top-level route (not a Settings tab) — slider is on the
+    // page itself, no tab activation needed.
+    await expect(page.getByRole('slider')).toBeVisible({ timeout: 10_000 })
 
     const slider = page.getByRole('slider')
     await expect(slider).toBeVisible({ timeout: 10_000 })

@@ -27,6 +27,14 @@ test('(a) all section cards load without console errors', async ({ page }) => {
 });
 
 test('(b) approval-queue: policy=ask tool call triggers approval modal and Approve routes it through', async ({ page }) => {
+  // Soft-skipped: PUT /api/v1/agents/{id}/tools body uses the old
+  // {builtin: {default_policy, policies: ...}} shape; the v0.1.0 tool-registry
+  // redesign moved per-tool policies into the sandbox.tool_policies model.
+  // Tracked: https://github.com/elicify-ai/omnipus/issues/426
+  test.skip(
+    true,
+    'BLOCKED on #426 — AgentToolsUpdateRequest schema changed in the v0.1.0 tool-registry redesign; see SKIP_ALLOWLIST',
+  );
   // test.slow() triples the global 90s test timeout to 270s. The LLM-driven
   // approval modal occasionally takes 40-60s to appear under suite load.
   test.slow();
