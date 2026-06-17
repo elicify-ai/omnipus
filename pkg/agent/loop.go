@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,20 +107,20 @@ type AgentLoop struct {
 	auditLogger   *audit.Logger
 	policyAuditor *policy.PolicyAuditor
 
-	// Wave 2: Kernel-level sandbox backend (SEC-01, SEC-02, SEC-03).
-	// Selected at startup via sandbox.SelectBackend: LinuxBackend on Linux
-	// 5.13+ (Landlock+seccomp), FallbackBackend elsewhere (cooperative env
-	// vars). Applied to every exec child via ExecTool.sandboxBackend.
+	// Kernel-level sandbox backend (SEC-01, SEC-02, SEC-03). Selected at startup
+	// via sandbox.SelectBackend: LinuxBackend on Linux 5.13+ (Landlock+seccomp),
+	// FallbackBackend elsewhere (cooperative env vars). Applied to every exec
+	// child via ExecTool.sandboxBackend.
 	sandboxBackend sandbox.SandboxBackend
 
-	// Wave 3: Prompt injection defense (SEC-25). Sanitizes untrusted tool
-	// results — web_search, web_fetch, browser_*, read_file — before they
-	// enter the LLM's context. Nil when the guard is misconfigured; callers
-	// must nil-check. Trusted tool results (exec, spawn, message, etc.) are
-	// NEVER sanitized so the LLM sees verbatim user and internal output.
+	// Prompt injection defense (SEC-25). Sanitizes untrusted tool results —
+	// web_search, web_fetch, browser_*, read_file — before they enter the
+	// LLM's context. Nil when the guard is misconfigured; callers must
+	// nil-check. Trusted tool results (exec, spawn, message, etc.) are NEVER
+	// sanitized so the LLM sees verbatim user and internal output.
 	promptGuard *security.PromptGuard
 
-	// Wave 3: SSRF proxy for exec child processes (SEC-28). Only started when
+	// SSRF proxy for exec child processes (SEC-28). Only started when
 	// cfg.Tools.Exec.EnableProxy is true. The proxy is idle-stop: it exits
 	// after DefaultIdleTimeout (30s) when no commands are active, and is
 	// automatically restarted by PrepareCmd() on the next exec command so
@@ -134,8 +135,8 @@ type AgentLoop struct {
 	// receive this instance so the allow_internal policy is honored uniformly.
 	ssrfChecker *security.SSRFChecker
 
-	// Wave 4: Browser automation manager (US-4/US-6/US-7). Nil when browser
-	// tools are disabled. Shutdown() is called in AgentLoop.Close().
+	// Browser automation manager (US-4/US-6/US-7). Nil when browser tools
+	// are disabled. Shutdown() is called in AgentLoop.Close().
 	browserMgr *browser.BrowserManager
 
 	// Tier 1/3 deps — stored so WireTier13Deps can re-run on hot reload.
@@ -173,7 +174,7 @@ type AgentLoop struct {
 	// env preamble with the new values.
 	contextBuilderRegistry *ContextBuilderRegistry
 
-	// Wave 4: Per-agent rate limiting and global daily cost cap (SEC-26).
+	// Per-agent rate limiting and global daily cost cap (SEC-26).
 	// rateLimiter manages sliding-window counters; costTracker persists the
 	// daily cost accumulator across restarts. Both are always non-nil after
 	// NewAgentLoop — the registry exists even when no limits are configured
@@ -293,7 +294,7 @@ type processOptions struct {
 
 	// Metadata carries the inbound message metadata (bus.InboundMessage.Metadata)
 	// through to the turn flow. The agent loop reads Metadata["model_name"] to
-	// detect a per-thread model switch (Wave 3 / FR-011) and apply switch-time
+	// detect a per-thread model switch (FR-011) and apply switch-time
 	// compress before the next LLM call.
 	Metadata map[string]string
 }
@@ -713,9 +714,9 @@ func NewAgentLoop(
 	// Register shared tools to all agents (now that al is created)
 	registerSharedTools(al, cfg, msgBus, registry, provider)
 
-	// Wave 2: replace the exec tool in each agent's registry with a version
-	// that has the policy auditor and sandbox backend wired in. Registering
-	// the same tool name overwrites the previous entry (see ToolRegistry.Register).
+	// Replace the exec tool in each agent's registry with a version that has
+	// the policy auditor and sandbox backend wired in. Registering the same
+	// tool name overwrites the previous entry (see ToolRegistry.Register).
 	al.wireExecToolDeps()
 
 	// FR-029a: Validate the recap model allow-list at boot.
@@ -922,13 +923,13 @@ func (al *AgentLoop) recordRateLimitDenial(
 			Details:    details,
 		})
 	}
-	// FIX-1 / FR-001: the rate-limit denial MUST be visible after a page
-	// reload. The WS `rate_limit` frame (EventKindRateLimit below) drives the
-	// live UI only; the JSONL transcript is what the replay path reads. Emit
-	// EventKindError with the same RateLimitPayload so consumers see a
-	// single error-kind event regardless of whether the wire is live or
-	// replayed. The original EventKindRateLimit frame is preserved for
-	// backward compatibility with the WS forwarder.
+	// FIX-1 / FR-001: rate-limit denials MUST be visible after a page reload.
+	// The spec requires EventKindError in the JSONL transcript (consumed by the
+	// replay path on session reopen), but the live WS UI still subscribes to
+	// EventKindRateLimit for the dedicated denial banner. We therefore emit BOTH
+	// — EventKindError drives the persistent record + replay, EventKindRateLimit
+	// drives the live toast/banner. The transcript write below closes the
+	// "Error replay gap" called out as US-1.
 	al.emitEvent(
 		EventKindError,
 		ts.eventMeta("runTurn", "turn.error"),
@@ -939,10 +940,6 @@ func (al *AgentLoop) recordRateLimitDenial(
 		ts.eventMeta("runTurn", "turn.rate_limit"),
 		payload,
 	)
-	// Persist the rate-limit context to the JSONL transcript so a session
-	// reopen re-renders the error in the chat. Without this, the live
-	// `rate_limit` frame is only visible during the current session — the
-	// spec calls this out as the "Error replay gap" (US-1).
 	rlMsg := fmt.Sprintf("rate limit: %s (retry after %.0fs)",
 		payload.PolicyRule, payload.RetryAfterSeconds)
 	ts.appendErrorTranscript(EventKindRateLimit.String(), "runTurn", rlMsg)
@@ -952,7 +949,7 @@ func (al *AgentLoop) recordRateLimitDenial(
 // NewExecToolWithDeps, injecting the policy auditor (SEC-05) and the sandbox
 // backend (SEC-01/02/03). This runs after NewAgentInstance has created the
 // default exec tool so that all other tool setup (deny patterns, allow paths,
-// timeouts) is preserved — we only add the Wave 2 security deps on top.
+// timeouts) is preserved — we only add the security deps on top.
 //
 // No-op when the agent has exec disabled or when the registry lookup fails.
 func (al *AgentLoop) wireExecToolDeps() {
@@ -1070,9 +1067,9 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 		restrict := cfg.Agents.Defaults.RestrictToWorkspace
 		execTool, err := tools.NewExecToolWithDeps(agent.Workspace, restrict, cfg, deps, allowReadPaths)
 		if err != nil {
-			// Fail closed: if Wave 2 security wiring fails, remove the exec
-			// tool from the registry entirely. The agent will lose exec
-			// capability but cannot run commands without the security layer.
+			// Fail closed: if security wiring fails, remove the exec tool from the
+			// registry entirely. The agent will lose exec capability but
+			// cannot run commands without the security layer.
 			logger.ErrorCF("agent", "Failed to wire exec tool deps; removing exec tool (fail closed)",
 				map[string]any{"agent_id": agentID, "error": err.Error()})
 			agent.Tools.Unregister("exec")
@@ -1639,7 +1636,7 @@ func registerSharedTools(
 			}))
 		}
 
-		// Browser automation tools (Wave 4, US-4/US-6/US-7).
+		// Browser automation tools (US-4/US-6/US-7).
 		// Tools are always registered; whether an agent can actually invoke them
 		// is determined by the policy engine. Chromium presence is checked lazily
 		// at first use and produces a clear error if missing.
@@ -2403,6 +2400,13 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 			Stage:   "hook." + stage,
 			Message: err.Error(),
 		},
+	)
+	// FIX-2 / US-1: persist the hook abort to the JSONL transcript so the
+	// replay path re-renders it after page reload (see appendErrorTranscript
+	// docstring). Without this, hook aborts vanish on session reopen.
+	ts.appendErrorTranscript(
+		EventKindError.String(), "hooks",
+		err.Error(),
 	)
 	return err
 }
@@ -3442,9 +3446,10 @@ func (al *AgentLoop) ProcessHeartbeat(
 //   - It sets AutoDenyAsk so any `ask`-policy tool call is denied without
 //     blocking for approval (FR-009) — no operator is present.
 //
-// The caller (the Wave-2 gateway runner) resolves the owner + picks the session
-// per session_mode and supplies a concrete sessionID; it imposes the deadline on
-// ctx and calls RequestCancel on timeout. ProcessScheduled only guarantees
+// The caller (the gateway's scheduled-job runner) resolves the owner + picks
+// the session per session_mode and supplies a concrete sessionID; it imposes
+// the deadline on ctx and calls RequestCancel on timeout. ProcessScheduled
+// only guarantees
 // owner-pinning, cancellability, and prompt return.
 //
 // Returns the agent's reply and a non-nil error on run failure. An aborted
@@ -3654,8 +3659,8 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		TranscriptSessionID: transcriptSessionID,
 		TranscriptStore:     transcriptStore,
 		// Carry inbound metadata so runTurn can detect a per-thread model
-		// switch (Wave 3 / FR-011). The map is copied by reference — the
-		// turn flow only reads from it.
+		// switch (FR-011). The map is copied by reference — the turn flow
+		// only reads from it.
 		Metadata: msg.Metadata,
 	}
 
@@ -4200,12 +4205,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		},
 	)
 
-	// Wave 3 / FR-011, FR-012: detect a per-thread model switch via the
-	// inbound message metadata. When the user-selected model differs from
-	// the agent's currently loaded model, run handleModelSwitch BEFORE the
-	// first LLM call so the next request sees the compressed, annotated
-	// history. handleModelSwitch is a no-op when no switch is requested.
-	if requested := strings.TrimSpace(inboundMetadataFromOpts(ts.opts.Metadata, "model_name")); requested != "" {
+	// FR-011, FR-012: detect a per-thread model switch via the inbound message
+	// metadata. When the user-selected model differs from the agent's currently
+	// loaded model, run handleModelSwitch BEFORE the first LLM call so the next
+	// request sees the compressed, annotated history. handleModelSwitch is a
+	// no-op when no switch is requested.
+	if requested := strings.TrimSpace(inboundMetadata(bus.InboundMessage{Metadata: ts.opts.Metadata}, "model_name")); requested != "" {
 		// Skip when the requested model is the same as the agent's currently
 		// loaded one — this is the no-op case in spec §11 Dataset 3 row 1.
 		if requested != ts.agent.Model {
@@ -5076,6 +5081,15 @@ turnLoop:
 					),
 				}
 				err = nil
+				// The synthesized guidance above is NOT produced by llmModel — the
+				// provider refused the call entirely. Stamp a sentinel so the
+				// transcript model field does NOT mis-attribute this turn to llmModel
+				// (silent-failure-A #5). The original error stays in the warn log
+				// above so operators can debug; we surface a debug-level marker here
+				// for search/discovery.
+				ts.setLastProducedModel("(image-rejection synthesis)")
+				logger.DebugCF("agent", "image-rejection synthesis stamped; llmModel retained in error log only",
+					map[string]any{"agent_id": ts.agent.ID, "model": llmModel})
 				// fall through to the normal post-LLM handling below.
 			}
 		}
@@ -5089,9 +5103,8 @@ turnLoop:
 					Message: err.Error(),
 				},
 			)
-			// FIX-1 / FR-002: persist the provider error to the JSONL transcript
-			// so the session replay path re-renders it after page reload. The
-			// bus emit above drives the live UI; this write drives the replay.
+			// FIX-1 / FR-002: persist the provider error to the transcript (see
+			// appendErrorTranscript docstring for rationale).
 			ts.appendErrorTranscript(
 				EventKindError.String(), "runTurn",
 				fmt.Sprintf("LLM call failed after retries: %s", err.Error()),
@@ -5279,8 +5292,8 @@ turnLoop:
 					ts.eventMeta("runTurn", "turn.error"),
 					ErrorPayload{Stage: "llm_empty_retry", Message: err.Error()},
 				)
-				// FIX-1 / FR-002: persist this provider error to the JSONL
-				// transcript so the session replay re-renders it after reload.
+				// FIX-1 / FR-002: persist this provider error to the transcript (see
+				// appendErrorTranscript docstring for rationale).
 				ts.appendErrorTranscript(
 					EventKindError.String(), "runTurn",
 					fmt.Sprintf("LLM call failed during empty-response retry: %s", err.Error()),
@@ -6115,6 +6128,13 @@ turnLoop:
 					Message: err.Error(),
 				},
 			)
+			// FIX-2 / US-1: persist the session-save failure to the JSONL
+			// transcript so the replay path re-renders it after reload (see
+			// appendErrorTranscript docstring).
+			ts.appendErrorTranscript(
+				EventKindError.String(), "runTurn",
+				fmt.Sprintf("session save failed: %s", err.Error()),
+			)
 			return turnResult{}, err
 		}
 	}
@@ -6326,19 +6346,12 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (
 	}
 
 	// Split at a Turn boundary so no tool-call sequence is torn apart.
-	// parseTurnBoundaries gives us the start of each Turn; we drop the
-	// oldest half of Turns and keep the most recent ones.
-	turns := parseTurnBoundaries(history)
-	var mid int
-	if len(turns) >= 2 {
-		mid = turns[len(turns)/2]
-	} else {
-		// Fewer than 2 Turns — fall back to message-level midpoint
-		// aligned to the nearest Turn boundary.
-		mid = findSafeBoundary(history, len(history)/2)
-	}
+	// splitHistoryAtTurnMidpoint gives us (dropped, kept, ok); ok=false
+	// means no safe boundary — we then fall back to keeping only the
+	// most recent user message (Turn atomicity last-resort break).
 	var keptHistory []providers.Message
-	if mid <= 0 {
+	_, kept, ok := splitHistoryAtTurnMidpoint(history)
+	if !ok {
 		// No safe Turn boundary — the entire history is a single Turn
 		// (e.g. one user message followed by a massive tool response).
 		// Keeping everything would leave the agent stuck in a context-
@@ -6351,7 +6364,7 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (
 			}
 		}
 	} else {
-		keptHistory = history[mid:]
+		keptHistory = kept
 	}
 
 	droppedCount := len(history) - len(keptHistory)
@@ -6389,7 +6402,7 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (
 // SwitchAction is the result of decideSwitchCompressAction: should we
 // compress the conversation at model-switch time, or no-op?
 //
-// (Wave 3 / FR-011, spec §11 Dataset 3.)
+// (FR-011, spec §11 Dataset 3.)
 type SwitchAction int
 
 const (
@@ -6422,6 +6435,7 @@ func (a SwitchAction) String() string {
 // Decision matrix (spec §11 Dataset 3):
 //
 //	currentConvTokens == 0           → Noop
+//	newContextWindow  <= 0           → Noop (graceful — see handleModelSwitch)
 //	currentConvTokens <= newWindow    → Noop
 //	currentConvTokens >  newWindow    → Compress
 //
@@ -6450,13 +6464,15 @@ func estimateHistoryTokens(history []providers.Message) int {
 // summarizeDroppedTurns makes a small LLM call asking the new model (or the
 // agent's configured provider) to produce a real prose summary of the
 // dropped turns. The returned summary is bounded to ≤50% of the new model's
-// context window (per FR-011) by injecting a token cap into the prompt and
-// clamping the response length. If the LLM call fails, the caller is expected
-// to fall back to forceCompression and surface a warning.
+// context window (per FR-011) by passing a max_tokens request hint to the
+// provider; the actual response length is whatever the provider returns —
+// there is no post-hoc truncation, so a misbehaving provider may exceed
+// the budget. If the LLM call fails, the caller is expected to fall back
+// to forceCompression and surface a warning.
 //
 // We use the agent's currently configured provider/model so the summary is
 // cheap (already in the context, no new credential resolution). This matches
-// the spec direction in Wave 3 / §13 FR-011.
+// the spec direction in §13 FR-011.
 //
 // Parameters:
 //   - ctx:    request context (caller passes a sensible timeout).
@@ -6496,7 +6512,7 @@ func (al *AgentLoop) summarizeDroppedTurns(
 	// markdown") so the new model gets a clean hint and no tool calls.
 	var b strings.Builder
 	b.WriteString("Summarize the key decisions, facts, and open questions from this conversation. Output ≤")
-	b.WriteString(itoa(summaryBudget))
+	b.WriteString(strconv.Itoa(summaryBudget))
 	b.WriteString(" tokens. Plain prose, no markdown formatting beyond plain text.\n\n---\n")
 	for i, m := range dropped {
 		// Truncate per-message to avoid blowing the prompt on a single
@@ -6533,31 +6549,6 @@ func (al *AgentLoop) summarizeDroppedTurns(
 	return strings.TrimSpace(resp.Content), nil
 }
 
-// itoa is a tiny stdlib-free int formatter used by summarizeDroppedTurns to
-// avoid pulling strconv into the hot path (negligible cost; keeps the
-// function dependency-light for review).
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
-}
-
 // buildSyntheticSwitchMessage renders the agreed synthetic system message
 // (spec Q4 wording): "Conversation moved to {new_model} from {old_model} on
 // {timestamp}. The prior turns have been compressed to fit the new context
@@ -6578,9 +6569,9 @@ func buildSyntheticSwitchMessage(oldModel, newModel, summary string, timestamp t
 	}
 }
 
-// handleModelSwitch is the new switch-time compress path (Wave 3 / FR-011,
-// FR-012). It is invoked when an incoming bus message carries a model_name
-// metadata that differs from the agent's current Model.
+// handleModelSwitch is the switch-time compress path (FR-011, FR-012). It is
+// invoked when an incoming bus message carries a model_name metadata that
+// differs from the agent's current Model.
 //
 // Behaviour:
 //  1. Resolve the new model's ContextWindow. In this worktree we read it
@@ -6600,8 +6591,8 @@ func buildSyntheticSwitchMessage(oldModel, newModel, summary string, timestamp t
 //
 // The function is intentionally side-effect-light on the agent: it does NOT
 // touch agent.Provider / agent.Candidates — those are resolved by the
-// existing ApplyAgentModel path (FR-004 in Wave 1A). handleModelSwitch is
-// the conversation-shape half of the switch; ApplyAgentModel is the
+// existing ApplyAgentModel path (FR-004). handleModelSwitch is the
+// conversation-shape half of the switch; ApplyAgentModel is the
 // provider/credential half. The turn flow wires both.
 //
 // Returns the (possibly mutated) agent so callers can keep using the same
@@ -6628,12 +6619,10 @@ func (al *AgentLoop) handleModelSwitch(
 	history := agent.Sessions.GetHistory(sessionKey)
 	currentConvTokens := estimateHistoryTokens(history)
 
-	// Resolve the new model's window. Until Wave 1A's ResolveModelCfg lands,
-	// we conservatively reuse the agent's current ContextWindow — this
-	// preserves the existing per-turn behaviour and means a model switch
-	// without a registry-resolved window is treated as "fits". This is
-	// safe: forceCompression at the next LLM call will still kick in if
-	// the conversation overflows.
+	// Resolve the new model's window. When the agent's stored ContextWindow is
+	// non-positive we conservatively reuse it as-is — a model switch without
+	// a resolved window is treated as "fits". This is safe: forceCompression
+	// at the next LLM call will still kick in if the conversation overflows.
 	newContextWindow := agent.ContextWindow
 	if newContextWindow <= 0 {
 		newContextWindow = 128000
@@ -6707,52 +6696,34 @@ func (al *AgentLoop) handleModelSwitch(
 }
 
 // splitForSwitchCompress splits history into (dropped, kept) for switch-time
-// compression. We mirror the safe-split logic in forceCompression (parse
-// Turn boundaries, drop the oldest half of Turns). Exposed as a free
-// function so summarizeDroppedTurns gets a bounded, cheap-to-summarize set
-// without forcing it to read the session again.
+// compression. It is a thin wrapper over splitHistoryAtTurnMidpoint that
+// degrades to "keep everything" when no safe boundary exists — handleModelSwitch
+// is allowed to feed the full history to summarizeDroppedTurns if it has to,
+// because the next LLM call will still trip forceCompression on overflow.
+//
+// Call chain: handleModelSwitch → splitForSwitchCompress →
+// summarizeDroppedTurns (only path that uses `dropped`; `kept` is then
+// combined with the synthetic switch message and re-trimmed via
+// truncateHistoryToBudget).
 func splitForSwitchCompress(history []providers.Message) (dropped, kept []providers.Message) {
 	if len(history) == 0 {
 		return nil, nil
 	}
-	turns := parseTurnBoundaries(history)
-	var mid int
-	if len(turns) >= 2 {
-		mid = turns[len(turns)/2]
-	} else {
-		mid = findSafeBoundary(history, len(history)/2)
+	if d, k, ok := splitHistoryAtTurnMidpoint(history); ok {
+		return d, k
 	}
-	if mid <= 0 {
-		// Single-turn history — nothing safe to split. Keep everything;
-		// forceCompression at the next LLM call will still trip on overflow.
-		return nil, append([]providers.Message(nil), history...)
-	}
-	return append([]providers.Message(nil), history[:mid]...), append([]providers.Message(nil), history[mid:]...)
+	return nil, append([]providers.Message(nil), history...)
 }
 
 // fitWithinBudget aggressively trims history until its token estimate fits
-// within newContextWindow. The synthetic system message (always at index 0
-// when this is called from handleModelSwitch) is preserved first so the new
-// model still sees the switch context; we then shed older messages from the
-// tail backwards. The minimum result is [synthetic] — we never produce an
-// empty history (the new model would have no anchor at all).
+// within newContextWindow. Thin wrapper over truncateHistoryToBudget — the
+// synthetic system message (always at index 0 when this is called from
+// handleModelSwitch) is preserved first so the new model still sees the
+// switch context; we then shed older messages from the tail backwards.
+// The minimum result is [synthetic] — we never produce an empty history
+// (the new model would have no anchor at all).
 func fitWithinBudget(history []providers.Message, newContextWindow int) []providers.Message {
-	if len(history) == 0 {
-		return history
-	}
-	for estimateHistoryTokens(history) > newContextWindow && len(history) > 1 {
-		// Always keep the first message (the synthetic switch anchor).
-		if len(history) <= 2 {
-			// Two messages (synthetic + one real). Drop the real one; keep
-			// only the synthetic. If even the synthetic overflows, we have
-			// to accept the overflow — forceCompression at the next LLM
-			// call is the last line of defence.
-			history = history[:1]
-			break
-		}
-		history = history[:len(history)-1]
-	}
-	return history
+	return truncateHistoryToBudget(history, newContextWindow)
 }
 
 // GetStartupInfo returns information about loaded tools and skills for logging.
@@ -7423,16 +7394,6 @@ func inboundMetadata(msg bus.InboundMessage, key string) string {
 		return ""
 	}
 	return msg.Metadata[key]
-}
-
-// inboundMetadataFromOpts is the map-form sibling of inboundMetadata, used by
-// the turn flow where we already have processOptions.Metadata (Wave 3). It
-// returns "" when the map is nil or the key is absent.
-func inboundMetadataFromOpts(meta map[string]string, key string) string {
-	if meta == nil {
-		return ""
-	}
-	return meta[key]
 }
 
 // inboundInstanceID returns the channel-instance key a message arrived on

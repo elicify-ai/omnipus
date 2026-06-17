@@ -168,19 +168,6 @@ func runExternalCLISubTurn(
 	return result, result.Err
 }
 
-// stampExternalDispatchModel sets the child's lastProducedModel so the
-// transcript writes from the external-CLI sub-turn attribute the output to
-// the delegated agent's primary model. The external CLI itself runs its own
-// LLM, but the model string we record is the agent's configured model —
-// consistent with how the chat path records the model that was selected at
-// turn start (FR-013 / Phase 1B).
-func stampExternalDispatchModel(childTS *turnState, model string) {
-	if childTS == nil {
-		return
-	}
-	childTS.setLastProducedModel(model)
-}
-
 // drainExternalRun consumes the runner's event stream, mirrors each event into the
 // sub-agent session transcript, and aggregates the run's textual output into a
 // tools.ToolResult. It returns when the stream closes (run end/error) or ctx ends.
