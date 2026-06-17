@@ -115,4 +115,51 @@ describe('W2-29 _validateOutboundFrame', () => {
     expect(sendSpy).toHaveBeenCalledTimes(1)
     expect(warnSpy).not.toHaveBeenCalled()
   })
+
+  it('emits a focused 1-line dev-toast on a malformed frame (W4-15 fix)', () => {
+    // W4-15: the dev-toast used to dump the multi-line Zod result.error.message
+    // (a wall of JSON). The fix focuses on the first issue: path.join + message.
+    // In dev mode + with a malformed frame, addToast must be called with a
+    // single-line description that includes the failing field and the issue.
+    vi.stubEnv('DEV', true)
+    vi.stubEnv('MODE', 'development')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const frame = {
+      type: 'message' as const,
+      // content omitted — Zod fails on the required field "content"
+      session_id: SID,
+    }
+    useChatStore.getState()._validateOutboundFrame(frame)
+
+    const toasts = useUiStore.getState().toasts
+    expect(toasts.length).toBeGreaterThan(0)
+    const lastToast = toasts[toasts.length - 1]
+    // Focused: single-line description including the failing field path + issue
+    expect(lastToast.message).toContain('Outbound frame validation failed (dev):')
+    expect(lastToast.message).toContain('content')
+    // Must NOT contain the multi-line JSON dump
+    expect(lastToast.message).not.toContain('[\n')
+    expect(lastToast.message).not.toContain('{\n')
+
+    expect(warnSpy).toHaveBeenCalled()
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT emit a dev-toast in production builds', () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const frame = {
+      type: 'message' as const,
+      // content omitted
+      session_id: SID,
+    }
+    useChatStore.getState()._validateOutboundFrame(frame)
+
+    // Toast count should be unchanged from the reset (empty toasts array)
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+
+    expect(warnSpy).toHaveBeenCalled()
+    vi.unstubAllEnvs()
+  })
 })
