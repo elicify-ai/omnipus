@@ -101,6 +101,33 @@ echo "▸ Generating schemas.ts (Zod) from contracts/openapi.yaml …"
   --export-types \
   -t "$TEMPLATE"
 
+# Post-process: append `.strict()` to schemas that opt into strict object
+# validation via `additionalProperties: false` in their YAML schema. The
+# openapi-zod-client tool (v1.18.3) does not honor this per-schema; the global
+# `--strict-objects` flag is too broad (it would affect every object schema,
+# including ones that intentionally allow extra fields). We use a narrow
+# opt-in list — the contract is the YAML `additionalProperties: false`; this
+# list is a deliberate manual mapping (W2-9 fix). The runtime result is the
+# same as if the YAML were `additionalProperties: false` AND we chained
+# `.strict()`: unknown fields are rejected.
+STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel"}
+STRICT_RAW="$GEN/_schemas.generated.tmp.ts"
+for name in $STRICT_SCHEMAS; do
+  if grep -q "^export const ${name}:" "$STRICT_RAW"; then
+    # Append .strict() to the last .something() chain in the schema definition.
+    # Generator emits:  export const Name: z.ZodType<Name> = z.object({...});
+    #                  or: .object({...}).partial().passthrough();
+    # Rewrite to:        ... .partial().passthrough().strict();
+    #                  or: z.object({...}).strict();
+    awk -v name="$name" '
+      /^export const '"$name"':/ { in_block = 1; buf = $0; next }
+      in_block && /;/ { buf = buf "\n" $0; gsub(/;$/, ".strict();", buf); print buf; in_block = 0; next }
+      in_block { buf = buf "\n" $0; next }
+      { print }
+    ' "$STRICT_RAW" > "$STRICT_RAW.tmp" && mv "$STRICT_RAW.tmp" "$STRICT_RAW"
+  fi
+done
+
 # Append the generated AsyncAPI Zod schemas and write the final file atomically.
 # Strip the `// @ts-nocheck` and "Fragment —" sentinel lines from the fragment
 # before concatenating — those are only meaningful when the fragment is checked
