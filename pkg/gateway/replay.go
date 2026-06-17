@@ -209,7 +209,8 @@ func streamReplay(
 			// Phase 1B (FR-013/FR-014): surface per-turn model. Populated from
 			// TranscriptEntry.Model on every assistant message written via
 			// pkg/agent/turn.go since Phase 1B landed. Empty for legacy turns;
-			// the SPA renders "(model not recorded)" for those (FR-014).
+			// the UI omits the model field entirely (no placeholder) for those
+			// entries — see MessageItem.tsx model-footer rendering (FR-014).
 			if entry.Model != "" {
 				modelCopy := entry.Model
 				msgFrame.Model = &modelCopy
