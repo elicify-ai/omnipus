@@ -40,20 +40,56 @@ function _shouldEmit(): boolean {
 }
 
 /**
- * Emit a structured telemetry event.
- *
- * Production: writes a single-line JSON record to console.error so a
- * log-collector can pick it up. Rate-limited to avoid floods.
- *
- * Dev/test: also writes to console.error — dev-mode telemetry still goes
- * somewhere visible, but the dev counters and dev-toast helpers in
- * src/lib/ws.ts carry the richer feedback.
+ * Internal emitter — runs the rate-limit check + console.error write
+ * unconditionally. Called by both `logError` (which adds the test-mode
+ * gate) and `_emitTelemetryRaw` (which the test suite uses to drive
+ * the rate-limit logic without the gate interfering).
  */
-export function logError(event: TelemetryEvent): void {
+function _emit(event: TelemetryEvent): void {
   if (!_shouldEmit()) return
   // Single-line JSON: makes grep / awk / log-collector parsing trivial.
   // The "telemetry" prefix is the stable key operators can filter on.
   const payload = JSON.stringify({ telemetry: 'error', ...event })
   // eslint-disable-next-line no-console
   console.error(payload)
+}
+
+/**
+ * Emit a structured telemetry event.
+ *
+ * Production: writes a single-line JSON record to console.error so a
+ * log-collector can pick it up. Rate-limited to avoid floods.
+ *
+ * Dev/test (W4-16): vitest runs set `import.meta.env.MODE === 'test'`,
+ * which gates the actual console.error call so a CI run that fires
+ * many telemetry events does not pollute the captured log. The
+ * rate-limit state still advances, so a test that exercises
+ * logError many times observes the throttle window even though no
+ * console.error side effect is produced. The `MODE !== 'test'` guard
+ * mirrors the pattern at src/lib/ws.ts:162,690.
+ */
+export function logError(event: TelemetryEvent): void {
+  if (import.meta.env.MODE === 'test') return
+  _emit(event)
+}
+
+/**
+ * Test-only emitter that bypasses the test-mode gate. Use this when
+ * you need to observe the rate-limit + window-reset behaviour via
+ * the console.error side effect. Production code MUST NOT import
+ * this — the `_` prefix + the `Raw` suffix are the convention.
+ */
+export function _emitTelemetryRaw(event: TelemetryEvent): void {
+  _emit(event)
+}
+
+/**
+ * Test-only helper: reset the rate-limit window and counter to their
+ * initial state. Module-level globals persist across tests in vitest's
+ * same-process model, so a test that emits N events would otherwise
+ * leak that count into the next test's rate-limit window.
+ */
+export function _resetTelemetryForTest(): void {
+  _sampleWindowStart = 0
+  _sampleCount = 0
 }
