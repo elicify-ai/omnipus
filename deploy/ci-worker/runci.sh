@@ -95,7 +95,6 @@ run_e2e() {
   # seeded /tmp/omnipus-e2e config is ignored — gateway would come up on the default port
   # 5000 instead of our seeded 6060, and health-check polling would never see /health.
   export OMNIPUS_HOME=/tmp/omnipus-e2e
-  local E2E_BIN=/tmp/omnipus-e2e-bin
   local E2E_LOG=/tmp/omnipus-e2e.log
   local GATEWAY_PID=
 
@@ -116,7 +115,15 @@ run_e2e() {
   # 2. Build the gateway binary with the embedded SPA. CGO=0 matches the runtime build
   #    path so the test binary doesn't pick up CGO-only deps that the production binary
   #    would lack.
+  #    Binary path: build to /tmp/omnipus-ci (NOT /tmp/omnipus-e2e-bin) because
+  #    tests/e2e/setup.ts:24 hardcodes DEFAULT_OMNIPUS_BINARY = '/tmp/omnipus-ci' in
+  #    its startGateway helper, and several specs (hot-reload, user-crud, handoff,
+  #    subagent) call startGateway() and abort with "Gateway binary not found at
+  #    /tmp/omnipus-ci" if it's not there. Building to that path is the canonical
+  #    GitHub Actions build path (see .github/workflows/pr.yml "Build gateway binary"
+  #    step) and matches the test infrastructure's expectation.
   log "e2e: build gateway binary"
+  local E2E_BIN=/tmp/omnipus-ci
   CGO_ENABLED=0 go build -tags "$TAGS" -o "$E2E_BIN" ./cmd/omnipus/ || return 1
 
   # 3. Fresh OMNIPUS_HOME every run.
