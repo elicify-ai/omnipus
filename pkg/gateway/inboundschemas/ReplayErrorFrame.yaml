@@ -77,7 +77,7 @@ properties:
         description: Rate-limit policy rule that fired (rate_limit only).
       scope:
         type: string
-        description: Rate-limit scope: session | agent | global (rate_limit only).
+        description: "Rate-limit scope: session | agent | global (rate_limit only)."
       resource:
         type: string
         description: Rate-limited resource identifier (rate_limit only).
