@@ -48,11 +48,7 @@ func ResolveModelCfg(cfg *config.Config, modelName, workspace string) (*config.M
 
 	// 1. Direct match via cfg.GetModelConfig (matches by ModelName).
 	if mc, err := cfg.GetModelConfig(raw); err == nil && mc != nil {
-		clone := *mc
-		if clone.Workspace == "" {
-			clone.Workspace = workspace
-		}
-		return &clone, nil
+		return cloneWithWorkspace(mc, workspace), nil
 	}
 
 	// 2 & 3. Direct model-field or unprefixed-modelID match against each
@@ -63,18 +59,10 @@ func ResolveModelCfg(cfg *config.Config, modelName, workspace string) (*config.M
 			continue
 		}
 		if full == raw {
-			clone := *cfg.Providers[i]
-			if clone.Workspace == "" {
-				clone.Workspace = workspace
-			}
-			return &clone, nil
+			return cloneWithWorkspace(cfg.Providers[i], workspace), nil
 		}
 		if _, modelID := providers.ExtractProtocol(full); modelID == raw {
-			clone := *cfg.Providers[i]
-			if clone.Workspace == "" {
-				clone.Workspace = workspace
-			}
-			return &clone, nil
+			return cloneWithWorkspace(cfg.Providers[i], workspace), nil
 		}
 	}
 
@@ -91,20 +79,34 @@ func ResolveModelCfg(cfg *config.Config, modelName, workspace string) (*config.M
 			if provName == "" {
 				continue
 			}
-			if isPassthroughProvider(provName, cfg.Providers[i].APIBase) {
-				clone := *cfg.Providers[i]
+			if providers.IsPassthroughProvider(provName, cfg.Providers[i].APIBase) {
+				clone := cloneWithWorkspace(cfg.Providers[i], workspace)
 				clone.Model = provName + "/" + raw
 				// Clone already carries the provider's own Provider field; keep
 				// it so CreateProviderFromConfig routes via the right backend.
-				if clone.Workspace == "" {
-					clone.Workspace = workspace
-				}
-				return &clone, nil
+				return clone, nil
 			}
 		}
 	}
 
 	return nil, fmt.Errorf("model %q not found in model_list or providers", raw)
+}
+
+// cloneWithWorkspace returns a pointer to a fresh copy of src with Workspace
+// filled in when src left it empty. The dereference-and-take-address pattern
+// (vs. a deep copy) is intentional: ModelConfig holds scalar fields and
+// pointers; the inner pointer targets (e.g. Subagents) are deliberately shared
+// with the underlying cfg.Providers entry so a model change does NOT silently
+// rewrite the agent's subagent wiring.
+func cloneWithWorkspace(src *config.ModelConfig, workspace string) *config.ModelConfig {
+	if src == nil {
+		return nil
+	}
+	clone := *src
+	if clone.Workspace == "" {
+		clone.Workspace = workspace
+	}
+	return &clone
 }
 
 // resolveModel is the thin boolean wrapper around ResolveModelCfg used by the
