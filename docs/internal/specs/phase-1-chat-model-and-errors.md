@@ -121,7 +121,7 @@ Five connected defects in the current chat (verified manually on the dev pod at 
 | 4 | Auto-compress at switch time when new `ContextWindow < current conversation size`; insert synthetic system message | user Q4 response |
 | 5 | Per-thread model in `ExternalStoreThreadData.metadata`; agent_id is already per-turn (handoff works) | user Q5 response |
 | 6 | Record `model` on each assistant message in the JSONL transcript | user Q6 response |
-| 7 | Replace `fallback_models: [string]` with `[{model, provider}]` (object form); accept old form during migration | user Q7 response |
+| 7 | Replace `fallback_models: [string]` with `[{model, provider}]` (object form); accept old form during migration. **See also Q1** (the "full cutover" applies to the write path; Q7's acceptance of the old form is the read path). | user Q7 response |
 | 8 | Phased with parallel fan-out agents in worktrees, fast-forward-merge to hotfix between waves | user Q8 response |
 
 ---
@@ -513,7 +513,7 @@ Test implementation order: Unit tests first (rows 1–18), then integration, the
 
 | # | Decision | Rationale |
 |---|---|---|
-| Q1 | **Full cutover to `[{model, provider}]`**, no legacy `[string]` support. One-time conversion of any existing legacy data at first load. | User direction: "we do not have to be backward compatible". Simpler code, no two paths to maintain. |
+| Q1 | **Q1 amended (see Q7):** marshal always emits the object form `[{model, provider}]`; legacy `[string]` is **accepted at read for backward-compat** with existing `config.json` files and normalized to the object form at config-load. | Reconciled with Q7 after implementation: existing user installs have `config.json` files with the old `[string]` form. Dropping the read path on day-one would crash boot. Q1's "full cutover" is preserved on the write path (Q7). |
 | Q2 | **Mid-stream model change is queued for the next turn.** The in-flight turn finishes on the old model; the new model applies on the next outgoing message. | Avoids in-flight corruption. Matches `sessionActiveAgent` semantics (handoff is per-turn). |
 | Q3 | **Picker is a "next message will use this" selector, not a per-thread preference.** Picker state is local to the page-load (not persisted). On session reopen (continue from history), the picker auto-defaults to the **last model in the transcript**. The complete model-resolution chain at send time is: (1) the picker value if user has selected one this session, else (2) the last model from history, else (3) the agent's `model` config, else (4) the first entry of `fallback_models`. | User clarification. There is no per-thread model concept in this architecture (one session = one thread). The model is recorded per-message in the transcript; the picker just picks what the NEXT message will use. |
 | Q4 | **Plain wording for synthetic switch message**: "Conversation moved to {new_model} from {old_model} on {timestamp}. The prior turns have been compressed to fit the new context window. Summary: {summary}". | User direction. Clear, explicit, names both models. |
