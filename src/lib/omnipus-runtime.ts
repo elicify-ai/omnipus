@@ -181,18 +181,40 @@ function buildMessageStatus(msg: AssistantMessage & { isStreaming?: boolean }): 
   return { type: "complete", reason: "stop" };
 }
 
-function convertMessage(
+// Per-turn model record (Wave 2 / FR-014). The AssistantUI ThreadMessageLike
+// exposes a `metadata.custom` channel that survives the runtime's internal
+// message transformation — that's where the per-turn model rides so the
+// renderer can read it without breaking assistant-ui's typed surface.
+//
+// Legacy turns (no `model` field recorded) must NOT show any model info
+// (spec §18 Q6: no placeholder text). We pass `undefined` for `model` in
+// those cases, which means `metadata.custom.model` is `undefined` and the
+// renderer simply doesn't render a model line.
+function modelForMessage(msg: ChatMessage): string | undefined {
+  if (msg.role !== "assistant") return undefined;
+  const raw = (msg as { model?: string }).model;
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function convertMessage(
   msg: ChatMessage,
   toolCalls: Record<string, StoreToolCall>,
   toolCallOrder: string[],
   textAtToolCallStart: Record<string, string>,
   isLastAssistant: boolean
 ): ThreadMessageLike {
+  const model = modelForMessage(msg);
   return {
     id: msg.id,
     role: msg.role,
     content: buildContentParts(msg, toolCalls, toolCallOrder, textAtToolCallStart, isLastAssistant),
     ...(msg.role === "assistant" ? { status: buildMessageStatus(msg) } : {}),
+    // Surface the per-turn model on metadata.custom for the renderer.
+    // Only attached when the message has a non-empty model value
+    // (FR-014 + spec §18 Q6: legacy turns render nothing).
+    ...(model ? { metadata: { custom: { model } } } : {}),
   };
 }
 
@@ -207,6 +229,12 @@ export function useOmnipusRuntime() {
   const sendMessage = useChatStore((s) => s.sendMessage);
   const cancelStream = useChatStore((s) => s.cancelStream);
   const addToast = useUiStore((s) => s.addToast);
+  // Phase 1 / FR-008/009/010: the composer's model picker writes the
+  // picker's value here. We read it in onNew so the next message is
+  // routed via the chosen model. The store clears `nextModel` after
+  // sendMessage completes, so the picker auto-derives a fresh default
+  // on the next session reopen (per spec §18 Q3).
+  const nextModel = useChatStore((s) => s.nextModel);
 
   return useExternalStoreRuntime<ChatMessage>({
     messages,
@@ -265,9 +293,9 @@ export function useOmnipusRuntime() {
       }
 
       if (mediaRefs.length > 0) {
-        sendMessage(text, { mediaRefs, attachments });
+        sendMessage(text, { mediaRefs, attachments, ...(nextModel ? { model_name: nextModel } : {}) });
       } else {
-        sendMessage(text);
+        sendMessage(text, nextModel ? { model_name: nextModel } : undefined);
       }
     },
     onCancel: async () => { cancelStream() },

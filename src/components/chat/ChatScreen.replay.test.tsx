@@ -112,6 +112,7 @@ vi.mock('@/lib/api', () => ({
   fetchSessionMessages: vi.fn().mockResolvedValue([]),
   createSession: vi.fn(),
   uploadFiles: vi.fn(),
+  fetchProviders: vi.fn().mockResolvedValue([]),
 }))
 
 // Mock SVG asset import

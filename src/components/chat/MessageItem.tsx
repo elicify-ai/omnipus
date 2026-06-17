@@ -184,6 +184,19 @@ export function MessageItem({ message }: MessageItemProps) {
           {message.cost != null && message.cost > 0 && (
             <span className="text-[10px] text-[var(--color-muted)]">{formatCost(message.cost)}</span>
           )}
+          {/* Phase 1 / FR-014: per-turn model record. Only rendered when the
+              turn has a non-empty `model` field. Legacy turns without one
+              must NOT show any model info (spec §18 Q6: no placeholder
+              text, no "(model not recorded)" string). The span uses
+              font-mono so the model slug stays readable at small sizes. */}
+          {message.role === 'assistant' && typeof message.model === 'string' && message.model.trim().length > 0 && (
+            <span
+              data-testid="message-model"
+              className="text-[10px] font-mono text-[var(--color-muted)]"
+            >
+              {message.model.trim()}
+            </span>
+          )}
         </div>
       </div>
     </div>

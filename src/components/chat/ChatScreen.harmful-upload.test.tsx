@@ -104,6 +104,7 @@ vi.mock('@/lib/api', () => ({
   fetchSessionMessages: vi.fn().mockResolvedValue([]),
   createSession: vi.fn(),
   uploadFiles: vi.fn(),
+  fetchProviders: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))

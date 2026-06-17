@@ -159,9 +159,13 @@ type MessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	Content string  `json:"content"`
 	// Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent can see the attachment. Empty or omitted for text-only messages.
-	Media     []string `json:"media,omitempty"`
-	SessionId *string  `json:"session_id,omitempty"`
-	Type      string   `json:"type"`
+	Media []string `json:"media,omitempty"`
+	// Optional per-message metadata. Phase 1 (FR-010) adds `model_name`: when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes THIS turn to the chosen model. The server falls back to the agent's `model` config when this field is absent.
+	Metadata struct {
+		ModelName *string `json:"model_name,omitempty"`
+	} `json:"metadata,omitempty"`
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
 }
 
 // NotificationFrame — Server → client. A notification raised for the recipient user (e.g. a scheduled run failed). Delivered only to that user's connections; the SPA adds it to the header notification center (#264).
