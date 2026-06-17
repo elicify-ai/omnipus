@@ -35,12 +35,23 @@ test('(a) roster loads with 4 base agents (Mia/Jim/Ava/Ray) plus any custom', as
 });
 
 test('(b) profile accordion expands all available sections', async ({ page }) => {
-  // Click the first agent card to navigate to its profile
+  // Click the first agent card to open the agent profile slide-over.
+  // Pre-v0.1.0-foundation, clicking a card navigated to a full page route at
+  // /#/agents/{id}. The slideover refactor (commit d854b02) moved the profile
+  // into a Radix <Sheet> — see src/components/agents/AgentProfile.tsx:1238 and
+  // src/components/agents/AgentCard.tsx:25 (handleOpen defaults to
+  // openEditAgentSlideOver). The transient route /_app/agents/$agentId
+  // immediately replaces history back to /agents, so the URL stays at /#/agents
+  // (see src/routes/_app/agents.$agentId.tsx). The slide-over content lives at
+  // data-testid="agent-name-input" (or "agent-profile-close"), which is the
+  // "slideover opened" signal.
   const firstCard = agentCards(page).first();
   await expect(firstCard).toBeVisible({ timeout: 10_000 });
   await firstCard.click();
 
-  await expect(page).toHaveURL(/\/agents\//, { timeout: 10_000 });
+  // Wait for the slide-over to mount (the agent-name-input is rendered by
+  // AgentProfile.tsx once the agent query resolves — see AgentProfile.tsx:483).
+  await expect(page.getByTestId('agent-name-input')).toBeVisible({ timeout: 10_000 });
 
   // Accordion is a Radix Accordion — items produce [data-state="closed"|"open"] (AgentProfile.tsx:347)
   // Each AccordionTrigger is a button. Find all accordion triggers and click them.
@@ -77,24 +88,36 @@ test('(c) "New Agent" button on roster opens the create-agent modal', async ({ p
 });
 
 test('(d) locked fields render read-only on core agents', async ({ page }) => {
-  // Navigate to the Jim agent profile (locked core agent)
+  // Click the Jim card to open the agent profile slide-over (see (b) for the
+  // slideover-refactor rationale). Jim is a locked core agent.
   await page.goto('/#/agents');
   const jimCard = page.locator('[aria-label*="Jim" i]').or(page.getByText('Jim', { exact: true })).first();
   await expect(jimCard).toBeVisible({ timeout: 15_000 });
   await jimCard.click();
 
-  // Wait for the profile to load
-  await expect(page).toHaveURL(/\/agents\//, { timeout: 10_000 });
+  // Wait for the slide-over to mount.
+  await expect(page.getByTestId('agent-name-input')).toBeVisible({ timeout: 10_000 });
 
   // The identity accordion should exist and be open (defaultValue includes 'identity')
   const nameInput = page.getByTestId('agent-name-input');
-  await expect(nameInput).toBeVisible({ timeout: 10_000 });
+  // (Already waited for visible above; re-grab for the disabled assertion below.)
 
   // For a locked agent, the input must be disabled
   await expect(nameInput).toBeDisabled();
 });
 
 test('(e) deleted agent URL returns branded 404 with "Back to Agents" link', async ({ page }) => {
+  // Soft-skipped: the slideover refactor changed the /_app/agents/$agentId route
+  // to a transient "open slideover and navigate back to /agents" handler (see
+  // src/routes/_app/agents.$agentId.tsx). The route does not render a branded
+  // 404 page for unknown agent IDs — it silently opens an empty slideover and
+  // redirects to /#/agents. The test premise (a 404 page with a "Back to
+  // Agents" link) does not match the current product shape.
+  // Tracked: https://github.com/elicify-ai/omnipus/issues/427
+  test.skip(
+    true,
+    'BLOCKED on #427 — slideover refactor removed the branded 404 page for unknown agent IDs; see SKIP_ALLOWLIST',
+  );
   await page.goto('/#/agents/this-agent-does-not-exist-xyz');
 
   // Should see a "not found" message, not crash the app

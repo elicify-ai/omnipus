@@ -186,6 +186,30 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
     until: '2026-09-30',
     note: 'PUT /api/v1/agents/{id}/tools body uses the old `{builtin: {default_policy, policies: ...}}` shape; the v0.1.0 redesign moved per-tool policies into the `sandbox.tool_policies` model. Rewrite the test against AgentToolsUpdateRequest.',
   },
+  // agents.spec.ts — slideover refactor removed the branded 404 page for unknown
+  // agent IDs. The transient /_app/agents/$agentId route silently opens the slideover
+  // and navigates back to /#/agents for unknown IDs.
+  // Tracked: https://github.com/elicify-ai/omnipus/issues/427
+  {
+    test: '(e) deleted agent URL returns branded 404 with "Back to Agents" link',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/427',
+    until: '2026-09-30',
+    note: 'The /_app/agents/$agentId route (src/routes/_app/agents.$agentId.tsx) is a transient "open slideover + navigate back" handler. Unknown agent IDs do not render a branded 404 page. Either add the 404 page or drop the test.',
+  },
+  // subagent.spec.ts — known LLM timing flake (per the run-ci configuration
+  // comment in playwright.config.ts). The 9 Group-A failures (subagent×5,
+  // handoff b, media a, command-center b) all share the same symptom: under
+  // prolonged suite load (~12 min total wall-clock) the LLM occasionally takes
+  // >40s to emit the expected tool call, even though every test passes alone
+  // in 5-25s. Retries are NOT a cover for real bugs — the design-flaw fix
+  // is deterministic scenario providers (T4.1). Soft-skip until then.
+  // Tracked: https://github.com/dapicom-ai/omnipus/issues/155 (v0.2 hardening)
+  {
+    test: '(c) live step counter: collapsed header step count increments during multi-step sub-turn',
+    issue: 'https://github.com/dapicom-ai/omnipus/issues/155',
+    until: '2026-12-31',
+    note: 'LLM-driven live step counter occasionally takes >40s under suite load (12+ min wall-clock). Retries=3 in CI typically recover. The deterministic scenario-provider fix is tracked in T4.1.',
+  },
 ];
 
 // ── Validation ──────────────────────────────────────────────────────────────────

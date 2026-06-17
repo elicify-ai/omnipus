@@ -136,17 +136,15 @@ test.afterAll(async () => {
 });
 
 // ── Test: SPA embed verification ──────────────────────────────────────────────
-
-test('(a) SPA embed contains user-management UI', async () => {
-  // Soft-skipped: UsersSection component was removed in the v0.1.0-foundation
-  // consolidation (commit d854b02). The "Add user" string is no longer in the SPA
-  // bundle. Tracked at https://github.com/elicify-ai/omnipus/issues/424 — the
-  // component will either be restored (revert 1284 lines) or the test will be
-  // rewritten for the new product shape.
-  test.skip(
-    true,
-    'BLOCKED on #424 — UsersSection component removed in v0.1.0-foundation; see SKIP_ALLOWLIST',
-  );
+// Soft-skipped at definition (test.skip) because UsersSection component was removed
+// in the v0.1.0-foundation consolidation (commit d854b02). The "Add user" string
+// is no longer in the SPA bundle. Tracked at
+// https://github.com/elicify-ai/omnipus/issues/424 — the component will either be
+// restored (revert 1284 lines) or the test will be rewritten for the new product
+// shape. test.skip() at definition (rather than inside the body) ensures the body
+// never runs, which is necessary because the body calls assertUserManagementEmbedPresent()
+// synchronously and that throws before the test.skip() inside the body can be processed.
+test.skip('(a) SPA embed contains user-management UI', async () => {
   // assertUserManagementEmbedPresent() was already called in startGateway().
   // This test documents the contract explicitly so failures are loud.
   assertUserManagementEmbedPresent(); // re-assert in test context for clear FAIL message
