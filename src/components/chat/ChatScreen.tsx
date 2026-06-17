@@ -37,6 +37,7 @@ import { ExecApprovalBlock } from './ExecApprovalBlock'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
+import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { ModelSelector } from '@/components/ui/model-selector'
 import {
@@ -599,16 +600,8 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
 
         {/* Per-turn model record (FR-014). Mirrors MessageItem.tsx so
             replay sessions show the same model footer as the live
-            AssistantUI render. `truncate max-w-[160px]` prevents a long
-            model slug from breaking the row layout. */}
-        {message.role === 'assistant' && typeof (message as { model?: string }).model === 'string' && (message as { model?: string }).model!.trim().length > 0 && (
-          <span
-            data-testid="message-model"
-            className="text-[10px] font-mono text-[var(--color-muted)] truncate max-w-[160px]"
-          >
-            {(message as { model?: string }).model!.trim()}
-          </span>
-        )}
+            AssistantUI render. */}
+        {message.role === 'assistant' && <ModelFooter model={message.model} />}
       </div>
     </div>
   )
@@ -1080,7 +1073,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
       if (m.role !== 'assistant') continue
-      const model = (m as { model?: string }).model
+      const model = m.model
       if (typeof model === 'string' && model.trim().length > 0) {
         return model.trim()
       }
@@ -1097,22 +1090,22 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // The picker shows a "next message" value. The store's `nextModel` is
   // the single source of truth — we feed it directly to <ModelSelector>.
   // We do NOT mirror it into local state (dual-state was the original
-  // dual-source bug W2-7d: keeping a `pickerValue` mirror caused the
-  // store to lag the visible value on every transcript mutation).
+  // dual-source bug: keeping a `pickerValue` mirror caused the store to
+  // lag the visible value on every transcript mutation).
   //
   // The store is keyed globally (not per-session), so on a session or
   // agent switch the seed effect below clears the store value, then
   // writes a freshly-derived default (transcript-last → agent → '').
   // This prevents a user-pick in session A from silently carrying into
-  // session B (W2-7b).
+  // session B.
   const nextModel = useChatStore((s) => s.nextModel)
   const setNextModel = useChatStore((s) => s.setNextModel)
   const lastSeedKey = useRef<string>('')
   useEffect(() => {
     // Re-seed only when the active session or agent id changes. The
     // seed-key gate guarantees this effect never reads transcript state
-    // mid-mutation, so we don't need messages as a dep (W2-7a — the
-    // previous `messagesForDerivation` dep was dead).
+    // mid-mutation, so we don't need messages as a dep (the previous
+    // `messagesForDerivation` dep was dead).
     const seedKey = `${activeSessionId ?? ''}::${activeAgentId ?? ''}`
     if (seedKey === lastSeedKey.current) return
     lastSeedKey.current = seedKey
@@ -1124,7 +1117,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // Helper: user just picked a model in the dropdown. Write directly
   // to the store; an empty string means "revert to the agent default
   // for the next message" — we toast to make the implicit revert
-  // explicit (W2-7e).
+  // explicit.
   function onPickerChange(model: string) {
     setNextModel(model || null)
     if (model === '') {

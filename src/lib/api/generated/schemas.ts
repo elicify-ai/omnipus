@@ -6299,6 +6299,19 @@ export const MessageFrame = z
   })
   .strict();
 
+// ── Validation policy note (mirrors MessageFrame.yaml) ────────────────────────
+// Outer MessageFrame is .strict(): unknown top-level keys are rejected (a
+// server-added field surfaces as a visible schema failure, debuggable).
+// The nested `metadata` object is intentionally .passthrough(): it is the
+// wire's forward-compat extension channel. Adding a new optional metadata
+// field server-side must NOT break already-shipped SPA clients — strict()
+// would. Drift on a *newly required* metadata field is caught by the
+// W2-29 outbound validator (src/lib/ws.ts) the moment the server starts
+// requiring it. Inbound, the dev-mode console.debug in
+// src/lib/ws.ts::_parseServerFrame lists any extra metadata keys so
+// drift is grep-able even though strict-validation is off.
+// See contracts/components/schemas/MessageFrame.yaml for the full rationale.
+
 export const CancelFrame = z
   .object({
     type: z.literal("cancel"),

@@ -185,9 +185,8 @@ function buildMessageStatus(msg: AssistantMessage & { isStreaming?: boolean }): 
 // VirtualAssistantMessageRow in ChatScreen.tsx) reads `msg.model`
 // directly off the ChatMessage — that's the only consumer surface for
 // the per-turn model. There is no `metadata.custom.model` write here
-// because no renderer reads it (W2-30 — the prior write was dead code,
-// orphan fields on the ThreadMessageLike that AssistantUI never round-
-// tripped back to the renderer).
+// because no renderer reads it (orphan fields on the ThreadMessageLike
+// that AssistantUI never round-tripped back to the renderer).
 //
 // Legacy turns (no `model` field recorded) must NOT show any model info
 // (spec §18 Q6: no placeholder text). The renderer's own trim-and-
