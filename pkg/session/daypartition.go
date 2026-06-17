@@ -135,9 +135,10 @@ type TranscriptEntry struct {
 	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
 	AgentID     string       `json:"agent_id"` // which agent produced this entry (FR-002)
 	// Model records which model produced this assistant message. Populated
-	// on every assistant message written via pkg/agent/turn.go (Phase 1B
-	// FR-013). Empty for legacy turns written before this field existed;
-	// the UI shows "(model not recorded)" for those (FR-014).
+	// on every assistant message written via pkg/agent/turn.go (FR-013).
+	// Empty for legacy turns written before this field existed; the UI
+	// omits the model span entirely for those (FR-014) — there is no
+	// "(model not recorded)" placeholder string rendered.
 	Model string `json:"model,omitempty"`
 
 	// For compaction entries.

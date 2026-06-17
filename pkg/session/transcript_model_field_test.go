@@ -8,8 +8,9 @@ import (
 // TestTranscriptEntry_ModelFieldRoundTrip verifies the per-turn `model` field
 // (FR-013) survives the JSONL round-trip: a value set in Go decodes back to
 // the same value. UI replay must be able to read each turn's producing model
-// to render the "produced by {model}" badge (or "(model not recorded)" for
-// legacy turns that lack the field — see FR-014).
+// to render the "produced by {model}" badge. For legacy turns that lack the
+// field the UI omits the model span entirely per FR-014 — there is no
+// "(model not recorded)" placeholder rendered.
 //
 // Traces to: spec §11 Dataset 5 / §12 TDD row 15 / FR-013.
 func TestTranscriptEntry_ModelFieldRoundTrip(t *testing.T) {
@@ -37,7 +38,8 @@ func TestTranscriptEntry_ModelFieldRoundTrip(t *testing.T) {
 
 // TestTranscriptEntry_ModelFieldAbsentIsOK verifies that legacy transcript
 // entries — written before FR-013 — decode cleanly with an empty Model
-// string. UI shows "(model not recorded)" for these (FR-014).
+// string. The UI omits the model span entirely for these per FR-014
+// (no "(model not recorded)" placeholder rendered).
 func TestTranscriptEntry_ModelFieldAbsentIsOK(t *testing.T) {
 	jsonData := `{
 		"id":"entry-1",

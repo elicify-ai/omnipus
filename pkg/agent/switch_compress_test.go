@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -247,7 +248,7 @@ func TestSummarizeDroppedTurns_Success_StoresSummary(t *testing.T) {
 		"summarizeDroppedTurns must send at least one prompt message")
 	assert.Contains(t, captured.Messages[0].Content, "Summarize",
 		"summary prompt must ask the LLM to summarize")
-	assert.Contains(t, captured.Messages[0].Content, itoa(expectedBudget),
+	assert.Contains(t, captured.Messages[0].Content, strconv.Itoa(expectedBudget),
 		"summary prompt must include the budget token cap so the LLM knows the size bound")
 }
 
