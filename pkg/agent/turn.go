@@ -22,6 +22,20 @@ import (
 // and operator tooling (omnipus_abandoned_writes_suppressed_total).
 var abandonedWritesSuppressed atomic.Int64
 
+// transcriptSuppressedErrors is incremented each time appendErrorTranscript
+// is called with no transcript store wired (e.g. boot misconfig where
+// transcriptStore is nil). A persistent non-zero value is a strong signal
+// that error events are vanishing from the on-disk transcript; surfaces
+// the otherwise-silent "errors-but-no-record" gap (W4-18). DEBUG logs of
+// the no-op are promoted to WARN to keep this signal visible in production.
+var transcriptSuppressedErrors atomic.Uint64
+
+// TranscriptSuppressedErrors returns the current value of the
+// transcript-suppressed-error counter. Used by tests and operator tooling.
+func TranscriptSuppressedErrors() uint64 {
+	return transcriptSuppressedErrors.Load()
+}
+
 // AbandonedWritesSuppressed returns the current value of the
 // omnipus_abandoned_writes_suppressed_total counter.
 func AbandonedWritesSuppressed() int64 {
@@ -804,7 +818,8 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
 		return
 	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
-		logger.DebugCF("agent", "appendErrorTranscript: suppressed (no transcript store wired)",
+		transcriptSuppressedErrors.Add(1)
+		logger.WarnCF("agent", "appendErrorTranscript: suppressed (no transcript store wired) — error event will NOT appear in replay",
 			map[string]any{
 				"event_kind":  kind,
 				"stage":       stage,

@@ -202,7 +202,7 @@ func drainExternalRun(
 			case runner.EventKindOutput:
 				if ev.Output != nil && ev.Output.Text != "" {
 					sb.WriteString(ev.Output.Text)
-					childTS.appendIntermediateAssistantTranscript(ev.Output.Text)
+					childTS.appendIntermediateAssistantTranscript(ev.Output.Text, transcriptModelFor(childTS.agent))
 				}
 			case runner.EventKindToolCall:
 				if ev.ToolCall != nil {
@@ -211,7 +211,7 @@ func drainExternalRun(
 			case runner.EventKindDiff:
 				if ev.Diff != nil {
 					txt := fmt.Sprintf("diff %s:\n%s", ev.Diff.Path, ev.Diff.Diff)
-					childTS.appendIntermediateAssistantTranscript(txt)
+					childTS.appendIntermediateAssistantTranscript(txt, transcriptModelFor(childTS.agent))
 				}
 			case runner.EventKindPermissionRequest:
 				// Already routed to consent by ConsentDispatcher; record for the
@@ -224,7 +224,7 @@ func drainExternalRun(
 			case runner.EventKindError:
 				if ev.Err != nil {
 					msg := ev.Err.Message
-					childTS.appendIntermediateAssistantTranscript("[external-cli error] " + msg)
+					childTS.appendIntermediateAssistantTranscript("[external-cli error] "+msg, transcriptModelFor(childTS.agent))
 					if ev.Err.Fatal {
 						runErr = fmt.Errorf("external-cli run failed: %s", msg)
 					}
@@ -238,7 +238,7 @@ done:
 	// Persist the aggregated final content as the assistant transcript entry so a
 	// replay reconstructs the run's result (mirrors the native finalContent path).
 	if output != "" {
-		childTS.appendAssistantTranscript(output)
+		childTS.appendAssistantTranscript(output, transcriptModelFor(childTS.agent))
 	}
 
 	// A recorded consent DENY is terminal: the driver cancels the run (and
@@ -270,7 +270,7 @@ done:
 		msg := fmt.Sprintf(
 			"External CLI run (%s) was DENIED and aborted (a permission request was rejected: %s). "+
 				"The delegated task did NOT complete.", cli, reason)
-		childTS.appendIntermediateAssistantTranscript("[external-cli denied] " + reason)
+		childTS.appendIntermediateAssistantTranscript("[external-cli denied] "+reason, transcriptModelFor(childTS.agent))
 		return &tools.ToolResult{
 			Err:     denyErr,
 			ForLLM:  msg,
@@ -319,12 +319,24 @@ func recordExternalToolCall(childTS *turnState, tc *runner.ToolCallEvent) {
 // ConsentDispatcher; this is observability only.
 func recordExternalPermission(childTS *turnState, pr *runner.PermissionRequestEvent) {
 	childTS.appendIntermediateAssistantTranscript(
-		fmt.Sprintf("[external-cli permission] tool=%q: %s", pr.ToolName, pr.Description))
+		fmt.Sprintf("[external-cli permission] tool=%q: %s", pr.ToolName, pr.Description),
+		transcriptModelFor(childTS.agent))
 }
 
 // defaultExternalMaxTurns bounds an external run when the agent declares no
 // MaxIterations (FR-5.4 turn cap).
 const defaultExternalMaxTurns = 50
+
+// transcriptModelFor returns the model string to stamp on transcript entries
+// produced by an external-CLI sub-turn. It mirrors the trim applied in
+// setLastProducedModel so the variadic and the single-slot stamp agree
+// (W4-9 — variadic surface is now USED, not just declared).
+func transcriptModelFor(agent *AgentInstance) string {
+	if agent == nil {
+		return ""
+	}
+	return strings.TrimSpace(agent.Model)
+}
 
 // newExternalDriver is the driver factory used by runExternalCLISubTurn. It is a
 // package var (not a direct call to runner.NewDriver) solely so in-package tests

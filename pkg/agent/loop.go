@@ -47,6 +47,16 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/voice"
 )
 
+// ModelSyntheticImageRejection is the transcript-stamp value the loop sets on
+// `ts.lastProducedModel` when the LLM provider refuses an image-bearing input
+// and we synthesize a guidance reply in place of the raw error. The provider
+// did NOT actually emit this turn — the stamp exists so the transcript
+// `model` field does not mis-attribute the synthesized guidance to the
+// refusing model. Downstream consumers (replay, future filters) can detect
+// this sentinel by typed string-comparison; the "synthetic:" prefix is
+// reserved for non-LLM-produced transcripts.
+const ModelSyntheticImageRejection = "synthetic:image-rejection"
+
 type AgentLoop struct {
 	// Core dependencies
 	bus      *bus.MessageBus
@@ -923,7 +933,7 @@ func (al *AgentLoop) recordRateLimitDenial(
 			Details:    details,
 		})
 	}
-	// FIX-1 / FR-001: rate-limit denials MUST be visible after a page reload.
+	// FR-001: rate-limit denials MUST be visible after a page reload.
 	// The spec requires EventKindError in the JSONL transcript (consumed by the
 	// replay path on session reopen), but the live WS UI still subscribes to
 	// EventKindRateLimit for the dedicated denial banner. We therefore emit BOTH
@@ -2413,7 +2423,7 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 			Message: err.Error(),
 		},
 	)
-	// FIX-2 / US-1: persist the hook abort to the JSONL transcript so the
+	// US-1: persist the hook abort to the JSONL transcript so the
 	// replay path re-renders it after page reload (see appendErrorTranscript
 	// docstring). Without this, hook aborts vanish on session reopen.
 	ts.appendErrorTranscript(
@@ -5126,7 +5136,7 @@ turnLoop:
 				// (silent-failure-A #5). The original error stays in the warn log
 				// above so operators can debug; we surface a debug-level marker here
 				// for search/discovery.
-				ts.setLastProducedModel("(image-rejection synthesis)")
+				ts.setLastProducedModel(ModelSyntheticImageRejection)
 				logger.DebugCF("agent", "image-rejection synthesis stamped; llmModel retained in error log only",
 					map[string]any{"agent_id": ts.agent.ID, "model": llmModel})
 				// fall through to the normal post-LLM handling below.
@@ -5142,7 +5152,7 @@ turnLoop:
 					Message: err.Error(),
 				},
 			)
-			// FIX-1 / FR-002: persist the provider error to the transcript (see
+			// FR-002: persist the provider error to the transcript (see
 			// appendErrorTranscript docstring for rationale).
 			ts.appendErrorTranscript(
 				EventKindError.String(), "runTurn",
@@ -5331,7 +5341,7 @@ turnLoop:
 					ts.eventMeta("runTurn", "turn.error"),
 					ErrorPayload{Stage: "llm_empty_retry", Message: err.Error()},
 				)
-				// FIX-1 / FR-002: persist this provider error to the transcript (see
+				// FR-002: persist this provider error to the transcript (see
 				// appendErrorTranscript docstring for rationale).
 				ts.appendErrorTranscript(
 					EventKindError.String(), "runTurn",
@@ -6167,7 +6177,7 @@ turnLoop:
 					Message: err.Error(),
 				},
 			)
-			// FIX-2 / US-1: persist the session-save failure to the JSONL
+			// US-1: persist the session-save failure to the JSONL
 			// transcript so the replay path re-renders it after reload (see
 			// appendErrorTranscript docstring).
 			ts.appendErrorTranscript(
@@ -6598,26 +6608,6 @@ func (al *AgentLoop) summarizeDroppedTurns(
 	return strings.TrimSpace(resp.Content), nil
 }
 
-// buildSyntheticSwitchMessage renders the agreed synthetic system message
-// (spec Q4 wording): "Conversation moved to {new_model} from {old_model} on
-// {timestamp}. The prior turns have been compressed to fit the new context
-// window. Summary: {summary}". The message carries Synthetic=true so the UI
-// can render it distinctly if it wants to.
-func buildSyntheticSwitchMessage(oldModel, newModel, summary string, timestamp time.Time) providers.Message {
-	wording := fmt.Sprintf(
-		"Conversation moved to %s from %s on %s. The prior turns have been compressed to fit the new context window. Summary: %s",
-		newModel,
-		oldModel,
-		timestamp.UTC().Format("2006-01-02 15:04:05 UTC"),
-		summary,
-	)
-	return providers.Message{
-		Role:      "system",
-		Content:   wording,
-		Synthetic: true,
-	}
-}
-
 // handleModelSwitch is the switch-time compress path (FR-011, FR-012). It is
 // invoked when an incoming bus message carries a model_name metadata that
 // differs from the agent's current Model.
@@ -6827,10 +6817,11 @@ func (al *AgentLoop) handleModelSwitch(
 // is allowed to feed the full history to summarizeDroppedTurns if it has to,
 // because the next LLM call will still trip forceCompression on overflow.
 //
-// Call chain: handleModelSwitch → splitForSwitchCompress →
-// summarizeDroppedTurns (only path that uses `dropped`; `kept` is then
-// combined with the synthetic switch message and re-trimmed via
-// truncateHistoryToBudget).
+// Call chain (Strategy B): handleModelSwitch → splitForSwitchCompress →
+// summarizeDroppedTurns writes the summary to Sessions.SetSummary (the
+// in-memory switch summary, NOT a history entry). The kept half is then
+// re-trimmed via fitWithinBudget to fit the new model's context window.
+// No synthetic anchor message is inserted into history under Strategy B.
 func splitForSwitchCompress(history []providers.Message) (dropped, kept []providers.Message) {
 	if len(history) == 0 {
 		return nil, nil
