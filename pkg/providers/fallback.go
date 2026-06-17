@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 // defaultPerCandidateTimeout is used when no explicit per-candidate timeout is
@@ -169,11 +171,32 @@ func ResolveCandidatesWithLookup(
 	seen := make(map[string]bool)
 	var candidates []FallbackCandidate
 
-	addCandidate := func(raw string) {
+	addCandidate := func(raw string, kind string) {
 		candidateRaw := strings.TrimSpace(raw)
 		if lookup != nil {
 			if resolved, ok := lookup(candidateRaw); ok {
 				candidateRaw = resolved
+			} else if kind == "fallback" && candidateRaw != "" && !strings.Contains(candidateRaw, "/") {
+				// Lookup didn't recognize this fallback slug and it has no
+				// provider prefix to anchor on — the next LLM call will
+				// likely fail with a confusing 404 unless the defaultProvider
+				// is a passthrough that accepts arbitrary slugs. Emit a WARN
+				// so an operator auditing the config load can spot the typo
+				// before it bites at runtime. Without this, a typo'd fallback
+				// silently routes through defaultProvider and the agent loop
+				// surfaces the failure several stack frames later with no
+				// breadcrumb pointing to the bad config value
+				// (silent-failure-A #4). Scoped to fallbacks only — the
+				// primary is the operator's deliberate choice and shouldn't
+				// spam the log on every miss.
+				logger.WarnCF(
+					"providers.fallback",
+					"addCandidate: lookup did not resolve fallback slug; using defaultProvider passthrough",
+					map[string]any{
+						"raw":             candidateRaw,
+						"defaultProvider": defaultProvider,
+					},
+				)
 			}
 		}
 
@@ -193,11 +216,11 @@ func ResolveCandidatesWithLookup(
 	}
 
 	// Primary first.
-	addCandidate(cfg.Primary)
+	addCandidate(cfg.Primary, "primary")
 
 	// Then fallbacks.
 	for _, fb := range cfg.Fallbacks {
-		addCandidate(fb)
+		addCandidate(fb, "fallback")
 	}
 
 	return candidates

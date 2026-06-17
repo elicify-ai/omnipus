@@ -266,3 +266,161 @@ func TestBuildModelListResolver_RejectsPrefixedPassthrough(t *testing.T) {
 		t.Errorf("passthrough should not have re-prefixed openai/gpt-4o, got %q", got)
 	}
 }
+
+// TestResolveModelCandidatesFromList_PerEntryProvider locks in the FR-007
+// contract: each fallback in the [{model, provider}] form must yield a
+// candidate whose Provider equals the explicit provider, NOT the agent's
+// default provider. Without this, a fallback that the operator pinned to a
+// different provider (e.g. anthropic when primary is openrouter) silently
+// re-routes through the primary's credentials at LLM-call time.
+//
+// The primary is resolved through the model_list lookup (it has no explicit
+// Provider on the FallbackModel entry); the fallback bypasses the lookup
+// because its Provider is pinned — the operator's exact intent.
+func TestResolveModelCandidatesFromList_PerEntryProvider(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "gpt-5",
+				Model:     "openai/gpt-5",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKeyRef: "OPENROUTER_KEY",
+			},
+			{
+				ModelName: "claude-haiku",
+				Model:     "anthropic/claude-haiku-4-5",
+				Provider:  "anthropic",
+				APIBase:   "https://api.anthropic.com/v1",
+				APIKeyRef: "ANTHROPIC_KEY",
+			},
+		},
+	}
+
+	fallbacks := []config.FallbackModel{
+		{Model: "claude-haiku", Provider: "anthropic"},
+	}
+
+	candidates := resolveModelCandidatesFromList(cfg, "openrouter", "gpt-5", fallbacks)
+
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %d, want 2 (primary + 1 explicit-provider fallback)", len(candidates))
+	}
+	// Primary is resolved via cfg.GetModelConfig(ModelName="gpt-5") which
+	// returns the entry's Model verbatim ("openai/gpt-5") — parsed into
+	// Provider=openai, Model=gpt-5.
+	if candidates[0].Provider != "openai" || candidates[0].Model != "gpt-5" {
+		t.Errorf("candidates[0] = %s/%s, want openai/gpt-5", candidates[0].Provider, candidates[0].Model)
+	}
+	// Fallback MUST carry its own Provider — anthropic, NOT openrouter.
+	// This is the FR-007 invariant the bug was violating.
+	if candidates[1].Provider != "anthropic" {
+		t.Errorf("candidates[1].Provider = %q, want %q (FR-007: fallback must use its own provider)",
+			candidates[1].Provider, "anthropic")
+	}
+	// Because the fallback has a pinned Provider, the resolver is bypassed:
+	// the Model is taken verbatim from the entry. The operator wrote the
+	// model slug the way their provider expects it — we don't second-guess.
+	if candidates[1].Model != "claude-haiku" {
+		t.Errorf("candidates[1].Model = %q, want %q (explicit Provider: model is verbatim)",
+			candidates[1].Model, "claude-haiku")
+	}
+}
+
+// TestResolveModelCandidatesFromList_PassthroughProviderHonored confirms that
+// when the only configured provider is openrouter, a fallback declared as
+// {model, provider:"anthropic"} STILL routes through anthropic — the
+// provider is honored even though no passthrough match exists for the slug.
+func TestResolveModelCandidatesFromList_PassthroughProviderHonored(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "gpt-5",
+				Model:     "openai/gpt-5",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKeyRef: "OPENROUTER_KEY",
+			},
+		},
+	}
+
+	fallbacks := []config.FallbackModel{
+		{Model: "claude-haiku-4-5", Provider: "anthropic"},
+	}
+
+	candidates := resolveModelCandidatesFromList(cfg, "openrouter", "gpt-5", fallbacks)
+
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %d, want 2", len(candidates))
+	}
+	// Primary: matched via cfg.GetModelConfig by ModelName "gpt-5"; the
+	// entry's Model is "openai/gpt-5" → parsed into Provider=openai,
+	// Model=gpt-5. The primary's "openrouter" provider field is a routing
+	// hint for credential resolution, not what appears in the candidate's
+	// Provider field (which comes from the model-ref prefix).
+	if candidates[0].Provider != "openai" {
+		t.Errorf("candidates[0].Provider = %q, want openai", candidates[0].Provider)
+	}
+	if candidates[0].Model != "gpt-5" {
+		t.Errorf("candidates[0].Model = %q, want gpt-5", candidates[0].Model)
+	}
+	// Fallback via anthropic — explicit Provider overrides any passthrough
+	// that might match the slug.
+	if candidates[1].Provider != "anthropic" {
+		t.Errorf("candidates[1].Provider = %q, want anthropic (explicit provider wins over passthrough)",
+			candidates[1].Provider)
+	}
+	if candidates[1].Model != "claude-haiku-4-5" {
+		t.Errorf("candidates[1].Model = %q, want claude-haiku-4-5", candidates[1].Model)
+	}
+}
+
+// TestResolveModelCandidatesForAgent_PicksFallbackModelsWhenSet asserts the
+// runtime helper used by ApplyAgentModel: when the agent instance carries
+// FallbackModels, the per-entry-provider resolver is selected; when only the
+// legacy Fallbacks []string is set, the historical resolver is selected.
+func TestResolveModelCandidatesForAgent_PicksFallbackModelsWhenSet(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{ModelName: "gpt-5", Model: "openai/gpt-5", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
+			{ModelName: "haiku", Model: "anthropic/claude-haiku-4-5", Provider: "anthropic", APIBase: "https://api.anthropic.com/v1"},
+		},
+	}
+
+	// Modern wire shape: fallback carries its own Provider.
+	modern := &AgentInstance{
+		Model: "gpt-5",
+		FallbackModels: []config.FallbackModel{
+			{Model: "haiku", Provider: "anthropic"},
+		},
+	}
+	cands := resolveModelCandidatesForAgent(cfg, "openrouter", "gpt-5", modern)
+	if len(cands) != 2 || cands[1].Provider != "anthropic" {
+		t.Fatalf("modern agent: cands = %+v, want 2 entries with [1].Provider=anthropic", cands)
+	}
+
+	// Legacy wire shape: agent carries only Fallbacks []string.
+	// The legacy resolver runs the bare slug "haiku" through the model_list
+	// lookup first. "haiku" is registered as a ModelName → entry's Model
+	// "anthropic/claude-haiku-4-5". ParseModelRef parses that into
+	// {Provider:anthropic, Model:claude-haiku-4-5}. So the legacy path ALSO
+	// ends up with the anthropic provider in this case — that's a happy
+	// coincidence of how the entry was authored, not a guarantee. The
+	// contract is "legacy preserves old behavior"; modern is "fallback uses
+	// its own provider" which the explicit-Provider path guarantees
+	// regardless of how the entry is authored.
+	legacy := &AgentInstance{
+		Model:     "gpt-5",
+		Fallbacks: []string{"haiku"},
+	}
+	cands = resolveModelCandidatesForAgent(cfg, "openrouter", "gpt-5", legacy)
+	if len(cands) != 2 {
+		t.Fatalf("legacy agent: cands = %d, want 2", len(cands))
+	}
+
+	// Nil agent → legacy resolver with no fallbacks → only the primary.
+	cands = resolveModelCandidatesForAgent(cfg, "openrouter", "gpt-5", nil)
+	if len(cands) != 1 || cands[0].Model != "gpt-5" {
+		t.Fatalf("nil agent: cands = %+v, want 1 entry {*,gpt-5}", cands)
+	}
+}

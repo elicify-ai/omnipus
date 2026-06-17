@@ -9,6 +9,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
 func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
@@ -95,6 +96,224 @@ func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
 
 	if agent.Temperature != 0.7 {
 		t.Fatalf("Temperature = %f, want %f", agent.Temperature, 0.7)
+	}
+}
+
+func TestNewAgentInstance_FallbackModelsPerEntryProvider(t *testing.T) {
+	// FR-007: a fallback declared with [{model, provider}] must resolve to a
+	// candidate that carries the explicit Provider — distinct from the
+	// primary's provider — so a rate-limit on the primary routes through the
+	// fallback's own credentials at LLM-call time.
+	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "gpt-5",
+				Provider:  "openrouter",
+			},
+		},
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "gpt-5",
+				Model:     "openai/gpt-5",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
+			{
+				ModelName: "claude-haiku",
+				Model:     "anthropic/claude-haiku-4-5",
+				Provider:  "anthropic",
+				APIBase:   "https://api.anthropic.com/v1",
+			},
+		},
+	}
+
+	agentCfg := &config.AgentConfig{
+		ID: "mia",
+		Model: &config.AgentModelConfig{
+			Primary: "gpt-5",
+		},
+		FallbackModels: config.FallbackModelSlice{
+			{Model: "claude-haiku", Provider: "anthropic"},
+		},
+	}
+
+	provider := &mockProvider{}
+	agent := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, provider)
+
+	if len(agent.FallbackModels) != 1 {
+		t.Fatalf("len(agent.FallbackModels) = %d, want 1", len(agent.FallbackModels))
+	}
+	if agent.FallbackModels[0].Provider != "anthropic" {
+		t.Fatalf("agent.FallbackModels[0].Provider = %q, want %q", agent.FallbackModels[0].Provider, "anthropic")
+	}
+	if agent.FallbackModels[0].Model != "claude-haiku" {
+		t.Fatalf("agent.FallbackModels[0].Model = %q, want %q", agent.FallbackModels[0].Model, "claude-haiku")
+	}
+
+	// Candidates must contain BOTH the primary and the explicit fallback.
+	// The primary resolves through cfg.GetModelConfig (matches by ModelName
+	// "gpt-5") and returns the entry's Model verbatim ("openai/gpt-5") —
+	// so the primary candidate carries the explicit "openai/" prefix, and
+	// ParseModelRef splits that into Provider=openai, Model=gpt-5.
+	//
+	// The KEY assertion is the SECOND candidate: the fallback MUST carry
+	// its own Provider ("anthropic"), NOT the agent default provider
+	// ("openrouter"). That is the FR-007 invariant the bug was violating.
+	if len(agent.Candidates) != 2 {
+		t.Fatalf("len(agent.Candidates) = %d, want 2", len(agent.Candidates))
+	}
+	if agent.Candidates[1].Provider != "anthropic" {
+		t.Fatalf("candidate[1].Provider = %q, want %q (FR-007: fallback must carry its own provider, not the agent's default %q)",
+			agent.Candidates[1].Provider, "anthropic", cfg.Agents.Defaults.Provider)
+	}
+	// Because the fallback has a pinned Provider, the resolver is bypassed:
+	// the Model is taken verbatim from the entry. The operator wrote the
+	// model slug the way their provider expects it — we don't second-guess.
+	if agent.Candidates[1].Model != "claude-haiku" {
+		t.Fatalf("candidate[1].Model = %q, want %q (explicit Provider: model is verbatim)",
+			agent.Candidates[1].Model, "claude-haiku")
+	}
+
+	// Sanity: the legacy Fallbacks []string field is empty — the modern
+	// FallbackModels path was used.
+	if len(agent.Fallbacks) != 0 {
+		t.Fatalf("len(agent.Fallbacks) = %d, want 0 (legacy field unused)", len(agent.Fallbacks))
+	}
+
+	// GetProviderForCandidate MUST return a distinct provider instance for
+	// the fallback (Provider="anthropic") — verifying the runtime half of
+	// the FR-007 contract. The test config has no API keys, so the pool
+	// build logs a WARN and skips that entry; the lookup MUST fall back to
+	// the primary provider gracefully rather than panic / nil-deref.
+	primary := agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: "openai", Model: "gpt-5"})
+	if primary == nil {
+		t.Fatal("GetProviderForCandidate returned nil for primary candidate")
+	}
+	fb := agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: "anthropic", Model: "claude-haiku-4-5"})
+	if fb == nil {
+		t.Fatal("GetProviderForCandidate returned nil for fallback candidate")
+	}
+	// Legacy wire shape (no Provider pinned): MUST return the primary's
+	// provider, regardless of pool contents.
+	legacy := agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: "", Model: "anything"})
+	if legacy != agent.Provider {
+		t.Errorf("legacy candidate (no Provider) returned %p, want primary %p", legacy, agent.Provider)
+	}
+}
+
+func TestNewAgentInstance_FallbackModelsPrefersExplicitOverLegacy(t *testing.T) {
+	// When BOTH the modern FallbackModels and the legacy Model.Fallbacks are
+	// populated, FallbackModels wins (FR-005 wire shape is the canonical
+	// forward form). Legacy Fallbacks is retained on the instance for
+	// backward compatibility with code that still reads it.
+	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "gpt-5",
+				Provider:  "openrouter",
+			},
+		},
+		Providers: []*config.ModelConfig{
+			{ModelName: "gpt-5", Model: "openai/gpt-5", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
+			{ModelName: "haiku-anthropic", Model: "anthropic/claude-haiku-4-5", Provider: "anthropic", APIBase: "https://api.anthropic.com/v1"},
+			{ModelName: "haiku-openrouter", Model: "openrouter/anthropic/claude-haiku-4-5", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
+		},
+	}
+
+	agentCfg := &config.AgentConfig{
+		ID: "mia",
+		Model: &config.AgentModelConfig{
+			Primary:   "gpt-5",
+			Fallbacks: []string{"haiku-openrouter"}, // legacy — should be ignored
+		},
+		FallbackModels: config.FallbackModelSlice{
+			{Model: "haiku-anthropic", Provider: "anthropic"}, // modern — should win
+		},
+	}
+
+	agent := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if len(agent.Candidates) != 2 {
+		t.Fatalf("len(agent.Candidates) = %d, want 2", len(agent.Candidates))
+	}
+	if agent.Candidates[1].Provider != "anthropic" {
+		t.Fatalf("candidate[1].Provider = %q, want %q (FallbackModels must override legacy)",
+			agent.Candidates[1].Provider, "anthropic")
+	}
+	// When the modern FallbackModels entry has an explicit Provider, the
+	// model slug is passed verbatim — operator intent is honored over alias
+	// resolution.
+	if agent.Candidates[1].Model != "haiku-anthropic" {
+		t.Fatalf("candidate[1].Model = %q, want %q", agent.Candidates[1].Model, "haiku-anthropic")
+	}
+}
+
+// TestAgentInstance_GetProviderForCandidate_PoolHonorsPinnedProvider locks in
+// the runtime half of FR-007: when the ProviderPool has an entry for the
+// candidate's pinned Provider, GetProviderForCandidate MUST return that
+// entry — NOT the agent's primary provider. This is what makes a rate-limit
+// on the primary's provider actually route through the fallback's own
+// credentials at LLM-call time.
+//
+// The pool is pre-populated here (vs. via buildProviderPool) so the test
+// doesn't depend on CreateProviderFromConfig succeeding — that path requires
+// a real API key and would needlessly couple the test to live config. The
+// contract under test is the pool lookup itself, which is the part that
+// fires on every fallback attempt in production.
+func TestAgentInstance_GetProviderForCandidate_PoolHonorsPinnedProvider(t *testing.T) {
+	primary := &mockProvider{}
+	anthropicProvider := &mockProvider{}
+
+	agent := &AgentInstance{
+		ID:       "mia",
+		Provider: primary,
+		ProviderPool: map[string]providers.LLMProvider{
+			"anthropic": anthropicProvider,
+		},
+	}
+
+	got := agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: "anthropic", Model: "claude-haiku-4-5"})
+	if got != anthropicProvider {
+		t.Errorf("GetProviderForCandidate(anthropic) = %p, want %p (the pool entry, not the primary)",
+			got, anthropicProvider)
+	}
+
+	// Empty pool entry for "openai" (the candidate's Provider is openai).
+	// MUST fall back to primary provider, NOT panic.
+	got = agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: "openai", Model: "gpt-5"})
+	if got != primary {
+		t.Errorf("GetProviderForCandidate(openai) with no pool entry = %p, want primary %p",
+			got, primary)
+	}
+
+	// Empty candidate.Provider (legacy wire shape): MUST return primary
+	// unconditionally, regardless of pool contents.
+	got = agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: "", Model: "anything"})
+	if got != primary {
+		t.Errorf("GetProviderForCandidate(empty provider) = %p, want primary %p", got, primary)
+	}
+}
+
+// TestAgentInstance_GetProviderForCandidate_NilAgent ensures the nil-safe
+// path used by tests and edge-case callers doesn't panic.
+func TestAgentInstance_GetProviderForCandidate_NilAgent(t *testing.T) {
+	var agent *AgentInstance
+	if got := agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: "anthropic", Model: "x"}); got != nil {
+		t.Errorf("nil agent returned %p, want nil", got)
 	}
 }
 
