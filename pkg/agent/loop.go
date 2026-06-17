@@ -290,6 +290,12 @@ type processOptions struct {
 	// approval prompt would stall the run forever. Only ProcessScheduled sets
 	// this; interactive paths leave it false so `ask` keeps prompting.
 	AutoDenyAsk bool
+
+	// Metadata carries the inbound message metadata (bus.InboundMessage.Metadata)
+	// through to the turn flow. The agent loop reads Metadata["model_name"] to
+	// detect a per-thread model switch (Wave 3 / FR-011) and apply switch-time
+	// compress before the next LLM call.
+	Metadata map[string]string
 }
 
 // ScheduledJobInfo carries the schedule/job identity that ProcessScheduled
@@ -3647,6 +3653,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		SendResponse:        false,
 		TranscriptSessionID: transcriptSessionID,
 		TranscriptStore:     transcriptStore,
+		// Carry inbound metadata so runTurn can detect a per-thread model
+		// switch (Wave 3 / FR-011). The map is copied by reference — the
+		// turn flow only reads from it.
+		Metadata: msg.Metadata,
 	}
 
 	// FR-025: reset idle ticker on every user turn, using transcript session ID
@@ -4189,6 +4199,38 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			MediaCount:  len(ts.media),
 		},
 	)
+
+	// Wave 3 / FR-011, FR-012: detect a per-thread model switch via the
+	// inbound message metadata. When the user-selected model differs from
+	// the agent's currently loaded model, run handleModelSwitch BEFORE the
+	// first LLM call so the next request sees the compressed, annotated
+	// history. handleModelSwitch is a no-op when no switch is requested.
+	if requested := strings.TrimSpace(inboundMetadataFromOpts(ts.opts.Metadata, "model_name")); requested != "" {
+		// Skip when the requested model is the same as the agent's currently
+		// loaded one — this is the no-op case in spec §11 Dataset 3 row 1.
+		if requested != ts.agent.Model {
+			switchedAgent, switchErr := al.handleModelSwitch(
+				ctx,
+				ts.agent,
+				ts.sessionKey,
+				requested,
+				bus.InboundMessage{Metadata: ts.opts.Metadata},
+			)
+			if switchErr != nil {
+				logger.WarnCF("agent", "switch-time compress failed; continuing with current model",
+					map[string]any{
+						"agent_id":   ts.agentID,
+						"session_id": ts.sessionKey,
+						"new_model":  requested,
+						"error":      switchErr.Error(),
+					})
+			} else if switchedAgent != nil {
+				// Re-point the turn at the (possibly mutated) agent so
+				// subsequent reads of ts.agent.Model reflect the switch.
+				ts.agent = switchedAgent
+			}
+		}
+	}
 
 	var history []providers.Message
 	var summary string
@@ -6344,6 +6386,375 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (
 	}, true
 }
 
+// SwitchAction is the result of decideSwitchCompressAction: should we
+// compress the conversation at model-switch time, or no-op?
+//
+// (Wave 3 / FR-011, spec §11 Dataset 3.)
+type SwitchAction int
+
+const (
+	// SwitchActionNoop means the new window fits the current conversation;
+	// no compression needed.
+	SwitchActionNoop SwitchAction = iota
+	// SwitchActionCompress means the new window is smaller than the current
+	// conversation; the loop MUST invoke summarizeDroppedTurns and then
+	// forceCompression before the next LLM call.
+	SwitchActionCompress
+)
+
+// String returns a stable name for logging/metrics.
+func (a SwitchAction) String() string {
+	switch a {
+	case SwitchActionNoop:
+		return "noop"
+	case SwitchActionCompress:
+		return "compress"
+	default:
+		return "unknown"
+	}
+}
+
+// decideSwitchCompressAction decides whether the loop must run switch-time
+// compression (FR-011) given the current conversation size and the new
+// model's context window. The decision is pure — it has no side effects and
+// no LLM call — so the call site can gate the expensive summary path.
+//
+// Decision matrix (spec §11 Dataset 3):
+//
+//	currentConvTokens == 0           → Noop
+//	currentConvTokens <= newWindow    → Noop
+//	currentConvTokens >  newWindow    → Compress
+//
+// Tested by TestSwitchTimeCompress_*.
+func decideSwitchCompressAction(currentConvTokens, newContextWindow int) SwitchAction {
+	if currentConvTokens <= 0 || newContextWindow <= 0 {
+		return SwitchActionNoop
+	}
+	if currentConvTokens <= newContextWindow {
+		return SwitchActionNoop
+	}
+	return SwitchActionCompress
+}
+
+// estimateHistoryTokens is a small helper that sums estimateMessageTokens
+// across a history slice. The loop's switch-time compress path uses it to
+// compute the "current conversation size" fed into decideSwitchCompressAction.
+func estimateHistoryTokens(history []providers.Message) int {
+	total := 0
+	for _, m := range history {
+		total += estimateMessageTokens(m)
+	}
+	return total
+}
+
+// summarizeDroppedTurns makes a small LLM call asking the new model (or the
+// agent's configured provider) to produce a real prose summary of the
+// dropped turns. The returned summary is bounded to ≤50% of the new model's
+// context window (per FR-011) by injecting a token cap into the prompt and
+// clamping the response length. If the LLM call fails, the caller is expected
+// to fall back to forceCompression and surface a warning.
+//
+// We use the agent's currently configured provider/model so the summary is
+// cheap (already in the context, no new credential resolution). This matches
+// the spec direction in Wave 3 / §13 FR-011.
+//
+// Parameters:
+//   - ctx:    request context (caller passes a sensible timeout).
+//   - agent:  the agent whose Provider will produce the summary.
+//   - dropped: the messages we are about to drop from history (in order,
+//     oldest first).
+//   - newContextWindow: the new model's context window — used to bound the
+//     summary's length to ≤50% (rounded down to whole tokens).
+//
+// Returns the summary string and any error from the LLM call. Pure I/O —
+// does not mutate the agent or the session.
+func (al *AgentLoop) summarizeDroppedTurns(
+	ctx context.Context,
+	agent *AgentInstance,
+	dropped []providers.Message,
+	newContextWindow int,
+) (string, error) {
+	if agent == nil || agent.Provider == nil {
+		return "", fmt.Errorf("summarizeDroppedTurns: nil agent/provider")
+	}
+
+	// Bound the summary to ≤50% of the new context window. MaxTokens on the
+	// agent is the OUTPUT cap; the agent's existing MaxTokens is also a
+	// reasonable ceiling on the summary size when the new window is very
+	// small.
+	summaryBudget := newContextWindow / 2
+	if agent.MaxTokens > 0 && agent.MaxTokens < summaryBudget {
+		summaryBudget = agent.MaxTokens
+	}
+	if summaryBudget <= 0 {
+		summaryBudget = 256
+	}
+
+	// Build the prompt: render the dropped turns into a single transcript
+	// block, then ask the LLM to summarize. We deliberately keep the
+	// instruction short and the format request explicit ("plain prose, no
+	// markdown") so the new model gets a clean hint and no tool calls.
+	var b strings.Builder
+	b.WriteString("Summarize the key decisions, facts, and open questions from this conversation. Output ≤")
+	b.WriteString(itoa(summaryBudget))
+	b.WriteString(" tokens. Plain prose, no markdown formatting beyond plain text.\n\n---\n")
+	for i, m := range dropped {
+		// Truncate per-message to avoid blowing the prompt on a single
+		// dropped message that itself was over-budget.
+		content := m.Content
+		if len(content) > 2000 {
+			content = content[:2000] + "…"
+		}
+		fmt.Fprintf(&b, "[%s] %s\n", m.Role, content)
+		if i == 16 {
+			b.WriteString("… (later messages truncated)\n")
+			break
+		}
+	}
+
+	prompt := []providers.Message{
+		{Role: "user", Content: b.String()},
+	}
+
+	model := agent.Model
+	if model == "" {
+		model = agent.Provider.GetDefaultModel()
+	}
+
+	resp, err := agent.Provider.Chat(ctx, prompt, nil, model, map[string]any{
+		"max_tokens": summaryBudget,
+	})
+	if err != nil {
+		return "", fmt.Errorf("summarizeDroppedTurns: provider chat: %w", err)
+	}
+	if resp == nil || strings.TrimSpace(resp.Content) == "" {
+		return "", fmt.Errorf("summarizeDroppedTurns: empty summary from provider")
+	}
+	return strings.TrimSpace(resp.Content), nil
+}
+
+// itoa is a tiny stdlib-free int formatter used by summarizeDroppedTurns to
+// avoid pulling strconv into the hot path (negligible cost; keeps the
+// function dependency-light for review).
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}
+
+// buildSyntheticSwitchMessage renders the agreed synthetic system message
+// (spec Q4 wording): "Conversation moved to {new_model} from {old_model} on
+// {timestamp}. The prior turns have been compressed to fit the new context
+// window. Summary: {summary}". The message carries Synthetic=true so the UI
+// can render it distinctly if it wants to.
+func buildSyntheticSwitchMessage(oldModel, newModel, summary string, timestamp time.Time) providers.Message {
+	wording := fmt.Sprintf(
+		"Conversation moved to %s from %s on %s. The prior turns have been compressed to fit the new context window. Summary: %s",
+		newModel,
+		oldModel,
+		timestamp.UTC().Format("2006-01-02 15:04:05 UTC"),
+		summary,
+	)
+	return providers.Message{
+		Role:      "system",
+		Content:   wording,
+		Synthetic: true,
+	}
+}
+
+// handleModelSwitch is the new switch-time compress path (Wave 3 / FR-011,
+// FR-012). It is invoked when an incoming bus message carries a model_name
+// metadata that differs from the agent's current Model.
+//
+// Behaviour:
+//  1. Resolve the new model's ContextWindow. In this worktree we read it
+//     from the agent's stored defaults when available; otherwise we fall
+//     back to the agent's current ContextWindow (no shrink detected → noop).
+//  2. Estimate the current conversation size.
+//  3. If decideSwitchCompressAction says Compress:
+//     - call summarizeDroppedTurns with the dropped turns (oldest first,
+//     after a single forceCompression pass that splits at a Turn
+//     boundary and keeps the most recent half);
+//     - on LLM error, fall back to the existing forceCompression path and
+//     emit a warn-level log;
+//     - prepend the synthetic system message to the kept history;
+//     - persist the session.
+//  4. Update agent.Model to the new model and return the agent for the
+//     caller to use as the turn's effective model.
+//
+// The function is intentionally side-effect-light on the agent: it does NOT
+// touch agent.Provider / agent.Candidates — those are resolved by the
+// existing ApplyAgentModel path (FR-004 in Wave 1A). handleModelSwitch is
+// the conversation-shape half of the switch; ApplyAgentModel is the
+// provider/credential half. The turn flow wires both.
+//
+// Returns the (possibly mutated) agent so callers can keep using the same
+// pointer.
+func (al *AgentLoop) handleModelSwitch(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+	newModel string,
+	_ bus.InboundMessage,
+) (*AgentInstance, error) {
+	if agent == nil {
+		return nil, fmt.Errorf("handleModelSwitch: nil agent")
+	}
+	if newModel == "" {
+		return agent, nil
+	}
+
+	oldModel := agent.Model
+	if oldModel == newModel {
+		return agent, nil
+	}
+
+	history := agent.Sessions.GetHistory(sessionKey)
+	currentConvTokens := estimateHistoryTokens(history)
+
+	// Resolve the new model's window. Until Wave 1A's ResolveModelCfg lands,
+	// we conservatively reuse the agent's current ContextWindow — this
+	// preserves the existing per-turn behaviour and means a model switch
+	// without a registry-resolved window is treated as "fits". This is
+	// safe: forceCompression at the next LLM call will still kick in if
+	// the conversation overflows.
+	newContextWindow := agent.ContextWindow
+	if newContextWindow <= 0 {
+		newContextWindow = 128000
+	}
+
+	action := decideSwitchCompressAction(currentConvTokens, newContextWindow)
+	if action == SwitchActionCompress {
+		// 1. Drop the oldest ~half of turns (reuse the existing safe-split
+		//    logic in forceCompression) to recover headroom for the new
+		//    window. We do this BEFORE the LLM summary call so the dropped
+		//    set is small enough for a cheap summarization request.
+		dropped, kept := splitForSwitchCompress(history)
+
+		// 2. Ask the new model (via the agent's current provider) for a
+		//    prose summary of the dropped turns. On error, fall back to
+		//    the existing forceCompression note.
+		var summary string
+		sumSummary, summaryErr := al.summarizeDroppedTurns(ctx, agent, dropped, newContextWindow)
+		if summaryErr == nil {
+			summary = sumSummary
+		}
+		if summaryErr != nil {
+			logger.WarnCF("agent", "switch-time summarizeDroppedTurns failed; falling back to forceCompression",
+				map[string]any{
+					"session_key": sessionKey,
+					"old_model":   oldModel,
+					"new_model":   newModel,
+					"error":       summaryErr.Error(),
+				})
+			// Fallback: a brief meta-note that mentions the switch but does
+			// not attempt an LLM call. Persist via the same path so the
+			// next turn's system prompt can surface it.
+			summary = fmt.Sprintf("(summary unavailable: %s) — moved from %s to %s", summaryErr.Error(), oldModel, newModel)
+		}
+
+		// 3. Build the synthetic system message and prepend it.
+		synthetic := buildSyntheticSwitchMessage(oldModel, newModel, summary, time.Now())
+
+		// 4. If even after dropping the oldest half we still overflow the
+		//    new window (spec §6 edge case: synthetic message would push
+		//    the conversation over), shed more — drop the synthetic too
+		//    first (it carries the summary, which we already have in
+		//    `summary`; if the LLM call needs it later, the system prompt
+		//    already includes it). Then drop more recent history until we
+		//    fit. This is the "synthetic over budget → compress more
+		//    aggressively" rule from spec §6.
+		newHistory := append([]providers.Message{synthetic}, kept...)
+		newHistory = fitWithinBudget(newHistory, newContextWindow)
+
+		agent.Sessions.SetHistory(sessionKey, newHistory)
+		if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
+			logger.ErrorCF("agent", "handleModelSwitch: failed to persist switched session",
+				map[string]any{"session_key": sessionKey, "error": saveErr.Error()})
+		}
+		logger.InfoCF("agent", "switch-time compress completed",
+			map[string]any{
+				"session_key":     sessionKey,
+				"old_model":       oldModel,
+				"new_model":       newModel,
+				"dropped":         len(dropped),
+				"kept":            len(kept),
+				"synthetic_chars": len(synthetic.Content),
+			})
+	}
+
+	// 4. Update the agent's Model field. We do NOT mutate Provider /
+	//    Candidates — those are the ApplyAgentModel path's job (FR-004).
+	agent.Model = newModel
+
+	return agent, nil
+}
+
+// splitForSwitchCompress splits history into (dropped, kept) for switch-time
+// compression. We mirror the safe-split logic in forceCompression (parse
+// Turn boundaries, drop the oldest half of Turns). Exposed as a free
+// function so summarizeDroppedTurns gets a bounded, cheap-to-summarize set
+// without forcing it to read the session again.
+func splitForSwitchCompress(history []providers.Message) (dropped, kept []providers.Message) {
+	if len(history) == 0 {
+		return nil, nil
+	}
+	turns := parseTurnBoundaries(history)
+	var mid int
+	if len(turns) >= 2 {
+		mid = turns[len(turns)/2]
+	} else {
+		mid = findSafeBoundary(history, len(history)/2)
+	}
+	if mid <= 0 {
+		// Single-turn history — nothing safe to split. Keep everything;
+		// forceCompression at the next LLM call will still trip on overflow.
+		return nil, append([]providers.Message(nil), history...)
+	}
+	return append([]providers.Message(nil), history[:mid]...), append([]providers.Message(nil), history[mid:]...)
+}
+
+// fitWithinBudget aggressively trims history until its token estimate fits
+// within newContextWindow. The synthetic system message (always at index 0
+// when this is called from handleModelSwitch) is preserved first so the new
+// model still sees the switch context; we then shed older messages from the
+// tail backwards. The minimum result is [synthetic] — we never produce an
+// empty history (the new model would have no anchor at all).
+func fitWithinBudget(history []providers.Message, newContextWindow int) []providers.Message {
+	if len(history) == 0 {
+		return history
+	}
+	for estimateHistoryTokens(history) > newContextWindow && len(history) > 1 {
+		// Always keep the first message (the synthetic switch anchor).
+		if len(history) <= 2 {
+			// Two messages (synthetic + one real). Drop the real one; keep
+			// only the synthetic. If even the synthetic overflows, we have
+			// to accept the overflow — forceCompression at the next LLM
+			// call is the last line of defence.
+			history = history[:1]
+			break
+		}
+		history = history[:len(history)-1]
+	}
+	return history
+}
+
 // GetStartupInfo returns information about loaded tools and skills for logging.
 func (al *AgentLoop) GetStartupInfo() map[string]any {
 	info := make(map[string]any)
@@ -7012,6 +7423,16 @@ func inboundMetadata(msg bus.InboundMessage, key string) string {
 		return ""
 	}
 	return msg.Metadata[key]
+}
+
+// inboundMetadataFromOpts is the map-form sibling of inboundMetadata, used by
+// the turn flow where we already have processOptions.Metadata (Wave 3). It
+// returns "" when the map is nil or the key is absent.
+func inboundMetadataFromOpts(meta map[string]string, key string) string {
+	if meta == nil {
+		return ""
+	}
+	return meta[key]
 }
 
 // inboundInstanceID returns the channel-instance key a message arrived on
