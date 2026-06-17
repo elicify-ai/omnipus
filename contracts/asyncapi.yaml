@@ -892,6 +892,25 @@ components:
             type: string
             minLength: 1
             maxLength: 256
+        metadata:
+          type: object
+          description: >
+            Optional per-message metadata. Phase 1 (FR-010) adds `model_name`:
+            when the user picks a model in the chat composer, the picker
+            value is sent as `metadata.model_name` so the server routes
+            THIS turn to the chosen model. The server falls back to the
+            agent's `model` config when this field is absent.
+          additionalProperties: false
+          properties:
+            model_name:
+              type: string
+              minLength: 1
+              maxLength: 256
+              description: >
+                Model identifier for this turn. Server honors when present,
+                falls back to agent config otherwise. Empty string is
+                treated as absent.
+              example: "z-ai/glm-5-turbo"
 
     CancelFrame:
       title: CancelFrame

@@ -107,6 +107,7 @@ vi.mock('@/lib/api', () => ({
   fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }),
   createSession: vi.fn(),
   uploadFiles: vi.fn(),
+  fetchProviders: vi.fn().mockResolvedValue([]),
   isApiError: vi.fn().mockReturnValue(false),
 }))
 

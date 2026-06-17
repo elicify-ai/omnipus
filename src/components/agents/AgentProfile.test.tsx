@@ -4,6 +4,22 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent, Skill } from '@/lib/api'
 
+// ResizeObserver is required by cmdk (used inside the ModelSelector popover);
+// jsdom does not implement it. Polyfill with a noop for the tests that open
+// the popover. We use vi.stubGlobal so individual tests can unstub it via
+// vi.unstubAllGlobals() to test the "ResizeObserver unavailable" fallback.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+}
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function () {}
+}
+
 // test_agent_profile_sections (test #13)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Agent profile renders with type-appropriate sections
 //             wave5a-wire-ui-spec.md — US-7 AC2: core agent sections
@@ -18,10 +34,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchSkills: vi.fn() }
+  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchSkills: vi.fn(), fetchProviders: vi.fn() }
 })
 
-import { fetchAgent, fetchSkills, updateAgent } from '@/lib/api'
+import { fetchAgent, fetchSkills, updateAgent, fetchProviders } from '@/lib/api'
 import { ApiError } from '@/lib/api-error'
 
 const mockCoreAgent: Agent = {
@@ -103,6 +119,12 @@ beforeEach(() => {
   mockNavigate.mockClear()
   vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
   vi.mocked(fetchSkills).mockResolvedValue([])
+  // Default: two connected providers with model lists — Wave 2 fallback-editor
+  // tests need ≥2 provider groups to exercise the provider-grouped chip layout.
+  vi.mocked(fetchProviders).mockResolvedValue([
+    { id: 'openrouter', name: 'openrouter', display_name: 'OpenRouter', status: 'connected', models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo'] },
+    { id: 'anthropic', name: 'anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6', 'claude-opus-4-6'] },
+  ])
 })
 
 describe('AgentProfile — loading state', () => {
@@ -459,5 +481,145 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     await screen.findByText('General Assistant')
     expect(screen.queryByText(/^Executor$/)).toBeNull()
     expect(screen.getByText(/^Schedules$/)).toBeInTheDocument()
+  })
+})
+
+// Wave 2 / FIX-4 / FR-005/006: provider-aware fallback editor.
+//
+// The old editor was a free-text string[] of model slugs. The new editor
+// tracks provider alongside model so a fallback can route through a
+// different provider when the primary's provider is rate-limited
+// (US-3). Each chip shows provider name + model; the add UI is a
+// `<ModelSelector>` with provider grouping.
+//
+// Until Wave 1B lands (which will change the wire fallback_models shape
+// to `[{model, provider}]`), the saved payload still uses the legacy
+// `string[]` shape (model slugs only). The editor carries the provider
+// info locally so the chip layout is correct, and the saved payload
+// strips the provider on the way out. The local FallbackEntry[] type
+// is the only place the provider is held.
+describe('AgentProfile — provider-aware fallback editor (FIX-4)', () => {
+  // The Model Configuration accordion must be opened before the fallback
+  // editor is visible. Helper that mounts the profile and opens the
+  // accordion, returning the underlying container.
+  async function openFallbackEditor(agent: typeof mockCoreAgent = mockCoreAgent) {
+    vi.mocked(fetchAgent).mockResolvedValue(agent)
+    renderProfile(agent.id)
+    await screen.findByText(agent.name)
+    // The Model Configuration trigger is in the DOM regardless of open/closed state
+    const trigger = screen.getByText(/^Model Configuration$/)
+    fireEvent.click(trigger)
+    // The fallback section heading is "Fallback models (...)" inside the panel
+    await screen.findByText(/Fallback models/i)
+  }
+
+  it('renders existing fallbacks as chips with model name and provider badge', async () => {
+    // Hydrate with two fallbacks across two different providers.
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [
+        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
+        { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+      ],
+    })
+    // Each model name appears as a chip
+    expect(screen.getByTestId('fallback-chip-model-z-ai/glm-5-turbo')).toBeInTheDocument()
+    expect(screen.getByTestId('fallback-chip-model-claude-sonnet-4-6')).toBeInTheDocument()
+    // Each chip has a provider badge (FR-005)
+    expect(screen.getByTestId('fallback-chip-provider-z-ai/glm-5-turbo')).toHaveTextContent(/openrouter/i)
+    expect(screen.getByTestId('fallback-chip-provider-claude-sonnet-4-6')).toHaveTextContent(/anthropic/i)
+  })
+
+  it('removes a fallback chip via the X button', async () => {
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [
+        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
+        { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+      ],
+    })
+    // Both present initially
+    expect(screen.getByTestId('fallback-chip-model-z-ai/glm-5-turbo')).toBeInTheDocument()
+    expect(screen.getByTestId('fallback-chip-model-claude-sonnet-4-6')).toBeInTheDocument()
+    // Click the remove button on the first chip
+    fireEvent.click(screen.getByTestId('fallback-chip-remove-z-ai/glm-5-turbo'))
+    // First chip is gone, second remains
+    expect(screen.queryByTestId('fallback-chip-model-z-ai/glm-5-turbo')).toBeNull()
+    expect(screen.getByTestId('fallback-chip-model-claude-sonnet-4-6')).toBeInTheDocument()
+  })
+
+  it('adds a fallback via the ModelSelector with provider tracking', async () => {
+    // Provider tracking on add: picking a model in the dropdown must record
+    // both model AND the provider that owns it (per spec, the fallback can
+    // route through a different provider).
+    await openFallbackEditor({ ...mockCoreAgent, fallback_models: [] })
+
+    // The "add fallback" ModelSelector is mounted. Open it and pick a model.
+    // The trigger button is identified by data-testid on the add-fallback
+    // selector (the primary model selector above uses a different testid).
+    const addTrigger = screen.getByTestId('fallback-add-trigger')
+    fireEvent.click(addTrigger)
+
+    // The CommandItem for claude-sonnet-4-6 lives inside the popover content.
+    // OpenAI / Anthropic models appear under their provider heading.
+    const item = await screen.findByTestId('fallback-add-item-claude-sonnet-4-6')
+    fireEvent.click(item)
+
+    // The new chip should now appear with both model and provider
+    expect(await screen.findByTestId('fallback-chip-model-claude-sonnet-4-6')).toBeInTheDocument()
+    expect(screen.getByTestId('fallback-chip-provider-claude-sonnet-4-6')).toHaveTextContent(/anthropic/i)
+  })
+
+  it('persists the fallback list (model slugs only) on save — the wire format is still string[]', async () => {
+    // Until Wave 1B's regen lands, the wire fallback_models shape is
+    // string[]. The new editor locally tracks {model, provider} but the
+    // save payload must remain a string[] of model slugs. The provider
+    // info is local-only; it's not part of the wire format yet.
+    vi.mocked(updateAgent).mockResolvedValue(mockCoreAgent)
+    vi.mocked(updateAgent).mockClear() // ignore earlier test's calls
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [
+        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
+        { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+      ],
+    })
+
+    // Remove one
+    fireEvent.click(screen.getByTestId('fallback-chip-remove-z-ai/glm-5-turbo'))
+    // Wait for the auto-save debounce + flush
+    await waitFor(
+      () => {
+        const calls = vi.mocked(updateAgent).mock.calls
+        expect(calls.length).toBeGreaterThan(0)
+      },
+      { timeout: 3000 },
+    )
+    // Filter to calls for THIS agent id only — other tests in the file
+    // (e.g. the worker tier-branched test) call updateAgent with a
+    // different id, and the auto-save's last-call assertion would
+    // otherwise pick up a stale call from another describe block.
+    const callsForAgent = vi.mocked(updateAgent).mock.calls.filter(
+      ([id]) => id === mockCoreAgent.id,
+    )
+    const last = callsForAgent.at(-1)!
+    expect(Array.isArray(last[1].fallback_models)).toBe(true)
+    // After removing z-ai/glm-5-turbo, only claude-sonnet-4-6 remains
+    expect(last[1].fallback_models).toEqual(['claude-sonnet-4-6'])
+  })
+
+  it('hides the fallback editor entirely for locked core agents', async () => {
+    // Locked agents (Mia, Jim, Ava, Ray, Max) cannot edit their model
+    // configuration — the editor is rendered in `canEdit` blocks and
+    // must not surface for the locked roster. This guards against a
+    // regression where the provider-aware editor leaks into the locked path.
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    // The locked agent renders the model selector (read-only) but NOT
+    // the fallback editor. The accordion may be open or closed; either
+    // way the add-trigger and chips must be absent.
+    expect(screen.queryByTestId('fallback-chip-model-claude-opus-4-6')).toBeNull()
+    expect(screen.queryByTestId('fallback-add-trigger')).toBeNull()
   })
 })

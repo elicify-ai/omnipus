@@ -56,6 +56,9 @@ export interface MessageFrame {
   session_id?: string;
   agent_id?: string;
   media?: Array<string>;
+  metadata?: {
+    model_name?: string;
+  };
 }
 
 export interface CancelFrame {
