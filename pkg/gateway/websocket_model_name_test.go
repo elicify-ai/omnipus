@@ -52,7 +52,7 @@ func newTestWSHandlerForModelName(t *testing.T, msgBus *bus.MessageBus) (*WSHand
 // string. Without this wire-up, the Wave 3 switch-compress machinery
 // (handleModelSwitch, summarizeDroppedTurns, splitForSwitchCompress,
 // fitWithinBudget) is functionally inert end-to-end because the consumer at
-// pkg/agent/loop.go (inboundMetadataFromOpts("model_name")) sits behind a
+// pkg/agent/loop.go (inboundMetadata("model_name")) sits behind a
 // producer that never writes the key.
 func TestHandleChatMessage_ForwardsModelNameToBus(t *testing.T) {
 	msgBus := bus.NewMessageBus()
