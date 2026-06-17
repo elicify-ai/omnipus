@@ -776,6 +776,14 @@ interface MessageBase { // not-wire-format
    * populates ChatMessage.agentId from each frame's agent_id.
    */
   agentId?: string
+  /**
+   * Per-turn model record (Phase 1, FR-013). Only populated for assistant
+   * messages that have a recorded model on the wire. Legacy turns and
+   * non-assistant messages leave this undefined. Empty string is treated
+   * the same as undefined at render time (per spec §18 Q6: no placeholder
+   * text — just don't show anything when the field is empty).
+   */
+  model?: string
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
@@ -914,6 +922,13 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   tool_calls?: RawToolCall[]
   agent_id: string
   messages_compacted?: number
+  /**
+   * Per-turn model record (Phase 1, FR-013). Forwarded to AssistantMessage
+   * so the UI can render which model produced each assistant turn. Absent
+   * on legacy turns; legacy turns must NOT show any model info (no
+   * placeholder text per spec §18 Q6).
+   */
+  model?: string
 }
 
 function rawToToolCall(raw: RawToolCall): ToolCall {
@@ -985,6 +1000,13 @@ function rawToMessage(raw: RawMessage): Message {
     } satisfies SystemMessage
   }
   // role === 'assistant' (default)
+  // Per-turn model record (FR-013). Forwarded to AssistantMessage so the
+  // UI can render which model produced each assistant turn. The wire
+  // field is optional — legacy turns lack it; those must NOT show a
+  // placeholder (spec §18 Q6). Empty string is normalized to undefined
+  // here so the renderer's `if (model) ` check covers both cases.
+  const rawModel = raw.model?.trim()
+  const modelField = rawModel && rawModel.length > 0 ? rawModel : undefined
   return {
     id: raw.id,
     session_id: undefined,
@@ -1000,6 +1022,7 @@ function rawToMessage(raw: RawMessage): Message {
     // (never on persisted wire messages) so this branch guards for undefined only.
     status: (baseStatus === 'done' || baseStatus === 'error' || baseStatus === 'interrupted') ? baseStatus : 'done',
     tool_calls: raw.tool_calls?.map(rawToToolCall),
+    ...(modelField ? { model: modelField } : {}),
   } satisfies AssistantMessage
 }
 

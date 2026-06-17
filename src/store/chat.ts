@@ -386,6 +386,18 @@ interface ChatStore {
   cancelStage: 'graceful' | 'hard' | 'detached' | null
   /** ISO timestamp of the most recent server frame for the active session. */
   lastReceivedEventTime: string | null
+  /**
+   * Phase 1 / FR-008/009/010: per-thread model override for the next
+   * outgoing message. The composer model selector writes the picker's
+   * value here; the AssistantUI runtime reads it in `onNew` and threads
+   * it into `sendMessage` as `model_name` (forwarded to the server as
+   * `metadata.model_name` in the WS frame). Cleared after each send
+   * so the next session reopen re-derives the default from transcript
+   * history or the agent's `model` config (per spec §18 Q3).
+   */
+  nextModel: string | null
+  /** Set the next-turn model override (called by the composer). */
+  setNextModel: (model: string | null) => void
 
   // ── Actions that operate on the foreground session ───────────────────────────
   setReplaying: (value: boolean) => void
@@ -432,7 +444,12 @@ interface ChatStore {
   //   into the outbound message frame so the agent sees the attachment (#254).
   // opts.attachments: optional MediaAttachment[] rendered inline on the
   //   optimistic user bubble (display only — not sent on the wire).
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[] }) => void
+  // opts.model_name: optional model slug for THIS turn only (Phase 1, FR-010).
+  //   The composer model selector writes the picker's value here; sendMessage
+  //   forwards it as `metadata.model_name` in the WS message frame. The
+  //   server honors it when present and falls back to the agent's `model`
+  //   config when absent.
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string }) => void
   cancelStream: () => void
   respondToApproval: (id: string, decision: 'allow' | 'deny' | 'always') => void
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
@@ -586,6 +603,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
     lastUserMessageAt: null,
     cancelStage: null,
     lastReceivedEventTime: null,
+    // Phase 1 / FR-008/009/010: per-thread model override for the next
+    // outgoing message. null means "no override" — the server uses the
+    // agent's `model` config. The composer writes here on picker
+    // change; the runtime reads here in onNew and clears it.
+    nextModel: null,
+    setNextModel: (model) => set({ nextModel: model }),
 
     setReplaying: (value) => {
       const sid = getActiveSid()
@@ -1161,6 +1184,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
     sendMessage: (content, opts) => {
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
+      // Phase 1 / FR-010: per-turn model override. Trim and strip empty
+      // strings so absent and "" are equivalent (the WS frame is omitted
+      // entirely when no model was picked this session, per spec §18 Q3).
+      const modelNameRaw = opts?.model_name
+      const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
+      const modelNameFrame = modelName.length > 0 ? { metadata: { model_name: modelName } } : {}
+      // Clear the nextModel slot after the outgoing call so the next
+      // session reopen re-derives the default from transcript history
+      // or the agent's `model` config (per spec §18 Q3).
+      if (get().nextModel !== null) {
+        set({ nextModel: null })
+      }
       const { connection, isConnected } = useConnectionStore.getState()
       const { activeSessionId, activeAgentId } = useSessionStore.getState()
       const { isStreaming } = get()
@@ -1278,6 +1313,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           session_id: activeSessionId,
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+          ...modelNameFrame,
         })
 
         if (!sent) {
@@ -1342,6 +1378,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           content,
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+          ...modelNameFrame,
         })
         if (!sent) {
           // #253(a): Mark the user message with status:'error' and remove the

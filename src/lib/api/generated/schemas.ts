@@ -64,6 +64,7 @@ type Message = {
   canceled_by_channel?: string | undefined;
   cancel_method?: ("graceful" | "hard") | undefined;
   descendants_canceled?: Array<string> | undefined;
+  model?: string | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -830,6 +831,7 @@ export const Message: z.ZodType<Message> = z.object({
   canceled_by_channel: z.string().optional(),
   cancel_method: z.enum(["graceful", "hard"]).optional(),
   descendants_canceled: z.array(z.string()).optional(),
+  model: z.string().optional(),
 });
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
@@ -6304,6 +6306,11 @@ export const MessageFrame = z
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
+    metadata: z
+    .object({
+      model_name: z.string().min(1).max(256).optional(),
+    })
+    .strict().optional(),
   })
   .strict();
 

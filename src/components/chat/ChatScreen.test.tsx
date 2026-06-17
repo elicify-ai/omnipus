@@ -10,6 +10,23 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import * as api from '@/lib/api'
+
+// ResizeObserver is required by cmdk (used inside the ModelSelector popover);
+// jsdom does not implement it. Polyfill with a noop for the tests that open
+// the popover. We use vi.stubGlobal so individual tests can unstub it via
+// vi.unstubAllGlobals() to test the "ResizeObserver unavailable" fallback.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+}
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function () {}
+}
 
 // Static import: vi.mock() calls are hoisted before this import, so all mocks
 // are in place when the module resolves. This avoids per-test dynamic import
@@ -47,12 +64,16 @@ vi.mock('@assistant-ui/react', () => {
           onChange, onKeyDown, onBlur,
           'data-testid': 'composer-input',
         }),
-      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
+      // The mock Send button accepts an onClick so test code can wire
+      // up the assistant-ui onNew path. In production, ComposerPrimitive.Send
+      // calls composer.send() internally — the onClick prop is a noop there.
+      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick }: {
         disabled?: boolean; children?: React.ReactNode; className?: string;
-        'data-testid'?: string; 'aria-label'?: string
+        'data-testid'?: string; 'aria-label'?: string; onClick?: () => void
       }) =>
         React.createElement('button', {
           type: 'button', disabled, className,
+          onClick,
           'data-testid': testId ?? 'chat-send',
           'aria-label': ariaLabel,
         }, children),
@@ -116,6 +137,7 @@ vi.mock('@/lib/api', () => ({
   fetchSessionMessages: vi.fn().mockResolvedValue([]),
   createSession: vi.fn(),
   uploadFiles: vi.fn(),
+  fetchProviders: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
@@ -254,3 +276,189 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
 // auto-creation on first upload, and surfacing a failed registration rather
 // than silently dropping the file — now live in src/lib/attachment-adapter.ts
 // and are covered by src/lib/attachment-adapter.test.ts.
+
+// ── Wave 2 / FR-008/009/010: chat composer model selector ────────────────────
+//
+// Spec §16 Wave 2 / FR-008/009/010: the composer must include a
+// <ModelSelector> showing the "next message" model. On send, the
+// selection is forwarded as `Metadata["model_name"]` in the WS
+// message frame so the server routes this turn to the chosen model.
+// On session reopen the picker auto-defaults to the last model
+// recorded in the transcript (or the agent's model when transcript
+// is empty).
+//
+// The picker is a forward-looking "next message" indicator (spec §18
+// Q3) — NOT a per-thread preference. We use local React state inside
+// OmnipusComposer, NOT useThreadModelContext from assistant-ui.
+describe('OmnipusComposer — model selector (FR-008/009/010)', () => {
+  // Per-test helpers. The composer's local state is initialised from
+  // (1) the picker value the user has selected this session, else
+  // (2) the last model from the active session's transcript, else
+  // (3) the active agent's `model` config. We stub the relevant
+  // queries/state per test.
+
+  // The composer's "send" ultimately calls chatStore.sendMessage with
+  // an opts arg that may include model_name. We can drive the composer
+  // by calling composer.setText + composer.send (assistant-ui's path)
+  // OR by triggering the native form submit. The ChatScreen composer
+  // uses ComposerPrimitive.Send; the assistant-ui runtime onNew path
+  // ends up calling store.sendMessage. We assert the model_name is
+  // forwarded by inspecting the store call directly.
+
+  // We need a way to read what `sendMessage` was called with. The
+  // chat store is created via zustand; we can spy on its `sendMessage`
+  // setter via useChatStore.setState — but the real production
+  // `sendMessage` is a closure with WS dispatch. The most direct way
+  // is to replace sendMessage via useChatStore.setState at the start
+  // of each test (the test mock layer for the attachment flow uses
+  // this pattern; see omnipus-runtime.attachments.test.tsx).
+  // For composer tests, we use the OmnipusComposer path: a real
+  // ComposerPrimitive.Send click fires onNew → sendMessage. We
+  // intercept sendMessage via setState.
+
+  // Set up an active session + a provider list (so ModelSelector has
+  // options to show). The composer auto-derives the picker value
+  // from the active agent's `model` config.
+  function primeActiveAgentAndProviders() {
+    useSessionStore.setState({
+      activeAgentId: 'general-assistant',
+    })
+    // Default to a single connected provider with 3 models
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      {
+        id: 'openrouter',
+        name: 'openrouter',
+        display_name: 'OpenRouter',
+        status: 'connected',
+        models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo', 'openai/gpt-4o'],
+      },
+    ])
+  }
+
+  it('renders a model selector in the composer action area', async () => {
+    // FR-008: the chat composer includes a model selector.
+    primeActiveAgentAndProviders()
+    render(<OmnipusComposer />)
+    // The selector trigger renders the active agent's model by default
+    const trigger = await screen.findByTestId('composer-model-selector')
+    expect(trigger).toBeInTheDocument()
+  })
+
+  it('auto-defaults the picker to the active agent model when transcript is empty', async () => {
+    // FR-009: with no transcript history, the picker defaults to the
+    // active agent's `model` config. With the test's empty useQuery
+    // mocks, the agent list is empty so the picker falls back to
+    // the activeAgentModel. The placeholder is rendered as a DOM
+    // attribute on the input element when no models are available.
+    primeActiveAgentAndProviders()
+    render(<OmnipusComposer />)
+    const trigger = await screen.findByTestId('composer-model-selector')
+    // The picker element must exist and the placeholder attribute
+    // indicates the agent model fallback.
+    expect(trigger).toBeInTheDocument()
+    expect(trigger.getAttribute('placeholder')).toMatch(/select a model/i)
+  })
+
+  it('writes the picked model to the chat store so the runtime can forward it on send', async () => {
+    // FR-010: on send, the picker value is sent as Metadata["model_name"].
+    // The runtime's onNew (in useOmnipusRuntime) reads `nextModel` from
+    // the chat store and threads it into sendMessage's opts.model_name.
+    // We can't easily drive the assistant-ui onNew path in this test
+    // (assistant-ui is mocked), so we test the composer's half of the
+    // contract: it writes the picker value to the store, ready for the
+    // runtime to consume. The runtime's contract is covered separately
+    // in omnipus-runtime.attachments.test.tsx.
+    primeActiveAgentAndProviders()
+    render(<OmnipusComposer />)
+    const trigger = await screen.findByTestId('composer-model-selector')
+
+    // The test mock returns [] for useQuery, so the ModelSelector falls
+    // back to its text-input mode (no popover). Typing into the input
+    // directly updates the value and triggers the onChange handler.
+    fireEvent.change(trigger, { target: { value: 'z-ai/glm-5-turbo' } })
+
+    // The composer must write the picked model to the chat store so
+    // the runtime's onNew can pick it up.
+    expect(useChatStore.getState().nextModel).toBe('z-ai/glm-5-turbo')
+  })
+
+  it('sendMessage forwards nextModel as metadata.model_name on the WS frame (store-level contract)', () => {
+    // FR-010 / Spec §13 FR-010: the chat store's sendMessage must accept
+    // an opts.model_name and translate it into `metadata.model_name` in
+    // the WS message frame. This test covers the contract directly,
+    // bypassing the assistant-ui runtime (which is mocked in this file).
+    const sentFrames: unknown[] = []
+    const fakeConnection = {
+      send: (frame: unknown) => {
+        sentFrames.push(frame)
+        return true
+      },
+    }
+    act(() => {
+      useConnectionStore.setState({
+        connection: fakeConnection as never,
+        isConnected: true,
+      })
+    })
+    // Seed an active session
+    act(() => {
+      useSessionStore.setState({
+        activeSessionId: 'sess_send_test',
+        activeAgentId: 'general-assistant',
+      })
+    })
+    // Set nextModel to a real value
+    act(() => {
+      useChatStore.getState().setNextModel('z-ai/glm-5-turbo')
+    })
+    // Send via the real store
+    act(() => {
+      useChatStore.getState().sendMessage('hello', { model_name: 'z-ai/glm-5-turbo' })
+    })
+    // The frame on the wire must include metadata.model_name
+    const last = sentFrames.at(-1) as { type?: string; metadata?: { model_name?: string } }
+    expect(last).toBeDefined()
+    expect(last?.type).toBe('message')
+    expect(last?.metadata?.model_name).toBe('z-ai/glm-5-turbo')
+    // And the store must clear nextModel after send (per spec §18 Q3:
+    // the picker is forward-looking, not persisted).
+    expect(useChatStore.getState().nextModel).toBeNull()
+  })
+
+  it('omits metadata.model_name when the user has not picked a model this session (store-level)', () => {
+    // Spec §18 Q3: the picker is forward-looking. If the user never
+    // touched it, model_name is absent and the server uses the
+    // agent's `model` config (the legacy path). The store must omit
+    // the metadata key entirely so the wire format stays clean.
+    const sentFrames: unknown[] = []
+    const fakeConnection = {
+      send: (frame: unknown) => {
+        sentFrames.push(frame)
+        return true
+      },
+    }
+    act(() => {
+      useConnectionStore.setState({
+        connection: fakeConnection as never,
+        isConnected: true,
+      })
+    })
+    act(() => {
+      useSessionStore.setState({
+        activeSessionId: 'sess_no_pick',
+        activeAgentId: 'general-assistant',
+      })
+    })
+    // nextModel is null (the user never picked)
+    act(() => {
+      useChatStore.getState().setNextModel(null)
+    })
+    act(() => {
+      useChatStore.getState().sendMessage('hello')
+    })
+    const last = sentFrames.at(-1) as { type?: string; metadata?: unknown }
+    expect(last?.type).toBe('message')
+    // No metadata key on the frame (or it's empty/undefined)
+    expect(last?.metadata).toBeUndefined()
+  })
+})

@@ -45,3 +45,24 @@ properties:
       type: string
       minLength: 1
       maxLength: 256
+  metadata:
+    type: object
+    description: >
+      Optional per-message metadata. Currently only `model_name` is
+      surfaced (Phase 1, FR-010). When the user picks a model in the
+      chat composer, the picker value is sent as
+      `metadata.model_name` so the server routes this turn to the
+      chosen model. The server falls back to the agent's `model`
+      config when this field is absent.
+    additionalProperties: false
+    properties:
+      model_name:
+        type: string
+        minLength: 1
+        maxLength: 256
+        description: >
+          Model identifier to use for THIS turn only. The server honors
+          this when present and falls back to the agent's configured
+          `model` (and then to the active session's default) when
+          absent. Empty string is treated the same as absent.
+        example: "z-ai/glm-5-turbo"

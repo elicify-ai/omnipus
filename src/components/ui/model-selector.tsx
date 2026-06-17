@@ -19,9 +19,18 @@ interface ModelSelectorProps {
   disabled?: boolean
   /** When provided, renders models grouped by provider (shown when ≥2 providers configured). */
   providerGroups?: ModelGroup[]
+  /**
+   * Wave 2 / FIX-4: optional test ids for the combobox trigger and the
+   * pickable model items. Defaults preserve the existing behavior
+   * (no data-testid on the trigger or items) so the change is
+   * backward-compatible with all current call sites.
+   */
+  triggerTestId?: string
+  /** Prefix for each item's data-testid. The full id is `${itemTestIdPrefix}${model}`. */
+  itemTestIdPrefix?: string
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix }: ModelSelectorProps) {
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
 
@@ -33,6 +42,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder ?? 'Enter model slug (e.g. MiniMax-M2.7)'}
         disabled={disabled}
+        {...(triggerTestId ? { 'data-testid': triggerTestId } : {})}
         className="font-mono text-sm"
       />
     )
@@ -76,6 +86,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           role="combobox"
           aria-expanded={open}
           disabled={disabled}
+          data-testid={triggerTestId}
           className="flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50"
           style={{
             borderColor: open ? 'var(--color-accent)' : 'var(--color-border)',
@@ -112,6 +123,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                         key={model}
                         value={model}
                         onSelect={() => handleSelect(model)}
+                        {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
                       >
                         <Check
                           size={14}
@@ -137,6 +149,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                       key={model}
                       value={model}
                       onSelect={() => handleSelect(model)}
+                      {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
                     >
                       <Check
                         size={14}

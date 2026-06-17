@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { generateId } from '@/lib/constants'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -38,6 +38,7 @@ import { RateLimitIndicator } from './RateLimitIndicator'
 import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
 import { Button } from '@/components/ui/button'
+import { ModelSelector } from '@/components/ui/model-selector'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -53,7 +54,7 @@ import type { ChatMessage } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, fetchSessionMessages, createSession, isApiError } from '@/lib/api'
+import { fetchAgents, fetchSessionMessages, createSession, fetchProviders, isApiError } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
@@ -1021,12 +1022,104 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const appendMessage = useChatStore((s) => s.appendMessage)
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  // Phase 1 / FR-008/009/010: read the active session's messages so we
+  // can derive the picker's initial value from the transcript's last
+  // assistant model (per spec §18 Q3 chain rule #2).
+  const messages = useChatStore((s) => s.messages)
   const addToast = useUiStore((s) => s.addToast)
   const composerRuntime = useComposerRuntime()
   const queryClient = useQueryClient()
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name ?? 'Omnipus'
+
+  // Phase 1 / FR-008/009/010: chat composer model selector.
+  // We fetch the same provider list used by the agent profile so the
+  // selector shows the same grouped layout. `availableModels` is the flat
+  // list (used as a fallback when the user is offline and the provider
+  // list is empty); `providerGroups` is the grouped view (rendered when
+  // ≥2 providers exist).
+  const { data: providers = [] } = useQuery({ queryKey: ['providers'], queryFn: fetchProviders })
+  const connectedProviders = providers.filter((p) => p.status === 'connected')
+  const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
+  const providerGroups = connectedProviders
+    .filter((p) => (p.models ?? []).length > 0)
+    .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
+
+  // Phase 1 / FR-008/009/010: local picker state. The picker is a
+  // "next message will use this" indicator (spec §18 Q3) — it does
+  // NOT persist as a per-thread preference. The full model-resolution
+  // chain at send time is:
+  //   1. the picker value the user has selected this session (nextModel)
+  //   2. the last model from the current session's transcript
+  //   3. the active agent's `model` config
+  // We initialise `nextModel` lazily on first render via a ref; subsequent
+  // navigations and pickups update the state directly. We DO NOT
+  // re-derive on transcript change (the picker is forward-looking — the
+  // user picks what the NEXT message will use, regardless of the
+  // transcript's most recent model).
+  const transcriptLastModel = useMemo<string | null>(() => {
+    // Walk the active session's messages bottom-up. The last assistant
+    // message that has a non-empty `model` field wins. We use the
+    // chat-store messages array (it's the foreground projection of the
+    // active session's bucket).
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role !== 'assistant') continue
+      const model = (m as { model?: string }).model
+      if (typeof model === 'string' && model.trim().length > 0) {
+        return model.trim()
+      }
+    }
+    return null
+  }, [messages])
+  const activeAgentModel = useMemo<string | null>(() => {
+    const agent = agents.find((a) => a.id === activeAgentId)
+    if (!agent || typeof agent.model !== 'string') return null
+    const trimmed = agent.model.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }, [agents, activeAgentId])
+
+  // The picker shows a "next message" value. We track:
+  //   - hasUserPicked: has the user clicked a model this session?
+  //   - nextModel: the current picker value (or null = un-picked)
+  // Initial render: derive the default from transcript last-model, then
+  // agent model. We do NOT auto-update when the transcript changes —
+  // the user has control once they've picked (or have not picked).
+  const messagesForDerivation = useChatStore((s) => s.messages)
+  const nextModel = useChatStore((s) => s.nextModel)
+  const setNextModel = useChatStore((s) => s.setNextModel)
+  // Mirror nextModel into local React state for the ModelSelector's
+  // controlled `value` prop. The store value is the source of truth;
+  // local state just makes the controlled-input UX feel snappy.
+  const [pickerValue, setPickerValue] = useState<string>('')
+  // Seed pickerValue on first render only — pick the first non-empty
+  // source from (transcript, agent). Once seeded, the user controls
+  // it. We track "has the seed happened" via a ref so navigations
+  // (e.g. switching agents) re-seed.
+  const lastSeedKey = useRef<string>('')
+  useEffect(() => {
+    // Re-seed only when the active session or agent id changes. We do
+    // not re-seed on transcript change (the picker is forward-looking).
+    const seedKey = `${activeSessionId ?? ''}::${activeAgentId ?? ''}`
+    if (seedKey === lastSeedKey.current) return
+    lastSeedKey.current = seedKey
+    // If the user has already picked this session, keep their value.
+    if (nextModel !== null) {
+      setPickerValue(nextModel)
+      return
+    }
+    const seed = transcriptLastModel ?? activeAgentModel ?? ''
+    setPickerValue(seed)
+  }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, nextModel, messagesForDerivation])
+
+  // Helper: user just picked a model in the dropdown. Write to local
+  // state AND the store so the runtime's onNew can pick it up.
+  function onPickerChange(model: string) {
+    setPickerValue(model)
+    setNextModel(model || null)
+  }
 
   const { mutate: doCreateSession, isPending: isCreatingSession } = useMutation({
     mutationFn: () => {
@@ -1405,6 +1498,31 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           and threads the media:// ref into our transport via onNew. */}
       <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
         <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
+      </div>
+
+      {/* Phase 1 / FR-008: chat composer model selector. Renders a
+          compact <ModelSelector> directly above the input row, aligned to
+          the right of the attachment chips. The picker is a
+          "next message will use this" indicator (spec §18 Q3) — NOT a
+          per-thread preference. Local state is mirrored into the chat
+          store's `nextModel` slot so the runtime's onNew can read it
+          on send. The store clears `nextModel` after each send. */}
+      <div
+        data-testid="composer-model-bar"
+        className="flex items-center justify-end gap-2 px-2 pb-1"
+      >
+        <span className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">Model</span>
+        <div className="w-[260px]">
+          <ModelSelector
+            models={availableModels}
+            value={pickerValue}
+            onChange={onPickerChange}
+            placeholder={activeAgentModel ?? 'Select a model…'}
+            providerGroups={providerGroups}
+            triggerTestId="composer-model-selector"
+            disabled={availableModels.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))}
+          />
+        </div>
       </div>
 
       <div className="flex items-end gap-2 px-2 py-2">
