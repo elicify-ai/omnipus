@@ -701,7 +701,13 @@ func (ts *turnState) resolveActiveAgentID() string {
 // wsStreamer.Finalize (streaming path) or appendAssistantTranscript (non-streaming).
 //
 // Bug #416 fix: without this, only the last text segment reached the transcript.
-func (ts *turnState) appendIntermediateAssistantTranscript(content string) {
+//
+// producedModel is the model string that emitted THIS segment. When the
+// caller is a streaming path or a sub-agent, the per-message model differs
+// from ts.lastProducedModel (a single slot which the parent's LLM call may
+// have just overwritten). Pass "" to fall back to ts.lastProducedModel
+// for callers that don't have a per-message producer.
+func (ts *turnState) appendIntermediateAssistantTranscript(content string, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		return
@@ -710,13 +716,17 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string) {
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
+	model := ts.lastProducedModel
+	if len(producedModel) > 0 && producedModel[0] != "" {
+		model = producedModel[0]
+	}
 	entry := session.TranscriptEntry{
 		ID:        uuid.New().String(),
 		Role:      "assistant",
 		AgentID:   agentID,
 		Content:   content,
 		Timestamp: time.Now().UTC(),
-		Model:     ts.lastProducedModel,
+		Model:     model,
 		// Tokens and Cost are intentionally 0 — the turn total is attributed to
 		// the final assistant entry only. See appendAssistantTranscript.
 	}
@@ -733,7 +743,10 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string) {
 // Bug 3 fix: the wsStreamer.Finalize path already handles streaming responses.
 // For non-streaming turns (WS disconnected or channel that never streams), this
 // ensures the assistant content reaches transcript.jsonl.
-func (ts *turnState) appendAssistantTranscript(content string) {
+//
+// producedModel is the model string that emitted THIS response. Pass ""
+// to fall back to ts.lastProducedModel.
+func (ts *turnState) appendAssistantTranscript(content string, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		return
@@ -742,6 +755,10 @@ func (ts *turnState) appendAssistantTranscript(content string) {
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
+	model := ts.lastProducedModel
+	if len(producedModel) > 0 && producedModel[0] != "" {
+		model = producedModel[0]
+	}
 	// Populate token/cost from accumulated turn stats so scheduled and
 	// non-websocket turns record real usage, mirroring the wsStreamer.Finalize
 	// path (#411). GetTurnStats is safe to call here — the turn is finishing.
@@ -754,7 +771,7 @@ func (ts *turnState) appendAssistantTranscript(content string) {
 		Timestamp: time.Now().UTC(),
 		Tokens:    int(turnTokens),
 		Cost:      turnCost,
-		Model:     ts.lastProducedModel,
+		Model:     model,
 	}
 	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
 		logger.WarnCF("agent", "could not record assistant message to transcript",
@@ -775,7 +792,9 @@ func (ts *turnState) appendAssistantTranscript(content string) {
 //
 // Silently no-ops when the turn has been abandoned or when no transcript
 // store is wired (matches appendAssistantTranscript's failure semantics — a
-// failed transcript write must NOT abort the in-flight turn).
+// failed transcript write must NOT abort the in-flight turn). Debug-level
+// logging is emitted when the no-op fires so an operator can trace why a
+// transcript entry was suppressed.
 func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
 	if ts == nil {
 		return
@@ -785,6 +804,12 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
 		return
 	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
+		logger.DebugCF("agent", "appendErrorTranscript: suppressed (no transcript store wired)",
+			map[string]any{
+				"event_kind":  kind,
+				"stage":       stage,
+				"message_len": len(message),
+			})
 		return
 	}
 	agentID := ts.resolveActiveAgentID()

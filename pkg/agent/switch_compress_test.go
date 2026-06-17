@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 )
@@ -45,6 +46,54 @@ func (r *recordingSummaryProvider) Chat(
 
 func (r *recordingSummaryProvider) GetDefaultModel() string {
 	return "recording-summary-model"
+}
+
+// newSwitchTestAgentLoop builds an AgentLoop with the models needed by the
+// switch-time compress tests registered in cfg.Providers so that
+// ApplyAgentModel (which handleModelSwitch now calls to orchestrate the
+// provider+candidates swap alongside Model) can resolve them. Without this
+// every ApplyAgentModel call would fail with "model not found".
+//
+// The ModelName is the public identifier (matches the input passed to
+// handleModelSwitch), and the Model field is the provider-prefixed form
+// ("openai/<name>") so the known-protocol factory can build a stub
+// provider. Protocol = "openai" is a recognised protocol prefix (see
+// pkg/providers/factory_provider.go::knownProtocols).
+func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg *config.Config, cleanup func()) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	t.Setenv("SWITCH_TEST_KEY", "switch-test-key")
+	mkProvider := func(name string) *config.ModelConfig {
+		return &config.ModelConfig{
+			ModelName: name,
+			Model:     "openai/" + name,
+			Provider:  "openai",
+			APIBase:   "http://127.0.0.1:1",
+			APIKeyRef: "SWITCH_TEST_KEY",
+		}
+	}
+	providers := make([]*config.ModelConfig, 0, len(models))
+	for _, m := range models {
+		providers = append(providers, mkProvider(m))
+	}
+	cfg = &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Providers: providers,
+	}
+	// Default model entry must be present too so registry construction succeeds.
+	if len(providers) == 0 {
+		cfg.Providers = append(cfg.Providers, mkProvider("test-model"))
+	}
+	mp := &mockProvider{}
+	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), mp)
+	return al, cfg, func() {}
 }
 
 // TestSwitchTimeCompress_LargerToSmaller_TriggersCompress verifies that when
@@ -213,7 +262,11 @@ func TestSummarizeDroppedTurns_Success_StoresSummary(t *testing.T) {
 //  5. keeps the new Model field on the next outgoing assistant message
 //     (verified here by checking that the agent's Model field was updated).
 func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
+	// Register both the default model and the new model so ApplyAgentModel
+	// (called by handleModelSwitch to swap Provider+Candidates alongside
+	// Model) can resolve them.
+	const newModel = "openrouter/some-small-model"
+	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
 	agent := al.GetRegistry().GetDefaultAgent()
@@ -245,8 +298,6 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	}
 	agent.Provider = recProv
 
-	// Use a distinct new model name so the switch is detected.
-	newModel := "openrouter/some-small-model"
 	require.NotEqual(t, oldModel, newModel,
 		"test invariant: new model must differ from current model")
 
@@ -267,41 +318,49 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	assert.Equal(t, newModel, updatedAgent.Model,
 		"agent.Model must be updated to the new model after a switch")
 
-	// The synthetic system message was inserted into the session history.
-	history := updatedAgent.Sessions.GetHistory(sessionKey)
-	require.NotEmpty(t, history, "session history must not be empty after switch")
-	hasSynthetic := false
-	for _, m := range history {
-		if m.Role == "system" && m.Synthetic {
-			hasSynthetic = true
-			assert.Contains(t, m.Content, newModel, "synthetic message must name the new model")
-			assert.Contains(t, m.Content, oldModel, "synthetic message must name the old model")
-			assert.Contains(t, m.Content, "Summary:",
-				"synthetic message must include the Summary: section")
-			break
-		}
-	}
-	assert.True(t, hasSynthetic,
-		"synthetic system message with Synthetic=true must be inserted into history")
+	// Strategy B (FR-012): the switch summary lives in Sessions.GetSummary
+	// (consumed by BuildMessages into the dynamic system prompt), NOT as a
+	// role:"system" message in history. sanitizeHistoryForProvider would
+	// have stripped that synthetic system message before it reached the LLM.
+	sessionSummary := updatedAgent.Sessions.GetSummary(sessionKey)
+	require.NotEmpty(t, sessionSummary,
+		"strategy B: switch summary must be stored in session summary (FR-012)")
+	assert.Contains(t, sessionSummary, newModel, "switch summary must name the new model")
+	assert.Contains(t, sessionSummary, oldModel, "switch summary must name the old model")
+	assert.Contains(t, sessionSummary, "Conversation moved",
+		"switch summary must use the agreed wording")
 
 	// The conversation was compressed — total token estimate must be < 8k.
+	// Strategy B has no synthetic message in history; only the kept real
+	// turns remain, trimmed to fit.
+	history := updatedAgent.Sessions.GetHistory(sessionKey)
+	for _, m := range history {
+		assert.False(t, m.Synthetic,
+			"strategy B: no synthetic system message must be inserted into history")
+	}
 	total := 0
 	for _, m := range history {
 		total += estimateMessageTokens(m)
 	}
 	assert.Less(t, total, 8000,
-		"after compress + synthetic, history token estimate must fit in 8k window")
+		"after compress, history token estimate must fit in 8k window")
 
 	// The LLM summary call actually happened.
 	require.NotEmpty(t, recProv.chatCalls,
 		"summarizeDroppedTurns must have invoked the provider's Chat")
+
+	// ApplyAgentModel swap: agent.Provider must have been replaced (the
+	// orchestration call resolved and created a new provider for newModel).
+	require.NotNil(t, updatedAgent.Provider,
+		"agent.Provider must not be nil after ApplyAgentModel swap")
 }
 
 // TestSwitchTime_EmptySession_NoSyntheticMessage verifies that switching on an
 // empty session does NOT insert a synthetic system message — there is nothing
 // to summarize.
 func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
+	const newModel = "openrouter/some-other-model"
+	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
 	agent := al.GetRegistry().GetDefaultAgent()
@@ -311,7 +370,6 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	agent.MaxTokens = 4096
 
 	oldModel := agent.Model
-	newModel := "openrouter/some-other-model"
 	require.NotEqual(t, oldModel, newModel)
 
 	const sessionKey = "empty-session"
@@ -342,6 +400,89 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 		"empty session switch still updates agent.Model")
 	assert.Empty(t, recProv.chatCalls,
 		"empty session must not invoke the summarization LLM call")
+}
+
+// TestSwitchTime_LLMReceivesSyntheticSummary is the FR-012 regression
+// guard: after a model switch with compression, the LLM MUST see the
+// switch summary text — either in the system prompt (Strategy B) or in
+// the message list (Strategy A). The previous bug was that
+// sanitizeHistoryForProvider stripped the synthetic role:"system" message
+// before it reached the LLM, so the summary the chat runtime paid an LLM
+// call to produce was silently lost.
+//
+// This test drives handleModelSwitch with a recording summary provider,
+// then runs the next LLM call through the agent loop's BuildMessages path
+// and asserts the captured messages contain the summary text.
+func TestSwitchTime_LLMReceivesSyntheticSummary(t *testing.T) {
+	const newModel = "openrouter/some-small-model"
+	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
+	defer cleanup()
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, agent)
+
+	// Force compress to fire.
+	agent.ContextWindow = 8000
+	agent.MaxTokens = 4096
+
+	const sessionKey = "llm-receives-summary"
+	bigText := make([]byte, 0, 50000)
+	for i := 0; i < 50000; i++ {
+		bigText = append(bigText, 'a')
+	}
+	agent.Sessions.SetHistory(sessionKey, []providers.Message{
+		{Role: "user", Content: "I need help with: " + string(bigText)},
+		{Role: "assistant", Content: "Sure, here is what I think: " + string(bigText)},
+	})
+	require.NoError(t, agent.Sessions.Save(sessionKey))
+
+	// Summary the LLM will produce — verify it reaches the next chat call.
+	const summaryText = "FR-012-key-decisions: pick A; open: confirm plan"
+	recProv := &recordingSummaryProvider{summary: summaryText}
+	agent.Provider = recProv
+
+	// Trigger the switch — this is the production path that previously lost
+	// the synthetic system message to sanitizeHistoryForProvider.
+	updatedAgent, err := al.handleModelSwitch(
+		context.Background(),
+		agent,
+		sessionKey,
+		newModel,
+		bus.InboundMessage{
+			Metadata: map[string]string{"model_name": newModel},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, updatedAgent)
+
+	// BuildMessages consumes Sessions.GetSummary and stitches it into the
+	// system prompt. Verify the next LLM call would see the summary text
+	// by running BuildMessages and asserting the system message contains
+	// the summary string (Strategy B: summary → system prompt).
+	messages := updatedAgent.ContextBuilder.BuildMessages(
+		updatedAgent.Sessions.GetHistory(sessionKey),
+		updatedAgent.Sessions.GetSummary(sessionKey),
+		"now please continue",
+		nil,
+		"", "", "", "",
+	)
+	require.NotEmpty(t, messages,
+		"BuildMessages must produce messages for the next turn")
+	require.Equal(t, "system", messages[0].Role,
+		"first message must be the system prompt")
+	systemPrompt := messages[0].Content
+	assert.Contains(t, systemPrompt, summaryText,
+		"the LLM system prompt must contain the switch summary text — FR-012 regression guard")
+
+	// Also confirm the summary is not present in history (Strategy B stores
+	// it in summary, not in history messages).
+	for _, m := range messages {
+		if m.Role == "system" {
+			continue
+		}
+		assert.False(t, m.Synthetic,
+			"no message outside the system prompt must carry Synthetic=true")
+	}
 }
 
 // failingProvider is used to exercise summarizeDroppedTurns' error path. It
