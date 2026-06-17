@@ -181,22 +181,18 @@ function buildMessageStatus(msg: AssistantMessage & { isStreaming?: boolean }): 
   return { type: "complete", reason: "stop" };
 }
 
-// Per-turn model record (Wave 2 / FR-014). The AssistantUI ThreadMessageLike
-// exposes a `metadata.custom` channel that survives the runtime's internal
-// message transformation — that's where the per-turn model rides so the
-// renderer can read it without breaking assistant-ui's typed surface.
+// Per-turn model record (FR-014). The renderer (MessageItem.tsx and
+// VirtualAssistantMessageRow in ChatScreen.tsx) reads `msg.model`
+// directly off the ChatMessage — that's the only consumer surface for
+// the per-turn model. There is no `metadata.custom.model` write here
+// because no renderer reads it (W2-30 — the prior write was dead code,
+// orphan fields on the ThreadMessageLike that AssistantUI never round-
+// tripped back to the renderer).
 //
 // Legacy turns (no `model` field recorded) must NOT show any model info
-// (spec §18 Q6: no placeholder text). We pass `undefined` for `model` in
-// those cases, which means `metadata.custom.model` is `undefined` and the
-// renderer simply doesn't render a model line.
-function modelForMessage(msg: ChatMessage): string | undefined {
-  if (msg.role !== "assistant") return undefined;
-  const raw = (msg as { model?: string }).model;
-  if (typeof raw !== "string") return undefined;
-  const trimmed = raw.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+// (spec §18 Q6: no placeholder text). The renderer's own trim-and-
+// length-check handles that — see MessageItem.tsx and
+// VirtualAssistantMessageRow.
 
 export function convertMessage(
   msg: ChatMessage,
@@ -205,16 +201,11 @@ export function convertMessage(
   textAtToolCallStart: Record<string, string>,
   isLastAssistant: boolean
 ): ThreadMessageLike {
-  const model = modelForMessage(msg);
   return {
     id: msg.id,
     role: msg.role,
     content: buildContentParts(msg, toolCalls, toolCallOrder, textAtToolCallStart, isLastAssistant),
     ...(msg.role === "assistant" ? { status: buildMessageStatus(msg) } : {}),
-    // Surface the per-turn model on metadata.custom for the renderer.
-    // Only attached when the message has a non-empty model value
-    // (FR-014 + spec §18 Q6: legacy turns render nothing).
-    ...(model ? { metadata: { custom: { model } } } : {}),
   };
 }
 
