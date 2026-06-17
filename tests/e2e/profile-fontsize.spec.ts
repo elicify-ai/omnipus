@@ -285,21 +285,19 @@ test(
     // Verify --user-font-size is set before reload.
     expect(await getRootFontSizeVar(page)).toBe('18px')
 
-    // ── Persistence check: reload and re-open Profile tab.
+    // ── Persistence check: reload and re-open Profile screen.
     // The useAutoSave hook debounces and persists to localStorage. Wait briefly
     // so the debounced save has had time to write before reloading.
     await page.waitForTimeout(600)
 
     await page.reload()
-    await expect(page).toHaveURL(/settings/, { timeout: 10_000 })
+    // Profile is now a top-level route (not a Settings tab) — the URL stays at
+    // /#/profile after reload, not /#/settings.
+    await expect(page).toHaveURL(/\/profile/, { timeout: 10_000 })
 
-    // Re-activate Profile tab after reload — openProfileTab navigates to
-    // /#/settings internally, but since we are already there we just click the tab.
-    const profileTabAfter = page.locator('button[role="tab"]', { hasText: 'Profile' })
-    await expect(profileTabAfter).toBeVisible({ timeout: 10_000 })
-    await profileTabAfter.click()
-    const profilePanelAfter = page.locator('[role="tabpanel"][data-state="active"]').first()
-    await expect(profilePanelAfter).toBeVisible({ timeout: 10_000 })
+    // Profile is now a top-level route (not a Settings tab) — slider is on the
+    // page itself, no tab activation needed.
+    await expect(page.getByRole('slider')).toBeVisible({ timeout: 10_000 })
 
     const sliderAfterReload = page.getByRole('slider')
     await expect(sliderAfterReload).toBeVisible({ timeout: 10_000 })
