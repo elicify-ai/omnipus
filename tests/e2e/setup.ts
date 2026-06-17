@@ -85,23 +85,16 @@ export function assertUserManagementEmbedPresent(): void {
         '  CGO_ENABLED=0 go build -o /tmp/omnipus-ci ./cmd/omnipus/',
     );
   }
-  const hasUserManagement = jsFiles.some((f) => {
-    try {
-      const content = fs.readFileSync(path.join(spaAssetsDir, f), 'utf-8');
-      // "Add user" is the button label in UsersSection.tsx — proves the user-management UI is embedded.
-      return content.includes('Add user');
-    } catch {
-      return false;
-    }
-  });
-  if (!hasUserManagement) {
-    throw new Error(
-      'BLOCKED: User-management frontend not embedded in pkg/gateway/spa/.\n' +
-        'Run the sync pipeline:\n' +
-        '  npm run build && rm -rf pkg/gateway/spa/assets && cp -r dist/spa/* pkg/gateway/spa/\n' +
-        '  CGO_ENABLED=0 go build -o /tmp/omnipus-ci ./cmd/omnipus/',
-    );
-  }
+  // Note: the previous "Add user" presence check (assertUserManagementEmbedPresent
+  // semantics) was removed in the v0.1.0-foundation fix-up — UsersSection.tsx
+  // (859 lines) was deleted by commit d854b02 along with its test, so the
+  // literal "Add user" string is no longer in the SPA bundle. The user-crud
+  // e2e suite is now soft-skipped per https://github.com/elicify-ai/omnipus/issues/424.
+  // The previously-required "Add user" assertion was dead code that aborted
+  // every test calling startGateway() (including hot-reload, which never used
+  // the user-management UI) — see the v0.1.0-foundation post-merge run where
+  // every hot-reload prompt-guard test failed at 0ms with this same error.
+
 }
 
 /**
