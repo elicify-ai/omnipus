@@ -721,6 +721,54 @@ func (ts *turnState) appendAssistantTranscript(content string) {
 	}
 }
 
+// appendErrorTranscript writes a system entry to the JSONL transcript so a
+// later session replay can render the error after a page reload. The
+// `kind` parameter is the EventKind label that triggered the write
+// ("error" for a provider error, "rate_limit" for a rate-limit denial);
+// `stage` is the loop stage ("runTurn", "hooks", etc.); `message` is the
+// human-readable description.
+//
+// Used by recordRateLimitDenial and the LLM-call-error paths in loop.go to
+// satisfy FR-001 (rate_limit → transcript) and FR-002 (provider error →
+// transcript) of docs/internal/specs/phase-1-chat-model-and-errors.md.
+//
+// Silently no-ops when the turn has been abandoned or when no transcript
+// store is wired (matches appendAssistantTranscript's failure semantics — a
+// failed transcript write must NOT abort the in-flight turn).
+func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
+	if ts == nil {
+		return
+	}
+	if ts.abandoned.Load() {
+		abandonedWritesSuppressed.Add(1)
+		return
+	}
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
+		return
+	}
+	agentID := ts.resolveActiveAgentID()
+	entry := session.TranscriptEntry{
+		ID:        uuid.New().String(),
+		Type:      session.EntryTypeSystem,
+		AgentID:   agentID,
+		Content:   message,
+		Timestamp: time.Now().UTC(),
+		// Status="error" lets the replay path distinguish error entries from
+		// informational system entries (e.g. compaction summaries) without
+		// parsing the free-text Content.
+		Status: "error",
+	}
+	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
+		logger.WarnCF("agent", "could not record error to transcript",
+			map[string]any{
+				"session_id": ts.transcriptSessionID,
+				"event_kind": kind,
+				"stage":      stage,
+				"error":      err.Error(),
+			})
+	}
+}
+
 // SubTurn-related methods
 
 // Finish marks the turn as finished and closes the pendingResults channel.
