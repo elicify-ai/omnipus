@@ -281,10 +281,14 @@ func TestAgentInstance_GetProviderForCandidate_PoolHonorsPinnedProvider(t *testi
 	agent := &AgentInstance{
 		ID:       "mia",
 		Provider: primary,
-		ProviderPool: map[string]providers.LLMProvider{
-			"anthropic": anthropicProvider,
-		},
 	}
+	// Pool is published via StoreProviderPool (atomic.Pointer). Direct field
+	// assignment would be a race hazard with GetProviderForCandidate, so the
+	// exported API is the only supported publish path in production AND in
+	// tests.
+	agent.StoreProviderPool(map[string]providers.LLMProvider{
+		"anthropic": anthropicProvider,
+	})
 
 	got := agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: "anthropic", Model: "claude-haiku-4-5"})
 	if got != anthropicProvider {
