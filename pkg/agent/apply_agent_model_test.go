@@ -124,3 +124,80 @@ func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
 		t.Error("expected error for unknown agent id")
 	}
 }
+
+// TestApplyAgentModel_PassthroughModel_UpdatesInMemory covers Dataset 1 row 6
+// / TDD row 6 (BDD-4): the runtime MUST accept a model whose slug is not
+// registered as its own provider entry, when a passthrough provider (e.g.
+// openrouter) is configured. The bug being fixed (per the phase-1 spec §1.1
+// item 2): the UI shows passthrough-only slugs as available, but
+// ApplyAgentModel's old resolvedModelConfig rejected them, leaving the
+// in-memory agent stuck on the previous model.
+func TestApplyAgentModel_PassthroughModel_UpdatesInMemory(t *testing.T) {
+	t.Setenv("LOOP_APPLY_PASSTHROUGH_KEY", "passthrough-key")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				Provider:          "openai",
+				ModelName:         "local",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "local",
+				Model:     "openai/qwen",
+				APIBase:   "http://127.0.0.1:1",
+				APIKeyRef: "LOOP_APPLY_PASSTHROUGH_KEY",
+			},
+			{
+				ModelName: "z-ai/glm-5.2",
+				Model:     "z-ai/glm-5.2",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKeyRef: "LOOP_APPLY_PASSTHROUGH_KEY",
+			},
+		},
+	}
+
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+
+	before := al.GetRegistry().GetDefaultAgent()
+	if before == nil {
+		t.Fatal("no default agent")
+	}
+	id := before.ID
+	if before.Model != "local" {
+		t.Fatalf("initial model = %q, want local", before.Model)
+	}
+
+	// Apply a slug that is NOT registered as its own provider entry; the
+	// resolver must passthrough-route it via openrouter.
+	old, err := al.ApplyAgentModel(id, "z-ai/glm-5-turbo")
+	if err != nil {
+		t.Fatalf("ApplyAgentModel(passthrough) returned error: %v — FR-004 violated (FIX-2)", err)
+	}
+	if old != "local" {
+		t.Errorf("returned previous model = %q, want local", old)
+	}
+
+	after, ok := al.GetRegistry().GetAgent(id)
+	if !ok {
+		t.Fatal("agent vanished after ApplyAgentModel")
+	}
+	if after.Model != "z-ai/glm-5-turbo" {
+		t.Errorf("agent.Model after switch = %q, want z-ai/glm-5-turbo (FR-004 in-memory update)", after.Model)
+	}
+	if after.Provider == nil {
+		t.Fatal("agent.Provider is nil after successful switch (FR-004)")
+	}
+	if len(after.Candidates) == 0 {
+		t.Error("agent.Candidates is empty after successful switch (FR-004)")
+	}
+}
