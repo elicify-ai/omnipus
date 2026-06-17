@@ -2934,12 +2934,16 @@ export interface components {
             sandbox_profile?: "workspace" | "workspace+net" | "host" | "off";
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
-             * @description Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
+             * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007).
+             *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
-             *       "anthropic/claude-3.5-haiku"
+             *       {
+             *         "model": "claude-sonnet-4.6",
+             *         "provider": "anthropic"
+             *       }
              *     ]
              */
-            fallback_models?: string[];
+            fallback_models?: components["schemas"]["FallbackModel"][];
             model_params?: components["schemas"]["AgentModelParams"];
             rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
@@ -3333,12 +3337,16 @@ export interface components {
              */
             icon?: string;
             /**
-             * @description Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
+             * @description Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007).
+             *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
-             *       "anthropic/claude-3.5-haiku"
+             *       {
+             *         "model": "claude-sonnet-4.6",
+             *         "provider": "anthropic"
+             *       }
              *     ]
              */
-            fallback_models?: string[];
+            fallback_models?: components["schemas"]["FallbackModel"][];
             /** @description LLM sampling parameters applied to this agent's requests. */
             model_params?: {
                 /**
@@ -6534,6 +6542,23 @@ export interface components {
              * @example 2026-07-01T00:00:00Z
              */
             period_end: string;
+        };
+        /**
+         * @description One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
+         *     Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
+         *     Order matters — entries are tried in the order they appear in the parent's `fallback_models` array.
+         */
+        FallbackModel: {
+            /**
+             * @description Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
+             * @example claude-sonnet-4.6
+             */
+            model: string;
+            /**
+             * @description Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
+             * @example anthropic
+             */
+            provider?: string;
         };
         /**
          * @description Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.

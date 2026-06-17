@@ -119,6 +119,14 @@ func runExternalCLISubTurn(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Phase 1B FR-013: attribute the external-CLI sub-turn's transcript
+	// output to the agent's configured model. The external CLI runs its
+	// own LLM, but we record what model the agent would have used in the
+	// non-CLI path — consistent with how chat turns are attributed.
+	if agent != nil {
+		childTS.setLastProducedModel(strings.TrimSpace(agent.Model))
+	}
+
 	// SECURITY (Spec-4 FR-5.3 / SEC-23): the spawned external CLI must NOT inherit
 	// the full gateway environment — that would leak OMNIPUS_MASTER_KEY (and every
 	// other gateway secret) into a third-party binary. ScrubGatewayEnvForRunner
@@ -158,6 +166,19 @@ func runExternalCLISubTurn(
 
 	result := drainExternalRun(runCtx, childTS, runID, cli, out, consent)
 	return result, result.Err
+}
+
+// stampExternalDispatchModel sets the child's lastProducedModel so the
+// transcript writes from the external-CLI sub-turn attribute the output to
+// the delegated agent's primary model. The external CLI itself runs its own
+// LLM, but the model string we record is the agent's configured model —
+// consistent with how the chat path records the model that was selected at
+// turn start (FR-013 / Phase 1B).
+func stampExternalDispatchModel(childTS *turnState, model string) {
+	if childTS == nil {
+		return
+	}
+	childTS.setLastProducedModel(model)
 }
 
 // drainExternalRun consumes the runner's event stream, mirrors each event into the
