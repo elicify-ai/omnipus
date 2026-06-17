@@ -44,6 +44,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -375,7 +376,7 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 // We use the recordingSummaryProvider from switch_compress_test.go (same
 // package) — it captures the messages sent to the LLM. The opts map is
 // passed by summarizeDroppedTurns but not captured by chatCall, so we
-// assert the budget in the prompt text (which itoa-budgets the cap into).
+// assert the budget in the prompt text (which strconv.Itoa-budgets the cap into).
 func TestSummarizeDroppedTurns_Respects50PercentCap(t *testing.T) {
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
 	defer cleanup()
@@ -409,11 +410,11 @@ func TestSummarizeDroppedTurns_Respects50PercentCap(t *testing.T) {
 	call := recProv.chatCalls[0]
 
 	// The prompt itself includes the budget number, so we can lock the cap
-	// from the prompt text. messages[0].Content embeds itoa(summaryBudget),
+	// from the prompt text. messages[0].Content embeds strconv.Itoa(summaryBudget),
 	// which is newContextWindow/2 = 2000.
 	require.NotEmpty(t, call.Messages, "summary call must include a prompt")
 	prompt := call.Messages[0].Content
-	require.Contains(t, prompt, itoa(expectedMaxBudget),
+	require.Contains(t, prompt, strconv.Itoa(expectedMaxBudget),
 		"W2-20 #3: summarizeDroppedTurns must ask the LLM for ≤50%% of newContextWindow; "+
 			"expected prompt to mention %d tokens, got: %q", expectedMaxBudget, prompt)
 
@@ -421,7 +422,7 @@ func TestSummarizeDroppedTurns_Respects50PercentCap(t *testing.T) {
 	// in the budget clause. We check the prompt text embeds "2000" but
 	// not "4000" (or the substring "≤4000"). This catches a regression
 	// that sets the budget to newContextWindow instead of newContextWindow/2.
-	require.NotContains(t, prompt, "≤"+itoa(newContextWindow),
+	require.NotContains(t, prompt, "≤"+strconv.Itoa(newContextWindow),
 		"prompt must NOT request the full context window as the budget; got: %q", prompt)
 }
 

@@ -733,8 +733,10 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				sessionID = *f.SessionId
 			}
 			var modelName string
-			if f.Metadata.ModelName != nil {
-				modelName = *f.Metadata.ModelName
+			if v, ok := f.Metadata["model_name"].(string); ok {
+				if strings.TrimSpace(v) != "" {
+					modelName = v
+				}
 			}
 			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, f.Media, modelName, wc)
 		case string(generated.WsFrameTypeCancel):
