@@ -162,7 +162,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [model, setModel] = useState('')
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
   const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
-  const [fallbackModels, setFallbackModels] = useState<string[]>([])
+  const [fallbackModels, setFallbackModels] = useState<Array<{ model: string; provider?: string }>>([])
   const [fallbackInput, setFallbackInput] = useState('')
   const [temperature, setTemperature] = useState(1.0)
   const [maxTokens, setMaxTokens] = useState(4096)
@@ -318,8 +318,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   function addFallbackModel() {
     const trimmed = fallbackInput.trim()
-    if (!trimmed || fallbackModels.includes(trimmed)) return
-    setFallbackModels((prev) => [...prev, trimmed])
+    if (!trimmed || fallbackModels.some((f) => f.model === trimmed)) return
+    setFallbackModels((prev) => [...prev, { model: trimmed }])
     setFallbackInput('')
   }
 
@@ -684,13 +684,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   <div className="flex flex-wrap gap-1.5 p-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
                     {fallbackModels.map((m) => (
                       <span
-                        key={m}
+                        key={m.model}
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
                       >
-                        {m}
+                        {m.model}
+                        {m.provider ? <span className="text-[var(--color-muted)]"> · {m.provider}</span> : null}
                         <button
                           type="button"
-                          onClick={() => setFallbackModels((prev) => prev.filter((x) => x !== m))}
+                          onClick={() => setFallbackModels((prev) => prev.filter((x) => x.model !== m.model))}
                           className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
                         >
                           <X size={10} />

@@ -105,7 +105,12 @@ type Agent = {
     | ("workspace" | "workspace+net" | "host" | "off")
     | undefined;
   shell_policy?: AgentShellPolicy | undefined;
-  fallback_models?: Array<string> | undefined;
+  fallback_models?:
+    | Array<{
+        model: string;
+        provider?: string | undefined;
+      }>
+    | undefined;
   model_params?: AgentModelParams | undefined;
   rate_limits?: AgentRateLimits | undefined;
   stats?: AgentStats | undefined;
@@ -235,7 +240,7 @@ type AgentUpdateRequest = Partial<{
   }>;
   color: string;
   icon: string;
-  fallback_models: Array<string>;
+  fallback_models: Array<items>;
   model_params: Partial<{
     temperature: number;
     max_tokens: number;
@@ -254,6 +259,10 @@ type AgentUpdateRequest = Partial<{
   voice: string | null;
   executor: ExecutorConfig;
 }>;
+type items = {
+  model: string;
+  provider?: string | undefined;
+};
 type ChannelEntry = {
   id: ChannelId;
   instance_id?: string | undefined;
@@ -972,7 +981,17 @@ export const Agent: z.ZodType<Agent> = z
       .enum(["workspace", "workspace+net", "host", "off"])
       .optional(),
     shell_policy: AgentShellPolicy.optional(),
-    fallback_models: z.array(z.string()).max(10).optional(),
+    fallback_models: z
+      .array(
+        z
+          .object({
+            model: z.string().max(256),
+            provider: z.string().max(64).optional(),
+          })
+          .passthrough()
+      )
+      .max(10)
+      .optional(),
     model_params: AgentModelParams.optional(),
     rate_limits: AgentRateLimits.optional(),
     stats: AgentStats.optional(),
@@ -1047,6 +1066,12 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   voice: z.string().nullish(),
   executor: ExecutorConfig.optional(),
 });
+export const items: z.ZodType<items> = z
+  .object({
+    model: z.string().max(256),
+    provider: z.string().max(64).optional(),
+  })
+  .passthrough();
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
   .object({
     name: z.string().min(1),
@@ -1071,7 +1096,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
       .passthrough(),
     color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
     icon: z.string().max(50),
-    fallback_models: z.array(z.string()).max(10),
+    fallback_models: z.array(items).max(10),
     model_params: z
       .object({
         temperature: z.number(),

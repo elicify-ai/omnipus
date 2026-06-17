@@ -4611,6 +4611,11 @@ turnLoop:
 						map[string]any{"agent_id": ts.agent.ID, "iteration": iteration},
 					)
 				}
+				// Phase 1B FR-013: record the model that actually produced
+				// the response (may differ from the agent's primary model
+				// when a fallback candidate was used).
+				ts.setLastProducedModel(fbResult.Model)
+				ts.markLastStreamerProducedModel(fbResult.Model)
 				return fbResult.Response, nil
 			}
 			// Use streaming if the provider supports it and we have a streamer for this channel.
@@ -4641,9 +4646,14 @@ turnLoop:
 					// after the last LLM call, preventing premature "done" frames
 					// that tell the frontend the response is complete mid-turn.
 					ts.setLastStreamer(streamer)
+					ts.setLastProducedModel(llmModel)
+					// FR-013: also push to the streamer so Finalize stamps the
+					// per-turn Model field on the streamed assistant entry.
+					ts.markLastStreamerProducedModel(llmModel)
 					return resp, streamErr
 				}
 			}
+			ts.setLastProducedModel(llmModel)
 			return activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts)
 		}
 

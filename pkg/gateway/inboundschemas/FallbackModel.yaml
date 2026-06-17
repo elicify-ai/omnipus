@@ -1,0 +1,30 @@
+type: object
+description: >
+  One entry in an agent's fallback model chain. Carries its own provider so
+  the fallback can route through a different provider than the primary
+  (FR-007 / Phase 1B).
+
+  Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
+
+  Order matters — entries are tried in the order they appear in the parent's
+  `fallback_models` array.
+required:
+  - model
+properties:
+  model:
+    type: string
+    maxLength: 256
+    description: >
+      Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6")
+      when `provider` is set, or a "provider/model" string when the
+      slug routes through a passthrough provider.
+    example: "claude-sonnet-4.6"
+  provider:
+    type: string
+    maxLength: 64
+    description: >
+      Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the
+      fallback uses this provider's API credentials — independent of the
+      agent's primary model's provider. This is the FR-007 contract: a
+      rate-limited primary does NOT poison the fallback's provider.
+    example: "anthropic"

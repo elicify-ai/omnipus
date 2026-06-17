@@ -161,6 +161,28 @@ type turnState struct {
 	// a system message {type: "turn_aborted", reason: "synthetic_error_loop"}.
 	// The counter resets per turn (initialized to zero here).
 	syntheticErrorCount int
+
+	// lastProducedModel is the model string that produced the most recent
+	// assistant message in this turn. Set after each successful LLM call in
+	// loop.go (and external_dispatch.go for CLI providers). The transcript
+	// write sites read this to stamp the per-turn Model field on every
+	// assistant entry (FR-013).
+	//
+	// NOTE: written and read on the same goroutine as the LLM call sequence
+	// (no cross-goroutine access); no synchronization needed. For the
+	// streaming path, setLastProducedModel is called by the streamer wrapper
+	// after each chat completes.
+	lastProducedModel string
+}
+
+// setLastProducedModel stamps the model that produced the most recent
+// successful LLM call. Used by transcript writes to attribute the response
+// to the correct model (FR-013).
+func (ts *turnState) setLastProducedModel(model string) {
+	if ts == nil {
+		return
+	}
+	ts.lastProducedModel = model
 }
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
@@ -407,6 +429,23 @@ func (ts *turnState) setLastStreamer(s bus.Streamer) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.lastStreamer = s
+}
+
+// markLastStreamerProducedModel stamps the model that produced the response
+// on the active streamer. The streamer's Finalize writes the assistant
+// transcript entry directly (bypassing appendAssistantTranscript); we push
+// the model there so the entry carries the per-turn Model field (FR-013).
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-streaming-transcript streamers (telegram, wecom, sse, manager)
+// are untouched; only wsStreamer implements SetProducedModel.
+func (ts *turnState) markLastStreamerProducedModel(model string) {
+	ts.mu.RLock()
+	s := ts.lastStreamer
+	ts.mu.RUnlock()
+	if pm, ok := s.(interface{ SetProducedModel(string) }); ok && s != nil {
+		pm.SetProducedModel(model)
+	}
 }
 
 // markLastStreamerTranscriptPersisted tells the active streamer that the agent
@@ -677,6 +716,7 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string) {
 		AgentID:   agentID,
 		Content:   content,
 		Timestamp: time.Now().UTC(),
+		Model:     ts.lastProducedModel,
 		// Tokens and Cost are intentionally 0 — the turn total is attributed to
 		// the final assistant entry only. See appendAssistantTranscript.
 	}
@@ -714,6 +754,7 @@ func (ts *turnState) appendAssistantTranscript(content string) {
 		Timestamp: time.Now().UTC(),
 		Tokens:    int(turnTokens),
 		Cost:      turnCost,
+		Model:     ts.lastProducedModel,
 	}
 	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
 		logger.WarnCF("agent", "could not record assistant message to transcript",
