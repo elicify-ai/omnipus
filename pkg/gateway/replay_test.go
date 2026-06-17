@@ -23,6 +23,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
+	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 )
 
@@ -1043,3 +1044,231 @@ func TestLiveEventForwarder_ToolCallStart_CarriesAgentID(t *testing.T) {
 	eb.Unsubscribe(sub.ID)
 	<-eventDone
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 1B (FR-013/FR-014): per-turn model field on ReplayMessageFrame
+// ─────────────────────────────────────────────────────────────────────────────
+
+// assistantEntryWithModel builds a simple assistant TranscriptEntry carrying a
+// populated Model field (Phase 1B, FR-013). Mirrors the shape written by
+// pkg/agent/turn.go since Phase 1B landed.
+func assistantEntryWithModel(content, agentID, model string) session.TranscriptEntry {
+	return session.TranscriptEntry{
+		ID:      "entry-model-" + agentID + model + content,
+		Role:    "assistant",
+		Content: content,
+		AgentID: agentID,
+		Model:   model,
+	}
+}
+
+// TestReplay_AssistantWithModel_CarriesModelField verifies that a transcript
+// entry whose Model field is populated emits a ReplayMessageFrame carrying
+// that model string in its model field. Without this wire-up the SPA would
+// silently drop the model label after Phase 1B made it per-turn.
+//
+// Traces to: Phase 1B FR-013/FR-014, W2-5 (backend half).
+func TestReplay_AssistantWithModel_CarriesModelField(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		assistantEntryWithModel("hello there", "ray", "z-ai/glm-5-turbo"),
+	}
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "z-ai/glm-5-turbo", msg.Model,
+		"replay_message must carry entry.Model when populated (Phase 1B FR-013)")
+
+	// Verify the JSON wire shape carries the key (omitempty is on the Go side,
+	// but the generated type uses *string so an explicit string would marshal
+	// the key when set).
+	raw, err := json.Marshal(msg)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"model":"z-ai/glm-5-turbo"`,
+		"JSON wire must include model when populated")
+}
+
+// TestReplay_AssistantEmptyModel_OmitsField verifies that a legacy assistant
+// entry without a populated Model field produces a ReplayMessageFrame that
+// omits the model key entirely (omitempty / *string → nil). The SPA's
+// "(model not recorded)" placeholder (FR-014) renders only when the field
+// is absent on the wire.
+//
+// Traces to: Phase 1B FR-014, W2-5 (backend half).
+func TestReplay_AssistantEmptyModel_OmitsField(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		assistantEntry("legacy message", "ray"), // Model empty
+	}
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Empty(t, msg.Model, "model must be empty when entry.Model is empty (legacy turns)")
+
+	// Verify the JSON wire shape does NOT include the model key.
+	raw, err := json.Marshal(msg)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"model"`,
+		"JSON wire must omit model key when entry.Model is empty (FR-014 placeholder)")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 1B (FR-014): typed ReplayErrorFrame for system-error entries
+// ─────────────────────────────────────────────────────────────────────────────
+
+// systemErrorEntry builds a system transcript entry representing an error
+// event written by pkg/agent/turn.go::appendErrorTranscript. The replay path
+// must convert this into a ReplayErrorFrame so the SPA renders a typed error
+// component instead of an empty-Role ReplayMessageFrame.
+func systemErrorEntry(content, agentID string) session.TranscriptEntry {
+	return session.TranscriptEntry{
+		ID:        "entry-error-" + agentID + content,
+		Type:      session.EntryTypeSystem,
+		Role:      "",
+		Content:   content,
+		AgentID:   agentID,
+		Timestamp: time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
+		Status:    "error",
+	}
+}
+
+// TestReplay_SystemErrorRateLimit_EmitsReplayErrorFrame verifies that a
+// system entry with Status="error" and Content starting with "rate limit:"
+// produces a ReplayErrorFrame (not ReplayMessageFrame) with kind=rate_limit.
+// Without this, the SPA falls back to assistant render and shows the
+// rate-limit text as a regular bubble.
+//
+// Traces to: W2-16, FR-014.
+func TestReplay_SystemErrorRateLimit_EmitsReplayErrorFrame(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		systemErrorEntry("rate limit: daily_quota (retry after 30s)", "ray"),
+	}
+	frames, _ := runReplay(t, entries)
+
+	// Exactly one replay_error frame (no replay_message).
+	require.Equal(t, []string{"replay_error", "done"}, frameTypes(frames),
+		"system-error entries must emit replay_error, NOT replay_message")
+
+	// Decode the raw JSON to the generated type for full wire fidelity.
+	require.Len(t, frames, 2)
+	typed := decodeReplayErrorFrame(t, frames[0])
+	assert.Equal(t, "rate_limit", typed.Kind,
+		"replay_error.kind must be \"rate_limit\" when content starts with \"rate limit:\"")
+	assert.Contains(t, typed.Message, "rate limit",
+		"replay_error.message must carry the original transcript content verbatim")
+	require.NotNil(t, typed.Payload.RetryAfterSeconds,
+		"rate_limit error payload must include retry_after_seconds")
+	assert.InDelta(t, 30.0, *typed.Payload.RetryAfterSeconds, 0.0001)
+}
+
+// TestReplay_SystemErrorGeneric_EmitsReplayErrorFrame verifies that a system
+// entry with Status="error" and a non-rate-limit Content produces a
+// ReplayErrorFrame with kind=error. Same wire path as the rate-limit case
+// but the SPA picks the generic error component instead of the rate-limit
+// banner.
+//
+// Traces to: W2-16, FR-014.
+func TestReplay_SystemErrorGeneric_EmitsReplayErrorFrame(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		systemErrorEntry("LLM call failed after retries: provider timeout", "ray"),
+	}
+	frames, _ := runReplay(t, entries)
+
+	require.Equal(t, []string{"replay_error", "done"}, frameTypes(frames),
+		"system-error entries must emit replay_error, NOT replay_message")
+
+	typed := decodeReplayErrorFrame(t, frames[0])
+	assert.Equal(t, "error", typed.Kind,
+		"replay_error.kind must be \"error\" for non-rate-limit system errors")
+	assert.Contains(t, typed.Message, "LLM call failed")
+}
+
+// TestReplay_SystemNonError_StillEmitsReplayMessage verifies that the
+// ReplayErrorFrame path is ONLY triggered for Status="error" entries.
+// Informational system entries (e.g. compaction summaries with empty Status)
+// must still flow through the replay_message path so they render in the
+// conversation thread.
+//
+// Traces to: W2-16 — only Status="error" routes to ReplayErrorFrame.
+func TestReplay_SystemNonError_StillEmitsReplayMessage(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		{
+			ID:        "entry-info",
+			Type:      session.EntryTypeSystem,
+			Role:      "system",
+			Content:   "compaction summary: 5 turns dropped",
+			Timestamp: time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
+			// Status empty — informational, not an error
+		},
+	}
+	frames, _ := runReplay(t, entries)
+
+	require.Equal(t, []string{"replay_message", "done"}, frameTypes(frames),
+		"informational system entries must NOT route to replay_error")
+	assert.Nil(t, findFrame(frames, "replay_error"),
+		"non-error system entries must not emit replay_error")
+}
+
+// TestReplay_SystemError_EntryIDAndAgentIDPropagated verifies that the
+// replay_error frame carries the entry ID (so the SPA can dedup against live
+// entries on WS reconnect) and the agent ID (so multi-agent sessions can
+// route the error to the right agent's timeline).
+//
+// Traces to: W2-16 — wire fidelity.
+func TestReplay_SystemError_EntryIDAndAgentIDPropagated(t *testing.T) {
+	entry := systemErrorEntry("rate limit: per_agent_quota (retry after 60s)", "ray")
+	entry.ID = "entry-fixed-id-123"
+	entries := []session.TranscriptEntry{entry}
+	frames, _ := runReplay(t, entries)
+
+	typed := decodeReplayErrorFrame(t, frames[0])
+	assert.Equal(t, "entry-fixed-id-123", typed.EntryId,
+		"replay_error.entry_id must equal entry.ID for dedup")
+	require.NotNil(t, typed.AgentId)
+	assert.Equal(t, "ray", *typed.AgentId,
+		"replay_error.agent_id must be propagated when present")
+}
+
+// decodeReplayErrorFrame re-marshals the decoder struct to JSON and decodes
+// it back into the generated.ReplayErrorFrame so tests assert full wire
+// fidelity (exact JSON key shape) rather than the decoder's collapsed view.
+func decodeReplayErrorFrame(t *testing.T, frame replayFrameDecoder) generated.ReplayErrorFrame {
+	t.Helper()
+	rawJSON, err := json.Marshal(frame)
+	require.NoError(t, err)
+	var typed generated.ReplayErrorFrame
+	require.NoError(t, json.Unmarshal(rawJSON, &typed))
+	return typed
+}
+
+// TestParseRetryAfterSeconds covers the unit-level helper that extracts a
+// "(retry after Ns)" parenthetical from rate-limit content into a typed
+// retry_after_seconds. Edge cases: missing, malformed, multiple matches.
+//
+// Traces to: W2-16 — ReplayErrorFrame.Payload.RetryAfterSeconds.
+func TestParseRetryAfterSeconds(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    *float64
+	}{
+		{"happy path", "rate limit: daily_quota (retry after 30s)", ptrF(30)},
+		{"decimal", "rate limit: x (retry after 0.5s)", ptrF(0.5)},
+		{"missing parenthetical", "rate limit: daily_quota", nil},
+		{"malformed", "rate limit: x (retry after 30)", nil},
+		{"empty", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseRetryAfterSeconds(tc.content)
+			if tc.want == nil {
+				assert.Nil(t, got, "expected nil for %q", tc.content)
+				return
+			}
+			require.NotNil(t, got, "expected non-nil for %q", tc.content)
+			assert.InDelta(t, *tc.want, *got, 0.0001)
+		})
+	}
+}
+
+func ptrF(f float64) *float64 { return &f }

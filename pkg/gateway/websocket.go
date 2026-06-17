@@ -93,6 +93,16 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	SpanID       string `json:"span_id,omitempty"`
 	ParentCallID string `json:"parent_call_id,omitempty"`
 	TaskLabel    string `json:"task_label,omitempty"`
+	// Phase 1B (FR-013/FR-014): per-turn model on replay_message.
+	Model string `json:"model,omitempty"`
+	// Phase 1B (FR-014): ReplayErrorFrame wire fields. Decoder-only — production
+	// code uses the generated type directly. The `Message` field above (the
+	// legacy ErrorFrame.message) doubles as the replay_error.message sink
+	// since both frames use the same wire key. We just need an additional
+	// `kind`, `entry_id`, and `payload` decoder slot.
+	ErrorKind    string         `json:"kind,omitempty"`
+	ErrorEntryID string         `json:"entry_id,omitempty"`
+	ErrorPayload map[string]any `json:"payload,omitempty"`
 }
 
 // WSHandler handles the /api/v1/chat/ws WebSocket endpoint for bi-directional
@@ -722,7 +732,11 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			if f.SessionId != nil {
 				sessionID = *f.SessionId
 			}
-			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, f.Media, wc)
+			var modelName string
+			if f.Metadata.ModelName != nil {
+				modelName = *f.Metadata.ModelName
+			}
+			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, f.Media, modelName, wc)
 		case string(generated.WsFrameTypeCancel):
 			var f generated.CancelFrame
 			if err := json.Unmarshal(data, &f); err != nil {
@@ -893,6 +907,11 @@ func wsFrameSchemaName(frameType string) string {
 
 // handleChatMessage mints a new session when frame.SessionID is empty, records
 // every user message to the transcript, and publishes the message to the bus.
+//
+// modelName, when non-empty and non-whitespace, is forwarded to the agent loop
+// as msg.Metadata["model_name"] so the per-turn switch (Phase 1, FR-010) routes
+// THIS message to the chosen model instead of the agent's default. Whitespace-only
+// or empty values are treated as absent — the agent falls back to its configured model.
 func (h *WSHandler) handleChatMessage(
 	ctx context.Context,
 	chatID string,
@@ -900,6 +919,7 @@ func (h *WSHandler) handleChatMessage(
 	content string,
 	agentID string,
 	mediaRefs []string,
+	modelName string,
 	wc *wsConn,
 ) {
 	targetAgentID := agentID
@@ -1120,6 +1140,18 @@ func (h *WSHandler) handleChatMessage(
 			return
 		}
 		msg.Metadata = map[string]string{"agent_id": agentID}
+	}
+	// FR-010: forward per-turn model override to the bus so the agent loop's
+	// switch-compress path can route THIS turn to the chosen model. Trim
+	// whitespace first; empty / whitespace-only values are dropped so the agent
+	// falls back to its configured model. The map is created lazily here so a
+	// model_name-only frame still produces a populated Metadata on the wire.
+	trimmedModel := strings.TrimSpace(modelName)
+	if trimmedModel != "" {
+		if msg.Metadata == nil {
+			msg.Metadata = map[string]string{}
+		}
+		msg.Metadata["model_name"] = trimmedModel
 	}
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

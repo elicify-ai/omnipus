@@ -27,6 +27,7 @@ export type WsFrameType =
   | "exec_approval_expired"
   | "task_status_changed"
   | "replay_message"
+  | "replay_error"
   | "rate_limit"
   | "media"
   | "agent_switched"
@@ -223,6 +224,25 @@ export interface ReplayMessageFrame {
   id?: string;
   timestamp?: string;
   agent_id?: string;
+  model?: string;
+}
+
+export interface ReplayErrorFrame {
+  type: "replay_error";
+  session_id: string;
+  entry_id: string;
+  timestamp: string;
+  kind: "rate_limit" | "error";
+  message: string;
+  agent_id?: string;
+  payload?: {
+    retry_after_seconds?: number;
+    policy_rule?: string;
+    scope?: string;
+    resource?: string;
+    tool?: string;
+    stage?: string;
+  };
 }
 
 export interface RateLimitFrame {
@@ -393,6 +413,7 @@ export type WsFrame =
   | ExecApprovalRequestFrame
   | TaskStatusChangedFrame
   | ReplayMessageFrame
+  | ReplayErrorFrame
   | RateLimitFrame
   | MediaFrame
   | AgentSwitchedFrame
@@ -443,6 +464,7 @@ export type ServerFrame =
   | ExecApprovalRequestFrame
   | TaskStatusChangedFrame
   | ReplayMessageFrame
+  | ReplayErrorFrame
   | RateLimitFrame
   | MediaFrame
   | AgentSwitchedFrame

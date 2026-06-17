@@ -6290,7 +6290,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "exec_approval_expired", "task_status_changed", "replay_message", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "exec_approval_response_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "exec_approval_expired", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "exec_approval_response_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification"]);
 
 export const AuthFrame = z
   .object({
@@ -6512,6 +6512,29 @@ export const ReplayMessageFrame = z
     id: z.string().optional(),
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),
+    model: z.string().max(256).optional(),
+  })
+  .strict();
+
+export const ReplayErrorFrame = z
+  .object({
+    type: z.literal("replay_error"),
+    session_id: z.string().min(1),
+    entry_id: z.string(),
+    timestamp: z.string(),
+    kind: z.enum(["rate_limit", "error"]),
+    message: z.string(),
+    agent_id: z.string().optional(),
+    payload: z
+    .object({
+      retry_after_seconds: z.number().optional(),
+      policy_rule: z.string().optional(),
+      scope: z.string().optional(),
+      resource: z.string().optional(),
+      tool: z.string().optional(),
+      stage: z.string().optional(),
+    })
+    .strict().optional(),
   })
   .strict();
 
@@ -6718,6 +6741,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   ExecApprovalRequestFrame,
   TaskStatusChangedFrame,
   ReplayMessageFrame,
+  ReplayErrorFrame,
   RateLimitFrame,
   MediaFrame,
   AgentSwitchedFrame,
