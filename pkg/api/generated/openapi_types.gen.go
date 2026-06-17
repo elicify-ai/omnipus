@@ -3637,13 +3637,7 @@ type Agent struct {
 
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007).
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
-	FallbackModels *[]struct {
-		// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
-		Model string `json:"model"`
-
-		// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
-		Provider *string `json:"provider,omitempty"`
-	} `json:"fallback_models,omitempty"`
+	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
 	// Heartbeat Contents of HEARTBEAT.md — periodic background instructions. Empty string when not set. Always present on detail responses (never null).
 	Heartbeat string `json:"heartbeat"`
@@ -3874,13 +3868,7 @@ type AgentCreateRequest struct {
 
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007).
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
-	FallbackModels *[]struct {
-		// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
-		Model string `json:"model"`
-
-		// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
-		Provider *string `json:"provider,omitempty"`
-	} `json:"fallback_models,omitempty"`
+	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
@@ -4288,13 +4276,7 @@ type AgentUpdateRequest struct {
 
 	// FallbackModels Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007).
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
-	FallbackModels *[]struct {
-		// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
-		Model string `json:"model"`
-
-		// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
-		Provider *string `json:"provider,omitempty"`
-	} `json:"fallback_models,omitempty"`
+	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
 	// Heartbeat New HEARTBEAT.md content. Rejected on locked agents. Writing this triggers a config reload.
 	Heartbeat *string `json:"heartbeat,omitempty"`
