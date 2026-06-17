@@ -23,7 +23,7 @@
  * The `useOmnipusRuntime` hook is exercised in
  * `omnipus-runtime.attachments.test.tsx` — these tests focus on the
  * per-message conversion output shape and ensure no dead `metadata.custom`
- * write is reintroduced (W2-30).
+ * write is reintroduced.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -51,10 +51,10 @@ function makeAssistantMsg(overrides: Partial<ChatMessage> = {}): ChatMessage {
 
 describe('convertMessage — per-turn model field (FR-014)', () => {
   it('does not write a metadata.custom.model wrapper for turns that have a model', () => {
-    // W2-30: the runtime no longer writes `metadata.custom.model`. The
-    // renderer (MessageItem, VirtualAssistantMessageRow) reads the model
-    // off the ChatMessage directly, so a metadata write is dead code
-    // and the previous field is asserted absent.
+    // The runtime no longer writes `metadata.custom.model`. The renderer
+    // (MessageItem, VirtualAssistantMessageRow) reads the model off the
+    // ChatMessage directly, so a metadata write is dead code and the
+    // previous field is asserted absent.
     const msg = makeAssistantMsg({ model: 'z-ai/glm-5.2' })
     const out = convertMessage(
       msg,

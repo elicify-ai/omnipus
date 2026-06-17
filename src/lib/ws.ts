@@ -179,13 +179,13 @@ function _maybeDevToast(frameType: string, message: string): void {
   void maybeDevToast(message, frameType)
 }
 
-// W2-36: increment the dropped-frame counter AND emit a production
-// telemetry event. Rate-limited inside logError so a contract-drift
-// flood doesn't spam the log collector. Dev builds skip telemetry
-// (they already get the toast + console output above).
+// Increment the dropped-frame counter AND emit a production telemetry
+// event. Rate-limited inside logError so a contract-drift flood doesn't
+// spam the log collector. Dev builds skip telemetry (they already get the
+// toast + console output above).
 function _recordDropped(frameType: string, reason: string): void {
   _droppedFrameCount++
-  if (!import.meta.env.DEV) {
+  if (!import.meta.env.DEV && import.meta.env.MODE !== 'test') {
     logError({
       event: 'wsFrameDropped',
       frameType,
@@ -306,6 +306,25 @@ function _parseServerFrame(data: unknown): ServerFrame | null {
   // Try strict schema validation first.
   const result = WsFrameSchema.safeParse(raw)
   if (result.success) {
+    // Dev-only drift detector: MessageFrame.metadata is intentionally open
+    // (forward-compat). When the server starts sending new optional metadata
+    // keys (e.g. request_id, traceparent), strict-validation can NEVER catch
+    // them — additionalProperties:true + .passthrough() accepts them silently.
+    // List any extras in the dev console so the drift is grep-able instead of
+    // silent. Production builds (DEV=false, MODE!=='test') never log.
+    // This fires before the direction filter so it also catches drift on
+    // echo-back / injection frames used in dev testing.
+    if (import.meta.env.DEV) {
+      const meta = (raw as { metadata?: unknown }).metadata
+      if (meta && typeof meta === 'object') {
+        const known = new Set(['model_name'])
+        const extras = Object.keys(meta as Record<string, unknown>).filter((k) => !known.has(k))
+        if (extras.length > 0) {
+          // eslint-disable-next-line no-console
+          console.debug(`[ws-debug] extra metadata keys: ${extras.join(', ')}`)
+        }
+      }
+    }
     // Direction filter: client→server frames that somehow passed Zod must be
     // dropped. A spoofed `{type:"auth",token:"x"}` is spec-valid but must not
     // reach the SPA reducer.

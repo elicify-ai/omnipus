@@ -47,7 +47,6 @@ import {
   fetchActivity,
   fetchSkills,
   isWorker,
-  type Agent,
   type AgentSession,
   type ActivityEvent,
   type AgentToolsCfg,
@@ -58,6 +57,7 @@ import {
 import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { AVATAR_COLORS } from '@/lib/constants'
+import type { FallbackModel } from '@/lib/api/generated/openapi-types'
 
 const ICON_OPTIONS = [
   { name: 'Robot', component: Robot },
@@ -82,17 +82,8 @@ function getIconComponent(name: string | undefined) {
   return match?.component ?? Robot
 }
 
-/**
- * One entry in the agent's fallback chain. Mirrors the wire shape
- * (derived from `Agent['fallback_models'][number]`) but narrows
- * `provider` to required so the editor and the auto-save payload can
- * share a single type without `?` chains. At hydration we look up the
- * provider from `modelToProvider`; if that fails we fall back to ''
- * and the chip renders a muted dash. When the openapi-types re-export
- * adds a top-level `FallbackModel`, this alias becomes a one-liner
- * `FallbackModel & { provider: string }`.
- */
-type FallbackEntry = NonNullable<Agent['fallback_models']>[number] & { provider: string }
+/** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
+type FallbackEntry = FallbackModel & { provider: string }
 
 interface AgentProfileProps {
   /**
