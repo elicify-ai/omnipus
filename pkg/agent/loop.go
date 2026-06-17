@@ -6547,10 +6547,10 @@ func buildSyntheticSwitchMessage(oldModel, newModel, summary string, timestamp t
 //  2. Estimate the current conversation size.
 //  3. If decideSwitchCompressAction says Compress:
 //     - call summarizeDroppedTurns with the dropped turns (oldest first,
-//       after a single forceCompression pass that splits at a Turn
-//       boundary and keeps the most recent half);
+//     after a single forceCompression pass that splits at a Turn
+//     boundary and keeps the most recent half);
 //     - on LLM error, fall back to the existing forceCompression path and
-//       emit a warn-level log;
+//     emit a warn-level log;
 //     - prepend the synthetic system message to the kept history;
 //     - persist the session.
 //  4. Update agent.Model to the new model and return the agent for the
@@ -6648,11 +6648,11 @@ func (al *AgentLoop) handleModelSwitch(
 		}
 		logger.InfoCF("agent", "switch-time compress completed",
 			map[string]any{
-				"session_key":    sessionKey,
-				"old_model":      oldModel,
-				"new_model":      newModel,
-				"dropped":        len(dropped),
-				"kept":           len(kept),
+				"session_key":     sessionKey,
+				"old_model":       oldModel,
+				"new_model":       newModel,
+				"dropped":         len(dropped),
+				"kept":            len(kept),
 				"synthetic_chars": len(synthetic.Content),
 			})
 	}
