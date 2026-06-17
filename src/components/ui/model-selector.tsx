@@ -48,6 +48,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder ?? 'Enter model slug (e.g. MiniMax-M2.7)'}
+        aria-label="Model slug"
         disabled={disabled}
         {...(triggerTestId ? { 'data-testid': triggerTestId } : {})}
         className="font-mono text-sm"
@@ -99,6 +100,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           type="button"
           role="combobox"
           aria-expanded={open}
+          aria-label={value ? `Model selector, currently ${value}` : `Model selector, ${displayValue}`}
           disabled={disabled}
           data-testid={triggerTestId}
           className="flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50"
