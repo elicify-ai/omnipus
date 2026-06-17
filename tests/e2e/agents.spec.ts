@@ -10,19 +10,26 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/#/agents');
 });
 
-test('(a) roster loads with 5 core agents (Mia/Jim/Ava/Ray/Max) plus any custom', async ({
+// (a) roster test was updated for the v0.1.0-foundation 4-base roster (Mia/Jim/Ava/Ray).
+// Max was retired per the .preview-doc/ concept (see pkg/coreagent/core.go: "IDMax is
+// intentionally absent: Max was retired from the 4-base roster"). The 4-base roster
+// replaces the legacy 5-core roster (Mia/Jim/Ava/Ray/Max).
+test('(a) roster loads with 4 base agents (Mia/Jim/Ava/Ray) plus any custom', async ({
   page,
 }) => {
   await expect(page).toHaveURL(/agents/, { timeout: 10_000 });
 
-  // Verify each core agent name appears in the page body
-  for (const name of ['Mia', 'Jim', 'Ava', 'Ray', 'Max']) {
+  // Verify each base agent name appears in the page body
+  for (const name of ['Mia', 'Jim', 'Ava', 'Ray']) {
     await expect(page.locator('body')).toContainText(new RegExp(name, 'i'), { timeout: 15_000 });
   }
 
+  // Max is intentionally NOT seeded — see .preview-doc/ for the retirement rationale.
+  await expect(page.locator('body')).not.toContainText(/^Max$/m);
+
   // AgentCard renders button[aria-label="View agent {name}"] (AgentCard.tsx:29)
   await expect(agentCards(page).first()).toBeVisible({ timeout: 10_000 });
-  expect(await agentCards(page).count()).toBeGreaterThanOrEqual(5);
+  expect(await agentCards(page).count()).toBeGreaterThanOrEqual(4);
 
   await expectA11yClean(page);
 });

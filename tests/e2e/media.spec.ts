@@ -9,23 +9,27 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
+// (a) screenshot test was updated for the v0.1.0-foundation 4-base roster.
+// Max was retired per the .preview-doc/ concept (see pkg/coreagent/core.go).
+// Switched to Mia (the Assistant), the canonical default agent, which has the
+// web_search / browser tools and is what an end-user would actually use.
 test(
-  '(a) screenshot inline render: Max screenshots example.com and renders an img',
+  '(a) screenshot inline render: Mia screenshots example.com and renders an img',
   async ({ page }) => {
     // test.slow() triples the global 90s test timeout to 270s. The screenshot
     // flow exercises the LLM (tool selection) + Chromium (screenshot) +
     // SPA (media render). End-to-end can take 60-120s under suite load even
     // though every layer alone is sub-30s.
     test.slow();
-    // Select Max agent via the agent picker dropdown
+    // Select Mia agent via the agent picker dropdown
     const picker = agentPicker(page);
     await expect(picker).toBeVisible({ timeout: 15_000 });
     await picker.click();
 
-    // Find Max in the dropdown items (Radix DropdownMenuItem)
-    const maxItem = page.locator('[role="menuitem"]').filter({ hasText: /max/i }).first();
-    await expect(maxItem).toBeVisible({ timeout: 10_000 });
-    await maxItem.click();
+    // Find Mia in the dropdown items (Radix DropdownMenuItem)
+    const miaItem = page.locator('[role="menuitem"]').filter({ hasText: /mia/i }).first();
+    await expect(miaItem).toBeVisible({ timeout: 10_000 });
+    await miaItem.click();
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 10_000 });
