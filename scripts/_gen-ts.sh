@@ -139,6 +139,57 @@ ASYNCAPI_FRAG_STRIPPED=$(grep -v '^// @ts-nocheck' "$ASYNCAPI_FRAG" | grep -v '^
   printf '%s\n' "$ASYNCAPI_FRAG_STRIPPED"
 } > "$GEN/schemas.ts"
 rm -f "$GEN/_schemas.generated.tmp.ts"
+
+# ── Inject rationale comments for schemas with a non-default validation policy.
+# The codegen faithfully reflects the YAML, but the rationale for *why* a
+# schema diverges from the project default lives in YAML comments that do not
+# survive into the generated artifact. Mirror the rationale next to the schema
+# so the policy is grep-able from src/lib/api/generated/schemas.ts as well as
+# from contracts/components/schemas/*.yaml.
+#   - MessageFrame.metadata: passthrough (open). Forward-compat extension
+#     channel. See contracts/components/schemas/MessageFrame.yaml.
+node - "$GEN/schemas.ts" <<'NODE_SCRIPT'
+const fs = require("fs");
+const path = process.argv[2];
+const src = fs.readFileSync(path, "utf8");
+
+const POLICY_COMMENTS = {
+  MessageFrame: `// ── Validation policy note (mirrors MessageFrame.yaml) ────────────────────────
+// Outer MessageFrame is .strict(): unknown top-level keys are rejected (a
+// server-added field surfaces as a visible schema failure, debuggable).
+// The nested \`metadata\` object is intentionally .passthrough(): it is the
+// wire's forward-compat extension channel. Adding a new optional metadata
+// field server-side must NOT break already-shipped SPA clients — strict()
+// would. Drift on a *newly required* metadata field is caught by the
+// W2-29 outbound validator (src/lib/ws.ts) the moment the server starts
+// requiring it. Inbound, the dev-mode console.debug in
+// src/lib/ws.ts::_parseServerFrame lists any extra metadata keys so
+// drift is grep-able even though strict-validation is off.
+// See contracts/components/schemas/MessageFrame.yaml for the full rationale.
+`,
+};
+
+let out = src;
+for (const [name, comment] of Object.entries(POLICY_COMMENTS)) {
+  // Anchor: insert *after* the entire `export const <name> = z … ;` block
+  // ends. The codegen emits each definition as a chained expression ending
+  // with `;` — possibly with intermediate calls like `.passthrough().optional()`.
+  // Match the shortest span from `export const <name>` to the next `;\n` that
+  // sits on its own line.
+  const re = new RegExp(`(export const ${name} = z[\\s\\S]*?;\\n)`, "m");
+  if (!re.test(out)) {
+    console.warn(`  WARN: could not find ${name} definition to annotate`);
+    continue;
+  }
+  out = out.replace(re, `$1\n${comment}`);
+}
+
+if (out !== src) {
+  fs.writeFileSync(path, out, "utf8");
+  console.log(`  Injected policy comments for: ${Object.keys(POLICY_COMMENTS).join(", ")}`);
+}
+NODE_SCRIPT
+
 echo "  Written: $GEN/schemas.ts"
 
 # ── Quality gates ─────────────────────────────────────────────────────────────

@@ -47,10 +47,26 @@ properties:
       maxLength: 256
   metadata:
     type: object
-    # additionalProperties: true — forward-compat. The metadata object
-    # is the wire's extension channel (currently model_name, but future
-    # fields like request_id, traceparent, etc. land here). strict()
-    # would silently reject future fields and break the SPA mid-rollout.
+    # additionalProperties: true — forward-compat, by design.
+    # The metadata object is the wire's extension channel (currently
+    # model_name, but future fields like request_id, traceparent, etc.
+    # land here). strict() would silently reject future fields and break
+    # the SPA mid-rollout.
+    #
+    # Validation policy is ASYMMETRIC across the boundary:
+    #   - Outer MessageFrame is strict (additionalProperties: false) —
+    #     the SPA rejects unknown top-level keys, so server-added fields
+    #     land as a hard schema failure (visible, debuggable).
+    #   - This nested `metadata` object is open (passthrough) — the SPA
+    #     accepts unknown future keys without breaking, so the rollout
+    #     of a new optional metadata field can ship server-side first.
+    #   - Outbound (SPA → server): the W2-29 outbound validator still
+    #     requires known fields to match their declared shape, AND
+    #     unknown keys are logged + counted in dev mode (see
+    #     src/lib/ws.ts::_parseServerFrame dev-debug + the matching
+    #     outbound site). Drift on a *newly required* field is caught
+    #     the moment the server starts requiring it — the validator
+    #     rejects the missing required key, the SPA upgrades, ships.
     additionalProperties: true
     description: >
       Optional per-message metadata. Currently only `model_name` is
