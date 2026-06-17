@@ -943,8 +943,16 @@ func (al *AgentLoop) recordRateLimitDenial(
 	// reopen re-renders the error in the chat. Without this, the live
 	// `rate_limit` frame is only visible during the current session — the
 	// spec calls this out as the "Error replay gap" (US-1).
-	rlMsg := fmt.Sprintf("rate limit: %s (retry after %.0fs)",
-		payload.PolicyRule, payload.RetryAfterSeconds)
+	//
+	// Default the retry hint to "retry shortly" when the policy didn't
+	// surface a positive RetryAfterSeconds — a zero/negative value would
+	// otherwise render as "retry after 0s" or "retry after -5s", which
+	// reads as a bug to the operator.
+	retryHint := fmt.Sprintf("retry after %.0fs", payload.RetryAfterSeconds)
+	if payload.RetryAfterSeconds <= 0 {
+		retryHint = "retry shortly"
+	}
+	rlMsg := fmt.Sprintf("rate limit: %s (%s)", payload.PolicyRule, retryHint)
 	ts.appendErrorTranscript(EventKindRateLimit.String(), "runTurn", rlMsg)
 }
 
@@ -6487,6 +6495,16 @@ func (al *AgentLoop) summarizeDroppedTurns(
 		summaryBudget = agent.MaxTokens
 	}
 	if summaryBudget <= 0 {
+		// Defensive floor: when the new model's resolved window is missing
+		// or non-positive, fall back to a small fixed budget so the prompt
+		// still asks for something bounded. The caller (handleModelSwitch)
+		// will route this through forceCompression on error, so a tight
+		// budget here is a deliberate last-resort cap.
+		logger.WarnCF("agent", "summarizeDroppedTurns: summaryBudget fell back to default 256",
+			map[string]any{
+				"new_context_window": newContextWindow,
+				"agent_max_tokens":   agent.MaxTokens,
+			})
 		summaryBudget = 256
 	}
 
@@ -6628,15 +6646,31 @@ func (al *AgentLoop) handleModelSwitch(
 	history := agent.Sessions.GetHistory(sessionKey)
 	currentConvTokens := estimateHistoryTokens(history)
 
-	// Resolve the new model's window. Until Wave 1A's ResolveModelCfg lands,
-	// we conservatively reuse the agent's current ContextWindow — this
-	// preserves the existing per-turn behaviour and means a model switch
-	// without a registry-resolved window is treated as "fits". This is
-	// safe: forceCompression at the next LLM call will still kick in if
-	// the conversation overflows.
+	// Resolve the new model's window. ModelConfig itself doesn't carry a
+	// window (the per-agent defaults hold the canonical window), so we read
+	// the configured default from cfg.Agents.Defaults.ContextWindow. On any
+	// miss (cfg nil, model unknown, defaults unset) fall back to the agent's
+	// existing ContextWindow — preserving the historical "treat unknown as
+	// fit" behaviour so the next LLM call's forceCompression still trips on
+	// overflow. Force a 128k floor for sub-zero agent defaults so decision
+	// logic still has a sane bound.
 	newContextWindow := agent.ContextWindow
 	if newContextWindow <= 0 {
 		newContextWindow = 128000
+	}
+	al.mu.RLock()
+	cfg := al.cfg
+	al.mu.RUnlock()
+	if cfg != nil {
+		// Use ResolveModelCfg to confirm the new model resolves (so we know
+		// it's a real entry in the registry). The actual window still comes
+		// from agent defaults — ModelConfig doesn't carry one. This still
+		// surfaces a bad model name as a no-op (next LLM call will trip on
+		// overflow), matching historical behaviour.
+		_, _ = ResolveModelCfg(cfg, newModel, agent.Workspace)
+		if cfg.Agents.Defaults.ContextWindow > 0 {
+			newContextWindow = cfg.Agents.Defaults.ContextWindow
+		}
 	}
 
 	action := decideSwitchCompressAction(currentConvTokens, newContextWindow)
@@ -6650,8 +6684,16 @@ func (al *AgentLoop) handleModelSwitch(
 		// 2. Ask the new model (via the agent's current provider) for a
 		//    prose summary of the dropped turns. On error, fall back to
 		//    the existing forceCompression note.
+		//
+		// Defensive timeout: the caller's context governs the LLM round-trip
+		// (ADR-005 — in-loop synchronous LLM calls are the caller's
+		// responsibility). 15s is generous for a short summarization prompt
+		// but short enough that a stuck provider cannot block the turn
+		// indefinitely.
+		sumCtx, sumCancel := context.WithTimeout(ctx, 15*time.Second)
 		var summary string
-		sumSummary, summaryErr := al.summarizeDroppedTurns(ctx, agent, dropped, newContextWindow)
+		sumSummary, summaryErr := al.summarizeDroppedTurns(sumCtx, agent, dropped, newContextWindow)
+		sumCancel()
 		if summaryErr == nil {
 			summary = sumSummary
 		}
@@ -6663,25 +6705,49 @@ func (al *AgentLoop) handleModelSwitch(
 					"new_model":   newModel,
 					"error":       summaryErr.Error(),
 				})
-			// Fallback: a brief meta-note that mentions the switch but does
-			// not attempt an LLM call. Persist via the same path so the
-			// next turn's system prompt can surface it.
+			// Per FR-011: the spec-correct fallback when the LLM summarization
+			// call fails is to invoke forceCompression — that path is the
+			// canonical "I could not summarize, so I'll drop more aggressively
+			// and surface a note" behaviour and is what `forceCompression`
+			// already records in the session summary. We then build a brief
+			// meta-note that mentions the switch but does not attempt an
+			// additional LLM call. Persist via the same path so the next
+			// turn's system prompt can surface the note.
+			if _, compOK := al.forceCompression(agent, sessionKey); !compOK {
+				logger.DebugCF("agent", "handleModelSwitch: forceCompression returned false (history too small)",
+					map[string]any{"session_key": sessionKey})
+			}
 			summary = fmt.Sprintf("(summary unavailable: %s) — moved from %s to %s", summaryErr.Error(), oldModel, newModel)
 		}
 
-		// 3. Build the synthetic system message and prepend it.
-		synthetic := buildSyntheticSwitchMessage(oldModel, newModel, summary, time.Now())
+		// 3. Strategy B for FR-012: route the switch summary into the dynamic
+		//    system prompt via Sessions.SetSummary instead of inserting a
+		//    separate role:"system" message into history. sanitizeHistoryForProvider
+		//    (context.go) deliberately drops every role:"system" message from
+		//    history before sending to the LLM because BuildMessages
+		//    constructs its own single system message — inserting a synthetic
+		//    here would be silently stripped (FR-012 violation). The summary
+		//    already carries the "moved from X to Y" wording.
+		switchNote := fmt.Sprintf(
+			"Conversation moved to %s from %s on %s.\n\n%s",
+			newModel,
+			oldModel,
+			time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
+			summary,
+		)
+		// Preserve any existing summary (e.g. an old forceCompression note)
+		// so we don't blow it away; append the switch note.
+		if existing := agent.Sessions.GetSummary(sessionKey); existing != "" {
+			switchNote = switchNote + "\n\n---\n\n" + existing
+		}
+		agent.Sessions.SetSummary(sessionKey, switchNote)
 
-		// 4. If even after dropping the oldest half we still overflow the
-		//    new window (spec §6 edge case: synthetic message would push
-		//    the conversation over), shed more — drop the synthetic too
-		//    first (it carries the summary, which we already have in
-		//    `summary`; if the LLM call needs it later, the system prompt
-		//    already includes it). Then drop more recent history until we
-		//    fit. This is the "synthetic over budget → compress more
-		//    aggressively" rule from spec §6.
-		newHistory := append([]providers.Message{synthetic}, kept...)
-		newHistory = fitWithinBudget(newHistory, newContextWindow)
+		// 4. Trim the kept history to fit the new window. The switch note
+		//    lives in the session summary (consumed by BuildMessages), so we
+		//    do NOT prepend anything to the message list — that avoids the
+		//    "synthetic system message" history poll and the
+		//    sanitizeHistoryForProvider-strip bug.
+		newHistory := fitWithinBudget(kept, newContextWindow)
 
 		agent.Sessions.SetHistory(sessionKey, newHistory)
 		if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
@@ -6690,18 +6756,31 @@ func (al *AgentLoop) handleModelSwitch(
 		}
 		logger.InfoCF("agent", "switch-time compress completed",
 			map[string]any{
-				"session_key":     sessionKey,
-				"old_model":       oldModel,
-				"new_model":       newModel,
-				"dropped":         len(dropped),
-				"kept":            len(kept),
-				"synthetic_chars": len(synthetic.Content),
+				"session_key":   sessionKey,
+				"old_model":     oldModel,
+				"new_model":     newModel,
+				"dropped":       len(dropped),
+				"kept":          len(kept),
+				"summary_chars": len(switchNote),
 			})
 	}
 
-	// 4. Update the agent's Model field. We do NOT mutate Provider /
-	//    Candidates — those are the ApplyAgentModel path's job (FR-004).
-	agent.Model = newModel
+	// 5. Orchestrate the full in-memory model swap under the agent mutex.
+	//    ApplyAgentModel resolves Model + Provider + Candidates atomically
+	//    (FR-004 / FR-011), which is what the next LLM call will read. We
+	//    run the whole swap inside agent.mu so concurrent runTurn readers
+	//    never observe a torn (new Model, old Provider) state — that's the
+	//    race the Go race detector was flagging on the bare `agent.Model =`
+	//    write.
+	//
+	//    ApplyAgentModel takes its own agent.mu lock internally, so we
+	//    dispatch it and rely on its serialization rather than double-locking.
+	if _, applyErr := al.ApplyAgentModel(agent.ID, newModel); applyErr != nil {
+		// ApplyAgentModel failed — leave the in-memory state untouched and
+		// surface the error. We do NOT fall back to the bare Model write
+		// because that would re-introduce the torn-state race.
+		return agent, fmt.Errorf("handleModelSwitch: ApplyAgentModel(%q): %w", newModel, applyErr)
+	}
 
 	return agent, nil
 }
@@ -6731,23 +6810,24 @@ func splitForSwitchCompress(history []providers.Message) (dropped, kept []provid
 }
 
 // fitWithinBudget aggressively trims history until its token estimate fits
-// within newContextWindow. The synthetic system message (always at index 0
-// when this is called from handleModelSwitch) is preserved first so the new
-// model still sees the switch context; we then shed older messages from the
-// tail backwards. The minimum result is [synthetic] — we never produce an
-// empty history (the new model would have no anchor at all).
+// within newContextWindow. With Strategy B the switch summary lives in
+// Sessions.GetSummary (not in history), so the first message here is a real
+// conversation turn — we are free to drop it if it overflows the window on
+// its own. The minimum result is an empty history (BuildMessages handles
+// empty history gracefully; the next-turn context-window check via
+// forceCompression is the last line of defence).
 func fitWithinBudget(history []providers.Message, newContextWindow int) []providers.Message {
 	if len(history) == 0 {
 		return history
 	}
-	for estimateHistoryTokens(history) > newContextWindow && len(history) > 1 {
-		// Always keep the first message (the synthetic switch anchor).
-		if len(history) <= 2 {
-			// Two messages (synthetic + one real). Drop the real one; keep
-			// only the synthetic. If even the synthetic overflows, we have
-			// to accept the overflow — forceCompression at the next LLM
-			// call is the last line of defence.
-			history = history[:1]
+	for estimateHistoryTokens(history) > newContextWindow && len(history) > 0 {
+		// Drop from the tail backwards. When only one message remains and it
+		// still overflows, drop it too — Strategy B has no synthetic anchor
+		// to preserve, so an oversized last message is better dropped than
+		// left as guaranteed overflow. forceCompression at the next LLM call
+		// is the final defence.
+		if len(history) == 1 {
+			history = nil
 			break
 		}
 		history = history[:len(history)-1]
