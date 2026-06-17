@@ -15,6 +15,7 @@
 import { ApiError } from './api-error'
 export { ApiError, isApiError } from './api-error'
 import { maybeDevToast } from './dev-toast'
+import { logError } from './telemetry'
 
 import type { ZodType } from 'zod'
 import { z } from 'zod'
@@ -151,6 +152,22 @@ export function getApiSchemaErrorCount(): number {
 
 export function resetApiSchemaErrorCount(): void {
   _apiSchemaErrorCount = 0
+}
+
+// W2-36: increment the API-schema-error counter AND emit a production
+// telemetry event. Rate-limited inside logError so a contract-drift
+// flood doesn't spam the log collector. Dev builds skip telemetry
+// (they already get the dev toast).
+function _recordApiSchemaError(endpoint: string, issueCount: number): void {
+  _apiSchemaErrorCount++
+  if (!import.meta.env.DEV) {
+    logError({
+      event: 'apiSchemaError',
+      endpoint,
+      issueCount,
+      totalErrors: _apiSchemaErrorCount,
+    })
+  }
 }
 
 // Config validEnum coercion counter — incremented each time validEnum replaces
@@ -569,7 +586,7 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
     }
     const rawText = String(cause instanceof Error ? cause.message : cause)
     if (schema !== undefined) {
-      _apiSchemaErrorCount++
+      _recordApiSchemaError(`${method} /api/v1${path}`, 1)
       const schemaErr = new ApiSchemaError(
         `${method} /api/v1${path}`,
         [{ path: [], message: 'Response is not valid JSON' }],
@@ -595,7 +612,7 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
   if (schema !== undefined) {
     const result = schema.safeParse(body)
     if (!result.success) {
-      _apiSchemaErrorCount++
+      _recordApiSchemaError(`${method} /api/v1${path}`, result.error.issues.length)
       const schemaErr = new ApiSchemaError(
         `${method} /api/v1${path}`,
         result.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message })),
@@ -1912,7 +1929,7 @@ export async function uploadFiles(sessionId: string, files: File[]): Promise<Upl
   const raw: unknown = await res.json()
   const parsed = (UploadFilesResponseSchema as ZodType<UploadFilesResponse>).safeParse(raw)
   if (!parsed.success) {
-    _apiSchemaErrorCount++
+    _recordApiSchemaError('/upload', parsed.error.issues.length)
     const issues = parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message }))
     void maybeDevToast(`[api] uploadFiles response schema mismatch: ${issues[0]?.message ?? 'unknown'}`, 'POST:/upload:schema')
     throw new ApiSchemaError('/upload', issues, raw)
@@ -2013,7 +2030,7 @@ export async function transcribeAudio(audio: Blob): Promise<TranscribeResponse> 
   const parsed = TranscribeResponseSchema.safeParse(raw)
   if (!parsed.success) {
     const issues = parsed.error.issues
-    _apiSchemaErrorCount++
+    _recordApiSchemaError('/voice/transcribe', issues.length)
     void maybeDevToast(
       `[api] transcribe response schema mismatch: ${issues[0]?.message ?? 'unknown'}`,
       'POST:/voice/transcribe:schema',

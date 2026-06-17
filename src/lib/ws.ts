@@ -3,6 +3,7 @@
 
 import { maybeDevToast } from '@/lib/dev-toast'
 import { forceLogout } from '@/lib/authLogout'
+import { logError } from '@/lib/telemetry'
 
 // ── Generated type imports ────────────────────────────────────────────────────
 // All wire-format frame types are sourced from the generated AsyncAPI types.
@@ -178,6 +179,22 @@ function _maybeDevToast(frameType: string, message: string): void {
   void maybeDevToast(message, frameType)
 }
 
+// W2-36: increment the dropped-frame counter AND emit a production
+// telemetry event. Rate-limited inside logError so a contract-drift
+// flood doesn't spam the log collector. Dev builds skip telemetry
+// (they already get the toast + console output above).
+function _recordDropped(frameType: string, reason: string): void {
+  _droppedFrameCount++
+  if (!import.meta.env.DEV) {
+    logError({
+      event: 'wsFrameDropped',
+      frameType,
+      reason,
+      totalDropped: _droppedFrameCount,
+    })
+  }
+}
+
 // ── safeJsonParse ────────────────────────────────────────────────────────────
 //
 // Shared JSON-parse helper. Avoids duplicating try/catch in multiple callers.
@@ -226,7 +243,7 @@ const CLIENT_FRAME_TYPES = new Set<string>(ClientFrameTypes)
 export function parseFrameSafe(data: unknown): WsFrame | null {
   const parsed = safeJsonParse(data)
   if (!parsed.ok) {
-    _droppedFrameCount++
+    _recordDropped('_json_parse', 'json_parse_error')
     _maybeDevToast('_json_parse', '[ws] Dropped frame: JSON parse error')
     return null
   }
@@ -248,7 +265,7 @@ export function parseFrameSafe(data: unknown): WsFrame | null {
     return result.data as WsFrame
   }
 
-  _droppedFrameCount++
+  _recordDropped(frameType, `schema_invalid: ${result.error.issues[0]?.path.join('.') ?? 'root'}: ${result.error.issues[0]?.message ?? result.error.message}`)
   const first = result.error.issues[0]
   const desc = first
     ? `${first.path.join('.') || 'root'}: ${first.message}`
@@ -276,7 +293,7 @@ export function parseFrameSafe(data: unknown): WsFrame | null {
 function _parseServerFrame(data: unknown): ServerFrame | null {
   const parsed = safeJsonParse(data)
   if (!parsed.ok) {
-    _droppedFrameCount++
+    _recordDropped('_json_parse', 'json_parse_error')
     return null
   }
   const raw = parsed.raw
@@ -293,7 +310,7 @@ function _parseServerFrame(data: unknown): ServerFrame | null {
     // dropped. A spoofed `{type:"auth",token:"x"}` is spec-valid but must not
     // reach the SPA reducer.
     if (CLIENT_FRAME_TYPES.has(frameType)) {
-      _droppedFrameCount++
+      _recordDropped(frameType, 'client_direction_frame_from_server')
       _maybeDevToast(
         frameType,
         `[ws] Dropped client-direction frame received from server (type="${frameType}") — possible injection attempt`,
@@ -330,7 +347,7 @@ function _parseServerFrame(data: unknown): ServerFrame | null {
 
   // Known-type validation failure, client-type validation failure, or no
   // type field at all — all go to _droppedFrameCount.
-  _droppedFrameCount++
+  _recordDropped(frameType, `schema_invalid: ${result.error.issues[0]?.path.join('.') ?? 'root'}: ${result.error.issues[0]?.message ?? result.error.message}`)
   const first = result.error.issues[0]
   const desc = first
     ? `${first.path.join('.') || 'root'}: ${first.message}`
