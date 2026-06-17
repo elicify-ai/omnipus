@@ -3872,8 +3872,15 @@ type AgentCreateRequest struct {
 		Kind AgentCreateRequestExecutorKind `json:"kind"`
 	} `json:"executor,omitempty"`
 
-	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
-	FallbackModels *[]string `json:"fallback_models,omitempty"`
+	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007).
+	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
+	FallbackModels *[]struct {
+		// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
+		Model string `json:"model"`
+
+		// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
+		Provider *string `json:"provider,omitempty"`
+	} `json:"fallback_models,omitempty"`
 
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
@@ -5102,6 +5109,18 @@ type ExecutorConfigCli string
 
 // ExecutorConfigKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
 type ExecutorConfigKind string
+
+// FallbackModel One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
+// Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
+// Order matters — entries are tried in the order they appear in the parent's `fallback_models` array.
+// `additionalProperties: false` — the wire type has exactly two fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
+type FallbackModel struct {
+	// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
+	Model string `json:"model"`
+
+	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
+	Provider *string `json:"provider,omitempty"`
+}
 
 // GTDBoardTaskStatus GTD board task status.
 type GTDBoardTaskStatus string

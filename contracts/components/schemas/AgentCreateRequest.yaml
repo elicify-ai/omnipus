@@ -49,12 +49,17 @@ properties:
     type: array
     maxItems: 10
     items:
-      type: string
+      $ref: './FallbackModel.yaml'
     description: >
-      Ordered list of fallback model IDs tried when the primary model returns an
-      error. Each entry may be a bare model name or "provider/model" format.
+      Ordered list of fallback model entries tried when the primary model returns
+      an error. Each entry carries its own provider so the fallback can route
+      through a different provider than the primary (FR-007).
+
+      Wire format is always the object form `[{model, provider}]`. Legacy
+      `[string]` payloads are normalized at config-load time (FR-006).
     example:
-      - "anthropic/claude-3.5-haiku"
+      - model: "claude-sonnet-4.6"
+        provider: "anthropic"
   model_params:
     type: object
     description: LLM sampling parameters applied to this agent's requests.

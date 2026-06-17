@@ -8,6 +8,13 @@ description: >
 
   Order matters — entries are tried in the order they appear in the parent's
   `fallback_models` array.
+
+  `additionalProperties: false` — the wire type has exactly two fields;
+  unknown keys are rejected (rendered as Zod strict mode). This prevents
+  legacy `[string]` payloads from sneaking through and is the single source
+  of truth for the object-form contract (Q1/Q7 reconciled — see
+  docs/internal/specs/phase-1-chat-model-and-errors.md).
+additionalProperties: false
 required:
   - model
 properties:
