@@ -229,6 +229,125 @@ func resolveModelCandidates(
 	)
 }
 
+// resolveModelCandidatesForAgent picks the right candidate resolver based on
+// what the agent has populated. When the agent carries FallbackModels (the
+// modern provider-aware chain — FR-005 / FR-007), it routes each fallback
+// through its own provider via resolveModelCandidatesFromList. Otherwise it
+// falls back to the legacy string-based resolver so configs that predate the
+// new wire shape keep their original behavior.
+func resolveModelCandidatesForAgent(
+	cfg *config.Config,
+	defaultProvider string,
+	primary string,
+	agent *AgentInstance,
+) []providers.FallbackCandidate {
+	if agent == nil {
+		return resolveModelCandidates(cfg, defaultProvider, primary, nil)
+	}
+	if len(agent.FallbackModels) > 0 {
+		return resolveModelCandidatesFromList(cfg, defaultProvider, primary, agent.FallbackModels)
+	}
+	return resolveModelCandidates(cfg, defaultProvider, primary, agent.Fallbacks)
+}
+
+// resolveModelCandidatesFromList is the provider-aware variant of
+// resolveModelCandidates. Each fallback entry may carry its own Provider
+// (FR-005 / FR-007) so a fallback can route through a different provider than
+// the primary. The primary is still resolved through the model_list lookup so
+// a bare alias (e.g. "step-3.5-flash") is expanded to its full protocol-prefixed
+// form; fallback entries bypass the lookup when Provider is set because the
+// agent has explicitly pinned the route.
+//
+// An entry with Provider == "" falls back to the model_list lookup so legacy
+// [string] entries normalized via config.NormalizeFallbacks continue to work
+// at the agent layer. After lookup, the entry is treated as a bare slug routed
+// through defaultProvider — same behavior as resolveModelCandidates.
+//
+// Order is preserved: primary first, then fallbacks in declared order.
+// Duplicates (same provider+model) are collapsed.
+func resolveModelCandidatesFromList(
+	cfg *config.Config,
+	defaultProvider string,
+	primary string,
+	fallbacks []config.FallbackModel,
+) []providers.FallbackCandidate {
+	resolver := buildModelListResolver(cfg)
+	seen := make(map[string]bool)
+	var out []providers.FallbackCandidate
+
+	addPrimary := func(raw string) {
+		candidateRaw := strings.TrimSpace(raw)
+		if candidateRaw == "" {
+			return
+		}
+		if resolver != nil {
+			if resolved, ok := resolver(candidateRaw); ok {
+				candidateRaw = resolved
+			}
+		}
+		ref := providers.ParseModelRef(candidateRaw, defaultProvider)
+		if ref == nil {
+			return
+		}
+		key := providers.ModelKey(ref.Provider, ref.Model)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model})
+	}
+
+	addFallback := func(fb config.FallbackModel) {
+		candidateRaw := strings.TrimSpace(fb.Model)
+		if candidateRaw == "" {
+			return
+		}
+		// When the entry has a pinned Provider, use it directly — bypass the
+		// model_list lookup so a non-passthrough provider is honored even when
+		// the configured providers only include a passthrough (FR-007).
+		// NormalizeFallbacks has already populated Provider for legacy string
+		// entries against the configured providers, so an empty Provider here
+		// means "no configured provider matched" — fall back to the chat-side
+		// resolver so the candidate at least surfaces a sensible default.
+		if strings.TrimSpace(fb.Provider) != "" {
+			ref := providers.ParseModelRef(candidateRaw, fb.Provider)
+			if ref == nil {
+				return
+			}
+			key := providers.ModelKey(ref.Provider, ref.Model)
+			if seen[key] {
+				return
+			}
+			seen[key] = true
+			out = append(out, providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model})
+			return
+		}
+		// No pinned provider — defer to the legacy resolver path (same as
+		// resolveModelCandidates for a single entry).
+		if resolver != nil {
+			if resolved, ok := resolver(candidateRaw); ok {
+				candidateRaw = resolved
+			}
+		}
+		ref := providers.ParseModelRef(candidateRaw, defaultProvider)
+		if ref == nil {
+			return
+		}
+		key := providers.ModelKey(ref.Provider, ref.Model)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model})
+	}
+
+	addPrimary(primary)
+	for _, fb := range fallbacks {
+		addFallback(fb)
+	}
+	return out
+}
+
 func resolvedCandidateModel(candidates []providers.FallbackCandidate, fallback string) string {
 	if len(candidates) > 0 && strings.TrimSpace(candidates[0].Model) != "" {
 		return candidates[0].Model

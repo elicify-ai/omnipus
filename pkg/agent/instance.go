@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,10 +29,24 @@ type AgentInstance struct {
 	// written by SwitchModel while runTurn reads them concurrently.
 	mu sync.RWMutex
 
-	ID                        string
-	Name                      string
-	Model                     string
-	Fallbacks                 []string
+	// providerPoolMu guards ProviderPool against concurrent lazy-init from
+	// parallel fallback-chain iterations. Kept separate from mu so a
+	// fallback in flight doesn't block a config-PUT model switch.
+	providerPoolMu sync.Mutex
+
+	ID        string
+	Name      string
+	Model     string
+	Fallbacks []string
+	// FallbackModels is the provider-aware fallback chain (FR-005 / FR-007).
+	// Each entry carries its own Provider so a fallback can route through a
+	// different provider than the primary — when set, Fallbacks (the legacy
+	// []string field) is ignored at candidate-resolution time. The wire format
+	// is [{model, provider}] (FR-005); legacy [string] entries are normalized
+	// at config-load time via config.NormalizeFallbacks, so by the time this
+	// slice reaches the agent every entry carries a populated Provider (or an
+	// empty one if no configured provider matched).
+	FallbackModels            []config.FallbackModel
 	Workspace                 string
 	MaxIterations             int
 	MaxTokens                 int
@@ -41,10 +56,19 @@ type AgentInstance struct {
 	SummarizeMessageThreshold int
 	SummarizeTokenPercent     int
 	Provider                  providers.LLMProvider
-	Sessions                  session.SessionStore
-	ContextBuilder            *ContextBuilder
-	Tools                     *tools.ToolRegistry
-	Subagents                 *config.SubagentsConfig
+	// ProviderPool is keyed by provider name and holds one LLMProvider
+	// instance per distinct provider referenced by Candidates (or by the
+	// light tier). The fallback chain looks up the right provider here so a
+	// fallback declared with Provider="anthropic" actually uses the
+	// anthropic credentials at LLM-call time — not the primary's openrouter
+	// credentials (FR-007). Lazily populated by GetProviderForCandidate;
+	// never mutated after construction except via StoreProviderPool (used by
+	// ApplyAgentModel on model switch).
+	ProviderPool   map[string]providers.LLMProvider
+	Sessions       session.SessionStore
+	ContextBuilder *ContextBuilder
+	Tools          *tools.ToolRegistry
+	Subagents      *config.SubagentsConfig
 	// DelegationPolicy is the canonical unified delegation policy for this agent.
 	// When non-nil, it takes precedence over Subagents.AllowAgents in CanSpawnSubagent.
 	// Nil means fall back to legacy Subagents.AllowAgents check.
@@ -104,6 +128,7 @@ func NewAgentInstance(
 
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
+	fallbackModels := resolveAgentFallbackModels(agentCfg, defaults)
 
 	restrict := defaults.RestrictToWorkspace
 	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace
@@ -224,8 +249,26 @@ func NewAgentInstance(
 		summarizeTokenPercent = 75
 	}
 
-	// Resolve fallback candidates
-	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
+	// Resolve fallback candidates. Prefer the provider-aware resolver when
+	// AgentConfig.FallbackModels (or a derived equivalent) is populated so a
+	// fallback can route through its own provider (FR-007). Falls back to the
+	// legacy resolver when only the historical Fallbacks []string is set —
+	// preserves the original behavior for configs that have not migrated to
+	// the new wire shape.
+	var candidates []providers.FallbackCandidate
+	if len(fallbackModels) > 0 {
+		candidates = resolveModelCandidatesFromList(cfg, defaults.Provider, model, fallbackModels)
+	} else {
+		candidates = resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
+	}
+
+	// Pre-build the provider pool for every distinct provider referenced by
+	// the resolved candidate chain. FR-007 requires each fallback to use its
+	// own credentials at LLM-call time; building the pool here at
+	// construction (vs. lazily inside the fallback hot path) keeps the
+	// per-turn hot path allocation-free and surfaces credential / API-base
+	// config errors at startup instead of mid-conversation.
+	providerPool := buildProviderPool(cfg, candidates)
 
 	// Model routing setup: pre-resolve light model candidates at creation time
 	// to avoid repeated model_list lookups on every incoming message.
@@ -290,6 +333,7 @@ func NewAgentInstance(
 		Name:                      agentName,
 		Model:                     model,
 		Fallbacks:                 fallbacks,
+		FallbackModels:            fallbackModels,
 		Workspace:                 workspace,
 		MaxIterations:             maxIter,
 		MaxTokens:                 maxTokens,
@@ -299,6 +343,7 @@ func NewAgentInstance(
 		SummarizeMessageThreshold: summarizeMessageThreshold,
 		SummarizeTokenPercent:     summarizeTokenPercent,
 		Provider:                  provider,
+		ProviderPool:              providerPool,
 		Sessions:                  sessions,
 		ContextBuilder:            contextBuilder,
 		Tools:                     toolsRegistry,
@@ -332,6 +377,128 @@ func (a *AgentInstance) LoadToolPolicy() *tools.ToolPolicyCfg {
 // Safe for concurrent access with ongoing turn assembly.
 func (a *AgentInstance) StoreToolPolicy(p *tools.ToolPolicyCfg) {
 	a.toolPolicy.Store(p)
+}
+
+// GetProviderForCandidate returns the LLMProvider instance that should service
+// the given fallback candidate (FR-007). When a candidate explicitly pins a
+// Provider via the new [{model, provider}] wire shape, the fallback chain
+// MUST use that provider's credentials — not the primary's.
+//
+// Lookup order:
+//  1. ProviderPool by provider name (pre-populated at agent construction
+//     time for every distinct provider referenced by Candidates /
+//     LightCandidates).
+//  2. Fall back to the agent's primary provider when the candidate has no
+//     Provider pinned (legacy []string wire shape) or the pool entry is
+//     missing (operator pre-build failure — log + degrade gracefully).
+//
+// This is the runtime half of the FR-007 contract: candidate chain carries
+// the explicit provider (set in resolveModelCandidatesFromList) AND the
+// fallback iteration routes through the matching provider instance here.
+func (a *AgentInstance) GetProviderForCandidate(candidate providers.FallbackCandidate) providers.LLMProvider {
+	if a == nil {
+		return nil
+	}
+	pinned := strings.TrimSpace(candidate.Provider)
+	if pinned == "" {
+		// Legacy fallback path: every candidate uses the primary's provider.
+		// Preserve pre-FR-007 behavior.
+		return a.Provider
+	}
+	if a.ProviderPool != nil {
+		if p, ok := a.ProviderPool[pinned]; ok && p != nil {
+			return p
+		}
+	}
+	logger.WarnCF("agent", "GetProviderForCandidate: no pre-built provider for pinned name; falling back to primary",
+		map[string]any{
+			"agent_id": a.ID,
+			"pinned":   pinned,
+		})
+	return a.Provider
+}
+
+// StoreProviderPool atomically replaces the agent's provider pool. Called by
+// ApplyAgentModel on model switch to ensure the new primary's provider is in
+// the pool (the old primary is closed only after ApplyAgentModel finishes its
+// Provider swap on the instance). Safe for concurrent access with in-flight
+// turn assembly.
+func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider) {
+	a.providerPoolMu.Lock()
+	defer a.providerPoolMu.Unlock()
+	a.ProviderPool = pool
+}
+
+// buildProviderPool pre-builds an LLMProvider for every distinct provider
+// name referenced by the agent's candidate chain (primary + fallbacks).
+// Returns nil when the candidate chain has no explicit providers (every
+// candidate routes through the agent primary — no pool needed).
+//
+// Build failures are non-fatal: a missing entry for a pinned provider name
+// degrades to "use the primary's provider" via GetProviderForCandidate's
+// fallback path. We log at WARN so operators can see the cause of a
+// degraded fallback path at startup.
+func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandidate) map[string]providers.LLMProvider {
+	if cfg == nil || len(candidates) == 0 {
+		return nil
+	}
+	// Collect distinct provider names. Empty Provider names share the
+	// primary's provider via the legacy path — no pool entry needed.
+	seen := make(map[string]struct{})
+	for _, c := range candidates {
+		name := strings.TrimSpace(c.Provider)
+		if name == "" {
+			continue
+		}
+		seen[name] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	pool := make(map[string]providers.LLMProvider, len(seen))
+	for name := range seen {
+		mc, err := findModelConfigForProvider(cfg, name)
+		if err != nil {
+			logger.WarnCF("agent", "buildProviderPool: no ModelConfig for candidate provider; pool entry skipped",
+				map[string]any{"provider": name, "error": err.Error()})
+			continue
+		}
+		p, _, err := providers.CreateProviderFromConfig(mc)
+		if err != nil {
+			logger.WarnCF("agent", "buildProviderPool: CreateProviderFromConfig failed; pool entry skipped",
+				map[string]any{"provider": name, "error": err.Error()})
+			continue
+		}
+		pool[name] = p
+	}
+	if len(pool) == 0 {
+		return nil
+	}
+	return pool
+}
+
+// findModelConfigForProvider returns a clone of the ModelConfig whose
+// Provider field matches the given provider name. Used by buildProviderPool
+// at agent construction to locate the right ModelConfig for a candidate's
+// pinned provider.
+func findModelConfigForProvider(cfg *config.Config, providerName string) (*config.ModelConfig, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" {
+		return nil, fmt.Errorf("provider name is required")
+	}
+	for _, mc := range cfg.Providers {
+		if mc == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(mc.Provider), providerName) {
+			clone := *mc
+			return &clone, nil
+		}
+	}
+	return nil, fmt.Errorf("provider %q not found in configured providers", providerName)
 }
 
 // agentToolsCfgToPolicy converts config.AgentToolsCfg to tools.ToolPolicyCfg for
@@ -427,6 +594,38 @@ func resolveAgentFallbacks(agentCfg *config.AgentConfig, defaults *config.AgentD
 		return agentCfg.Model.Fallbacks
 	}
 	return defaults.ModelFallbacks
+}
+
+// resolveAgentFallbackModels resolves the provider-aware fallback chain for
+// an agent. It prefers the modern AgentConfig.FallbackModels (FR-005) when
+// populated and falls back to deriving one from the legacy sources in order:
+//  1. agentCfg.Model.Fallbacks (the legacy []string on the agent's model block)
+//  2. defaults.ModelFallbacks (the agent-defaults model_fallbacks list)
+//
+// Each returned entry is a config.FallbackModel with Provider populated by
+// config.NormalizeFallbacks (which has already run at config-load time for
+// the AgentConfig path). The defaults path is normalized here so the
+// downstream resolveModelCandidatesFromList can treat every entry uniformly.
+func resolveAgentFallbackModels(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) []config.FallbackModel {
+	if agentCfg != nil && len(agentCfg.FallbackModels) > 0 {
+		// Already normalized at config load — Provider is populated for every
+		// entry that matched a configured provider or passthrough.
+		return agentCfg.FallbackModels
+	}
+	var legacy []string
+	switch {
+	case agentCfg != nil && agentCfg.Model != nil && len(agentCfg.Model.Fallbacks) > 0:
+		legacy = agentCfg.Model.Fallbacks
+	case len(defaults.ModelFallbacks) > 0:
+		legacy = defaults.ModelFallbacks
+	default:
+		return nil
+	}
+	out := make([]config.FallbackModel, len(legacy))
+	for i, s := range legacy {
+		out[i] = config.FallbackModel{Model: s}
+	}
+	return out
 }
 
 func compilePatterns(patterns []string) []*regexp.Regexp {
