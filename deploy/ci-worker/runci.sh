@@ -207,12 +207,22 @@ EOF
         -H 'Content-Type: application/json' -d @- >/dev/null \
     || { echo "Onboarding API failed" >&2; cat "$E2E_LOG" >&2; return 1; }
 
-  # 9. Run the full Playwright matrix. The repo's playwright.config.ts already pins
-  #    workers=1 (single gateway, shared credentials — concurrent writes are unsafe
-  #    per CLAUDE.md concurrency model) and retries=3 in CI. We don't override.
-  #    Both OPENROUTER_API_KEY (alias for the gateway's api_key_ref) and
-  #    OPENROUTER_API_KEY_CI (required by tests/e2e/global-setup.ts preflight check
-  #    — see .github/workflows/pr.yml env block) are exported with the same value.
+  # 9. Install the chromium revision that the *actually-installed* @playwright/test expects.
+  #    The repo's package.json declares "^1.49.0" (caret), so `npm ci` may pick up the
+  #    latest 1.x.x release (e.g. 1.60.0), which targets a different chromium revision
+  #    than the one baked into the image (1.49.0's chromium-1148). Re-running `npx
+  #    playwright install chromium` here forces the matching revision into
+  #    $PLAYWRIGHT_BROWSERS_PATH before the matrix runs, so the image and the test
+  #    always agree. Cost: ~500 MB download on the first run, then cached in the image.
+  log "e2e: install matching chromium"
+  npx playwright install chromium || return 1
+
+  # 10. Run the full Playwright matrix. The repo's playwright.config.ts already pins
+  #     workers=1 (single gateway, shared credentials — concurrent writes are unsafe
+  #     per CLAUDE.md concurrency model) and retries=3 in CI. We don't override.
+  #     Both OPENROUTER_API_KEY (alias for the gateway's api_key_ref) and
+  #     OPENROUTER_API_KEY_CI (required by tests/e2e/global-setup.ts preflight check
+  #     — see .github/workflows/pr.yml env block) are exported with the same value.
   log "e2e: run Playwright matrix"
   OMNIPUS_URL=http://localhost:6060 \
   OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
