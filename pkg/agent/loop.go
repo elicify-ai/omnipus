@@ -916,11 +916,30 @@ func (al *AgentLoop) recordRateLimitDenial(
 			Details:    details,
 		})
 	}
+	// FIX-1 / FR-001: the rate-limit denial MUST be visible after a page
+	// reload. The WS `rate_limit` frame (EventKindRateLimit below) drives the
+	// live UI only; the JSONL transcript is what the replay path reads. Emit
+	// EventKindError with the same RateLimitPayload so consumers see a
+	// single error-kind event regardless of whether the wire is live or
+	// replayed. The original EventKindRateLimit frame is preserved for
+	// backward compatibility with the WS forwarder.
+	al.emitEvent(
+		EventKindError,
+		ts.eventMeta("runTurn", "turn.error"),
+		payload,
+	)
 	al.emitEvent(
 		EventKindRateLimit,
 		ts.eventMeta("runTurn", "turn.rate_limit"),
 		payload,
 	)
+	// Persist the rate-limit context to the JSONL transcript so a session
+	// reopen re-renders the error in the chat. Without this, the live
+	// `rate_limit` frame is only visible during the current session — the
+	// spec calls this out as the "Error replay gap" (US-1).
+	rlMsg := fmt.Sprintf("rate limit: %s (retry after %.0fs)",
+		payload.PolicyRule, payload.RetryAfterSeconds)
+	ts.appendErrorTranscript(EventKindRateLimit.String(), "runTurn", rlMsg)
 }
 
 // wireExecToolDeps replaces each agent's exec tool with one constructed via
@@ -5018,6 +5037,13 @@ turnLoop:
 					Message: err.Error(),
 				},
 			)
+			// FIX-1 / FR-002: persist the provider error to the JSONL transcript
+			// so the session replay path re-renders it after page reload. The
+			// bus emit above drives the live UI; this write drives the replay.
+			ts.appendErrorTranscript(
+				EventKindError.String(), "runTurn",
+				fmt.Sprintf("LLM call failed after retries: %s", err.Error()),
+			)
 			logger.ErrorCF("agent", "LLM call failed",
 				map[string]any{
 					"agent_id":  ts.agent.ID,
@@ -5200,6 +5226,12 @@ turnLoop:
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
 					ErrorPayload{Stage: "llm_empty_retry", Message: err.Error()},
+				)
+				// FIX-1 / FR-002: persist this provider error to the JSONL
+				// transcript so the session replay re-renders it after reload.
+				ts.appendErrorTranscript(
+					EventKindError.String(), "runTurn",
+					fmt.Sprintf("LLM call failed during empty-response retry: %s", err.Error()),
 				)
 				return turnResult{}, fmt.Errorf("LLM call failed during empty-response retry: %w", err)
 			}
