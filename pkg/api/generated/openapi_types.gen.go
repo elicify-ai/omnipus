@@ -5368,6 +5368,9 @@ type Message struct {
 	// MessagesCompacted Number of messages compacted (present only on compaction entries).
 	MessagesCompacted *int `json:"messages_compacted,omitempty"`
 
+	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
+	Model *string `json:"model,omitempty"`
+
 	// Role Author role. Absent on compaction entries.
 	Role *MessageRole `json:"role,omitempty"`
 
@@ -6552,6 +6555,9 @@ type SessionDetail struct {
 
 		// MessagesCompacted Number of messages compacted (present only on compaction entries).
 		MessagesCompacted *int `json:"messages_compacted,omitempty"`
+
+		// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
+		Model *string `json:"model,omitempty"`
 
 		// Role Author role. Absent on compaction entries.
 		Role *SessionDetailMessagesRole `json:"role,omitempty"`

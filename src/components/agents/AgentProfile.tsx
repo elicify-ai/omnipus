@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, KeyboardEvent } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Robot,
@@ -81,6 +81,22 @@ function getIconComponent(name: string | undefined) {
   return match?.component ?? Robot
 }
 
+/**
+ * Wave 2 / FIX-4: provider-aware fallback entry.
+ *
+ * `model` is the model slug sent on the wire. `provider` is the provider
+ * that owns that model — tracked locally so the fallback can be routed
+ * through a different provider than the agent's primary (US-3). Until
+ * Wave 1B's regen lands and the wire `fallback_models` shape becomes
+ * `[{model, provider}]`, only `model` is persisted; `provider` is local
+ * state for the chip layout (and the auto-save payload stays a
+ * `string[]` of model slugs).
+ */
+interface FallbackEntry {
+  model: string
+  provider: string
+}
+
 interface AgentProfileProps {
   /**
    * Explicit agent id (wins over the store-driven `editAgentId`). Used by
@@ -144,6 +160,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     .filter((p) => (p.models ?? []).length > 0)
     .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
 
+  // Wave 2 / FIX-4: model → provider lookup. Used by the fallback editor to
+  // attribute each fallback chip to the provider that owns it. The lookup
+  // walks every connected provider; if a model is listed by more than one
+  // provider we use the first match (consistent with ModelSelector's
+  // rendering order).
+  const modelToProvider: Record<string, string> = {}
+  for (const p of connectedProviders) {
+    for (const m of p.models ?? []) {
+      if (!(m in modelToProvider)) {
+        modelToProvider[m] = p.display_name ?? p.name ?? p.id ?? ''
+      }
+    }
+  }
+
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
 
@@ -162,8 +192,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [model, setModel] = useState('')
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
   const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
-  const [fallbackModels, setFallbackModels] = useState<string[]>([])
-  const [fallbackInput, setFallbackInput] = useState('')
+  // Wave 2 / FIX-4: FallbackEntry[] replaces the legacy string[]. Each
+  // entry tracks the provider alongside the model so the chip layout
+  // can show the provider badge. The wire payload still uses string[]
+  // (model slugs) — see the `formData` memo below.
+  const [fallbackModels, setFallbackModels] = useState<FallbackEntry[]>([])
   const [temperature, setTemperature] = useState(1.0)
   const [maxTokens, setMaxTokens] = useState(4096)
   const [topP, setTopP] = useState(1.0)
@@ -204,7 +237,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setModel(agent.model ?? '')
     setSelectedColor(agent.color)
     setSelectedIcon((agent.icon as IconName) ?? 'Robot')
-    setFallbackModels(agent.fallback_models ?? [])
+    // Wave 2 / FIX-4: hydrate FallbackEntry[] from the agent's string[].
+    // Each model slug is paired with its provider via the
+    // modelToProvider lookup (built from the connected providers list).
+    // Slugs that aren't in any connected provider (e.g. legacy entries
+    // from a removed provider) fall back to an empty provider label.
+    const rawFallbacks = agent.fallback_models ?? []
+    setFallbackModels(
+      rawFallbacks.map((m) => ({ model: m, provider: modelToProvider[m] ?? '' })),
+    )
     setTemperature(agent.model_params?.temperature ?? 1.0)
     setMaxTokens(agent.model_params?.max_tokens ?? 4096)
     setTopP(agent.model_params?.top_p ?? 1.0)
@@ -240,7 +281,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     model,
     color: selectedColor,
     icon: selectedIcon,
-    fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
+    // Wave 2 / FIX-4: persist FallbackEntry[] as string[] (model slugs only)
+    // on the wire. The provider info is local-only until Wave 1B's regen
+    // changes the wire fallback_models shape to [{model, provider}]. The
+    // Editor keeps the provider around so the chip layout is correct
+    // (provider badge per chip) and so the Wave 1B regen is a one-liner
+    // (replace `.map((f) => f.model)` with `fallbackModels`).
+    fallback_models: fallbackModels.length > 0 ? fallbackModels.map((f) => f.model) : undefined,
     model_params: { temperature, max_tokens: maxTokens, top_p: topP },
     rate_limits: {
       use_global_defaults: useGlobalRateLimits,
@@ -316,20 +363,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // Locked agents can still save model and tool changes — do not disable auto-save
   )
 
-  function addFallbackModel() {
-    const trimmed = fallbackInput.trim()
-    if (!trimmed || fallbackModels.includes(trimmed)) return
-    setFallbackModels((prev) => [...prev, trimmed])
-    setFallbackInput('')
+
+  // Wave 2 / FIX-4: add a fallback from the <ModelSelector> dropdown. The
+  // selector's onChange fires with the model string; we pair it with the
+  // provider that owns it via the modelToProvider lookup. De-dupe by
+  // model — the fallback list cannot have the same model twice (US-3).
+  function addFallbackFromSelector(modelSlug: string) {
+    const trimmed = modelSlug.trim()
+    if (!trimmed) return
+    setFallbackModels((prev) => {
+      if (prev.some((f) => f.model === trimmed)) return prev
+      return [...prev, { model: trimmed, provider: modelToProvider[trimmed] ?? '' }]
+    })
   }
 
-  function handleFallbackKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter' || e.key === ',') {
-      e.preventDefault()
-      addFallbackModel()
-    } else if (e.key === 'Backspace' && fallbackInput === '' && fallbackModels.length > 0) {
-      setFallbackModels((prev) => prev.slice(0, -1))
-    }
+  function removeFallback(modelSlug: string) {
+    setFallbackModels((prev) => prev.filter((f) => f.model !== modelSlug))
   }
 
   function UploadButton({ onUpload }: { onUpload: (content: string) => void }) {
@@ -682,29 +731,57 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <div className="space-y-1.5">
                   <p className="text-xs text-[var(--color-muted)]">Fallback models (tried in order if primary fails)</p>
                   <div className="flex flex-wrap gap-1.5 p-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
-                    {fallbackModels.map((m) => (
+                    {fallbackModels.map((entry) => (
                       <span
-                        key={m}
+                        key={entry.model}
+                        data-testid={`fallback-chip-model-${entry.model}`}
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
                       >
-                        {m}
+                        {/* Provider badge — color-coded by provider name hash so
+                            visually distinct entries don't all look identical.
+                            Empty provider is rendered as a muted dash so the
+                            badge slot is always present (consistent height). */}
+                        <span
+                          data-testid={`fallback-chip-provider-${entry.model}`}
+                          className="inline-flex items-center px-1 rounded text-[9px] font-semibold"
+                          style={{
+                            backgroundColor: 'var(--color-accent)/15',
+                            color: 'var(--color-accent)',
+                            border: '1px solid var(--color-accent)/30',
+                          }}
+                        >
+                          {entry.provider || '—'}
+                        </span>
+                        <span>{entry.model}</span>
                         <button
                           type="button"
-                          onClick={() => setFallbackModels((prev) => prev.filter((x) => x !== m))}
+                          data-testid={`fallback-chip-remove-${entry.model}`}
+                          aria-label={`Remove fallback ${entry.model}`}
+                          onClick={() => removeFallback(entry.model)}
                           className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
                         >
                           <X size={10} />
                         </button>
                       </span>
                     ))}
-                    <input
-                      value={fallbackInput}
-                      onChange={(e) => { markDirty(); setFallbackInput(e.target.value) }}
-                      onKeyDown={handleFallbackKeyDown}
-                      onBlur={addFallbackModel}
-                      placeholder={fallbackModels.length === 0 ? 'Type a model name, press Enter' : ''}
-                      className="flex-1 min-w-[160px] bg-transparent text-xs text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)]"
-                    />
+                    {/* Add UI: a second <ModelSelector> dedicated to the
+                        fallback list. It mounts as a separate combobox so the
+                        primary model selector above stays untouched. The
+                        add-trigger is identified by data-testid
+                        `fallback-add-trigger` and each pickable item is
+                        `fallback-add-item-<model>`. */}
+                    <div className="min-w-[220px] flex-1">
+                      <ModelSelector
+                        models={availableModels}
+                        value=""
+                        onChange={(v) => { markDirty(); addFallbackFromSelector(v) }}
+                        placeholder="Add fallback…"
+                        providerGroups={providerGroups}
+                        triggerTestId="fallback-add-trigger"
+                        itemTestIdPrefix="fallback-add-item-"
+                        disabled={availableModels.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))}
+                      />
+                    </div>
                   </div>
                 </div>
               )}

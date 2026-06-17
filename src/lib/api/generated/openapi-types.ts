@@ -2757,6 +2757,11 @@ export interface components {
              *     ]
              */
             descendants_canceled?: string[];
+            /**
+             * @description Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
+             * @example z-ai/glm-5.2
+             */
+            model?: string;
         };
         /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
         ToolCall: {

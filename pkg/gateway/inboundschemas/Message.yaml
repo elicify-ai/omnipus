@@ -129,3 +129,12 @@ properties:
       IDs of descendant turns that were canceled in cascade — present only on
       type="turn_canceled" entries (FR-6a).
     example: ["turn-T3-sub-1"]
+  model:
+    type: string
+    description: >
+      Identifier of the model that produced this assistant turn (per-turn
+      record). Present on assistant entries only. Absent on legacy turns
+      recorded before the per-turn model field was added — those entries do
+      not display any model info in the UI (no placeholder). Empty string
+      is treated the same as absent for UI display.
+    example: "z-ai/glm-5.2"
