@@ -2801,8 +2801,17 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	agent.Provider = nextProvider
 	agent.Candidates = nextCandidates
 	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
-	agent.mu.Unlock()
+	// Publish the new pool INSIDE the same lock as the Model + Provider +
+	// Candidates flip. The atomic.Pointer in StoreProviderPool would protect
+	// the pool's map against concurrent read/write on its own, but an
+	// in-flight turn that has just RLock'd agent.mu to read the old Model
+	// would then Load() a pool that no longer matches the model — the
+	// fallback chain would route through the NEW pool's primary credentials
+	// while the model field still says OLD. Holding the lock across the
+	// full tuple flip makes (Model, Provider, Candidates, ProviderPool) a
+	// single coherent swap from any reader's perspective.
 	agent.StoreProviderPool(newPool)
+	agent.mu.Unlock()
 
 	// Close the previous provider if it holds resources (e.g. a stateful
 	// session) and is actually being replaced.
@@ -6677,10 +6686,24 @@ func (al *AgentLoop) handleModelSwitch(
 	if cfg != nil {
 		// Use ResolveModelCfg to confirm the new model resolves (so we know
 		// it's a real entry in the registry). The actual window still comes
-		// from agent defaults — ModelConfig doesn't carry one. This still
-		// surfaces a bad model name as a no-op (next LLM call will trip on
-		// overflow), matching historical behaviour.
-		_, _ = ResolveModelCfg(cfg, newModel, agent.Workspace)
+		// from agent defaults — ModelConfig doesn't carry one. We deliberately
+		// keep the "unknown model = no-op switch" behavior (the next LLM
+		// call will trip on overflow, forceCompression will still fire), but
+		// we MUST surface the miss to the operator via a WARN. Discarding the
+		// error (W4-4 silent-failure-A) would let a typo'd `metadata.model_name`
+		// from the operator silently route the next LLM call through the
+		// agent's PRIMARY model — the exact FR-007 failure mode. Logging the
+		// resolve error at WARN with the requested model + agent id gives
+		// operators a breadcrumb to spot the typo at the switch site rather
+		// than several stack frames later.
+		if _, resolveErr := ResolveModelCfg(cfg, newModel, agent.Workspace); resolveErr != nil {
+			logger.WarnCF("agent", "handleModelSwitch: requested model did not resolve; falling back to agent defaults",
+				map[string]any{
+					"requested_model": newModel,
+					"agent_id":        agent.ID,
+					"resolve_error":   resolveErr.Error(),
+				})
+		}
 		if cfg.Agents.Defaults.ContextWindow > 0 {
 			newContextWindow = cfg.Agents.Defaults.ContextWindow
 		}
