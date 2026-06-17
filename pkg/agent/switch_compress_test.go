@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 )
@@ -483,6 +486,121 @@ func TestSwitchTime_LLMReceivesSyntheticSummary(t *testing.T) {
 		}
 		assert.False(t, m.Synthetic,
 			"no message outside the system prompt must carry Synthetic=true")
+	}
+}
+
+// TestSwitchTime_UnknownModel_LogsWarn is the W4-4 regression guard for
+// silent-failure-A CRITICAL #1: when an operator typo'd `metadata.model_name`
+// arrives at handleModelSwitch, the resolve against cfg.Providers fails
+// silently. The previous code did `_, _ = ResolveModelCfg(...)` — the
+// fallback chain then "appeared to succeed" and routed the next LLM call
+// through the agent's PRIMARY model, recreating the FR-007 bug class.
+//
+// The fix surfaces the miss to operators via logger.WarnCF. This test
+// drives handleModelSwitch with a typo'd model name, captures the WARN
+// to a temp file (DisableConsole + EnableFileLogging), and asserts the
+// log line carries the requested model, the agent id, and the resolve
+// error. The agent defaults (cfg.Agents.Defaults.ContextWindow) are
+// deliberately set to a value larger than agent.ContextWindow so the
+// switch window-resolution path is exercised; we only assert the WARN
+// fired — the actual switch still completes against the agent's primary
+// model, matching the historical "unknown model = no-op switch" behavior.
+//
+// BDD: typo'd `metadata.model_name` from operator → WARN with resolve_error
+// is emitted (operator can spot the typo at the switch site).
+func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
+	// Set up log capture to a temp file. DisableConsole silences stderr;
+	// EnableFileLogging routes log output to the file so the assertion can
+	// read it back (standard pattern in this repo; see
+	// pkg/providers/fallback_test.go).
+	tmpDir := t.TempDir()
+	logFile := tmpDir + "/switch-unknown-model.log"
+
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	if err := logger.EnableFileLogging(logFile); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	// Register the default model only — the requested model ("not-a-real-model")
+	// is intentionally not in the registry. This guarantees ResolveModelCfg
+	// returns an error and the WARN path is exercised.
+	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model")
+	defer cleanup()
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, agent)
+	// Drop the agent's existing context window so the cfg.Agents.Defaults
+	// override path is exercised (200k > 8k → newContextWindow = 200k).
+	agent.ContextWindow = 8000
+
+	// Force a wider agent-defaults context window. After my change,
+	// handleModelSwitch reads this value when ResolveModelCfg succeeds OR
+	// fails (we don't bail on the error — we just WARN). The test asserts
+	// only the WARN, not the window value.
+	al.mu.Lock()
+	al.cfg.Agents.Defaults.ContextWindow = 200000
+	al.mu.Unlock()
+
+	const sessionKey = "unknown-model-test"
+	const typoModel = "not-a-real-model-typo"
+	agent.Sessions.SetHistory(sessionKey, nil)
+	require.NoError(t, agent.Sessions.Save(sessionKey))
+
+	recProv := &recordingSummaryProvider{summary: "should not be used"}
+	agent.Provider = recProv
+
+	// Drive the switch with the typo'd model name. handleModelSwitch will
+	// return an error (ApplyAgentModel propagates the registry miss), but
+	// the WARN we're testing fires BEFORE that call — in the window-resolution
+	// block where we look up the new model's config. The agent's in-memory
+	// state stays untouched (ApplyAgentModel is the LAST step, after the
+	// WARN site, and it bails on registry miss).
+	_, switchErr := al.handleModelSwitch(
+		context.Background(),
+		agent,
+		sessionKey,
+		typoModel,
+		bus.InboundMessage{
+			Metadata: map[string]string{"model_name": typoModel},
+		},
+	)
+	// We do NOT assert switchErr == nil — ApplyAgentModel propagates the
+	// registry miss up. The behavior under test is purely the WARN emission
+	// at the ResolveModelCfg site; the error return from handleModelSwitch
+	// is the pre-existing (and correct) error path. W4-4 is about NOT
+	// swallowing the resolve error silently, not about suppressing the
+	// downstream error return.
+	if switchErr != nil {
+		t.Logf("handleModelSwitch returned error (expected for unknown model): %v", switchErr)
+	}
+
+	// Read the captured log back and assert the WARN.
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", logFile, err)
+	}
+	logged := string(data)
+
+	if !strings.Contains(logged, "handleModelSwitch: requested model did not resolve") {
+		t.Errorf("log file missing the W4-4 WARN marker; got:\n%s", logged)
+	}
+	if !strings.Contains(logged, typoModel) {
+		t.Errorf("log file missing the typo'd model name %q; got:\n%s", typoModel, logged)
+	}
+	if !strings.Contains(logged, agent.ID) {
+		t.Errorf("log file missing the agent_id %q; got:\n%s", agent.ID, logged)
+	}
+	if !strings.Contains(logged, "resolve_error") {
+		t.Errorf("log file missing the resolve_error field; got:\n%s", logged)
+	}
+	if !strings.Contains(logged, `"level":"warn"`) {
+		t.Errorf("log file missing the warn level; got:\n%s", logged)
 	}
 }
 

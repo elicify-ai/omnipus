@@ -29,11 +29,6 @@ type AgentInstance struct {
 	// written by SwitchModel while runTurn reads them concurrently.
 	mu sync.RWMutex
 
-	// providerPoolMu guards ProviderPool against concurrent lazy-init from
-	// parallel fallback-chain iterations. Kept separate from mu so a
-	// fallback in flight doesn't block a config-PUT model switch.
-	providerPoolMu sync.Mutex
-
 	ID        string
 	Name      string
 	Model     string
@@ -56,15 +51,22 @@ type AgentInstance struct {
 	SummarizeMessageThreshold int
 	SummarizeTokenPercent     int
 	Provider                  providers.LLMProvider
-	// ProviderPool is keyed by provider name and holds one LLMProvider
-	// instance per distinct provider referenced by Candidates (or by the
-	// light tier). The fallback chain looks up the right provider here so a
-	// fallback declared with Provider="anthropic" actually uses the
-	// anthropic credentials at LLM-call time — not the primary's openrouter
-	// credentials (FR-007). Lazily populated by GetProviderForCandidate;
-	// never mutated after construction except via StoreProviderPool (used by
-	// ApplyAgentModel on model switch).
-	ProviderPool   map[string]providers.LLMProvider
+	// providerPool is the atomic-pointer form of ProviderPool. The pool is
+	// keyed by provider name and holds one LLMProvider instance per distinct
+	// provider referenced by Candidates (or by the light tier). The fallback
+	// chain looks up the right provider here so a fallback declared with
+	// Provider="anthropic" actually uses the anthropic credentials at LLM-call
+	// time — not the primary's openrouter credentials (FR-007).
+	//
+	// Eagerly built by buildProviderPool at agent construction (see
+	// NewAgentInstance) — NOT lazily populated at lookup time. Reads in
+	// GetProviderForCandidate and writes via StoreProviderPool (model switch)
+	// are race-free because both go through the atomic.Pointer. Even with
+	// the atomic load/store, ApplyAgentModel holds agent.mu around the
+	// Model + Provider + Candidates + ProviderPool flip so an in-flight turn
+	// never sees a torn (newModel, oldPool) state — the lock ensures the
+	// tuple of fields swaps as one unit.
+	providerPool   atomic.Pointer[map[string]providers.LLMProvider]
 	Sessions       session.SessionStore
 	ContextBuilder *ContextBuilder
 	Tools          *tools.ToolRegistry
@@ -343,7 +345,6 @@ func NewAgentInstance(
 		SummarizeMessageThreshold: summarizeMessageThreshold,
 		SummarizeTokenPercent:     summarizeTokenPercent,
 		Provider:                  provider,
-		ProviderPool:              providerPool,
 		Sessions:                  sessions,
 		ContextBuilder:            contextBuilder,
 		Tools:                     toolsRegistry,
@@ -358,6 +359,10 @@ func NewAgentInstance(
 		IsRoutingDefault:          isRoutingDefault,
 		DelegationPolicy:          delegationPolicy,
 	}
+	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
+	// pointer; calling it here (vs. direct field assignment) keeps the
+	// publish path identical to the model-switch path in ApplyAgentModel.
+	inst.StoreProviderPool(providerPool)
 	if agentCfg != nil && agentCfg.Tools != nil {
 		inst.toolPolicy.Store(agentToolsCfgToPolicy(agentCfg.Tools))
 	}
@@ -395,6 +400,13 @@ func (a *AgentInstance) StoreToolPolicy(p *tools.ToolPolicyCfg) {
 // This is the runtime half of the FR-007 contract: candidate chain carries
 // the explicit provider (set in resolveModelCandidatesFromList) AND the
 // fallback iteration routes through the matching provider instance here.
+//
+// Safe for concurrent access with StoreProviderPool (model switch). Both
+// sides go through the atomic pointer, so concurrent map read+write is
+// impossible by construction. ApplyAgentModel additionally holds agent.mu
+// around the full Model+Provider+Candidates+ProviderPool flip so an
+// in-flight turn never observes a torn (newModel, oldPool) state — see
+// loop.go::ApplyAgentModel.
 func (a *AgentInstance) GetProviderForCandidate(candidate providers.FallbackCandidate) providers.LLMProvider {
 	if a == nil {
 		return nil
@@ -405,8 +417,8 @@ func (a *AgentInstance) GetProviderForCandidate(candidate providers.FallbackCand
 		// Preserve pre-FR-007 behavior.
 		return a.Provider
 	}
-	if a.ProviderPool != nil {
-		if p, ok := a.ProviderPool[pinned]; ok && p != nil {
+	if pool := a.providerPool.Load(); pool != nil {
+		if p, ok := (*pool)[pinned]; ok && p != nil {
 			return p
 		}
 	}
@@ -419,14 +431,30 @@ func (a *AgentInstance) GetProviderForCandidate(candidate providers.FallbackCand
 }
 
 // StoreProviderPool atomically replaces the agent's provider pool. Called by
+// NewAgentInstance to publish the eagerly-built initial pool, and by
 // ApplyAgentModel on model switch to ensure the new primary's provider is in
-// the pool (the old primary is closed only after ApplyAgentModel finishes its
-// Provider swap on the instance). Safe for concurrent access with in-flight
-// turn assembly.
+// the pool (the old primary is closed only after ApplyAgentModel finishes
+// its Provider swap on the instance). Safe for concurrent access with
+// in-flight turn assembly — readers in GetProviderForCandidate Load() the
+// same atomic pointer and never observe a torn map state.
+//
+// The atomic pointer only protects the pointer swap; callers that need the
+// new pool to be coherent with Model+Provider+Candidates (e.g. ApplyAgentModel)
+// MUST additionally hold agent.mu around the full flip so an in-flight turn
+// never reads (newModel, oldPool) — see loop.go::ApplyAgentModel.
 func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider) {
-	a.providerPoolMu.Lock()
-	defer a.providerPoolMu.Unlock()
-	a.ProviderPool = pool
+	// Defensive copy: a caller that mutates the map after StoreProviderPool
+	// would race with readers. Copy the keys+values so the published map is
+	// owned by the agent instance from this point on.
+	var publish *map[string]providers.LLMProvider
+	if pool != nil {
+		buf := make(map[string]providers.LLMProvider, len(pool))
+		for k, v := range pool {
+			buf[k] = v
+		}
+		publish = &buf
+	}
+	a.providerPool.Store(publish)
 }
 
 // buildProviderPool pre-builds an LLMProvider for every distinct provider
