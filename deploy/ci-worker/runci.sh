@@ -90,20 +90,20 @@ run_contracts(){ make verify-contracts; }
 # workflow on a PR.
 run_e2e() {
   : "${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret}"
-  local E2E_HOME=/tmp/omnipus-e2e
+  # OMNIPUS_HOME MUST be exported before any omnipus-binary call, otherwise the binary
+  # falls back to the default home (~/.omnipus → /root/.omnipus on this worker) and our
+  # seeded /tmp/omnipus-e2e config is ignored — gateway would come up on the default port
+  # 5000 instead of our seeded 6060, and health-check polling would never see /health.
+  export OMNIPUS_HOME=/tmp/omnipus-e2e
   local E2E_BIN=/tmp/omnipus-e2e-bin
   local E2E_LOG=/tmp/omnipus-e2e.log
   local GATEWAY_PID=
 
-  # Trap cleans up the gateway on ANY exit path (success, failure, signal). The step()
-  # wrapper has already accounted rc; we just need to make sure we don't leak the process.
-  cleanup_e2e() {
-    local rc=$?
-    [ -n "$GATEWAY_PID" ] && kill "$GATEWAY_PID" 2>/dev/null || true
-    wait "$GATEWAY_PID" 2>/dev/null || true
-    return $rc
-  }
-  trap cleanup_e2e RETURN
+  # Trap cleans up the gateway on ANY exit path (success, failure, signal). Inlined
+  # (NOT a nested function) because nested functions have their own scope and cannot
+  # see the parent's `local GATEWAY_PID` — `set -u` then fires on the unset reference.
+  # The trap body runs in the function's own scope, so the local is visible here.
+  trap '[ -n "$GATEWAY_PID" ] && kill "$GATEWAY_PID" 2>/dev/null; wait "$GATEWAY_PID" 2>/dev/null; return $?' RETURN
 
   # 1. Build SPA + sync into the embed target (the //go:embed in pkg/gateway/embed.go
   #    requires pkg/gateway/spa/ to be non-empty).
@@ -121,8 +121,8 @@ run_e2e() {
 
   # 3. Fresh OMNIPUS_HOME every run.
   log "e2e: prepare OMNIPUS_HOME"
-  rm -rf "$E2E_HOME"
-  mkdir -p "$E2E_HOME"
+  rm -rf "$OMNIPUS_HOME"
+  mkdir -p "$OMNIPUS_HOME"
 
   # 4. Seed the canonical e2e config.json. The dev_mode_bypass flag unblocks
   #    onboarding endpoints that require bearer auth before an admin exists.
@@ -130,7 +130,7 @@ run_e2e() {
   #    the onboarding handler updates the existing entry instead of overwriting
   #    agent defaults with a non-aliased model path. See .github/workflows/pr.yml
   #    "Seed gateway config" for the same rationale.
-  cat > "$E2E_HOME/config.json" <<'EOF'
+  cat > "$OMNIPUS_HOME/config.json" <<'EOF'
 {
   "version": 1,
   "gateway": {
@@ -171,7 +171,7 @@ EOF
   sleep 0.5
   if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then
     echo "Gateway process died immediately. Panic log:" >&2
-    cat "$E2E_HOME/logs/gateway_panic.log" 2>/dev/null || true
+    cat "$OMNIPUS_HOME/logs/gateway_panic.log" 2>/dev/null || true
     cat "$E2E_LOG" >&2
     return 1
   fi
