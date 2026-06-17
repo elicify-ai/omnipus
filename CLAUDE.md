@@ -234,6 +234,38 @@ Onboarding flow → Chat (multi-turn, token/cost) → Agents (list, create, prof
 
 Gateway opens two listeners by default: `gateway.port` (5000, SPA + authenticated API) and `gateway.preview_port` (5001, agent-generated HTML previews on a separate origin for browser isolation). `gateway.preview_listener_enabled=false` fully disables iframe preview (second listener not started, `/preview/` not registered → 404; `web_serve` URLs won't resolve). No single-port fallback. Reverse-proxy operators set `gateway.public_url` and `gateway.preview_origin` to the FQ HTTPS URLs the browser reaches (for correct CSP / `frame-ancestors`) — see `docs/operations/reverse-proxy.md`. On Android/Termux, `preview_listener_enabled` defaults to false (can't bind a second port).
 
+### Local PR-runner (ci-omnipus Fly worker)
+
+The Go test/build suite is run on a dedicated Fly worker, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see "Testing & building — CI is the authority" above). The worker is a sized, on-demand box with persistent caches, driven via `flyctl ssh console`.
+
+- **App**: `ci-omnipus` (`sin` region, `performance-8x/16GB`, persistent `/cache` volume for go-build/mod cache, npm cache, and the cloned repo).
+- **Source of truth**: `deploy/ci-worker/runci.sh` (in this repo) **and** the deployed copy at `/cache/runci.sh` on the worker. **Editing the repo file does NOT update the executing copy** — see "Redeploying runci.sh" below.
+- **Trigger** (one gate at a time):
+  ```bash
+  fly ssh console --app ci-omnipus -C "/cache/runci.sh <ref> <gate>"
+  ```
+- **Gates**: `all | go-build | go-vet | go-test | contracts | spa | gofmt | quick | embed-build`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE").
+- **When to use it**:
+  - Pre-push verification on a feature branch **before** opening a PR (when you want a signal without burning a PR slot).
+  - Pre-merge gate on a hotfix / release branch (faster turnaround than the public PR workflow).
+  - Any time the dev pod can't run the suite (OOM, RAM pressure, root disk > 90%).
+
+**Two false-signal traps (both hit during the v0.1.0 epic, 2026-06-14) — read before trusting a verdict:**
+
+1. **Stale-checkout false-RED.** A bare `git checkout -f <branch>` switches to the *local* branch, which `git fetch` does NOT fast-forward; `reset --hard <branch>` then resets to that stale local commit, silently testing yesterday's code. Symptom: pushed fixes "don't take" — the same tests keep failing across runs. **Fix in runci.sh**: `TARGET="$(git rev-parse --verify --quiet "origin/$REF^{commit}" || git rev-parse --verify --quiet "$REF^{commit}")"`; checkout/reset to that SHA. **Always confirm the `HEAD: <sha> <subject>` line near the top of the run matches the commit you pushed** before trusting the verdict.
+2. **Wrapper-exit-code false-GREEN.** `flyctl ssh console -C "…"` and a background-task `<status>completed exit 0</status>` report the **SSH wrapper's** exit code, NOT runci.sh's. A failing gate can still show "exit 0". **Always parse the output** for `GATE FAILURE(S)` / `REAL FAILURE` / `go-test -> exit 1` / the final `RESULT: …` line, never trust the task-completion exit code.
+
+**Redeploying runci.sh** (after editing the repo file — the worker keeps using its cached copy):
+```bash
+# 1. base64 the local file and pipe it through SSH
+base64 deploy/ci-worker/runci.sh | fly ssh console --app ci-omnipus -C 'cat > /tmp/runci.sh.b64'
+# 2. decode + install on the worker
+fly ssh console --app ci-omnipus -C 'base64 -d /tmp/runci.sh.b64 > /cache/runci.sh && chmod +x /cache/runci.sh && md5sum /cache/runci.sh'
+# 3. confirm md5 matches `md5sum deploy/ci-worker/runci.sh` locally
+```
+
+**Cost / lifecycle**: the worker is stopped when idle (no public service). If `fly status` shows the machine `stopped`, run `fly machines start <id> --app ci-omnipus` once before invoking `runci.sh`; the SSH console will auto-start it otherwise. Watch the persistent `/cache` volume for disk pressure — `fly ssh console --app ci-omnipus -C 'df -h /cache'`.
+
 ## Contract regeneration
 
 Wire types are generated from `contracts/openapi.yaml` (REST), `contracts/asyncapi.yaml` (WS), `contracts/components/schemas/` (shared schemas). Artifacts (committed, never hand-edit): `pkg/api/generated/` (Go, oapi-codegen) and `src/lib/api/generated/` (TS types + Zod, openapi-typescript / openapi-zod-client).
