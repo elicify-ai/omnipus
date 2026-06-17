@@ -163,6 +163,49 @@ describe('MessageItem — interrupted status', () => {
   })
 })
 
+describe('MessageItem — per-turn model footer (FR-014)', () => {
+  it('renders the model slug on assistant messages that carry one', () => {
+    // test-analyzer-B #6: assert the model footer is rendered when the
+    // message has a non-empty `model` field. The renderer reads the
+    // SPA-internal `message.model` directly (W2-30 — no metadata.custom
+    // round-trip).
+    renderWithQuery(
+      <MessageItem
+        message={makeMsg({
+          role: 'assistant',
+          content: 'response',
+          model: 'z-ai/glm-5-turbo',
+        })}
+      />
+    )
+    const modelSpan = screen.getByTestId('message-model')
+    expect(modelSpan).toBeInTheDocument()
+    expect(modelSpan.textContent).toBe('z-ai/glm-5-turbo')
+  })
+
+  it('omits the model footer when the assistant message has no model', () => {
+    // Spec §18 Q6: legacy turns (no model field) MUST NOT show any model
+    // info — no placeholder text, no "(model not recorded)" string.
+    renderWithQuery(
+      <MessageItem
+        message={makeMsg({ role: 'assistant', content: 'response' })}
+      />
+    )
+    expect(screen.queryByTestId('message-model')).toBeNull()
+  })
+
+  it('omits the model footer when the model field is empty/whitespace', () => {
+    // Belt-and-suspenders: the renderer treats "" and "   " the same
+    // as absent.
+    renderWithQuery(
+      <MessageItem
+        message={makeMsg({ role: 'assistant', content: 'response', model: '   ' })}
+      />
+    )
+    expect(screen.queryByTestId('message-model')).toBeNull()
+  })
+})
+
 describe('MessageItem — XSS safety', () => {
   it('renders XSS token content as escaped text', () => {
     // Dataset: WebSocket Message Parsing row 5 — XSS content must not execute

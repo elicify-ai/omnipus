@@ -596,6 +596,19 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
         {isInterrupted && (
           <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
         )}
+
+        {/* Per-turn model record (FR-014). Mirrors MessageItem.tsx so
+            replay sessions show the same model footer as the live
+            AssistantUI render. `truncate max-w-[160px]` prevents a long
+            model slug from breaking the row layout. */}
+        {message.role === 'assistant' && typeof (message as { model?: string }).model === 'string' && (message as { model?: string }).model!.trim().length > 0 && (
+          <span
+            data-testid="message-model"
+            className="text-[10px] font-mono text-[var(--color-muted)] truncate max-w-[160px]"
+          >
+            {(message as { model?: string }).model!.trim()}
+          </span>
+        )}
       </div>
     </div>
   )
@@ -1081,44 +1094,42 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     return trimmed.length > 0 ? trimmed : null
   }, [agents, activeAgentId])
 
-  // The picker shows a "next message" value. We track:
-  //   - hasUserPicked: has the user clicked a model this session?
-  //   - nextModel: the current picker value (or null = un-picked)
-  // Initial render: derive the default from transcript last-model, then
-  // agent model. We do NOT auto-update when the transcript changes —
-  // the user has control once they've picked (or have not picked).
-  const messagesForDerivation = useChatStore((s) => s.messages)
+  // The picker shows a "next message" value. The store's `nextModel` is
+  // the single source of truth — we feed it directly to <ModelSelector>.
+  // We do NOT mirror it into local state (dual-state was the original
+  // dual-source bug W2-7d: keeping a `pickerValue` mirror caused the
+  // store to lag the visible value on every transcript mutation).
+  //
+  // The store is keyed globally (not per-session), so on a session or
+  // agent switch the seed effect below clears the store value, then
+  // writes a freshly-derived default (transcript-last → agent → '').
+  // This prevents a user-pick in session A from silently carrying into
+  // session B (W2-7b).
   const nextModel = useChatStore((s) => s.nextModel)
   const setNextModel = useChatStore((s) => s.setNextModel)
-  // Mirror nextModel into local React state for the ModelSelector's
-  // controlled `value` prop. The store value is the source of truth;
-  // local state just makes the controlled-input UX feel snappy.
-  const [pickerValue, setPickerValue] = useState<string>('')
-  // Seed pickerValue on first render only — pick the first non-empty
-  // source from (transcript, agent). Once seeded, the user controls
-  // it. We track "has the seed happened" via a ref so navigations
-  // (e.g. switching agents) re-seed.
   const lastSeedKey = useRef<string>('')
   useEffect(() => {
-    // Re-seed only when the active session or agent id changes. We do
-    // not re-seed on transcript change (the picker is forward-looking).
+    // Re-seed only when the active session or agent id changes. The
+    // seed-key gate guarantees this effect never reads transcript state
+    // mid-mutation, so we don't need messages as a dep (W2-7a — the
+    // previous `messagesForDerivation` dep was dead).
     const seedKey = `${activeSessionId ?? ''}::${activeAgentId ?? ''}`
     if (seedKey === lastSeedKey.current) return
     lastSeedKey.current = seedKey
-    // If the user has already picked this session, keep their value.
-    if (nextModel !== null) {
-      setPickerValue(nextModel)
-      return
-    }
-    const seed = transcriptLastModel ?? activeAgentModel ?? ''
-    setPickerValue(seed)
-  }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, nextModel, messagesForDerivation])
+    // Always clear on session/agent switch so a stale pick from another
+    // session cannot leak in. The seed re-derives a fresh default below.
+    setNextModel(transcriptLastModel ?? activeAgentModel ?? null)
+  }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, setNextModel])
 
-  // Helper: user just picked a model in the dropdown. Write to local
-  // state AND the store so the runtime's onNew can pick it up.
+  // Helper: user just picked a model in the dropdown. Write directly
+  // to the store; an empty string means "revert to the agent default
+  // for the next message" — we toast to make the implicit revert
+  // explicit (W2-7e).
   function onPickerChange(model: string) {
-    setPickerValue(model)
     setNextModel(model || null)
+    if (model === '') {
+      addToast({ message: 'Reverted to agent default for next message', variant: 'default' })
+    }
   }
 
   const { mutate: doCreateSession, isPending: isCreatingSession } = useMutation({
@@ -1515,7 +1526,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         <div className="w-[260px]">
           <ModelSelector
             models={availableModels}
-            value={pickerValue}
+            value={nextModel ?? ''}
             onChange={onPickerChange}
             placeholder={activeAgentModel ?? 'Select a model…'}
             providerGroups={providerGroups}

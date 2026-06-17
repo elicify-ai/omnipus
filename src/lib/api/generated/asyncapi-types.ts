@@ -59,6 +59,7 @@ export interface MessageFrame {
   media?: Array<string>;
   metadata?: {
     model_name?: string;
+    [key: string]: unknown;
   };
 }
 

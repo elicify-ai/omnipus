@@ -1,13 +1,13 @@
 /**
  * omnipus-runtime.model-field.test.ts
  *
- * Wave 2 / FR-014: per-turn model field on replay.
+ * FR-014: per-turn model field on replay.
  *
  * The AssistantUI external-store runtime adapter reads each message from the
- * chat store and converts it to a `ThreadMessageLike` for rendering. After
- * Wave 1B lands the per-turn `model` field on the wire transcript, the
- * adapter must surface that field on the resulting `ThreadMessageLike` so
- * the UI can render "this turn was produced by model X".
+ * chat store and converts it to a `ThreadMessageLike` for rendering. The
+ * per-turn `model` field is consumed directly by the renderer
+ * (MessageItem.tsx, VirtualAssistantMessageRow in ChatScreen.tsx) reading
+ * `message.model` off the ChatMessage — not via a metadata round-trip.
  *
  * Spec §18 Q6: legacy turns (no `model` field recorded) MUST NOT show any
  * model info. No placeholder text, no "(model not recorded)" string — the
@@ -22,7 +22,8 @@
  * Approach: drive `convertMessage` directly (it's a pure function).
  * The `useOmnipusRuntime` hook is exercised in
  * `omnipus-runtime.attachments.test.tsx` — these tests focus on the
- * per-message conversion output (where the model field is added).
+ * per-message conversion output shape and ensure no dead `metadata.custom`
+ * write is reintroduced (W2-30).
  */
 
 import { describe, it, expect } from 'vitest'
@@ -31,7 +32,7 @@ import type { ChatMessage } from '@/store/chat'
 
 // convertMessage is pure given its args. We hand-build the call signature
 // with empty tool-call state (no tool calls, no live state) — these tests
-// are about the model-field surface, not the tool-call interleaving.
+// are about the conversion shape, not the tool-call interleaving.
 
 const EMPTY_TOOL_CALLS = {} as never
 const EMPTY_TOOL_CALL_ORDER: string[] = []
@@ -49,10 +50,11 @@ function makeAssistantMsg(overrides: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 describe('convertMessage — per-turn model field (FR-014)', () => {
-  it('exposes the assistant model on metadata.custom for turns that have it recorded', () => {
-    // New assistant turn carries `model: "z-ai/glm-5.2"` from the wire
-    // transcript. The runtime adapter must surface it on the resulting
-    // ThreadMessageLike so the UI can render it.
+  it('does not write a metadata.custom.model wrapper for turns that have a model', () => {
+    // W2-30: the runtime no longer writes `metadata.custom.model`. The
+    // renderer (MessageItem, VirtualAssistantMessageRow) reads the model
+    // off the ChatMessage directly, so a metadata write is dead code
+    // and the previous field is asserted absent.
     const msg = makeAssistantMsg({ model: 'z-ai/glm-5.2' })
     const out = convertMessage(
       msg,
@@ -62,14 +64,13 @@ describe('convertMessage — per-turn model field (FR-014)', () => {
       false,
     )
     const custom = (out as { metadata?: { custom?: { model?: string } } }).metadata?.custom
-    expect(custom?.model).toBe('z-ai/glm-5.2')
+    expect(custom?.model).toBeUndefined()
   })
 
-  it('omits metadata.custom for legacy turns (no model recorded)', () => {
+  it('omits metadata.custom entirely for legacy turns (no model recorded)', () => {
     // Spec §18 Q6: legacy turns (no model field) MUST NOT show any
     // model info. The runtime adapter must NOT inject a placeholder
-    // string — metadata.custom must be absent (or its model field
-    // must be undefined).
+    // string — metadata.custom must be absent.
     const msg = makeAssistantMsg()
     const out = convertMessage(
       msg,
