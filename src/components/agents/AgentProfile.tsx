@@ -47,6 +47,7 @@ import {
   fetchActivity,
   fetchSkills,
   isWorker,
+  type Agent,
   type AgentSession,
   type ActivityEvent,
   type AgentToolsCfg,
@@ -82,20 +83,16 @@ function getIconComponent(name: string | undefined) {
 }
 
 /**
- * Wave 2 / FIX-4: provider-aware fallback entry.
- *
- * `model` is the model slug sent on the wire. `provider` is the provider
- * that owns that model — tracked locally so the fallback can be routed
- * through a different provider than the agent's primary (US-3). Until
- * Wave 1B's regen lands and the wire `fallback_models` shape becomes
- * `[{model, provider}]`, only `model` is persisted; `provider` is local
- * state for the chip layout (and the auto-save payload stays a
- * `string[]` of model slugs).
+ * One entry in the agent's fallback chain. Mirrors the wire shape
+ * (derived from `Agent['fallback_models'][number]`) but narrows
+ * `provider` to required so the editor and the auto-save payload can
+ * share a single type without `?` chains. At hydration we look up the
+ * provider from `modelToProvider`; if that fails we fall back to ''
+ * and the chip renders a muted dash. When the openapi-types re-export
+ * adds a top-level `FallbackModel`, this alias becomes a one-liner
+ * `FallbackModel & { provider: string }`.
  */
-interface FallbackEntry {
-  model: string
-  provider: string
-}
+type FallbackEntry = NonNullable<Agent['fallback_models']>[number] & { provider: string }
 
 interface AgentProfileProps {
   /**
@@ -160,11 +157,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     .filter((p) => (p.models ?? []).length > 0)
     .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
 
-  // Wave 2 / FIX-4: model → provider lookup. Used by the fallback editor to
-  // attribute each fallback chip to the provider that owns it. The lookup
-  // walks every connected provider; if a model is listed by more than one
-  // provider we use the first match (consistent with ModelSelector's
-  // rendering order).
+  // Model → provider lookup. The fallback editor attributes each chip to
+  // the provider that owns it; if a model is listed by more than one
+  // provider we keep the first match (consistent with ModelSelector's
+  // rendering order). Used to narrow wire `provider?: string` to
+  // required at hydration.
   const modelToProvider: Record<string, string> = {}
   for (const p of connectedProviders) {
     for (const m of p.models ?? []) {
@@ -192,10 +189,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [model, setModel] = useState('')
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
   const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
-  // Wave 2 / FIX-4: FallbackEntry[] replaces the legacy string[]. Each
-  // entry tracks the provider alongside the model so the chip layout
-  // can show the provider badge. The wire payload uses [{model, provider}]
-  // post-phase1b cutover — see the `formData` memo below.
+  // Fallback chain — the wire shape is `[{model, provider}]`; the editor
+  // tracks it 1:1 with `provider` always populated (see FallbackEntry
+  // type). Provider is needed for the chip badge; the wire payload in
+  // `formData` below emits the same shape.
   const [fallbackModels, setFallbackModels] = useState<FallbackEntry[]>([])
   const [temperature, setTemperature] = useState(1.0)
   const [maxTokens, setMaxTokens] = useState(4096)
@@ -237,14 +234,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setModel(agent.model ?? '')
     setSelectedColor(agent.color)
     setSelectedIcon((agent.icon as IconName) ?? 'Robot')
-    // Wave 1B + Wave 2: hydrate from FallbackEntry[] wire shape directly.
-    // Each entry already has {model, provider}; if provider is missing (legacy
-    // entry from before the cutover, or a connector that has since been
-    // removed), look it up via modelToProvider, else empty string.
+    // Hydrate the fallback chain from the wire. `provider` is optional on
+    // the wire type; narrow to required by looking up via modelToProvider,
+    // else empty string (renders as a muted dash in the chip).
     const rawFallbacks = agent.fallback_models ?? []
     setFallbackModels(
       rawFallbacks.map((entry) => ({
-        model: entry.model,
+        ...entry,
         provider: entry.provider || modelToProvider[entry.model] || '',
       })),
     )
@@ -283,9 +279,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     model,
     color: selectedColor,
     icon: selectedIcon,
-    // Wave 1B cutover: wire `fallback_models` is now [{model, provider}].
-    // The FallbackEntry editor state matches the wire shape 1:1 — just emit
-    // it directly (omit empty for explicit unset).
+    // Editor state matches the wire shape 1:1; emit `undefined` for
+    // empty (treated as "no fallbacks" by the backend).
     fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
     model_params: { temperature, max_tokens: maxTokens, top_p: topP },
     rate_limits: {
@@ -340,12 +335,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // closed sheet. Refuse a save with no id rather than PUT /null.
       if (agentId === null) return
       // Locked agents: strip every field the backend treats as immutable for
-      // the locked roster (Mia/Jim/Ava/Ray/Max). Identity fields plus the
-      // sandbox profile, shell policy, tools_cfg, and skills are all built-in
-      // for these agents — sending them yields a 403 from the locked-field
-      // validator, and the autosave indicator would surface a spurious error.
-      // Skills are stripped here (B-2 defense-in-depth on the frontend side):
-      // the Skills picker is rendered disabled for locked agents, so this strip
+      // the locked roster (see `.preview-doc/agents.html` for the current
+      // 4-base roster). Identity fields plus the sandbox profile, shell
+      // policy, tools_cfg, and skills are all built-in for these agents —
+      // sending them yields a 403 from the locked-field validator, and the
+      // autosave indicator would surface a spurious error. Skills are
+      // stripped here (B-2 defense-in-depth on the frontend side): the
+      // Skills picker is rendered disabled for locked agents, so this strip
       // is the belt-and-suspenders path for any state that may survive hydration.
       const payload = agent?.locked
         ? (({
@@ -363,16 +359,24 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   )
 
 
-  // Wave 2 / FIX-4: add a fallback from the <ModelSelector> dropdown. The
-  // selector's onChange fires with the model string; we pair it with the
-  // provider that owns it via the modelToProvider lookup. De-dupe by
-  // model — the fallback list cannot have the same model twice (US-3).
+  // Add a fallback from the <ModelSelector> dropdown. Pairs the picked
+  // model with the provider that owns it (via modelToProvider). De-dupes
+  // by model — the fallback list cannot have the same model twice
+  // (US-3). Free-text picks (model not in any connected provider) are
+  // accepted but surface a warning toast.
   function addFallbackFromSelector(modelSlug: string) {
     const trimmed = modelSlug.trim()
     if (!trimmed) return
+    const knownProvider = modelToProvider[trimmed]
+    if (!knownProvider) {
+      addToast({
+        message: `"${trimmed}" isn't listed by any connected provider — saving anyway, but the fallback may not work.`,
+        variant: 'warning',
+      })
+    }
     setFallbackModels((prev) => {
       if (prev.some((f) => f.model === trimmed)) return prev
-      return [...prev, { model: trimmed, provider: modelToProvider[trimmed] ?? '' }]
+      return [...prev, { model: trimmed, provider: knownProvider ?? '' }]
     })
   }
 
@@ -725,6 +729,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 onChange={(v) => { markDirty(); setModel(v) }}
                 placeholder="Provider default"
                 providerGroups={providerGroups}
+                onUnknownModel={(m) => addToast({
+                  message: `"${m}" isn't listed by any connected provider — saving anyway, but the call may not work.`,
+                  variant: 'warning',
+                })}
               />
               {canEdit && (
                 <div className="space-y-1.5">
@@ -744,9 +752,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           data-testid={`fallback-chip-provider-${entry.model}`}
                           className="inline-flex items-center px-1 rounded text-[9px] font-semibold"
                           style={{
-                            backgroundColor: 'var(--color-accent)/15',
+                            backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
                             color: 'var(--color-accent)',
-                            border: '1px solid var(--color-accent)/30',
+                            border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
                           }}
                         >
                           {entry.provider || '—'}

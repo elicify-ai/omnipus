@@ -20,17 +20,24 @@ interface ModelSelectorProps {
   /** When provided, renders models grouped by provider (shown when ≥2 providers configured). */
   providerGroups?: ModelGroup[]
   /**
-   * Wave 2 / FIX-4: optional test ids for the combobox trigger and the
-   * pickable model items. Defaults preserve the existing behavior
-   * (no data-testid on the trigger or items) so the change is
-   * backward-compatible with all current call sites.
+   * Optional test ids for the combobox trigger and the pickable model
+   * items. Defaults preserve the existing behavior (no data-testid on
+   * the trigger or items) so the change is backward-compatible with
+   * all current call sites.
    */
   triggerTestId?: string
   /** Prefix for each item's data-testid. The full id is `${itemTestIdPrefix}${model}`. */
   itemTestIdPrefix?: string
+  /**
+   * Optional callback fired when the user picks a free-text model slug
+   * that is NOT in the supplied `models` / `providerGroups` list (i.e.
+   * the "Use <query>" row at the bottom of the popover). Lets callers
+   * surface a warning toast. Not called for exact-match picks.
+   */
+  onUnknownModel?: (model: string) => void
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel }: ModelSelectorProps) {
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
 
@@ -73,6 +80,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   const useGrouped = groupsWithModels.length >= 2
 
   const handleSelect = (model: string) => {
+    onChange(model)
+    setOpen(false)
+    setQuery('')
+  }
+
+  const handleUnknownSelect = (model: string) => {
+    onUnknownModel?.(model)
     onChange(model)
     setOpen(false)
     setQuery('')
@@ -165,7 +179,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
               <CommandGroup>
                 <CommandItem
                   value={`custom:${queryLower}`}
-                  onSelect={() => handleSelect(queryRaw)}
+                  onSelect={() => handleUnknownSelect(queryRaw)}
                 >
                   <Keyboard size={14} className="mr-2 shrink-0" style={{ color: 'var(--color-muted)' }} />
                   <span className="text-xs">
