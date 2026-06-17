@@ -354,6 +354,18 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	// orchestration call resolved and created a new provider for newModel).
 	require.NotNil(t, updatedAgent.Provider,
 		"agent.Provider must not be nil after ApplyAgentModel swap")
+
+	// Crit 7 (W4-17): the post-switch provider pool must be queryable for
+	// the new pinned provider. Both registered models in this test pin
+	// provider "openai"; the GetProviderForCandidate accessor must return
+	// a non-nil LLMProvider for that pinned name, otherwise a subsequent
+	// fallback that targets the same provider would silently degrade to
+	// the primary's provider (FR-007 violation).
+	pinnedProv := updatedAgent.GetProviderForCandidate(providers.FallbackCandidate{
+		Provider: "openai",
+		Model:    newModel,
+	})
+	require.NotNil(t, pinnedProv, "post-switch pool returned nil provider for the new pinned name 'openai'")
 }
 
 // TestSwitchTime_EmptySession_NoSyntheticMessage verifies that switching on an
