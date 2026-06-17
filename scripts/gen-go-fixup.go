@@ -1,0 +1,72 @@
+// Command _gen-go-fixup replaces inline anonymous struct copies of named types
+// that oapi-codegen v2 emits as a side effect of certain spec patterns
+// (notably `items: $ref` arrays that also declare `additionalProperties: false`
+// on the referenced schema). It enforces Constraint #8 — wire types defined in
+// contracts/ are the single source of truth, and consumers must use the named
+// types rather than JSON-shape-coincident anonymous copies.
+//
+// Why this exists: without the fixup, generated Go code carries both a named
+// type and an inline anonymous struct for the same schema, and the
+// Constraint #8 wire-format lint happily passes because the inline copy has
+// two or more `json:` tags. Renaming a field in the named type would NOT
+// propagate to the inline copy, silently breaking handlers that depend on the
+// Go-side type. This fixup is idempotent: running it twice on a clean tree
+// produces no diff.
+//
+// One known rewrite is currently applied: the `fallback_models` field on
+// AgentDetail, AgentCreateRequest, and AgentUpdateRequest is replaced with a
+// `*[]FallbackModel` reference to the named top-level type.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"regexp"
+)
+
+// fallbackModelsInline matches the inline anonymous struct that oapi-codegen
+// emits for `fallback_models: *[]struct{Model string; Provider *string}` and
+// captures the field name (FallbackModels) plus the trailing json tag.
+//
+// Group 1: field name (e.g. "FallbackModels")
+// Group 2: json tag with surrounding backticks (e.g. "`json:\"fallback_models,omitempty\"`")
+//
+// The multiline `(?s)` flag lets `.` match newlines so we capture the entire
+// inline struct definition, including its body.
+var fallbackModelsInline = regexp.MustCompile(`(?s)(FallbackModels)\s+\*\[\]struct\s*\{[^}]*?\}\s*(` + "`json:\"fallback_models[^\"]*\"`" + `)`)
+
+// rewriter maps a (fieldName → replacement) pair to the Go fragment that
+// should appear in its place. The replacement is a complete `Field *[]Type`
+// declaration followed by the same json tag.
+const fallbackModelRewrite = `FallbackModels *[]FallbackModel `
+
+func run(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	original := string(data)
+	updated := fallbackModelsInline.ReplaceAllString(original, fallbackModelRewrite+"$2")
+
+	if updated == original {
+		return nil
+	}
+
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func main() {
+	path := flag.String("file", "pkg/api/generated/openapi_types.gen.go", "path to the generated openapi Go file")
+	flag.Parse()
+
+	if err := run(*path); err != nil {
+		fmt.Fprintf(os.Stderr, "_gen-go-fixup: %v\n", err)
+		os.Exit(1)
+	}
+}

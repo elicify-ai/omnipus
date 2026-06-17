@@ -51,6 +51,13 @@ CGO_ENABLED=0 "$GO" run ./scripts/gen-asyncapi-go/ \
   contracts/asyncapi.yaml \
   pkg/api/generated/asyncapi_types.gen.go
 
+# Wire-format fixup: replace inline anonymous struct copies with named type
+# references so Constraint #8 is honored at the codegen level. See
+# scripts/gen-go-fixup.go for the rewrite rules.
+echo "==> Applying wire-format fixup to openapi_types.gen.go..."
+CGO_ENABLED=0 "$GO" run ./scripts/gen-go-fixup.go \
+  -file pkg/api/generated/openapi_types.gen.go
+
 echo "==> Go type generation complete."
 echo "    pkg/api/generated/openapi_types.gen.go"
 echo "    pkg/api/generated/asyncapi_types.gen.go"
