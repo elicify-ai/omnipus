@@ -529,6 +529,13 @@ func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
 // the primary (FR-007). FR-005 pins the wire format to [{model, provider}]
 // going forward; FR-006 accepts the legacy [string] form during migration —
 // see FallbackModel.UnmarshalJSON.
+//
+// Spec reconciliation (Q1/Q7, phase-1-chat-model-and-errors.md §3 / §18):
+// Q1 originally said "full cutover, no [string] support" and Q7 said
+// "accept old form during migration". Implementation follows Q7: the read
+// path (UnmarshalJSON) accepts both forms, the write path (MarshalJSON)
+// always emits the object form. This file is the single read-side
+// normalizer; do not duplicate the legacy-form parsing elsewhere.
 type FallbackModel struct {
 	// Model is the model slug the fallback will use (e.g. "claude-sonnet-4.6"
 	// or "openrouter/anthropic/claude-opus-4.7").

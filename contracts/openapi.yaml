@@ -134,6 +134,8 @@ components:
       $ref: ./components/schemas/AgentCreateRequest.yaml
     AgentUpdateRequest:
       $ref: ./components/schemas/AgentUpdateRequest.yaml
+    FallbackModel:
+      $ref: ./components/schemas/FallbackModel.yaml
     ExecutorConfig:
       $ref: ./components/schemas/ExecutorConfig.yaml
     AgentSession:
