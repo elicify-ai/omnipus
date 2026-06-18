@@ -99,15 +99,17 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         </div>
       </button>
 
-      {/* "Set as default" sits outside the card button to avoid nested-button HTML violation */}
+      {/* "Set as default" sits outside the card button to avoid nested-button HTML violation.
+          Persistent (no group-hover gating — touch users would never see it) and sized for a
+          44×44 tap target per WCAG 2.5.8. */}
       {!agent.default && onSetDefault && (
         <button
           type="button"
           onClick={onSetDefault}
-          className="absolute bottom-3 right-4 flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors opacity-0 group-hover/card:opacity-100"
+          className="absolute bottom-3 right-4 flex items-center justify-center gap-1 min-h-[44px] min-w-[44px] px-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
           aria-label={`Set ${agent.name} as default agent`}
         >
-          <Star size={10} />
+          <Star size={12} weight="fill" />
           Set as default
         </button>
       )}
