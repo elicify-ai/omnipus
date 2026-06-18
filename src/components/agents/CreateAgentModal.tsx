@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Robot,
@@ -187,6 +187,33 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     }
     // resetForm references stable setState callbacks — isOpen is the only meaningful dep
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen])
+
+  // W6-A3 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
+  // modal (typically the "New agent" / "New worker" button) on close.
+  // Capture the focused element at the moment the modal transitions to open
+  // and restore it in the cleanup. Radix Dialog's default focus management
+  // moves focus into the dialog and would otherwise leave the user stranded
+  // on the body when the dialog unmounts.
+  const triggerRef = useRef<HTMLElement | null>(null)
+  const prevOpenRef = useRef(isOpen)
+  useEffect(() => {
+    if (isOpen && !prevOpenRef.current) {
+      // Modal just opened — capture the element that had focus (the trigger).
+      // document.activeElement is the trigger button in normal click-to-open
+      // flows; the ref is reset on close below.
+      triggerRef.current = document.activeElement as HTMLElement | null
+    } else if (!isOpen && prevOpenRef.current) {
+      // Modal just closed — restore focus to the captured trigger.
+      const trigger = triggerRef.current
+      triggerRef.current = null
+      if (trigger && typeof trigger.focus === 'function' && document.contains(trigger)) {
+        // Defer to next frame so Radix has finished its own teardown focus
+        // (Radix moves focus to the body on unmount).
+        requestAnimationFrame(() => trigger.focus())
+      }
+    }
+    prevOpenRef.current = isOpen
   }, [isOpen])
 
   const AvatarIcon = getIconComponent(icon)
