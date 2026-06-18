@@ -477,9 +477,19 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-8 py-6 space-y-4">
+      {/* W6-B1 / I1: cap the visible-on-open section count at Miller's 7±2.
+          Base agents open Identity + Sandbox + Model Configuration + Behavior
+          (4 accordions — the Identity strip header is also visible above, so
+          the user sees 5 top-level chunks). Workers replace Behavior with
+          Executor + Tools & Permissions (Tools is priority for a worker since
+          it's their run-time surface; Behavior's persona/heartbeat sub-blocks
+          don't apply). Schedules, Sessions, Activity stay collapsed — they're
+          reference material, not editing surfaces. */}
       <Accordion
         type="multiple"
-        defaultValue={['identity']}
+        defaultValue={isWorkerAgent
+          ? ['identity', 'sandbox', 'executor', 'tools']
+          : ['identity', 'sandbox', 'model', 'behavior']}
         className="rounded-lg border border-[var(--color-border)] divide-y divide-[var(--color-border)] overflow-hidden"
       >
         {/* Identity — always rendered; read-only for locked (core) agents */}
