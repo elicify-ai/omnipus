@@ -1,16 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Robot,
-  Brain,
-  Lightbulb,
-  MagnifyingGlass,
-  PencilSimple,
-  Code,
-  Chat,
-  Gear,
-  Shield,
-  Rocket,
   X,
   CaretDown,
   CaretUp,
@@ -58,29 +48,7 @@ import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { AVATAR_COLORS } from '@/lib/constants'
 import type { FallbackModel } from '@/lib/api/generated/openapi-types'
-
-const ICON_OPTIONS = [
-  { name: 'Robot', component: Robot },
-  { name: 'Brain', component: Brain },
-  { name: 'Lightbulb', component: Lightbulb },
-  { name: 'MagnifyingGlass', component: MagnifyingGlass },
-  { name: 'PencilSimple', component: PencilSimple },
-  { name: 'Code', component: Code },
-  { name: 'Chat', component: Chat },
-  { name: 'Gear', component: Gear },
-  { name: 'Shield', component: Shield },
-  { name: 'Rocket', component: Rocket },
-] as const
-
-type IconName = typeof ICON_OPTIONS[number]['name']
-
-function getIconComponent(name: string | undefined) {
-  const match = ICON_OPTIONS.find((o) => o.name === name)
-  if (!match && name) {
-    console.warn('[AgentProfile] Unknown icon:', name)
-  }
-  return match?.component ?? Robot
-}
+import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
 
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
 type FallbackEntry = FallbackModel & { provider: string }
@@ -1327,12 +1295,13 @@ function SandboxInfoTooltip() {
   const [visible, setVisible] = useState(false)
   return (
     <span className="relative inline-block">
-      {/* W6-A1 / I6: 44x44 px tap target (WCAG 2.5.8 AA). The Info icon is
-          rendered at 13 px but centered inside a 44 px button so the touch
-          surface meets the AA minimum without growing the visual glyph. */}
+      {/* W6-A1 / I6: 44x44 px tap target (WCAG 2.5.8 AA, token
+          --spacing-tap-target-min). The Info icon is rendered at 13 px
+          but centered inside a 44 px button so the touch surface meets
+          the AA minimum without growing the visual glyph. */}
       <button
         type="button"
-        className="min-h-[44px] min-w-[44px] flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
+        className="min-h-tap-target-min min-w-tap-target-min flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-1)]"
         onMouseEnter={() => setVisible(true)}
         onMouseLeave={() => setVisible(false)}
         onFocus={() => setVisible(true)}
