@@ -2,9 +2,11 @@ type: object
 description: >
   Body for PUT /agents/{id}. All fields are optional — only provided fields are updated.
   Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions.
-  model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback,
+  model, timeout_seconds, max_tool_iterations, steering_mode,
   heartbeat_enabled, and heartbeat_interval may be updated on locked agents.
   At least one field must be present (minProperties: 1) — empty patches are rejected 400.
+  Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400
+  with code field_not_applicable_to_type.
 minProperties: 1
 additionalProperties: false
 properties:
@@ -15,7 +17,10 @@ properties:
     example: "My Renamed Agent"
   description:
     type: string
-    description: New description. Rejected on locked agents. Empty string removes it.
+    description: >
+      New description. Rejected on locked agents. Empty string removes it. For Subagent /
+      subagent_3p, an empty string after trim is rejected 400 (description is required for
+      workers per the routing contract).
     example: "Updated description"
   model:
     type: string
@@ -23,9 +28,10 @@ properties:
     example: "gpt-4o"
   soul:
     type: string
+    minLength: 1
     description: >
       New SOUL.md content (agent system prompt). Rejected on locked agents.
-      Writing this triggers a config reload.
+      Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
     example: "You are a helpful assistant..."
   heartbeat:
     type: string
@@ -49,19 +55,18 @@ properties:
     example: 100
   steering_mode:
     type: string
-    description: New steering mode. Allowed on all agents.
+    enum:
+      - one-at-a-time
+      - queue-and-process
+    description: New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
     example: "one-at-a-time"
-  tool_feedback:
-    type: boolean
-    description: Enable/disable tool feedback loop. Allowed on all agents.
-    example: true
   heartbeat_enabled:
     type: boolean
-    description: Enable/disable heartbeat loop. Allowed on all agents.
+    description: Enable/disable heartbeat loop. Allowed on all agents (Main only).
     example: false
   heartbeat_interval:
     type: integer
-    description: New heartbeat interval in seconds. Allowed on all agents.
+    description: New heartbeat interval in seconds. Allowed on all agents (Main only).
     example: 1800
   sandbox_profile:
     type: string
@@ -72,10 +77,12 @@ properties:
       - off
     description: >
       New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
+      Rejected 400 on subagent_3p agents (CLI manages its own isolation).
     example: "workspace"
   shell_policy:
     type: object
-    description: Per-agent shell command deny-pattern configuration.
+    description: >
+      Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
     properties:
       enable_deny_patterns:
         type: boolean
@@ -99,13 +106,14 @@ properties:
     example: "Robot"
   fallback_models:
     type: array
-    maxItems: 10
+    maxItems: 2
     items:
       $ref: './FallbackModel.yaml'
     description: >
       Replace the agent's fallback model chain (Phase 1B / FR-005). Each
-      entry carries its own provider so the fallback can route through a
-      different provider than the primary (FR-007).
+      entry carries its own provider so the fallback can route through
+      a different provider than the primary (FR-007). Capped at 2 entries.
+      Rejected 400 on subagent_3p agents (CLI handles its own retries).
 
       Wire format is always the object form `[{model, provider}]`. Legacy
       `[string]` payloads are normalized at config-load time (FR-006).
@@ -114,7 +122,9 @@ properties:
         provider: "anthropic"
   model_params:
     type: object
-    description: LLM sampling parameters applied to this agent's requests.
+    description: >
+      LLM sampling parameters applied to this agent's requests. Rejected 400 on
+      subagent_3p agents (CLI may not support these flags).
     properties:
       temperature:
         type: number
@@ -158,7 +168,7 @@ properties:
     description: >
       Whether this agent is the global default that handles inbound messages
       with no more-specific routing rule. At most one agent is default.
-      Omitting this field leaves the flag unchanged.
+      Omitting this field leaves the flag unchanged. Main only — workers never default.
     example: false
   skills:
     type: array
@@ -168,7 +178,8 @@ properties:
     description: >
       Replace the agent's skill list. Only the skill IDs in this list will
       be granted; omitting this field leaves the existing list unchanged.
-      Send an empty array to remove all skills.
+      Send an empty array to remove all skills. Rejected 400 on subagent_3p agents
+      (CLI doesn't see Omnipus skills).
     example:
       - "web-research"
   delegation_policy:
@@ -178,7 +189,7 @@ properties:
     nullable: true
     description: >
       Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
-      Send null to clear.
+      Send null to clear. Main only.
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'
