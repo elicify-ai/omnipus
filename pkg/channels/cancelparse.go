@@ -12,11 +12,6 @@ import (
 // to fire a cancel. Defined here (pkg/channels) to avoid an import cycle with
 // pkg/agent. The agent loop's *AgentLoop implements this interface.
 type CancelInterceptor interface {
-	// InterruptByChannelChat gracefully cancels all active turns whose channel
-	// and chatID match. Returns nil when no active turn exists (no-op).
-	// Deprecated: prefer RequestCancelByChannelChat which runs the full cancel
-	// state machine (audit, transcript, abuse-detection, 2-stage timer).
-	InterruptByChannelChat(channel, chatID, hint string) error
 	// RequestCancelByChannelChat runs the full cancel state machine for the
 	// turn identified by (channelName, chatID). All parameters are primitives to
 	// avoid importing pkg/agent from pkg/channels (circular dependency).
@@ -58,7 +53,6 @@ func DispatchCancelIfRecognized(
 	if interceptor != nil {
 		// RequestCancelByChannelChat runs the full cancel state machine: audit,
 		// transcript marking, abuse detection, and the 2-stage graceful→hard timer.
-		// This supersedes the old InterruptByChannelChat path which skipped all of that.
 		if err := interceptor.RequestCancelByChannelChat(ctx, channelName, chatID, senderID); err != nil {
 			logger.WarnCF("channels", "cancel intercept error", map[string]any{
 				"channel": channelName,
