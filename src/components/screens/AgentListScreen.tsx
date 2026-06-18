@@ -6,7 +6,7 @@ import { WorkerCard } from '@/components/agents/WorkerCard'
 import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, updateAgent, isApiError } from '@/lib/api'
+import { fetchAgents, updateAgent, isApiError, isWorker } from '@/lib/api'
 
 export function AgentListScreen() {
   const { openCreateAgentModal, addToast } = useUiStore()
@@ -17,10 +17,13 @@ export function AgentListScreen() {
     queryFn: fetchAgents,
   })
 
-  // Two-tier roster (locked v0.3 concept): base agents are chat colleagues;
-  // sub-agent workers are delegation-only labour. Partition strictly on type.
-  const baseAgents = agents.filter((a) => a.type !== 'worker')
-  const workerAgents = agents.filter((a) => a.type === 'worker')
+  // Three-tier roster (W4 of agent-form-requirements): user-defined chat
+  // colleagues (Main) on top, user-defined workers (Subagent + subagent_3p)
+  // below, built-in roster (Mia / Jim / Ava / Ray, type=core) at the bottom.
+  // Partition via isWorker() so the new wire enum values are classified
+  // correctly without enumerating them here (see src/lib/api.ts:664-666).
+  const baseAgents = agents.filter((a) => !isWorker(a))
+  const workerAgents = agents.filter(isWorker)
 
   const { mutate: doSetDefault } = useMutation({
     mutationFn: (agentId: string) => updateAgent(agentId, { default: true }),
@@ -164,6 +167,49 @@ export function AgentListScreen() {
               >
                 <Plus size={12} weight="bold" /> + New Subagent
               </Button>
+              {/* W6 spec §5.1: third +Add button with CLI sub-options (Subagent External).
+                  Renders the 3 CLI choices inline on desktop; on phone the
+                  spec §13.2 says these expand as a vertical list — the buttons
+                  below already stack vertically because the parent row is
+                  `flex-col sm:flex-row`. */}
+              <div className="flex flex-col sm:flex-row gap-1.5 ml-0 sm:ml-2 shrink-0">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => openCreateAgentModal('subagent_3p')}
+                  className="gap-1.5 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                  data-testid="add-subagent-external-button"
+                >
+                  <Plus size={12} weight="bold" /> + New Subagent (External)
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => openCreateAgentModal('subagent_3p')}
+                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                  data-testid="add-external-claude-code"
+                >
+                  claude-code
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => openCreateAgentModal('subagent_3p')}
+                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                  data-testid="add-external-codex"
+                >
+                  codex
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => openCreateAgentModal('subagent_3p')}
+                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                  data-testid="add-external-opencode"
+                >
+                  opencode
+                </Button>
+              </div>
             </div>
             {workerAgents.length === 0 ? (
               <div
