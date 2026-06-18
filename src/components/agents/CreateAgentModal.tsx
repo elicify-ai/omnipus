@@ -288,7 +288,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
               <div className="space-y-5 px-8 pb-8">
                 {/* Avatar preview + color + icon */}
                 <div>
-                  <label className="text-xs font-medium text-[var(--color-muted)] mb-2 block">
+                  <label className="text-sm font-medium text-[var(--color-muted)] mb-2 block">
                     Avatar
                   </label>
                   <div className="flex items-start gap-4">
@@ -300,7 +300,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                     </div>
                     <div className="flex-1 space-y-3">
                       <div>
-                        <p className="text-[10px] text-[var(--color-muted)] mb-1.5">Color</p>
+                        <p className="text-sm text-[var(--color-muted)] mb-1.5">Color</p>
                         <div className="flex gap-2 flex-wrap">
                           {AVATAR_COLORS.map((c) => (
                             <button
@@ -315,7 +315,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                         </div>
                       </div>
                       <div>
-                        <p className="text-[10px] text-[var(--color-muted)] mb-1.5">Icon</p>
+                        <p className="text-sm text-[var(--color-muted)] mb-1.5">Icon</p>
                         <div className="grid grid-cols-5 gap-1.5">
                           {ICON_OPTIONS.map(({ name: iconName, component: IconComp }) => (
                             <button
@@ -340,7 +340,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
 
                 {/* Name */}
                 <div>
-                  <label htmlFor="agent-name" className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+                  <label htmlFor="agent-name" className="text-sm font-medium text-[var(--color-muted)] mb-1.5 block">
                     Name <span className="text-[var(--color-error)]">*</span>
                   </label>
                   <Input
@@ -355,13 +355,13 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                     autoFocus
                   />
                   {nameError && (
-                    <p className="mt-1 text-xs text-[var(--color-error)]">{nameError}</p>
+                    <p className="mt-1 text-sm text-[var(--color-error)]">{nameError}</p>
                   )}
                 </div>
 
                 {/* Description */}
                 <div>
-                  <label htmlFor="agent-description" className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+                  <label htmlFor="agent-description" className="text-sm font-medium text-[var(--color-muted)] mb-1.5 block">
                     Description
                   </label>
                   <Textarea
@@ -375,7 +375,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
 
                 {/* Model */}
                 <div>
-                  <label className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+                  <label className="text-sm font-medium text-[var(--color-muted)] mb-1.5 block">
                     Model
                   </label>
                   {providersError && (
@@ -405,14 +405,14 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                   <div>
                     <label
                       htmlFor="worker-task-prompt"
-                      className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block"
+                      className="text-sm font-medium text-[var(--color-muted)] mb-1.5 block"
                     >
                       Task prompt <span className="text-[var(--color-muted)] font-normal">(optional)</span>
                     </label>
-                    <p className="text-[11px] text-[var(--color-muted)] mb-1.5">
+                    <p className="text-sm text-[var(--color-muted)] mb-1.5">
                       Optional system prompt for the worker&apos;s runner. Composed with any
                       caller-supplied task prompt at run time. Stored as{' '}
-                      <span className="font-mono text-[10px]">SOUL.md</span>. Leave empty to use
+                      <span className="font-mono text-xs">SOUL.md</span>. Leave empty to use
                       the executor&apos;s default behaviour.
                     </p>
                     <Textarea
@@ -481,11 +481,11 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                       {/* US-E6: Skills picker — opt-in, default none */}
                       {availableSkills.length > 0 && (
                         <div className="space-y-1.5 pt-1 border-t border-[var(--color-border)]">
-                          <p className="text-xs font-medium text-[var(--color-secondary)] pt-1">
+                          <p className="text-sm font-medium text-[var(--color-secondary)] pt-1">
                             Skills
                             <span className="ml-1.5 font-normal text-[var(--color-muted)]">(opt-in)</span>
                           </p>
-                          <p className="text-[11px] text-[var(--color-muted)]">
+                          <p className="text-sm text-[var(--color-muted)]">
                             Grant installed skills to this agent. Unselected = no skills.
                           </p>
                           <div className="space-y-1">
