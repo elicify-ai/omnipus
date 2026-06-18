@@ -1,10 +1,11 @@
 'use client'
 
 import * as React from 'react'
-import { CaretUpDown, Check, Keyboard } from '@phosphor-icons/react'
+import { CaretUpDown, Check, Keyboard, WarningCircle } from '@phosphor-icons/react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
+import { isKnownModelSlugInList } from '@/lib/agents/model-validation'
 
 export interface ModelGroup {
   providerName: string
@@ -35,9 +36,18 @@ interface ModelSelectorProps {
    * surface a warning toast. Not called for exact-match picks.
    */
   onUnknownModel?: (model: string) => void
+  /**
+   * W6-C4 / G12: when `true`, the trigger button shows an inline "unresolved"
+   * chip next to the current value if the value is NOT in the supplied
+   * `models` / `providerGroups` list (case-insensitive, also matches the
+   * bare slug stripped of its protocol prefix). Defaults to `true` so the
+   * indicator is always on when this component is wired into a free-text
+   * picker — pass `false` to opt out (e.g. for read-only displays).
+   */
+  showUnresolvedIndicator?: boolean
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, showUnresolvedIndicator = true }: ModelSelectorProps) {
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
   // Unique id for the sr-only description the popover's aria-describedby
@@ -47,16 +57,36 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
 
   // Text input mode — no models available
   if (models.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))) {
+    // W6-C4 / G12: in text-input mode the trigger is just an <input>; we
+    // surface the unresolved state via a small inline note beneath the
+    // input when a non-empty value isn't in the supplied flat list (which
+    // is always empty here, so EVERY non-empty value is unresolved).
+    const valueUnresolved = showUnresolvedIndicator && value.trim() !== ''
     return (
-      <Input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder ?? 'Enter model slug (e.g. MiniMax-M2.7)'}
-        aria-label="Model slug"
-        disabled={disabled}
-        {...(triggerTestId ? { 'data-testid': triggerTestId } : {})}
-        className="font-mono text-sm"
-      />
+      <div className="space-y-1">
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder ?? 'Enter model slug (e.g. MiniMax-M2.7)'}
+          aria-label="Model slug"
+          aria-invalid={valueUnresolved || undefined}
+          aria-describedby={valueUnresolved ? `${descriptionId}-unresolved` : undefined}
+          disabled={disabled}
+          {...(triggerTestId ? { 'data-testid': triggerTestId } : {})}
+          className="font-mono text-sm"
+        />
+        {valueUnresolved && (
+          <p
+            id={`${descriptionId}-unresolved`}
+            data-testid={triggerTestId ? `${triggerTestId}-unresolved` : undefined}
+            className="flex items-center gap-1 text-[10px] text-[var(--color-warning)]"
+            role="status"
+          >
+            <WarningCircle size={11} weight="fill" aria-hidden="true" />
+            Model not in any connected provider — calls will fail until you add a provider that supports this model.
+          </p>
+        )}
+      </div>
     )
   }
 
@@ -65,6 +95,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     providerGroups && providerGroups.length > 0
       ? providerGroups.flatMap((g) => g.models)
       : models
+
+  // W6-C4 / G12: when the current `value` doesn't appear in the flat model
+  // list, render an "unresolved" chip on the trigger. The chip persists
+  // across re-renders (no toast, no flicker) so the user always knows the
+  // saved value can't be routed at chat time.
+  const valueUnresolved =
+    showUnresolvedIndicator && value.trim() !== '' && !isKnownModelSlugInList(value, allModels)
 
   // Combobox mode — searchable dropdown
   const displayValue = value || placeholder || 'Select a model...'
@@ -104,17 +141,38 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           type="button"
           role="combobox"
           aria-expanded={open}
-          aria-label={value ? `Model selector, currently ${value}` : `Model selector, ${displayValue}`}
+          aria-label={value ? `Model selector, currently ${value}${valueUnresolved ? ' (unresolved)' : ''}` : `Model selector, ${displayValue}`}
+          aria-invalid={valueUnresolved || undefined}
+          aria-describedby={valueUnresolved ? `${descriptionId}-unresolved` : undefined}
           disabled={disabled}
           data-testid={triggerTestId}
+          data-unresolved={valueUnresolved || undefined}
           className="flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50"
           style={{
-            borderColor: open ? 'var(--color-accent)' : 'var(--color-border)',
+            borderColor: open ? 'var(--color-accent)' : valueUnresolved ? 'var(--color-warning)' : 'var(--color-border)',
             backgroundColor: 'var(--color-surface-1)',
             color: value ? 'var(--color-secondary)' : 'var(--color-muted)',
           }}
         >
-          <span className="truncate font-mono text-sm">{displayValue}</span>
+          <span className="flex items-center gap-2 min-w-0 flex-1">
+            <span className="truncate font-mono text-sm">{displayValue}</span>
+            {valueUnresolved && (
+              <span
+                id={`${descriptionId}-unresolved`}
+                data-testid={triggerTestId ? `${triggerTestId}-unresolved` : undefined}
+                className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider border"
+                style={{
+                  backgroundColor: 'color-mix(in srgb, var(--color-warning) 15%, transparent)',
+                  color: 'var(--color-warning)',
+                  borderColor: 'color-mix(in srgb, var(--color-warning) 40%, transparent)',
+                }}
+                role="status"
+              >
+                <WarningCircle size={10} weight="fill" aria-hidden="true" />
+                Unresolved
+              </span>
+            )}
+          </span>
           <CaretUpDown size={14} className="shrink-0 opacity-50" />
         </button>
       </PopoverTrigger>
