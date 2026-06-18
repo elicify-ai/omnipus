@@ -18,6 +18,7 @@ package coreagent
 import (
 	"fmt"
 
+	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
@@ -222,6 +223,32 @@ func coreAgentSkills(id CoreAgentID) []string {
 		return []string{"skill-authoring"}
 	default:
 		return nil
+	}
+}
+
+// ResolveType maps the 3 user-creatable wire enum values (Main / Subagent /
+// subagent_3p) to the on-disk config.AgentType the rest of the system reads.
+//
+// The wire enum is the canonical source for the agent-form spec (§2). The
+// gateway handlers translate at the boundary: incoming POST/PUT bodies carry
+// the wire values; this function returns the persisted config.AgentType to
+// write to config.json. legacyAgentTypeString / generated.AgentType round-trip
+// the same set of strings so existing tooling (CLI, audit log, telemetry) keeps
+// working without an alias layer.
+//
+// The built-in roster (Mia / Jim / Ava / Ray) keeps `core` — ResolveType is only
+// for user-creatable types. Callers handling a built-in must NOT call this.
+func ResolveType(wire generated.AgentType) config.AgentType {
+	switch wire {
+	case generated.AgentTypeMain:
+		return config.AgentTypeCustom // Main ≈ user-defined chat colleague (the legacy "custom" slot)
+	case generated.AgentTypeSubagent:
+		return config.AgentTypeWorker // Subagent ≈ user-defined worker on native (the legacy "worker" slot)
+	case generated.AgentTypeSubagent3p:
+		return config.AgentTypeWorker // subagent_3p also persisted as "worker" with executor.kind=external-cli
+	default:
+		// Pass through core / system / unknown values unchanged.
+		return config.AgentType(wire)
 	}
 }
 
