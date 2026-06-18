@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"net/http"
+	"strings"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
@@ -14,31 +15,26 @@ import (
 // which voice widget variant (dropdown / free-text / disabled) to render in the
 // agent edit slide-over (per agent-form spec §4.10.1).
 //
-// Source of truth: pkg/config.VoiceConfig (engine-level). The handler reads the
-// voice provider identifier from the engine config and returns:
+// Provider identification (read from cfg.Voice via a.agentLoop.GetConfig()):
 //
-//	{
-//	  "provider":   string | null,        // e.g. "openai-tts", "elevenlabs", "piper", null
-//	  "voices":     string[] | undefined,  // populated for providers with an enum
-//	  "voices_endpoint": string | null     // optional paginated endpoint URL
-//	}
+//   - ModelName starts with "openai/" (or matches openai/tts-*) → "openai-tts",
+//     voices = the 6-voice OpenAI TTS fixed list.
+//   - ElevenLabsAPIKeyRef is set (non-empty) → "elevenlabs",
+//     voices_endpoint = ElevenLabs paginated list.
+//   - Otherwise → provider = nil; SPA renders the field disabled with the
+//     "Voice provider unavailable" tooltip (per voice-provider-detect.ts).
 //
-// When no voice provider is configured, `provider` is null and the SPA renders
-// the field as disabled (the "Voice provider unavailable" tooltip).
+// We do NOT cache *config.Config on restAPI — the agentLoop's snapshot
+// middleware is the source of truth for hot-reload consistency.
 
-// openAITTSVoices is the fixed voices enum exposed by OpenAI's TTS API. The SPA
-// renders a <select> with this list when provider === "openai-tts". Keep in
-// sync with the OpenAI TTS docs; this is intentionally not inlined into the
-// schema because it's a static list of allowed values, not a per-call response
-// shape.
 var openAITTSVoices = []string{
 	"alloy", "echo", "fable", "onyx", "nova", "shimmer",
 }
 
-// elevenLabsVoicesEndpoint is the paginated endpoint URL for ElevenLabs. We
-// don't ship the voice list (paginated, dynamic) — the SPA hits the endpoint
-// directly when provider === "elevenlabs".
 const elevenLabsVoicesEndpoint = "https://api.elevenlabs.io/v1/voices"
+
+const voiceProviderOpenAI = "openai-tts"
+const voiceProviderElevenLabs = "elevenlabs"
 
 // HandleVoiceProvider handles GET /api/v1/voice/provider. Returns the active
 // voice provider's identity and (optionally) its voices enum.
@@ -50,41 +46,40 @@ func (a *restAPI) HandleVoiceProvider(w http.ResponseWriter, r *http.Request) {
 
 	resp := a.describeVoiceProvider()
 	w.Header().Set("Content-Type", "application/json")
-	if err := writeJSON(w, http.StatusOK, resp); err != nil {
-		jsonErr(w, http.StatusInternalServerError, "encode voice provider response: "+err.Error())
-		return
-	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // describeVoiceProvider returns the wire-shape response for /voice/provider.
-// Pulled out of the HTTP handler so it's trivially testable.
 func (a *restAPI) describeVoiceProvider() gen.VoiceProvider {
-	if a == nil || a.config == nil {
-		// No config (test scaffolding) — return a "no provider" descriptor.
+	if a == nil {
 		return gen.VoiceProvider{Provider: nil}
 	}
 
-	provider := a.config.Voice.ModelName
-	if provider == "" {
-		// No voice provider configured globally.
-		return gen.VoiceProvider{Provider: nil}
-	}
+	// Resolve via agentLoop (NOT a cached config pointer) so hot-reload
+	// changes to cfg.Voice propagate to subsequent requests.
+	cfg := a.agentLoop.GetConfig()
 
-	resp := gen.VoiceProvider{
-		Provider: &provider,
-	}
+	modelName := cfg.Voice.ModelName
+	hasElevenLabs := cfg.Voice.ElevenLabsAPIKeyRef != ""
 
-	switch provider {
-	case "openai-tts":
+	switch {
+	case strings.HasPrefix(modelName, "openai/") || strings.HasPrefix(modelName, "openai-tts"):
+		p := voiceProviderOpenAI
 		v := openAITTSVoices
-		resp.Voices = &v
-	case "elevenlabs":
-		ep := elevenLabsVoicesEndpoint
-		resp.VoicesEndpoint = &ep
-	case "google-tts", "azure-speech", "piper":
-		// Future: per-provider voice lists. For v0.1.0 the SPA falls back to
-		// free-text when these are configured (no enum surfaced yet).
-	}
+		return gen.VoiceProvider{
+			Provider: &p,
+			Voices:   &v,
+		}
 
-	return resp
+	case hasElevenLabs:
+		p := voiceProviderElevenLabs
+		ep := elevenLabsVoicesEndpoint
+		return gen.VoiceProvider{
+			Provider:       &p,
+			VoicesEndpoint: &ep,
+		}
+
+	default:
+		return gen.VoiceProvider{Provider: nil}
+	}
 }
