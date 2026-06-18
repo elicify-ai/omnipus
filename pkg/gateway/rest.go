@@ -1463,6 +1463,61 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Description != nil {
 		description = strings.TrimSpace(*req.Description)
 	}
+	// W2 spec §4.3 / §9.2 F-02 (mirror of PUT path): Subagent and subagent_3p
+	// require a non-empty description after trim. A worker without a
+	// description cannot be routed to by the orchestrator.
+	if (createType == config.AgentTypeWorker) && description == "" {
+		jsonErr(w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
+		return
+	}
+	// W2 spec §3.1 row 16 / §9.2 F-13 (mirror of PUT path): fallback_models
+	// is capped at 2 entries. Server-enforced so direct REST callers (not the
+	// SPA) cannot smuggle more entries past the schema validator.
+	if req.FallbackModels != nil && len(*req.FallbackModels) > 2 {
+		jsonErr(w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
+		return
+	}
+	// W2 spec §4.19.1 / §9.2 (mirror of PUT path): subagent_3p forbids
+	// runtime mutation of tools_cfg / skills / fallback_models / model_params /
+	// sandbox_profile / shell_policy / delegation_policy at create time too.
+	if createType == config.AgentTypeWorker && req.Executor != nil &&
+		executorKindStr(req.Executor.Kind) == string(config.ExecutorKindExternalCLI) {
+		if req.ToolsCfg != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support tools_cfg; this is fixed at create time.")
+			return
+		}
+		if req.Skills != nil && len(*req.Skills) > 0 {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support skills; this is fixed at create time.")
+			return
+		}
+		if req.FallbackModels != nil && len(*req.FallbackModels) > 0 {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support fallback_models; this is fixed at create time.")
+			return
+		}
+		if req.ModelParams != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support model_params; this is fixed at create time.")
+			return
+		}
+		if req.SandboxProfile != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support sandbox_profile; this is fixed at create time.")
+			return
+		}
+		if req.ShellPolicy != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support shell_policy; this is fixed at create time.")
+			return
+		}
+		if req.DelegationPolicy != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support delegation_policy; this is fixed at create time.")
+			return
+		}
+	}
+	// W2 spec §4.7 / §9.2 row 8: whitespace-only soul is rejected (the wire
+	// schema enforces minLength:1; whitespace-only is the natural
+	// soft-bypass). Backend trims before validation.
+	if req.Soul == "" || strings.TrimSpace(req.Soul) == "" {
+		jsonErr(w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
+		return
+	}
 	color := ""
 	if req.Color != nil {
 		color = *req.Color
@@ -1470,6 +1525,18 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	icon := ""
 	if req.Icon != nil {
 		icon = *req.Icon
+	}
+	// color hex regex (spec §4.4).
+	if color != "" {
+		if matched, _ := regexp.MatchString(`^#[0-9A-Fa-f]{6}$`, color); !matched {
+			jsonErr(w, http.StatusBadRequest, "color must be a valid hex code (e.g. #D4AF37)")
+			return
+		}
+	}
+	// icon maxLength:50 (spec §4.4).
+	if len(icon) > 50 {
+		jsonErr(w, http.StatusBadRequest, "icon exceeds maxLength: 50")
+		return
 	}
 	// ac is the in-memory config record. Locked is left at its zero value
 	// (false) for BOTH custom and worker creates — the API is the operator's
@@ -1689,9 +1756,9 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// Type reflects the chosen classification (custom or worker). For
 	// "custom" this matches the pre-existing hardcoded behaviour. For
 	// "worker" it surfaces the create-time choice so the response — and
-	// subsequent GET / list reads via ac.ResolveType — round-trips the
-	// agent kind the caller actually created.
-	ag.Type = gen.AgentType(ac.Type)
+	// subsequent GET / list reads via coreagent.ResolveType — round-trips the
+	// agent kind the caller actually created (Main/Subagent/subagent_3p on the wire).
+	ag.Type = gen.AgentType(ac.ResolveType(coreagent.IsCoreAgent))
 	ag.Locked = ac.Locked
 	ag.Model = &model
 	// Echo the just-persisted soul so the FE round-trip works (req.Soul was
@@ -1771,8 +1838,8 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 // isExternalSubagent reports whether the persisted agent is a subagent_3p
 // (an External-CLI worker). Subagent (native worker) returns false; Main /
 // core / system return false; only subagent_3p returns true.
-func isExternalSubagent(ac *config.AgentConfig) bool {
-	if ac == nil || ac.Type != config.AgentTypeWorker {
+func isExternalSubagent(ac config.AgentConfig) bool {
+	if ac.Type != config.AgentTypeWorker {
 		return false
 	}
 	if ac.Subagents == nil || ac.Subagents.Executor == nil {
@@ -1950,6 +2017,33 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// rather than persisting an invalid combination.
 	var updatedExecutor *config.ExecutorConfig
 	if req.Executor != nil {
+		// CLI-lock rule (spec §4.16 / F-10): once an agent is created with a
+		// non-empty executor.cli, the cli is IMMUTABLE. Subsequent PUTs may
+		// only mutate cli_path (allows binary upgrades without re-creating the
+		// agent), env_overrides, and cli_args. cli_path IS mutable on PUT;
+		// env_overrides and cli_args are too. cli itself is fixed at create.
+		if foundAgent.Subagents != nil && foundAgent.Subagents.Executor != nil &&
+			foundAgent.Subagents.Executor.CLI != "" {
+			reqCLI := executorCliStr(req.Executor.Cli)
+			if reqCLI != "" && reqCLI != foundAgent.Subagents.Executor.CLI {
+				jsonErr(w, http.StatusBadRequest,
+					"executor.cli is locked after create; create a new agent to switch CLIs.")
+				return
+			}
+		}
+		// env_overrides OMNIPUS_-prefix guard (spec §4.18 / F-04 STRIDE).
+		// A user-submitted env_overrides key starting with OMNIPUS_ would
+		// override gateway-managed secrets (master key, audit chain, etc.)
+		// for the spawned CLI process — a defence-in-depth gap.
+		if req.Executor.EnvOverrides != nil {
+			for k := range *req.Executor.EnvOverrides {
+				if strings.HasPrefix(strings.ToUpper(k), "OMNIPUS_") {
+					jsonErr(w, http.StatusBadRequest,
+						fmt.Sprintf("env_overrides key %q is reserved: OMNIPUS_* is gateway-internal", k))
+					return
+				}
+			}
+		}
 		execCfg, errMsg := executorConfigFromRequest(executorKindStr(req.Executor.Kind), executorCliStr(req.Executor.Cli))
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
