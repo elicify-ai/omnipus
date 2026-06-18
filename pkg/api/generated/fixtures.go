@@ -1868,7 +1868,8 @@ func FixtureAgentToolsResponse_ZeroValue() AgentToolsResponse {
 }
 
 func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
-	agentType := AgentToolsResponseAgentTypeCustom
+	agentType := AgentToolsResponseAgentTypeMain
+	_ = agentType
 	deny := AgentToolsResponseConfigBuiltinDefaultPolicyDeny
 	toolCfgDeny := AgentToolsResponseToolsConfiguredPolicyDeny
 	toolEffAsk := AgentToolsResponseToolsEffectivePolicyAsk

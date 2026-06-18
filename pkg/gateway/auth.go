@@ -55,6 +55,19 @@ type AuthResult struct {
 func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request, cfg *config.Config) AuthResult {
 	auth := r.Header.Get("Authorization")
 	prefix := "Bearer "
+
+	// dev_mode_bypass short-circuit: when auth isn't configured AND bypass is
+	// enabled, allow the request as admin (even with no Authorization header
+	// at all). This makes the SPA reviewable on a fresh install without
+	// onboarding first. Per-user RBAC and OMNIPUS_BEARER_TOKEN paths below
+	// still run for the non-bypass case.
+	if !strings.HasPrefix(auth, prefix) && cfg.Gateway.DevModeBypass {
+		warnUnauthOnce.Do(func() {
+			slog.Warn("DEV MODE: API has no authentication. Set gateway.dev_mode_bypass=false for production.")
+		})
+		return AuthResult{Authenticated: true, Role: config.UserRoleAdmin, User: &devBypassUser}
+	}
+
 	if !strings.HasPrefix(auth, prefix) {
 		// No Bearer prefix — treat as unauthenticated.
 		http.Error(w, "unauthorized: missing Bearer token", http.StatusUnauthorized)

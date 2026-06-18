@@ -38,6 +38,26 @@ func executorCliStr[T ~string](cli *T) string {
 	return string(*cli)
 }
 
+// executorKindStr dereferences an optional generated ExecutorKind pointer to its
+// string value. Returns "" when the pointer is nil. Used by the create/update
+// handlers where Executor.Kind is *ExecutorKind (the schema marks kind as
+// optional + derived, so the pointer may be nil on the wire).
+func executorKindStr[T ~string](kind *T) string {
+	if kind == nil {
+		return ""
+	}
+	return string(*kind)
+}
+
+// executorKindPtr returns a pointer to the given gen.AgentExecutorKind. Used
+// when populating the response-side gen.Agent.Executor struct, where Kind is
+// `*AgentExecutorKind` because the field is derived and may be omitted when
+// empty.
+func executorKindPtr(k gen.ExecutorConfigKind) *gen.AgentExecutorKind {
+	v := gen.AgentExecutorKind(k)
+	return &v
+}
+
 // executorConfigFromRequest validates a request executor (kind + cli) and converts
 // it to a *config.ExecutorConfig.
 //
@@ -172,17 +192,16 @@ func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
 	}
 	ec := sub.Executor
 	// The literal below mirrors the inlined anonymous-struct shape oapi-codegen
-	// generated for gen.Agent.Executor (the contract emits it inline, not as a named
-	// schema), so the assignment target type must be spelled verbatim here.
+	// generated for gen.Agent.Executor. Fields must be declared in the SAME
+	// ORDER they appear in the generated struct (Cli, CliArgs, CliPath,
+	// EnvOverrides, Kind) — Go struct literal positional initialisation.
 	exec := struct { // not-wire-format: generated gen.Agent.Executor inline shape, only populates the generated field
 		Cli          *gen.AgentExecutorCli     `json:"cli,omitempty"`
-		Kind         gen.AgentExecutorKind     `json:"kind"`
+		CliArgs      *string                   `json:"cli_args,omitempty"`
 		CliPath      *string                   `json:"cli_path,omitempty"`
 		EnvOverrides *map[string]string        `json:"env_overrides,omitempty"`
-		CliArgs      *string                   `json:"cli_args,omitempty"`
-	}{
-		Kind: gen.AgentExecutorKind(ec.EffectiveKind()),
-	}
+		Kind         *gen.AgentExecutorKind    `json:"kind,omitempty"`
+	}{}
 	if ec.CLI != "" {
 		cli := gen.AgentExecutorCli(ec.CLI)
 		exec.Cli = &cli
@@ -199,5 +218,7 @@ func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
 		ca := ec.CLIArgs
 		exec.CliArgs = &ca
 	}
+	kind := gen.ExecutorConfigKind(ec.EffectiveKind())
+	exec.Kind = executorKindPtr(kind)
 	ag.Executor = &exec
 }

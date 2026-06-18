@@ -18,11 +18,16 @@ properties:
   agent_type:
     type: string
     description: >
-      Agent classification: "core", "system", "custom", or "worker".
+      Agent classification. Built-in roster (Mia / Jim / Ava / Ray) returns
+      "core" with locked=true; legacy operator-supplied "system" entries
+      remain for backward compatibility. User-created chat colleagues are
+      "Main", native workers are "Subagent", and external-CLI workers are
+      "subagent_3p" (distinguished from Subagent by executor.kind=external-cli).
       Informs the UI whether policy editing is allowed.
     enum:
       - core
       - system
-      - custom
-      - worker
-    example: custom
+      - Main
+      - Subagent
+      - subagent_3p
+    example: Main

@@ -362,7 +362,9 @@ type DevicePaired = {
 type AgentToolsResponse = {
   config: AgentToolsCfg;
   tools: Array<AgentToolEntry>;
-  agent_type?: ("core" | "system" | "custom" | "worker") | undefined;
+  agent_type?:
+    | ("core" | "system" | "Main" | "Subagent" | "subagent_3p")
+    | undefined;
 };
 type AgentToolEntry = {
   name: string;
@@ -1166,7 +1168,9 @@ export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
 export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
   config: AgentToolsCfg,
   tools: z.array(AgentToolEntry),
-  agent_type: z.enum(["core", "system", "custom", "worker"]).optional(),
+  agent_type: z
+    .enum(["core", "system", "Main", "Subagent", "subagent_3p"])
+    .optional(),
 });
 export const AgentToolsUpdateRequest = z
   .object({
