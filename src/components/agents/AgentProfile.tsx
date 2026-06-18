@@ -800,11 +800,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   <p className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mb-1">
                     Profile
                   </p>
+                  {/* W6-C1 / G5: surface the actual inherited profile name.
+                      Previously the locked branch always rendered "Built-in
+                      (locked)" with no profile name, which left the operator
+                      guessing whether Mia runs workspace or workspace+net.
+                      The wire `sandbox_profile` is populated on locked core
+                      agents (Jim is seeded with workspace+net, the others
+                      inherit the global default = workspace) so we read it
+                      directly and append " (built-in, locked)" so the
+                      un-editable nature is still signalled. Falls back to
+                      the bare "Built-in (locked)" only when the field is
+                      empty (pre-seed fresh install before the idempotent
+                      migration runs). The label set is shared with the
+                      editable branch above via `formatSandboxProfileLabel`. */}
                   <p className="text-sm font-medium text-[var(--color-secondary)]">
                     {sandboxProfile
-                      ? sandboxProfile === 'workspace+net'
-                        ? 'Workspace + Net'
-                        : sandboxProfile.charAt(0).toUpperCase() + sandboxProfile.slice(1)
+                      ? `${formatSandboxProfileLabel(sandboxProfile)} (built-in, locked)`
                       : 'Built-in (locked)'}
                   </p>
                   <p className="text-xs text-[var(--color-muted)] mt-2">
@@ -1546,6 +1557,18 @@ function SandboxInfoTooltip() {
       )}
     </span>
   )
+}
+
+/** W6-C1 / G5: friendly label for a SandboxProfile wire value. Shared by
+ *  the editable branch (SandboxProfileSelector's selected chip) and the
+ *  locked branch (read-only summary), so the two surfaces never disagree
+ *  on how to spell "workspace+net". The wire enum is `workspace`,
+ *  `workspace+net`, `host`, `off`; "none" is the UI-only sentinel that
+ *  means "inherit global default" (stripped from the wire payload before
+ *  PUT — see `formData`). */
+function formatSandboxProfileLabel(profile: string): string {
+  if (profile === 'workspace+net') return 'Workspace + Net'
+  return profile.charAt(0).toUpperCase() + profile.slice(1)
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {
