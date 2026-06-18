@@ -527,6 +527,28 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
             </TabsContent>
           </Tabs>
 
+          {/* W6-C1 / G4: Create modal exposes 6 of 25 wire fields. The
+              other 19 (delegation policy, fallback models, sandbox profile,
+              schedules, voice, rate limits, sampling parameters, etc.)
+              live on the Edit profile. Signpost this so the operator
+              doesn't think "create" is a complete surface and leave. The
+              helper text sits between the tabs and the sticky footer so it
+              reads as a "before submitting" reminder without competing with
+              the primary CTA visually. Uses `text-[var(--color-muted)]` to
+              match the existing caption tier — not a louder colour so the
+              CTA stays the primary focal point. */}
+          <div
+            data-testid="create-edit-signpost"
+            className="shrink-0 px-8 py-3 border-t border-[var(--color-border)] bg-[var(--color-surface-1)]/40"
+          >
+            <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+              All other settings — delegation policy, fallback models, sandbox, voice,
+              rate limits, sampling parameters, schedules — are available in the{' '}
+              <span className="text-[var(--color-secondary)] font-medium">Edit profile</span>{' '}
+              after the agent is created.
+            </p>
+          </div>
+
           {/* Sticky footer actions (slideout-friendly) */}
           <div className="flex justify-end gap-3 px-8 py-5 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0">
             <Button
