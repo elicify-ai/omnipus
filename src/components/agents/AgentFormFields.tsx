@@ -194,6 +194,13 @@ export interface ExecutorSectionProps {
   onChange: (next: ExecutorConfig | undefined) => void
   /** Validation error to render below the selector (worker: required). */
   error?: string
+  /**
+   * True when the parent form is for a locked CORE agent (Mia, Jim, Ray, Ava).
+   * Wave 6 G9: "core agents run native only" — external-cli is a worker-only
+   * affordance, so when this is true the dropdown disables external-cli and
+   * the selector clamps programmatic changes back to native. Default false.
+   */
+  isCoreAgent?: boolean
 }
 
 /**
@@ -211,6 +218,7 @@ export function ExecutorSection({
   value,
   onChange,
   error,
+  isCoreAgent = false,
 }: ExecutorSectionProps) {
   // Wave 6 / A-fix: WCAG 3.3.1/4.1.3 wiring. The `<select>` in
   // ExecutorSelector carries `aria-describedby="executor-error"` and
@@ -236,6 +244,7 @@ export function ExecutorSection({
         }}
         errorId={errorId}
         hasError={!!error}
+        isCoreAgent={isCoreAgent}
       />
       <FormError id={errorId} error={error} />
     </div>

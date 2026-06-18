@@ -15,6 +15,7 @@ import {
   ArrowDown,
   Warning,
   Lock,
+  WarningCircle,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
@@ -45,6 +46,7 @@ import {
   fetchAgentSessions,
   fetchActivity,
   fetchSkills,
+  testAgentRunner,
   isWorker,
   type AgentSession,
   type ActivityEvent,
@@ -140,6 +142,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Tracks whether the initial hydration from the server has completed.
   // Guards auto-save from firing with default (empty) state before the first fetch resolves.
   const hasHydrated = useRef(false)
+
+  // I12: cache the executor kind+cli we've already passed the runner-test for,
+  // so the auto-save debounce (500 ms) doesn't re-fire the test on every
+  // unrelated keystroke while the user has external-cli selected. We re-test
+  // only when the kind or cli actually changes (or the agent id changes).
+  type ExecutorSig = { kind: ExecutorConfig['kind']; cli?: ExecutorConfig['cli']; agentId: string | null }
+  const testedExecutorSig = useRef<ExecutorSig | null>(null)
 
   // Reset flags when navigating to a different agent
   useEffect(() => {
@@ -349,6 +358,52 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // Form is mounted at the layout level; its state can outlive a
       // closed sheet. Refuse a save with no id rather than PUT /null.
       if (agentId === null) return
+      // I12: when the agent's executor is external-cli, run the runner-test
+      // BEFORE allowing the save to commit. We re-test only when the kind+cli
+      // signature actually changes (or the agent id changes) so the auto-save
+      // debounce doesn't re-fire on every keystroke. On a failure, throw —
+      // useAutoSave catches and surfaces the error inline, the save is
+      // blocked, and the form stays dirty so the user can fix and retry.
+      if (data.executor?.kind === 'external-cli' && agentId) {
+        const sig: ExecutorSig = {
+          kind: data.executor.kind,
+          cli: data.executor.cli,
+          agentId,
+        }
+        const last = testedExecutorSig.current
+        const needsTest = !last
+          || last.agentId !== sig.agentId
+          || last.kind !== sig.kind
+          || last.cli !== sig.cli
+        if (needsTest) {
+          let result
+          try {
+            result = await testAgentRunner(agentId)
+          } catch (err) {
+            // Network / 5xx failure — surface the message inline. The user
+            // can retry the save (or run the explicit Test Connection button).
+            const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err)
+            addToast({
+              message: `Runner test failed before save: ${msg}`,
+              variant: 'error',
+            })
+            throw new Error(`Runner test failed: ${msg}`)
+          }
+          if (!result.ok) {
+            // Backend returned a structured failure (missing-binary,
+            // unauthenticated, handshake-failed, unknown-cli, not-external-cli).
+            // Block the save — operator needs to fix the runner first.
+            addToast({
+              message: `Runner test failed: ${result.message}. Fix the runner before saving.`,
+              variant: 'error',
+            })
+            throw new Error(`Runner test failed (${result.reason || 'unknown'}): ${result.message}`)
+          }
+          // Cache the signature only on success — a failed test keeps us
+          // ready to retry on the next change.
+          testedExecutorSig.current = sig
+        }
+      }
       // Locked agents: strip every field the backend treats as immutable for
       // the locked roster (see `.preview-doc/agents.html` for the current
       // 4-base roster). Identity fields plus the sandbox profile, shell
@@ -834,6 +889,26 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             </AccordionTrigger>
             <AccordionContent>
               <div className="px-4 space-y-4">
+                {/* G10: when the worker's executor is external-cli, Omnipus'
+                    sandbox_profile is ignored at runtime — the external CLI
+                    manages its own isolation. Surface this so the operator
+                    doesn't think the chosen profile is enforcing anything.
+                    Only show when a non-off profile is selected (off itself
+                    is already documented; warning would be redundant). */}
+                {isWorkerAgent && executor?.kind === 'external-cli' && sandboxProfile && sandboxProfile !== 'off' && (
+                  <div
+                    data-testid="sandbox-external-cli-ignored-callout"
+                    role="note"
+                    aria-live="polite"
+                    className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
+                  >
+                    <WarningCircle size={14} weight="fill" className="text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
+                    <p className="text-[11px] text-amber-200 leading-snug">
+                      Sandbox profile is ignored when executor.kind=external-cli.
+                      The external CLI manages its own isolation.
+                    </p>
+                  </div>
+                )}
                 <SandboxProfileSelector
                   value={sandboxProfile}
                   agentName={name || agent.name}

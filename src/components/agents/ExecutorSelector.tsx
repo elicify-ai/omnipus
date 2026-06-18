@@ -56,13 +56,33 @@ interface ExecutorSelectorProps {
    */
   errorId?: string
   hasError?: boolean
+  /**
+   * When true, this selector is rendering for a locked CORE agent (Mia, Jim,
+   * Ray, Ava). Core agents run native/in-process only — `external-cli` is a
+   * worker-only affordance and the backend rejects it with 400 for core
+   * agents (G9: "core agents run native only" gate). When set, the
+   * `external-cli` option is rendered with `disabled` + a tooltip explaining
+   * the restriction, so the user cannot even reach the wire. The default
+   * (false) preserves the existing behaviour for workers + custom base agents.
+   */
+  isCoreAgent?: boolean
 }
 
-export function ExecutorSelector({ value, onChange, agentId, disabled = false, errorId, hasError }: ExecutorSelectorProps) {
+export function ExecutorSelector({ value, onChange, agentId, disabled = false, errorId, hasError, isCoreAgent = false }: ExecutorSelectorProps) {
   const kind = effectiveKind(value)
   const cli = value?.cli
 
   const handleKindChange = (nextKind: ExecutorKind) => {
+    // Defence-in-depth: even if a consumer forgets to disable the option, we
+    // must never emit an `external-cli` payload for a locked core agent — the
+    // backend rejects it with 400 and the user sees a confusing server error.
+    // The dropdown is also disabled + tooltip'd, but if the value is mutated
+    // programmatically (test harness, future programmatic form reset), this
+    // clamp keeps the wire safe.
+    if (isCoreAgent && nextKind === 'external-cli') {
+      onChange({ kind: 'native' })
+      return
+    }
     if (nextKind === 'external-cli') {
       // Default the CLI to claude-code when switching into external-cli so the
       // payload is immediately valid and the test button has a target.
@@ -91,13 +111,27 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
           onChange={(e) => handleKindChange(e.target.value as ExecutorKind)}
           aria-describedby={errorId}
           aria-invalid={hasError || undefined}
+          title={isCoreAgent ? 'Core agents run native only. External CLI is for workers only.' : undefined}
           className="w-full h-9 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 text-sm text-[var(--color-secondary)] outline-none focus:border-[var(--color-accent)] disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          {KIND_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
+          {KIND_OPTIONS.map((o) => {
+            // G9: core agents cannot pick external-cli — the backend rejects
+            // the wire payload with 400. Render the option but disable it with
+            // a tooltip that explains why; the testid lets tests verify the
+            // disabled flag without scraping the DOM.
+            const disableForCore = isCoreAgent && o.value === 'external-cli'
+            return (
+              <option
+                key={o.value}
+                value={o.value}
+                disabled={disableForCore || undefined}
+                title={disableForCore ? 'Core agents run native only. External CLI is for workers only.' : undefined}
+                data-testid={`executor-kind-option-${o.value}`}
+              >
+                {disableForCore ? `${o.label} (workers only)` : o.label}
+              </option>
+            )
+          })}
         </select>
         <p className="text-[11px] text-[var(--color-muted)] leading-snug">
           {kind === 'native'
