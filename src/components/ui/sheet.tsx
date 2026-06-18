@@ -59,6 +59,9 @@ const SheetContent = React.forwardRef<
     {overlay && <SheetOverlay />}
     <DialogPrimitive.Content
       ref={ref}
+      // WCAG 4.1.2: Radix Dialog.Content sets role="dialog" automatically;
+      // pair it with aria-modal="true" so AT knows outside content is inert.
+      aria-modal="true"
       className={cn(
         'fixed z-50 bg-[var(--color-surface-1)] p-6 shadow-xl transition ease-in-out',
         'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500',
