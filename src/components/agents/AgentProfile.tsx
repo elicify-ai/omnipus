@@ -143,6 +143,64 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     hasHydrated.current = false
   }, [agentId])
 
+  // W6-B1 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
+  // slide-over (typically the AgentCard button — also covers the TrustGraph
+  // row click and the /agents/:id route mount) on close.
+  //
+  // The capture happens in two places, mirroring the Wave A CreateAgentModal
+  // pattern (src/components/agents/CreateAgentModal.tsx:175-213):
+  //   1. `handleOpenAutoFocus` fires inside <SheetContent> (via the
+  //      `onOpenAutoFocus` prop below) BEFORE Radix moves focus into the
+  //      dialog — so `document.activeElement` is still the trigger button
+  //      at capture time, not the dialog body. This is the load-bearing
+  //      fix for click-opens (Radix's first-focusable focus shift would
+  //      otherwise steal activeElement before the useEffect ran).
+  //   2. The useEffect here is a fallback for programmatic opens (e.g. the
+  //      /agents/:id route mount via `openEditAgentSlideOver` from
+  //      src/routes/_app/agents.$agentId.tsx:13) where onOpenAutoFocus
+  //      was bypassed.
+  const slideOverTriggerRef = useRef<HTMLElement | null>(null)
+  const prevOpenRef = useRef(isOpen)
+  const handleOpenAutoFocus = (_e: Event) => {
+    // Capture before Radix shifts focus. Don't preventDefault — Radix's
+    // focus management (focus first focusable inside the slide-over) is
+    // desired; we only want the trigger reference for restore-on-close.
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active !== document.body) {
+      slideOverTriggerRef.current = active
+    }
+  }
+  useEffect(() => {
+    if (isOpen && !prevOpenRef.current) {
+      // Fallback capture if onOpenAutoFocus didn't fire (e.g. programmatic
+      // route mount via agents.$agentId.tsx).
+      if (!slideOverTriggerRef.current) {
+        const active = document.activeElement
+        if (active instanceof HTMLElement && active !== document.body) {
+          slideOverTriggerRef.current = active
+        }
+      }
+    } else if (!isOpen && prevOpenRef.current) {
+      // Slide-over just closed — restore focus to the captured trigger.
+      const trigger = slideOverTriggerRef.current
+      slideOverTriggerRef.current = null
+      if (trigger && typeof trigger.focus === 'function' && document.contains(trigger)) {
+        // Defer to next frame so Radix has finished its own teardown focus
+        // (Radix moves focus to the body on unmount). Wrap in try/catch so a
+        // detached-node focus() (route-change race) doesn't crash React's
+        // commit phase.
+        requestAnimationFrame(() => {
+          try {
+            trigger.focus()
+          } catch {
+            // Silent — focus restore is best-effort; users can re-tab.
+          }
+        })
+      }
+    }
+    prevOpenRef.current = isOpen
+  }, [isOpen])
+
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [model, setModel] = useState('')
@@ -383,7 +441,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   if (isLoading) {
     return (
-      <ProfileSheet isOpen={isOpen} onClose={closeEditAgentSlideOver} title="Edit agent">
+      <ProfileSheet
+        isOpen={isOpen}
+        onClose={closeEditAgentSlideOver}
+        title="Edit agent"
+        onOpenAutoFocus={handleOpenAutoFocus}
+      >
         <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
           Loading agent...
         </div>
@@ -410,6 +473,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         isOpen={isOpen}
         onClose={closeEditAgentSlideOver}
         title={isNotFound ? 'Agent not found' : "Couldn't load agent"}
+        onOpenAutoFocus={handleOpenAutoFocus}
       >
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
           <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
@@ -445,7 +509,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const isWorkerAgent = isWorker(agent)
 
   return (
-    <ProfileSheet isOpen={isOpen} onClose={closeEditAgentSlideOver} title={`Edit ${agent.name}`}>
+    <ProfileSheet
+      isOpen={isOpen}
+      onClose={closeEditAgentSlideOver}
+      title={`Edit ${agent.name}`}
+      onOpenAutoFocus={handleOpenAutoFocus}
+    >
       <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
           <div className="flex items-center gap-4">
             <div
@@ -477,14 +546,28 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-8 py-6 space-y-4">
+      {/* W6-B1 / I1: cap the visible-on-open section count at Miller's 7±2.
+          Base agents open Identity + Sandbox + Model Configuration + Behavior
+          (4 accordions — the Identity strip header is also visible above, so
+          the user sees 5 top-level chunks). Workers replace Behavior with
+          Executor + Tools & Permissions (Tools is priority for a worker since
+          it's their run-time surface; Behavior's persona/heartbeat sub-blocks
+          don't apply). Schedules, Sessions, Activity stay collapsed — they're
+          reference material, not editing surfaces. */}
       <Accordion
         type="multiple"
-        defaultValue={['identity']}
+        defaultValue={isWorkerAgent
+          ? ['identity', 'sandbox', 'executor', 'tools']
+          : ['identity', 'sandbox', 'model', 'behavior']}
         className="rounded-lg border border-[var(--color-border)] divide-y divide-[var(--color-border)] overflow-hidden"
       >
         {/* Identity — always rendered; read-only for locked (core) agents */}
         <AccordionItem value="identity" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          {/* W6-B1 / I3: 14 px / 600. Explicit `text-[14px]` (not `text-sm`) so
+              the size cannot drift if Tailwind defaults change; `font-semibold`
+              (600) per the spec — lighter than the prior 700/bold so the
+              section heading reads as an H2, not a button label. */}
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             Identity
           </AccordionTrigger>
           <AccordionContent>
@@ -547,7 +630,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         {/* Sandbox — editable for custom agents, read-only for locked core agents */}
         {!isLocked ? (
           <AccordionItem value="sandbox" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <div className="flex items-center gap-2">
                 <span>Sandbox</span>
                 {/* #335 (US-D3): standing warning badge on accordion header when a widened profile is active */}
@@ -597,7 +680,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </AccordionItem>
         ) : (
           <AccordionItem value="sandbox" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <div className="flex items-center gap-2">
                 <span>Sandbox</span>
                 <SandboxInfoTooltip />
@@ -647,7 +730,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             rather than rendered disabled. Read-only for locked core workers. */}
         {isWorkerAgent && (
           <AccordionItem value="executor" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <div className="flex items-center gap-2">
                 <span>Executor</span>
                 {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
@@ -672,7 +755,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Model Configuration — default CLOSED */}
         <AccordionItem value="model" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             Model Configuration
           </AccordionTrigger>
           <AccordionContent>
@@ -805,7 +888,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         {/* Rate Limits — default CLOSED */}
         {!isLocked && (
           <AccordionItem value="rate-limits" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               Rate Limits
             </AccordionTrigger>
             <AccordionContent>
@@ -878,7 +961,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             per-agent engine settings, not persona or scheduling. */}
         {canEdit && (
           <AccordionItem value="behavior" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               Behavior
             </AccordionTrigger>
             <AccordionContent>
@@ -1025,7 +1108,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Tools & Permissions — default CLOSED */}
         <AccordionItem value="tools" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <span>Tools &amp; Permissions</span>
               {toolsCfg.builtin?.policies && Object.keys(toolsCfg.builtin.policies).length > 0 && (
                 <span className="text-xs text-[var(--color-muted)] font-normal ml-2">
@@ -1049,7 +1132,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Skills — US-E6: per-agent skill assignment, opt-in, default none */}
         <AccordionItem value="skills" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             <div className="flex items-center gap-2">
               <span>Skills</span>
               {agentSkills.length > 0 && (
@@ -1134,7 +1217,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Sessions — default CLOSED */}
         <AccordionItem value="sessions" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             Sessions
           </AccordionTrigger>
           <AccordionContent>
@@ -1160,7 +1243,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             create form also filters workers out (see ScheduleFormSheet). */}
         {!isWorkerAgent && (
           <AccordionItem value="schedules" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               Schedules
             </AccordionTrigger>
             <AccordionContent>
@@ -1183,7 +1266,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Activity — default CLOSED */}
         <AccordionItem value="activity" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             Activity
           </AccordionTrigger>
           <AccordionContent>
@@ -1263,6 +1346,10 @@ function ProfileSheet({
   isOpen,
   onClose,
   title,
+  /** W6-B1 / I7: forwarded to SheetContent's onOpenAutoFocus so the parent
+   *  can capture the trigger element before Radix shifts focus. Used by
+   *  AgentProfile to restore focus to the AgentCard on close. */
+  onOpenAutoFocus,
   children,
 }: {
   isOpen: boolean
@@ -1275,14 +1362,19 @@ function ProfileSheet({
    * with no announced name.
    */
   title: string
+  onOpenAutoFocus?: (event: Event) => void
   children: React.ReactNode
 }) {
   return (
     <Sheet open={isOpen} onOpenChange={(o) => { if (!o) onClose() }}>
+      {/* W6-B1 / I2: dropped the `widthClass="w-full sm:max-w-3xl"` literal so
+          this picks up sheet.tsx's right-side default (`w-[90vw] sm:max-w-2xl`,
+          i.e. 90vw on mobile, 672 px on desktop). Caps the Edit slide-over at
+          ~32rem/90vw instead of 768 px / 47% of a 1440 viewport. */}
       <SheetContent
         side="right"
-        widthClass="w-full sm:max-w-3xl"
         className="flex flex-col gap-0 p-0"
+        onOpenAutoFocus={onOpenAutoFocus}
       >
         <SheetTitle className="sr-only">{title}</SheetTitle>
         {children}
