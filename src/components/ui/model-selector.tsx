@@ -40,6 +40,10 @@ interface ModelSelectorProps {
 export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel }: ModelSelectorProps) {
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
+  // Unique id for the sr-only description the popover's aria-describedby
+  // points at. useId() guarantees uniqueness even if multiple
+  // ModelSelectors are mounted on the same page.
+  const descriptionId = React.useId()
 
   // Text input mode — no models available
   if (models.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))) {
@@ -114,7 +118,24 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           <CaretUpDown size={14} className="shrink-0 opacity-50" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+      <PopoverContent
+        className="w-[--radix-popover-trigger-width] p-0"
+        align="start"
+        // WCAG 4.1.2 + 1.3.1 + 2.4.6: the picker is a transient dialog.
+        // Radix Popover.Content does not set role/aria-modal by default,
+        // so we set them explicitly and pair the popover with an
+        // accessible name (aria-label) and a longer description
+        // (aria-describedby pointing to the sr-only <p> below). The
+        // description id is generated via useId() to keep it unique if
+        // multiple ModelSelectors ever mount on the same page.
+        role="dialog"
+        aria-modal="true"
+        aria-label="Select model"
+        aria-describedby={descriptionId}
+      >
+        <p id={descriptionId} className="sr-only">
+          Search or scroll to pick a model from the list. Press Enter on a suggestion to select it, or type a custom model slug and choose “Use your-slug” to save the exact value.
+        </p>
         {/* shouldFilter=false: we handle filtering ourselves so search targets model name only */}
         <Command shouldFilter={false}>
           <CommandInput
