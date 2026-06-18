@@ -9,6 +9,7 @@ import {
   Plus,
   Sparkle,
   Star,
+  WarningCircle,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
@@ -705,6 +706,26 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             </AccordionTrigger>
             <AccordionContent>
               <div className="px-4 space-y-4">
+                {/* G10: when the worker's executor is external-cli, Omnipus'
+                    sandbox_profile is ignored at runtime — the external CLI
+                    manages its own isolation. Surface this so the operator
+                    doesn't think the chosen profile is enforcing anything.
+                    Only show when a non-off profile is selected (off itself
+                    is already documented; warning would be redundant). */}
+                {isWorkerAgent && executor?.kind === 'external-cli' && sandboxProfile && sandboxProfile !== 'off' && (
+                  <div
+                    data-testid="sandbox-external-cli-ignored-callout"
+                    role="note"
+                    aria-live="polite"
+                    className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
+                  >
+                    <WarningCircle size={14} weight="fill" className="text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
+                    <p className="text-[11px] text-amber-200 leading-snug">
+                      Sandbox profile is ignored when executor.kind=external-cli.
+                      The external CLI manages its own isolation.
+                    </p>
+                  </div>
+                )}
                 <SandboxProfileSelector
                   value={sandboxProfile}
                   agentName={name || agent.name}
