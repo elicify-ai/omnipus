@@ -12,6 +12,7 @@ import {
   ArrowUp,
   ArrowDown,
   Warning,
+  Lock,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
@@ -394,6 +395,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   function removeFallback(modelSlug: string) {
     setFallbackModels((prev) => prev.filter((f) => f.model !== modelSlug))
+  }
+
+  // W6-C2 / I9: per-chip provider picker. Picking a different provider
+  // for an existing fallback updates the entry's `provider` field
+  // (the wire routing key — see FR-007 / FallbackModel.yaml). Picking
+  // "—" (empty) clears the provider so the chip flips into the
+  // "Provider not connected" state (I11). No-op when the value is
+  // unchanged.
+  function setFallbackProvider(modelSlug: string, providerId: string) {
+    setFallbackModels((prev) =>
+      prev.map((f) => (f.model === modelSlug ? { ...f, provider: providerId } : f)),
+    )
   }
 
   // W6-C2 / I10: reorder helper. The wire contract for `fallback_models`
@@ -852,9 +865,59 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   variant: 'warning',
                 })}
               />
-              {canEdit && (
-                <div className="space-y-1.5">
-                  <p className="text-xs text-[var(--color-muted)]">Fallback models (tried in order if primary fails)</p>
+              {/* W6-C2: Fallback editor — visible for both editable and locked
+                  core agents. Editable agents get the full editor (provider
+                  picker + reorder + persistent indicator + remove + add).
+                  Locked agents (G6) get a read-only summary so operators can
+                  still see the configured fallback chain. */}
+              <div className="space-y-1.5">
+                <p className="text-xs text-[var(--color-muted)]">Fallback models (tried in order if primary fails)</p>
+                {isLocked ? (
+                  // W6-C2 / G6: read-only summary for the locked roster.
+                  // `fallback_models` IS allowed on the wire for locked
+                  // core agents (per AgentUpdateRequest.yaml), but the
+                  // editor was previously stripped via `canEdit`. Operators
+                  // had no way to see what the locked core compiled with;
+                  // now we surface the configured chain so the operator
+                  // can verify the inherited fallback.
+                  <div
+                    data-testid="fallback-summary-locked"
+                    className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                  >
+                    <div className="flex items-center gap-2 text-[var(--color-muted)]">
+                      <Lock size={12} weight="fill" aria-hidden="true" />
+                      <p className="text-[11px]">
+                        Locked: fallback models are inherited from the locked core config.
+                      </p>
+                    </div>
+                    {fallbackModels.length === 0 ? (
+                      <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
+                    ) : (
+                      <ol className="space-y-1" data-testid="fallback-summary-locked-list">
+                        {fallbackModels.map((entry, idx) => (
+                          <li
+                            key={entry.model}
+                            className="flex items-center gap-2 text-xs font-mono text-[var(--color-secondary)]"
+                          >
+                            <span className="text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
+                            <span
+                              data-testid={`fallback-summary-provider-${entry.model}`}
+                              className="inline-flex items-center px-1.5 rounded text-[10px] font-semibold"
+                              style={{
+                                backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
+                                color: 'var(--color-accent)',
+                                border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
+                              }}
+                            >
+                              {entry.provider || '—'}
+                            </span>
+                            <span data-testid={`fallback-summary-model-${entry.model}`}>{entry.model}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+                ) : (
                   <div className="flex flex-wrap gap-1.5 p-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
                     {fallbackModels.map((entry, idx) => {
                       // W6-C2 / I11: persistent indicator. When the chip's
@@ -865,16 +928,29 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       // the canonical accessible name; the visible icon is
                       // redundant signaling for sighted users).
                       const providerMissing = entry.provider === ''
+                      // W6-C2 / I9: badge shows the provider's display
+                      // name (or the routing key when unconnected),
+                      // while the picker emits the provider ID on
+                      // change. Display names are layered for UX only;
+                      // the wire value is the ID.
+                      const providerLabel = providerMissing
+                        ? '—'
+                        : (connectedProviders.find((p) => p.id === entry.provider)?.display_name
+                            ?? connectedProviders.find((p) => p.id === entry.provider)?.name
+                            ?? entry.provider)
                       return (
                       <span
                         key={entry.model}
                         data-testid={`fallback-chip-model-${entry.model}`}
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
                       >
-                        {/* Provider badge — color-coded by provider name hash so
-                            visually distinct entries don't all look identical.
-                            Empty provider is rendered as a muted dash so the
-                            badge slot is always present (consistent height). */}
+                        {/* Provider badge — color-coded by provider name
+                            hash so visually distinct entries don't all
+                            look identical. Empty provider is rendered as
+                            a muted dash so the badge slot is always
+                            present (consistent height). The text content
+                            is the display name, but the chip's stored
+                            field is the provider id (see I9). */}
                         <span
                           data-testid={`fallback-chip-provider-${entry.model}`}
                           className="inline-flex items-center px-1 rounded text-[9px] font-semibold"
@@ -884,7 +960,38 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                             border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
                           }}
                         >
-                          {entry.provider || '—'}
+                          {providerLabel}
+                        </span>
+                        {/* W6-C2 / I9: provider combobox for this chip.
+                            Options are the connected provider ids; "—"
+                            maps to the empty routing key (which surfaces
+                            the persistent warning — I11). Emits the
+                            provider ID (not display name) so the wire
+                            value stays 1:1 with FR-007. */}
+                        <span className="relative inline-block">
+                          <select
+                            data-testid={`fallback-provider-select-${entry.model}`}
+                            aria-label={`Provider for fallback ${entry.model}`}
+                            value={entry.provider}
+                            onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
+                            className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-1 pr-3 py-0 text-[9px] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] rounded cursor-pointer"
+                          >
+                            <option value="" data-testid={`fallback-provider-option-empty-${entry.model}`}>—</option>
+                            {connectedProviders.map((p) => (
+                              <option
+                                key={p.id}
+                                value={p.id}
+                                data-testid={`fallback-provider-option-${p.id}-${entry.model}`}
+                              >
+                                {p.display_name ?? p.name ?? p.id}
+                              </option>
+                            ))}
+                          </select>
+                          <CaretDown
+                            size={9}
+                            className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
+                            aria-hidden="true"
+                          />
                         </span>
                         <span>{entry.model}</span>
                         {/* W6-C2 / I10: reorder controls. Up disabled for
@@ -960,8 +1067,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       />
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
               {/* #335 (US-D3): temperature/top-p under "Sampling parameters" with plain captions */}
               {canEdit && (
                 <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">

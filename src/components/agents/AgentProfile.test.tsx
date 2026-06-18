@@ -646,6 +646,119 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     expect(screen.queryByTestId('fallback-add-trigger')).toBeNull()
   })
 
+  // W6-C2 / G6: read-only summary for locked core agents. Operators
+  // can see what the locked core compiled with but cannot edit it.
+  it('locked core agents: read-only fallback summary, no add-trigger, no provider picker (G6)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockLockedCoreAgent,
+      fallback_models: [
+        { model: 'claude-opus-4-6', provider: 'anthropic' },
+      ],
+    })
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    // The summary panel is present (G6), the locked note is visible.
+    expect(screen.getByTestId('fallback-summary-locked')).toBeInTheDocument()
+    expect(screen.getByText(/inherited from the locked core config/i)).toBeInTheDocument()
+    // The summary lists the configured fallback (model + provider).
+    expect(screen.getByTestId('fallback-summary-model-claude-opus-4-6')).toHaveTextContent(/claude-opus-4-6/)
+    expect(screen.getByTestId('fallback-summary-provider-claude-opus-4-6')).toHaveTextContent(/anthropic/i)
+    // The EDITOR affordances (chip, add-trigger, provider select) must
+    // NOT render for locked agents — the summary is read-only.
+    expect(screen.queryByTestId('fallback-chip-model-claude-opus-4-6')).toBeNull()
+    expect(screen.queryByTestId('fallback-add-trigger')).toBeNull()
+    expect(screen.queryByTestId('fallback-provider-select-claude-opus-4-6')).toBeNull()
+  })
+
+  it('locked core agents with no fallback_models show an "empty" summary line', async () => {
+    // The summary must not crash when `fallback_models` is absent on a
+    // locked agent — surface the empty-chain copy instead.
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    expect(screen.getByTestId('fallback-summary-locked')).toBeInTheDocument()
+    expect(screen.getByText(/no fallback chain configured/i)).toBeInTheDocument()
+  })
+
+  // W6-C2 / I9: per-chip provider picker. The fallback can route through
+  // a different provider than the primary (FR-007), so the chip must
+  // expose the provider as a pickable field that persists the
+  // **provider id** (the wire routing key) on save.
+  it('renders a per-chip provider picker bound to connected providers (I9)', async () => {
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [
+        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
+      ],
+    })
+    // The provider select is rendered for each chip.
+    const providerSelect = screen.getByTestId('fallback-provider-select-z-ai/glm-5-turbo')
+    expect(providerSelect).toBeInTheDocument()
+    expect((providerSelect as HTMLSelectElement).value).toBe('openrouter')
+    // Connected providers are populated as options.
+    expect(screen.getByTestId('fallback-provider-option-openrouter-z-ai/glm-5-turbo')).toBeInTheDocument()
+    expect(screen.getByTestId('fallback-provider-option-anthropic-z-ai/glm-5-turbo')).toBeInTheDocument()
+    // An "empty" option exists so the user can clear the provider
+    // (which surfaces the persistent warning — I11).
+    expect(screen.getByTestId('fallback-provider-option-empty-z-ai/glm-5-turbo')).toBeInTheDocument()
+  })
+
+  it('changing the provider combobox persists the provider ID (not display name) on save (I9)', async () => {
+    // Regression: pre-C2 the editor stored the provider DISPLAY name
+    // in `entry.provider` (FR-007 spec: routing key, e.g. "openrouter").
+    // Pin the wire payload as provider id; the display name is layered
+    // separately at render time.
+    vi.mocked(updateAgent).mockResolvedValue(mockCoreAgent)
+    vi.mocked(updateAgent).mockClear()
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [
+        { model: 'claude-sonnet-4-6', provider: 'openrouter' },
+      ],
+    })
+    // Switch the provider to anthropic — a different connected provider.
+    fireEvent.change(screen.getByTestId('fallback-provider-select-claude-sonnet-4-6'), {
+      target: { value: 'anthropic' },
+    })
+    // Wait for the auto-save debounce + flush.
+    await waitFor(
+      () => {
+        const calls = vi.mocked(updateAgent).mock.calls.filter(
+          ([id]) => id === mockCoreAgent.id,
+        )
+        expect(calls.length).toBeGreaterThan(0)
+      },
+      { timeout: 3000 },
+    )
+    const calls = vi.mocked(updateAgent).mock.calls.filter(
+      ([id]) => id === mockCoreAgent.id,
+    )
+    const last = calls.at(-1)!
+    expect(last[1].fallback_models).toEqual([
+      // The wire value MUST be the provider ID, not "Anthropic" or
+      // "OpenRouter". This is the I9 contract.
+      { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+    ])
+  })
+
+  it('clearing the provider combobox flips the chip into the warning state (I11 + I9 integration)', async () => {
+    // Sanity: an explicit user action — picking "—" on the provider
+    // select — must trigger the warning indicator on that chip.
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [
+        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
+      ],
+    })
+    expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
+    fireEvent.change(screen.getByTestId('fallback-provider-select-z-ai/glm-5-turbo'), {
+      target: { value: '' },
+    })
+    expect(
+      await screen.findByTestId('fallback-chip-warning-z-ai/glm-5-turbo'),
+    ).toBeInTheDocument()
+  })
+
   // W6-C2 / I10: reorder controls. The wire contract for
   // `fallback_models` says entries are tried in the order they appear,
   // so reordering changes runtime behavior. Up arrow disabled at index
