@@ -163,6 +163,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [maxCostPerDay, setMaxCostPerDay] = useState<number | ''>('')
   const [soul, setSoul] = useState('')
   const [instructions, setInstructions] = useState('')
+  // W6-B4 / G1: per-agent persona voice identifier (TTS voice name or model ID).
+  // Schema-pinned on Agent.voice; not active until v0.2.0 TTS. Empty string
+  // means "not configured" — the wire payload omits the field entirely.
+  const [voice, setVoice] = useState('')
   const [heartbeat, setHeartbeat] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState(0)
   const [maxToolIterations, setMaxToolIterations] = useState(50)
@@ -212,6 +216,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setMaxCostPerDay(agent.rate_limits?.max_cost_per_day ?? '')
     setSoul(agent.soul ?? '')
     setInstructions(agent.instructions ?? '')
+    // W6-B4 / G1: hydrate the persona voice. The wire field is nullable;
+    // `null` and absent both render as the empty string in the input.
+    setVoice(agent.voice ?? '')
     setHeartbeat(agent.heartbeat ?? '')
     setTimeoutSeconds(agent.timeout_seconds ?? 0)
     setMaxToolIterations(agent.max_tool_iterations ?? 50)
@@ -250,6 +257,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     },
     soul,
     instructions,
+    // W6-B4 / G1: voice is optional — emit only when non-empty so the backend
+    // can leave the field unchanged when the user hasn't set it. An empty
+    // string and `undefined` are semantically equivalent for the wire (both
+    // mean "no override"); sending `null` explicitly would clear an existing
+    // value, which is the right semantics for "Clear voice" but not for an
+    // untouched field. We send `undefined` (omitted) for the empty case.
+    voice: voice !== '' ? voice : undefined,
     heartbeat,
     timeout_seconds: timeoutSeconds > 0 ? timeoutSeconds : undefined,
     max_tool_iterations: maxToolIterations,
@@ -278,7 +292,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   }), [
     name, description, model, selectedColor, selectedIcon, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
-    maxToolCallsPerMinute, maxCostPerDay, soul, instructions, heartbeat,
+    maxToolCallsPerMinute, maxCostPerDay, soul, instructions, voice, heartbeat,
     timeoutSeconds, maxToolIterations, steeringMode, toolFeedback,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
     toolsCfg, agentSkills, executor,
@@ -894,6 +908,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   setSoul={(v) => { markDirty(); setSoul(v) }}
                   instructions={instructions}
                   setInstructions={(v) => { markDirty(); setInstructions(v) }}
+                  // W6-B4 / G1: per-agent persona voice (TTS voice name / model ID).
+                  // Schema-pinned; not active until v0.2.0 TTS.
+                  voice={voice}
+                  setVoice={(v) => { markDirty(); setVoice(v) }}
                   renderUploadButton={(_, onUpload) => <UploadButton onUpload={onUpload} />}
                 />
 
