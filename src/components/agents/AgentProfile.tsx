@@ -9,6 +9,8 @@ import {
   Plus,
   Sparkle,
   Star,
+  ArrowUp,
+  ArrowDown,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
@@ -391,6 +393,25 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   function removeFallback(modelSlug: string) {
     setFallbackModels((prev) => prev.filter((f) => f.model !== modelSlug))
+  }
+
+  // W6-C2 / I10: reorder helper. The wire contract for `fallback_models`
+  // is "tried in the order they appear in the array" (see
+  // FallbackModel.yaml description); order matters semantically.
+  // Up/down arrow buttons keep the move explicit and keyboard-friendly
+  // (no native HTML5 drag-and-drop needed, no extra library, accessible
+  // to screen readers and keyboard-only users).
+  function moveFallback(modelSlug: string, direction: -1 | 1) {
+    setFallbackModels((prev) => {
+      const idx = prev.findIndex((f) => f.model === modelSlug)
+      if (idx < 0) return prev
+      const target = idx + direction
+      if (target < 0 || target >= prev.length) return prev
+      const next = prev.slice()
+      const [item] = next.splice(idx, 1)
+      next.splice(target, 0, item)
+      return next
+    })
   }
 
   function UploadButton({ onUpload }: { onUpload: (content: string) => void }) {
@@ -834,7 +855,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <div className="space-y-1.5">
                   <p className="text-xs text-[var(--color-muted)]">Fallback models (tried in order if primary fails)</p>
                   <div className="flex flex-wrap gap-1.5 p-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
-                    {fallbackModels.map((entry) => (
+                    {fallbackModels.map((entry, idx) => (
                       <span
                         key={entry.model}
                         data-testid={`fallback-chip-model-${entry.model}`}
@@ -856,6 +877,32 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           {entry.provider || '—'}
                         </span>
                         <span>{entry.model}</span>
+                        {/* W6-C2 / I10: reorder controls. Up disabled for
+                            index 0, down disabled for last index — no
+                            wrap-around. The data-testid pattern is
+                            `fallback-chip-up-<model>` /
+                            `fallback-chip-down-<model>` so tests can
+                            target each chip. */}
+                        <button
+                          type="button"
+                          data-testid={`fallback-chip-up-${entry.model}`}
+                          aria-label={`Move fallback ${entry.model} up`}
+                          disabled={idx === 0}
+                          onClick={() => moveFallback(entry.model, -1)}
+                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)]"
+                        >
+                          <ArrowUp size={10} />
+                        </button>
+                        <button
+                          type="button"
+                          data-testid={`fallback-chip-down-${entry.model}`}
+                          aria-label={`Move fallback ${entry.model} down`}
+                          disabled={idx === fallbackModels.length - 1}
+                          onClick={() => moveFallback(entry.model, 1)}
+                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)]"
+                        >
+                          <ArrowDown size={10} />
+                        </button>
                         <button
                           type="button"
                           data-testid={`fallback-chip-remove-${entry.model}`}

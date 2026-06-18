@@ -645,4 +645,57 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     expect(screen.queryByTestId('fallback-chip-model-claude-opus-4-6')).toBeNull()
     expect(screen.queryByTestId('fallback-add-trigger')).toBeNull()
   })
+
+  // W6-C2 / I10: reorder controls. The wire contract for
+  // `fallback_models` says entries are tried in the order they appear,
+  // so reordering changes runtime behavior. Up arrow disabled at index
+  // 0; down arrow disabled at last index.
+  it('renders up/down reorder buttons on each chip (I10)', async () => {
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [
+        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
+        { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+      ],
+    })
+    expect(screen.getByTestId('fallback-chip-up-z-ai/glm-5-turbo')).toBeInTheDocument()
+    expect(screen.getByTestId('fallback-chip-down-z-ai/glm-5-turbo')).toBeInTheDocument()
+    expect(screen.getByTestId('fallback-chip-up-claude-sonnet-4-6')).toBeInTheDocument()
+    expect(screen.getByTestId('fallback-chip-down-claude-sonnet-4-6')).toBeInTheDocument()
+    // Up is disabled for the first chip.
+    expect((screen.getByTestId('fallback-chip-up-z-ai/glm-5-turbo') as HTMLButtonElement).disabled).toBe(true)
+    // Down is disabled for the last chip.
+    expect((screen.getByTestId('fallback-chip-down-claude-sonnet-4-6') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('moving a fallback down reorders the wire array on save (I10)', async () => {
+    vi.mocked(updateAgent).mockResolvedValue(mockCoreAgent)
+    vi.mocked(updateAgent).mockClear()
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [
+        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
+        { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+      ],
+    })
+    // Move the first fallback DOWN — the array becomes [claude-sonnet-4-6, z-ai/glm-5-turbo].
+    fireEvent.click(screen.getByTestId('fallback-chip-down-z-ai/glm-5-turbo'))
+    await waitFor(
+      () => {
+        const calls = vi.mocked(updateAgent).mock.calls.filter(
+          ([id]) => id === mockCoreAgent.id,
+        )
+        expect(calls.length).toBeGreaterThan(0)
+      },
+      { timeout: 3000 },
+    )
+    const calls = vi.mocked(updateAgent).mock.calls.filter(
+      ([id]) => id === mockCoreAgent.id,
+    )
+    const last = calls.at(-1)!
+    expect(last[1].fallback_models).toEqual([
+      { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+      { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
+    ])
+  })
 })
