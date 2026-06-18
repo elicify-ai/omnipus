@@ -12,7 +12,7 @@ import { FormError } from '@/components/ui/FormError'
 import { useUiStore } from '@/store/ui'
 import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, isApiError } from '@/lib/api'
 import type { Agent, AgentCreateRequest, AgentToolsCfg, ExecutorConfig, Skill } from '@/lib/api'
-import { AVATAR_COLORS } from '@/lib/constants'
+import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
@@ -328,16 +328,26 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                         {/* W6-A1 / C3: 40x40 tap target (WCAG 2.5.8 AA). Visual swatch stays
                             full-bleed; the button's extra padding gives the tap surface. */}
                         <div className="flex gap-2 flex-wrap">
-                          {AVATAR_COLORS.map((c) => (
-                            <button
-                              key={c}
-                              type="button"
-                              onClick={() => setColor(c)}
-                              className={`min-h-tap-target-comfortable min-w-tap-target-comfortable rounded-full p-0 transition-transform ${color === c ? 'ring-2 ring-[var(--color-secondary)] ring-offset-2 ring-offset-[var(--color-surface-1)] scale-110' : 'hover:scale-110'}`}
-                              style={{ backgroundColor: c }}
-                              aria-label={`Select color ${c}`}
-                            />
-                          ))}
+                          {AVATAR_COLORS.map((c) => {
+                            // W6-B4 / M7: aria-label uses the semantic name
+                            // (e.g. "Forge Gold") instead of the raw hex.
+                            // The `title` attribute is shown on hover and
+                            // mirrors the aria-label so sighted users get
+                            // the same readable string.
+                            const name = AVATAR_COLORS_BY_NAME[c] ?? c
+                            return (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => setColor(c)}
+                                className={`min-h-tap-target-comfortable min-w-tap-target-comfortable rounded-full p-0 transition-transform ${color === c ? 'ring-2 ring-[var(--color-secondary)] ring-offset-2 ring-offset-[var(--color-surface-1)] scale-110' : 'hover:scale-110'}`}
+                                style={{ backgroundColor: c }}
+                                aria-label={`Select color ${name}`}
+                                title={name}
+                                data-testid={`avatar-color-${name.toLowerCase().replace(/\s+/g, '-')}`}
+                              />
+                            )
+                          })}
                         </div>
                       </div>
                       <div>
