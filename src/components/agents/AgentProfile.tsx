@@ -11,6 +11,7 @@ import {
   Star,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
+import { useFocusRestore } from '@/hooks/useFocusRestore'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -148,59 +149,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // slide-over (typically the AgentCard button — also covers the TrustGraph
   // row click and the /agents/:id route mount) on close.
   //
-  // The capture happens in two places, mirroring the Wave A CreateAgentModal
-  // pattern (src/components/agents/CreateAgentModal.tsx:175-213):
-  //   1. `handleOpenAutoFocus` fires inside <SheetContent> (via the
-  //      `onOpenAutoFocus` prop below) BEFORE Radix moves focus into the
-  //      dialog — so `document.activeElement` is still the trigger button
-  //      at capture time, not the dialog body. This is the load-bearing
-  //      fix for click-opens (Radix's first-focusable focus shift would
-  //      otherwise steal activeElement before the useEffect ran).
-  //   2. The useEffect here is a fallback for programmatic opens (e.g. the
-  //      /agents/:id route mount via `openEditAgentSlideOver` from
-  //      src/routes/_app/agents.$agentId.tsx:13) where onOpenAutoFocus
-  //      was bypassed.
-  const slideOverTriggerRef = useRef<HTMLElement | null>(null)
-  const prevOpenRef = useRef(isOpen)
-  const handleOpenAutoFocus = (_e: Event) => {
-    // Capture before Radix shifts focus. Don't preventDefault — Radix's
-    // focus management (focus first focusable inside the slide-over) is
-    // desired; we only want the trigger reference for restore-on-close.
-    const active = document.activeElement
-    if (active instanceof HTMLElement && active !== document.body) {
-      slideOverTriggerRef.current = active
-    }
-  }
-  useEffect(() => {
-    if (isOpen && !prevOpenRef.current) {
-      // Fallback capture if onOpenAutoFocus didn't fire (e.g. programmatic
-      // route mount via agents.$agentId.tsx).
-      if (!slideOverTriggerRef.current) {
-        const active = document.activeElement
-        if (active instanceof HTMLElement && active !== document.body) {
-          slideOverTriggerRef.current = active
-        }
-      }
-    } else if (!isOpen && prevOpenRef.current) {
-      // Slide-over just closed — restore focus to the captured trigger.
-      const trigger = slideOverTriggerRef.current
-      slideOverTriggerRef.current = null
-      if (trigger && typeof trigger.focus === 'function' && document.contains(trigger)) {
-        // Defer to next frame so Radix has finished its own teardown focus
-        // (Radix moves focus to the body on unmount). Wrap in try/catch so a
-        // detached-node focus() (route-change race) doesn't crash React's
-        // commit phase.
-        requestAnimationFrame(() => {
-          try {
-            trigger.focus()
-          } catch {
-            // Silent — focus restore is best-effort; users can re-tab.
-          }
-        })
-      }
-    }
-    prevOpenRef.current = isOpen
-  }, [isOpen])
+  // Wave 6 / B-fix: extracted to `useFocusRestore` hook so the same
+  // proven pattern (capture-in-onOpenAutoFocus + restore-via-RAF + try/
+  // catch) is shared with the modal in CreateAgentModal. Future Wave C
+  // consumers (ModelFooter slide-over) will adopt the hook instead of
+  // forking this block.
+  const { onOpenAutoFocus: handleOpenAutoFocus } = useFocusRestore(isOpen)
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -286,7 +240,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setInstructions(agent.instructions ?? '')
     // W6-B4 / G1: hydrate the persona voice. The wire field is nullable;
     // `null` and absent both render as the empty string in the input.
-    setVoice(agent.voice ?? '')
+    // W6-B-fix: trim existing whitespace on disk so the input never
+    // renders 3 spaces and the wire round-trip is clean (whitespace was
+    // silently reaching the server).
+    setVoice((agent.voice ?? '').trim())
     setHeartbeat(agent.heartbeat ?? '')
     setTimeoutSeconds(agent.timeout_seconds ?? 0)
     setMaxToolIterations(agent.max_tool_iterations ?? 50)
@@ -343,7 +300,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // mean "no override"); sending `null` explicitly would clear an existing
     // value, which is the right semantics for "Clear voice" but not for an
     // untouched field. We send `undefined` (omitted) for the empty case.
-    voice: voice !== '' ? voice : undefined,
+    // W6-B-fix: trim on the wire so whitespace-only inputs collapse to
+    // "no voice configured" rather than persisting a literal "   " that
+    // breaks TTS lookup at v0.2.0 release.
+    voice: voice.trim() !== '' ? voice.trim() : undefined,
     heartbeat,
     timeout_seconds: timeoutSeconds > 0 ? timeoutSeconds : undefined,
     max_tool_iterations: maxToolIterations,
