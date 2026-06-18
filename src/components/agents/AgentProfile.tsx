@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import {
   X,
   CaretDown,
@@ -644,6 +645,55 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 </div>
               )}
+              {/* W6-C1 / G2: Delegation policy summary link. The
+                  `delegation_policy` shape (DelegationPolicy.yaml) has five
+                  editable sub-fields (to, accept_from, modes, depth, budget)
+                  but the Edit profile does not surface them — they live in
+                  the Trust editor. Instead of cloning the editor here we
+                  expose a single summary line that counts the rules and
+                  links to `/agents/trust?agent=<id>` so the operator can
+                  jump straight into the per-agent row. Hidden for locked
+                  core agents (their delegation policy is built-in and not
+                  user-editable in v0.1.0). Hidden for workers too — workers
+                  are delegation-only labour agents; their `to` list is
+                  configured on the *caller* agent, not on the worker
+                  itself, so a "Delegation policy" link here would point at
+                  the wrong surface. */}
+              {canEdit && !isWorkerAgent && (() => {
+                const dp = agent.delegation_policy
+                // Sum non-empty sub-fields so the user sees "0 rules" for
+                // an unset policy rather than "5 rules" (which would imply
+                // allow-by-default — the schema is deny-by-default).
+                const toCount = dp?.to?.length ?? 0
+                const acceptFromCount = dp?.accept_from?.length ?? 0
+                const modesCount = dp?.modes?.length ?? 0
+                const hasDepth = typeof dp?.depth === 'number'
+                const hasBudget = !!(dp?.budget && (dp.budget.max_cost_usd !== undefined || dp.budget.max_tokens !== undefined))
+                const ruleCount = toCount + acceptFromCount + modesCount + (hasDepth ? 1 : 0) + (hasBudget ? 1 : 0)
+                const rulesLabel = ruleCount === 1 ? '1 rule' : `${ruleCount} rules`
+                return (
+                  <div
+                    data-testid="delegation-policy-summary"
+                    className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm text-[var(--color-secondary)]">Delegation policy</p>
+                      <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                        {rulesLabel} configured. Edit on the Trust graph.
+                      </p>
+                    </div>
+                    <Link
+                      to="/agents/trust"
+                      search={{ agent: resolvedAgentId }}
+                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-primary)]"
+                      data-testid="delegation-policy-link"
+                      aria-label={`Edit delegation policy for ${agent.name}`}
+                    >
+                      Open Trust graph
+                    </Link>
+                  </div>
+                )
+              })()}
               {canEdit && (
                 <div className="space-y-1.5">
                   <p className="text-xs text-[var(--color-muted)]">Avatar color</p>
@@ -794,6 +844,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
                   <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
                     {executor.kind === 'external-cli' ? (executor.cli ?? 'external') : 'A2A'}
+                  </span>
+                )}
+                {/* W6-C1: surface the native kind too so the accordion
+                    header always shows the active runtime — `native` is
+                    the default and previously rendered as a bare "Executor"
+                    label with no kind chip. "Native (in-process)" is the
+                    user-facing copy the operator sees in the
+                    WorkerCard badge and on the executor selector; the
+                    header mirrors it for consistency. */}
+                {(!executor || executor.kind === 'native') && (
+                  <span
+                    data-testid="executor-native-badge"
+                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]"
+                  >
+                    Native (in-process)
                   </span>
                 )}
               </div>
