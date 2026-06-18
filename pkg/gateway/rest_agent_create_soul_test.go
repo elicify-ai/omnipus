@@ -118,7 +118,9 @@ func TestCreateAgent_Worker_AllowsAnyExecutorKind(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, "worker", string(created.Type))
+	// W1 wire enum: legacy "worker" becomes "Subagent" (native worker) on the wire.
+	assert.Equal(t, "Subagent", string(created.Type))
 	require.NotNil(t, created.Executor)
-	assert.Equal(t, "remote-a2a", string(created.Executor.Kind))
+	require.NotNil(t, created.Executor.Kind, "Executor.Kind must be non-nil pointer after W1 wire schema")
+	assert.Equal(t, "remote-a2a", string(*created.Executor.Kind))
 }
