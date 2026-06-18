@@ -64,10 +64,6 @@ func (s *stubAgentLoop) InterruptSession(sessionID, hint string) ([]string, erro
 	return nil, s.returnErr
 }
 
-func (s *stubAgentLoop) InterruptByChannelChat(channel, chatID, hint string) error {
-	return nil
-}
-
 func (s *stubAgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (bool, error) {
 	// Delegate to InterruptSession for test coverage continuity.
 	// Include both userID and channel in the hint so tests can assert on both.

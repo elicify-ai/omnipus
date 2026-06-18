@@ -573,54 +573,6 @@ func (al *AgentLoop) InterruptHard() error {
 	return nil
 }
 
-// InterruptByChannelChat gracefully cancels the active root turn (depth==0)
-// whose channel and chatID match the supplied values, then cascades to all
-// sub-turns that share the same transcriptSessionID via InterruptSession.
-//
-// This is the correct cancellation path for Tier B (text-parsing) channels:
-// inbound messages from those channels carry no explicit SessionID so a direct
-// InterruptSession call would match nothing. Sub-turns inherit their parent's
-// transcriptSessionID but NOT channel/chatID (they are created with empty
-// values), so matching by channel+chatID alone misses them. The two-step
-// strategy — find root by channel+chatID, then cascade by sessionID — covers
-// both parent and all sub-turns.
-//
-// Returns nil whether or not any matching turn was found — "no active turn" is
-// a valid no-op. Returns a non-nil error only when channel or chatID is empty.
-func (al *AgentLoop) InterruptByChannelChat(channel, chatID, hint string) error {
-	if channel == "" || chatID == "" {
-		return fmt.Errorf("InterruptByChannelChat: channel and chatID must be non-empty")
-	}
-
-	// Step 1: find the root turn (depth==0) matching channel+chatID and extract
-	// its transcriptSessionID. We stop at the first match because a given
-	// channel+chatID pair can have at most one active root turn at a time.
-	var sid string
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
-		ts.mu.RLock()
-		ch := ts.channel
-		cid := ts.chatID
-		depth := ts.depth
-		ts.mu.RUnlock()
-		if ch == channel && cid == chatID && depth == 0 {
-			sid = ts.transcriptSessionID
-			return false // stop walking — found the root
-		}
-		return true
-	})
-
-	if sid == "" {
-		// No active root turn for this channel+chatID — valid no-op.
-		return nil
-	}
-
-	// Step 2: cascade via InterruptSession which covers parent + all sub-turns
-	// that share the same transcriptSessionID.
-	_, err := al.InterruptSession(sid, hint)
-	return err
-}
-
 // ====================== SubTurn Result Polling ======================
 
 // dequeuePendingSubTurnResults polls the SubTurn result channel for the given

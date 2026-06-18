@@ -1707,17 +1707,17 @@ func TestInterruptSession_NoActiveTurnIsAttemptOnly(t *testing.T) {
 	}
 }
 
-// TestInterruptByChannelChat_CascadesToSubTurns verifies that a Tier B cancel
+// TestRequestCancelByChannelChat_CascadesToSubTurns verifies that a Tier B cancel
 // originating from a channel+chatID match propagates to sub-turns that share
 // the same transcriptSessionID even though sub-turns have empty channel/chatID.
 //
 // BDD: Given a root turn (depth=0, channel="telegram", chatID="123", transcriptSessionID="S")
 // and a sub-turn (depth=1, channel="", chatID="", transcriptSessionID="S"),
-// When InterruptByChannelChat("telegram", "123", "hint") is called,
+// When RequestCancelByChannelChat(ctx, "telegram", "123", "") is called,
 // Then BOTH turns receive requestGracefulInterrupt (gracefulInterrupt=true).
 //
 // Refs: FR-6, FR-10.
-func TestInterruptByChannelChat_CascadesToSubTurns(t *testing.T) {
+func TestRequestCancelByChannelChat_CascadesToSubTurns(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
 
@@ -1759,8 +1759,8 @@ func TestInterruptByChannelChat_CascadesToSubTurns(t *testing.T) {
 	// Sub-turn: inherits transcriptSessionID but has no channel/chatID (depth=1).
 	subTS, subPC := makeTurn("sub-key", "", "", 1, sid)
 
-	if err := al.InterruptByChannelChat("telegram", "123", "test"); err != nil {
-		t.Fatalf("InterruptByChannelChat returned unexpected error: %v", err)
+	if err := al.RequestCancelByChannelChat(context.Background(), "telegram", "123", ""); err != nil {
+		t.Fatalf("RequestCancelByChannelChat returned unexpected error: %v", err)
 	}
 
 	// Both providerCancel stubs must fire within 200ms (FR-12a).
@@ -1782,28 +1782,28 @@ func TestInterruptByChannelChat_CascadesToSubTurns(t *testing.T) {
 	}
 }
 
-// TestInterruptByChannelChat_NoMatchIsNoop verifies that calling
-// InterruptByChannelChat when no root turn matches is a silent no-op.
-func TestInterruptByChannelChat_NoMatchIsNoop(t *testing.T) {
+// TestRequestCancelByChannelChat_NoMatchIsNoop verifies that calling
+// RequestCancelByChannelChat when no root turn matches is a silent no-op.
+func TestRequestCancelByChannelChat_NoMatchIsNoop(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
 
 	// No turns registered — must return nil, not error.
-	if err := al.InterruptByChannelChat("telegram", "999", "hint"); err != nil {
+	if err := al.RequestCancelByChannelChat(context.Background(), "telegram", "999", ""); err != nil {
 		t.Fatalf("expected nil for no-match, got: %v", err)
 	}
 }
 
-// TestInterruptByChannelChat_EmptyArgsError verifies that empty channel or
+// TestRequestCancelByChannelChat_EmptyArgsError verifies that empty channel or
 // chatID returns a non-nil error.
-func TestInterruptByChannelChat_EmptyArgsError(t *testing.T) {
+func TestRequestCancelByChannelChat_EmptyArgsError(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
 
-	if err := al.InterruptByChannelChat("", "123", "hint"); err == nil {
+	if err := al.RequestCancelByChannelChat(context.Background(), "", "123", ""); err == nil {
 		t.Fatal("expected error for empty channel")
 	}
-	if err := al.InterruptByChannelChat("telegram", "", "hint"); err == nil {
+	if err := al.RequestCancelByChannelChat(context.Background(), "telegram", "", ""); err == nil {
 		t.Fatal("expected error for empty chatID")
 	}
 }

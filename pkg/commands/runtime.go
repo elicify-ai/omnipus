@@ -23,10 +23,6 @@ type AgentLoopInterface interface {
 	// of canceled turn IDs (parent + sub-turns) which the gateway uses for the
 	// turn_canceled audit entry; the commands runtime discards it.
 	InterruptSession(sessionID, hint string) ([]string, error)
-	// InterruptByChannelChat requests a graceful interrupt for all active turns
-	// whose channel and chatID match the supplied values. Used by Tier B
-	// (text-parsing) channels where inbound messages carry no explicit SessionID.
-	InterruptByChannelChat(channel, chatID, hint string) error
 	// RequestCancelForSession runs the full cancel state machine (audit, transcript,
 	// abuse-detection, approval auto-deny, 2-stage timer) for the given session.
 	// All parameters are primitive types so this interface can be defined without
