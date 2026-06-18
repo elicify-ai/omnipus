@@ -1,4 +1,5 @@
-import { Scroll, NotePencil } from '@phosphor-icons/react'
+import { Scroll, NotePencil, Microphone } from '@phosphor-icons/react'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { ExecutorSelector } from './ExecutorSelector'
@@ -35,6 +36,17 @@ export interface BehaviorFieldsProps {
   /** Instructions setter alias — accepts the conventional `setInstructions` name. */
   setInstructions?: (next: string) => void
   /**
+   * Per-agent persona voice identifier (e.g. TTS voice name or voice model ID).
+   * Schema-pinned; not active until v0.2.0 TTS. Optional in both tiers — empty
+   * string means "no voice configured" (the wire field is omitted).
+   * W6-B4 / G1: this field has been on the wire for a while but had no UI.
+   */
+  voice: string
+  /** Voice setter. Either `onVoiceChange` or `setVoice` may be supplied. */
+  onVoiceChange?: (next: string) => void
+  /** Voice setter alias — accepts the conventional `setVoice` name. */
+  setVoice?: (next: string) => void
+  /**
    * Optional upload button — the profile renders one, the modal does not
    * (the modal has no file upload affordance for soul/instructions).
    */
@@ -56,10 +68,14 @@ export function BehaviorFields({
   instructions,
   onInstructionsChange,
   setInstructions,
+  voice,
+  onVoiceChange,
+  setVoice,
   renderUploadButton,
 }: BehaviorFieldsProps) {
   const handleSoul = onSoulChange ?? setSoul
   const handleInstructions = onInstructionsChange ?? setInstructions
+  const handleVoice = onVoiceChange ?? setVoice
   return (
     <div className="space-y-5">
       {/* SOUL.md / Task prompt — relabelled for workers, optional in both tiers.
@@ -133,6 +149,36 @@ export function BehaviorFields({
           className="text-xs font-mono resize-none"
         />
         {renderUploadButton?.('instructions', (v) => handleInstructions?.(v))}
+      </div>
+
+      <Separator />
+
+      {/* W6-B4 / G1: Voice — per-agent persona voice identifier (TTS voice name
+          or voice model ID). Schema-pinned on `Agent.voice` / `AgentUpdateRequest.voice`;
+          not active until v0.2.0 TTS, but exposing the field now means operators
+          can pre-configure the persona voice for when the feature ships.
+          Optional in both tiers — empty string omits the field on the wire. */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Microphone size={13} className="text-[var(--color-accent)]" />
+          <p className="text-xs font-medium text-[var(--color-secondary)]">
+            Voice <span className="text-[var(--color-muted)] font-normal">(optional)</span>
+          </p>
+        </div>
+        <p className="text-xs text-[var(--color-muted)]">
+          Per-agent persona voice identifier (e.g. <span className="font-mono text-[11px]">alloy</span>).
+          Used by v0.2.0 TTS to pick a voice when this agent speaks. Leave empty for the engine default.
+        </p>
+        <Input
+          data-testid={isWorker ? 'worker-voice' : 'agent-voice'}
+          value={voice}
+          onChange={(e) => handleVoice?.(e.target.value)}
+          placeholder="e.g. alloy"
+          className="text-xs h-8 font-mono"
+          // Voice is optional in both tiers — never required.
+          required={false}
+          aria-required={false}
+        />
       </div>
     </div>
   )

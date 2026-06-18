@@ -8,6 +8,7 @@ import {
   Info,
   Plus,
   Sparkle,
+  Star,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -46,7 +47,7 @@ import {
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
-import { AVATAR_COLORS } from '@/lib/constants'
+import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import type { FallbackModel } from '@/lib/api/generated/openapi-types'
 import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
 
@@ -206,6 +207,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [model, setModel] = useState('')
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
   const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
+  // W6-B4 / G3: `default` flag mirrors Agent.default on the wire. At most one
+  // agent is default across the roster; the backend enforces that on PUT.
+  // The toggle in the Identity strip is the only way to flip it from the
+  // Edit profile (previously, users had to go back to the Agents list).
+  const [isDefault, setIsDefault] = useState(false)
   // Fallback chain — the wire shape is `[{model, provider}]`; the editor
   // tracks it 1:1 with `provider` always populated (see FallbackEntry
   // type). Provider is needed for the chip badge; the wire payload in
@@ -221,6 +227,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [maxCostPerDay, setMaxCostPerDay] = useState<number | ''>('')
   const [soul, setSoul] = useState('')
   const [instructions, setInstructions] = useState('')
+  // W6-B4 / G1: per-agent persona voice identifier (TTS voice name or model ID).
+  // Schema-pinned on Agent.voice; not active until v0.2.0 TTS. Empty string
+  // means "not configured" — the wire payload omits the field entirely.
+  const [voice, setVoice] = useState('')
   const [heartbeat, setHeartbeat] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState(0)
   const [maxToolIterations, setMaxToolIterations] = useState(50)
@@ -251,6 +261,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setModel(agent.model ?? '')
     setSelectedColor(agent.color)
     setSelectedIcon((agent.icon as IconName) ?? 'Robot')
+    // W6-B4 / G3: hydrate the `default` flag from the agent response. The
+    // wire field is a plain boolean; absent = false. The Identity strip
+    // shows the current state of this flag and lets the user flip it.
+    setIsDefault(agent.default ?? false)
     // Hydrate the fallback chain from the wire. `provider` is optional on
     // the wire type; narrow to required by looking up via modelToProvider,
     // else empty string (renders as a muted dash in the chip).
@@ -270,6 +284,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setMaxCostPerDay(agent.rate_limits?.max_cost_per_day ?? '')
     setSoul(agent.soul ?? '')
     setInstructions(agent.instructions ?? '')
+    // W6-B4 / G1: hydrate the persona voice. The wire field is nullable;
+    // `null` and absent both render as the empty string in the input.
+    setVoice(agent.voice ?? '')
     setHeartbeat(agent.heartbeat ?? '')
     setTimeoutSeconds(agent.timeout_seconds ?? 0)
     setMaxToolIterations(agent.max_tool_iterations ?? 50)
@@ -296,6 +313,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     model,
     color: selectedColor,
     icon: selectedIcon,
+    // W6-B4 / G3: `default` flag. Always sent with the current value so the
+    // PUT payload reflects the user's intent. The wire contract says
+    // "Omitting this field leaves the flag unchanged" — but auto-save only
+    // fires on a real change, and on the real change the user has flipped
+    // this toggle, so emitting the new value is exactly right. If a future
+    // edit (say, renaming) does not flip `default`, the formData still
+    // includes the existing value; the server treats the PUT as "set to
+    // this value", which preserves the existing value — the desired
+    // behavior. PUT semantics: at most one agent is default across the
+    // roster; the backend enforces uniqueness on PUT and demotes the prior
+    // default to false in the same transaction.
+    default: isDefault,
     // Editor state matches the wire shape 1:1; emit `undefined` for
     // empty (treated as "no fallbacks" by the backend).
     fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
@@ -308,6 +337,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     },
     soul,
     instructions,
+    // W6-B4 / G1: voice is optional — emit only when non-empty so the backend
+    // can leave the field unchanged when the user hasn't set it. An empty
+    // string and `undefined` are semantically equivalent for the wire (both
+    // mean "no override"); sending `null` explicitly would clear an existing
+    // value, which is the right semantics for "Clear voice" but not for an
+    // untouched field. We send `undefined` (omitted) for the empty case.
+    voice: voice !== '' ? voice : undefined,
     heartbeat,
     timeout_seconds: timeoutSeconds > 0 ? timeoutSeconds : undefined,
     max_tool_iterations: maxToolIterations,
@@ -334,9 +370,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // rather than forcing an empty value over the wire.
     executor,
   }), [
-    name, description, model, selectedColor, selectedIcon, fallbackModels,
+    name, description, model, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
-    maxToolCallsPerMinute, maxCostPerDay, soul, instructions, heartbeat,
+    maxToolCallsPerMinute, maxCostPerDay, soul, instructions, voice, heartbeat,
     timeoutSeconds, maxToolIterations, steeringMode, toolFeedback,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
     toolsCfg, agentSkills, executor,
@@ -592,23 +628,85 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 )}
               </div>
+              {/* W6-B4 / G3: Default agent toggle. The wire field `default` is
+                  a boolean on Agent / AgentUpdateRequest; at most one agent
+                  across the roster is default. Previously, the only way to
+                  change the default was from the Agents list ("Set as default"
+                  link on each card). This toggle brings the action into the
+                  Edit profile so users do not have to leave the slide-over.
+                  Hidden for locked core agents (locked roster: Mia is the
+                  seeded default and the field is immutable for them). */}
+              {canEdit && (
+                <div
+                  data-testid="default-toggle-row"
+                  className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Star
+                      size={14}
+                      weight={isDefault ? 'fill' : 'regular'}
+                      className={isDefault ? 'text-[var(--color-accent)] shrink-0' : 'text-[var(--color-muted)] shrink-0'}
+                      aria-hidden="true"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm text-[var(--color-secondary)]">Default agent</p>
+                      <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                        Handles inbound messages with no more-specific routing rule. Only one agent is default at a time.
+                      </p>
+                    </div>
+                  </div>
+                  <Switch
+                    data-testid="default-toggle"
+                    checked={isDefault}
+                    onCheckedChange={(v) => {
+                      markDirty()
+                      setIsDefault(v)
+                      // W6-B4 / G3 (Reviewer 2): optimistic UI clear. The
+                      // toggle change triggers the auto-save (500ms debounce)
+                      // but the AgentListScreen / AgentCard stars depend on
+                      // the `['agents']` query. Without this invalidation,
+                      // the star would only move after the next list refetch.
+                      // Fire the invalidation synchronously so the star
+                      // transitions to the new state in real time across
+                      // every visible card.
+                      queryClient.invalidateQueries({ queryKey: ['agents'] })
+                      // Surface the action so users get explicit feedback —
+                      // a default toggle is a global roster change, not a
+                      // local edit.
+                      addToast({
+                        message: v
+                          ? `${name || agent.name} is now the default agent`
+                          : `${name || agent.name} is no longer the default agent`,
+                        variant: 'success',
+                      })
+                    }}
+                    aria-label={isDefault ? 'Unset as default agent' : 'Set as default agent'}
+                  />
+                </div>
+              )}
               {canEdit && (
                 <div className="space-y-1.5">
                   <p className="text-xs text-[var(--color-muted)]">Avatar color</p>
                   <div className="flex gap-2">
-                    {AVATAR_COLORS.map((color) => (
-                      <button
-                        key={color}
-                        type="button"
-                        onClick={() => { markDirty(); setSelectedColor(color) }}
-                        className="w-7 h-7 rounded-full transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-1 focus:ring-offset-[var(--color-primary)]"
-                        style={{
-                          backgroundColor: color,
-                          boxShadow: selectedColor === color ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,
-                        }}
-                        aria-label={color}
-                      />
-                    ))}
+                    {AVATAR_COLORS.map((color) => {
+                      // W6-B4 / M7: aria-label and title use the semantic
+                      // name (e.g. "Forge Gold") instead of the raw hex.
+                      const name = AVATAR_COLORS_BY_NAME[color] ?? color
+                      return (
+                        <button
+                          key={color}
+                          type="button"
+                          onClick={() => { markDirty(); setSelectedColor(color) }}
+                          className="w-7 h-7 rounded-full transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-1 focus:ring-offset-[var(--color-primary)]"
+                          style={{
+                            backgroundColor: color,
+                            boxShadow: selectedColor === color ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,
+                          }}
+                          aria-label={name}
+                          title={name}
+                        />
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -977,6 +1075,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   setSoul={(v) => { markDirty(); setSoul(v) }}
                   instructions={instructions}
                   setInstructions={(v) => { markDirty(); setInstructions(v) }}
+                  // W6-B4 / G1: per-agent persona voice (TTS voice name / model ID).
+                  // Schema-pinned; not active until v0.2.0 TTS.
+                  voice={voice}
+                  setVoice={(v) => { markDirty(); setVoice(v) }}
                   renderUploadButton={(_, onUpload) => <UploadButton onUpload={onUpload} />}
                 />
 
