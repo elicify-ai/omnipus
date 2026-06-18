@@ -34,10 +34,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchSkills: vi.fn(), fetchProviders: vi.fn() }
+  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchSkills: vi.fn(), fetchProviders: vi.fn(), testAgentRunner: vi.fn() }
 })
 
-import { fetchAgent, fetchSkills, updateAgent, fetchProviders } from '@/lib/api'
+import { fetchAgent, fetchSkills, updateAgent, fetchProviders, testAgentRunner } from '@/lib/api'
 import { ApiError } from '@/lib/api-error'
 
 const mockCoreAgent: Agent = {
@@ -117,8 +117,15 @@ function renderProfile(agentId: string) {
 
 beforeEach(() => {
   mockNavigate.mockClear()
-  vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
-  vi.mocked(fetchSkills).mockResolvedValue([])
+  vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockCoreAgent)
+  vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
+  vi.mocked(updateAgent).mockReset().mockResolvedValue(mockCoreAgent)
+  vi.mocked(testAgentRunner).mockReset().mockResolvedValue({
+    ok: true,
+    reason: '',
+    message: 'ready',
+    cli: 'claude-code',
+  })
   // Default: two connected providers with model lists — the provider-aware
   // fallback editor needs ≥2 provider groups to exercise the provider-grouped
   // chip layout (and the per-provider badge attribution).
@@ -399,6 +406,64 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     expect(kind.disabled).toBe(true)
     // The test button is hidden for locked agents.
     expect(screen.queryByTestId('runner-test-button')).toBeNull()
+  })
+
+  // Wave 6 / I12 — runner-test guard. When the user saves a worker with an
+  // external-cli executor, the save flow runs testAgentRunner BEFORE
+  // updateAgent. A failure aborts the save (no silent commit). A success
+  // caches the signature so subsequent saves for the same kind+cli do not
+  // re-fire the test (avoids hammering the runner on every keystroke).
+  it('I12: calls testAgentRunner before updateAgent when transitioning to external-cli', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, executor: undefined })
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    if (!screen.queryByTestId('executor-kind-select')) {
+      fireEvent.click(screen.getByText(/^Executor$/))
+    }
+    const kind = await screen.findByTestId('executor-kind-select')
+    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    await waitFor(() => {
+      expect(testAgentRunner).toHaveBeenCalledWith('web-researcher')
+    }, { timeout: 3000 })
+    // And the save still commits (test returned ok).
+    await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 3000 })
+  })
+
+  it('I12: blocks updateAgent when the runner test fails (missing-binary)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, executor: undefined })
+    vi.mocked(testAgentRunner).mockResolvedValue({
+      ok: false,
+      reason: 'missing-binary',
+      message: 'claude not found on PATH',
+      cli: 'claude-code',
+    })
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    if (!screen.queryByTestId('executor-kind-select')) {
+      fireEvent.click(screen.getByText(/^Executor$/))
+    }
+    const kind = await screen.findByTestId('executor-kind-select')
+    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    await waitFor(() => expect(testAgentRunner).toHaveBeenCalled(), { timeout: 3000 })
+    // Give the auto-save a chance to attempt the save.
+    await new Promise((r) => setTimeout(r, 800))
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+
+  it('I12: skips testAgentRunner when executor is native (no need to test native runners)', async () => {
+    // Use a fresh agent id never seen before so the testedExecutorSig cache
+    // is empty and any call to testAgentRunner would be observed.
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockWorkerAgent,
+      id: 'native-only-worker',
+      name: 'Native Worker',
+      executor: { kind: 'native' },
+    })
+    renderProfile('native-only-worker')
+    await screen.findByText('Native Worker')
+    // Wait for hydration + auto-save window to pass.
+    await new Promise((r) => setTimeout(r, 800))
+    expect(testAgentRunner).not.toHaveBeenCalled()
   })
 
   it('does NOT render the Executor accordion for a base (core) agent', async () => {
