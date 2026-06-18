@@ -79,12 +79,6 @@ type Deps struct {
 	// wires this to AgentLoop.MutateConfig. In tests without an AgentLoop,
 	// provide a simple mutex-based implementation.
 	MutateConfig func(fn func(*config.Config) error) error
-	// SaveConfig persists the current config to ConfigPath.
-	//
-	// Deprecated: use SaveConfigLocked when called from within WithConfig.
-	// SaveConfig is kept for backward compatibility with existing tests that
-	// wire it directly. When both are set, WithConfig uses SaveConfigLocked.
-	SaveConfig func() error
 	// SaveConfigLocked persists cfg to disk. The caller MUST already hold
 	// al.mu via MutateConfig — this function does NOT acquire any mutex.
 	// Keeping it lock-free breaks the AB-BA deadlock:
@@ -97,7 +91,7 @@ type Deps struct {
 	//
 	// The gateway wires this to a closure that calls config.SaveConfig directly.
 	// Tests that do not need real persistence can set it to a no-op or leave it
-	// nil (WithConfig falls back to SaveConfig in that case).
+	// nil (WithConfig will return an error in that case).
 	SaveConfigLocked func(cfg *config.Config) error
 	// CredStore is the encrypted credential store.
 	CredStore *credentials.Store
@@ -202,15 +196,14 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 			return fnErr
 		}
 
-		// Persist. SaveConfigLocked is preferred (no mutex acquired — caller
-		// already holds al.mu). Fall back to SaveConfig for tests that only
-		// wire the legacy field.
-		var saveErr error
-		if d.SaveConfigLocked != nil {
-			saveErr = d.SaveConfigLocked(cfg)
-		} else if d.SaveConfig != nil {
-			saveErr = d.SaveConfig()
+		// Persist. The caller MUST have wired SaveConfigLocked (the
+		// gateway does this at boot; tests must wire it explicitly).
+		// Returning an error here surfaces the misconfiguration loudly
+		// rather than silently no-op'ing the write.
+		if d.SaveConfigLocked == nil {
+			return fmt.Errorf("sysagent: SaveConfigLocked not wired on Deps — gateway must call WithDeps() at boot")
 		}
+		saveErr := d.SaveConfigLocked(cfg)
 		if saveErr != nil {
 			// Roll back in-memory state on disk write failure.
 			if restoreErr := restoreConfig(cfg, snapshotJSON); restoreErr != nil {
