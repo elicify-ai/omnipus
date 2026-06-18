@@ -1244,26 +1244,80 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </AccordionItem>
         )}
 
-        {/* Tools & Permissions — default CLOSED */}
+        {/* Tools & Permissions — default CLOSED.
+            W6-C1 / G8: native workers (default executor.kind) carry 4
+            seeded tool overrides (system.* → deny + the 3 memory
+            allow-entries), and the editable ToolsAndPermissions surface
+            invited the operator to edit those overrides — even though
+            those overrides are compiled-in for native workers and the
+            edits never reach a real native runtime. Collapse the editor
+            to a compact read-only summary for native workers whose
+            `tools_cfg.builtin.policies` is empty/non-overridden. If the
+            operator has explicitly added overrides (`policies` non-empty)
+            we keep the editor open so they can still manage them — the
+            ticket carves out this case ("...unless tools_cfg.overrides
+            is non-empty"). External-cli workers always get the editor
+            because their executor respects the policy. The override
+            count in the accordion trigger is updated to surface the
+            seeded count too so the badge is accurate. */}
         <AccordionItem value="tools" className="border-0">
             <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <span>Tools &amp; Permissions</span>
-              {toolsCfg.builtin?.policies && Object.keys(toolsCfg.builtin.policies).length > 0 && (
-                <span className="text-xs text-[var(--color-muted)] font-normal ml-2">
-                  {Object.keys(toolsCfg.builtin.policies).length} overrides
-                </span>
-              )}
+              {(() => {
+                const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
+                if (overrideCount === 0) return null
+                return (
+                  <span className="text-xs text-[var(--color-muted)] font-normal ml-2">
+                    {overrideCount} overrides
+                  </span>
+                )
+              })()}
             </AccordionTrigger>
             <AccordionContent>
               <div className="px-4">
-                {/* #332 (US-D5 / B-2): isLocked=true → read-only editor, no writes */}
-                <ToolsAndPermissions
-                  agentId={agentId}
-                  agentType={agent.type}
-                  isLocked={isLocked}
-                  tools={toolsCfg}
-                  onChange={setToolsCfg}
-                />
+                {(() => {
+                  // Native workers with no user-added overrides: collapse
+                  // to a read-only summary. The seed pre-populates a
+                  // compiled rail (allow-by-default + system.* deny + the
+                  // 3 memory allow entries) that the operator cannot and
+                  // should not edit from the UI.
+                  const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
+                  const isNativeWorker = isWorkerAgent && (!executor || executor.kind === 'native')
+                  const collapseToReadOnly = isNativeWorker && overrideCount === 0
+                  if (!collapseToReadOnly) {
+                    // #332 (US-D5 / B-2): isLocked=true → read-only editor, no writes
+                    return (
+                      <ToolsAndPermissions
+                        agentId={agentId}
+                        agentType={agent.type}
+                        isLocked={isLocked}
+                        tools={toolsCfg}
+                        onChange={setToolsCfg}
+                      />
+                    )
+                  }
+                  return (
+                    <div
+                      data-testid="native-worker-tools-readonly"
+                      className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+                    >
+                      <p className="text-sm text-[var(--color-secondary)]">
+                        Built-in tool policies (read-only)
+                      </p>
+                      <p className="text-[11px] text-[var(--color-muted)] leading-snug mt-0.5">
+                        Native workers run with a compiled allow/deny rail — the seeded
+                        system and memory entries cannot be edited from the UI. Add
+                        explicit overrides only if your task requires non-default behaviour;
+                        otherwise leave this empty to inherit the inherited rail.
+                      </p>
+                      {isNativeWorker && !executor && (
+                        <p className="text-[10px] text-[var(--color-muted)]/70 mt-1.5">
+                          Executor: Native (in-process) — default.
+                        </p>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             </AccordionContent>
           </AccordionItem>
