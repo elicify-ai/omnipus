@@ -1187,7 +1187,24 @@ type ExecutorConfig struct { // not-wire-format
 	// CLI names the external CLI tool for Kind="external-cli".
 	// Valid values: "claude-code", "codex", "opencode". Required when
 	// Kind="external-cli"; ignored otherwise.
+	// Locked after create (agent-form spec §4.16 / W3 F-10) — to switch CLIs,
+	// create a new agent. Mutable on the wire via PUT is rejected at the handler.
 	CLI string `json:"cli,omitempty"`
+	// CLIPath is the absolute filesystem path to the CLI binary. Required when
+	// Kind="external-cli" (per agent-form spec §4.17 / W3). Mutable on PUT (allows
+	// upgrading the CLI binary without re-creating the agent). Empty means the
+	// OS $PATH is used — fragile when multiple CLI versions are installed.
+	CLIPath string `json:"cli_path,omitempty"`
+	// EnvOverrides are additional environment variables merged into the spawned
+	// CLI process's environment. Omnipus-internal env vars (OMNIPUS_*, the
+	// master-key vars) are NOT overridable; user-supplied keys take precedence
+	// only for non-Omnipus vars (per agent-form spec §4.18 / W3).
+	EnvOverrides map[string]string `json:"env_overrides,omitempty"`
+	// CLIArgs is free-form additional CLI arguments appended to the spawn
+	// invocation. The spawn layer uses execve (no shell interpolation), so
+	// values are passed safely; warn (but do not reject) on shell-injection
+	// chars in the value (per agent-form spec §4.19 / W3).
+	CLIArgs string `json:"cli_args,omitempty"`
 }
 
 // EffectiveKind returns the ExecutorKind with nil-safe defaulting to native.
