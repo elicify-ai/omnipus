@@ -62,7 +62,17 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                 <Circle size={7} weight="fill" className="text-[var(--color-success)] shrink-0" />
               )}
               {agent.default && (
-                <Star size={11} weight="fill" className="text-[var(--color-accent)] shrink-0" aria-label="Default agent" />
+                <>
+                  <Star
+                    size={11}
+                    weight="fill"
+                    className="text-[var(--color-accent)] shrink-0"
+                    aria-label="Default agent"
+                  />
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-accent)] shrink-0">
+                    Default
+                  </span>
+                </>
               )}
             </div>
             <p className="text-sm text-[var(--color-muted)] line-clamp-2 mb-2">
@@ -74,7 +84,9 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               ) : agent.status === 'error' ? (
                 <Badge variant="destructive" className="text-[var(--color-error)] border-[var(--color-error)]/30 bg-[var(--color-error)]/10">error</Badge>
               ) : (
-                <Badge variant={typeBadgeVariant[agent.type]}>{agent.type}</Badge>
+                <Badge variant={typeBadgeVariant[agent.type]} className="font-normal">
+                  {agent.type}
+                </Badge>
               )}
               {agent.model && (
                 <span
