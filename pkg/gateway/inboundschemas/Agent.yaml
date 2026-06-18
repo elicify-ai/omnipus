@@ -16,7 +16,6 @@ required:
   - timeout_seconds
   - max_tool_iterations
   - steering_mode
-  - tool_feedback
   - heartbeat_enabled
   - heartbeat_interval
 properties:
@@ -34,17 +33,21 @@ properties:
     type: string
     enum:
       - core
-      - custom
       - system
-      - worker
+      - Main
+      - Subagent
+      - subagent_3p
     description: >
-      Agent classification. "core" = compiled-in identity locked agent.
-      "custom" = user-defined agent. "system" = legacy operator-supplied entry
-      (config.AgentTypeSystem survives in the API contract for backwards compatibility
-      but SeedConfig does NOT create these — they only appear if config.json contains one).
-      "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a
-      chat target, has no heartbeat, is never the default, and carries an executor
-      (see Agent.executor). The FE sections the roster by type==='worker'.
+      Agent lifecycle classification.
+      "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray).
+      "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives
+      in the API contract for backwards compatibility but SeedConfig does NOT create these).
+      "Main" = user-defined chat colleague (the typical Main agent).
+      "Subagent" = user-defined delegation-only worker on the Omnipus engine.
+      "subagent_3p" = user-defined delegation-only worker on an external CLI
+      (claude-code / codex / opencode).
+      Built-in agents return type: "core" with locked: true; the "Main" enum value is only
+      for user-created chat agents.
     example: "core"
   locked:
     type: boolean
@@ -59,6 +62,7 @@ properties:
     example: "#D4AF37"
   icon:
     type: string
+    maxLength: 50
     description: Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
     example: "Robot"
   model:
@@ -96,6 +100,7 @@ properties:
     description: >
       Contents of HEARTBEAT.md — periodic background instructions.
       Empty string when not set. Always present on detail responses (never null).
+      Main only.
     example: "Every hour, check for new tasks in the queue."
   instructions:
     type: string
@@ -124,24 +129,21 @@ properties:
     example: 50
   steering_mode:
     type: string
+    enum:
+      - one-at-a-time
+      - queue-and-process
     description: >
       Tool execution steering strategy. "one-at-a-time" = approve each tool call
-      individually. Other values are provider-specific. Defaults to "one-at-a-time".
+      individually. Workers always use "one-at-a-time" (server-set).
     example: "one-at-a-time"
-  tool_feedback:
-    type: boolean
-    description: >
-      When true, tool results are echoed back to the LLM as user messages
-      (tool feedback loop enabled).
-    example: true
   heartbeat_enabled:
     type: boolean
-    description: Whether the HEARTBEAT.md periodic instruction loop is active for this agent.
+    description: Whether the HEARTBEAT.md periodic instruction loop is active for this agent (Main only).
     example: false
   heartbeat_interval:
     type: integer
     minimum: 0
-    description: Interval in seconds between heartbeat passes.
+    description: Interval in seconds between heartbeat passes (Main only).
     example: 3600
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
@@ -158,12 +160,13 @@ properties:
       "workspace+net" = Landlock + network access.
       "host" = read-only host filesystem access.
       "off" = god-mode (requires --allow-god-mode at gateway boot).
+      Hidden for subagent_3p — CLI manages its own isolation.
     example: "workspace"
   shell_policy:
     $ref: './AgentShellPolicy.yaml'
   fallback_models:
     type: array
-    maxItems: 10
+    maxItems: 2
     items:
       $ref: './FallbackModel.yaml'
     description: >
@@ -171,7 +174,7 @@ properties:
       returns an error (Phase 1B / FR-005). Each entry carries its own
       provider so the fallback can route through a different provider than
       the primary — useful when the primary's provider is rate-limited
-      (FR-007).
+      (FR-007). Capped at 2 entries. Hidden for subagent_3p.
 
       Wire format is always the object form `[{model, provider}]`. Legacy
       `[string]` payloads are normalized at config-load time (FR-006).
@@ -189,6 +192,7 @@ properties:
     description: >
       Whether this agent is the global default that handles inbound messages
       with no more-specific routing rule. At most one agent is default.
+      Main only — workers never default.
     example: false
   skills:
     type: array
@@ -212,7 +216,7 @@ properties:
       Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID).
       Distinct from the global VoiceConfig engine settings (which hold the TTS/STT
       provider and API key). This field is schema-pinned but NOT used until v0.2.0
-      TTS feature delivery. Absent when not configured.
+      TTS feature delivery. Absent when not configured. Main only.
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'

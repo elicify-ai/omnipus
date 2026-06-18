@@ -184,6 +184,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/voice/provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Return the active voice provider's identity and (optional) voices enum
+         * @description Reads the active voice provider config from the gateway and returns a small descriptor so the SPA can decide which voice widget variant to render in the agent edit slide-over (dropdown / free-text / disabled). Requires authentication. Returns 503 when the provider is misconfigured (e.g. credentials unavailable) — the SPA falls back to a "Voice provider unavailable" disabled widget per voice-provider-detect.ts.
+         */
+        get: operations["getVoiceProvider"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/onboarding/complete": {
         parameters: {
             query?: never;
@@ -438,7 +458,7 @@ export interface paths {
         get: operations["getAgent"];
         /**
          * Update agent configuration
-         * @description Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+         * @description Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
          */
         put: operations["updateAgent"];
         post?: never;
@@ -2844,11 +2864,11 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
+             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
              * @example core
              * @enum {string}
              */
-            type: "core" | "custom" | "system" | "worker";
+            type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
             /**
              * @description When true, name, description, soul, heartbeat, and instructions are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
              * @example false
@@ -2886,7 +2906,7 @@ export interface components {
              */
             soul: string;
             /**
-             * @description Contents of HEARTBEAT.md — periodic background instructions. Empty string when not set. Always present on detail responses (never null).
+             * @description Contents of HEARTBEAT.md — periodic background instructions. Empty string when not set. Always present on detail responses (never null). Main only.
              * @example Every hour, check for new tasks in the queue.
              */
             heartbeat: string;
@@ -2911,35 +2931,31 @@ export interface components {
              */
             max_tool_iterations: number;
             /**
-             * @description Tool execution steering strategy. "one-at-a-time" = approve each tool call individually. Other values are provider-specific. Defaults to "one-at-a-time".
+             * @description Tool execution steering strategy. "one-at-a-time" = approve each tool call individually. Workers always use "one-at-a-time" (server-set).
              * @example one-at-a-time
+             * @enum {string}
              */
-            steering_mode: string;
+            steering_mode: "one-at-a-time" | "queue-and-process";
             /**
-             * @description When true, tool results are echoed back to the LLM as user messages (tool feedback loop enabled).
-             * @example true
-             */
-            tool_feedback: boolean;
-            /**
-             * @description Whether the HEARTBEAT.md periodic instruction loop is active for this agent.
+             * @description Whether the HEARTBEAT.md periodic instruction loop is active for this agent (Main only).
              * @example false
              */
             heartbeat_enabled: boolean;
             /**
-             * @description Interval in seconds between heartbeat passes.
+             * @description Interval in seconds between heartbeat passes (Main only).
              * @example 3600
              */
             heartbeat_interval: number;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot).
+             * @description Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot). Hidden for subagent_3p — CLI manages its own isolation.
              * @example workspace
              * @enum {string}
              */
             sandbox_profile?: "workspace" | "workspace+net" | "host" | "off";
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
-             * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007).
+             * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
              *       {
@@ -2953,7 +2969,7 @@ export interface components {
             rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
             /**
-             * @description Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default.
+             * @description Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Main only — workers never default.
              * @example false
              */
             default?: boolean;
@@ -2966,7 +2982,7 @@ export interface components {
             skills?: string[];
             delegation_policy?: components["schemas"]["DelegationPolicy"];
             /**
-             * @description Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured.
+             * @description Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured. Main only.
              * @example alloy
              */
             voice?: string | null;
@@ -3153,14 +3169,14 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent tier to create. "custom" = a user-defined chat colleague (default for the existing POST /agents flow). "worker" = a sub-agent worker: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and must carry an executor (see Agent.executor). When omitted, the server creates a "custom" agent. The "core" and "system" types are reserved and cannot be created via this endpoint.
-             * @default custom
-             * @example custom
+             * @description Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode). "core" and "system" are reserved and cannot be created via this endpoint.
+             * @default Main
+             * @example Main
              * @enum {string}
              */
-            type: "custom" | "worker";
+            type: "Main" | "Subagent" | "subagent_3p" | "core" | "system";
             /**
-             * @description Short description of the agent's purpose.
+             * @description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
              * @example Specialized data analysis assistant
              */
             description?: string;
@@ -3181,7 +3197,7 @@ export interface components {
             icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007).
+             * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
              *       {
@@ -3243,19 +3259,62 @@ export interface components {
              */
             skills?: string[];
             /**
-             * @description Initial SOUL.md content. When omitted, the new agent starts in "draft" with an empty soul (the profile edit flow writes it later). Worker-tier agents (type=worker) treat this as the optional task prompt; empty is valid for workers per the locked concept.
+             * @description Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
              * @example You are a focused research assistant...
              */
-            soul?: string;
+            soul: string;
+            /**
+             * @description Initial HEARTBEAT.md content (Main only). Optional.
+             * @example Check the queue every hour.
+             */
+            heartbeat?: string;
+            /**
+             * @description Whether the HEARTBEAT.md periodic instruction loop is active (Main only).
+             * @example false
+             */
+            heartbeat_enabled?: boolean;
+            /**
+             * @description Interval in seconds between heartbeat passes (Main only).
+             * @example 1800
+             */
+            heartbeat_interval?: number;
+            /**
+             * @description Initial AGENT.md body (after frontmatter). Optional.
+             * @example Focus on TypeScript and Go projects only.
+             */
+            instructions?: string;
             delegation_policy?: components["schemas"]["DelegationPolicy"];
             /**
-             * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+             * @description Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
              * @example alloy
              */
             voice?: string | null;
             executor?: components["schemas"]["ExecutorConfig"];
+            /**
+             * @description Kernel sandbox profile applied to this agent's tool calls. Hidden for Subagent (External) — the CLI manages its own isolation.
+             * @example workspace
+             * @enum {string}
+             */
+            sandbox_profile?: "workspace" | "workspace+net" | "host" | "off";
+            shell_policy?: components["schemas"]["AgentShellPolicy"];
+            /**
+             * @description Maximum seconds a single agent turn may run before being interrupted.
+             * @example 300
+             */
+            timeout_seconds?: number;
+            /**
+             * @description Maximum number of tool calls allowed per turn.
+             * @example 50
+             */
+            max_tool_iterations?: number;
+            /**
+             * @description Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
+             * @example one-at-a-time
+             * @enum {string}
+             */
+            steering_mode?: "one-at-a-time" | "queue-and-process";
         };
-        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. */
+        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
         AgentUpdateRequest: {
             /**
              * @description New display name. Rejected on locked agents.
@@ -3263,7 +3322,7 @@ export interface components {
              */
             name?: string;
             /**
-             * @description New description. Rejected on locked agents. Empty string removes it.
+             * @description New description. Rejected on locked agents. Empty string removes it. For Subagent / subagent_3p, an empty string after trim is rejected 400 (description is required for workers per the routing contract).
              * @example Updated description
              */
             description?: string;
@@ -3273,7 +3332,7 @@ export interface components {
              */
             model?: string;
             /**
-             * @description New SOUL.md content (agent system prompt). Rejected on locked agents. Writing this triggers a config reload.
+             * @description New SOUL.md content (agent system prompt). Rejected on locked agents. Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
              * @example You are a helpful assistant...
              */
             soul?: string;
@@ -3298,32 +3357,28 @@ export interface components {
              */
             max_tool_iterations?: number;
             /**
-             * @description New steering mode. Allowed on all agents.
+             * @description New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
              * @example one-at-a-time
+             * @enum {string}
              */
-            steering_mode?: string;
+            steering_mode?: "one-at-a-time" | "queue-and-process";
             /**
-             * @description Enable/disable tool feedback loop. Allowed on all agents.
-             * @example true
-             */
-            tool_feedback?: boolean;
-            /**
-             * @description Enable/disable heartbeat loop. Allowed on all agents.
+             * @description Enable/disable heartbeat loop. Allowed on all agents (Main only).
              * @example false
              */
             heartbeat_enabled?: boolean;
             /**
-             * @description New heartbeat interval in seconds. Allowed on all agents.
+             * @description New heartbeat interval in seconds. Allowed on all agents (Main only).
              * @example 1800
              */
             heartbeat_interval?: number;
             /**
-             * @description New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
+             * @description New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
              * @example workspace
              * @enum {string}
              */
             sandbox_profile?: "workspace" | "workspace+net" | "host" | "off";
-            /** @description Per-agent shell command deny-pattern configuration. */
+            /** @description Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents. */
             shell_policy?: {
                 /** @example true */
                 enable_deny_patterns?: boolean;
@@ -3346,7 +3401,7 @@ export interface components {
              */
             icon?: string;
             /**
-             * @description Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007).
+             * @description Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
              *       {
@@ -3356,7 +3411,7 @@ export interface components {
              *     ]
              */
             fallback_models?: components["schemas"]["FallbackModel"][];
-            /** @description LLM sampling parameters applied to this agent's requests. */
+            /** @description LLM sampling parameters applied to this agent's requests. Rejected 400 on subagent_3p agents (CLI may not support these flags). */
             model_params?: {
                 /**
                  * Format: double
@@ -3402,12 +3457,12 @@ export interface components {
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged.
+             * @description Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged. Main only — workers never default.
              * @example false
              */
             default?: boolean;
             /**
-             * @description Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills.
+             * @description Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
              * @example [
              *       "web-research"
              *     ]
@@ -3415,7 +3470,7 @@ export interface components {
             skills?: string[];
             delegation_policy?: components["schemas"]["DelegationPolicy"];
             /**
-             * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear.
+             * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
              * @example alloy
              */
             voice?: string | null;
@@ -3441,24 +3496,70 @@ export interface components {
         };
         /**
          * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-         *     "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-         *     "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+         *     "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
+         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
          *     "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-         *     When absent the default is "native". Only "native" is functional in v0.1.0.
+         *     The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
+         *     When the agent has no executor block, the default is "native".
          */
         ExecutorConfig: {
             /**
-             * @description Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+             * @description Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
              * @example native
              * @enum {string}
              */
-            kind: "native" | "external-cli" | "remote-a2a";
+            kind?: "native" | "external-cli" | "remote-a2a";
             /**
-             * @description The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+             * @description The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
              * @example claude-code
              * @enum {string}
              */
             cli?: "claude-code" | "codex" | "opencode";
+            /**
+             * @description Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
+             * @example /usr/local/bin/claude
+             */
+            cli_path?: string;
+            /**
+             * @description Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+             * @example {
+             *       "ANTHROPIC_API_KEY": "...",
+             *       "DEBUG": "1"
+             *     }
+             */
+            env_overrides?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+             * @example --max-turns 5
+             */
+            cli_args?: string;
+        };
+        /** @description Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over. */
+        VoiceProvider: {
+            /**
+             * @description Identifier of the currently active voice provider (e.g. "openai-tts", "elevenlabs", "google-tts", "azure-speech", "piper"). null when no voice provider is configured globally — the SPA renders the field as disabled.
+             * @example openai-tts
+             */
+            provider: string | null;
+            /**
+             * @description Populated when the active provider exposes a voices enum (OpenAI TTS, ElevenLabs, Google TTS, Azure Speech, Piper). The SPA renders a dropdown using this list. Absent or empty when the provider has no enum, or when no provider is configured.
+             * @example [
+             *       "alloy",
+             *       "echo",
+             *       "fable",
+             *       "onyx",
+             *       "nova",
+             *       "shimmer"
+             *     ]
+             */
+            voices?: string[];
+            /**
+             * @description Optional URL of the provider's voices-list endpoint (for paginated providers like ElevenLabs). Absent when not applicable.
+             * @example https://api.elevenlabs.io/v1/voices
+             */
+            voices_endpoint?: string | null;
         };
         /** @description Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly. */
         AgentSession: {
@@ -6972,6 +7073,29 @@ export interface operations {
                 };
             };
             400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    getVoiceProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Voice provider descriptor. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceProvider"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             500: components["responses"]["500InternalServerError"];
             503: components["responses"]["503ServiceUnavailable"];
@@ -11298,6 +11422,7 @@ export type AgentCreateRequest = components["schemas"]["AgentCreateRequest"];
 export type AgentUpdateRequest = components["schemas"]["AgentUpdateRequest"];
 export type FallbackModel = components["schemas"]["FallbackModel"];
 export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
+export type VoiceProvider = components["schemas"]["VoiceProvider"];
 export type AgentSession = components["schemas"]["AgentSession"];
 export type SessionScopeRequest = components["schemas"]["SessionScopeRequest"];
 export type SessionScopeResponse = components["schemas"]["SessionScopeResponse"];

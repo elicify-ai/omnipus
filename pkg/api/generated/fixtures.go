@@ -717,7 +717,6 @@ func FixtureAgent_Populated() Agent {
 		TimeoutSeconds:    300,
 		MaxToolIterations: 50,
 		SteeringMode:      "one-at-a-time",
-		ToolFeedback:      true,
 		HeartbeatEnabled:  false,
 		HeartbeatInterval: 300,
 		Color:             &color,
@@ -736,7 +735,7 @@ func FixtureAgent_Edge() Agent {
 	return Agent{
 		Id:                "custom-" + repeatStr("y", 36),
 		Name:              "Unicode Agent 🤖",
-		Type:              AgentTypeCustom,
+		Type:              AgentTypeMain,
 		Locked:            false,
 		Status:            AgentStatusDraft,
 		Soul:              "",
@@ -745,7 +744,6 @@ func FixtureAgent_Edge() Agent {
 		TimeoutSeconds:    0,
 		MaxToolIterations: 0,
 		SteeringMode:      "one-at-a-time",
-		ToolFeedback:      false,
 		HeartbeatEnabled:  false,
 		HeartbeatInterval: 0,
 	}
@@ -2197,9 +2195,10 @@ func FixtureDelegationPolicy_InvalidJSON() []byte {
 // Traces to: contracts/components/schemas/ExecutorConfig.yaml
 
 func FixtureExecutorConfig_Populated() ExecutorConfig {
+	kind := ExternalCli
 	cli := ExecutorConfigCliClaudeCode
 	return ExecutorConfig{
-		Kind: ExternalCli,
+		Kind: &kind,
 		Cli:  &cli,
 	}
 }

@@ -1,0 +1,39 @@
+type: object
+description: >
+  Response body for GET /api/v1/voice/provider. Describes the active voice provider
+  configuration so the SPA can decide which widget variant (dropdown / free-text /
+  disabled) to render in the agent edit slide-over.
+required:
+  - provider
+properties:
+  provider:
+    type: string
+    nullable: true
+    description: >
+      Identifier of the currently active voice provider (e.g. "openai-tts",
+      "elevenlabs", "google-tts", "azure-speech", "piper"). null when no voice
+      provider is configured globally — the SPA renders the field as disabled.
+    example: "openai-tts"
+  voices:
+    type: array
+    items:
+      type: string
+    description: >
+      Populated when the active provider exposes a voices enum (OpenAI TTS,
+      ElevenLabs, Google TTS, Azure Speech, Piper). The SPA renders a dropdown
+      using this list. Absent or empty when the provider has no enum, or when
+      no provider is configured.
+    example:
+      - "alloy"
+      - "echo"
+      - "fable"
+      - "onyx"
+      - "nova"
+      - "shimmer"
+  voices_endpoint:
+    type: string
+    nullable: true
+    description: >
+      Optional URL of the provider's voices-list endpoint (for paginated providers
+      like ElevenLabs). Absent when not applicable.
+    example: "https://api.elevenlabs.io/v1/voices"

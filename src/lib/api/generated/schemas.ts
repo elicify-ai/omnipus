@@ -84,7 +84,7 @@ type ToolCall = {
 type Agent = {
   id: string;
   name: string;
-  type: "core" | "custom" | "system" | "worker";
+  type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
   locked: boolean;
   color?: string | undefined;
   icon?: string | undefined;
@@ -97,8 +97,7 @@ type Agent = {
   warning?: string | undefined;
   timeout_seconds: number;
   max_tool_iterations: number;
-  steering_mode: string;
-  tool_feedback: boolean;
+  steering_mode: "one-at-a-time" | "queue-and-process";
   heartbeat_enabled: boolean;
   heartbeat_interval: number;
   tools_cfg?: AgentToolsCfg | undefined;
@@ -170,13 +169,16 @@ type AgentStats = {
   total_cost: number;
   last_active?: string | undefined;
 };
-type ExecutorConfig = {
+type ExecutorConfig = Partial<{
   kind: "native" | "external-cli" | "remote-a2a";
-  cli?: ("claude-code" | "codex" | "opencode") | undefined;
-};
+  cli: "claude-code" | "codex" | "opencode";
+  cli_path: string;
+  env_overrides: {};
+  cli_args: string;
+}>;
 type AgentCreateRequest = {
   name: string;
-  type?: ("custom" | "worker") | undefined;
+  type?: ("Main" | "Subagent" | "subagent_3p" | "core" | "system") | undefined;
   description?: string | undefined;
   model?: string | undefined;
   color?: string | undefined;
@@ -199,10 +201,21 @@ type AgentCreateRequest = {
       }>
     | undefined;
   skills?: Array<string> | undefined;
-  soul?: string | undefined;
+  soul: string;
+  heartbeat?: string | undefined;
+  heartbeat_enabled?: boolean | undefined;
+  heartbeat_interval?: number | undefined;
+  instructions?: string | undefined;
   delegation_policy?: delegation_policy | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
+  sandbox_profile?:
+    | ("workspace" | "workspace+net" | "host" | "off")
+    | undefined;
+  shell_policy?: AgentShellPolicy | undefined;
+  timeout_seconds?: number | undefined;
+  max_tool_iterations?: number | undefined;
+  steering_mode?: ("one-at-a-time" | "queue-and-process") | undefined;
 };
 type delegation_policy = Partial<{
   to: Array<{
@@ -229,8 +242,7 @@ type AgentUpdateRequest = Partial<{
   instructions: string;
   timeout_seconds: number;
   max_tool_iterations: number;
-  steering_mode: string;
-  tool_feedback: boolean;
+  steering_mode: "one-at-a-time" | "queue-and-process";
   heartbeat_enabled: boolean;
   heartbeat_interval: number;
   sandbox_profile: "workspace" | "workspace+net" | "host" | "off";
@@ -671,6 +683,13 @@ export const TranscribeResponse = z.object({
   language: z.string().optional(),
   duration: z.number().optional(),
 });
+export const VoiceProvider = z
+  .object({
+    provider: z.string().nullable(),
+    voices: z.array(z.string()).optional(),
+    voices_endpoint: z.string().nullish(),
+  })
+  .passthrough();
 export const OnboardingCompleteRequest = z.object({
   provider: z
     .object({
@@ -949,21 +968,26 @@ export const AgentStats: z.ZodType<AgentStats> = z
     last_active: z.string().datetime({ offset: true }).optional(),
   })
   .passthrough();
-export const ExecutorConfig: z.ZodType<ExecutorConfig> = z.object({
-  kind: z.enum(["native", "external-cli", "remote-a2a"]),
-  cli: z.enum(["claude-code", "codex", "opencode"]).optional(),
-});
+export const ExecutorConfig: z.ZodType<ExecutorConfig> = z
+  .object({
+    kind: z.enum(["native", "external-cli", "remote-a2a"]),
+    cli: z.enum(["claude-code", "codex", "opencode"]),
+    cli_path: z.string(),
+    env_overrides: z.record(z.string()),
+    cli_args: z.string(),
+  })
+  .partial();
 export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
     name: z.string().min(1).max(100),
-    type: z.enum(["core", "custom", "system", "worker"]),
+    type: z.enum(["core", "system", "Main", "Subagent", "subagent_3p"]),
     locked: z.boolean(),
     color: z
       .string()
       .regex(/^#[0-9A-Fa-f]{6}$/)
       .optional(),
-    icon: z.string().optional(),
+    icon: z.string().max(50).optional(),
     model: z.string().max(256).optional(),
     description: z.string().optional(),
     status: z.enum(["active", "idle", "draft", "error"]),
@@ -973,8 +997,7 @@ export const Agent: z.ZodType<Agent> = z
     warning: z.string().optional(),
     timeout_seconds: z.number().int().gte(0),
     max_tool_iterations: z.number().int().gte(0),
-    steering_mode: z.string(),
-    tool_feedback: z.boolean(),
+    steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
     heartbeat_enabled: z.boolean(),
     heartbeat_interval: z.number().int().gte(0),
     tools_cfg: AgentToolsCfg.optional(),
@@ -982,7 +1005,7 @@ export const Agent: z.ZodType<Agent> = z
       .enum(["workspace", "workspace+net", "host", "off"])
       .optional(),
     shell_policy: AgentShellPolicy.optional(),
-    fallback_models: z.array(FallbackModel).max(10).optional(),
+    fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
     rate_limits: AgentRateLimits.optional(),
     stats: AgentStats.optional(),
@@ -1025,13 +1048,19 @@ export const delegation_policy: z.ZodType<delegation_policy> = z
   .partial();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   name: z.string().min(1),
-  type: z.enum(["custom", "worker"]).optional().default("custom"),
-  description: z.string().optional(),
+  type: z
+    .enum(["Main", "Subagent", "subagent_3p", "core", "system"])
+    .optional()
+    .default("Main"),
+  description: z.string().min(1).optional(),
   model: z.string().optional(),
-  color: z.string().optional(),
-  icon: z.string().optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/)
+    .optional(),
+  icon: z.string().max(50).optional(),
   tools_cfg: AgentToolsCfg.optional(),
-  fallback_models: z.array(FallbackModel).max(10).optional(),
+  fallback_models: z.array(FallbackModel).max(2).optional(),
   model_params: z
     .object({
       temperature: z.number(),
@@ -1052,23 +1081,33 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
     .passthrough()
     .optional(),
   skills: z.array(z.string()).optional(),
-  soul: z.string().optional(),
+  soul: z.string().min(1),
+  heartbeat: z.string().optional(),
+  heartbeat_enabled: z.boolean().optional(),
+  heartbeat_interval: z.number().int().gte(0).optional(),
+  instructions: z.string().optional(),
   delegation_policy: delegation_policy.optional(),
   voice: z.string().nullish(),
   executor: ExecutorConfig.optional(),
+  sandbox_profile: z
+    .enum(["workspace", "workspace+net", "host", "off"])
+    .optional(),
+  shell_policy: AgentShellPolicy.optional(),
+  timeout_seconds: z.number().int().gte(0).optional(),
+  max_tool_iterations: z.number().int().gte(0).optional(),
+  steering_mode: z.enum(["one-at-a-time", "queue-and-process"]).optional(),
 });
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
   .object({
     name: z.string().min(1),
     description: z.string(),
     model: z.string(),
-    soul: z.string(),
+    soul: z.string().min(1),
     heartbeat: z.string(),
     instructions: z.string(),
     timeout_seconds: z.number().int(),
     max_tool_iterations: z.number().int(),
-    steering_mode: z.string(),
-    tool_feedback: z.boolean(),
+    steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
     heartbeat_enabled: z.boolean(),
     heartbeat_interval: z.number().int(),
     sandbox_profile: z.enum(["workspace", "workspace+net", "host", "off"]),
@@ -1081,7 +1120,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
       .passthrough(),
     color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
     icon: z.string().max(50),
-    fallback_models: z.array(FallbackModel).max(10),
+    fallback_models: z.array(FallbackModel).max(2),
     model_params: z
       .object({
         temperature: z.number(),
@@ -2187,7 +2226,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id",
     alias: "updateAgent",
-    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
 `,
     requestFormat: "json",
     parameters: [
@@ -5820,6 +5859,32 @@ Returns HTTP 201 on success.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/voice/provider",
+    alias: "getVoiceProvider",
+    description: `Reads the active voice provider config from the gateway and returns a small descriptor so the SPA can decide which voice widget variant to render in the agent edit slide-over (dropdown / free-text / disabled). Requires authentication. Returns 503 when the provider is misconfigured (e.g. credentials unavailable) — the SPA falls back to a &quot;Voice provider unavailable&quot; disabled widget per voice-provider-detect.ts.
+`,
+    requestFormat: "json",
+    response: VoiceProvider,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
