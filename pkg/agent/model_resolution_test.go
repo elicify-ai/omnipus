@@ -424,3 +424,85 @@ func TestResolveModelCandidatesForAgent_PicksFallbackModelsWhenSet(t *testing.T)
 		t.Fatalf("nil agent: cands = %+v, want 1 entry {*,gpt-5}", cands)
 	}
 }
+
+// TestIsKnownModel covers W6-C4 / G12 — the catalog helper that lets the SPA
+// show a persistent "unresolved" indicator when a user types a free-text
+// model slug that no configured provider exposes. The TS twin in
+// src/lib/agents/model-validation.ts MUST mirror these cases.
+func TestIsKnownModel(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "claude-haiku",
+				Model:     "anthropic/claude-haiku-4-5",
+				Provider:  "anthropic",
+			},
+			{
+				ModelName: "gpt-4o",
+				Model:     "openai/gpt-4o",
+				Provider:  "openai",
+			},
+			{
+				ModelName: "z-ai/glm-5.2",
+				Model:     "z-ai/glm-5.2",
+				Provider:  "openrouter",
+			},
+		},
+	}
+
+	cases := []struct {
+		name string
+		slug string
+		want bool
+	}{
+		// Empty / whitespace → false (nothing to validate).
+		{"empty", "", false},
+		{"whitespace", "   ", false},
+
+		// Exact match against mc.Model (protocol-prefixed form).
+		{"exact-protocol-prefixed", "anthropic/claude-haiku-4-5", true},
+		// Case-insensitive.
+		{"case-insensitive-protocol", "Anthropic/Claude-Haiku-4-5", true},
+
+		// Bare slug extracted from mc.Model via providers.ExtractProtocol.
+		{"bare-slug-from-protocol", "claude-haiku-4-5", true},
+		{"bare-slug-from-protocol-case", "GPT-4O", true},
+
+		// Match against mc.ModelName (user-facing alias).
+		{"model-name", "claude-haiku", true},
+
+		// None of the providers expose this slug → false.
+		{"unknown-bare", "gpt-9000-ultra", false},
+		{"unknown-prefix", "fake-provider/some-model", false},
+
+		// Passthrough provider's ModelName happens to contain a slash; that
+		// shouldn't fool the validator when the lookup is against an
+		// entirely different slug.
+		{"passthrough-non-match", "z-ai/glm-5-turbo", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsKnownModel(tc.slug, cfg.Providers)
+			if got != tc.want {
+				t.Errorf("IsKnownModel(%q) = %v, want %v", tc.slug, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsKnownModel_NilAndEmpty makes sure the helper doesn't panic on the
+// edge cases the gateway encounters when /providers has never been seeded
+// (fresh install, prior to onboarding).
+func TestIsKnownModel_NilAndEmpty(t *testing.T) {
+	if IsKnownModel("gpt-4o", nil) {
+		t.Errorf("IsKnownModel(nil providers) = true, want false")
+	}
+	if IsKnownModel("gpt-4o", []*config.ModelConfig{}) {
+		t.Errorf("IsKnownModel(empty providers) = true, want false")
+	}
+	// Nil entry inside the slice is skipped, not panicked on.
+	ps := []*config.ModelConfig{nil, {Model: "openai/gpt-4o", Provider: "openai"}}
+	if !IsKnownModel("openai/gpt-4o", ps) {
+		t.Errorf("IsKnownModel(slice with nil entry) = false, want true")
+	}
+}
