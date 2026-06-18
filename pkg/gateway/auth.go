@@ -62,6 +62,7 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	// onboarding first. Per-user RBAC and OMNIPUS_BEARER_TOKEN paths below
 	// still run for the non-bypass case.
 	if !strings.HasPrefix(auth, prefix) && cfg.Gateway.DevModeBypass {
+		slog.Warn("AUTH-BYPASS", "users_count", len(cfg.Gateway.Users), "bypass_flag", cfg.Gateway.DevModeBypass, "has_bearer", strings.HasPrefix(auth, prefix))
 		warnUnauthOnce.Do(func() {
 			slog.Warn("DEV MODE: API has no authentication. Set gateway.dev_mode_bypass=false for production.")
 		})
