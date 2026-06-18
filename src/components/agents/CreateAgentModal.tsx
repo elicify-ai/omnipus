@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { FormError } from '@/components/ui/FormError'
 import { useUiStore } from '@/store/ui'
 import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, isApiError } from '@/lib/api'
 import type { Agent, AgentCreateRequest, AgentToolsCfg, ExecutorConfig, Skill } from '@/lib/api'
@@ -380,10 +381,12 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                     placeholder="e.g. Research Assistant"
                     className={nameError ? 'border-[var(--color-error)]' : ''}
                     autoFocus
+                    required
+                    aria-required="true"
+                    aria-invalid={nameError ? true : undefined}
+                    aria-describedby={nameError ? 'agent-name-error' : undefined}
                   />
-                  {nameError && (
-                    <p className="mt-1 text-xs text-[var(--color-error)]">{nameError}</p>
-                  )}
+                  <FormError id="agent-name-error" error={nameError} />
                 </div>
 
                 {/* Description */}
