@@ -1,69 +1,36 @@
-import { useState, useEffect } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CaretDown, CaretUp } from '@phosphor-icons/react'
-import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { ModelSelector } from '@/components/ui/model-selector'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { FormError } from '@/components/ui/FormError'
-import { useFocusRestore } from '@/hooks/useFocusRestore'
-import { useUiStore } from '@/store/ui'
-import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, isApiError } from '@/lib/api'
-import type { Agent, AgentCreateRequest, AgentToolsCfg, ExecutorConfig, Skill } from '@/lib/api'
-import { AVATAR_COLORS, avatarColorName } from '@/lib/constants'
-import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
-import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
-import { applyRolePreset } from '@/lib/toolPolicyPresets'
-import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
-import { ExecutorSection, getCreateAgentFormCopy } from './AgentFormFields'
-
-// ── CreateAgentToolsTab ────────────────────────────────────────────────────────
+// CreateAgentModal — thin wrapper that mounts CreateAgentWizard.
 //
-// #334 (US-D1): Renders the shared ToolPolicyEditor inside the Create-Agent
-// modal. Fetches the tool registry itself (no agentId → no per-agent tools
-// endpoint needed). Handles loading and error states inline.
+// W4 of agent-form-requirements rewrites the create-agent flow as a 3-step
+// + Advanced wizard (Main / Subagent / subagent_3p), per
+// docs/internal/specs/agent-form-requirements.md §5.3-§5.5. The legacy
+// 2-tab `CreateAgentModal.tsx` (573 LOC, using 'custom' | 'worker' types)
+// was the W3 Wave C1 G4 signpost; this file preserves the mount point
+// (`<CreateAgentModal />` in `AgentListScreen.tsx:192`) while delegating
+// the entire form surface to `<CreateAgentWizard initialType={...} />`.
+//
+// Production path: reads `createAgentModalOpen` + `createAgentModalType` from
+// the Zustand store. W6's `openCreateAgentModal('Main' | 'Subagent' | 'subagent_3p')`
+// passes the type into the store, which feeds the wizard's initialType.
+//
+// Test path: legacy callers pass `open onClose onCreate initialType` props.
+// initialType accepts the W3-era 'custom' | 'worker' literals for backward
+// compatibility — we map them to the new wire enum ('custom' → 'Main',
+// 'worker' → 'Subagent').
 
-function CreateAgentToolsTab({
-  value,
-  onChange,
-}: {
-  value: ToolPolicyValue
-  onChange: (next: ToolPolicyValue) => void
-}) {
-  const { data: registryTools = [], isLoading, isError } = useQuery({
-    queryKey: ['registry-tools'],
-    queryFn: fetchRegistryTools,
-  })
+import * as React from 'react'
+import { useCallback } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 
-  if (isLoading) {
-    return (
-      <div className="space-y-2 py-4">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="h-9 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
-        ))}
-      </div>
-    )
-  }
+import { useUiStore } from '@/store/ui'
+import { createAgent, isApiError } from '@/lib/api'
+import type { Agent, AgentCreateRequest } from '@/lib/api'
 
-  if (isError) {
-    return (
-      <p className="text-xs text-[var(--color-error)] py-4">
-        Failed to load tool list. Check that the backend is running.
-      </p>
-    )
-  }
-
-  return (
-    <ToolPolicyEditor
-      tools={registryTools}
-      value={value}
-      onChange={onChange}
-    />
-  )
-}
+import {
+  CreateAgentWizard,
+  type WizardCli,
+  type WizardSubmitPayload,
+  type WizardType,
+} from './CreateAgentWizard'
 
 interface CreateAgentModalProps {
   /** Override modal open state (optional — defaults to Zustand store) */
@@ -73,501 +40,130 @@ interface CreateAgentModalProps {
   /** Override create handler (optional — defaults to REST API) */
   onCreate?: (data: AgentCreateRequest) => Promise<void>
   /**
-   * Initial tier preset for the modal. When `open` is supplied, this drives
-   * the modal type instead of the Zustand store. Defaults to 'custom' so the
-   * prop-only path stays simple for tests that don't care about tier.
+   * Initial wizard type. Accepts the new wire enum OR the legacy
+   * 'custom' | 'worker' literals (mapped to 'Main' / 'Subagent' respectively)
+   * for backward compatibility with W3 tests.
    */
-  initialType?: 'custom' | 'worker'
+  initialType?: WizardType | 'custom' | 'worker'
+  /**
+   * Initial CLI choice for External wizards. Optional.
+   */
+  initialCli?: WizardCli
 }
 
-export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreate: onCreateProp, initialType }: CreateAgentModalProps) {
-  const { createAgentModalOpen, createAgentModalType, closeCreateAgentModal } = useUiStore()
+/** Map legacy 'custom' | 'worker' literals to the new wire enum. */
+function normalizeWizardType(
+  t: WizardType | 'custom' | 'worker' | undefined,
+  fallback: WizardType,
+): WizardType {
+  if (!t) return fallback
+  if (t === 'custom') return 'Main'
+  if (t === 'worker') return 'Subagent'
+  return t
+}
+
+/** Convert the wizard's submit payload to a wire AgentCreateRequest. */
+function payloadToCreateRequest(
+  payload: WizardSubmitPayload,
+): AgentCreateRequest {
+  const req: AgentCreateRequest = {
+    type: payload.type,
+    name: payload.name,
+    description: payload.description,
+    color: payload.color,
+    icon: payload.icon,
+    model: payload.model,
+    soul: payload.soul,
+    instructions: payload.instructions || '',
+  }
+  if (payload.heartbeat !== undefined) req.heartbeat = payload.heartbeat
+  if (payload.heartbeat_enabled !== undefined) req.heartbeat_enabled = payload.heartbeat_enabled
+  if (payload.heartbeat_interval !== undefined) req.heartbeat_interval = payload.heartbeat_interval
+  if (payload.voice !== undefined) req.voice = payload.voice
+  if (payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg as AgentCreateRequest['tools_cfg']
+  if (payload.skills !== undefined) req.skills = payload.skills
+  if (payload.fallback_models !== undefined) {
+    req.fallback_models = payload.fallback_models as AgentCreateRequest['fallback_models']
+  }
+  if (payload.cli || payload.executor_cli_path || payload.executor_env_overrides || payload.executor_cli_args) {
+    req.executor = {
+      kind: payload.type === 'subagent_3p' ? 'external-cli' : 'native',
+    }
+    if (payload.cli) req.executor.cli = payload.cli
+    if (payload.executor_cli_path) req.executor.cli_path = payload.executor_cli_path
+    if (payload.executor_env_overrides) req.executor.env_overrides = payload.executor_env_overrides
+    if (payload.executor_cli_args) req.executor.cli_args = payload.executor_cli_args
+  }
+  return req
+}
+
+export function CreateAgentModal({
+  open: openProp,
+  onClose: onCloseProp,
+  onCreate: onCreateProp,
+  initialType,
+  initialCli,
+}: CreateAgentModalProps) {
+  const {
+    createAgentModalOpen,
+    createAgentModalType,
+    closeCreateAgentModal,
+    addToast,
+  } = useUiStore()
   const queryClient = useQueryClient()
 
   const isOpen = openProp !== undefined ? openProp : createAgentModalOpen
   const handleClose = onCloseProp ?? closeCreateAgentModal
-  // Type-preset: 'custom' (default) or 'worker'. When the prop-only path is
-  // taken (open supplied), the tier comes from `initialType` (defaulting to
-  // 'custom'). Otherwise the Zustand store drives the tier.
-  const modalType = openProp !== undefined ? (initialType ?? 'custom') : createAgentModalType
-  const isWorkerModal = modalType === 'worker'
-  const formCopy = getCreateAgentFormCopy(modalType)
 
-  const { data: providersData, isError: providersError } = useQuery({
-    queryKey: ['providers'],
-    queryFn: fetchProviders,
-    enabled: isOpen,
-  })
+  // Store-driven path: openCreateAgentModal('Main' | 'Subagent' | 'subagent_3p').
+  // Test path: legacy props map 'custom'/'worker' to the new wire enum.
+  const effectiveType: WizardType = normalizeWizardType(
+    openProp !== undefined ? initialType : createAgentModalType,
+    'Main',
+  )
 
-  // US-E6: fetch installed skills so the picker can show available options.
-  const { data: availableSkills = [] } = useQuery<Skill[]>({
-    queryKey: ['skills'],
-    queryFn: fetchSkills,
-    enabled: isOpen,
-    staleTime: 60_000,
-  })
-  const providers = Array.isArray(providersData) ? providersData : []
-  const connectedProviders = providers.filter((p) => p.status === 'connected')
-  const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
-  const providerGroups = connectedProviders
-    .filter((p) => (p.models ?? []).length > 0)
-    .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
-
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [model, setModel] = useState('')
-  const [color, setColor] = useState(AVATAR_COLORS[0])
-  const [icon, setIcon] = useState<IconName>('Robot')
-  const [temperature, setTemperature] = useState(1.0)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [nameError, setNameError] = useState('')
-  // US-E6: per-agent skill assignment; new agent defaults to none (opt-in).
-  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
-  // Spec-4 FR-4.1: sub-agent executor; new agent defaults to native (undefined).
-  const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
-  // Worker-only: optional task prompt (SOUL.md for the worker runner).
-  const [soul, setSoul] = useState('')
-  // Worker-only: validation state for the required executor. Workers must
-  // carry an executor — they cannot be created without one.
-  const [executorError, setExecutorError] = useState('')
-
-  // #334 (US-D1): new agent defaults to Balanced (not default_policy:'allow').
-  const BALANCED_DEFAULT: ToolPolicyValue = applyRolePreset('balanced')
-  const [toolsPolicyValue, setToolsPolicyValue] = useState<ToolPolicyValue>(BALANCED_DEFAULT)
-
-  const resetForm = () => {
-    setName('')
-    setDescription('')
-    setModel('')
-    setColor(AVATAR_COLORS[0])
-    setIcon('Robot')
-    setTemperature(1.0)
-    setAdvancedOpen(false)
-    setNameError('')
-    setSelectedSkills([])
-    setExecutor(undefined)
-    setSoul('')
-    setExecutorError('')
-    setToolsPolicyValue(applyRolePreset('balanced'))
-  }
-
-  // Reset form state whenever the modal opens so stale values are not shown
-  useEffect(() => {
-    if (isOpen) {
-      resetForm()
-    }
-    // resetForm references stable setState callbacks — isOpen is the only meaningful dep
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen])
-
-  // W6-A3 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
-  // modal (typically the "New agent" / "New worker" button) on close.
-  //
-  // Wave 6 / B-fix: extracted to `useFocusRestore` hook so the same
-  // proven pattern (capture-in-onOpenAutoFocus + restore-via-RAF + try/
-  // catch) is shared with the slide-over in AgentProfile. Future Wave C
-  // consumers (ModelFooter slide-over) will adopt the hook instead of
-  // forking this block.
-  const { onOpenAutoFocus: handleOpenAutoFocus } = useFocusRestore(isOpen)
-
-  const AvatarIcon = getIconComponent(icon)
-
-  const { mutate: doCreate, isPending } = useMutation({
-    mutationFn: async (data: AgentCreateRequest) => {
-      if (onCreateProp) {
-        await onCreateProp(data)
-        return data as Agent
-      }
-      return createAgent(data)
-    },
-    onSuccess: () => {
+  const createAgentMutation = useMutation({
+    mutationFn: onCreateProp ?? ((data: AgentCreateRequest) => createAgent(data)),
+    onSuccess: (agent: Agent) => {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
+      addToast({
+        id: `agent-created-${agent.id}`,
+        message: `Created agent "${agent.name}"`,
+        variant: 'success',
+      })
       handleClose()
-      resetForm()
     },
-    onError: (err: Error) => {
-      useUiStore.getState().addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to create agent', variant: 'error' })
+    onError: (err: unknown) => {
+      const message = isApiError(err)
+        ? err.userMessage
+        : err instanceof Error
+          ? err.message
+          : 'Failed to create agent'
+      addToast({
+        id: 'agent-create-error',
+        message,
+        variant: 'error',
+      })
     },
   })
 
-  const handleCreate = () => {
-    if (!name.trim()) {
-      setNameError('Name is required')
-      return
-    }
-    // Worker-only validation: an executor is required (a worker without a
-    // runtime is not a worker — it's just a missing-config row).
-    // The ExecutorSection is always visible for workers now, so the
-    // validation message renders next to the field.
-    if (isWorkerModal && !executor) {
-      setExecutorError('Worker requires an executor')
-      return
-    }
-    setExecutorError('')
-    // Build the AgentToolsCfg wire shape from the ToolPolicyValue editor state.
-    const toolsCfg: AgentToolsCfg = {
-      builtin: {
-        default_policy: toolsPolicyValue.default_policy,
-        policies: toolsPolicyValue.policies,
-      },
-    }
-    doCreate({
-      // Tier preset — 'custom' for base-agent modal, 'worker' for the
-      // worker-section "New worker" button. The backend contract (AgentCreateRequest)
-      // accepts either; the tier drives the response shape.
-      type: modalType,
-      name: name.trim(),
-      description: description || undefined,
-      model: model || undefined,
-      color,
-      icon,
-      model_params: { temperature },
-      tools_cfg: toolsCfg,
-      // US-E6: only include skills when at least one is selected (opt-in, default none).
-      skills: selectedSkills.length > 0 ? selectedSkills : undefined,
-      // Spec-4 FR-4.1: send the executor when present. For workers it is
-      // required (validated above) and is always sent (including native,
-      // since the worker concept needs a real runtime assignment).
-      // For base agents, omit native (preserves the existing payload shape).
-      executor: isWorkerModal
-        ? executor
-        : executor && executor.kind !== 'native' ? executor : undefined,
-      // Worker-only: SOUL.md content (the task prompt). Empty is valid for
-      // workers (per the locked concept) — omitted for base agents, which
-      // expect a later SOUL.md write via the profile edit flow.
-      soul: isWorkerModal ? (soul.trim() || undefined) : undefined,
-    })
-  }
+  const handleSubmit = useCallback(
+    async (payload: WizardSubmitPayload) => {
+      const req = payloadToCreateRequest(payload)
+      await createAgentMutation.mutateAsync(req)
+    },
+    [createAgentMutation],
+  )
+
+  if (!isOpen) return null
 
   return (
-    <DialogPrimitive.Root open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-      <DialogPrimitive.Portal>
-        <SheetContent
-          side="right"
-          widthClass="w-full sm:max-w-3xl"
-          className="flex flex-col gap-0 p-0"
-          onOpenAutoFocus={handleOpenAutoFocus}
-        >
-          <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
-            <SheetTitle
-              data-testid={formCopy.testId}
-              className="font-headline text-xl font-bold text-[var(--color-secondary)] tracking-tight"
-            >
-              {formCopy.title}
-            </SheetTitle>
-            <SheetDescription className="text-sm text-[var(--color-muted)] mt-1.5 leading-relaxed">
-              {formCopy.description}
-            </SheetDescription>
-          </SheetHeader>
-
-          <Tabs defaultValue="general" className="flex-1 min-h-0 flex flex-col">
-            <TabsList className="shrink-0 px-8 mb-4 mt-2">
-              <TabsTrigger value="general">General</TabsTrigger>
-              <TabsTrigger value="tools">Tools &amp; Permissions</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="general" className="flex-1 overflow-y-auto min-h-0 mt-0">
-              <div className="space-y-5 px-8 pb-8">
-                {/* Avatar preview + color + icon */}
-                <div>
-                  <label className="text-sm font-medium text-[var(--color-secondary)] mb-2 block">
-                    Avatar
-                  </label>
-                  <div className="flex items-start gap-4">
-                    <div
-                      className="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
-                      style={{ backgroundColor: color }}
-                    >
-                      <AvatarIcon size={20} className="text-[var(--color-primary)]" />
-                    </div>
-                    <div className="flex-1 space-y-3">
-                      <div>
-                        <p className="text-xs font-medium text-[var(--color-muted)] mb-1.5">Color</p>
-                        {/* W6-A1 / C3: 40x40 tap target (WCAG 2.5.8 AA). Visual swatch stays
-                            full-bleed; the button's extra padding gives the tap surface. */}
-                        <div className="flex gap-2 flex-wrap">
-                          {AVATAR_COLORS.map((c) => {
-                            // W6-B4 / M7: aria-label uses the semantic name
-                            // (e.g. "Forge Gold") instead of the raw hex.
-                            // The `title` attribute is shown on hover and
-                            // mirrors the aria-label so sighted users get
-                            // the same readable string.
-                            const name = avatarColorName(c)
-                            return (
-                              <button
-                                key={c}
-                                type="button"
-                                onClick={() => setColor(c)}
-                                className={`min-h-tap-target-comfortable min-w-tap-target-comfortable rounded-full p-0 transition-transform ${color === c ? 'ring-2 ring-[var(--color-secondary)] ring-offset-2 ring-offset-[var(--color-surface-1)] scale-110' : 'hover:scale-110'}`}
-                                style={{ backgroundColor: c }}
-                                aria-label={`Select color ${name}`}
-                                title={name}
-                                data-testid={`avatar-color-${name.toLowerCase().replace(/\s+/g, '-')}`}
-                              />
-                            )
-                          })}
-                        </div>
-                      </div>
-                      <div>
-                        <p className="text-xs font-medium text-[var(--color-muted)] mb-1.5">Icon</p>
-                        {/* W6-A1 / C3: 44x44 tap target (WCAG 2.5.8 AA, token
-                            --spacing-tap-target-min). grid-cols-5 + gap-2
-                            keeps the row from wrapping awkwardly on the
-                            modal's 3xl width. */}
-                        <div className="grid grid-cols-5 gap-2">
-                          {ICON_OPTIONS.map(({ name: iconName, component: IconComp }) => (
-                            <button
-                              key={iconName}
-                              type="button"
-                              onClick={() => setIcon(iconName)}
-                              title={iconName}
-                              className={`min-h-tap-target-min min-w-tap-target-min rounded-md transition-colors flex items-center justify-center ${
-                                icon === iconName
-                                  ? 'bg-[var(--color-accent)] text-[var(--color-primary)]'
-                                  : 'bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
-                              }`}
-                            >
-                              <IconComp size={18} />
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Name */}
-                <div>
-                  <label htmlFor="agent-name" className="text-sm font-medium text-[var(--color-secondary)] mb-1.5 block">
-                    Name <span className="text-[var(--color-error)]" aria-hidden="true">*</span>
-                  </label>
-                  <Input
-                    id="agent-name"
-                    value={name}
-                    onChange={(e) => {
-                      setName(e.target.value)
-                      if (e.target.value.trim()) setNameError('')
-                    }}
-                    placeholder="e.g. Research Assistant"
-                    className={nameError ? 'border-[var(--color-error)]' : ''}
-                    autoFocus
-                    required
-                    aria-required="true"
-                    aria-invalid={nameError ? true : undefined}
-                    aria-describedby={nameError ? 'agent-name-error' : undefined}
-                  />
-                  <FormError id="agent-name-error" error={nameError} />
-                </div>
-
-                {/* Description */}
-                <div>
-                  <label htmlFor="agent-description" className="text-sm font-medium text-[var(--color-secondary)] mb-1.5 block">
-                    Description
-                  </label>
-                  <Textarea
-                    id="agent-description"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="What does this agent do?"
-                    rows={2}
-                  />
-                </div>
-
-                {/* Model */}
-                <div>
-                  <label className="text-sm font-medium text-[var(--color-secondary)] mb-1.5 block">
-                    Model
-                  </label>
-                  {providersError && (
-                    <div className="mb-2 rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-3 py-2">
-                      <p className="text-xs text-[var(--color-error)] font-medium">Provider list unavailable</p>
-                      <p className="text-xs text-[var(--color-error)]/80 mt-0.5">
-                        Could not load connected providers. Verify your provider settings before creating this agent.
-                      </p>
-                    </div>
-                  )}
-                  <ModelSelector
-                    models={availableModels}
-                    value={model}
-                    onChange={setModel}
-                    placeholder="Use provider default"
-                    providerGroups={providerGroups}
-                  />
-                </div>
-
-                {/* Worker-only: optional task prompt (SOUL.md).
-                    Lives at the top level for workers because the worker form
-                    shape is executor-first, no heartbeat, no schedules — the
-                    task prompt is the primary "personality" affordance.
-                    Mirrors the worker profile's "Task prompt (optional)" block
-                    in AgentFormFields. */}
-                {isWorkerModal && (
-                  <div>
-                    <label
-                      htmlFor="worker-task-prompt"
-                      className="text-sm font-medium text-[var(--color-secondary)] mb-1.5 block"
-                    >
-                      Task prompt <span className="text-[var(--color-muted)] font-normal">(optional)</span>
-                    </label>
-                    <p className="text-xs text-[var(--color-muted)] mb-1.5">
-                      Optional system prompt for the worker&apos;s runner. Composed with any
-                      caller-supplied task prompt at run time. Stored as{' '}
-                      <span className="font-mono text-xs">SOUL.md</span>. Leave empty to use
-                      the executor&apos;s default behaviour.
-                    </p>
-                    <Textarea
-                      id="worker-task-prompt"
-                      data-testid="create-worker-task-prompt"
-                      value={soul}
-                      onChange={(e) => setSoul(e.target.value)}
-                      placeholder="# Task prompt (optional)&#10;&#10;Define how this worker should approach its delegated task..."
-                      rows={5}
-                      className="text-xs font-mono resize-none"
-                    />
-                  </div>
-                )}
-
-                {/* Spec-4 FR-4.1: Executor runtime selector — ALWAYS visible
-                    for workers (it's a required field). For base agents
-                    the executor is optional and the row stays compact.
-                    Sourced from AgentFormFields (the shared form-shape
-                    split) so the ExecutorSelector import stays in this
-                    chunk — Vite was tree-shaking the previous direct
-                    import. */}
-                <ExecutorSection
-                  isWorker={isWorkerModal}
-                  value={executor}
-                  onChange={(next) => {
-                    setExecutor(next)
-                    if (next) setExecutorError('')
-                  }}
-                  error={executorError}
-                />
-
-                {/* Advanced model params + skills (executor moved out). */}
-                <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setAdvancedOpen((o) => !o)}
-                    className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                  >
-                    <span>Advanced</span>
-                    {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                  </button>
-                  {advancedOpen && (
-                    <div className="px-3 pb-3 border-t border-[var(--color-border)] pt-3 space-y-3">
-                      {/* Temperature */}
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-[var(--color-muted)]">Temperature</span>
-                          <span className="text-xs font-mono text-[var(--color-secondary)]">{temperature.toFixed(2)}</span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={2}
-                          step={0.05}
-                          value={temperature}
-                          onChange={(e) => setTemperature(Number(e.target.value))}
-                          className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
-                          style={{
-                            background: `linear-gradient(to right, var(--color-accent) 0%, var(--color-accent) ${(temperature / 2) * 100}%, var(--color-border) ${(temperature / 2) * 100}%, var(--color-border) 100%)`,
-                          }}
-                        />
-                      </div>
-
-                      {/* US-E6: Skills picker — opt-in, default none */}
-                      {availableSkills.length > 0 && (
-                        <div className="space-y-1.5 pt-1 border-t border-[var(--color-border)]">
-                          <p className="text-sm font-medium text-[var(--color-secondary)] pt-1">
-                            Skills
-                            <span className="ml-1.5 font-normal text-[var(--color-muted)]">(opt-in)</span>
-                          </p>
-                          <p className="text-xs text-[var(--color-muted)]">
-                            Grant installed skills to this agent. Unselected = no skills.
-                          </p>
-                          <div className="space-y-1">
-                            {availableSkills.map((skill) => (
-                              <label
-                                key={skill.id}
-                                className="flex items-center gap-2 text-xs cursor-pointer py-0.5"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={selectedSkills.includes(skill.id)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setSelectedSkills((prev) => [...prev, skill.id])
-                                    } else {
-                                      setSelectedSkills((prev) => prev.filter((s) => s !== skill.id))
-                                    }
-                                  }}
-                                  className="accent-[var(--color-accent)]"
-                                  data-testid={`create-skill-checkbox-${skill.id}`}
-                                />
-                                <span className="text-[var(--color-secondary)]">{skill.name}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="tools" className="flex-1 overflow-y-auto min-h-0 mt-0 px-8 pb-8">
-              {/* #334 (US-D1): shared ToolPolicyEditor with Balanced default.
-                  Tool list from registry — new agent has no agentId yet. */}
-              <CreateAgentToolsTab
-                value={toolsPolicyValue}
-                onChange={setToolsPolicyValue}
-              />
-            </TabsContent>
-          </Tabs>
-
-          {/* W6-C1 / G4: Create modal exposes 6 of 25 wire fields. The
-              other 19 (delegation policy, fallback models, sandbox profile,
-              schedules, voice, rate limits, sampling parameters, etc.)
-              live on the Edit profile. Signpost this so the operator
-              doesn't think "create" is a complete surface and leave. The
-              helper text sits between the tabs and the sticky footer so it
-              reads as a "before submitting" reminder without competing with
-              the primary CTA visually. Uses `text-[var(--color-muted)]` to
-              match the existing caption tier — not a louder colour so the
-              CTA stays the primary focal point. */}
-          <div
-            data-testid="create-edit-signpost"
-            className="shrink-0 px-8 py-3 border-t border-[var(--color-border)] bg-[var(--color-surface-1)]/40"
-          >
-            <p className="text-xs text-[var(--color-muted)] leading-relaxed">
-              All other settings — delegation policy, fallback models, sandbox, voice,
-              rate limits, sampling parameters, schedules — are available in the{' '}
-              <span className="text-[var(--color-secondary)] font-medium">Edit profile</span>{' '}
-              after the agent is created.
-            </p>
-          </div>
-
-          {/* Sticky footer actions (slideout-friendly) */}
-          <div className="flex justify-end gap-3 px-8 py-5 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0">
-            <Button
-              variant="outline"
-              onClick={() => { handleClose(); resetForm() }}
-              disabled={isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleCreate}
-              disabled={isPending}
-              data-testid="create-agent-submit"
-            >
-              {isPending ? 'Creating...' : formCopy.submitLabel}
-            </Button>
-          </div>
-        </SheetContent>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+    <CreateAgentWizard
+      initialType={effectiveType}
+      {...(initialCli ? { initialCli } : {})}
+      onSubmit={handleSubmit}
+    />
   )
 }
+
+export default CreateAgentModal
