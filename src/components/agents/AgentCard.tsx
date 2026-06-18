@@ -74,7 +74,9 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               ) : agent.status === 'error' ? (
                 <Badge variant="destructive" className="text-[var(--color-error)] border-[var(--color-error)]/30 bg-[var(--color-error)]/10">error</Badge>
               ) : (
-                <Badge variant={typeBadgeVariant[agent.type]}>{agent.type}</Badge>
+                <Badge variant={typeBadgeVariant[agent.type]} className="font-normal">
+                  {agent.type}
+                </Badge>
               )}
               {agent.model && (
                 <span
