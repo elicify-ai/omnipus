@@ -76,10 +76,11 @@ func TestApplyAgentModel_RebuildsProviderPool(t *testing.T) {
 
 	// Sanity: the initial pool was built eagerly from the candidate chain at
 	// NewAgentInstance. openrouter must be in it (the primary provider).
-	if before.ProviderPool == nil {
-		t.Fatal("initial ProviderPool is nil — FR-007 buildProviderPool was skipped")
-	}
-	if _, ok := before.ProviderPool["openrouter"]; !ok {
+	// providerPool is an atomic.Pointer[map[…]]; Load() returns the current
+	// map snapshot (or nil if the pointer was never set, which would be a bug).
+	if pool := before.providerPool.Load(); pool == nil {
+		t.Fatal("initial providerPool is nil — FR-007 buildProviderPool was skipped")
+	} else if _, ok := (*pool)["openrouter"]; !ok {
 		t.Error("initial pool missing openrouter entry — buildProviderPool did not pick up the primary provider")
 	}
 
