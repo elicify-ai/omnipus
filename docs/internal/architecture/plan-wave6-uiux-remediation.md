@@ -203,7 +203,7 @@ After each wave's 4-worktree merge, run:
 | **G7** | Scoped go test on touched packages: `go test -tags goolm,stdjson -run '^TestW6\|^TestNewName' -p 1` (or pattern that matches the new test names) |
 | **G8** | **Per-wave local e2e** (Wave 5 lesson): `npx playwright test tests/e2e/<relevant-spec>.spec.ts` (subset, not full matrix). Catches the class of regression scoped gates miss (e.g. Wave 5 aria-label fail). NOT deferred to the end. **No Fly worker, no remote — runs on the user's dev pod.** Wall-clock ~3-5 min per wave. |
 | **G9** | Author audit: `git log origin/hotfix/v0.1.1..HEAD --format='%an <%ae>'` is only `Daniel Piatkowski <...>`; no Anthropic trailers |
-| **G10** | Visual smoke via Playwright: load `https://pod-omnipus.fly.dev/#/agents` (after gateway restart, see §6); drive the relevant flow; check no console errors |
+| **G10** | Visual smoke via Playwright: load `http://localhost:8080/#/agents` (after gateway restart, see §6.2 step 6); drive the relevant flow; check no console errors. The app runs locally on the user's machine; the dev pod Fly URL (`https://pod-omnipus.fly.dev`) is dev-time infra only and is **not** an app smoke-test target. |
 
 **If any gate fails:** the merge is reverted (`git revert -n <merge-sha>`, then commit), the wave is aborted, the offending worktree agent reworks, and the wave re-runs from a clean base. **No "fix forward"** unless the user explicitly approves — pre-staging a revert commit at wave start keeps the rollback cheap.
 
@@ -265,7 +265,12 @@ Per-wave procedure — done by the user, not an agent:
 
 ### 6.3 ~~Maintenance mode~~ — REMOVED 2026-06-18
 
-Per user: "we do not need any of this preview stuff." The entire `gateway.preview_maintenance` flag + `pkg/gateway/middleware.go` 503 short-circuit + A4-MAINT prerequisite ticket + §6.3b fallback are **deleted from the plan**. The desktop app is a single-user local app; the user knows the app is being restarted and is not on the page during the 2-second window.
+Per user (2026-06-18): "we do not need nay of this preview stuff, this is a stand alone desktop app at the end that happen to run in the browser, remove this feature completely" — referring specifically to the **deploy-time maintenance-mode machinery** (`gateway.preview_maintenance` flag + `pkg/gateway/middleware.go` 503 short-circuit + A4-MAINT prerequisite ticket + §6.3b fallback), **all deleted from the plan**. The two unrelated "preview" concepts are **kept untouched**:
+
+- **Level 1 — Dev pod preview port:** `0.0.0.0:8080` proxied publicly via Fly.io + elicify-devpod as `$DEVPOD_PREVIEW_URL` → `https://<pod>.fly.dev`. Platform infrastructure, not an app feature. Provided by the dev pod, never part of the shipped app.
+- **Level 2 — Agent `web_serve` preview:** `gateway.preview_port` (default 5001) lets agents serve generated web apps despite sandboxing, on a separate origin for browser isolation. Core v0.1 ship scope (`pkg/tools/web_serve.go`, `src/components/chat/IframePreview.tsx`, etc.).
+
+The desktop app is a single-user local app; the user knows the app is being restarted and is not on the page during the 2-second window.
 
 ### 6.4 Branch & worktree cleanup
 
@@ -357,7 +362,7 @@ Plus critical from Reviewer 1:
 3. **Re-scope `AgentProfile.tsx` co-tenancy.** Actually 9 worktrees, not 5/6/8. Resolution: extract everything to subcomponents; **add hidden worktree ownership for `/agents/trust` route (G2), `pkg/providers/catalog.go` (C4, now in `model_resolution.go`), and `FormError` component contract (A3)**.
 
 Plus critical from Reviewer 2:
-- **Gateway restart procedure targets wrong Fly app** — `ci-omnipus` is the test worker, `pod-omnipus.fly.dev` is the preview. Plan steps referenced the wrong binary location. **Resolution:** §6.2 corrected to target `pod-omnipus` (the live preview Fly app).
+- ~~**Gateway restart procedure targets wrong Fly app** — `ci-omnipus` is the test worker, `pod-omnipus.fly.dev` is the preview. Plan steps referenced the wrong binary location. **Resolution:** §6.2 corrected to target `pod-omnipus` (the live preview Fly app).~~ **REMOVED 2026-06-18** — conflated three "preview" concepts. For a standalone desktop app the gateway runs locally on `localhost`; `pod-omnipus.fly.dev` is the dev pod's public proxy (dev-time infra only, not an app deployment) and `ci-omnipus` is the CI test worker (Fly app `ci-omnipus`, separate from the user's machine). §6.2 step 6 already targets `http://localhost:8080/#/agents`.
 - **M10 may not be the bug described** — `useUiStore` is non-persisted, reload resets `editAgentId` to `null`; the slide-over cannot re-open on `/agents` after reload. **Resolution:** W6-B1 must reproduce M10 first; if not reproducible, drop the ticket.
 - **No worktree owns `src/store/ui.ts`** despite A3, B3, B4, C1 needing to read/extend it. **Resolution:** W6-B1 owns `src/store/ui.ts` (slide-over work + I7 modal focus restore).
 - **No coordination with other PRs needed.** Wave 6 is bounded by `hotfix/v0.1.1` per the user's explicit instruction. The user manages any other PRs (including PR #363) separately. Wave 6 does not interact with them.
