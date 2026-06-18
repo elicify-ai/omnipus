@@ -133,7 +133,7 @@ describe('AgentListScreen — per-section New buttons', () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
     const baseSection = await screen.findByTestId('base-agents-section')
-    const newBaseButton = within(baseSection).getByTestId('new-base-agent-button')
+    const newBaseButton = within(baseSection).getByTestId('add-main-button')
     expect(newBaseButton).toBeInTheDocument()
     expect(newBaseButton).toHaveTextContent(/new agent/i)
   })
@@ -145,7 +145,7 @@ describe('AgentListScreen — per-section New buttons', () => {
     ])
     renderScreen()
     const workerSection = await screen.findByTestId('worker-agents-section')
-    const newWorkerButton = within(workerSection).getByTestId('new-worker-button')
+    const newWorkerButton = within(workerSection).getByTestId('add-subagent-button')
     expect(newWorkerButton).toBeInTheDocument()
     expect(newWorkerButton).toHaveTextContent(/new worker/i)
   })
@@ -154,7 +154,7 @@ describe('AgentListScreen — per-section New buttons', () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
     const baseSection = await screen.findByTestId('base-agents-section')
-    fireEvent.click(within(baseSection).getByTestId('new-base-agent-button'))
+    fireEvent.click(within(baseSection).getByTestId('add-main-button'))
     const state = useUiStore.getState()
     expect(state.createAgentModalOpen).toBe(true)
     expect(state.createAgentModalType).toBe('custom')
@@ -167,7 +167,7 @@ describe('AgentListScreen — per-section New buttons', () => {
     ])
     renderScreen()
     const workerSection = await screen.findByTestId('worker-agents-section')
-    fireEvent.click(within(workerSection).getByTestId('new-worker-button'))
+    fireEvent.click(within(workerSection).getByTestId('add-subagent-button'))
     const state = useUiStore.getState()
     expect(state.createAgentModalOpen).toBe(true)
     expect(state.createAgentModalType).toBe('worker')
@@ -209,7 +209,7 @@ describe('AgentListScreen — empty-state per-section buttons', () => {
     // The New worker button lives in the worker section header, always
     // rendered. This is the regression: previously the entire section was
     // hidden when workerAgents.length === 0.
-    const newWorkerButton = within(workerSection).getByTestId('new-worker-button')
+    const newWorkerButton = within(workerSection).getByTestId('add-subagent-button')
     expect(newWorkerButton).toBeInTheDocument()
     expect(newWorkerButton).toHaveTextContent(/new worker/i)
   })
@@ -220,7 +220,7 @@ describe('AgentListScreen — empty-state per-section buttons', () => {
     ])
     renderScreen()
     const baseSection = await screen.findByTestId('base-agents-section')
-    const newBaseButton = within(baseSection).getByTestId('new-base-agent-button')
+    const newBaseButton = within(baseSection).getByTestId('add-main-button')
     expect(newBaseButton).toBeInTheDocument()
     expect(newBaseButton).toHaveTextContent(/new agent/i)
   })
@@ -239,8 +239,8 @@ describe('AgentListScreen — empty-state per-section buttons', () => {
     // Base section is NOT empty here (mia is present), so no empty-state.
     expect(within(baseSection).queryByTestId('base-agents-empty')).not.toBeInTheDocument()
     // Each section still has its New button, even with the worker section empty.
-    expect(within(baseSection).getByTestId('new-base-agent-button')).toBeInTheDocument()
-    expect(within(workerSection).getByTestId('new-worker-button')).toBeInTheDocument()
+    expect(within(baseSection).getByTestId('add-main-button')).toBeInTheDocument()
+    expect(within(workerSection).getByTestId('add-subagent-button')).toBeInTheDocument()
   })
 
   it('renders the base empty-state when only workers exist (inverse fresh install)', async () => {
@@ -255,7 +255,7 @@ describe('AgentListScreen — empty-state per-section buttons', () => {
     const workerSection = await screen.findByTestId('worker-agents-section')
     expect(within(baseSection).getByTestId('base-agents-empty')).toBeInTheDocument()
     expect(within(workerSection).queryByTestId('worker-agents-empty')).not.toBeInTheDocument()
-    expect(within(baseSection).getByTestId('new-base-agent-button')).toBeInTheDocument()
-    expect(within(workerSection).getByTestId('new-worker-button')).toBeInTheDocument()
+    expect(within(baseSection).getByTestId('add-main-button')).toBeInTheDocument()
+    expect(within(workerSection).getByTestId('add-subagent-button')).toBeInTheDocument()
   })
 })
