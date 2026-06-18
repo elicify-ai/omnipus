@@ -1243,12 +1243,11 @@ func computeAgentStatus(agentID string, activeIDs map[string]bool, soul string, 
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
 func buildAgentDefaults(cfg *config.Config) gen.Agent {
-	sm := steeringModeOrDefault(cfg.Agents.Defaults.SteeringMode)
+	sm := gen.AgentSteeringMode(steeringModeOrDefault(cfg.Agents.Defaults.SteeringMode))
 	return gen.Agent{
 		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
 		MaxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
 		SteeringMode:      sm,
-		ToolFeedback:      cfg.Agents.Defaults.ToolFeedback.Enabled,
 		HeartbeatEnabled:  cfg.Heartbeat.Enabled,
 		HeartbeatInterval: cfg.Heartbeat.Interval,
 		// Required string fields — initialized to empty (overwritten per-agent).
@@ -1402,21 +1401,24 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
-	// Resolve the requested agent type. The contract enum is {custom, worker};
-	// when omitted it defaults to "custom" (preserves pre-existing behaviour).
-	// "core" and "system" are seeded-only classifications — sending them (or
-	// any other value) is a 400: the only way to obtain a core/system agent
-	// is via SeedConfig, never via the REST create path.
+	// Resolve the requested agent type. The wire enum (W1) is
+	// [Main, Subagent, subagent_3p]; legacy "custom"/"worker" still round-trip
+	// via the boundary translation in coreagent.ResolveType so existing payloads
+	// don't break. "core" and "system" are seeded-only classifications —
+	// sending them (or any other value) is a 400: the only way to obtain a
+	// core/system agent is via SeedConfig, never via the REST create path.
 	createType := config.AgentTypeCustom
 	if req.Type != nil {
 		switch *req.Type {
-		case gen.AgentCreateRequestTypeCustom:
+		case gen.AgentCreateRequestTypeMain:
 			createType = config.AgentTypeCustom
-		case gen.AgentCreateRequestTypeWorker:
+		case gen.AgentCreateRequestTypeSubagent:
+			createType = config.AgentTypeWorker
+		case gen.AgentCreateRequestTypeSubagent3p:
 			createType = config.AgentTypeWorker
 		default:
 			jsonErr(w, http.StatusBadRequest,
-				"type must be \"custom\" or \"worker\"; \"core\" and \"system\" are seeded-only")
+				"type must be one of Main, Subagent, subagent_3p; \"core\" and \"system\" are seeded-only")
 			return
 		}
 	}
@@ -1440,7 +1442,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// first delegated run. The executor itself is then mapped into
 	// ac.Subagents in the executor block further down.
 	if createType != config.AgentTypeWorker && req.Executor != nil {
-		kind := string(req.Executor.Kind)
+		kind := ""
+		if req.Executor.Kind != nil {
+			kind = string(*req.Executor.Kind)
+		}
 		if kind == string(config.ExecutorKindExternalCLI) || kind == string(config.ExecutorKindRemoteA2A) {
 			jsonErr(w, http.StatusBadRequest,
 				"only sub-agent workers can use an external executor; base agents run native")
@@ -1489,7 +1494,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// Sub-agent executor (kind/cli). Mapped into AgentConfig.Subagents.Executor so
 	// it is actually persisted (previously the contract field was write-dropped).
 	if req.Executor != nil {
-		execCfg, errMsg := executorConfigFromRequest(string(req.Executor.Kind), executorCliStr(req.Executor.Cli))
+		execCfg, errMsg := executorConfigFromRequest(executorKindStr(req.Executor.Kind), executorCliStr(req.Executor.Cli))
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
@@ -1636,8 +1641,8 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// (create is the only write gate at this point, so a re-run is
 	// idempotent against itself).
 	var createSoulContent string
-	if req.Soul != nil {
-		createSoulContent = strings.TrimSpace(*req.Soul)
+	if req.Soul != "" {
+		createSoulContent = strings.TrimSpace(req.Soul)
 		workspace, wsErr := agentWorkspacePath(a.agentLoop.GetConfig(), ac.ID, ac.Workspace, a.homePath)
 		if wsErr != nil {
 			slog.Error("rest: agentWorkspacePath for create", "agent_id", ac.ID, "error", wsErr)
@@ -1763,6 +1768,19 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// isExternalSubagent reports whether the persisted agent is a subagent_3p
+// (an External-CLI worker). Subagent (native worker) returns false; Main /
+// core / system return false; only subagent_3p returns true.
+func isExternalSubagent(ac *config.AgentConfig) bool {
+	if ac == nil || ac.Type != config.AgentTypeWorker {
+		return false
+	}
+	if ac.Subagents == nil || ac.Subagents.Executor == nil {
+		return false
+	}
+	return ac.Subagents.Executor.EffectiveKind() == config.ExecutorKindExternalCLI
+}
+
 func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string) {
 	cfg := a.agentLoop.GetConfig()
 	var foundIdx int = -1
@@ -1846,6 +1864,69 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		jsonErr(w, http.StatusBadRequest, "a worker cannot have a per-agent voice (workers are not chat personas)")
 		return
 	}
+
+	// W2 spec §4.19.1 / §9.2: subagent_3p agents (External CLI workers) reject
+	// PUTs on any of the 7 forbidden fields with the literal "subagent_3p
+	// agents do not support <field>; this is fixed at create time." message.
+	// These properties are CLI-owned and cannot be tuned at runtime — they
+	// are fixed at the create call when the executor was wired. A silent-drop
+	// would be a foot-gun (the operator sets it, the gateway swallows it,
+	// nothing changes).
+	if isExternalSubagent(foundAgent) {
+		if req.ToolsCfg != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support tools_cfg; this is fixed at create time.")
+			return
+		}
+		if req.Skills != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support skills; this is fixed at create time.")
+			return
+		}
+		if req.FallbackModels != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support fallback_models; this is fixed at create time.")
+			return
+		}
+		if req.ModelParams != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support model_params; this is fixed at create time.")
+			return
+		}
+		if req.SandboxProfile != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support sandbox_profile; this is fixed at create time.")
+			return
+		}
+		if req.ShellPolicy != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support shell_policy; this is fixed at create time.")
+			return
+		}
+		if req.DelegationPolicy != nil {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support delegation_policy; this is fixed at create time.")
+			return
+		}
+	}
+
+	// W2 spec §4.3 / §9.2: worker types (Subagent, subagent_3p) MUST have a
+	// non-empty description (after trim). A blank/whitespace PUT is rejected
+	// 400 rather than silently stripping the field — the routing layer
+	// depends on the description to pick a worker for delegation.
+	if foundAgent.IsWorker() && req.Description != nil && strings.TrimSpace(*req.Description) == "" {
+		jsonErr(w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
+		return
+	}
+
+	// W2 spec §9.2 row 14: PUT worker with steering_mode=queue-and-process
+	// returns 200 but server forces steering_mode="one-at-a-time". Workers
+	// never queue (they run only via delegation; no concurrent inbound).
+	// Implementation: if the caller sent a non-nil steering_mode and the agent
+	// is a worker, ignore the caller's value and force the stored value to
+	// "one-at-a-time" via the persist block below.
+
+	// W2 spec §3.1 row 16 / §9.2 row 11+15: fallback_models is capped at 2
+	// entries (maxItems: 2). Server-enforced on every PUT/CREATE so a direct
+	// REST caller (not the SPA) cannot smuggle a 3rd entry past the schema.
+	if req.FallbackModels != nil && len(*req.FallbackModels) > 2 {
+		jsonErr(w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
+		return
+	}
+
 	if foundAgent.Locked {
 		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
 		// instructions, color, icon, and skills are identity/capability fields — reject on locked agents.
@@ -1869,7 +1950,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// rather than persisting an invalid combination.
 	var updatedExecutor *config.ExecutorConfig
 	if req.Executor != nil {
-		execCfg, errMsg := executorConfigFromRequest(string(req.Executor.Kind), executorCliStr(req.Executor.Cli))
+		execCfg, errMsg := executorConfigFromRequest(executorKindStr(req.Executor.Kind), executorCliStr(req.Executor.Cli))
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
@@ -1966,16 +2047,21 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					agentMap["max_tool_iterations"] = *req.MaxToolIterations
 				}
 				if req.SteeringMode != nil {
-					agentMap["steering_mode"] = *req.SteeringMode
-				}
-				if req.ToolFeedback != nil {
-					tfMap, _ := agentMap["tool_feedback"].(map[string]any)
-					if tfMap == nil {
-						tfMap = map[string]any{}
-						agentMap["tool_feedback"] = tfMap
+					// W2 spec §4.24 / §9.2 row 14: workers are forced to
+					// "one-at-a-time" server-side regardless of the caller's
+					// value. Workers run only via delegation (no concurrent
+					// inbound), so queueing is meaningless. This is a silent
+					// override, not a 400 — the spec calls for 200 with the
+					// stored value forced to one-at-a-time.
+					sm := string(*req.SteeringMode)
+					if foundAgent.IsWorker() {
+						sm = "one-at-a-time"
 					}
-					tfMap["enabled"] = *req.ToolFeedback
+					agentMap["steering_mode"] = sm
 				}
+				// tool_feedback was removed from the wire in W1 (it's now per-channel
+				// runtime behaviour driven by pkg/agent/loop.go: webchat skips). The
+				// global config-level agents.defaults.tool_feedback stays.
 				if req.SandboxProfile != nil {
 					if *req.SandboxProfile == "" {
 						delete(agentMap, "sandbox_profile")
@@ -2327,12 +2413,10 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		ag.MaxToolIterations = *req.MaxToolIterations
 	}
 	if req.SteeringMode != nil {
-		sm := steeringModeOrDefault(*req.SteeringMode)
+		sm := gen.AgentSteeringMode(steeringModeOrDefault(string(*req.SteeringMode)))
 		ag.SteeringMode = sm
 	}
-	if req.ToolFeedback != nil {
-		ag.ToolFeedback = *req.ToolFeedback
-	}
+	// tool_feedback removed from the wire in W1 (per-channel runtime behaviour now).
 	if req.HeartbeatEnabled != nil {
 		ag.HeartbeatEnabled = *req.HeartbeatEnabled
 	}
