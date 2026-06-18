@@ -47,7 +47,7 @@ import {
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
-import { AVATAR_COLORS } from '@/lib/constants'
+import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import type { FallbackModel } from '@/lib/api/generated/openapi-types'
 import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
 
@@ -605,19 +605,25 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <div className="space-y-1.5">
                   <p className="text-xs text-[var(--color-muted)]">Avatar color</p>
                   <div className="flex gap-2">
-                    {AVATAR_COLORS.map((color) => (
-                      <button
-                        key={color}
-                        type="button"
-                        onClick={() => { markDirty(); setSelectedColor(color) }}
-                        className="w-7 h-7 rounded-full transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-1 focus:ring-offset-[var(--color-primary)]"
-                        style={{
-                          backgroundColor: color,
-                          boxShadow: selectedColor === color ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,
-                        }}
-                        aria-label={color}
-                      />
-                    ))}
+                    {AVATAR_COLORS.map((color) => {
+                      // W6-B4 / M7: aria-label and title use the semantic
+                      // name (e.g. "Forge Gold") instead of the raw hex.
+                      const name = AVATAR_COLORS_BY_NAME[color] ?? color
+                      return (
+                        <button
+                          key={color}
+                          type="button"
+                          onClick={() => { markDirty(); setSelectedColor(color) }}
+                          className="w-7 h-7 rounded-full transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-1 focus:ring-offset-[var(--color-primary)]"
+                          style={{
+                            backgroundColor: color,
+                            boxShadow: selectedColor === color ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,
+                          }}
+                          aria-label={name}
+                          title={name}
+                        />
+                      )
+                    })}
                   </div>
                 </div>
               )}
