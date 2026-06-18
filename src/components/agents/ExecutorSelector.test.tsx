@@ -116,6 +116,46 @@ describe('ExecutorSelector — remote-a2a reserved note', () => {
   })
 })
 
+describe('ExecutorSelector — core-agent gate (G9)', () => {
+  it('renders external-cli option disabled with the workers-only tooltip when isCoreAgent', () => {
+    renderSelector({ isCoreAgent: true })
+    const opt = screen.getByTestId('executor-kind-option-external-cli') as HTMLOptionElement
+    expect(opt).toBeInTheDocument()
+    expect(opt.disabled).toBe(true)
+    expect(opt.title).toMatch(/core agents run native only/i)
+    expect(opt.textContent).toMatch(/workers only/i)
+  })
+
+  it('keeps native + remote-a2a options enabled for core agents', () => {
+    renderSelector({ isCoreAgent: true })
+    const native = screen.getByTestId('executor-kind-option-native') as HTMLOptionElement
+    const a2a = screen.getByTestId('executor-kind-option-remote-a2a') as HTMLOptionElement
+    expect(native.disabled).toBe(false)
+    expect(a2a.disabled).toBe(false)
+  })
+
+  it('leaves external-cli option enabled for non-core (worker) agents', () => {
+    renderSelector()
+    const opt = screen.getByTestId('executor-kind-option-external-cli') as HTMLOptionElement
+    expect(opt.disabled).toBe(false)
+    expect(opt.title).toBe('')
+  })
+
+  it('clamps the kind back to native when isCoreAgent is true (defence-in-depth)', () => {
+    const { onChange } = renderSelector({ isCoreAgent: true })
+    fireEvent.change(screen.getByTestId('executor-kind-select'), {
+      target: { value: 'external-cli' },
+    })
+    expect(onChange).toHaveBeenCalledWith({ kind: 'native' })
+  })
+
+  it('surfaces the core-agent tooltip on the kind select itself', () => {
+    renderSelector({ isCoreAgent: true })
+    const select = screen.getByTestId('executor-kind-select')
+    expect(select.getAttribute('title')).toMatch(/core agents run native only/i)
+  })
+})
+
 describe('ExecutorSelector — Test Connection button visibility', () => {
   it('hides the test button when no agentId is given (create flow)', () => {
     renderSelector({ value: { kind: 'external-cli', cli: 'claude-code' } })
