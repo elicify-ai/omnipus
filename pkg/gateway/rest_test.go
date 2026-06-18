@@ -1413,10 +1413,10 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	assert.NotNil(t, genResp.Tools, "PUT response must include `tools` field (not `effective_tools`)")
 	// Config.Builtin must be present.
 	require.NotNil(t, genResp.Config.Builtin, "PUT response must include config.builtin")
-	// AgentType must be "custom".
+	// AgentType must be "Main" (W1 wire enum — legacy 'custom' is now 'Main').
 	require.NotNil(t, genResp.AgentType, "PUT response must include agent_type")
-	assert.Equal(t, gen.AgentToolsResponseAgentTypeCustom, *genResp.AgentType,
-		"updateAgentTools must return agent_type=custom for a custom agent")
+	assert.Equal(t, gen.AgentToolsResponseAgentTypeMain, *genResp.AgentType,
+		"updateAgentTools must return agent_type=Main for a user-created chat-colleague agent")
 	// Legacy mode:"explicit" + visible is converted to policy format (default_policy=deny).
 	require.NotNil(t, genResp.Config.Builtin.DefaultPolicy, "config.builtin.default_policy must be present")
 	assert.Equal(t, gen.AgentToolsResponseConfigBuiltinDefaultPolicyDeny, *genResp.Config.Builtin.DefaultPolicy,
