@@ -32,8 +32,14 @@
   --color-surface-2: #1a1a1e;
   --color-surface-3: #222228;
 
-  /* Muted text / borders */
-  --color-muted: #4a5568;
+  /* Muted text / borders.
+     W6-C4 / C1 (WCAG 1.4.3 AA contrast, normal text):
+     The previous `#4a5568` measured ~2.6:1 against `--color-surface-1`
+     (#111113) — failing the 4.5:1 floor and breaking ~50 muted-text
+     strings across the /agents surface. `#9ca3af` (Tailwind gray-400)
+     measures ~7.5:1 against #111113 — comfortably AA and AAA for normal
+     text. Brand-guidelines Tier-2/3 muted text now uses this token. */
+  --color-muted: #9ca3af;
   --color-border: #2d3748;
 
   /* Typography */

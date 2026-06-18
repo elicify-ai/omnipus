@@ -360,3 +360,53 @@ func resolvedCandidateProvider(candidates []providers.FallbackCandidate, fallbac
 func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
 	return ResolveModelCfg(cfg, modelName, workspace)
 }
+
+// IsKnownModel reports whether `slug` corresponds to a model that at least
+// one configured provider exposes. It is the validation half of W6-C4 / G12:
+// the SPA lets users type arbitrary model slugs (free-text) into the
+// AgentProfile model picker, but the runtime will fail any chat call against
+// a slug no provider actually supports. This helper is the authoritative
+// answer for "is this slug resolvable?" so the SPA can show a persistent
+// "unresolved" indicator (the TS twin lives in
+// `src/lib/agents/model-validation.ts` and MUST stay in sync).
+//
+// Matching rules (mirrors `resolveModel` so the UI's unresolved chip and the
+// chat runtime agree on what "known" means):
+//
+//  1. Empty / whitespace slug → false (no model to validate).
+//  2. Exact match against `mc.Model` (the protocol-prefixed form, e.g.
+//     "openai/gpt-4o"). Case-insensitive on both sides.
+//  3. Match against the model ID extracted from `mc.Model` via
+//     `providers.ExtractProtocol` — catches bare slugs ("gpt-4o") when the
+//     entry stores the protocol-prefixed form ("openai/gpt-4o"). Same case
+//     insensitivity.
+//  4. Exact match against `mc.ModelName` (the user-facing alias). Same
+//     case insensitivity.
+//
+// A passthrough provider (openrouter / vivgrid) does NOT auto-validate
+// arbitrary slugs — `IsKnownModel` is the conservative "explicitly
+// configured" check; the SPA's free-text "Use <slug>" path still works, but
+// the unresolved chip is the user-facing signal that the runtime may not
+// have a route. That matches G12's product intent ("show a warning; don't
+// block the save").
+func IsKnownModel(slug string, models []*config.ModelConfig) bool {
+	needle := strings.ToLower(strings.TrimSpace(slug))
+	if needle == "" {
+		return false
+	}
+	for _, mc := range models {
+		if mc == nil {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(mc.Model)) == needle {
+			return true
+		}
+		if _, modelID := providers.ExtractProtocol(strings.TrimSpace(mc.Model)); strings.ToLower(strings.TrimSpace(modelID)) == needle {
+			return true
+		}
+		if strings.ToLower(strings.TrimSpace(mc.ModelName)) == needle {
+			return true
+		}
+	}
+	return false
+}
