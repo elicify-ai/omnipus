@@ -3502,6 +3502,9 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/integrations/providers/", a.withAuth(a.HandleIntegrationProviders))
 	// Composer mic — voice transcription (Spec-6 FR-12.1).
 	cm.RegisterHTTPHandler("/api/v1/voice/transcribe", a.withAuth(a.HandleTranscribe))
+	// Voice provider descriptor (agent-form spec §4.10.1). Drives the dropdown /
+	// free-text / disabled widget in the agent edit slide-over.
+	cm.RegisterHTTPHandler("/api/v1/voice/provider", a.withAuth(a.HandleVoiceProvider))
 
 	// File upload endpoints (Milestone 3).
 	cm.RegisterHTTPHandler("/api/v1/upload", a.withUploadAuth(a.HandleUpload))

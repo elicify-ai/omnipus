@@ -11,11 +11,11 @@ import (
 
 // rest_agent_executor.go — mapping helpers for the sub-agent Executor wire field.
 //
-// The Executor (kind/cli) is part of the AgentCreateRequest / AgentUpdateRequest /
-// Agent generated contract types but was previously never mapped to
-// config.AgentConfig.Subagents.Executor — so the field was write-dropped on
-// create/update and never echoed on GET. These helpers do the mapping in one place
-// for createAgent, updateAgent, getAgent, and listAgents.
+// The Executor (kind/cli/cli_path/env_overrides/cli_args) is part of the
+// AgentCreateRequest / AgentUpdateRequest / Agent generated contract types.
+// W3 (agent-form-requirements) extended this surface with cli_path,
+// env_overrides, and cli_args; this file is the single source-of-truth for
+// mapping between the wire shape and config.AgentConfig.Subagents.Executor.
 
 // validExecutorCLIs is the set of external CLI names accepted for
 // kind="external-cli". It matches the AgentExecutorCli enum and
@@ -77,13 +77,87 @@ func executorConfigFromRequest(kind, cli string) (*config.ExecutorConfig, string
 	}
 }
 
+// executorConfigUpdate reconciles a request executor with the agent's persisted
+// executor, applying the cli-lock rule (agent-form spec §4.16 / W3 F-10):
+//   - cli is LOCKED after create. Any attempt to mutate it on PUT returns 400
+//     with "executor.cli is locked after create; create a new agent to switch CLIs."
+//   - cli_path IS mutable on PUT (allows binary upgrades without re-creating).
+//   - env_overrides and cli_args are fully mutable.
+//
+// Returns (updated *config.ExecutorConfig, ""), or (nil, errMsg) on lock violation.
+func executorConfigUpdate(existing *config.ExecutorConfig, req *struct {
+	Kind        string
+	CLI         string
+	CLIPath     string
+	EnvOver     map[string]string
+	CLIArgs     string
+	HasCLIPath  bool
+	HasEnvOver  bool
+	HasCLIArgs  bool
+}) (*config.ExecutorConfig, string) {
+	// Lock check: if the persisted agent has an executor.cli and the request
+	// carries a different cli value, reject 400.
+	if existing != nil && existing.CLI != "" {
+		if req.CLI != "" && req.CLI != existing.CLI {
+			return nil, "executor.cli is locked after create; create a new agent to switch CLIs."
+		}
+	}
+
+	// Start from the persisted executor (may be nil for a previously-native agent).
+	var out *config.ExecutorConfig
+	if existing != nil {
+		cp := *existing
+		out = &cp
+	} else {
+		out = &config.ExecutorConfig{}
+	}
+
+	// Apply kind/cli if the request sent them.
+	if req.Kind != "" {
+		out.Kind = config.ExecutorKind(req.Kind)
+	}
+	if req.CLI != "" {
+		out.CLI = req.CLI
+	}
+	if req.HasCLIPath {
+		out.CLIPath = req.CLIPath
+	}
+	if req.HasEnvOver {
+		out.EnvOverrides = req.EnvOver
+	}
+	if req.HasCLIArgs {
+		out.CLIArgs = req.CLIArgs
+	}
+
+	// Native with no executor surface → nil (callers persist nothing).
+	if out.Kind == "" || out.Kind == config.ExecutorKindNative {
+		if out.CLI == "" && out.CLIPath == "" && len(out.EnvOverrides) == 0 && out.CLIArgs == "" {
+			return nil, ""
+		}
+	}
+	return out, ""
+}
+
 // executorConfigToMap serializes a *config.ExecutorConfig into the JSON-map shape
 // written under agents.list[*].subagents.executor by the safeUpdateConfigJSON
 // writers. cli is omitted when empty (matches the `omitempty` on the Go struct).
+// cli_path, env_overrides, cli_args are similarly omitted when empty.
 func executorConfigToMap(ec *config.ExecutorConfig) map[string]any {
-	m := map[string]any{"kind": string(ec.Kind)}
+	if ec == nil {
+		return nil
+	}
+	m := map[string]any{"kind": string(ec.EffectiveKind())}
 	if ec.CLI != "" {
 		m["cli"] = ec.CLI
+	}
+	if ec.CLIPath != "" {
+		m["cli_path"] = ec.CLIPath
+	}
+	if len(ec.EnvOverrides) > 0 {
+		m["env_overrides"] = ec.EnvOverrides
+	}
+	if ec.CLIArgs != "" {
+		m["cli_args"] = ec.CLIArgs
 	}
 	return m
 }
@@ -101,14 +175,29 @@ func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
 	// generated for gen.Agent.Executor (the contract emits it inline, not as a named
 	// schema), so the assignment target type must be spelled verbatim here.
 	exec := struct { // not-wire-format: generated gen.Agent.Executor inline shape, only populates the generated field
-		Cli  *gen.AgentExecutorCli `json:"cli,omitempty"`
-		Kind gen.AgentExecutorKind `json:"kind"`
+		Cli          *gen.AgentExecutorCli     `json:"cli,omitempty"`
+		Kind         gen.AgentExecutorKind     `json:"kind"`
+		CliPath      *string                   `json:"cli_path,omitempty"`
+		EnvOverrides *map[string]string        `json:"env_overrides,omitempty"`
+		CliArgs      *string                   `json:"cli_args,omitempty"`
 	}{
 		Kind: gen.AgentExecutorKind(ec.EffectiveKind()),
 	}
 	if ec.CLI != "" {
 		cli := gen.AgentExecutorCli(ec.CLI)
 		exec.Cli = &cli
+	}
+	if ec.CLIPath != "" {
+		cp := ec.CLIPath
+		exec.CliPath = &cp
+	}
+	if len(ec.EnvOverrides) > 0 {
+		eo := ec.EnvOverrides
+		exec.EnvOverrides = &eo
+	}
+	if ec.CLIArgs != "" {
+		ca := ec.CLIArgs
+		exec.CliArgs = &ca
 	}
 	ag.Executor = &exec
 }
