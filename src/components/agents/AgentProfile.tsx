@@ -494,7 +494,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       >
         {/* Identity — always rendered; read-only for locked (core) agents */}
         <AccordionItem value="identity" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          {/* W6-B1 / I3: 14 px / 600. Explicit `text-[14px]` (not `text-sm`) so
+              the size cannot drift if Tailwind defaults change; `font-semibold`
+              (600) per the spec — lighter than the prior 700/bold so the
+              section heading reads as an H2, not a button label. */}
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             Identity
           </AccordionTrigger>
           <AccordionContent>
@@ -557,7 +561,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         {/* Sandbox — editable for custom agents, read-only for locked core agents */}
         {!isLocked ? (
           <AccordionItem value="sandbox" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <div className="flex items-center gap-2">
                 <span>Sandbox</span>
                 {/* #335 (US-D3): standing warning badge on accordion header when a widened profile is active */}
@@ -607,7 +611,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </AccordionItem>
         ) : (
           <AccordionItem value="sandbox" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <div className="flex items-center gap-2">
                 <span>Sandbox</span>
                 <SandboxInfoTooltip />
@@ -657,7 +661,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             rather than rendered disabled. Read-only for locked core workers. */}
         {isWorkerAgent && (
           <AccordionItem value="executor" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <div className="flex items-center gap-2">
                 <span>Executor</span>
                 {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
@@ -682,7 +686,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Model Configuration — default CLOSED */}
         <AccordionItem value="model" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             Model Configuration
           </AccordionTrigger>
           <AccordionContent>
@@ -815,7 +819,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         {/* Rate Limits — default CLOSED */}
         {!isLocked && (
           <AccordionItem value="rate-limits" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               Rate Limits
             </AccordionTrigger>
             <AccordionContent>
@@ -888,7 +892,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             per-agent engine settings, not persona or scheduling. */}
         {canEdit && (
           <AccordionItem value="behavior" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               Behavior
             </AccordionTrigger>
             <AccordionContent>
@@ -1035,7 +1039,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Tools & Permissions — default CLOSED */}
         <AccordionItem value="tools" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <span>Tools &amp; Permissions</span>
               {toolsCfg.builtin?.policies && Object.keys(toolsCfg.builtin.policies).length > 0 && (
                 <span className="text-xs text-[var(--color-muted)] font-normal ml-2">
@@ -1059,7 +1063,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Skills — US-E6: per-agent skill assignment, opt-in, default none */}
         <AccordionItem value="skills" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             <div className="flex items-center gap-2">
               <span>Skills</span>
               {agentSkills.length > 0 && (
@@ -1144,7 +1148,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Sessions — default CLOSED */}
         <AccordionItem value="sessions" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             Sessions
           </AccordionTrigger>
           <AccordionContent>
@@ -1170,7 +1174,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             create form also filters workers out (see ScheduleFormSheet). */}
         {!isWorkerAgent && (
           <AccordionItem value="schedules" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               Schedules
             </AccordionTrigger>
             <AccordionContent>
@@ -1193,7 +1197,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Activity — default CLOSED */}
         <AccordionItem value="activity" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             Activity
           </AccordionTrigger>
           <AccordionContent>
