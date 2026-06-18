@@ -420,6 +420,49 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
   })
 })
 
+// Wave 6 / G10 — when the worker's executor is external-cli, Omnipus'
+// sandbox_profile is ignored at runtime; the operator needs a visible
+// callout so the chosen profile isn't mistaken for an enforcement guarantee.
+// Worker accordions are default-open (W6-B1 / I1) so the Sandbox block is
+// rendered on mount; no extra click is needed.
+describe('AgentProfile — Sandbox callout when executor is external-cli (G10)', () => {
+  it('renders the "sandbox ignored" callout for external-cli workers with a non-off profile', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockWorkerAgent,
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+      sandbox_profile: 'workspace',
+    })
+    renderProfile('web-researcher')
+    const callout = await screen.findByTestId('sandbox-external-cli-ignored-callout')
+    expect(callout).toHaveAttribute('role', 'note')
+    expect(callout).toHaveAttribute('aria-live', 'polite')
+    expect(callout).toHaveTextContent(/sandbox profile is ignored when executor\.kind=external-cli/i)
+    expect(callout).toHaveTextContent(/external CLI manages its own isolation/i)
+  })
+
+  it('does NOT render the callout for native workers even with a non-off profile', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockWorkerAgent,
+      executor: { kind: 'native' },
+      sandbox_profile: 'workspace',
+    })
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    expect(screen.queryByTestId('sandbox-external-cli-ignored-callout')).toBeNull()
+  })
+
+  it('does NOT render the callout when sandbox_profile is "off" (warning would be redundant)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockWorkerAgent,
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+      sandbox_profile: 'off',
+    })
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    expect(screen.queryByTestId('sandbox-external-cli-ignored-callout')).toBeNull()
+  })
+})
+
 // Tier-branched form (locked concept: `.preview-doc/agents.html`).
 // A worker is a delegation-only labour agent — never a chat target, no
 // heartbeat, never the default. The form reflects that by HIDE-ing the
