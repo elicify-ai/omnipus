@@ -364,8 +364,8 @@ describe('CreateAgentModal — worker tier preset (v0.3)', () => {
     await vi.waitFor(() => {
       expect(onCreate).not.toHaveBeenCalled()
     })
-    // The executor-required error surfaces inline.
-    expect(await screen.findByTestId('executor-error')).toHaveTextContent(/worker requires an executor/i)
+    // The executor-required error surfaces inline via FormError's role=alert.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/worker requires an executor/i)
   })
 
   it('sends type=worker and the executor in the create payload when valid', async () => {
