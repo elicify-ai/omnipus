@@ -9,6 +9,7 @@ import {
   Plus,
   Sparkle,
   Star,
+  WarningCircle,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
@@ -22,6 +23,7 @@ import { ModelSelector } from '@/components/ui/model-selector'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
+import { isKnownModelSlug } from '@/lib/agents/model-validation'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
@@ -203,6 +205,19 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [shellAdvancedOpen, setShellAdvancedOpen] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
+
+  // W6-C4 / G12: when the primary model isn't known to any connected
+  // provider, render a persistent inline warning under the picker. The
+  // ModelSelector's own trigger button already shows an "Unresolved" chip
+  // (src/components/ui/model-selector.tsx); this complementary explanatory
+  // line gives the user a clear next step ("add a provider that supports
+  // this model") per the G12 ticket's product copy. Empty / unset values
+  // are intentionally NOT flagged — that's the default state, not an
+  // unresolved one. Computed AFTER `model` is declared so the reference
+  // is sound; the `useMemo` would be premature here because the consumers
+  // below only need the boolean, not a memoized reference.
+  const primaryModelUnresolved =
+    model.trim() !== '' && !isKnownModelSlug(model, providers)
 
   useEffect(() => {
     if (!agent) return
@@ -834,6 +849,24 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   variant: 'warning',
                 })}
               />
+              {/* W6-C4 / G12: persistent inline indicator for unresolved slugs.
+                  The ModelSelector's own trigger already shows the "Unresolved"
+                  chip; this line gives the user the actionable next step per
+                  the ticket's product copy. Only renders when the user has
+                  actually picked something — an empty picker is the default
+                  state, not an unresolved one. */}
+              {primaryModelUnresolved && (
+                <p
+                  data-testid="primary-model-unresolved"
+                  role="status"
+                  className="flex items-start gap-1.5 text-[11px] text-[var(--color-warning)] leading-snug"
+                >
+                  <WarningCircle size={12} weight="fill" className="shrink-0 mt-0.5" aria-hidden="true" />
+                  <span>
+                    Model not in any connected provider — calls will fail until you add a provider that supports this model.
+                  </span>
+                </p>
+              )}
               {canEdit && (
                 <div className="space-y-1.5">
                   <p className="text-xs text-[var(--color-muted)]">Fallback models (tried in order if primary fails)</p>
