@@ -1327,9 +1327,12 @@ function SandboxInfoTooltip() {
   const [visible, setVisible] = useState(false)
   return (
     <span className="relative inline-block">
+      {/* W6-A1 / I6: 44x44 px tap target (WCAG 2.5.8 AA). The Info icon is
+          rendered at 13 px but centered inside a 44 px button so the touch
+          surface meets the AA minimum without growing the visual glyph. */}
       <button
         type="button"
-        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
+        className="min-h-[44px] min-w-[44px] flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
         onMouseEnter={() => setVisible(true)}
         onMouseLeave={() => setVisible(false)}
         onFocus={() => setVisible(true)}
