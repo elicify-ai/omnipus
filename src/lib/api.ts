@@ -655,8 +655,14 @@ export type AgentKind = NonNullable<Agent['type']>
 // switcher, channel-routing picker, and schedule-owner picker to filter workers
 // out of those selection sites. Accepts a loose shape so it works on partial
 // agent objects too.
+//
+// W2 (agent-form-requirements): recognise both Subagent and subagent_3p (the new
+// wire enum values for the user-creatable worker types). The legacy "worker"
+// value is the build-time/seed config constant and is NOT emitted by the
+// gateway; it is left here as a defensive fallback so callers don't break on
+// stale payloads.
 export function isWorker(a: { type?: string | null }): boolean {
-  return a.type === 'worker'
+  return a.type === 'Subagent' || a.type === 'subagent_3p' || a.type === 'worker'
 }
 
 export function fetchAgents(): Promise<Agent[]> {
