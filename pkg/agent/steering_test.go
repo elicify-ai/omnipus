@@ -371,7 +371,9 @@ func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 
 	msg1 := bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "session one",
 		Peer: bus.Peer{
@@ -381,7 +383,9 @@ func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 	}
 	msg2 := bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user2",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user2",
+		},
 		ChatID:   "chat2",
 		Content:  "session two",
 		Peer: bus.Peer{
@@ -828,7 +832,9 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 
 	first := bus.InboundMessage{
 		Channel:  "test",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "first message",
 		Peer: bus.Peer{
@@ -838,7 +844,9 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}
 	late := bus.InboundMessage{
 		Channel:  "test",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "late append",
 		Peer: bus.Peer{

@@ -139,9 +139,9 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "discord",
-		SenderID: "discord:123",
+		Channel: "discord",
 		Sender: bus.SenderInfo{
+			CanonicalID: "discord:123",
 			DisplayName: "Alice",
 		},
 		ChatID:  "group-1",
@@ -231,7 +231,9 @@ func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "telegram:123",
+		Sender: bus.SenderInfo{
+			CanonicalID: "telegram:123",
+		},
 		ChatID:   "chat-1",
 		Content:  "/use shell explain how to list files",
 	})
@@ -279,7 +281,9 @@ func TestHandleCommand_UseCommandRejectsUnknownSkill(t *testing.T) {
 	opts := processOptions{}
 	reply, handled := al.handleCommand(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "telegram:123",
+		Sender: bus.SenderInfo{
+			CanonicalID: "telegram:123",
+		},
 		ChatID:   "chat-1",
 		Content:  "/use missing explain how to list files",
 	}, agent, &opts)
@@ -321,7 +325,9 @@ func TestProcessMessage_UseCommandArmsSkillForNextMessage(t *testing.T) {
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "telegram:123",
+		Sender: bus.SenderInfo{
+			CanonicalID: "telegram:123",
+		},
 		ChatID:   "chat-1",
 		Content:  "/use shell",
 	})
@@ -334,7 +340,9 @@ func TestProcessMessage_UseCommandArmsSkillForNextMessage(t *testing.T) {
 
 	response, _, err = al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "telegram:123",
+		Sender: bus.SenderInfo{
+			CanonicalID: "telegram:123",
+		},
 		ChatID:   "chat-1",
 		Content:  "explain how to list files",
 	})
@@ -639,7 +647,9 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
 		ChatID:   "chat1",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		Content:  "take a screenshot of the screen and send it to me",
 	})
 	if err != nil {
@@ -681,7 +691,9 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 	route, _, err := al.resolveMessageRoute(bus.InboundMessage{
 		Channel:  "telegram",
 		ChatID:   "chat1",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		Content:  "take a screenshot of the screen and send it to me",
 	})
 	if err != nil {
@@ -734,7 +746,9 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
 		ChatID:   "chat1",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		Content:  "take a screenshot of the screen and send it to me",
 	})
 	if err != nil {
@@ -785,7 +799,9 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
 		ChatID:   "chat1",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		Content:  "take a screenshot of the screen and send it to me",
 	})
 	if err != nil {
@@ -1426,7 +1442,9 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 
 	msg := bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "hello",
 		Peer: bus.Peer{
@@ -1486,7 +1504,9 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 
 	baseMsg := bus.InboundMessage{
 		Channel:  "whatsapp",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
@@ -1496,7 +1516,9 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  baseMsg.Channel,
-		SenderID: baseMsg.SenderID,
+		Sender: bus.SenderInfo{
+			CanonicalID: baseMsg.Sender.CanonicalID,
+		},
 		ChatID:   baseMsg.ChatID,
 		Content:  "/show channel",
 		Peer:     baseMsg.Peer,
@@ -1510,7 +1532,9 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 
 	fooResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  baseMsg.Channel,
-		SenderID: baseMsg.SenderID,
+		Sender: bus.SenderInfo{
+			CanonicalID: baseMsg.Sender.CanonicalID,
+		},
 		ChatID:   baseMsg.ChatID,
 		Content:  "/foo",
 		Peer:     baseMsg.Peer,
@@ -1524,7 +1548,9 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 
 	newResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  baseMsg.Channel,
-		SenderID: baseMsg.SenderID,
+		Sender: bus.SenderInfo{
+			CanonicalID: baseMsg.Sender.CanonicalID,
+		},
 		ChatID:   baseMsg.ChatID,
 		Content:  "/new",
 		Peer:     baseMsg.Peer,
@@ -1577,7 +1603,9 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 
 	switchResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "/switch model to deepseek",
 		Peer: bus.Peer{
@@ -1591,7 +1619,9 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "/show model",
 		Peer: bus.Peer{
@@ -1642,7 +1672,9 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 
 	switchResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "/switch model to missing",
 		Peer: bus.Peer{
@@ -1656,7 +1688,9 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "/show model",
 		Peer: bus.Peer{
@@ -1731,7 +1765,9 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 
 	firstResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "hello before switch",
 		Peer: bus.Peer{
@@ -1754,7 +1790,9 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 
 	switchResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "/switch model to deepseek",
 		Peer: bus.Peer{
@@ -1768,7 +1806,9 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 
 	secondResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "hello after switch",
 		Peer: bus.Peer{
@@ -1866,7 +1906,9 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "hi",
 		Peer: bus.Peer{
@@ -1913,7 +1955,9 @@ func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.InboundMessage{
 		Channel:    "test",
-		SenderID:   "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:     "chat1",
 		Content:    "read test.txt",
 		SessionKey: "test-session",
@@ -1955,7 +1999,9 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.InboundMessage{
 		Channel:    "test",
-		SenderID:   "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:     "chat1",
 		Content:    "run hello",
 		SessionKey: "test-session",
@@ -2487,7 +2533,9 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		ChatID:   "chat1",
 		Content:  "hello",
 	})
@@ -2593,7 +2641,9 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
-		SenderID: "user-1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user-1",
+		},
 		ChatID:   "chat-1",
 		Content:  "check tool feedback",
 	})
@@ -3126,7 +3176,9 @@ func TestProcessMessage_ContextOverflowRecovery(t *testing.T) {
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:    "test",
 		ChatID:     "chat1",
-		SenderID:   "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		SessionKey: "test-session",
 		Content:    "trigger recovery",
 	})
@@ -3168,7 +3220,9 @@ func TestProcessMessage_ContextOverflow_AnthropicStyle(t *testing.T) {
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "test",
 		ChatID:   "chat1",
-		SenderID: "user1",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user1",
+		},
 		Content:  "hello",
 	})
 	if err != nil {

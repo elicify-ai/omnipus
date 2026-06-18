@@ -84,10 +84,10 @@ func TestProcessMessage_ChannelSessionCreated(t *testing.T) {
 
 	// When — send a non-webchat message with no SessionID.
 	_, _, err = al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "discord",
-		SenderID: "discord:user-7",
+		Channel: "discord",
 		Sender: bus.SenderInfo{
-			DisplayName: "Alice",
+			CanonicalID: "discord:user-7",
+			DisplayName:  "Alice",
 		},
 		ChatID:  "chat-1",
 		Content: "hello",
@@ -118,10 +118,12 @@ func TestProcessMessage_WebchatDoesNotCreateChannelSession(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
 	_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "webchat",
-		SenderID: "user-1",
-		ChatID:   "chat-web-1",
-		Content:  "hello from webchat",
+		Channel: "webchat",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user-1",
+		},
+		ChatID:  "chat-web-1",
+		Content: "hello from webchat",
 	})
 	require.NoError(t, err, "processMessage for webchat must succeed")
 
@@ -273,10 +275,10 @@ func TestProcessMessage_ChannelUserMessageWrittenToTranscript(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
 	_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:user-42",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
-			DisplayName: "Bob",
+			CanonicalID: "telegram:user-42",
+			DisplayName:  "Bob",
 		},
 		ChatID:  "tg-chat-1",
 		Content: "hello from telegram",
@@ -323,10 +325,12 @@ func TestProcessMessage_WebchatUserMessageNotDoubleWritten(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
 	_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "webchat",
-		SenderID: "user-web-1",
-		ChatID:   "chat-web-1",
-		Content:  "hello from webchat",
+		Channel: "webchat",
+		Sender: bus.SenderInfo{
+			CanonicalID: "user-web-1",
+		},
+		ChatID:  "chat-web-1",
+		Content: "hello from webchat",
 	})
 	require.NoError(t, err)
 

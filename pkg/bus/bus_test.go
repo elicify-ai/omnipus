@@ -14,10 +14,12 @@ func TestPublishConsume(t *testing.T) {
 	ctx := context.Background()
 
 	msg := InboundMessage{
-		Channel:  "test",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "hello",
+		Channel: "test",
+		Sender: SenderInfo{
+			CanonicalID: "user1",
+		},
+		ChatID:  "chat1",
+		Content: "hello",
 	}
 
 	if err := mb.PublishInbound(ctx, msg); err != nil {
