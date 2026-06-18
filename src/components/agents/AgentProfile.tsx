@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { useModelToProvider } from '@/lib/agents/modelToProvider'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
@@ -118,19 +119,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     .filter((p) => (p.models ?? []).length > 0)
     .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
 
-  // Model → provider lookup. The fallback editor attributes each chip to
-  // the provider that owns it; if a model is listed by more than one
-  // provider we keep the first match (consistent with ModelSelector's
-  // rendering order). Used to narrow wire `provider?: string` to
-  // required at hydration.
-  const modelToProvider: Record<string, string> = {}
-  for (const p of connectedProviders) {
-    for (const m of p.models ?? []) {
-      if (!(m in modelToProvider)) {
-        modelToProvider[m] = p.display_name ?? p.name ?? p.id ?? ''
-      }
-    }
-  }
+  // W6-C2 / I9: model → provider-id lookup. Extracted to
+  // `src/lib/agents/modelToProvider.ts` so the same helper is
+  // reusable + unit-testable. Returns the **provider id** (the wire
+  // routing key per FR-007 / FallbackModel.yaml), NOT the display
+  // name — pre-C2 the editor was storing `display_name ?? name ?? id`
+  // and emitting that to the wire, which silently downgraded
+  // `provider` to a brand label and broke runtime resolution.
+  const { lookup: modelToProvider } = useModelToProvider(connectedProviders)
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
@@ -226,7 +222,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setFallbackModels(
       rawFallbacks.map((entry) => ({
         ...entry,
-        provider: entry.provider || modelToProvider[entry.model] || '',
+        provider: entry.provider || modelToProvider(entry.model) || '',
       })),
     )
     setTemperature(agent.model_params?.temperature ?? 1.0)
@@ -380,7 +376,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   function addFallbackFromSelector(modelSlug: string) {
     const trimmed = modelSlug.trim()
     if (!trimmed) return
-    const knownProvider = modelToProvider[trimmed]
+    const knownProvider = modelToProvider(trimmed)
     if (!knownProvider) {
       addToast({
         message: `"${trimmed}" isn't listed by any connected provider — saving anyway, but the fallback may not work.`,
