@@ -27,7 +27,7 @@ func newProviderTestDeps(t *testing.T, cfg *config.Config) (*Deps, *credentials.
 	deps := &Deps{
 		GetCfg:       func() *config.Config { return cfg },
 		MutateConfig: func(fn func(*config.Config) error) error { return fn(cfg) },
-		SaveConfig:   func() error { return nil },
+		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:    store,
 		ReloadFunc:   func() error { reloaded = true; return nil },
 	}

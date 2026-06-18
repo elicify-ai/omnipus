@@ -43,7 +43,7 @@ func newTestDeps() (*systools.Deps, *config.Config) {
 		GetCfg:       getCfg,
 		MutateConfig: testMutateConfig(&mu, getCfg),
 		// SaveConfig is a no-op in unit tests — we inspect cfg directly.
-		SaveConfig: func() error { return nil },
+		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:  nil,
 	}
 	return deps, cfg
@@ -66,7 +66,7 @@ func newTestDepsWithRealSave(t *testing.T) (*systools.Deps, string) {
 		ConfigPath:   cfgPath,
 		GetCfg:       getCfg,
 		MutateConfig: testMutateConfig(&mu, getCfg),
-		SaveConfig:   func() error { return config.SaveConfig(cfgPath, cfg) },
+		SaveConfigLocked: func(cfg *config.Config) error { return config.SaveConfig(cfgPath, cfg) },
 		CredStore:    nil,
 	}
 	return deps, cfgPath
@@ -121,7 +121,7 @@ func newTestDepsWithHome(t *testing.T) (*systools.Deps, string) {
 		ConfigPath:   filepath.Join(home, "config.json"),
 		GetCfg:       getCfg,
 		MutateConfig: testMutateConfig(&mu, getCfg),
-		SaveConfig:   func() error { return nil },
+		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:    nil,
 	}
 	return deps, home
@@ -214,7 +214,7 @@ func TestAgentActivate_PersistsEnabled(t *testing.T) {
 	}
 
 	saveCalled := false
-	deps.SaveConfig = func() error {
+	deps.SaveConfigLocked = func(cfg *config.Config) error {
 		saveCalled = true
 		return nil
 	}
@@ -253,7 +253,7 @@ func TestAgentDeactivate_PersistsEnabled(t *testing.T) {
 	}
 
 	saveCalled := false
-	deps.SaveConfig = func() error {
+	deps.SaveConfigLocked = func(cfg *config.Config) error {
 		saveCalled = true
 		return nil
 	}
@@ -482,7 +482,7 @@ func TestAgentActivate_RoundTripDisk(t *testing.T) {
 	disabled := false
 	deps.GetCfg().Agents.List = []config.AgentConfig{{ID: "my-agent", Name: "My Agent", Enabled: &disabled}}
 	// seed the config on disk with the pre-populated agent
-	if err := deps.SaveConfig(); err != nil {
+	if err := deps.SaveConfigLocked(deps.GetCfg()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -645,7 +645,7 @@ func TestAgentActivate_RollbackOnSaveFailure(t *testing.T) {
 		ConfigPath:   "/tmp/omnipus-test/config.json",
 		GetCfg:       getCfg,
 		MutateConfig: testMutateConfig(&mu, getCfg),
-		SaveConfig:   func() error { return errors.New("disk full") },
+		SaveConfigLocked: func(cfg *config.Config) error { return errors.New("disk full") },
 		CredStore:    nil,
 	}
 
@@ -675,7 +675,7 @@ func TestWithConfig_SerializesReaderWriter(t *testing.T) {
 		ConfigPath:   filepath.Join(t.TempDir(), "config.json"),
 		GetCfg:       getCfg,
 		MutateConfig: testMutateConfig(&mu, getCfg),
-		SaveConfig:   func() error { return nil },
+		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:    nil,
 	}
 	createTool := systools.NewAgentCreateTool(deps)
@@ -746,7 +746,7 @@ func TestSystemConfigSet_RollbackOnSaveFailure(t *testing.T) {
 		ConfigPath:   filepath.Join(t.TempDir(), "config.json"),
 		GetCfg:       getCfg,
 		MutateConfig: testMutateConfig(&mu, getCfg),
-		SaveConfig:   func() error { return errors.New("disk full") },
+		SaveConfigLocked: func(cfg *config.Config) error { return errors.New("disk full") },
 		CredStore:    nil,
 	}
 
@@ -786,7 +786,7 @@ func TestWithConfig_MapFieldRollback(t *testing.T) {
 		GetCfg:       getCfg,
 		MutateConfig: testMutateConfig(&mu, getCfg),
 		// SaveConfig is a no-op — we are testing rollback on fn error, not save error.
-		SaveConfig: func() error { return nil },
+		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:  nil,
 	}
 
@@ -829,7 +829,7 @@ func TestConcurrentRESTAndSysagentConfigWrite(t *testing.T) {
 		ConfigPath:   filepath.Join(t.TempDir(), "config.json"),
 		GetCfg:       getCfg,
 		MutateConfig: testMutateConfig(&mu, getCfg),
-		SaveConfig:   func() error { return nil },
+		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:    nil,
 	}
 	createTool := systools.NewAgentCreateTool(deps)
