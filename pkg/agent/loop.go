@@ -5675,8 +5675,13 @@ turnLoop:
 				},
 			)
 
-			// Send tool feedback to chat channel if enabled
-			if cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
+			// Per-channel tool feedback routing (agent-form spec §3.3 / F-01):
+			// the webchat surface renders tool calls inline (SessionPanel /
+			// ToolCallBadge / SubagentBlock), so re-publishing them as outbound
+			// messages on the webchat channel is duplication. Messaging channels
+			// always honour the global tool_feedback config.
+			if ts.channel != "webchat" &&
+				cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
 				ts.channel != "" &&
 				!ts.opts.SuppressToolFeedback {
 				feedbackPreview := utils.Truncate(
