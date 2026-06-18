@@ -29,7 +29,21 @@ const mockNavigate = vi.fn()
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  return { ...actual, useNavigate: () => mockNavigate, useParams: () => ({}) }
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useParams: () => ({}),
+    // W6-C1 / G2: AgentProfile now renders a <Link to="/agents/trust"> so
+    // the operator can jump to the delegation graph. TanStack Router's
+    // real <Link> calls useLinkProps → useRouter, which throws without
+    // a RouterProvider; stub it with a plain anchor so the screen renders
+    // in isolation (these tests assert content, not navigation behaviour).
+    Link: ({ children, to, ...rest }: { children?: React.ReactNode; to?: string } & Record<string, unknown>) => (
+      <a href={typeof to === 'string' ? to : '#'} {...(rest as Record<string, unknown>)}>
+        {children}
+      </a>
+    ),
+  }
 })
 
 vi.mock('@/lib/api', async (importOriginal) => {

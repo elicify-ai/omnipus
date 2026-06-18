@@ -10,6 +10,7 @@ import {
   Plus,
   Sparkle,
   Star,
+  Lightning,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
@@ -504,6 +505,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // to decide which accordions render. See the contract schema for the
   // `worker` type value: contracts/components/schemas/Agent.yaml.
   const isWorkerAgent = isWorker(agent)
+  // W6-C1 / M11: native workers are delegation-only labour agents. Their
+  // Tools / Skills / Sandbox settings are inherited from the caller and
+  // have no effect on a native runtime, so the lower accordions are
+  // hidden for them. External-cli workers still need those accordions
+  // because the external runner respects the policy. The callout at the
+  // top of the profile explains the omission.
+  const isNativeWorkerAgent = isWorkerAgent && (!executor || executor.kind === 'native')
 
   return (
     <ProfileSheet
@@ -551,6 +559,44 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           it's their run-time surface; Behavior's persona/heartbeat sub-blocks
           don't apply). Schedules, Sessions, Activity stay collapsed — they're
           reference material, not editing surfaces. */}
+      {/* W6-C1 / M11: native-worker delegation-only callout. Native workers
+          (default executor.kind) are delegation-only labour agents — they
+          are not chat targets and they run with a compiled allow/deny
+          rail. Their Tools, Skills, and Sandbox settings are inherited
+          from the caller (the agent that delegates work to them) and
+          editing them on the worker has no runtime effect. Surface this
+          prominently at the top of the profile so the operator
+          understands why the lower accordions are absent (or collapsed
+          to a summary). External-cli workers DO need their own Tools /
+          Sandbox because the external runner respects them — the
+          callout only renders for native workers. */}
+      {isNativeWorkerAgent && (
+        <div
+          data-testid="native-worker-delegation-callout"
+          role="note"
+          aria-label="Delegation-only worker"
+          className="rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/10 px-4 py-3 flex items-start gap-3"
+        >
+          <Lightning
+            size={16}
+            weight="fill"
+            className="text-[var(--color-accent)] mt-0.5 shrink-0"
+            aria-hidden="true"
+          />
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-[var(--color-secondary)]">
+              This is a delegation-only worker
+            </p>
+            <p className="text-[12px] text-[var(--color-muted)] leading-snug mt-0.5">
+              Tools, Skills, and Sandbox settings are inherited from the
+              agent that delegates work to this worker and have no
+              effect on a native (in-process) runtime. Configure them on
+              the caller, or switch this worker to an external runtime
+              (Executor accordion) to make them local.
+            </p>
+          </div>
+        </div>
+      )}
       <Accordion
         type="multiple"
         defaultValue={isWorkerAgent
@@ -735,8 +781,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </AccordionContent>
         </AccordionItem>
 
-        {/* Sandbox — editable for custom agents, read-only for locked core agents */}
-        {!isLocked ? (
+        {/* Sandbox — editable for custom agents, read-only for locked core agents.
+            W6-C1 / M11: hidden entirely for native workers (delegation-only
+            labour agents; sandbox is inherited from the caller). */}
+        {!isLocked && !isNativeWorkerAgent ? (
           <AccordionItem value="sandbox" className="border-0">
             <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <div className="flex items-center gap-2">
@@ -786,7 +834,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
             </AccordionContent>
           </AccordionItem>
-        ) : (
+        ) : !isNativeWorkerAgent ? (
           <AccordionItem value="sandbox" className="border-0">
             <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <div className="flex items-center gap-2">
@@ -841,7 +889,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
             </AccordionContent>
           </AccordionItem>
-        )}
+        ) : null}
 
         {/* Executor — Spec-4 FR-4.1: sub-agent runtime selector + runner test.
             Worker-only. Base agents run native/in-process only — there is no
@@ -1260,7 +1308,19 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             because their executor respects the policy. The override
             count in the accordion trigger is updated to surface the
             seeded count too so the badge is accurate. */}
-        <AccordionItem value="tools" className="border-0">
+        {/*
+          W6-C1 / G8 + M11: native workers carry a compiled rail and the
+          edits never reach a native runtime. Two-layer handling:
+            - Native worker WITH user-added overrides → keep the editor
+              open so the operator can manage them (G8 carve-out).
+            - Native worker with NO overrides → hide the entire
+              accordion (M11 hides inapplicable sections); the
+              delegation-only callout at the top of the profile
+              already explains the omission.
+          External-cli workers always see the editor.
+        */}
+        {(!isNativeWorkerAgent || Object.keys(toolsCfg.builtin?.policies ?? {}).length > 0) && (
+          <AccordionItem value="tools" className="border-0">
             <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
               <span>Tools &amp; Permissions</span>
               {(() => {
@@ -1282,8 +1342,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   // 3 memory allow entries) that the operator cannot and
                   // should not edit from the UI.
                   const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
-                  const isNativeWorker = isWorkerAgent && (!executor || executor.kind === 'native')
-                  const collapseToReadOnly = isNativeWorker && overrideCount === 0
+                  const collapseToReadOnly = isNativeWorkerAgent && overrideCount === 0
                   if (!collapseToReadOnly) {
                     // #332 (US-D5 / B-2): isLocked=true → read-only editor, no writes
                     return (
@@ -1310,19 +1369,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         explicit overrides only if your task requires non-default behaviour;
                         otherwise leave this empty to inherit the inherited rail.
                       </p>
-                      {isNativeWorker && !executor && (
-                        <p className="text-[10px] text-[var(--color-muted)]/70 mt-1.5">
-                          Executor: Native (in-process) — default.
-                        </p>
-                      )}
                     </div>
                   )
                 })()}
               </div>
             </AccordionContent>
           </AccordionItem>
+        )}
 
-        {/* Skills — US-E6: per-agent skill assignment, opt-in, default none */}
+        {/* Skills — US-E6: per-agent skill assignment, opt-in, default none.
+            W6-C1 / M11: hidden for native workers — skills are inherited
+            from the caller on a native runtime. External-cli workers
+            still get this section because the external runner respects
+            the per-agent skill list. */}
+        {!isNativeWorkerAgent && (
         <AccordionItem value="skills" className="border-0">
           <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
             <div className="flex items-center gap-2">
@@ -1406,6 +1466,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             </div>
           </AccordionContent>
         </AccordionItem>
+        )}
 
         {/* Sessions — default CLOSED */}
         <AccordionItem value="sessions" className="border-0">
