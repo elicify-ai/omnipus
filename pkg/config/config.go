@@ -2955,6 +2955,14 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 		logger.Errorf("failed to read config file: %v", err)
 		return nil, err
 	}
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.WarnF("config file not found, using default config", map[string]any{"path": path})
+			return DefaultConfig(), nil
+		}
+		logger.Errorf("failed to read config file: %v", err)
+		return nil, err
+	}
 
 	// First, try to detect config version by reading the version field
 	var versionInfo struct {
