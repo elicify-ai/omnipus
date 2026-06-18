@@ -205,3 +205,71 @@ describe('ModelSelector — grouped by provider (≥2 providers)', () => {
     expect(screen.queryByText('claude-3-sonnet')).not.toBeInTheDocument()
   })
 })
+
+// =====================================================================
+// W6-C4 / G12 — unresolved indicator on the trigger
+// =====================================================================
+
+describe('ModelSelector — unresolved indicator (W6-C4 / G12)', () => {
+  it('does NOT render the "Unresolved" chip when value is empty', () => {
+    renderSelector(FLAT_MODELS, '', vi.fn())
+    expect(screen.queryByText(/unresolved/i)).not.toBeInTheDocument()
+  })
+
+  it('does NOT render the chip when value matches a known model', () => {
+    renderSelector(FLAT_MODELS, 'claude-3-haiku', vi.fn())
+    expect(screen.queryByText(/unresolved/i)).not.toBeInTheDocument()
+  })
+
+  it('renders the chip on the trigger when value is a free-text unknown slug', () => {
+    renderSelector(FLAT_MODELS, 'gpt-9000-ultra', vi.fn())
+    // The chip itself uses the uppercase "Unresolved" label; use a scoped
+    // matcher so we don't pick up the trigger's aria-label which embeds the
+    // same word.
+    expect(screen.getByText('Unresolved')).toBeInTheDocument()
+    // Multiple <button role="combobox"> can appear when both the primary
+    // picker and the ModelSelector's fallback picker render together, so
+    // narrow to the trigger whose value matches our slug.
+    const triggers = screen.getAllByRole('combobox')
+    const trigger = triggers.find((el) =>
+      el.getAttribute('aria-label')?.includes('gpt-9000-ultra'),
+    )
+    expect(trigger).toBeDefined()
+    expect(trigger!.getAttribute('data-unresolved')).toBe('true')
+    expect(trigger!.getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('treats protocol-prefixed unknown slugs as unresolved (matches the bare slug via extractProtocolTail)', () => {
+    // The TS twin uses isKnownModelSlugInList, which strips the protocol
+    // prefix before matching. "anthropic/claude-3-haiku" is in FLAT_MODELS,
+    // but "anthropic/gpt-9000-ultra" is NOT — the chip must appear.
+    renderSelector(FLAT_MODELS, 'anthropic/gpt-9000-ultra', vi.fn())
+    expect(screen.getByText(/unresolved/i)).toBeInTheDocument()
+  })
+
+  it('matches the bare form when the provider exposes the protocol-prefixed form', () => {
+    // FLAT_MODELS includes "gpt-4o" (bare). The chip must NOT render when
+    // the user picks the bare form via the "Use <slug>" row.
+    renderSelector(FLAT_MODELS, 'gpt-4o', vi.fn())
+    expect(screen.queryByText(/unresolved/i)).not.toBeInTheDocument()
+  })
+
+  it('renders the unresolved hint in text-input mode (no models available)', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelSelector
+        models={[]}
+        value="my-custom-slug"
+        onChange={onChange}
+        placeholder="Enter a slug"
+        triggerTestId="primary-model-input"
+      />,
+    )
+    // text-input mode renders a <p> beneath the input rather than the chip.
+    expect(screen.getByText(/not in any connected provider/i)).toBeInTheDocument()
+    const input = screen.getByRole('textbox')
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    // Also picks up the test id prefix for parity with the combobox path.
+    expect(screen.getByTestId('primary-model-input-unresolved')).toBeInTheDocument()
+  })
+})
