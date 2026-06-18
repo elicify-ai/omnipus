@@ -82,7 +82,7 @@ export function AgentListScreen() {
               Create your first agent to get started.
             </p>
           </div>
-          <Button onClick={() => openCreateAgentModal('custom')} className="gap-2">
+          <Button onClick={() => openCreateAgentModal('Main')} className="gap-2">
             <Plus size={14} weight="bold" /> New agent
           </Button>
         </div>
@@ -105,11 +105,11 @@ export function AgentListScreen() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => openCreateAgentModal('custom')}
+                onClick={() => openCreateAgentModal('Main')}
                 className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-                data-testid="new-base-agent-button"
+                data-testid="add-main-button"
               >
-                <Plus size={12} weight="bold" /> New agent
+                <Plus size={12} weight="bold" /> + New Main
               </Button>
             </div>
             {baseAgents.length === 0 ? (
@@ -158,11 +158,11 @@ export function AgentListScreen() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => openCreateAgentModal('worker')}
+                onClick={() => openCreateAgentModal('Subagent')}
                 className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-                data-testid="new-worker-button"
+                data-testid="add-subagent-button"
               >
-                <Plus size={12} weight="bold" /> New worker
+                <Plus size={12} weight="bold" /> + New Subagent
               </Button>
             </div>
             {workerAgents.length === 0 ? (
