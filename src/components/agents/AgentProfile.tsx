@@ -143,6 +143,64 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     hasHydrated.current = false
   }, [agentId])
 
+  // W6-B1 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
+  // slide-over (typically the AgentCard button — also covers the TrustGraph
+  // row click and the /agents/:id route mount) on close.
+  //
+  // The capture happens in two places, mirroring the Wave A CreateAgentModal
+  // pattern (src/components/agents/CreateAgentModal.tsx:175-213):
+  //   1. `handleOpenAutoFocus` fires inside <SheetContent> (via the
+  //      `onOpenAutoFocus` prop below) BEFORE Radix moves focus into the
+  //      dialog — so `document.activeElement` is still the trigger button
+  //      at capture time, not the dialog body. This is the load-bearing
+  //      fix for click-opens (Radix's first-focusable focus shift would
+  //      otherwise steal activeElement before the useEffect ran).
+  //   2. The useEffect here is a fallback for programmatic opens (e.g. the
+  //      /agents/:id route mount via `openEditAgentSlideOver` from
+  //      src/routes/_app/agents.$agentId.tsx:13) where onOpenAutoFocus
+  //      was bypassed.
+  const slideOverTriggerRef = useRef<HTMLElement | null>(null)
+  const prevOpenRef = useRef(isOpen)
+  const handleOpenAutoFocus = (_e: Event) => {
+    // Capture before Radix shifts focus. Don't preventDefault — Radix's
+    // focus management (focus first focusable inside the slide-over) is
+    // desired; we only want the trigger reference for restore-on-close.
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active !== document.body) {
+      slideOverTriggerRef.current = active
+    }
+  }
+  useEffect(() => {
+    if (isOpen && !prevOpenRef.current) {
+      // Fallback capture if onOpenAutoFocus didn't fire (e.g. programmatic
+      // route mount via agents.$agentId.tsx).
+      if (!slideOverTriggerRef.current) {
+        const active = document.activeElement
+        if (active instanceof HTMLElement && active !== document.body) {
+          slideOverTriggerRef.current = active
+        }
+      }
+    } else if (!isOpen && prevOpenRef.current) {
+      // Slide-over just closed — restore focus to the captured trigger.
+      const trigger = slideOverTriggerRef.current
+      slideOverTriggerRef.current = null
+      if (trigger && typeof trigger.focus === 'function' && document.contains(trigger)) {
+        // Defer to next frame so Radix has finished its own teardown focus
+        // (Radix moves focus to the body on unmount). Wrap in try/catch so a
+        // detached-node focus() (route-change race) doesn't crash React's
+        // commit phase.
+        requestAnimationFrame(() => {
+          try {
+            trigger.focus()
+          } catch {
+            // Silent — focus restore is best-effort; users can re-tab.
+          }
+        })
+      }
+    }
+    prevOpenRef.current = isOpen
+  }, [isOpen])
+
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [model, setModel] = useState('')
@@ -383,7 +441,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   if (isLoading) {
     return (
-      <ProfileSheet isOpen={isOpen} onClose={closeEditAgentSlideOver} title="Edit agent">
+      <ProfileSheet
+        isOpen={isOpen}
+        onClose={closeEditAgentSlideOver}
+        title="Edit agent"
+        onOpenAutoFocus={handleOpenAutoFocus}
+      >
         <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
           Loading agent...
         </div>
@@ -410,6 +473,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         isOpen={isOpen}
         onClose={closeEditAgentSlideOver}
         title={isNotFound ? 'Agent not found' : "Couldn't load agent"}
+        onOpenAutoFocus={handleOpenAutoFocus}
       >
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
           <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
@@ -445,7 +509,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const isWorkerAgent = isWorker(agent)
 
   return (
-    <ProfileSheet isOpen={isOpen} onClose={closeEditAgentSlideOver} title={`Edit ${agent.name}`}>
+    <ProfileSheet
+      isOpen={isOpen}
+      onClose={closeEditAgentSlideOver}
+      title={`Edit ${agent.name}`}
+      onOpenAutoFocus={handleOpenAutoFocus}
+    >
       <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
           <div className="flex items-center gap-4">
             <div
@@ -1277,6 +1346,10 @@ function ProfileSheet({
   isOpen,
   onClose,
   title,
+  /** W6-B1 / I7: forwarded to SheetContent's onOpenAutoFocus so the parent
+   *  can capture the trigger element before Radix shifts focus. Used by
+   *  AgentProfile to restore focus to the AgentCard on close. */
+  onOpenAutoFocus,
   children,
 }: {
   isOpen: boolean
@@ -1289,6 +1362,7 @@ function ProfileSheet({
    * with no announced name.
    */
   title: string
+  onOpenAutoFocus?: (event: Event) => void
   children: React.ReactNode
 }) {
   return (
@@ -1300,6 +1374,7 @@ function ProfileSheet({
       <SheetContent
         side="right"
         className="flex flex-col gap-0 p-0"
+        onOpenAutoFocus={onOpenAutoFocus}
       >
         <SheetTitle className="sr-only">{title}</SheetTitle>
         {children}
