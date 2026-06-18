@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
@@ -9,10 +9,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { FormError } from '@/components/ui/FormError'
+import { useFocusRestore } from '@/hooks/useFocusRestore'
 import { useUiStore } from '@/store/ui'
 import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, isApiError } from '@/lib/api'
 import type { Agent, AgentCreateRequest, AgentToolsCfg, ExecutorConfig, Skill } from '@/lib/api'
-import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
+import { AVATAR_COLORS, avatarColorName } from '@/lib/constants'
 import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
@@ -162,55 +163,12 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
   // W6-A3 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
   // modal (typically the "New agent" / "New worker" button) on close.
   //
-  // The capture happens in two places:
-  //   1. `handleOpenAutoFocus` fires inside `<SheetContent>` (via the
-  //      `onOpenAutoFocus` prop below) BEFORE Radix moves focus into
-  //      the dialog — so `document.activeElement` is still the trigger
-  //      button at capture time, not the dialog body or the autoFocus'd
-  //      Name input. This is the load-bearing fix for click-opens (the
-  //      autoFocus on Name + Radix's own focus shift would otherwise
-  //      steal `document.activeElement` before the useEffect ran).
-  //   2. The useEffect here is a fallback for programmatic opens where
-  //      `onOpenAutoFocus` was bypassed.
-  const triggerRef = useRef<HTMLElement | null>(null)
-  const prevOpenRef = useRef(isOpen)
-  const handleOpenAutoFocus = (_e: Event) => {
-    // Capture before Radix shifts focus. Don't preventDefault — Radix's
-    // focus management (focus first focusable = Name input) is desired.
-    const active = document.activeElement
-    if (active instanceof HTMLElement && active !== document.body) {
-      triggerRef.current = active
-    }
-  }
-  useEffect(() => {
-    if (isOpen && !prevOpenRef.current) {
-      // Fallback capture if onOpenAutoFocus didn't fire (e.g. prop-only path).
-      if (!triggerRef.current) {
-        const active = document.activeElement
-        if (active instanceof HTMLElement && active !== document.body) {
-          triggerRef.current = active
-        }
-      }
-    } else if (!isOpen && prevOpenRef.current) {
-      // Modal just closed — restore focus to the captured trigger.
-      const trigger = triggerRef.current
-      triggerRef.current = null
-      if (trigger && typeof trigger.focus === 'function' && document.contains(trigger)) {
-        // Defer to next frame so Radix has finished its own teardown focus
-        // (Radix moves focus to the body on unmount). Wrap in try/catch so a
-        // detached-node `focus()` (route-change race) doesn't crash React's
-        // commit phase.
-        requestAnimationFrame(() => {
-          try {
-            trigger.focus()
-          } catch {
-            // Silent — focus restore is best-effort; users can re-tab.
-          }
-        })
-      }
-    }
-    prevOpenRef.current = isOpen
-  }, [isOpen])
+  // Wave 6 / B-fix: extracted to `useFocusRestore` hook so the same
+  // proven pattern (capture-in-onOpenAutoFocus + restore-via-RAF + try/
+  // catch) is shared with the slide-over in AgentProfile. Future Wave C
+  // consumers (ModelFooter slide-over) will adopt the hook instead of
+  // forking this block.
+  const { onOpenAutoFocus: handleOpenAutoFocus } = useFocusRestore(isOpen)
 
   const AvatarIcon = getIconComponent(icon)
 
@@ -334,7 +292,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                             // The `title` attribute is shown on hover and
                             // mirrors the aria-label so sighted users get
                             // the same readable string.
-                            const name = AVATAR_COLORS_BY_NAME[c] ?? c
+                            const name = avatarColorName(c)
                             return (
                               <button
                                 key={c}
