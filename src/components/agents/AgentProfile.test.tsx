@@ -334,7 +334,11 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, executor: undefined })
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
-    fireEvent.click(screen.getByText(/^Executor$/))
+    // Executor is in the default-open set for workers (W6-B1 / I1); only
+    // click to open if the selector is not yet on screen.
+    if (!screen.queryByTestId('executor-kind-select')) {
+      fireEvent.click(screen.getByText(/^Executor$/))
+    }
     const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
     // Absent executor → native default.
     expect(kind.value).toBe('native')
@@ -347,7 +351,9 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     })
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
-    fireEvent.click(screen.getByText(/^Executor$/))
+    if (!screen.queryByTestId('executor-kind-select')) {
+      fireEvent.click(screen.getByText(/^Executor$/))
+    }
     const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
     expect(kind.value).toBe('external-cli')
     const cli = (await screen.findByTestId('executor-cli-select')) as HTMLSelectElement
@@ -359,7 +365,9 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, executor: undefined })
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
-    fireEvent.click(screen.getByText(/^Executor$/))
+    if (!screen.queryByTestId('executor-kind-select')) {
+      fireEvent.click(screen.getByText(/^Executor$/))
+    }
     const kind = await screen.findByTestId('executor-kind-select')
     fireEvent.change(kind, { target: { value: 'external-cli' } })
     // The cli select now appears with the claude-code default.
@@ -384,7 +392,9 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     })
     renderProfile('marketplace-pack-worker')
     await screen.findByText('Marketplace Worker')
-    fireEvent.click(screen.getByText(/^Executor$/))
+    if (!screen.queryByTestId('executor-kind-select')) {
+      fireEvent.click(screen.getByText(/^Executor$/))
+    }
     const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
     expect(kind.disabled).toBe(true)
     // The test button is hidden for locked agents.
@@ -445,7 +455,11 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
-    fireEvent.click(screen.getByText(/^Executor$/))
+    // Executor is in the default-open set for workers (W6-B1 / I1); only
+    // click to open if the runner-test button is not yet on screen.
+    if (!screen.queryByTestId('runner-test-button')) {
+      fireEvent.click(screen.getByText(/^Executor$/))
+    }
     // Test Connection button is part of the ExecutorSelector and only
     // renders for workers. Confirms the "Test-run" action requirement.
     expect(await screen.findByTestId('runner-test-button')).toBeInTheDocument()
@@ -459,8 +473,11 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     expect(screen.queryByText(/^Executor$/)).toBeNull()
     // Base: Schedules accordion IS present
     expect(screen.getByText(/^Schedules$/)).toBeInTheDocument()
-    // Open Behavior — heartbeat affordance is present (base only)
-    fireEvent.click(screen.getByText(/^Behavior$/))
+    // Behavior may already be open by default (W6-B1 / I1) — only click
+    // the trigger to open if the heartbeat affordance is not yet on screen.
+    if (!screen.queryByText(/Enable heartbeat/i)) {
+      fireEvent.click(screen.getByText(/^Behavior$/))
+    }
     expect(await screen.findByText(/Enable heartbeat/i)).toBeInTheDocument()
   })
 
@@ -468,7 +485,11 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    fireEvent.click(screen.getByText(/^Behavior$/))
+    // Behavior may already be open by default (W6-B1 / I1) — only click
+    // if the framing heading is not yet on screen.
+    if (!screen.queryByText(/Personality\s*&\s*instructions/i)) {
+      fireEvent.click(screen.getByText(/^Behavior$/))
+    }
     expect(await screen.findByText(/Personality\s*&\s*instructions/i)).toBeInTheDocument()
     // Worker relabel is absent
     expect(screen.queryByText(/Task prompt/i)).toBeNull()
@@ -500,10 +521,16 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     vi.mocked(fetchAgent).mockResolvedValue(agent)
     renderProfile(agent.id)
     await screen.findByText(agent.name)
-    // The Model Configuration trigger is in the DOM regardless of open/closed state
-    const trigger = screen.getByText(/^Model Configuration$/)
-    fireEvent.click(trigger)
-    // The fallback section heading is "Fallback models (...)" inside the panel
+    // The fallback section heading is "Fallback models (...)" inside the panel.
+    // The accordion may already be open by default (W6-B1 / I1 — Model
+    // Configuration is in the default-open set for base agents). If it is,
+    // the heading is already on screen; otherwise click the trigger to open it.
+    // Click-toggle semantics: clicking an open accordion closes it, so we
+    // only click when the heading is absent.
+    if (!screen.queryByText(/Fallback models/i)) {
+      const trigger = screen.getByText(/^Model Configuration$/)
+      fireEvent.click(trigger)
+    }
     await screen.findByText(/Fallback models/i)
   }
 
