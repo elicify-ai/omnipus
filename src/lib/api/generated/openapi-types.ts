@@ -5341,11 +5341,11 @@ export interface components {
             /** @description Per-tool effective policy entries. */
             tools: components["schemas"]["AgentToolEntry"][];
             /**
-             * @description Agent classification: "core", "system", "custom", or "worker". Informs the UI whether policy editing is allowed.
-             * @example custom
+             * @description Agent classification. Built-in roster (Mia / Jim / Ava / Ray) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
+             * @example Main
              * @enum {string}
              */
-            agent_type?: "core" | "system" | "custom" | "worker";
+            agent_type?: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
         };
         /**
          * RunnerTestResponse

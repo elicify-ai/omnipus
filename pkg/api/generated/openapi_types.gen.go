@@ -546,10 +546,11 @@ func (e AgentToolEntryEffectivePolicy) Valid() bool {
 
 // Defines values for AgentToolsResponseAgentType.
 const (
-	AgentToolsResponseAgentTypeCore   AgentToolsResponseAgentType = "core"
-	AgentToolsResponseAgentTypeCustom AgentToolsResponseAgentType = "custom"
-	AgentToolsResponseAgentTypeSystem AgentToolsResponseAgentType = "system"
-	AgentToolsResponseAgentTypeWorker AgentToolsResponseAgentType = "worker"
+	AgentToolsResponseAgentTypeCore       AgentToolsResponseAgentType = "core"
+	AgentToolsResponseAgentTypeMain       AgentToolsResponseAgentType = "Main"
+	AgentToolsResponseAgentTypeSubagent   AgentToolsResponseAgentType = "Subagent"
+	AgentToolsResponseAgentTypeSubagent3p AgentToolsResponseAgentType = "subagent_3p"
+	AgentToolsResponseAgentTypeSystem     AgentToolsResponseAgentType = "system"
 )
 
 // Valid indicates whether the value is a known member of the AgentToolsResponseAgentType enum.
@@ -557,11 +558,13 @@ func (e AgentToolsResponseAgentType) Valid() bool {
 	switch e {
 	case AgentToolsResponseAgentTypeCore:
 		return true
-	case AgentToolsResponseAgentTypeCustom:
+	case AgentToolsResponseAgentTypeMain:
+		return true
+	case AgentToolsResponseAgentTypeSubagent:
+		return true
+	case AgentToolsResponseAgentTypeSubagent3p:
 		return true
 	case AgentToolsResponseAgentTypeSystem:
-		return true
-	case AgentToolsResponseAgentTypeWorker:
 		return true
 	default:
 		return false
@@ -4259,7 +4262,7 @@ type AgentToolsCfg struct {
 
 // AgentToolsResponse Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
 type AgentToolsResponse struct {
-	// AgentType Agent classification: "core", "system", "custom", or "worker". Informs the UI whether policy editing is allowed.
+	// AgentType Agent classification. Built-in roster (Mia / Jim / Ava / Ray) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
 	AgentType *AgentToolsResponseAgentType `json:"agent_type,omitempty"`
 
 	// Config Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
@@ -4305,7 +4308,7 @@ type AgentToolsResponse struct {
 	} `json:"tools"`
 }
 
-// AgentToolsResponseAgentType Agent classification: "core", "system", "custom", or "worker". Informs the UI whether policy editing is allowed.
+// AgentToolsResponseAgentType Agent classification. Built-in roster (Mia / Jim / Ava / Ray) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
 type AgentToolsResponseAgentType string
 
 // AgentToolsResponseConfigBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
