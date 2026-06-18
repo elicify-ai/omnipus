@@ -48,9 +48,17 @@ interface ExecutorSelectorProps {
   agentId?: string
   /** Read-only mode (locked core agents). */
   disabled?: boolean
+  /**
+   * WCAG 3.3.1 / 4.1.3 wiring for the validation error rendered below
+   * the selector (worker executor required). When `errorId` is supplied
+   * the selector's `aria-describedby` points at the `<FormError>` region
+   * and `aria-invalid` flips to `true` whenever `hasError` is true.
+   */
+  errorId?: string
+  hasError?: boolean
 }
 
-export function ExecutorSelector({ value, onChange, agentId, disabled = false }: ExecutorSelectorProps) {
+export function ExecutorSelector({ value, onChange, agentId, disabled = false, errorId, hasError }: ExecutorSelectorProps) {
   const kind = effectiveKind(value)
   const cli = value?.cli
 
@@ -81,6 +89,8 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false }:
           value={kind}
           disabled={disabled}
           onChange={(e) => handleKindChange(e.target.value as ExecutorKind)}
+          aria-describedby={errorId}
+          aria-invalid={hasError || undefined}
           className="w-full h-9 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 text-sm text-[var(--color-secondary)] outline-none focus:border-[var(--color-accent)] disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {KIND_OPTIONS.map((o) => (

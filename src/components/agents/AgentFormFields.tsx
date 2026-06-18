@@ -2,6 +2,7 @@ import { Scroll, NotePencil } from '@phosphor-icons/react'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { ExecutorSelector } from './ExecutorSelector'
+import { FormError } from '@/components/ui/FormError'
 import type { ExecutorConfig } from '@/lib/api'
 
 // ── AgentFormFields ──────────────────────────────────────────────────────────
@@ -165,10 +166,16 @@ export function ExecutorSection({
   onChange,
   error,
 }: ExecutorSectionProps) {
+  // Wave 6 / A-fix: WCAG 3.3.1/4.1.3 wiring. The `<select>` in
+  // ExecutorSelector carries `aria-describedby="executor-error"` and
+  // `aria-invalid={!!error}` whenever this section renders an error,
+  // so screen readers announce the validation message via the
+  // `<FormError role="alert">` rendered below.
+  const errorId = 'executor-error'
   return (
     <div className="space-y-1.5 pt-1 border-t border-[var(--color-border)]">
       <p className="text-xs font-medium text-[var(--color-secondary)] pt-1">
-        Executor {isWorker && <span className="text-[var(--color-error)]">*</span>}
+        Executor {isWorker && <span className="text-[var(--color-error)]" aria-hidden="true">*</span>}
       </p>
       {isWorker && (
         <p className="text-[11px] text-[var(--color-muted)]">
@@ -181,12 +188,10 @@ export function ExecutorSection({
           onChange(next)
           if (next && error) onChange(next)
         }}
+        errorId={errorId}
+        hasError={!!error}
       />
-      {error && (
-        <p className="text-xs text-[var(--color-error)]" data-testid="executor-error">
-          {error}
-        </p>
-      )}
+      <FormError id={errorId} error={error} />
     </div>
   )
 }

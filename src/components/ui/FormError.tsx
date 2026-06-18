@@ -1,15 +1,15 @@
 // FormError — shared form-field error renderer
 //
-// Wave 6 / A3 / C7 (WCAG 3.3.1, 3.3.3, 4.1.3): a single source of truth for
+// Wave 6 / A3 / C7 (WCAG 3.3.1, 4.1.3): a single source of truth for
 // field-level error messages. The contract is intentionally narrow so that
 // W6-B / W6-C consumers (B1 slide-over, B3 icon-case, B4 identity-section,
 // C1 config-levers) can wire it without diverging on semantics.
 //
 // Contract:
 //   - When `error` is a non-empty string, render the message inside a
-//     `role="alert"` region. Screen readers announce role=alert content
-//     when it is inserted into the accessibility tree, so the user hears
-//     the error without having to move focus.
+//     `role="alert"` region. `role="alert"` carries implicit
+//     `aria-live="assertive"` + `aria-atomic="true"` per ARIA 1.2 — do
+//     NOT override `aria-live` (it would weaken the announcement).
 //   - When `error` is null/empty, render nothing (no empty <p> tags clutter
 //     the DOM and no role=alert region is announced silently).
 //   - `id` is exposed so callers can wire `aria-describedby` on the
@@ -17,6 +17,10 @@
 //   - The styling reuses the existing --color-error token so the look is
 //     consistent with the in-place name/executor error rows in
 //     CreateAgentModal today.
+//
+// 3.3.3 (Error Suggestion) is a CALLER responsibility — pass actionable
+// suggestion strings when the failure mode is known; this component only
+// renders the string.
 //
 // Usage:
 //   <label htmlFor="x">Name</label>
@@ -50,7 +54,6 @@ export function FormError({ error, id, className }: FormErrorProps) {
     <p
       id={id}
       role="alert"
-      aria-live="polite"
       className={cn('mt-1 text-xs text-[var(--color-error)]', className)}
     >
       {error}

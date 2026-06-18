@@ -121,15 +121,18 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
       <PopoverContent
         className="w-[--radix-popover-trigger-width] p-0"
         align="start"
-        // WCAG 4.1.2 + 1.3.1 + 2.4.6: the picker is a transient dialog.
-        // Radix Popover.Content does not set role/aria-modal by default,
-        // so we set them explicitly and pair the popover with an
-        // accessible name (aria-label) and a longer description
-        // (aria-describedby pointing to the sr-only <p> below). The
-        // description id is generated via useId() to keep it unique if
-        // multiple ModelSelectors ever mount on the same page.
-        role="dialog"
-        aria-modal="true"
+        // WAI-ARIA Combobox Pattern 1.2 (WCAG 1.3.1, 2.4.6, 4.1.2):
+        // the trigger above carries `role="combobox"` + `aria-expanded`
+        // + `aria-controls` (via PopoverTrigger), and the picker is a
+        // generic container for the Command listbox below. We do NOT
+        // set `role="dialog"` + `aria-modal="true"` because Radix
+        // Popover is intentionally non-modal — there is no focus trap
+        // or inert overlay, so claiming modal semantics would mislead
+        // screen-reader users. The sr-only <p> below provides the
+        // longer description via `aria-describedby` so the combobox
+        // has an accessible name and description. The description id is
+        // generated via useId() to keep it unique if multiple
+        // ModelSelectors ever mount on the same page.
         aria-label="Select model"
         aria-describedby={descriptionId}
       >

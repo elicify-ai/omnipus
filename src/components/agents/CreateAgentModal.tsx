@@ -1,19 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Robot,
-  Brain,
-  Lightbulb,
-  MagnifyingGlass,
-  PencilSimple,
-  Code,
-  Chat,
-  Gear,
-  Shield,
-  Rocket,
-  CaretDown,
-  CaretUp,
-} from '@phosphor-icons/react'
+import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
@@ -29,26 +16,8 @@ import { AVATAR_COLORS } from '@/lib/constants'
 import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
+import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
 import { ExecutorSection, getCreateAgentFormCopy } from './AgentFormFields'
-
-const ICON_OPTIONS = [
-  { name: 'Robot', component: Robot },
-  { name: 'Brain', component: Brain },
-  { name: 'Lightbulb', component: Lightbulb },
-  { name: 'MagnifyingGlass', component: MagnifyingGlass },
-  { name: 'PencilSimple', component: PencilSimple },
-  { name: 'Code', component: Code },
-  { name: 'Chat', component: Chat },
-  { name: 'Gear', component: Gear },
-  { name: 'Shield', component: Shield },
-  { name: 'Rocket', component: Rocket },
-] as const
-
-type IconName = typeof ICON_OPTIONS[number]['name']
-
-function getIconComponent(name: IconName) {
-  return ICON_OPTIONS.find((o) => o.name === name)?.component ?? Robot
-}
 
 // ── CreateAgentToolsTab ────────────────────────────────────────────────────────
 //
@@ -192,26 +161,52 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
 
   // W6-A3 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
   // modal (typically the "New agent" / "New worker" button) on close.
-  // Capture the focused element at the moment the modal transitions to open
-  // and restore it in the cleanup. Radix Dialog's default focus management
-  // moves focus into the dialog and would otherwise leave the user stranded
-  // on the body when the dialog unmounts.
+  //
+  // The capture happens in two places:
+  //   1. `handleOpenAutoFocus` fires inside `<SheetContent>` (via the
+  //      `onOpenAutoFocus` prop below) BEFORE Radix moves focus into
+  //      the dialog — so `document.activeElement` is still the trigger
+  //      button at capture time, not the dialog body or the autoFocus'd
+  //      Name input. This is the load-bearing fix for click-opens (the
+  //      autoFocus on Name + Radix's own focus shift would otherwise
+  //      steal `document.activeElement` before the useEffect ran).
+  //   2. The useEffect here is a fallback for programmatic opens where
+  //      `onOpenAutoFocus` was bypassed.
   const triggerRef = useRef<HTMLElement | null>(null)
   const prevOpenRef = useRef(isOpen)
+  const handleOpenAutoFocus = (_e: Event) => {
+    // Capture before Radix shifts focus. Don't preventDefault — Radix's
+    // focus management (focus first focusable = Name input) is desired.
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active !== document.body) {
+      triggerRef.current = active
+    }
+  }
   useEffect(() => {
     if (isOpen && !prevOpenRef.current) {
-      // Modal just opened — capture the element that had focus (the trigger).
-      // document.activeElement is the trigger button in normal click-to-open
-      // flows; the ref is reset on close below.
-      triggerRef.current = document.activeElement as HTMLElement | null
+      // Fallback capture if onOpenAutoFocus didn't fire (e.g. prop-only path).
+      if (!triggerRef.current) {
+        const active = document.activeElement
+        if (active instanceof HTMLElement && active !== document.body) {
+          triggerRef.current = active
+        }
+      }
     } else if (!isOpen && prevOpenRef.current) {
       // Modal just closed — restore focus to the captured trigger.
       const trigger = triggerRef.current
       triggerRef.current = null
       if (trigger && typeof trigger.focus === 'function' && document.contains(trigger)) {
         // Defer to next frame so Radix has finished its own teardown focus
-        // (Radix moves focus to the body on unmount).
-        requestAnimationFrame(() => trigger.focus())
+        // (Radix moves focus to the body on unmount). Wrap in try/catch so a
+        // detached-node `focus()` (route-change race) doesn't crash React's
+        // commit phase.
+        requestAnimationFrame(() => {
+          try {
+            trigger.focus()
+          } catch {
+            // Silent — focus restore is best-effort; users can re-tab.
+          }
+        })
       }
     }
     prevOpenRef.current = isOpen
@@ -293,6 +288,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
           side="right"
           widthClass="w-full sm:max-w-3xl"
           className="flex flex-col gap-0 p-0"
+          onOpenAutoFocus={handleOpenAutoFocus}
         >
           <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
             <SheetTitle
@@ -337,7 +333,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                               key={c}
                               type="button"
                               onClick={() => setColor(c)}
-                              className={`h-10 w-10 rounded-full p-0 flex items-center justify-center transition-transform ${color === c ? 'ring-2 ring-[var(--color-secondary)] ring-offset-2 ring-offset-[var(--color-surface-1)] scale-110' : 'hover:scale-110'}`}
+                              className={`min-h-tap-target-comfortable min-w-tap-target-comfortable rounded-full p-0 transition-transform ${color === c ? 'ring-2 ring-[var(--color-secondary)] ring-offset-2 ring-offset-[var(--color-surface-1)] scale-110' : 'hover:scale-110'}`}
                               style={{ backgroundColor: c }}
                               aria-label={`Select color ${c}`}
                             />
@@ -346,8 +342,10 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                       </div>
                       <div>
                         <p className="text-xs font-medium text-[var(--color-muted)] mb-1.5">Icon</p>
-                        {/* W6-A1 / C3: 44x44 tap target (WCAG 2.5.8 AA). grid-cols-5 + gap-2
-                            keeps the row from wrapping awkwardly on the modal's 3xl width. */}
+                        {/* W6-A1 / C3: 44x44 tap target (WCAG 2.5.8 AA, token
+                            --spacing-tap-target-min). grid-cols-5 + gap-2
+                            keeps the row from wrapping awkwardly on the
+                            modal's 3xl width. */}
                         <div className="grid grid-cols-5 gap-2">
                           {ICON_OPTIONS.map(({ name: iconName, component: IconComp }) => (
                             <button
@@ -355,7 +353,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                               type="button"
                               onClick={() => setIcon(iconName)}
                               title={iconName}
-                              className={`h-11 w-11 rounded-md transition-colors flex items-center justify-center ${
+                              className={`min-h-tap-target-min min-w-tap-target-min rounded-md transition-colors flex items-center justify-center ${
                                 icon === iconName
                                   ? 'bg-[var(--color-accent)] text-[var(--color-primary)]'
                                   : 'bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
@@ -457,8 +455,6 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                       placeholder="# Task prompt (optional)&#10;&#10;Define how this worker should approach its delegated task..."
                       rows={5}
                       className="text-xs font-mono resize-none"
-                      required={false}
-                      aria-required={false}
                     />
                   </div>
                 )}
