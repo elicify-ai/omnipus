@@ -3,24 +3,26 @@ description: >
   Executor configuration for a sub-agent. Controls which runtime is used to
   execute the sub-agent's tasks.
 
-  "native" (default) runs the task inside the Omnipus agent loop — existing
+  "native" (default) runs the task inside the Omnipus agent loop — the existing
   behaviour, always available.
 
-  "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would
-  drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming
-  subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a
-  tool before Omnipus can gate it), so it is not presented as a safe, working
-  executor. The schema accepts it for forward-compatibility, but dispatch rejects
-  it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a
-  documented no-op.
+  "external-cli" drives an external CLI tool (claude-code, codex, or opencode)
+  as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and
+  `--model <model>`. The CLI's auth, isolation, and retries are managed by the
+  CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy /
+  tools_cfg / fallback_models / model_params / skills / delegation_policy are
+  hidden for subagent_3p agents and rejected 400 on PUT if set.
 
   "remote-a2a" is RESERVED for future A2A protocol resolution. The schema
   accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with
   an error ("not available in v0.1.0").
 
-  When absent the default is "native". Only "native" is functional in v0.1.0.
-required:
-  - kind
+  The "kind" field is derived server-side from the agent's type (Main -> native,
+  Subagent -> native, subagent_3p -> external-cli). It is exposed in responses
+  but is NOT a writable field on create/update — clients cannot choose kind
+  directly. Server-side derive at the handler boundary per the agent-form spec.
+
+  When the agent has no executor block, the default is "native".
 additionalProperties: false
 properties:
   kind:
@@ -30,12 +32,10 @@ properties:
       - external-cli
       - remote-a2a
     description: >
-      Execution runtime selector.
-      "native" = run inside the Omnipus agent loop (default; the only functional
-      kind in v0.1.0).
-      "external-cli" = RESERVED/experimental; would delegate to an external CLI agent
-      process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it.
-      "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+      Execution runtime selector. Derived from the agent's type: Main -> native,
+      Subagent -> native, subagent_3p -> external-cli. Clients cannot set this
+      directly on create/update; the server overrides any client-supplied value.
+      "remote-a2a" is reserved for future A2A protocol resolution.
     example: "native"
   cli:
     type: string
@@ -45,8 +45,34 @@ properties:
       - opencode
     description: >
       The external CLI tool to use when kind="external-cli".
-      Ignored for other kinds.
-      "claude-code" = Claude Code headless (claude -p --output-format stream-json).
-      "codex" = OpenAI Codex CLI (codex exec JSON).
-      "opencode" = opencode (opencode run --format json).
+      Required for subagent_3p agents. Locked after create — to switch CLIs,
+      the user must create a new agent. Mutating attempts on PUT return 400
+      with "executor.cli is locked after create; create a new agent to switch CLIs."
     example: "claude-code"
+  cli_path:
+    type: string
+    description: >
+      Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable
+      on PUT (allows upgrading the CLI binary without re-creating the agent).
+      When empty, the OS $PATH is used (fragile when multiple CLI versions are
+      installed — recommend an absolute path).
+    example: "/usr/local/bin/claude"
+  env_overrides:
+    type: object
+    additionalProperties:
+      type: string
+    description: >
+      Additional environment variables merged into the spawned CLI process's
+      environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE,
+      and the master-key env var are NOT overridable — user-supplied keys take
+      precedence only for non-Omnipus vars).
+    example:
+      ANTHROPIC_API_KEY: "..."
+      DEBUG: "1"
+  cli_args:
+    type: string
+    description: >
+      Free-form additional CLI arguments appended to the spawn invocation. The
+      spawn layer uses execve (no shell interpolation), so values are passed
+      safely; warn (but do not reject) on shell-injection chars in the value.
+    example: "--max-turns 5"

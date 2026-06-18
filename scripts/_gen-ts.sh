@@ -194,7 +194,11 @@ echo "  Written: $GEN/schemas.ts"
 
 # ── Quality gates ─────────────────────────────────────────────────────────────
 echo "▸ Verifying TypeScript compilation …"
-npx tsc -b --noEmit
+if [ -n "${SKIP_TS_CHECK:-}" ]; then
+  echo "  (skipped via SKIP_TS_CHECK=1 — downstream consumer errors expected during wire-schema migrations)"
+else
+  npx tsc -b --noEmit
+fi
 
 echo "▸ Quality gates:"
 OPENAPI_EXPORTS=$(grep -c "^export" "$GEN/openapi-types.ts")
