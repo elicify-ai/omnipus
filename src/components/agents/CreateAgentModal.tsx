@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Robot,
@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { FormError } from '@/components/ui/FormError'
 import { useUiStore } from '@/store/ui'
 import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, isApiError } from '@/lib/api'
 import type { Agent, AgentCreateRequest, AgentToolsCfg, ExecutorConfig, Skill } from '@/lib/api'
@@ -189,6 +190,33 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen])
 
+  // W6-A3 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
+  // modal (typically the "New agent" / "New worker" button) on close.
+  // Capture the focused element at the moment the modal transitions to open
+  // and restore it in the cleanup. Radix Dialog's default focus management
+  // moves focus into the dialog and would otherwise leave the user stranded
+  // on the body when the dialog unmounts.
+  const triggerRef = useRef<HTMLElement | null>(null)
+  const prevOpenRef = useRef(isOpen)
+  useEffect(() => {
+    if (isOpen && !prevOpenRef.current) {
+      // Modal just opened — capture the element that had focus (the trigger).
+      // document.activeElement is the trigger button in normal click-to-open
+      // flows; the ref is reset on close below.
+      triggerRef.current = document.activeElement as HTMLElement | null
+    } else if (!isOpen && prevOpenRef.current) {
+      // Modal just closed — restore focus to the captured trigger.
+      const trigger = triggerRef.current
+      triggerRef.current = null
+      if (trigger && typeof trigger.focus === 'function' && document.contains(trigger)) {
+        // Defer to next frame so Radix has finished its own teardown focus
+        // (Radix moves focus to the body on unmount).
+        requestAnimationFrame(() => trigger.focus())
+      }
+    }
+    prevOpenRef.current = isOpen
+  }, [isOpen])
+
   const AvatarIcon = getIconComponent(icon)
 
   const { mutate: doCreate, isPending } = useMutation({
@@ -288,7 +316,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
               <div className="space-y-5 px-8 pb-8">
                 {/* Avatar preview + color + icon */}
                 <div>
-                  <label className="text-sm font-medium text-[var(--color-muted)] mb-2 block">
+                  <label className="text-sm font-medium text-[var(--color-secondary)] mb-2 block">
                     Avatar
                   </label>
                   <div className="flex items-start gap-4">
@@ -300,7 +328,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                     </div>
                     <div className="flex-1 space-y-3">
                       <div>
-                        <p className="text-sm text-[var(--color-muted)] mb-1.5">Color</p>
+                        <p className="text-xs font-medium text-[var(--color-muted)] mb-1.5">Color</p>
                         {/* W6-A1 / C3: 40x40 tap target (WCAG 2.5.8 AA). Visual swatch stays
                             full-bleed; the button's extra padding gives the tap surface. */}
                         <div className="flex gap-2 flex-wrap">
@@ -317,7 +345,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                         </div>
                       </div>
                       <div>
-                        <p className="text-sm text-[var(--color-muted)] mb-1.5">Icon</p>
+                        <p className="text-xs font-medium text-[var(--color-muted)] mb-1.5">Icon</p>
                         {/* W6-A1 / C3: 44x44 tap target (WCAG 2.5.8 AA). grid-cols-5 + gap-2
                             keeps the row from wrapping awkwardly on the modal's 3xl width. */}
                         <div className="grid grid-cols-5 gap-2">
@@ -344,8 +372,8 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
 
                 {/* Name */}
                 <div>
-                  <label htmlFor="agent-name" className="text-sm font-medium text-[var(--color-muted)] mb-1.5 block">
-                    Name <span className="text-[var(--color-error)]">*</span>
+                  <label htmlFor="agent-name" className="text-sm font-medium text-[var(--color-secondary)] mb-1.5 block">
+                    Name <span className="text-[var(--color-error)]" aria-hidden="true">*</span>
                   </label>
                   <Input
                     id="agent-name"
@@ -357,15 +385,17 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                     placeholder="e.g. Research Assistant"
                     className={nameError ? 'border-[var(--color-error)]' : ''}
                     autoFocus
+                    required
+                    aria-required="true"
+                    aria-invalid={nameError ? true : undefined}
+                    aria-describedby={nameError ? 'agent-name-error' : undefined}
                   />
-                  {nameError && (
-                    <p className="mt-1 text-sm text-[var(--color-error)]">{nameError}</p>
-                  )}
+                  <FormError id="agent-name-error" error={nameError} />
                 </div>
 
                 {/* Description */}
                 <div>
-                  <label htmlFor="agent-description" className="text-sm font-medium text-[var(--color-muted)] mb-1.5 block">
+                  <label htmlFor="agent-description" className="text-sm font-medium text-[var(--color-secondary)] mb-1.5 block">
                     Description
                   </label>
                   <Textarea
@@ -379,7 +409,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
 
                 {/* Model */}
                 <div>
-                  <label className="text-sm font-medium text-[var(--color-muted)] mb-1.5 block">
+                  <label className="text-sm font-medium text-[var(--color-secondary)] mb-1.5 block">
                     Model
                   </label>
                   {providersError && (
@@ -409,11 +439,11 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                   <div>
                     <label
                       htmlFor="worker-task-prompt"
-                      className="text-sm font-medium text-[var(--color-muted)] mb-1.5 block"
+                      className="text-sm font-medium text-[var(--color-secondary)] mb-1.5 block"
                     >
                       Task prompt <span className="text-[var(--color-muted)] font-normal">(optional)</span>
                     </label>
-                    <p className="text-sm text-[var(--color-muted)] mb-1.5">
+                    <p className="text-xs text-[var(--color-muted)] mb-1.5">
                       Optional system prompt for the worker&apos;s runner. Composed with any
                       caller-supplied task prompt at run time. Stored as{' '}
                       <span className="font-mono text-xs">SOUL.md</span>. Leave empty to use
@@ -489,7 +519,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                             Skills
                             <span className="ml-1.5 font-normal text-[var(--color-muted)]">(opt-in)</span>
                           </p>
-                          <p className="text-sm text-[var(--color-muted)]">
+                          <p className="text-xs text-[var(--color-muted)]">
                             Grant installed skills to this agent. Unselected = no skills.
                           </p>
                           <div className="space-y-1">
