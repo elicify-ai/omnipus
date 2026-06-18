@@ -4,6 +4,7 @@ description: >
   The agent starts in "draft" status (no SOUL.md written yet).
 required:
   - name
+  - soul
 additionalProperties: false
 properties:
   name:
@@ -14,21 +15,25 @@ properties:
   type:
     type: string
     enum:
-      - custom
-      - worker
+      - Main
+      - Subagent
+      - subagent_3p
+      - core
+      - system
     description: >
-      Agent tier to create. "custom" = a user-defined chat colleague
-      (default for the existing POST /agents flow). "worker" = a sub-agent
-      worker: a delegation-only labour agent that is NOT a chat target, has
-      no heartbeat, is never the default, and must carry an executor
-      (see Agent.executor). When omitted, the server creates a "custom"
-      agent. The "core" and "system" types are reserved and cannot be
-      created via this endpoint.
-    example: "custom"
-    default: "custom"
+      Agent lifecycle to create. "Main" = user-defined chat colleague (default).
+      "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" =
+      a delegation-only labour agent that runs on an external CLI (claude-code / codex /
+      opencode). "core" and "system" are reserved and cannot be created via this endpoint.
+    example: "Main"
+    default: "Main"
   description:
     type: string
-    description: Short description of the agent's purpose.
+    minLength: 1
+    description: >
+      Short description of the agent's purpose. Required (non-empty after trim) for
+      Subagent and subagent_3p — the orchestrator uses it as the basis on which it
+      decides which agent to delegate to. Optional for Main.
     example: "Specialized data analysis assistant"
   model:
     type: string
@@ -37,23 +42,25 @@ properties:
     example: "claude-sonnet-4-6"
   color:
     type: string
+    pattern: '^#[0-9A-Fa-f]{6}$'
     description: Hex color code for the agent avatar.
     example: "#D4AF37"
   icon:
     type: string
+    maxLength: 50
     description: Phosphor icon name for the agent avatar.
     example: "ChartBar"
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
   fallback_models:
     type: array
-    maxItems: 10
+    maxItems: 2
     items:
       $ref: './FallbackModel.yaml'
     description: >
       Ordered list of fallback model entries tried when the primary model returns
-      an error. Each entry carries its own provider so the fallback can route
-      through a different provider than the primary (FR-007).
+      an error. Each entry carries its own provider so the fallback can route through
+      a different provider than the primary (FR-007). Capped at 2 entries.
 
       Wire format is always the object form `[{model, provider}]`. Legacy
       `[string]` payloads are normalized at config-load time (FR-006).
@@ -111,19 +118,68 @@ properties:
       - "web-research"
   soul:
     type: string
+    minLength: 1
     description: >
-      Initial SOUL.md content. When omitted, the new agent starts in
-      "draft" with an empty soul (the profile edit flow writes it later).
-      Worker-tier agents (type=worker) treat this as the optional task
-      prompt; empty is valid for workers per the locked concept.
+      Initial SOUL.md content. Required for every user-creatable type — including
+      Subagent (External), where it is passed as part of the CLI prompt at runtime.
+      The CLI never reads a file from disk. Backend trims before length-validation,
+      so whitespace-only is rejected as minLength violation.
     example: "You are a focused research assistant..."
+  heartbeat:
+    type: string
+    description: >
+      Initial HEARTBEAT.md content (Main only). Optional.
+    example: "Check the queue every hour."
+  heartbeat_enabled:
+    type: boolean
+    description: Whether the HEARTBEAT.md periodic instruction loop is active (Main only).
+    example: false
+  heartbeat_interval:
+    type: integer
+    minimum: 0
+    description: Interval in seconds between heartbeat passes (Main only).
+    example: 1800
+  instructions:
+    type: string
+    description: Initial AGENT.md body (after frontmatter). Optional.
+    example: "Focus on TypeScript and Go projects only."
   delegation_policy:
     $ref: './DelegationPolicy.yaml'
   voice:
     type: string
     nullable: true
     description: >
-      Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+      Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'
+  sandbox_profile:
+    type: string
+    enum:
+      - workspace
+      - workspace+net
+      - host
+      - off
+    description: >
+      Kernel sandbox profile applied to this agent's tool calls. Hidden for Subagent
+      (External) — the CLI manages its own isolation.
+    example: "workspace"
+  shell_policy:
+    $ref: './AgentShellPolicy.yaml'
+  timeout_seconds:
+    type: integer
+    minimum: 0
+    description: Maximum seconds a single agent turn may run before being interrupted.
+    example: 300
+  max_tool_iterations:
+    type: integer
+    minimum: 0
+    description: Maximum number of tool calls allowed per turn.
+    example: 50
+  steering_mode:
+    type: string
+    enum:
+      - one-at-a-time
+      - queue-and-process
+    description: Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
+    example: "one-at-a-time"

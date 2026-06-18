@@ -3334,8 +3334,12 @@ func TestContract_ExecutorConfig_Populated(t *testing.T) {
 }
 
 func TestContract_ExecutorConfig_ZeroValue(t *testing.T) {
-	mustFailComponent(t, "ExecutorConfig", FixtureExecutorConfig_ZeroValue(),
-		"kind is \"\" (not in [native, external-cli, remote-a2a])")
+	// ExecutorConfig.yaml no longer requires `kind` — kind is derived server-side
+	// from the agent's type. Empty object validates; the backend fills in kind
+	// (Main/Subagent -> native, subagent_3p -> external-cli) on dispatch.
+	assert.NoError(t,
+		validateAgainstComponentSchemaRawJSON(t, "ExecutorConfig", []byte(`{}`)),
+		"empty executor config {} must validate (kind is derived, not required)")
 }
 
 func TestContract_IntegrationProvider_Populated(t *testing.T) {

@@ -138,6 +138,8 @@ components:
       $ref: ./components/schemas/FallbackModel.yaml
     ExecutorConfig:
       $ref: ./components/schemas/ExecutorConfig.yaml
+    VoiceProvider:
+      $ref: ./components/schemas/VoiceProvider.yaml
     AgentSession:
       $ref: ./components/schemas/AgentSession.yaml
     SessionScopeRequest:
@@ -824,6 +826,30 @@ paths:
           $ref: '#/components/responses/503ServiceUnavailable'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+  /voice/provider:
+    get:
+      operationId: getVoiceProvider
+      summary: Return the active voice provider's identity and (optional) voices enum
+      description: 'Reads the active voice provider config from the gateway and returns a small descriptor so the SPA can decide which voice widget variant to render in the agent edit slide-over (dropdown / free-text / disabled). Requires authentication. Returns 503 when the provider is misconfigured (e.g. credentials unavailable) — the SPA falls back to a "Voice provider unavailable" disabled widget per voice-provider-detect.ts.
+
+        '
+      tags:
+      - voice
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Voice provider descriptor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceProvider'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /onboarding/complete:
     post:
       operationId: completeOnboarding
@@ -1441,7 +1467,7 @@ paths:
     put:
       operationId: updateAgent
       summary: Update agent configuration
-      description: 'Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+      description: 'Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
 
         '
       tags:

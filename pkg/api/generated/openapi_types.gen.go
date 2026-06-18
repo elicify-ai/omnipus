@@ -205,6 +205,24 @@ func (e AgentStatus) Valid() bool {
 	}
 }
 
+// Defines values for AgentSteeringMode.
+const (
+	AgentSteeringModeOneAtATime      AgentSteeringMode = "one-at-a-time"
+	AgentSteeringModeQueueAndProcess AgentSteeringMode = "queue-and-process"
+)
+
+// Valid indicates whether the value is a known member of the AgentSteeringMode enum.
+func (e AgentSteeringMode) Valid() bool {
+	switch e {
+	case AgentSteeringModeOneAtATime:
+		return true
+	case AgentSteeringModeQueueAndProcess:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentToolsCfgBuiltinDefaultPolicy.
 const (
 	AgentToolsCfgBuiltinDefaultPolicyAllow AgentToolsCfgBuiltinDefaultPolicy = "allow"
@@ -249,10 +267,11 @@ func (e AgentToolsCfgBuiltinPolicies) Valid() bool {
 
 // Defines values for AgentType.
 const (
-	AgentTypeCore   AgentType = "core"
-	AgentTypeCustom AgentType = "custom"
-	AgentTypeSystem AgentType = "system"
-	AgentTypeWorker AgentType = "worker"
+	AgentTypeCore       AgentType = "core"
+	AgentTypeMain       AgentType = "Main"
+	AgentTypeSubagent   AgentType = "Subagent"
+	AgentTypeSubagent3p AgentType = "subagent_3p"
+	AgentTypeSystem     AgentType = "system"
 )
 
 // Valid indicates whether the value is a known member of the AgentType enum.
@@ -260,11 +279,13 @@ func (e AgentType) Valid() bool {
 	switch e {
 	case AgentTypeCore:
 		return true
-	case AgentTypeCustom:
+	case AgentTypeMain:
+		return true
+	case AgentTypeSubagent:
+		return true
+	case AgentTypeSubagent3p:
 		return true
 	case AgentTypeSystem:
-		return true
-	case AgentTypeWorker:
 		return true
 	default:
 		return false
@@ -370,6 +391,48 @@ func (e AgentCreateRequestExecutorKind) Valid() bool {
 	}
 }
 
+// Defines values for AgentCreateRequestSandboxProfile.
+const (
+	AgentCreateRequestSandboxProfileHost         AgentCreateRequestSandboxProfile = "host"
+	AgentCreateRequestSandboxProfileOff          AgentCreateRequestSandboxProfile = "off"
+	AgentCreateRequestSandboxProfileWorkspace    AgentCreateRequestSandboxProfile = "workspace"
+	AgentCreateRequestSandboxProfileWorkspaceNet AgentCreateRequestSandboxProfile = "workspace+net"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSandboxProfile enum.
+func (e AgentCreateRequestSandboxProfile) Valid() bool {
+	switch e {
+	case AgentCreateRequestSandboxProfileHost:
+		return true
+	case AgentCreateRequestSandboxProfileOff:
+		return true
+	case AgentCreateRequestSandboxProfileWorkspace:
+		return true
+	case AgentCreateRequestSandboxProfileWorkspaceNet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSteeringMode.
+const (
+	AgentCreateRequestSteeringModeOneAtATime      AgentCreateRequestSteeringMode = "one-at-a-time"
+	AgentCreateRequestSteeringModeQueueAndProcess AgentCreateRequestSteeringMode = "queue-and-process"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSteeringMode enum.
+func (e AgentCreateRequestSteeringMode) Valid() bool {
+	switch e {
+	case AgentCreateRequestSteeringModeOneAtATime:
+		return true
+	case AgentCreateRequestSteeringModeQueueAndProcess:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentCreateRequestToolsCfgBuiltinDefaultPolicy.
 const (
 	AgentCreateRequestToolsCfgBuiltinDefaultPolicyAllow AgentCreateRequestToolsCfgBuiltinDefaultPolicy = "allow"
@@ -414,16 +477,25 @@ func (e AgentCreateRequestToolsCfgBuiltinPolicies) Valid() bool {
 
 // Defines values for AgentCreateRequestType.
 const (
-	AgentCreateRequestTypeCustom AgentCreateRequestType = "custom"
-	AgentCreateRequestTypeWorker AgentCreateRequestType = "worker"
+	AgentCreateRequestTypeCore       AgentCreateRequestType = "core"
+	AgentCreateRequestTypeMain       AgentCreateRequestType = "Main"
+	AgentCreateRequestTypeSubagent   AgentCreateRequestType = "Subagent"
+	AgentCreateRequestTypeSubagent3p AgentCreateRequestType = "subagent_3p"
+	AgentCreateRequestTypeSystem     AgentCreateRequestType = "system"
 )
 
 // Valid indicates whether the value is a known member of the AgentCreateRequestType enum.
 func (e AgentCreateRequestType) Valid() bool {
 	switch e {
-	case AgentCreateRequestTypeCustom:
+	case AgentCreateRequestTypeCore:
 		return true
-	case AgentCreateRequestTypeWorker:
+	case AgentCreateRequestTypeMain:
+		return true
+	case AgentCreateRequestTypeSubagent:
+		return true
+	case AgentCreateRequestTypeSubagent3p:
+		return true
+	case AgentCreateRequestTypeSystem:
 		return true
 	default:
 		return false
@@ -757,6 +829,24 @@ func (e AgentUpdateRequestSandboxProfile) Valid() bool {
 	case AgentUpdateRequestSandboxProfileWorkspace:
 		return true
 	case AgentUpdateRequestSandboxProfileWorkspaceNet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestSteeringMode.
+const (
+	OneAtATime      AgentUpdateRequestSteeringMode = "one-at-a-time"
+	QueueAndProcess AgentUpdateRequestSteeringMode = "queue-and-process"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestSteeringMode enum.
+func (e AgentUpdateRequestSteeringMode) Valid() bool {
+	switch e {
+	case OneAtATime:
+		return true
+	case QueueAndProcess:
 		return true
 	default:
 		return false
@@ -2175,19 +2265,19 @@ func (e SandboxConfigUpdateDefaultProfile) Valid() bool {
 
 // Defines values for SandboxConfigUpdateMode.
 const (
-	Enforce    SandboxConfigUpdateMode = "enforce"
-	Off        SandboxConfigUpdateMode = "off"
-	Permissive SandboxConfigUpdateMode = "permissive"
+	SandboxConfigUpdateModeEnforce    SandboxConfigUpdateMode = "enforce"
+	SandboxConfigUpdateModeOff        SandboxConfigUpdateMode = "off"
+	SandboxConfigUpdateModePermissive SandboxConfigUpdateMode = "permissive"
 )
 
 // Valid indicates whether the value is a known member of the SandboxConfigUpdateMode enum.
 func (e SandboxConfigUpdateMode) Valid() bool {
 	switch e {
-	case Enforce:
+	case SandboxConfigUpdateModeEnforce:
 		return true
-	case Off:
+	case SandboxConfigUpdateModeOff:
 		return true
-	case Permissive:
+	case SandboxConfigUpdateModePermissive:
 		return true
 	default:
 		return false
@@ -3576,7 +3666,7 @@ type Agent struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
 
-	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default.
+	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Main only — workers never default.
 	Default *bool `json:"default,omitempty"`
 
 	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
@@ -3623,29 +3713,39 @@ type Agent struct {
 	Description *string `json:"description,omitempty"`
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-	// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// When absent the default is "native". Only "native" is functional in v0.1.0.
+	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
+	// When the agent has no executor block, the default is "native".
 	Executor *struct {
-		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+		// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 		Cli *AgentExecutorCli `json:"cli,omitempty"`
 
-		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
-		Kind AgentExecutorKind `json:"kind"`
+		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		CliArgs *string `json:"cli_args,omitempty"`
+
+		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
+		CliPath *string `json:"cli_path,omitempty"`
+
+		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+		Kind *AgentExecutorKind `json:"kind,omitempty"`
 	} `json:"executor,omitempty"`
 
-	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007).
+	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Heartbeat Contents of HEARTBEAT.md — periodic background instructions. Empty string when not set. Always present on detail responses (never null).
+	// Heartbeat Contents of HEARTBEAT.md — periodic background instructions. Empty string when not set. Always present on detail responses (never null). Main only.
 	Heartbeat string `json:"heartbeat"`
 
-	// HeartbeatEnabled Whether the HEARTBEAT.md periodic instruction loop is active for this agent.
+	// HeartbeatEnabled Whether the HEARTBEAT.md periodic instruction loop is active for this agent (Main only).
 	HeartbeatEnabled bool `json:"heartbeat_enabled"`
 
-	// HeartbeatInterval Interval in seconds between heartbeat passes.
+	// HeartbeatInterval Interval in seconds between heartbeat passes (Main only).
 	HeartbeatInterval int `json:"heartbeat_interval"`
 
 	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
@@ -3696,7 +3796,7 @@ type Agent struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot).
+	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot). Hidden for subagent_3p — CLI manages its own isolation.
 	SandboxProfile *AgentSandboxProfile `json:"sandbox_profile,omitempty"`
 
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
@@ -3732,14 +3832,11 @@ type Agent struct {
 	// Status Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
 	Status AgentStatus `json:"status"`
 
-	// SteeringMode Tool execution steering strategy. "one-at-a-time" = approve each tool call individually. Other values are provider-specific. Defaults to "one-at-a-time".
-	SteeringMode string `json:"steering_mode"`
+	// SteeringMode Tool execution steering strategy. "one-at-a-time" = approve each tool call individually. Workers always use "one-at-a-time" (server-set).
+	SteeringMode AgentSteeringMode `json:"steering_mode"`
 
 	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted. Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
 	TimeoutSeconds int `json:"timeout_seconds"`
-
-	// ToolFeedback When true, tool results are echoed back to the LLM as user messages (tool feedback loop enabled).
-	ToolFeedback bool `json:"tool_feedback"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
@@ -3765,10 +3862,10 @@ type Agent struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
+	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
 	Type AgentType `json:"type"`
 
-	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured.
+	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured. Main only.
 	Voice *string `json:"voice,omitempty"`
 
 	// Warning Non-fatal advisory (e.g. config reload failed after create/update).
@@ -3784,17 +3881,20 @@ type AgentDelegationPolicyModes string
 // AgentDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
 type AgentDelegationPolicyToKind string
 
-// AgentExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+// AgentExecutorCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 type AgentExecutorCli string
 
-// AgentExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+// AgentExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentExecutorKind string
 
-// AgentSandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot).
+// AgentSandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot). Hidden for subagent_3p — CLI manages its own isolation.
 type AgentSandboxProfile string
 
 // AgentStatus Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
 type AgentStatus string
+
+// AgentSteeringMode Tool execution steering strategy. "one-at-a-time" = approve each tool call individually. Workers always use "one-at-a-time" (server-set).
+type AgentSteeringMode string
 
 // AgentToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
 type AgentToolsCfgBuiltinDefaultPolicy string
@@ -3802,7 +3902,7 @@ type AgentToolsCfgBuiltinDefaultPolicy string
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
-// AgentType Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
+// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
 type AgentType string
 
 // AgentCreateRequest Body for POST /agents. Creates a new agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet).
@@ -3850,28 +3950,53 @@ type AgentCreateRequest struct {
 		} `json:"to,omitempty"`
 	} `json:"delegation_policy,omitempty"`
 
-	// Description Short description of the agent's purpose.
+	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-	// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// When absent the default is "native". Only "native" is functional in v0.1.0.
+	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
+	// When the agent has no executor block, the default is "native".
 	Executor *struct {
-		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+		// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 		Cli *AgentCreateRequestExecutorCli `json:"cli,omitempty"`
 
-		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
-		Kind AgentCreateRequestExecutorKind `json:"kind"`
+		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		CliArgs *string `json:"cli_args,omitempty"`
+
+		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
+		CliPath *string `json:"cli_path,omitempty"`
+
+		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+		Kind *AgentCreateRequestExecutorKind `json:"kind,omitempty"`
 	} `json:"executor,omitempty"`
 
-	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007).
+	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
+	// Heartbeat Initial HEARTBEAT.md content (Main only). Optional.
+	Heartbeat *string `json:"heartbeat,omitempty"`
+
+	// HeartbeatEnabled Whether the HEARTBEAT.md periodic instruction loop is active (Main only).
+	HeartbeatEnabled *bool `json:"heartbeat_enabled,omitempty"`
+
+	// HeartbeatInterval Interval in seconds between heartbeat passes (Main only).
+	HeartbeatInterval *int `json:"heartbeat_interval,omitempty"`
+
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
+
+	// Instructions Initial AGENT.md body (after frontmatter). Optional.
+	Instructions *string `json:"instructions,omitempty"`
+
+	// MaxToolIterations Maximum number of tool calls allowed per turn.
+	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// Model Model name for LLM calls. When omitted, the global agents.defaults.model_name is used.
 	Model *string `json:"model,omitempty"`
@@ -3906,11 +4031,29 @@ type AgentCreateRequest struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
+	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls. Hidden for Subagent (External) — the CLI manages its own isolation.
+	SandboxProfile *AgentCreateRequestSandboxProfile `json:"sandbox_profile,omitempty"`
+
+	// ShellPolicy Per-agent shell command deny-pattern configuration.
+	ShellPolicy *struct {
+		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
+		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
+
+		// EnableDenyPatterns Enable pattern-based shell command blocking.
+		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
+	} `json:"shell_policy,omitempty"`
+
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
-	// Soul Initial SOUL.md content. When omitted, the new agent starts in "draft" with an empty soul (the profile edit flow writes it later). Worker-tier agents (type=worker) treat this as the optional task prompt; empty is valid for workers per the locked concept.
-	Soul *string `json:"soul,omitempty"`
+	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
+	Soul string `json:"soul"`
+
+	// SteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
+	SteeringMode *AgentCreateRequestSteeringMode `json:"steering_mode,omitempty"`
+
+	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
@@ -3936,10 +4079,10 @@ type AgentCreateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent tier to create. "custom" = a user-defined chat colleague (default for the existing POST /agents flow). "worker" = a sub-agent worker: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and must carry an executor (see Agent.executor). When omitted, the server creates a "custom" agent. The "core" and "system" types are reserved and cannot be created via this endpoint.
+	// Type Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode). "core" and "system" are reserved and cannot be created via this endpoint.
 	Type *AgentCreateRequestType `json:"type,omitempty"`
 
-	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+	// Voice Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
 	Voice *string `json:"voice,omitempty"`
 }
 
@@ -3952,11 +4095,17 @@ type AgentCreateRequestDelegationPolicyModes string
 // AgentCreateRequestDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
 type AgentCreateRequestDelegationPolicyToKind string
 
-// AgentCreateRequestExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+// AgentCreateRequestExecutorCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 type AgentCreateRequestExecutorCli string
 
-// AgentCreateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+// AgentCreateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentCreateRequestExecutorKind string
+
+// AgentCreateRequestSandboxProfile Kernel sandbox profile applied to this agent's tool calls. Hidden for Subagent (External) — the CLI manages its own isolation.
+type AgentCreateRequestSandboxProfile string
+
+// AgentCreateRequestSteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
+type AgentCreateRequestSteeringMode string
 
 // AgentCreateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
 type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
@@ -3964,7 +4113,7 @@ type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
 // AgentCreateRequestToolsCfgBuiltinPolicies defines model for AgentCreateRequest.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestToolsCfgBuiltinPolicies string
 
-// AgentCreateRequestType Agent tier to create. "custom" = a user-defined chat colleague (default for the existing POST /agents flow). "worker" = a sub-agent worker: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and must carry an executor (see Agent.executor). When omitted, the server creates a "custom" agent. The "core" and "system" types are reserved and cannot be created via this endpoint.
+// AgentCreateRequestType Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode). "core" and "system" are reserved and cannot be created via this endpoint.
 type AgentCreateRequestType string
 
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
@@ -4210,12 +4359,12 @@ type AgentToolsUpdateRequestBuiltinMode string
 // AgentToolsUpdateRequestBuiltinPolicies defines model for AgentToolsUpdateRequest.Builtin.Policies.
 type AgentToolsUpdateRequestBuiltinPolicies string
 
-// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400.
+// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type.
 type AgentUpdateRequest struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
 
-	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged.
+	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged. Main only — workers never default.
 	Default *bool `json:"default,omitempty"`
 
 	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
@@ -4258,33 +4407,43 @@ type AgentUpdateRequest struct {
 		} `json:"to,omitempty"`
 	} `json:"delegation_policy,omitempty"`
 
-	// Description New description. Rejected on locked agents. Empty string removes it.
+	// Description New description. Rejected on locked agents. Empty string removes it. For Subagent / subagent_3p, an empty string after trim is rejected 400 (description is required for workers per the routing contract).
 	Description *string `json:"description,omitempty"`
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-	// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// When absent the default is "native". Only "native" is functional in v0.1.0.
+	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
+	// When the agent has no executor block, the default is "native".
 	Executor *struct {
-		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+		// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 		Cli *AgentUpdateRequestExecutorCli `json:"cli,omitempty"`
 
-		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
-		Kind AgentUpdateRequestExecutorKind `json:"kind"`
+		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		CliArgs *string `json:"cli_args,omitempty"`
+
+		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
+		CliPath *string `json:"cli_path,omitempty"`
+
+		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+		Kind *AgentUpdateRequestExecutorKind `json:"kind,omitempty"`
 	} `json:"executor,omitempty"`
 
-	// FallbackModels Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007).
+	// FallbackModels Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
 	// Heartbeat New HEARTBEAT.md content. Rejected on locked agents. Writing this triggers a config reload.
 	Heartbeat *string `json:"heartbeat,omitempty"`
 
-	// HeartbeatEnabled Enable/disable heartbeat loop. Allowed on all agents.
+	// HeartbeatEnabled Enable/disable heartbeat loop. Allowed on all agents (Main only).
 	HeartbeatEnabled *bool `json:"heartbeat_enabled,omitempty"`
 
-	// HeartbeatInterval New heartbeat interval in seconds. Allowed on all agents.
+	// HeartbeatInterval New heartbeat interval in seconds. Allowed on all agents (Main only).
 	HeartbeatInterval *int `json:"heartbeat_interval,omitempty"`
 
 	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
@@ -4299,7 +4458,7 @@ type AgentUpdateRequest struct {
 	// Model New model name. Allowed on all agents.
 	Model *string `json:"model,omitempty"`
 
-	// ModelParams LLM sampling parameters applied to this agent's requests.
+	// ModelParams LLM sampling parameters applied to this agent's requests. Rejected 400 on subagent_3p agents (CLI may not support these flags).
 	ModelParams *struct {
 		// MaxTokens Maximum tokens to generate per turn.
 		MaxTokens *int `json:"max_tokens,omitempty"`
@@ -4329,30 +4488,27 @@ type AgentUpdateRequest struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// SandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
+	// SandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
 	SandboxProfile *AgentUpdateRequestSandboxProfile `json:"sandbox_profile,omitempty"`
 
-	// ShellPolicy Per-agent shell command deny-pattern configuration.
+	// ShellPolicy Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Must each be valid Go regexp patterns (400 on invalid regexp).
 		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
 		EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
 	} `json:"shell_policy,omitempty"`
 
-	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills.
+	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
 	Skills *[]string `json:"skills,omitempty"`
 
-	// Soul New SOUL.md content (agent system prompt). Rejected on locked agents. Writing this triggers a config reload.
+	// Soul New SOUL.md content (agent system prompt). Rejected on locked agents. Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
 	Soul *string `json:"soul,omitempty"`
 
-	// SteeringMode New steering mode. Allowed on all agents.
-	SteeringMode *string `json:"steering_mode,omitempty"`
+	// SteeringMode New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
+	SteeringMode *AgentUpdateRequestSteeringMode `json:"steering_mode,omitempty"`
 
 	// TimeoutSeconds New timeout in seconds per turn. Allowed on all agents.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-
-	// ToolFeedback Enable/disable tool feedback loop. Allowed on all agents.
-	ToolFeedback *bool `json:"tool_feedback,omitempty"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
@@ -4378,7 +4534,7 @@ type AgentUpdateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear.
+	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
 	Voice *string `json:"voice,omitempty"`
 }
 
@@ -4391,14 +4547,17 @@ type AgentUpdateRequestDelegationPolicyModes string
 // AgentUpdateRequestDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
 type AgentUpdateRequestDelegationPolicyToKind string
 
-// AgentUpdateRequestExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+// AgentUpdateRequestExecutorCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 type AgentUpdateRequestExecutorCli string
 
-// AgentUpdateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+// AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentUpdateRequestExecutorKind string
 
-// AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
+// AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
 type AgentUpdateRequestSandboxProfile string
+
+// AgentUpdateRequestSteeringMode New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
+type AgentUpdateRequestSteeringMode string
 
 // AgentUpdateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
 type AgentUpdateRequestToolsCfgBuiltinDefaultPolicy string
@@ -5074,22 +5233,32 @@ type ExecProxyStatus struct {
 }
 
 // ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
+// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
+// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 // "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-// When absent the default is "native". Only "native" is functional in v0.1.0.
+// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
+// When the agent has no executor block, the default is "native".
 type ExecutorConfig struct {
-	// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+	// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	Cli *ExecutorConfigCli `json:"cli,omitempty"`
 
-	// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
-	Kind ExecutorConfigKind `json:"kind"`
+	// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+	CliArgs *string `json:"cli_args,omitempty"`
+
+	// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
+	CliPath *string `json:"cli_path,omitempty"`
+
+	// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+	// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+	Kind *ExecutorConfigKind `json:"kind,omitempty"`
 }
 
-// ExecutorConfigCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+// ExecutorConfigCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 type ExecutorConfigCli string
 
-// ExecutorConfigKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+// ExecutorConfigKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type ExecutorConfigKind string
 
 // FallbackModel One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
@@ -7347,6 +7516,18 @@ type VersionResponse struct {
 
 	// Version Omnipus gateway version string (e.g. "0.1.0"). Must follow semver format.
 	Version string `json:"version"`
+}
+
+// VoiceProvider Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over.
+type VoiceProvider struct {
+	// Provider Identifier of the currently active voice provider (e.g. "openai-tts", "elevenlabs", "google-tts", "azure-speech", "piper"). null when no voice provider is configured globally — the SPA renders the field as disabled.
+	Provider *string `json:"provider"`
+
+	// Voices Populated when the active provider exposes a voices enum (OpenAI TTS, ElevenLabs, Google TTS, Azure Speech, Piper). The SPA renders a dropdown using this list. Absent or empty when the provider has no enum, or when no provider is configured.
+	Voices *[]string `json:"voices,omitempty"`
+
+	// VoicesEndpoint Optional URL of the provider's voices-list endpoint (for paginated providers like ElevenLabs). Absent when not applicable.
+	VoicesEndpoint *string `json:"voices_endpoint,omitempty"`
 }
 
 // Workspace A Level 1 workspace record. Workspaces are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate.
