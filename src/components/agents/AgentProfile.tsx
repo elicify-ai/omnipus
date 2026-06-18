@@ -11,6 +11,7 @@ import {
   Star,
   ArrowUp,
   ArrowDown,
+  Warning,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
@@ -855,7 +856,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <div className="space-y-1.5">
                   <p className="text-xs text-[var(--color-muted)]">Fallback models (tried in order if primary fails)</p>
                   <div className="flex flex-wrap gap-1.5 p-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
-                    {fallbackModels.map((entry, idx) => (
+                    {fallbackModels.map((entry, idx) => {
+                      // W6-C2 / I11: persistent indicator. When the chip's
+                      // `provider` field is empty, the model is not in any
+                      // connected provider — the runtime cannot resolve
+                      // it, so the fallback would silently fail. Surface
+                      // the warning directly on the chip (aria-label is
+                      // the canonical accessible name; the visible icon is
+                      // redundant signaling for sighted users).
+                      const providerMissing = entry.provider === ''
+                      return (
                       <span
                         key={entry.model}
                         data-testid={`fallback-chip-model-${entry.model}`}
@@ -912,8 +922,25 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         >
                           <X size={10} />
                         </button>
+                        {providerMissing && (
+                          // W6-C2 / I11: persistent warning indicator.
+                          // The aria-label is the canonical accessible
+                          // name for screen readers; the visible icon
+                          // is redundant signaling so sighted users
+                          // also catch the issue.
+                          <span
+                            data-testid={`fallback-chip-warning-${entry.model}`}
+                            role="img"
+                            aria-label="Provider not connected — fallback will not be used at runtime"
+                            title="Provider not connected — fallback will not be used at runtime"
+                            className="inline-flex items-center text-amber-400"
+                          >
+                            <Warning size={11} weight="fill" />
+                          </span>
+                        )}
                       </span>
-                    ))}
+                      )
+                    })}
                     {/* Add UI: a second <ModelSelector> dedicated to the
                         fallback list. It mounts as a separate combobox so the
                         primary model selector above stays untouched. The
