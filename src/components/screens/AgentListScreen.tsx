@@ -58,7 +58,7 @@ export function AgentListScreen() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
             <div
               key={i}
@@ -125,13 +125,12 @@ export function AgentListScreen() {
                 </p>
               </div>
             ) : (
-              <div
-                className={`grid gap-4 ${
-                  baseAgents.length < 4
-                    ? 'grid-cols-1'
-                    : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-                }`}
-              >
+              // Grid progression: 1 col → 2 col (sm) → 3 col (lg). No xl/2xl
+              // jump to 4 cols (avoids the "4th card sits alone at 1440 px"
+              // regression on lg-only viewports). With 4 cards at lg the
+              // layout is 3 + 1; the sm 2-col stage lets 2 + 2 sit
+              // together on md. (W6-B2, I4+M3.)
+              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                 {baseAgents.map((agent) => (
                   <AgentCard
                     key={agent.id}
@@ -179,13 +178,8 @@ export function AgentListScreen() {
                 </p>
               </div>
             ) : (
-              <div
-                className={`grid gap-4 ${
-                  workerAgents.length < 4
-                    ? 'grid-cols-1'
-                    : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-                }`}
-              >
+              // Same 1→2→3 progression as the base grid (W6-B2, I4+M3).
+              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                 {workerAgents.map((agent) => (
                   <WorkerCard key={agent.id} agent={agent} />
                 ))}
