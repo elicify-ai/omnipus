@@ -9,10 +9,18 @@ export function ToastContainer() {
 
   return (
     <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
-      {toasts.map((toast) => (
+      {toasts.map((toast) => {
+        // ARIA APG toast pattern: a toast is a transient status message,
+        // not a modal dialog. Errors must be announced immediately
+        // (role="alert" carries implicit aria-live="assertive"); info,
+        // success, and warning use role="status" with implicit
+        // aria-live="polite" so they don't interrupt the user.
+        const toastRole = toast.variant === 'error' ? 'alert' : 'status'
+        return (
         <div
           key={toast.id}
           data-testid={toast.testId}
+          role={toastRole}
           className={cn(
             'flex items-start gap-3 rounded-lg border px-4 py-3 shadow-lg pointer-events-auto',
             'animate-in slide-in-from-bottom-2 fade-in',
@@ -44,7 +52,8 @@ export function ToastContainer() {
             <X size={14} />
           </button>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
