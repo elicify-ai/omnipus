@@ -77,7 +77,7 @@ export function AgentListScreen() {
         <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
           <Robot size={48} weight="thin" className="text-[var(--color-border)]" />
           <div>
-            <p className="text-[var(--color-secondary)] font-medium">No agents yet</p>
+            <p className="text-[var(--color-secondary)] font-medium text-sm">No agents yet</p>
             <p className="text-[var(--color-muted)] text-sm mt-1">
               Create your first agent to get started.
             </p>
@@ -104,9 +104,9 @@ export function AgentListScreen() {
               </div>
               <Button
                 size="sm"
-                variant="outline"
+                variant="ghost"
                 onClick={() => openCreateAgentModal('custom')}
-                className="gap-1.5 shrink-0"
+                className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                 data-testid="new-base-agent-button"
               >
                 <Plus size={12} weight="bold" /> New agent
@@ -117,10 +117,10 @@ export function AgentListScreen() {
                 className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
                 data-testid="base-agents-empty"
               >
-                <p className="text-xs text-[var(--color-muted)]">
+                <p className="text-sm text-[var(--color-muted)]">
                   No base agents yet.
                 </p>
-                <p className="text-[11px] text-[var(--color-muted)]/70 mt-1">
+                <p className="text-sm text-[var(--color-muted)]/80 mt-1">
                   Create your first chat colleague to get started.
                 </p>
               </div>
@@ -157,9 +157,9 @@ export function AgentListScreen() {
               </div>
               <Button
                 size="sm"
-                variant="outline"
+                variant="ghost"
                 onClick={() => openCreateAgentModal('worker')}
-                className="gap-1.5 shrink-0"
+                className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                 data-testid="new-worker-button"
               >
                 <Plus size={12} weight="bold" /> New worker
@@ -170,10 +170,10 @@ export function AgentListScreen() {
                 className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
                 data-testid="worker-agents-empty"
               >
-                <p className="text-xs text-[var(--color-muted)]">
+                <p className="text-sm text-[var(--color-muted)]">
                   No sub-agent workers yet.
                 </p>
-                <p className="text-[11px] text-[var(--color-muted)]/70 mt-1">
+                <p className="text-sm text-[var(--color-muted)]/80 mt-1">
                   Create a worker to delegate labour to a third-party runtime.
                 </p>
               </div>
