@@ -109,6 +109,16 @@ interface IconRendererProps {
 }
 
 export function IconRenderer({ icon, size = 18, className, weight = 'regular' }: IconRendererProps) {
-  const Icon = (icon && ICON_MAP[icon]) || Robot
+  // W6-B3 / C8: case-insensitive lookup. Agents may have `icon` set to
+  // "Robot", "robot", or "ROBOT" (the backend sometimes emits the catalog's
+  // canonical PascalCase, sometimes whatever the user typed in the form).
+  // The previous direct `ICON_MAP[icon]` failed any case-mismatched input
+  // and silently fell back to the Robot icon — which is why Mia, Jim, Ava,
+  // and Ray all rendered the same default. `getIconComponent` (in
+  // @/lib/agentIcons) is the canonical case-insensitive resolver; this
+  // function stays here because it adds the larger BRD Appendix D catalog
+  // (e.g. "magnifying-glass", "shield-check", "flow-arrow") that the
+  // 10-entry create-modal catalog does not cover.
+  const Icon = (icon && ICON_MAP[icon.toLowerCase()]) || Robot
   return <Icon size={size} className={className} weight={weight} />
 }
