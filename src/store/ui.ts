@@ -18,14 +18,19 @@ interface UiStore {
   // Create agent modal
   createAgentModalOpen: boolean
   /**
-   * Tier preset for the create-agent modal. Controls which form shape the
-   * modal renders and which `type` value the create request sends. Reset to
-   * 'custom' on every close so the next open defaults back to the base-agent
-   * shape unless an explicit opener (e.g. the per-section "New…" buttons on
-   * the Agents screen) sets it again.
+   * Lifecycle preset for the create-agent modal. Controls which wizard branch
+   * the modal renders and which `type` value the create request sends. Reset
+   * to 'Main' on every close so the next open defaults back to the chat-agent
+   * shape unless an explicit opener (e.g. the per-section "+ Add" buttons on
+   * the Agents screen, W6) sets it again.
+   *
+   * W4 (agent-form-requirements): widened from `'custom' | 'worker'` (the
+   * legacy 2-tier enum) to the 3-type wire enum (`Main` / `Subagent` /
+   * `subagent_3p`). The store is the single source of truth for the wizard's
+   * locked type; the modal renders the corresponding wizard branch.
    */
-  createAgentModalType: 'custom' | 'worker'
-  openCreateAgentModal: (type?: 'custom' | 'worker') => void
+  createAgentModalType: 'Main' | 'Subagent' | 'subagent_3p'
+  openCreateAgentModal: (type?: 'Main' | 'Subagent' | 'subagent_3p') => void
   closeCreateAgentModal: () => void
 
   // Edit/view agent slide-over; null = closed.
@@ -62,11 +67,11 @@ export const useUiStore = create<UiStore>((set, get) => ({
   closeSessionPanel: () => set({ sessionPanelOpen: false }),
 
   createAgentModalOpen: false,
-  createAgentModalType: 'custom',
+  createAgentModalType: 'Main',
   openCreateAgentModal: (type) =>
-    set({ createAgentModalOpen: true, createAgentModalType: type ?? 'custom' }),
+    set({ createAgentModalOpen: true, createAgentModalType: type ?? 'Main' }),
   closeCreateAgentModal: () =>
-    set({ createAgentModalOpen: false, createAgentModalType: 'custom' }),
+    set({ createAgentModalOpen: false, createAgentModalType: 'Main' }),
 
   editAgentId: null,
   openEditAgentSlideOver: (agentId) => set({ editAgentId: agentId }),
