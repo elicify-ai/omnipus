@@ -1289,9 +1289,12 @@ function ProfileSheet({
 }) {
   return (
     <Sheet open={isOpen} onOpenChange={(o) => { if (!o) onClose() }}>
+      {/* W6-B1 / I2: dropped the `widthClass="w-full sm:max-w-3xl"` literal so
+          this picks up sheet.tsx's right-side default (`w-[90vw] sm:max-w-2xl`,
+          i.e. 90vw on mobile, 672 px on desktop). Caps the Edit slide-over at
+          ~32rem/90vw instead of 768 px / 47% of a 1440 viewport. */}
       <SheetContent
         side="right"
-        widthClass="w-full sm:max-w-3xl"
         className="flex flex-col gap-0 p-0"
       >
         <SheetTitle className="sr-only">{title}</SheetTitle>
