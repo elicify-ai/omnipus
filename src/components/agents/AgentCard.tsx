@@ -65,7 +65,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                 <Star size={11} weight="fill" className="text-[var(--color-accent)] shrink-0" aria-label="Default agent" />
               )}
             </div>
-            <p className="text-xs text-[var(--color-muted)] line-clamp-2 mb-2">
+            <p className="text-sm text-[var(--color-muted)] line-clamp-2 mb-2">
               {agent.description || 'No description'}
             </p>
             <div className="flex items-center gap-2 flex-wrap">
@@ -78,7 +78,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               )}
               {agent.model && (
                 <span
-                  className="text-[10px] font-mono text-[var(--color-muted)] truncate max-w-[140px]"
+                  className="text-xs font-mono text-[var(--color-muted)] truncate max-w-[140px]"
                   title={agent.model}
                 >
                   {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}
@@ -86,12 +86,12 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               )}
             </div>
             {agent.status === 'draft' && agent.type === 'custom' && (
-              <p className="text-[10px] text-[var(--color-warning)]/70 mt-1">
+              <p className="text-xs text-[var(--color-warning)]/70 mt-1">
                 Set up SOUL.md to activate this agent
               </p>
             )}
             {agent.status === 'error' && (
-              <p className="text-[10px] text-[var(--color-error)]/70 mt-1">
+              <p className="text-xs text-[var(--color-error)]/70 mt-1">
                 Agent encountered an error — check the activity log
               </p>
             )}
@@ -99,15 +99,17 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         </div>
       </button>
 
-      {/* "Set as default" sits outside the card button to avoid nested-button HTML violation */}
+      {/* "Set as default" sits outside the card button to avoid nested-button HTML violation.
+          Persistent (no group-hover gating — touch users would never see it) and sized for a
+          44×44 tap target per WCAG 2.5.8. */}
       {!agent.default && onSetDefault && (
         <button
           type="button"
           onClick={onSetDefault}
-          className="absolute bottom-3 right-4 flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors opacity-0 group-hover/card:opacity-100"
+          className="absolute bottom-3 right-4 flex items-center justify-center gap-1 min-h-[44px] min-w-[44px] px-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
           aria-label={`Set ${agent.name} as default agent`}
         >
-          <Star size={10} />
+          <Star size={12} weight="fill" />
           Set as default
         </button>
       )}

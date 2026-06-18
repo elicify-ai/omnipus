@@ -81,7 +81,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
               </span>
               {/* NB: no heartbeat indicator and no default-★ — workers never have them. */}
             </div>
-            <p className="text-xs text-[var(--color-muted)] line-clamp-2 mb-2">
+            <p className="text-sm text-[var(--color-muted)] line-clamp-2 mb-2">
               {agent.description || 'No description'}
             </p>
             <div className="flex items-center gap-2 flex-wrap">
@@ -95,12 +95,12 @@ export function WorkerCard({ agent }: WorkerCardProps) {
                     : `Runtime: ${executorLabel(agent.executor)}`
                 }
               >
-                <Lightning size={10} weight="fill" className="text-[var(--color-accent)]" />
+                <Lightning size={12} weight="fill" className="text-[var(--color-accent)]" />
                 {executorLabel(agent.executor)}
               </Badge>
               {agent.model && (
                 <span
-                  className="text-[10px] font-mono text-[var(--color-muted)] truncate max-w-[140px]"
+                  className="text-xs font-mono text-[var(--color-muted)] truncate max-w-[140px]"
                   title={agent.model}
                 >
                   {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}
@@ -134,10 +134,10 @@ function WorkerTestRun({ agentId, isExternalCli }: { agentId: string; isExternal
         disabled
         data-testid={`worker-test-run-${agentId}`}
         title="Native runners have no external connection to test."
-        className="absolute bottom-3 right-4 flex items-center gap-1 text-[10px] text-[var(--color-muted)]/50 cursor-not-allowed"
+        className="absolute bottom-3 right-4 flex items-center gap-1 text-xs text-[var(--color-muted)]/50 cursor-not-allowed"
         aria-label={`Test run for ${agentId} (unavailable for native runtime)`}
       >
-        <Lightning size={10} />
+        <Lightning size={12} />
         Test run
       </button>
     )
@@ -153,14 +153,14 @@ function WorkerTestRun({ agentId, isExternalCli }: { agentId: string; isExternal
           reset()
           mutate()
         }}
-        className="flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors disabled:opacity-60"
+        className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors disabled:opacity-60"
         aria-label={`Test run for ${agentId}`}
       >
-        {isPending ? <Spinner size={10} className="animate-spin" /> : <Lightning size={10} />}
+        {isPending ? <Spinner size={12} className="animate-spin" /> : <Lightning size={12} />}
         {isPending ? 'Testing…' : 'Test run'}
       </button>
       {error && (
-        <span className="text-[10px] text-[var(--color-error)] max-w-[180px] truncate" title={isApiError(error) ? error.userMessage : error.message}>
+        <span className="text-xs text-[var(--color-error)] max-w-[180px] truncate" title={isApiError(error) ? error.userMessage : error.message}>
           Test failed
         </span>
       )}
@@ -183,12 +183,12 @@ function WorkerTestResultPill({ result }: { result: RunnerTestResponse }) {
       : 'text-[var(--color-error)]'
   return (
     <span
-      className={`flex items-center gap-1 text-[10px] ${tone} max-w-[200px]`}
+      className={`flex items-center gap-1 text-xs ${tone} max-w-[200px]`}
       data-testid={`worker-test-result-${result.cli || 'cli'}`}
       data-reason={result.reason || 'ok'}
       title={result.message}
     >
-      <Icon size={11} weight="fill" className="shrink-0" />
+      <Icon size={12} weight="fill" className="shrink-0" />
       <span className="truncate">{result.message}</span>
     </span>
   )
