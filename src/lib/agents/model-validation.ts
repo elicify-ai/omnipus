@@ -35,7 +35,7 @@
  * Zod runtime; callers pass the same fields they already have on hand
  * from `fetchProviders()` (`src/lib/api.ts`).
  */
-export interface ProviderForValidation {
+export interface ProviderForValidation { // not-wire-format: subset of wire Provider used by validation helpers, never emitted on the boundary
   id: string
   name: string
   display_name?: string

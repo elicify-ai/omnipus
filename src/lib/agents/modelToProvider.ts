@@ -25,7 +25,7 @@ import type { Provider } from '@/lib/api/generated/openapi-types'
  * @returns A `useMemo`-stable `Record<model, providerId>` plus a small
  *   lookup helper for single-model queries.
  */
-export interface ModelToProviderResult {
+export interface ModelToProviderResult { // not-wire-format: hook return shape (Record + lookup fn), never crosses the gateway boundary
   /** `model → providerId` map. Empty string values are not stored (the
    *  map only contains entries that resolved to a non-empty id). */
   byModel: Record<string, string>
