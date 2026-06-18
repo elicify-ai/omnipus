@@ -698,4 +698,34 @@ describe('AgentProfile — provider-aware fallback editor', () => {
       { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
     ])
   })
+
+  // W6-C2 / I11: persistent indicator when the chip's provider field
+  // is empty. The model is not in any connected provider, so the
+  // fallback would silently fail at runtime. The chip must surface
+  // a persistent indicator with a canonical accessible name; the
+  // pre-C2 dash was unexplained (the ticket).
+  it('shows the persistent warning indicator + aria-label when provider is missing (I11)', async () => {
+    // Hydrate with an entry whose provider was empty on the wire (e.g.
+    // a free-text model that was never connected). After hydration the
+    // chip's `provider` field stays empty because `modelToProvider`
+    // cannot resolve the slug.
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [
+        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
+        { model: 'some-unconnected-slug', provider: '' },
+      ],
+    })
+    // The unconnected chip has the persistent warning indicator.
+    const warning = screen.getByTestId('fallback-chip-warning-some-unconnected-slug')
+    expect(warning).toBeInTheDocument()
+    expect(warning.getAttribute('aria-label')).toBe(
+      'Provider not connected — fallback will not be used at runtime',
+    )
+    expect(warning.getAttribute('title')).toBe(
+      'Provider not connected — fallback will not be used at runtime',
+    )
+    // The connected chip does NOT show the indicator (regression guard).
+    expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
+  })
 })
