@@ -41,7 +41,9 @@ func makeSessionMsg(sessionID, content string) bus.InboundMessage {
 	return bus.InboundMessage{
 		Channel:   "web",
 		ChatID:    "chat-" + sessionID,
-		SenderID:  "user-" + sessionID,
+		Sender: bus.SenderInfo{
+			CanonicalID: "user-" + sessionID,
+		},
 		SessionID: sessionID,
 		Content:   content,
 	}

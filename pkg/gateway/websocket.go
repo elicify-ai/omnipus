@@ -1123,8 +1123,10 @@ func (h *WSHandler) handleChatMessage(
 	}
 
 	msg := bus.InboundMessage{
-		Channel:   "webchat",
-		SenderID:  "webchat_user",
+		Channel: "webchat",
+		Sender: bus.SenderInfo{
+			CanonicalID: "webchat_user",
+		},
 		ChatID:    chatID,
 		Content:   content,
 		SessionID: sessionID,

@@ -189,10 +189,12 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Publish the inbound message to the bus.
 	msg := bus.InboundMessage{
-		Channel:  "webchat",
-		SenderID: "webchat_user",
-		ChatID:   chatID,
-		Content:  body.Message,
+		Channel: "webchat",
+		Sender: bus.SenderInfo{
+			CanonicalID: "webchat_user",
+		},
+		ChatID:  chatID,
+		Content: body.Message,
 	}
 	if err := h.msgBus.PublishInbound(r.Context(), msg); err != nil {
 		writeSSEEvent(w, "error", map[string]string{"error": err.Error()})

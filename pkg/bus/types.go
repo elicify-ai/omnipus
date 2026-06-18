@@ -29,8 +29,9 @@ type SenderInfo struct {
 
 type InboundMessage struct {
 	Channel string `json:"channel"`
-	// Deprecated: use Sender.CanonicalID instead. Retained for backward compatibility.
-	SenderID   string     `json:"sender_id"`
+	// Sender carries the structured sender identity. Use Sender.CanonicalID
+	// (e.g. "telegram:123") for routing keys and audit logs; use
+	// Sender.DisplayName / Sender.Username for human-facing UI.
 	Sender     SenderInfo `json:"sender"`
 	ChatID     string     `json:"chat_id"`
 	Content    string     `json:"content"`

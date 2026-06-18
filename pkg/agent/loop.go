@@ -3426,8 +3426,10 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	}
 
 	msg := bus.InboundMessage{
-		Channel:    channel,
-		SenderID:   "cron",
+		Channel: channel,
+		Sender: bus.SenderInfo{
+			CanonicalID: "cron",
+		},
 		ChatID:     chatID,
 		Content:    content,
 		SessionKey: sessionKey,
@@ -3583,11 +3585,11 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	}
 	logger.InfoCF(
 		"agent",
-		fmt.Sprintf("Processing message from %s:%s: %s", msg.Channel, msg.SenderID, logContent),
+		fmt.Sprintf("Processing message from %s:%s: %s", msg.Channel, msg.Sender.CanonicalID, logContent),
 		map[string]any{
 			"channel":     msg.Channel,
 			"chat_id":     msg.ChatID,
-			"sender_id":   msg.SenderID,
+			"sender_id":   msg.Sender.CanonicalID,
 			"session_key": msg.SessionKey,
 		},
 	)
@@ -3687,7 +3689,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		SessionKey:          sessionKey,
 		Channel:             msg.Channel,
 		ChatID:              msg.ChatID,
-		SenderID:            msg.SenderID,
+		SenderID:            msg.Sender.CanonicalID,
 		SenderDisplayName:   msg.Sender.DisplayName,
 		UserMessage:         msg.Content,
 		Media:               msg.Media,
@@ -3884,7 +3886,7 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		logger.WarnCF("agent", "Unroutable message rejected — no matching agent and no default",
 			map[string]any{
 				"channel":        msg.Channel,
-				"sender_id":      msg.SenderID,
+				"sender_id":      msg.Sender.CanonicalID,
 				"chat_id":        msg.ChatID,
 				"resolved_agent": route.AgentID,
 			})
@@ -3959,7 +3961,7 @@ func (al *AgentLoop) processSystemMessage(
 
 	logger.InfoCF("agent", "Processing system message",
 		map[string]any{
-			"sender_id": msg.SenderID,
+			"sender_id": msg.Sender.CanonicalID,
 			"chat_id":   msg.ChatID,
 		})
 
@@ -3984,7 +3986,7 @@ func (al *AgentLoop) processSystemMessage(
 	if constants.IsInternalChannel(originChannel) {
 		logger.InfoCF("agent", "Subagent completed (internal channel)",
 			map[string]any{
-				"sender_id":   msg.SenderID,
+				"sender_id":   msg.Sender.CanonicalID,
 				"content_len": len(content),
 				"channel":     originChannel,
 			})
@@ -4004,7 +4006,7 @@ func (al *AgentLoop) processSystemMessage(
 		SessionKey:      sessionKey,
 		Channel:         originChannel,
 		ChatID:          originChatID,
-		UserMessage:     fmt.Sprintf("[System: %s] %s", msg.SenderID, msg.Content),
+		UserMessage:     fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
 		DefaultResponse: "Background task completed.",
 		EnableSummary:   false,
 		SendResponse:    true,
@@ -5747,10 +5749,12 @@ turnLoop:
 				pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer pubCancel()
 				if pubErr := al.bus.PublishInbound(pubCtx, bus.InboundMessage{
-					Channel:  "system",
-					SenderID: fmt.Sprintf("async:%s", asyncToolName),
-					ChatID:   fmt.Sprintf("%s:%s", ts.channel, ts.chatID),
-					Content:  content,
+					Channel: "system",
+					Sender: bus.SenderInfo{
+						CanonicalID: fmt.Sprintf("async:%s", asyncToolName),
+					},
+					ChatID:  fmt.Sprintf("%s:%s", ts.channel, ts.chatID),
+					Content: content,
 				}); pubErr != nil {
 					logger.ErrorCF("agent", "Failed to publish async tool result; result permanently lost",
 						map[string]any{"tool": asyncToolName, "channel": ts.channel, "error": pubErr.Error()})
@@ -7236,7 +7240,7 @@ func (al *AgentLoop) handleCommand(
 	result := executor.Execute(ctx, commands.Request{
 		Channel:  msg.Channel,
 		ChatID:   msg.ChatID,
-		SenderID: msg.SenderID,
+		SenderID: msg.Sender.CanonicalID,
 		Text:     msg.Content,
 		Reply: func(text string) error {
 			commandReply = text
@@ -7513,7 +7517,7 @@ func extractPeer(msg bus.InboundMessage) *routing.RoutePeer {
 	peerID := msg.Peer.ID
 	if peerID == "" {
 		if msg.Peer.Kind == "direct" {
-			peerID = msg.SenderID
+			peerID = msg.Sender.CanonicalID
 		} else {
 			peerID = msg.ChatID
 		}

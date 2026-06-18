@@ -253,17 +253,16 @@ func (c *BaseChannel) HandleMessage(
 		}
 	}
 
-	// Set SenderID to canonical if available, otherwise keep the raw senderID
-	resolvedSenderID := senderID
-	if sender.CanonicalID != "" {
-		resolvedSenderID = sender.CanonicalID
+	// Prefer Sender.CanonicalID as the structured identity; fall back to the
+	// raw senderID for callers that haven't populated the SenderInfo struct.
+	if sender.CanonicalID == "" {
+		sender.CanonicalID = senderID
 	}
 
 	scope := BuildMediaScope(c.name, chatID, messageID)
 
 	msg := bus.InboundMessage{
 		Channel:    c.name,
-		SenderID:   resolvedSenderID,
 		Sender:     sender,
 		ChatID:     chatID,
 		Content:    content,
