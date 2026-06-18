@@ -301,13 +301,15 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                     <div className="flex-1 space-y-3">
                       <div>
                         <p className="text-[10px] text-[var(--color-muted)] mb-1.5">Color</p>
+                        {/* W6-A1 / C3: 40x40 tap target (WCAG 2.5.8 AA). Visual swatch stays
+                            full-bleed; the button's extra padding gives the tap surface. */}
                         <div className="flex gap-2 flex-wrap">
                           {AVATAR_COLORS.map((c) => (
                             <button
                               key={c}
                               type="button"
                               onClick={() => setColor(c)}
-                              className={`w-6 h-6 rounded-full transition-transform ${color === c ? 'ring-2 ring-[var(--color-secondary)] ring-offset-2 ring-offset-[var(--color-surface-1)] scale-110' : 'hover:scale-110'}`}
+                              className={`h-10 w-10 rounded-full p-0 flex items-center justify-center transition-transform ${color === c ? 'ring-2 ring-[var(--color-secondary)] ring-offset-2 ring-offset-[var(--color-surface-1)] scale-110' : 'hover:scale-110'}`}
                               style={{ backgroundColor: c }}
                               aria-label={`Select color ${c}`}
                             />
@@ -316,20 +318,22 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                       </div>
                       <div>
                         <p className="text-[10px] text-[var(--color-muted)] mb-1.5">Icon</p>
-                        <div className="grid grid-cols-5 gap-1.5">
+                        {/* W6-A1 / C3: 44x44 tap target (WCAG 2.5.8 AA). grid-cols-5 + gap-2
+                            keeps the row from wrapping awkwardly on the modal's 3xl width. */}
+                        <div className="grid grid-cols-5 gap-2">
                           {ICON_OPTIONS.map(({ name: iconName, component: IconComp }) => (
                             <button
                               key={iconName}
                               type="button"
                               onClick={() => setIcon(iconName)}
                               title={iconName}
-                              className={`flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
+                              className={`h-11 w-11 rounded-md transition-colors flex items-center justify-center ${
                                 icon === iconName
                                   ? 'bg-[var(--color-accent)] text-[var(--color-primary)]'
                                   : 'bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
                               }`}
                             >
-                              <IconComp size={16} />
+                              <IconComp size={18} />
                             </button>
                           ))}
                         </div>
