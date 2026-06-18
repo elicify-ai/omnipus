@@ -44,11 +44,19 @@ const sideVariants = {
   right: 'inset-y-0 right-0 h-full w-full border-l border-[var(--color-border)] data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
 }
 
+/**
+ * Per-side default width. The right side (slide-over) is capped at 32rem /
+ * sm:max-w-2xl (672 px) on desktop per Wave 6 finding I2 — the Edit-agent
+ * slide-over was rendering at 47% of a 1440 px viewport via the legacy
+ * sm:max-w-3xl literal (768 px). 90vw on mobile keeps the slide-over inside
+ * the viewport on phone widths. Callers may still override via the
+ * `widthClass` prop (e.g. CreateAgentModal keeps its wider sm:max-w-3xl).
+ */
 const sideDefaultWidth = {
   top: '',
   bottom: '',
-  left: 'sm:w-80',
-  right: 'sm:w-80',
+  left: 'w-[90vw] sm:max-w-md',
+  right: 'w-[90vw] sm:max-w-2xl',
 }
 
 const SheetContent = React.forwardRef<
