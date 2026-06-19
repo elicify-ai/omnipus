@@ -203,8 +203,8 @@ describe('AgentProfile — core agent sections (test #13)', () => {
     // Traces to: wave5a-wire-ui-spec.md — US-7 AC2: core agent sections
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    expect(screen.getByText(/core/i)).toBeInTheDocument()
-    expect(screen.getByText(/Model/)).toBeInTheDocument()
+    expect(screen.getAllByText(/core/i).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText(/Model/).length).toBeGreaterThanOrEqual(1)
   })
 
   it('shows Rate Limits section with "Use global defaults" for core agent', async () => {
@@ -540,7 +540,9 @@ describe('AgentProfile — Sandbox callout when executor is external-cli (G10)',
       sandbox_profile: 'workspace',
     })
     renderProfile('web-researcher')
-    const callout = await screen.findByTestId('sandbox-external-cli-ignored-callout')
+    const callouts = await screen.findAllByTestId('sandbox-external-cli-ignored-callout')
+    expect(callouts.length).toBeGreaterThanOrEqual(1)
+    const callout = callouts[0]
     expect(callout).toHaveAttribute('role', 'note')
     expect(callout).toHaveAttribute('aria-live', 'polite')
     expect(callout).toHaveTextContent(/sandbox profile is ignored when executor\.kind=external-cli/i)
@@ -588,9 +590,9 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     // Open the Personality tab and assert the worker relabel + no heartbeat
     switchTab('tab-personality')
     const taskPrompt = await screen.findByTestId('worker-task-prompt')
-    // Optional: not required by the browser, no aria-required="true"
-    expect((taskPrompt as HTMLTextAreaElement).required).toBe(false)
-    expect(taskPrompt.getAttribute('aria-required')).not.toBe('true')
+    // Worker task prompt is required (spec change: remove optional label).
+    expect((taskPrompt as HTMLTextAreaElement).required).toBe(true)
+    expect(taskPrompt.getAttribute('aria-required')).toBe('true')
     // The "Personality & instructions" persona framing is gone for workers
     expect(screen.queryByText(/Personality\s*&\s*instructions/i)).toBeNull()
     // No heartbeat affordances for workers
@@ -796,11 +798,13 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     renderProfile('mia')
     await screen.findByText('Mia')
     // The summary panel is present (G6), the locked note is visible.
-    expect(screen.getByTestId('fallback-summary-locked')).toBeInTheDocument()
-    expect(screen.getByText(/inherited from the locked core config/i)).toBeInTheDocument()
+    // With desktop Tabs and mobile Accordion both in the DOM, the Basics
+    // panel duplicates the summary; assert at least one is visible.
+    expect(screen.getAllByTestId('fallback-summary-locked-basics').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText(/inherited from the locked core config/i).length).toBeGreaterThanOrEqual(1)
     // The summary lists the configured fallback (model + provider).
-    expect(screen.getByTestId('fallback-summary-model-claude-opus-4-6')).toHaveTextContent(/claude-opus-4-6/)
-    expect(screen.getByTestId('fallback-summary-provider-claude-opus-4-6')).toHaveTextContent(/anthropic/i)
+    expect(screen.getAllByTestId('fallback-summary-model-claude-opus-4-6')[0]).toHaveTextContent(/claude-opus-4-6/)
+    expect(screen.getAllByTestId('fallback-summary-provider-claude-opus-4-6')[0]).toHaveTextContent(/anthropic/i)
     // The EDITOR affordances (chip, add-trigger, provider select) must
     // NOT render for locked agents — the summary is read-only.
     expect(screen.queryByTestId('fallback-chip-model-claude-opus-4-6')).toBeNull()
@@ -814,8 +818,8 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
     await screen.findByText('Mia')
-    expect(screen.getByTestId('fallback-summary-locked')).toBeInTheDocument()
-    expect(screen.getByText(/no fallback chain configured/i)).toBeInTheDocument()
+    expect(screen.getAllByTestId('fallback-summary-locked-basics').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText(/no fallback chain configured/i).length).toBeGreaterThanOrEqual(1)
   })
 
   // W6-C2 / I9: per-chip provider picker. The fallback can route through
@@ -992,11 +996,15 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     // Fallback editor is in the Tools tab. Switch to it first.
     switchTab('tab-tools')
     // The summary panel is present (G6), the locked note is visible.
-    expect(await screen.findByTestId('fallback-summary-locked')).toBeInTheDocument()
-    expect(screen.getByText(/inherited from the locked core config/i)).toBeInTheDocument()
+    expect(await screen.findByTestId('fallback-summary-locked-tools')).toBeInTheDocument()
+    expect(screen.getAllByText(/inherited from the locked core config/i).length).toBeGreaterThanOrEqual(1)
     // The summary lists the configured fallback (model + provider).
-    expect(screen.getByTestId('fallback-summary-model-claude-opus-4-6')).toHaveTextContent(/claude-opus-4-6/)
-    expect(screen.getByTestId('fallback-summary-provider-claude-opus-4-6')).toHaveTextContent(/anthropic/i)
+    screen.getAllByTestId('fallback-summary-model-claude-opus-4-6').forEach((el) => {
+      expect(el).toHaveTextContent(/claude-opus-4-6/)
+    })
+    screen.getAllByTestId('fallback-summary-provider-claude-opus-4-6').forEach((el) => {
+      expect(el).toHaveTextContent(/anthropic/i)
+    })
     // The EDITOR affordances (chip, add-trigger, provider select) must
     // NOT render for locked agents — the summary is read-only.
     expect(screen.queryByTestId('fallback-chip-model-claude-opus-4-6')).toBeNull()
@@ -1012,8 +1020,8 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     await screen.findByText('Mia')
     // Fallback editor is in the Tools tab.
     switchTab('tab-tools')
-    expect(await screen.findByTestId('fallback-summary-locked')).toBeInTheDocument()
-    expect(screen.getByText(/no fallback chain configured/i)).toBeInTheDocument()
+    expect(await screen.findByTestId('fallback-summary-locked-tools')).toBeInTheDocument()
+    expect(screen.getAllByText(/no fallback chain configured/i).length).toBeGreaterThanOrEqual(1)
   })
 
   // W6-C2 / I9: per-chip provider picker. The fallback can route through
