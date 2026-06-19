@@ -39,8 +39,8 @@ func newConcurrentTestAgentLoop(t *testing.T) (*AgentLoop, *bus.MessageBus) {
 // explicit SessionID so scope resolution produces deterministic scopes.
 func makeSessionMsg(sessionID, content string) bus.InboundMessage {
 	return bus.InboundMessage{
-		Channel:   "web",
-		ChatID:    "chat-" + sessionID,
+		Channel: "web",
+		ChatID:  "chat-" + sessionID,
 		Sender: bus.SenderInfo{
 			CanonicalID: "user-" + sessionID,
 		},

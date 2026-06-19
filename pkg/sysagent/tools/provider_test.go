@@ -25,11 +25,11 @@ func newProviderTestDeps(t *testing.T, cfg *config.Config) (*Deps, *credentials.
 	require.NoError(t, credentials.Unlock(store))
 	reloaded := false
 	deps := &Deps{
-		GetCfg:       func() *config.Config { return cfg },
-		MutateConfig: func(fn func(*config.Config) error) error { return fn(cfg) },
+		GetCfg:           func() *config.Config { return cfg },
+		MutateConfig:     func(fn func(*config.Config) error) error { return fn(cfg) },
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
-		CredStore:    store,
-		ReloadFunc:   func() error { reloaded = true; return nil },
+		CredStore:        store,
+		ReloadFunc:       func() error { reloaded = true; return nil },
 	}
 	return deps, store, &reloaded
 }

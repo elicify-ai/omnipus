@@ -87,7 +87,7 @@ func TestProcessMessage_ChannelSessionCreated(t *testing.T) {
 		Channel: "discord",
 		Sender: bus.SenderInfo{
 			CanonicalID: "discord:user-7",
-			DisplayName:  "Alice",
+			DisplayName: "Alice",
 		},
 		ChatID:  "chat-1",
 		Content: "hello",
@@ -278,7 +278,7 @@ func TestProcessMessage_ChannelUserMessageWrittenToTranscript(t *testing.T) {
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:user-42",
-			DisplayName:  "Bob",
+			DisplayName: "Bob",
 		},
 		ChatID:  "tg-chat-1",
 		Content: "hello from telegram",

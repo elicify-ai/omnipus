@@ -44,7 +44,7 @@ func newTestDeps() (*systools.Deps, *config.Config) {
 		MutateConfig: testMutateConfig(&mu, getCfg),
 		// SaveConfig is a no-op in unit tests — we inspect cfg directly.
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
-		CredStore:  nil,
+		CredStore:        nil,
 	}
 	return deps, cfg
 }
@@ -62,12 +62,12 @@ func newTestDepsWithRealSave(t *testing.T) (*systools.Deps, string) {
 	var mu sync.Mutex
 	getCfg := func() *config.Config { return cfg }
 	deps := &systools.Deps{
-		Home:         dir,
-		ConfigPath:   cfgPath,
-		GetCfg:       getCfg,
-		MutateConfig: testMutateConfig(&mu, getCfg),
+		Home:             dir,
+		ConfigPath:       cfgPath,
+		GetCfg:           getCfg,
+		MutateConfig:     testMutateConfig(&mu, getCfg),
 		SaveConfigLocked: func(cfg *config.Config) error { return config.SaveConfig(cfgPath, cfg) },
-		CredStore:    nil,
+		CredStore:        nil,
 	}
 	return deps, cfgPath
 }
@@ -117,12 +117,12 @@ func newTestDepsWithHome(t *testing.T) (*systools.Deps, string) {
 	var mu sync.Mutex
 	getCfg := func() *config.Config { return cfg }
 	deps := &systools.Deps{
-		Home:         home,
-		ConfigPath:   filepath.Join(home, "config.json"),
-		GetCfg:       getCfg,
-		MutateConfig: testMutateConfig(&mu, getCfg),
+		Home:             home,
+		ConfigPath:       filepath.Join(home, "config.json"),
+		GetCfg:           getCfg,
+		MutateConfig:     testMutateConfig(&mu, getCfg),
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
-		CredStore:    nil,
+		CredStore:        nil,
 	}
 	return deps, home
 }
@@ -641,12 +641,12 @@ func TestAgentActivate_RollbackOnSaveFailure(t *testing.T) {
 	var mu sync.Mutex
 	getCfg := func() *config.Config { return cfg }
 	deps := &systools.Deps{
-		Home:         "/tmp/omnipus-test",
-		ConfigPath:   "/tmp/omnipus-test/config.json",
-		GetCfg:       getCfg,
-		MutateConfig: testMutateConfig(&mu, getCfg),
+		Home:             "/tmp/omnipus-test",
+		ConfigPath:       "/tmp/omnipus-test/config.json",
+		GetCfg:           getCfg,
+		MutateConfig:     testMutateConfig(&mu, getCfg),
 		SaveConfigLocked: func(cfg *config.Config) error { return errors.New("disk full") },
-		CredStore:    nil,
+		CredStore:        nil,
 	}
 
 	result := systools.NewAgentActivateTool(deps).Execute(context.Background(), map[string]any{"id": "my-agent"})
@@ -671,12 +671,12 @@ func TestWithConfig_SerializesReaderWriter(t *testing.T) {
 	getCfg := func() *config.Config { return cfg }
 
 	deps := &systools.Deps{
-		Home:         t.TempDir(),
-		ConfigPath:   filepath.Join(t.TempDir(), "config.json"),
-		GetCfg:       getCfg,
-		MutateConfig: testMutateConfig(&mu, getCfg),
+		Home:             t.TempDir(),
+		ConfigPath:       filepath.Join(t.TempDir(), "config.json"),
+		GetCfg:           getCfg,
+		MutateConfig:     testMutateConfig(&mu, getCfg),
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
-		CredStore:    nil,
+		CredStore:        nil,
 	}
 	createTool := systools.NewAgentCreateTool(deps)
 
@@ -742,12 +742,12 @@ func TestSystemConfigSet_RollbackOnSaveFailure(t *testing.T) {
 	getCfg := func() *config.Config { return cfg }
 
 	deps := &systools.Deps{
-		Home:         t.TempDir(),
-		ConfigPath:   filepath.Join(t.TempDir(), "config.json"),
-		GetCfg:       getCfg,
-		MutateConfig: testMutateConfig(&mu, getCfg),
+		Home:             t.TempDir(),
+		ConfigPath:       filepath.Join(t.TempDir(), "config.json"),
+		GetCfg:           getCfg,
+		MutateConfig:     testMutateConfig(&mu, getCfg),
 		SaveConfigLocked: func(cfg *config.Config) error { return errors.New("disk full") },
-		CredStore:    nil,
+		CredStore:        nil,
 	}
 
 	tool := systools.NewConfigSetTool(deps)
@@ -787,7 +787,7 @@ func TestWithConfig_MapFieldRollback(t *testing.T) {
 		MutateConfig: testMutateConfig(&mu, getCfg),
 		// SaveConfig is a no-op — we are testing rollback on fn error, not save error.
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
-		CredStore:  nil,
+		CredStore:        nil,
 	}
 
 	sentinelErr := errors.New("fn deliberately failed")
@@ -825,12 +825,12 @@ func TestConcurrentRESTAndSysagentConfigWrite(t *testing.T) {
 	var restConfigMu sync.Mutex
 
 	deps := &systools.Deps{
-		Home:         t.TempDir(),
-		ConfigPath:   filepath.Join(t.TempDir(), "config.json"),
-		GetCfg:       getCfg,
-		MutateConfig: testMutateConfig(&mu, getCfg),
+		Home:             t.TempDir(),
+		ConfigPath:       filepath.Join(t.TempDir(), "config.json"),
+		GetCfg:           getCfg,
+		MutateConfig:     testMutateConfig(&mu, getCfg),
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
-		CredStore:    nil,
+		CredStore:        nil,
 	}
 	createTool := systools.NewAgentCreateTool(deps)
 
