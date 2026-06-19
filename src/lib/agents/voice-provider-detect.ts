@@ -26,6 +26,7 @@ import { fetchVoiceProvider, ApiError } from '@/lib/api'
 export type VoiceProviderMode = 'enum' | 'free-text' | 'disabled'
 
 export interface VoiceProviderDetectResult {
+  // not-wire-format: SPA-internal detection helper, never serialized to/from the gateway.
   mode: VoiceProviderMode
   voices?: string[]
   reason?: string
@@ -36,6 +37,7 @@ export interface VoiceProviderDetectResult {
 const SWR_WINDOW_MS = 10_000
 
 interface CacheEntry {
+  // not-wire-format: in-memory SWR cache slot for the voice widget; never serialised to the API.
   result: VoiceProviderDetectResult
   fetchedAtMs: number
 }

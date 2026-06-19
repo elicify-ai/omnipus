@@ -7,9 +7,16 @@ description: >
   At least one field must be present (minProperties: 1) — empty patches are rejected 400.
   Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400
   with code field_not_applicable_to_type.
+required:
+  - updated_at
 minProperties: 1
 additionalProperties: false
 properties:
+  updated_at:
+    type: string
+    format: date-time
+    description: ISO 8601 timestamp from the last GET /agents/{id} response. Must match the current server value or the request is rejected with 409 Conflict.
+    example: "2026-06-19T12:34:56Z"
   name:
     type: string
     minLength: 1
