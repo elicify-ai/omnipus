@@ -12,8 +12,8 @@ info:
     name: MIT
     url: https://opensource.org/licenses/MIT
 servers:
-- url: http://localhost:6060/api/v1
-  description: Local development gateway (default port 6060)
+- url: http://localhost:5000/api/v1
+  description: Local development gateway (default port 5000)
 tags:
 - name: auth
   description: "Authentication \u2014 login, logout, token validation, password management."

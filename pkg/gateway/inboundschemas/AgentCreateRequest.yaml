@@ -18,18 +18,15 @@ properties:
       - Main
       - Subagent
       - subagent_3p
-      - core
-      - system
     description: >
       Agent lifecycle to create. "Main" = user-defined chat colleague (default).
       "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" =
       a delegation-only labour agent that runs on an external CLI (claude-code / codex /
-      opencode). "core" and "system" are reserved and cannot be created via this endpoint.
+      opencode).
     example: "Main"
     default: "Main"
   description:
     type: string
-    minLength: 1
     description: >
       Short description of the agent's purpose. Required (non-empty after trim) for
       Subagent and subagent_3p — the orchestrator uses it as the basis on which it

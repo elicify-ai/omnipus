@@ -1,7 +1,9 @@
 type: object
 description: >
   An agent configuration object as returned by GET /agents and GET /agents/{id}.
-  Maps to the Go agentResponse struct and the TypeScript Agent interface in src/lib/api.ts.
+  Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go
+  and src/lib/api/generated/openapi-types.ts). The generated type is the single
+  source of truth.
   Core (locked) agents suppress soul/instructions in list responses and forbid
   identity mutations via PUT.
 required:
@@ -21,7 +23,7 @@ required:
 properties:
   id:
     type: string
-    description: Unique agent identifier. UUID for custom agents; well-known strings for core agents (e.g. "jim").
+    description: Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
     example: "550e8400-e29b-41d4-a716-446655440000"
   name:
     type: string
@@ -207,6 +209,11 @@ properties:
       (opt-in, default none).
     example:
       - "web-research"
+  updated_at:
+    type: string
+    format: date-time
+    description: ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in detail responses.
+    example: "2026-06-19T12:34:56Z"
   delegation_policy:
     $ref: './DelegationPolicy.yaml'
   voice:
