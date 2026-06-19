@@ -219,6 +219,12 @@ func drainExternalRun(
 				if ev.PermissionRequest != nil {
 					recordExternalPermission(childTS, ev.PermissionRequest)
 				}
+			case runner.EventKindToolResult:
+				// Tool result completion from the external runner: mirror it into the
+				// transcript so the run shows the tool's outcome.
+				if ev.ToolResult != nil {
+					recordExternalToolResult(childTS, ev.ToolResult)
+				}
 			case runner.EventKindEnd:
 				ended = true
 			case runner.EventKindError:
@@ -321,6 +327,34 @@ func recordExternalPermission(childTS *turnState, pr *runner.PermissionRequestEv
 	childTS.appendIntermediateAssistantTranscript(
 		fmt.Sprintf("[external-cli permission] tool=%q: %s", pr.ToolName, pr.Description),
 		transcriptModelFor(childTS.agent))
+}
+
+// recordExternalToolResult mirrors a completed external tool result into the
+// sub-agent session transcript. The paired tool-call event was already recorded
+// when the call started; this entry carries the result.
+func recordExternalToolResult(childTS *turnState, tr *runner.ToolResultEvent) {
+	id := tr.CallID
+	if id == "" {
+		id = fmt.Sprintf("ext-tool-result-%d", time.Now().UnixNano())
+	}
+	status := "success"
+	if tr.IsError {
+		status = "error"
+	}
+	var result map[string]any
+	if len(tr.Output) > 0 {
+		if err := json.Unmarshal(tr.Output, &result); err != nil {
+			// Not a JSON object — store as a raw string under "output".
+			result = map[string]any{"output": string(tr.Output)}
+		}
+	}
+	childTS.appendToolCallTranscript(session.ToolCall{
+		ID:         session.ToolCallID(id),
+		Tool:       tr.ToolName,
+		Status:     status,
+		Parameters: nil,
+		Result:     result,
+	})
 }
 
 // defaultExternalMaxTurns bounds an external run when the agent declares no

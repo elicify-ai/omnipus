@@ -38,6 +38,8 @@ const (
 	EventKindEnd EventKind = "end"
 	// EventKindError signals that the run failed. The run is terminated after this event.
 	EventKindError EventKind = "error"
+	// EventKindToolResult signals that an external tool call produced a result.
+	EventKindToolResult EventKind = "tool-result"
 )
 
 // RunEvent is a single structured event emitted by an external agent run.
@@ -61,6 +63,20 @@ type RunEvent struct {
 	PermissionRequest *PermissionRequestEvent
 	// Err holds an error description. Set when Kind=EventKindError.
 	Err *ErrorEvent
+	// ToolResult holds a completed external tool result. Set when Kind=EventKindToolResult.
+	ToolResult *ToolResultEvent
+}
+
+// ToolResultEvent carries the completion of a tool call emitted by an external agent.
+type ToolResultEvent struct {
+	// CallID is the correlation ID matching the pending ToolCallEvent.CallID.
+	CallID string
+	// ToolName is the name of the tool that produced the result.
+	ToolName string
+	// Output is the raw JSON-encoded result output.
+	Output []byte
+	// IsError is true when the tool itself reported an error.
+	IsError bool
 }
 
 // OutputEvent carries a text output chunk from the external agent.
