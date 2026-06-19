@@ -43,6 +43,18 @@ export function ToastContainer() {
             <Warning size={16} className="text-[var(--color-accent)] shrink-0 mt-0.5" weight="fill" />
           )}
           <p className="flex-1 text-sm">{toast.message}</p>
+          {toast.action && (
+            <button
+              type="button"
+              onClick={() => {
+                toast.action!.onClick()
+                removeToast(toast.id)
+              }}
+              className="text-xs font-medium text-[var(--color-accent)] hover:underline shrink-0"
+            >
+              {toast.action.label}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => removeToast(toast.id)}

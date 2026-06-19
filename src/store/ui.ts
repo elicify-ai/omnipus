@@ -8,6 +8,11 @@ export interface Toast {
   variant: 'default' | 'error' | 'success' | 'warning'
   duration?: number
   testId?: string
+  /** Optional primary action rendered inside the toast. */
+  action?: {
+    label: string
+    onClick: () => void
+  }
 }
 
 interface UiStore {
