@@ -99,7 +99,21 @@ function payloadToCreateRequest(
   if (payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
   if (payload.skills !== undefined) req.skills = payload.skills
   if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
-  if (payload.cli || payload.executor_cli_path || payload.executor_env_overrides || payload.executor_cli_args) {
+  if (payload.model_params !== undefined) req.model_params = payload.model_params
+  if (payload.sandbox_profile !== undefined) req.sandbox_profile = payload.sandbox_profile
+  if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
+  if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
+  if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
+  if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
+  if (payload.steering_mode !== undefined) req.steering_mode = payload.steering_mode
+
+  // Executor block. Subagents default to the in-process native runner when
+  // the user has not configured an external CLI. External agents must set
+  // kind='external-cli' and a CLI path.
+  const hasExecutorFields = payload.cli || payload.executor_cli_path || payload.executor_env_overrides || payload.executor_cli_args
+  if (payload.type === 'Subagent' && !hasExecutorFields) {
+    req.executor = { kind: 'native' }
+  } else if (hasExecutorFields) {
     req.executor = {
       kind: payload.type === 'subagent_3p' ? 'external-cli' : 'native',
     }

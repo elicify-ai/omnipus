@@ -25,7 +25,7 @@ import { X } from '@phosphor-icons/react'
 
 import { useUiStore } from '@/store/ui'
 import { isApiError, type AgentToolsCfg, type FallbackModel, type RegistryTool } from '@/lib/api'
-import { AVATAR_COLORS } from '@/lib/constants'
+import { AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
 import type { Provider, Skill } from '@/lib/api/generated/openapi-types'
 
@@ -69,7 +69,10 @@ export interface WizardSubmitPayload {
     top_p?: number
   }
   sandbox_profile?: 'workspace' | 'workspace+net' | 'host' | 'off'
-  shell_policy?: { deny?: string[] }
+  shell_policy?: {
+    enable_deny_patterns?: boolean
+    custom_deny_patterns?: string[]
+  }
   rate_limits?: {
     use_global_defaults?: boolean
     max_llm_calls_per_hour?: number
@@ -135,21 +138,25 @@ function reducer(state: WizardSubmitPayload, action: Action): WizardSubmitPayloa
 }
 
 function initialPayload(initialType: WizardType, initialCli?: WizardCli): WizardSubmitPayload {
+  // Per spec §4.4 the default color is the first entry of the palette map.
+  // `avatarColorName()` resolves its semantic label; the wire format stores
+  // the hex value, so we keep the hex.
+  const defaultColorHex = Object.keys(AVATAR_COLORS_BY_NAME)[0] as string
   return {
     type: initialType,
     cli: initialCli,
     name: '',
     description: '',
-    // Default to the first brand-palette hex. The wire contract requires
-    // /^#[0-9A-Fa-f]{6}$/ — sending the semantic name ('Verdant') 400s.
-    // Step 1 can override via the color picker once wired.
-    color: AVATAR_COLORS[0],
+    color: defaultColorHex,
     icon: 'Robot',
     model: '',
     soul: '',
     instructions: '',
     heartbeat_enabled: false,
     heartbeat_interval: 1800,
+    timeout_seconds: 300,
+    max_tool_iterations: 50,
+    steering_mode: 'one-at-a-time',
   }
 }
 
@@ -207,14 +214,26 @@ export function CreateAgentWizard({
   const isExternal = initialType === 'subagent_3p'
 
   // Step gating. Step 1 requires name + model + (description if worker).
+  // External (subagent_3p) agents also need a selected CLI and a non-empty
+  // CLI path before they can leave the Identity step.
   const step1Valid = payload.name.trim().length > 0 &&
     payload.model.trim().length > 0 &&
-    (!isWorker || payload.description.trim().length > 0)
+    (!isWorker || payload.description.trim().length > 0) &&
+    (!isExternal || (!!payload.cli && (payload.executor_cli_path?.trim().length ?? 0) > 0))
   // Step 2 requires soul (whitespace-trimmed non-empty).
   const step2Valid = payload.soul.trim().length > 0
   const canAdvance = step === 1 ? step1Valid : step === 2 ? step2Valid : true
 
   async function handleSubmit() {
+    // External (subagent_3p) agents need a non-empty CLI path. The step-1
+    // gate already prevents reaching the submit button with an empty path,
+    // but this check protects the API call if anything bypasses the gate.
+    if (isExternal && !payload.executor_cli_path?.trim()) {
+      setSubmitError('CLI path is required for an external subagent')
+      setSubmitting(false)
+      return
+    }
+
     setSubmitting(true)
     setSubmitError(null)
     try {
