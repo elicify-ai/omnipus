@@ -29,6 +29,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
 
 // readSoulMDForAgent returns the on-disk SOUL.md contents for the given agentID.
@@ -54,7 +56,7 @@ func TestCreateAgent_Worker_PersistsSoul(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "create body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, "worker", string(created.Type))
+	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
 	assert.Equal(t, "worker-soul-X", created.Soul, "response soul must echo the persisted value")
 
 	// On disk — must match the value the caller sent.
@@ -76,18 +78,16 @@ func TestCreateAgent_Custom_PersistsSoul(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "create body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, "custom", string(created.Type))
+	assert.Equal(t, gen.AgentTypeMain, created.Type)
 	assert.Equal(t, "custom-soul-X", created.Soul, "response soul must echo the persisted value")
 
 	got := readSoulMDForAgent(t, api, created.Id)
 	assert.Equal(t, "custom-soul-X", got, "SOUL.md must be persisted at create time")
 }
 
-// TestCreateAgent_Worker_RequiresExecutor is the write-time mirror of the FE
-// guard: a worker with no executor is 400. Workers run via delegation and need
-// a target runtime; the previously-write-dropped gap would have left a draft
-// the delegation path could not actually run.
-func TestCreateAgent_Worker_RequiresExecutor(t *testing.T) {
+// TestCreateAgent_Worker_RequiresExecutor verifies that a Subagent create
+// without an executor is accepted and derives kind=native server-side.
+func TestCreateAgent_Worker_DerivesNativeExecutor(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	body := `{"name":"Worker No Exec","type":"Subagent","description":"missing executor regression","soul":"worker-soul-noexec"}`
@@ -96,15 +96,18 @@ func TestCreateAgent_Worker_RequiresExecutor(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "executor",
-		"the rejection must name the missing executor")
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	created := decodeAgentResp(t, w.Body.Bytes())
+	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
+	require.NotNil(t, created.Executor, "derived native executor must be echoed")
+	require.NotNil(t, created.Executor.Kind, "derived executor.kind must be present")
+	assert.Equal(t, gen.AgentExecutorKindNative, *created.Executor.Kind)
 }
 
-// TestCreateAgent_Worker_AllowsAnyExecutorKind is the control: the new
-// "worker must declare an executor" rule accepts any kind (native,
-// external-cli, remote-a2a). Kind validation is the executor block's job;
-// this rule is about presence, not type.
+// TestCreateAgent_Worker_AllowsAnyExecutorKind is the control: a worker can be
+// created with any executor kind (native, external-cli, remote-a2a). Kind
+// validation ensures the kind is known; remote-a2a is accepted at create but
+// rejected at dispatch (runner.ErrRemoteA2AReserved).
 func TestCreateAgent_Worker_AllowsAnyExecutorKind(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
@@ -116,11 +119,8 @@ func TestCreateAgent_Worker_AllowsAnyExecutorKind(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	// Response type echoes the underlying config constant ("worker" — the
-	// Subagent wire enum value maps to AgentTypeWorker on disk, and the
-	// create response reads it back via ac.ResolveType).
-	assert.Equal(t, "worker", string(created.Type))
+	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
 	require.NotNil(t, created.Executor)
 	require.NotNil(t, created.Executor.Kind, "Executor.Kind must be non-nil pointer after W1 wire schema")
-	assert.Equal(t, "remote-a2a", string(*created.Executor.Kind))
+	assert.Equal(t, gen.AgentExecutorKindRemoteA2a, *created.Executor.Kind)
 }

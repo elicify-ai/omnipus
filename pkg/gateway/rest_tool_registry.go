@@ -172,10 +172,12 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	// Determine agent type.
 	agentType := "custom"
 	var toolsCfg *config.AgentToolsCfg
+	var wireAgentType gen.AgentType
 	for _, ac := range cfg.Agents.List {
 		if ac.ID == agentID {
 			at := ac.ResolveType(coreagent.IsCoreAgent)
 			agentType = string(at)
+			wireAgentType = coreagent.ToWireType(ac)
 			toolsCfg = ac.Tools
 			break
 		}
@@ -271,7 +273,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		builtinPolicies[k] = gen.AgentToolsResponseConfigBuiltinPolicies(v)
 	}
 	respBuiltinDefaultPolicy := gen.AgentToolsResponseConfigBuiltinDefaultPolicy(respDefaultPolicy)
-	agentTypeVal := gen.AgentToolsResponseAgentType(agentType)
+	agentTypeVal := gen.AgentToolsResponseAgentType(wireAgentType)
 
 	// Build the AgentToolsResponse. The Tools field uses the same anonymous struct
 	// as gen.AgentToolsResponse.Tools, aliased as toolsEntry above.
