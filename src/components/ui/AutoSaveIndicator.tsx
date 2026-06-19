@@ -5,13 +5,26 @@ interface AutoSaveIndicatorProps {
   status: AutoSaveStatus
   error?: string
   className?: string
+  /** Timestamp of the last successful save, surfaced when status === 'saved'. */
+  lastSavedAt?: Date | null
+}
+
+function formatSavedAt(date: Date): string {
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffSec = Math.floor(diffMs / 1000)
+  if (diffSec < 5) return 'Saved just now'
+  if (diffSec < 60) return `Saved ${diffSec}s ago`
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return `Saved ${diffMin}m ago`
+  return `Saved at ${date.toLocaleTimeString()}`
 }
 
 /**
  * Subtle auto-save status indicator.
- * idle → hidden, saving → spinner, saved → checkmark (fades), error → red warning.
+ * idle → hidden, saving → spinner, saved → checkmark + last saved time (fades), error → red warning.
  */
-export function AutoSaveIndicator({ status, error, className = '' }: AutoSaveIndicatorProps) {
+export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }: AutoSaveIndicatorProps) {
   if (status === 'idle') return null
 
   return (
@@ -29,7 +42,9 @@ export function AutoSaveIndicator({ status, error, className = '' }: AutoSaveInd
       {status === 'saved' && (
         <>
           <Check size={11} weight="bold" className="text-emerald-400" />
-          <span className="text-emerald-400">Saved</span>
+          <span className="text-emerald-400">
+            {lastSavedAt ? formatSavedAt(lastSavedAt) : 'Saved'}
+          </span>
         </>
       )}
       {status === 'error' && (

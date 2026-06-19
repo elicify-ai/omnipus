@@ -31,7 +31,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 vi.mock('@/hooks/useAutoSave', () => ({
-  useAutoSave: vi.fn(() => ({ status: 'idle', error: undefined, saveNow: vi.fn() })),
+  useAutoSave: vi.fn(() => ({ status: 'idle', error: undefined, lastSavedAt: undefined, saveNow: vi.fn() })),
 }))
 
 vi.mock('@/components/ui/AutoSaveIndicator', () => ({
@@ -246,7 +246,7 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
 
   it('disables auto-save when isLocked=true — useAutoSave receives disabled:true', async () => {
     const useAutoSaveSpy = vi.spyOn(autoSaveModule, 'useAutoSave')
-    useAutoSaveSpy.mockReturnValue({ status: 'idle', error: undefined, saveNow: vi.fn() })
+    useAutoSaveSpy.mockReturnValue({ status: 'idle', error: undefined, lastSavedAt: undefined, saveNow: vi.fn() })
 
     render(
       <ToolsAndPermissions
