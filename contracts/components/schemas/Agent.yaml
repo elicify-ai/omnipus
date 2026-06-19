@@ -1,7 +1,9 @@
 type: object
 description: >
   An agent configuration object as returned by GET /agents and GET /agents/{id}.
-  Maps to the Go agentResponse struct and the TypeScript Agent interface in src/lib/api.ts.
+  Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go
+  and src/lib/api/generated/openapi-types.ts). The generated type is the single
+  source of truth.
   Core (locked) agents suppress soul/instructions in list responses and forbid
   identity mutations via PUT.
 required:
@@ -21,7 +23,7 @@ required:
 properties:
   id:
     type: string
-    description: Unique agent identifier. UUID for custom agents; well-known strings for core agents (e.g. "jim").
+    description: Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
     example: "550e8400-e29b-41d4-a716-446655440000"
   name:
     type: string
@@ -47,17 +49,9 @@ properties:
       "Subagent" = user-defined delegation-only worker on the Omnipus engine.
       "subagent_3p" = user-defined delegation-only worker on an external CLI
       (claude-code / codex / opencode).
-      "worker" = legacy build-time/seed config constant (the seed `Worker` entry
-      in `pkg/config/worker_helpers_test.go` ships with this type; the build-time
-      string is preserved for backward compatibility with the on-disk seeded
-      `Worker` row that the gateway returns in GET /api/v1/agents). The
-      frontend's `isWorker()` helper already accepts this value; it is
-      functionally a Subagent. The W6-A wire enum is the canonical one for
-      new user-created agents; `worker` survives in the contract for the
-      legacy seed and for any operator-defined entries that predate the
-      W6-A type widening.
-      Built-in agents return type: "core" with locked: true; the "Main" enum value is only
-      for user-created chat agents.
+      "worker" = legacy build-time/seed config constant. It is functionally a Subagent;
+      it survives here only for backward compatibility with pre-W4 seeded configs.
+      New code should treat it as Subagent.
     example: "core"
   locked:
     type: boolean
@@ -217,6 +211,11 @@ properties:
       (opt-in, default none).
     example:
       - "web-research"
+  updated_at:
+    type: string
+    format: date-time
+    description: ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in detail responses.
+    example: "2026-06-19T12:34:56Z"
   delegation_policy:
     $ref: './DelegationPolicy.yaml'
   voice:
