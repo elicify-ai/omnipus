@@ -17,6 +17,7 @@ package coreagent
 
 import (
 	"fmt"
+	"log/slog"
 
 	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -110,6 +111,12 @@ func IsCoreAgent(id string) bool {
 // ToWireType maps the persisted config.AgentConfig to the canonical wire enum
 // value expected by the SPA. This is the response-side inverse of ResolveType.
 //
+// It first resolves the effective persisted type via ResolveType (which infers
+// the type when ac.Type is empty — core for known base IDs, custom otherwise),
+// then maps the resolved type to the wire enum. Switching on the resolved type
+// (rather than the raw ac.Type) closes the empty-Type gap that previously fell
+// through to the default branch.
+//
 // Mapping rules:
 //   - core → core
 //   - system → system
@@ -119,7 +126,8 @@ func IsCoreAgent(id string) bool {
 //   - The seeded worker (IDWorker) is reported as Subagent; the legacy "worker"
 //     enum value is dropped from responses.
 func ToWireType(ac config.AgentConfig) generated.AgentType {
-	switch ac.Type {
+	resolvedType := ac.ResolveType(IsCoreAgent)
+	switch resolvedType {
 	case config.AgentTypeCore:
 		return generated.AgentTypeCore
 	case config.AgentTypeSystem:
@@ -133,11 +141,12 @@ func ToWireType(ac config.AgentConfig) generated.AgentType {
 		}
 		return generated.AgentTypeSubagent
 	default:
-		// Defensive fallback: treat the seeded worker as a Subagent and unknown
-		// persisted agents as Main.
-		if ac.ID == string(IDWorker) {
-			return generated.AgentTypeSubagent
-		}
+		// Defensive fallback: unknown persisted agent types become Main. The
+		// empty-Type case is already handled by ResolveType (inferred to core
+		// for known IDs or custom for the rest), so reaching this branch means
+		// a genuinely unknown persisted type — log it so it surfaces.
+		slog.Warn("ToWireType: unknown persisted agent type",
+			"id", ac.ID, "type", ac.Type)
 		return generated.AgentTypeMain
 	}
 }

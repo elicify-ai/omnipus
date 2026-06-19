@@ -149,6 +149,7 @@ func worktreeRepoRoot(ctx context.Context, runDir string) (string, bool) {
 	// common-dir is "<repo>/.git"; its parent is the repo top-level.
 	out, err := runGit(ctx, runDir, "rev-parse", "--git-common-dir")
 	if err != nil {
+		slog.Warn("worktreeRepoRoot: git rev-parse failed", "runDir", runDir, "err", err)
 		return "", false
 	}
 	commonDir := strings.TrimSpace(out)

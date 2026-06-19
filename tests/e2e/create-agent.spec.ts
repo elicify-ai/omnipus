@@ -16,8 +16,12 @@ async function selectFirstModel(page: Page) {
 }
 
 test.describe('create agent wizard', () => {
-  const fillIdentityStep = async (page: Page, opts: { type: 'Main' | 'Subagent' | 'subagent_3p' }) => {
-    await page.getByTestId('wizard-name').fill(`E2E Test Agent ${Date.now()}`)
+  const fillIdentityStep = async (
+    page: Page,
+    opts: { type: 'Main' | 'Subagent' | 'subagent_3p' },
+  ): Promise<string> => {
+    const name = `E2E Test Agent ${Date.now()}`
+    await page.getByTestId('wizard-name').fill(name)
     if (opts.type === 'subagent_3p') {
       // External agents use a free-text model slug.
       await page.getByTestId('wizard-model').fill('claude-sonnet-4-6')
@@ -27,6 +31,7 @@ test.describe('create agent wizard', () => {
     if (opts.type !== 'Main') {
       await page.getByTestId('wizard-description').fill('A test worker created by the E2E suite')
     }
+    return name
   }
 
   test('Main agent wizard reaches creation state', async ({ page }) => {
@@ -42,9 +47,98 @@ test.describe('create agent wizard', () => {
 
     await expect(page.getByTestId('wizard-soul')).toBeVisible()
     await page.getByTestId('wizard-soul').fill('You are a helpful E2E test agent.')
+
+    // Voice field (Main only). VoiceProviderSub auto-detects the configured
+    // TTS provider on mount: enum mode renders a Radix Select (options appear
+    // after clicking the trigger), free-text mode renders a plain Input.
+    // In a fresh E2E environment no provider is configured → free-text.
+    const voiceContainer = modal.getByTestId('wizard-voice')
+    await expect(voiceContainer).toBeVisible()
+    const voiceField = voiceContainer.getByTestId('voice-field')
+    // Detection runs async on mount (field starts disabled); wait for it to
+    // settle before interacting.
+    await expect(voiceField).toBeEnabled({ timeout: 10_000 })
+    await voiceField.click()
+    // Enum mode → a dropdown of [role="option"] opens. Free-text mode → no
+    // options; type a value instead.
+    const voiceOptions = page.locator('[role="option"]')
+    if ((await voiceOptions.count()) > 0) {
+      await voiceOptions.first().click()
+    } else {
+      await voiceField.fill('alloy')
+    }
+
     await modal.getByTestId('wizard-next-2').click()
 
     await expect(modal.getByTestId('wizard-create')).toBeVisible()
+  })
+
+  test('Main agent wizard creates an agent end-to-end', async ({ page }) => {
+    await page.goto('/#/agents')
+    await page.getByTestId('add-main-button').click()
+
+    const modal = page.locator('[role="dialog"]')
+    await expect(modal).toBeVisible()
+    await expect(page.getByTestId('wizard-name')).toBeVisible()
+
+    const agentName = await fillIdentityStep(page, { type: 'Main' })
+    await modal.getByTestId('wizard-next-1').click()
+
+    await expect(page.getByTestId('wizard-soul')).toBeVisible()
+    await page.getByTestId('wizard-soul').fill('You are a helpful E2E test agent.')
+
+    // Voice field (Main only). VoiceProviderSub auto-detects the configured
+    // TTS provider on mount: enum mode renders a Radix Select (options appear
+    // after clicking the trigger), free-text mode renders a plain Input.
+    // In a fresh E2E environment no provider is configured → free-text.
+    const voiceContainer = modal.getByTestId('wizard-voice')
+    await expect(voiceContainer).toBeVisible()
+    const voiceField = voiceContainer.getByTestId('voice-field')
+    // Detection runs async on mount (field starts disabled); wait for it to
+    // settle before interacting.
+    await expect(voiceField).toBeEnabled({ timeout: 10_000 })
+    await voiceField.click()
+    // Enum mode → a dropdown of [role="option"] opens. Free-text mode → no
+    // options; type a value instead.
+    const voiceOptions = page.locator('[role="option"]')
+    if ((await voiceOptions.count()) > 0) {
+      await voiceOptions.first().click()
+    } else {
+      await voiceField.fill('alloy')
+    }
+
+    await modal.getByTestId('wizard-next-2').click()
+
+    // ── Step 3: Tools — click "Create agent" and verify the POST. ──────────
+    await expect(modal.getByTestId('wizard-create')).toBeVisible()
+
+    // waitForResponse must be registered before the click that triggers it.
+    const createResponsePromise = page.waitForResponse(
+      (resp) =>
+        resp.url().endsWith('/api/v1/agents') &&
+        resp.request().method() === 'POST',
+    )
+    await modal.getByTestId('wizard-create').click()
+
+    const createResponse = await createResponsePromise
+    expect(createResponse.status()).toBe(201)
+
+    // The created agent's id rides on the 201 body — use it to scope the
+    // roster card assertion rather than matching on the (timestamped) name.
+    const created = (await createResponse.json()) as { id: string; name: string }
+
+    // The modal (a Radix Dialog surfaced as [role="dialog"]) closes on
+    // success via CreateAgentModal's useMutation.onSuccess → handleClose.
+    // There is no `create-agent-modal` testid; the dialog role is the
+    // stable handle used throughout this suite.
+    await expect(modal).not.toBeVisible({ timeout: 10_000 })
+
+    // The new agent card must appear in the Main roster section.
+    const baseSection = page.getByTestId('base-agents-section')
+    const newCard = baseSection.getByTestId(`agent-card-${created.id}`)
+    await expect(newCard).toBeVisible({ timeout: 10_000 })
+    // Sanity: the card carries the name we typed in step 1.
+    await expect(newCard).toContainText(agentName)
   })
 
   test('Subagent wizard reaches creation state', async ({ page }) => {

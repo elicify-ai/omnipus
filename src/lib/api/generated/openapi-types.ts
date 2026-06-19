@@ -2908,11 +2908,11 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). "worker" = legacy build-time/seed config constant. It is functionally a Subagent; it survives here only for backward compatibility with pre-W4 seeded configs. New code should treat it as Subagent.
+             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
              * @example core
              * @enum {string}
              */
-            type: "core" | "system" | "Main" | "Subagent" | "subagent_3p" | "worker";
+            type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
             /**
              * @description When true, name, description, soul, heartbeat, and instructions are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
              * @example false
@@ -3026,7 +3026,7 @@ export interface components {
             skills?: string[];
             /**
              * Format: date-time
-             * @description ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in detail responses.
+             * @description ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
              * @example 2026-06-19T12:34:56Z
              */
             updated_at?: string;
@@ -3219,12 +3219,12 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode). "core", "system", and "worker" are reserved/legacy values and are rejected by the gateway if explicitly supplied; the enum keeps them only for backward compatibility with older clients.
+             * @description Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode) and requires executor.kind=external-cli. "core", "system", and "worker" are reserved/legacy values rejected by the gateway.
              * @default Main
              * @example Main
              * @enum {string}
              */
-            type: "Main" | "Subagent" | "subagent_3p" | "core" | "system" | "worker";
+            type: "Main" | "Subagent" | "subagent_3p";
             /**
              * @description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
              * @example Specialized data analysis assistant

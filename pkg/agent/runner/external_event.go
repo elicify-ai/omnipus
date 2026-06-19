@@ -28,7 +28,7 @@
 //	error                 -> EventKindError
 //	done                  -> EventKindEnd
 //
-// TODO(Spec-4, FR-5.1): permission_request is routed post-hoc. The three CLI
+// TODO(Spec-4 FR-5.1, #TBD): permission_request is routed post-hoc. The three CLI
 // drivers run in non-interactive streaming mode, so a DENY cancels the whole
 // run via driver.Cancel(). A future bidirectional stdin control channel could
 // allow mid-call allow/deny responses without killing the process.
@@ -39,6 +39,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -207,6 +208,7 @@ func ExternalEventToRunEvent(ev ExternalEvent, runID string) (RunEvent, bool) {
 		return RunEvent{Kind: EventKindEnd, RunID: runID, Timestamp: now}, true
 
 	default:
+		slog.Debug("external event: unknown type, skipping", "type", ev.Type, "runID", runID)
 		return RunEvent{}, false
 	}
 }

@@ -66,6 +66,13 @@ import (
 // passes the contract schema used by the SPA.
 var Version = "0.0.0-dev"
 
+// errConflict is the sentinel returned from a safeUpdateConfigJSON mutate
+// closure when an optimistic-concurrency check fails inside the configMu
+// lock (closing the TOCTOU race that existed when the check ran against the
+// in-memory cached config outside the lock). Callers test with errors.Is
+// and map it to HTTP 409.
+var errConflict = errors.New("optimistic concurrency conflict")
+
 // restAPI holds shared dependencies for all REST endpoint handlers.
 // Handlers are registered as method-dispatching http.HandlerFuncs in gateway.go.
 // Note: do NOT cache *config.Config here — use a.agentLoop.GetConfig() for
@@ -1333,8 +1340,8 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		}
 		setAgentExecutorResponse(&ag, ac.Subagents)
 		setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
-		if !ac.UpdatedAt.IsZero() {
-			ag.UpdatedAt = &ac.UpdatedAt
+		if ac.UpdatedAt != nil {
+			ag.UpdatedAt = ac.UpdatedAt
 		}
 		agents = append(agents, ag)
 	}
@@ -1389,8 +1396,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			}
 			setAgentExecutorResponse(&ag, ac.Subagents)
 			setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
-			if !ac.UpdatedAt.IsZero() {
-				ag.UpdatedAt = &ac.UpdatedAt
+			if ac.UpdatedAt != nil {
+				ag.UpdatedAt = ac.UpdatedAt
 			}
 			jsonOK(w, ag)
 			return
@@ -1428,6 +1435,19 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		default:
 			jsonErr(w, http.StatusBadRequest,
 				"type must be one of Main, Subagent, subagent_3p; \"core\" and \"system\" are seeded-only")
+			return
+		}
+	}
+	// W2 spec: subagent_3p agents run on an external CLI, so the create
+	// request MUST carry an executor with kind=external-cli. A subagent_3p
+	// without an external-cli executor has no runnable target — reject at the
+	// gate rather than silently defaulting to native (which would make it a
+	// mislabelled Subagent). This runs before the worker-without-executor
+	// native-defaulting below so that defaulting only applies to plain
+	// Subagent, never to subagent_3p.
+	if req.Type != nil && *req.Type == gen.AgentCreateRequestTypeSubagent3p {
+		if req.Executor == nil || req.Executor.Kind == nil || *req.Executor.Kind != gen.AgentCreateRequestExecutorKindExternalCli {
+			jsonErr(w, http.StatusBadRequest, "subagent_3p requires executor.kind=external-cli")
 			return
 		}
 	}
@@ -1896,13 +1916,6 @@ func isExternalSubagent(ac config.AgentConfig) bool {
 	return ac.Subagents.Executor.EffectiveKind() == config.ExecutorKindExternalCLI
 }
 
-// forbiddenSubagent3pField defines the CLI-owned fields that subagent_3p agents
-// reject at runtime. The value is used in the 400 error message.
-type forbiddenSubagent3pField struct {
-	Name    string
-	Present func() bool
-}
-
 // firstForbiddenSubagent3pField returns the first forbidden field supplied on
 // a create/update request, or ("", false). Both gen.AgentCreateRequest and
 // gen.AgentUpdateRequest are handled by a type switch.
@@ -2004,16 +2017,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Locked core agents: reject identity and prompt mutations.
 	// Allowed: model selection, heartbeat schedule (enabled/interval), tools (via updateAgentTools).
 	foundAgent := cfg.Agents.List[foundIdx]
-	// Optimistic concurrency: if the caller sent an updated_at value, it must
-	// match the persisted value exactly, otherwise another edit raced. Conflicts
-	// return a standard 409 with {error, code}.
-	if req.UpdatedAt != nil && !req.UpdatedAt.Equal(foundAgent.UpdatedAt) {
-		writeJSON(w, http.StatusConflict, gen.ErrorResponse{
-			Error: "conflict",
-			Code:  strPtr("conflict"),
-		})
-		return
-	}
 	// Worker agents can never be the routing default — they are not chat targets
 	// (invoked only via delegation). Reject an attempt to star a worker before
 	// any work is done so the single-default invariant and routing stay coherent.
@@ -2237,6 +2240,23 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				continue
 			}
 			if agentMap["id"] == id {
+				// Optimistic concurrency check (runs INSIDE configMu so two
+				// concurrent PUTs cannot both pass the version check and then
+				// both write — closing the TOCTOU race that existed when this
+				// check ran against the in-memory cached config outside the
+				// lock). If the caller sent an updated_at value, it must match
+				// the persisted value exactly; otherwise another edit raced and
+				// we abort the mutate (nothing is written). The caller maps
+				// errConflict to HTTP 409.
+				if req.UpdatedAt != nil {
+					persistedStr, _ := agentMap["updated_at"].(string)
+					if persistedStr != "" {
+						persistedAt, parseErr := time.Parse(time.RFC3339, persistedStr)
+						if parseErr == nil && !req.UpdatedAt.Equal(persistedAt) {
+							return errConflict
+						}
+					}
+				}
 				if req.Name != nil {
 					agentMap["name"] = newName
 				}
@@ -2454,6 +2474,13 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errConflict) {
+			writeJSON(w, http.StatusConflict, gen.ErrorResponse{
+				Error: "conflict",
+				Code:  strPtr("conflict"),
+			})
+			return
+		}
 		slog.Error("rest: save config for agent update", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
@@ -2591,7 +2618,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			}
 		}
 	}
-	ag.Type = coreagent.ToWireType(foundAgent)
 	ag.Locked = foundAgent.Locked
 	ag.Model = &model
 	ag.Status = gen.AgentStatus(computeAgentStatus(agentID, activeIDs, soul, foundAgent.Locked))
@@ -2611,6 +2637,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
+				ag.Type = coreagent.ToWireType(ac)
 				ag.Default = boolPtr(ac.Default)
 				if len(ac.Skills) > 0 {
 					skills := make([]string, len(ac.Skills))
@@ -2619,8 +2646,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				}
 				setAgentExecutorResponse(&ag, ac.Subagents)
 				setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
-				if !ac.UpdatedAt.IsZero() {
-					ag.UpdatedAt = &ac.UpdatedAt
+				if ac.UpdatedAt != nil {
+					ag.UpdatedAt = ac.UpdatedAt
 				}
 				break
 			}
@@ -4018,6 +4045,10 @@ func (a *restAPI) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 // HandleVersion handles GET /api/v1/version — unauthenticated build-info endpoint
 // used by the frontend to detect version drift and prompt "New version available" (#110).
+// Both fields are contract-constrained: `version` matches ^\d+\.\d+\.\d+(?:[-+].*)?$
+// (semver) and `build_sha` matches ^([0-9a-f]{7,40}|dev)$ (see VersionResponse.yaml).
+// build_sha is "dev" when built outside a version-controlled tree, else a 7-40 char
+// lowercase hex SHA pulled from debug.ReadBuildInfo() vcs.revision.
 func (a *restAPI) HandleVersion(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")

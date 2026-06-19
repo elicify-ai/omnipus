@@ -31,6 +31,10 @@ export function MessageInput() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const mediaStreamRef = useRef<MediaStream | null>(null)
+  // S4: guard onstop after onerror — MediaRecorder may still fire onstop
+  // after an onerror, which would otherwise transcribe partial/garbage
+  // chunks. Set in onerror, checked at the top of onstop.
+  const recorderErroredRef = useRef(false)
 
   // Append transcribed text to the current input, inserting a space when needed.
   const appendTranscript = useCallback((text: string) => {
@@ -59,12 +63,17 @@ export function MessageInput() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       mediaStreamRef.current = stream
       audioChunksRef.current = []
+      recorderErroredRef.current = false
       const recorder = new MediaRecorder(stream)
       mediaRecorderRef.current = recorder
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data)
       }
       recorder.onerror = (ev: Event) => {
+        // S4: mark errored so the subsequent onstop bails out instead of
+        // transcribing partial/garbage chunks.
+        recorderErroredRef.current = true
+        audioChunksRef.current = []
         // Surface non-fatal MediaRecorder failures so the user isn't left in
         // a stuck "recording" state. The event is an MediaRecorderErrorEvent
         // in compliant browsers, but the DOM type is just Event in some TS
@@ -79,6 +88,14 @@ export function MessageInput() {
         addToast({ message: `Recording failed: ${message}`, variant: 'error' })
       }
       recorder.onstop = async () => {
+        // S4: if onerror already fired, drop this stop and reset state —
+        // the error path already released the stream and reset micState.
+        if (recorderErroredRef.current) {
+          recorderErroredRef.current = false
+          releaseStream()
+          setMicState('idle')
+          return
+        }
         releaseStream()
         const chunks = audioChunksRef.current
         audioChunksRef.current = []

@@ -116,6 +116,11 @@ beforeEach(() => {
     })
   })
   vi.mocked(createAgent).mockReset()
+  // S8: reset fetchSkills between tests — individual tests override it with
+  // mockResolvedValue([...]), and without a reset the prior resolved value
+  // leaks into the next test (the "default none" AC1 test would see the
+  // previous test's skills list).
+  vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
 })
 
 describe('CreateAgentModal — prop-driven opening', () => {

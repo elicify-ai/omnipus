@@ -9,12 +9,20 @@ interface UseAutoSaveOptions {
   /** If true, auto-save is disabled (e.g., for locked agents) */
   disabled?: boolean
   /**
-   * Optional endpoint to receive a best-effort beacon of the pending data
-   * when the page is hidden or unloaded. Uses `navigator.sendBeacon` when
-   * available, falling back to `fetch(..., { keepalive: true })`. If not
-   * provided, no flush is attempted.
+   * Optional endpoint to receive a best-effort flush of the pending data
+   * when the page is hidden or unloaded. Uses `fetch(..., { keepalive: true })`
+   * (preferred over `navigator.sendBeacon` because keepalive fetch can carry
+   * an `Authorization` header, which sendBeacon cannot). If not provided, no
+   * flush is attempted.
    */
   flushUrl?: string
+  /**
+   * Optional bearer token sent as `Authorization: Bearer <token>` on the
+   * keepalive flush request. Required when the flush endpoint requires auth
+   * (the Omnipus gateway validates every state-changing call against the
+   * per-user RBAC token); without it the flush will 401 and silently drop.
+   */
+  flushAuthToken?: string
 }
 
 interface UseAutoSaveResult {
@@ -41,7 +49,7 @@ export function useAutoSave<T>(
   saveFn: (data: T) => Promise<unknown>,
   options?: UseAutoSaveOptions,
 ): UseAutoSaveResult {
-  const { debounceMs = 500, disabled = false, flushUrl } = options ?? {}
+  const { debounceMs = 500, disabled = false, flushUrl, flushAuthToken } = options ?? {}
   const [status, setStatus] = useState<AutoSaveStatus>('idle')
   const [error, setError] = useState<string>()
   const [lastSavedAt, setLastSavedAt] = useState<Date | undefined>(undefined)
@@ -109,34 +117,29 @@ export function useAutoSave<T>(
   }, [data, debounceMs, disabled, doSave])
 
   // Best-effort flush of pending changes when the page is hidden or unloaded.
-  // Uses `navigator.sendBeacon` when available, otherwise a fetch with
-  // `keepalive: true`. This prevents silently losing edits on tab close,
-  // browser reload, or background throttling.
+  // Uses `fetch(..., { keepalive: true })` rather than `navigator.sendBeacon`
+  // because keepalive fetch can carry an `Authorization: Bearer` header —
+  // the Omnipus gateway validates every state-changing call against the
+  // per-user RBAC token, and sendBeacon cannot set request headers, so a
+  // sendBeacon flush would 401 and silently drop the pending edit. This
+  // prevents silently losing edits on tab close, browser reload, or
+  // background throttling.
   const flushBeacon = useCallback(() => {
     if (!flushUrl || !initializedRef.current || !hasPendingChanges()) return
-
     const payload = JSON.stringify(latestDataRef.current)
-    const blob = new Blob([payload], { type: 'application/json' })
-
-    try {
-      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-        if (navigator.sendBeacon(flushUrl, blob)) return
-      }
-    } catch {
-      // Fall through to keepalive fetch.
-    }
-
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (flushAuthToken) headers['Authorization'] = `Bearer ${flushAuthToken}`
     try {
       void fetch(flushUrl, {
-        method: 'POST',
+        method: 'PUT',
         keepalive: true,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: payload,
       })
     } catch {
       // Best-effort — browser may block outbound requests during unload.
     }
-  }, [flushUrl, hasPendingChanges])
+  }, [flushUrl, flushAuthToken, hasPendingChanges])
 
   useEffect(() => {
     if (!flushUrl || disabled) return
@@ -156,7 +159,7 @@ export function useAutoSave<T>(
       window.removeEventListener('beforeunload', onBeforeUnload)
       window.removeEventListener('pagehide', onPageHide)
     }
-  }, [flushUrl, disabled, flushBeacon])
+  }, [flushUrl, flushAuthToken, disabled, flushBeacon])
 
   // Cleanup on unmount: cancel timers and flush any pending save so changes
   // made just before navigation/unmount are not silently dropped.

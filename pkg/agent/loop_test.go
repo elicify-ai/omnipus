@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -3233,5 +3235,32 @@ func TestProcessMessage_ContextOverflow_AnthropicStyle(t *testing.T) {
 	}
 	if provider.calls != 2 {
 		t.Fatalf("expected 2 calls for retry, got %d", provider.calls)
+	}
+}
+
+// TestIsMessagingChannel verifies the unexported isMessagingChannel predicate
+// classifies every registered human-messaging channel as messaging and every
+// non-messaging surface (webchat, system, cli, subagent, cron, unknown, empty)
+// as not. A missing entry here silently suppresses tool-feedback on that
+// channel, so this test guards the allowlist.
+//
+// Traces to: pkg/agent/loop.go isMessagingChannel — the switch over channel
+// names. NOTE: extend this list whenever a new human-messaging channel is
+// registered in pkg/channels/manager.go.
+func TestIsMessagingChannel(t *testing.T) {
+	messaging := []string{
+		"telegram", "discord", "slack", "whatsapp_native", "matrix", "irc",
+		"google-chat", "line", "wecom", "weixin", "dingtalk", "qq",
+		"email", "whatsapp", "feishu",
+	}
+	for _, ch := range messaging {
+		assert.True(t, isMessagingChannel(ch),
+			"expected %q to be a messaging channel", ch)
+	}
+
+	nonMessaging := []string{"webchat", "system", "cli", "subagent", "cron", "", "unknown"}
+	for _, ch := range nonMessaging {
+		assert.False(t, isMessagingChannel(ch),
+			"expected %q to NOT be a messaging channel", ch)
 	}
 }

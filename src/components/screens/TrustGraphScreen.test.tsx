@@ -98,7 +98,7 @@ function roster(): Agent[] {
     makeAgent({ id: 'ray', name: 'Ray' }),
     makeAgent({ id: 'existing', name: 'Existing' }),
     // A worker (delegation leaf): a valid drop TARGET, never a source.
-    makeAgent({ id: 'w1', name: 'Worker One', type: 'worker' }),
+    makeAgent({ id: 'w1', name: 'Worker One', type: 'Subagent' }),
   ]
 }
 

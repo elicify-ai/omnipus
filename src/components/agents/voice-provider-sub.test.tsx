@@ -65,7 +65,8 @@ describe('VoiceProviderSub', () => {
   })
 
   // Radix Select does not open in jsdom (data-state stays "closed"); assert the
-  // trigger/reason instead of driving the dropdown. Covered by Playwright E2E.
+  // trigger/reason instead of driving the dropdown. Dropdown interaction
+  // covered by create-agent.spec.ts Main case voice dropdown step.
   it.skip('renders a dropdown when the provider exposes voices', async () => {
     vi.mocked(detectVoiceProvider).mockResolvedValue({
       mode: 'enum',
@@ -102,7 +103,8 @@ describe('VoiceProviderSub', () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith('nova'))
   })
 
-  // Radix Select does not open in jsdom; covered by Playwright E2E.
+  // Radix Select does not open in jsdom; dropdown interaction covered by
+  // create-agent.spec.ts Main case voice dropdown step.
   it.skip('fires onChange when a dropdown voice is picked', async () => {
     vi.mocked(detectVoiceProvider).mockResolvedValue({
       mode: 'enum',

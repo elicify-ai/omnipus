@@ -23,16 +23,20 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
@@ -331,7 +335,24 @@ func recordExternalPermission(childTS *turnState, pr *runner.PermissionRequestEv
 
 // recordExternalToolResult mirrors a completed external tool result into the
 // sub-agent session transcript. The paired tool-call event was already recorded
-// when the call started; this entry carries the result.
+// (with Status="completed" + the call's Parameters) when the call started via
+// recordExternalToolCall; this call updates that existing entry in-place with
+// the result + final status rather than appending a second transcript line with
+// the same tool-call ID (which previously produced duplicate tool_call entries
+// on replay — review finding S1).
+//
+// If no matching pending entry is found (defensive: the start event was lost or
+// this is a result without a prior call), it falls back to appending a new entry.
+//
+// The in-place update reads the transcript JSONL, rewrites the matching line,
+// and writes the file back atomically under an advisory flock. This mirrors the
+// read-modify-rewrite pattern used by UnifiedStore.MarkLastEntryTruncated.
+// Because the store's AppendTranscript is guarded by an in-process mutex (not
+// flock), a narrow in-process race with a concurrent append from a sibling
+// sub-turn sharing this transcript session remains: in the worst case a
+// sibling's appended line lands in the read→rewrite gap and is overwritten.
+// That is accepted for this [MINOR] transcript-cleanliness fix; a structural
+// fix would add an exported UpdateToolCallResult method on UnifiedStore.
 func recordExternalToolResult(childTS *turnState, tr *runner.ToolResultEvent) {
 	id := tr.CallID
 	if id == "" {
@@ -348,6 +369,20 @@ func recordExternalToolResult(childTS *turnState, tr *runner.ToolResultEvent) {
 			result = map[string]any{"output": string(tr.Output)}
 		}
 	}
+
+	// S1: try to update the existing pending tool-call entry in-place. Only
+	// attempt this when a transcript store + session are configured and the
+	// turn has not been abandoned (appendToolCallTranscript applies the same
+	// guards, so we mirror them here to avoid a pointless rewrite).
+	if !childTS.abandoned.Load() &&
+		childTS.transcriptStore != nil && childTS.transcriptSessionID != "" {
+		if recordExternalToolResultUpdateInPlace(childTS, session.ToolCallID(id), status, result) {
+			return
+		}
+	}
+
+	// Defensive fallback: no matching pending entry found, or the in-place
+	// rewrite failed. Append a new transcript line so the result is not lost.
 	childTS.appendToolCallTranscript(session.ToolCall{
 		ID:         session.ToolCallID(id),
 		Tool:       tr.ToolName,
@@ -355,6 +390,108 @@ func recordExternalToolResult(childTS *turnState, tr *runner.ToolResultEvent) {
 		Parameters: nil,
 		Result:     result,
 	})
+}
+
+// recordExternalToolResultUpdateInPlace finds the most recent transcript entry
+// of type tool_call whose ToolCall.ID matches callID and Status is "completed"
+// (the entry written by recordExternalToolCall when the call started), and
+// updates that ToolCall in-place with the final status + result. It returns
+// true when an entry was found and the on-disk rewrite succeeded, false
+// otherwise (caller falls back to appending).
+func recordExternalToolResultUpdateInPlace(
+	childTS *turnState,
+	callID session.ToolCallID,
+	status string,
+	result map[string]any,
+) bool {
+	store := childTS.transcriptStore
+	sessionID := childTS.transcriptSessionID
+	transcriptPath := filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl")
+
+	var found bool
+	rewriteErr := fileutil.WithFlock(transcriptPath, func() error {
+		found = false
+		data, err := os.ReadFile(transcriptPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil // no transcript yet — nothing to update
+			}
+			return err
+		}
+
+		// Split into raw lines (preserving malformed lines so the file layout
+		// is unchanged on rewrite).
+		rawLines := bytes.Split(data, []byte{'\n'})
+		targetIdx := -1
+		var updatedEntry session.TranscriptEntry
+		for i, raw := range rawLines {
+			line := bytes.TrimSpace(raw)
+			if len(line) == 0 {
+				continue
+			}
+			var entry session.TranscriptEntry
+			if jErr := json.Unmarshal(line, &entry); jErr != nil {
+				// Skip malformed lines (matches ReadTranscript behavior).
+				continue
+			}
+			if entry.Type != session.EntryTypeToolCall {
+				continue
+			}
+			// Find a ToolCall on this entry with the matching ID whose Status
+			// is still "completed" (the start-of-call entry written by
+			// recordExternalToolCall). Walk the entry's ToolCalls slice.
+			for j := range entry.ToolCalls {
+				if entry.ToolCalls[j].ID != callID {
+					continue
+				}
+				if entry.ToolCalls[j].Status != "completed" {
+					// Already has a final status — leave it (idempotent guard
+					// against double-processing the same result event).
+					continue
+				}
+				targetIdx = i
+				updatedEntry = entry
+				updatedEntry.ToolCalls[j].Status = status
+				updatedEntry.ToolCalls[j].Result = result
+				break
+			}
+			if targetIdx == i {
+				break
+			}
+		}
+		if targetIdx == -1 {
+			return nil // no matching pending entry — signal fallback
+		}
+
+		rewritten, mErr := json.Marshal(updatedEntry)
+		if mErr != nil {
+			return mErr
+		}
+		rawLines[targetIdx] = rewritten
+
+		var buf bytes.Buffer
+		for i, line := range rawLines {
+			// Skip a trailing empty line produced by a final-newline split so
+			// the file does not grow a blank line on each rewrite.
+			if i == len(rawLines)-1 && len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			buf.Write(line)
+			buf.WriteByte('\n')
+		}
+		if wErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); wErr != nil {
+			return wErr
+		}
+		found = true
+		return nil
+	})
+
+	if rewriteErr != nil {
+		slog.Warn("external-cli dispatch: in-place tool-result transcript update failed; falling back to append",
+			"session_id", sessionID, "tool_call_id", string(callID), "err", rewriteErr)
+		return false
+	}
+	return found
 }
 
 // defaultExternalMaxTurns bounds an external run when the agent declares no
