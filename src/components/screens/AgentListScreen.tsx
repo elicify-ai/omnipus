@@ -8,8 +8,10 @@ import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
 import type { WizardCli } from '@/components/agents/wizard/types'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, updateAgent, isApiError, isWorker } from '@/lib/api'
+import type { Agent } from '@/lib/api'
 
 interface HostClis {
   hasClaude: boolean
@@ -40,13 +42,17 @@ export function AgentListScreen() {
     queryFn: fetchAgents,
   })
 
-  // Three-tier roster (W4 of agent-form-requirements): user-defined chat
-  // colleagues (Main) on top, user-defined workers (Subagent + subagent_3p)
-  // below, built-in roster (Mia / Jim / Ava / Ray, type=core) at the bottom.
-  // Partition via isWorker() so the new wire enum values are classified
-  // correctly without enumerating them here (see src/lib/api.ts:664-666).
-  const baseAgents = agents.filter((a) => !isWorker(a))
+  // Three-tier roster (W4 of agent-form-requirements §5.1/§13.2): user-defined
+  // Main agents on top, user-defined workers (Subagent + subagent_3p) below,
+  // built-in roster (locked core agents Mia/Jim/Ava/Ray, type=core) at the
+  // bottom in a collapsible disclosure.
+  const mainAgents = agents.filter((a) => !isWorker(a) && !(a.type === 'core' && a.locked))
   const workerAgents = agents.filter(isWorker)
+  const builtInAgents = agents.filter((a) => a.type === 'core' && a.locked)
+
+  // Built-in roster disclosure state — default collapsed so the custom agents
+  // stay prominent.
+  const [builtInOpen, setBuiltInOpen] = useState<string | undefined>(undefined)
 
   // Host-CLI detection — W4 of agent-form-requirements. We probe
   // `GET /api/v1/system/cli-detect` on mount and fall back to optimistic
@@ -74,7 +80,8 @@ export function AgentListScreen() {
   }, [])
 
   const { mutate: doSetDefault } = useMutation({
-    mutationFn: (agentId: string) => updateAgent(agentId, { default: true }),
+    mutationFn: (agent: Agent) =>
+      updateAgent(agent.id, { default: true, updated_at: agent.updated_at }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
       addToast({ message: 'Default agent updated', variant: 'success' })
@@ -100,11 +107,43 @@ export function AgentListScreen() {
     opencode: 'OpenCode is not installed on this host',
   }
 
+  if (isLoading) {
+    return (
+      <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+        <div className="max-w-4xl mx-auto px-4 py-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="h-32 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+        <div className="max-w-4xl mx-auto px-4 py-6">
+          <div className="flex flex-col items-center justify-center py-16 gap-3">
+            <p className="text-[var(--color-muted)] text-sm">Could not load agents.</p>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              Retry
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-    <div className="max-w-4xl mx-auto px-4 py-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Agents</h1>
           <p className="text-sm text-[var(--color-muted)] mt-0.5">
@@ -121,24 +160,7 @@ export function AgentListScreen() {
         </div>
       </div>
 
-      {/* Content */}
-      {isLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-32 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
-            />
-          ))}
-        </div>
-      ) : isError ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <p className="text-[var(--color-muted)] text-sm">Could not load agents.</p>
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
-            Retry
-          </Button>
-        </div>
-      ) : agents.length === 0 ? (
+      {agents.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
           <Robot size={48} weight="thin" className="text-[var(--color-border)]" />
           <div>
@@ -177,7 +199,7 @@ export function AgentListScreen() {
                 <Plus size={12} weight="bold" /> + New Main
               </Button>
             </div>
-            {baseAgents.length === 0 ? (
+            {mainAgents.length === 0 ? (
               <div
                 className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
                 data-testid="base-agents-empty"
@@ -196,11 +218,11 @@ export function AgentListScreen() {
               // layout is 3 + 1; the sm 2-col stage lets 2 + 2 sit
               // together on md. (W6-B2, I4+M3.)
               <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-                {baseAgents.map((agent) => (
+                {mainAgents.map((agent) => (
                   <AgentCard
                     key={agent.id}
                     agent={agent}
-                    onSetDefault={() => doSetDefault(agent.id)}
+                    onSetDefault={() => doSetDefault(agent)}
                   />
                 ))}
               </div>
@@ -220,6 +242,7 @@ export function AgentListScreen() {
                   Delegation-only labour agents — invoked by other agents, not chat targets.
                 </p>
               </div>
+              <div className="flex items-center gap-1">
               <Button
                 size="sm"
                 variant="ghost"
@@ -286,7 +309,8 @@ export function AgentListScreen() {
                 </PopoverContent>
               </Popover>
             </div>
-            {workerAgents.length === 0 ? (
+          </div>
+          {workerAgents.length === 0 ? (
               <div
                 className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
                 data-testid="worker-agents-empty"
@@ -307,11 +331,49 @@ export function AgentListScreen() {
               </div>
             )}
           </section>
+
+          {/* Built-in roster — locked core agents (Mia / Jim / Ava / Ray).
+              Collapsed by default per spec §5.1/§13.2 so the operator's own
+              agents stay in the visual hierarchy. */}
+          {builtInAgents.length > 0 && (
+            <section data-testid="built-in-agents-section">
+              <Accordion
+                type="single"
+                collapsible
+                value={builtInOpen}
+                onValueChange={setBuiltInOpen}
+              >
+                <AccordionItem value="built-in">
+                  <AccordionTrigger data-testid="built-in-agents-trigger">
+                    <div className="text-left">
+                      <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                        Built-in roster
+                      </h2>
+                      <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                        Core agents — Mia, Jim, Ava, Ray and any other locked system roster.
+                      </p>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-2">
+                      {builtInAgents.map((agent) => (
+                        <AgentCard
+                          key={agent.id}
+                          agent={agent}
+                          onSetDefault={() => doSetDefault(agent)}
+                        />
+                      ))}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </section>
+          )}
         </div>
       )}
 
       <CreateAgentModal />
     </div>
-    </div>
+  </div>
   )
 }

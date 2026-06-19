@@ -1,13 +1,10 @@
 import { Scroll, NotePencil, Microphone } from '@phosphor-icons/react'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { SmartSelect } from '@/components/ui/smart-select'
-import { ExecutorSelector } from './ExecutorSelector'
-import { FormError } from '@/components/ui/FormError'
+import { VoiceProviderSub } from './voice-provider-sub'
 import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
-import type { ExecutorConfig } from '@/lib/api'
 
 // ── AgentFormFields ──────────────────────────────────────────────────────────
 //
@@ -81,29 +78,22 @@ export function BehaviorFields({
   const handleVoice = onVoiceChange ?? setVoice
   return (
     <div className="space-y-5">
-      {/* SOUL.md / Task prompt — relabelled for workers, optional in both tiers.
-          Workers: empty is valid (per the locked concept, soul is optional).
+      {/* SOUL.md / Task prompt — relabelled for workers.
+          Workers: now a required task prompt (per the worker form spec).
           Base: empty at create time is also valid (the agent starts in "draft"). */}
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <Scroll size={13} className="text-[var(--color-accent)]" />
           <p className="text-xs font-medium text-[var(--color-secondary)]">
-            {isWorker ? (
-              <>
-                Task prompt <span className="text-[var(--color-muted)] font-normal">(optional)</span>
-              </>
-            ) : (
-              'Personality & instructions'
-            )}
+            {isWorker ? 'Task prompt' : 'Personality & instructions'}
           </p>
         </div>
         <p className="text-xs text-[var(--color-muted)]">
           {isWorker ? (
             <>
-              Optional system prompt for the worker&apos;s runner. Composed with
-              any caller-supplied task prompt at run time. Stored as{' '}
-              <span className="font-mono text-[11px]">SOUL.md</span>. Leave empty
-              to use the executor&apos;s default behaviour.
+              System prompt for the worker&apos;s runner. Composed with any
+              caller-supplied task prompt at run time. Stored as{' '}
+              <span className="font-mono text-[11px]">SOUL.md</span>.
             </>
           ) : (
             <>
@@ -119,14 +109,13 @@ export function BehaviorFields({
           onChange={(e) => handleSoul?.(e.target.value)}
           placeholder={
             isWorker
-              ? "# Task prompt (optional)\n\nDefine how this worker should approach its delegated task..."
+              ? "# Task prompt\n\nDefine how this worker should approach its delegated task..."
               : "# Soul\n\nDefine this agent's personality, expertise, and behavioural guidelines..."
           }
           rows={6}
           className="text-xs font-mono resize-none"
-          // Workers: explicitly NOT required. Empty is valid.
-          required={false}
-          aria-required={false}
+          required={isWorker}
+          aria-required={isWorker ? 'true' : 'false'}
         />
         {renderUploadButton?.('soul', (v) => handleSoul?.(v))}
       </div>
@@ -154,138 +143,32 @@ export function BehaviorFields({
         {renderUploadButton?.('instructions', (v) => handleInstructions?.(v))}
       </div>
 
-      <Separator />
-
       {/* W6-B4 / G1: Voice — per-agent persona voice identifier (TTS voice name
-          or voice model ID). Schema-pinned on `Agent.voice` / `AgentUpdateRequest.voice`;
-          not active until v0.2.0 TTS, but exposing the field now means operators
-          can pre-configure the persona voice for when the feature ships.
-          Optional in both tiers — empty string omits the field on the wire. */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <Microphone size={13} className="text-[var(--color-accent)]" />
-          <p className="text-xs font-medium text-[var(--color-secondary)]">
-            Voice <span className="text-[var(--color-muted)] font-normal">(optional)</span>
-          </p>
-        </div>
-        <p className="text-xs text-[var(--color-muted)]">
-          Per-agent persona voice identifier (e.g. <span className="font-mono text-[11px]">alloy</span>).
-          Used by v0.2.0 TTS to pick a voice when this agent speaks. Leave empty for the engine default.
-        </p>
-        <Input
-          data-testid={isWorker ? 'worker-voice' : 'agent-voice'}
-          value={voice}
-          onChange={(e) => handleVoice?.(e.target.value)}
-          placeholder="e.g. alloy"
-          className="text-xs h-8 font-mono"
-          // Voice is optional in both tiers — never required.
-          required={false}
-          aria-required={false}
-        />
-      </div>
-    </div>
-  )
-}
-
-// ── Executor runtime selector ────────────────────────────────────────────────
-
-export interface ExecutorSectionProps {
-  /** True when rendering the worker form (executor is required). */
-  isWorker: boolean
-  /** The current executor value (or `undefined` for the default). */
-  value: ExecutorConfig | undefined
-  onChange: (next: ExecutorConfig | undefined) => void
-  /** Validation error to render below the selector (worker: required). */
-  error?: string
-  /**
-   * True when the parent form is for a locked CORE agent (Mia, Jim, Ray, Ava).
-   * Wave 6 G9: "core agents run native only" — external-cli is a worker-only
-   * affordance, so when this is true the dropdown disables external-cli and
-   * the selector clamps programmatic changes back to native. Default false.
-   */
-  isCoreAgent?: boolean
-}
-
-/**
- * Renders the executor/runtime selector with the tier-branched label:
- *   - Worker: "Executor *" + the "Required for workers" helper, with a
- *     validation error slot.
- *   - Base: "Executor" (no helper, no error).
- * Placed here so the create modal AND any future form reusing this
- * component get the same chrome — and so the ExecutorSelector import
- * stays in one chunk (the modal's chunk imports from this module, and
- * the tree-shaker keeps the dependency).
- */
-export function ExecutorSection({
-  isWorker,
-  value,
-  onChange,
-  error,
-  isCoreAgent = false,
-}: ExecutorSectionProps) {
-  // Wave 6 / A-fix: WCAG 3.3.1/4.1.3 wiring. The `<select>` in
-  // ExecutorSelector carries `aria-describedby="executor-error"` and
-  // `aria-invalid={!!error}` whenever this section renders an error,
-  // so screen readers announce the validation message via the
-  // `<FormError role="alert">` rendered below.
-  const errorId = 'executor-error'
-  return (
-    <div className="space-y-1.5 pt-1 border-t border-[var(--color-border)]">
-      <p className="text-xs font-medium text-[var(--color-secondary)] pt-1">
-        Executor {isWorker && <span className="text-[var(--color-error)]" aria-hidden="true">*</span>}
-      </p>
-      {isWorker && (
-        <p className="text-[11px] text-[var(--color-muted)]">
-          Required for workers — pick the runtime that will execute delegated tasks.
-        </p>
+          or voice model ID). Main agents get the provider-aware widget; workers
+          do not have a chat surface and never use TTS, so the field is hidden. */}
+      {!isWorker && (
+        <>
+          <Separator />
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Microphone size={13} className="text-[var(--color-accent)]" />
+              <p className="text-xs font-medium text-[var(--color-secondary)]">
+                Voice <span className="text-[var(--color-muted)] font-normal">(optional)</span>
+              </p>
+            </div>
+            <p className="text-xs text-[var(--color-muted)]">
+              Per-agent persona voice identifier (e.g. <span className="font-mono text-[11px]">alloy</span>).
+              Used by v0.2.0 TTS to pick a voice when this agent speaks. Leave empty for the engine default.
+            </p>
+            <VoiceProviderSub
+              value={voice ?? ''}
+              onChange={(v) => handleVoice?.(v)}
+            />
+          </div>
+        </>
       )}
-      <ExecutorSelector
-        value={value}
-        onChange={(next) => {
-          onChange(next)
-          if (next && error) onChange(next)
-        }}
-        errorId={errorId}
-        hasError={!!error}
-        isCoreAgent={isCoreAgent}
-      />
-      <FormError id={errorId} error={error} />
     </div>
   )
-}
-
-// ── Modal title + description copy (tier-branched) ───────────────────────────
-
-export interface AgentFormCopy {
-  title: string
-  description: string
-  /** Test id for the modal title heading (used by tier-preset tests). */
-  testId: string
-  /** Submit-button label shown while the mutation is pending + the final label. */
-  submitLabel: string
-}
-
-/**
- * Returns the title/description/submit-label copy for the create modal,
- * branched by tier. Single source of truth — both the modal header and any
- * test that asserts on the title go through this helper.
- */
-export function getCreateAgentFormCopy(type: 'custom' | 'worker'): AgentFormCopy {
-  if (type === 'worker') {
-    return {
-      title: 'New sub-agent worker',
-      description:
-        'Configure a delegation-only labour agent. Workers are invoked by other agents — they are not chat targets and never run on a schedule.',
-      testId: 'create-worker-modal-title',
-      submitLabel: 'Create worker',
-    }
-  }
-  return {
-    title: 'New custom agent',
-    description: 'Configure a new custom agent with a persona, model, and tools.',
-    testId: 'create-custom-modal-title',
-    submitLabel: 'Create agent',
-  }
 }
 
 // ── Avatar color picker (lifted from AgentProfile.tsx:843-866) ─────────────
