@@ -10,6 +10,11 @@ description: >
 minProperties: 1
 additionalProperties: false
 properties:
+  updated_at:
+    type: string
+    format: date-time
+    description: ISO 8601 timestamp from the last GET /agents/{id} response. When provided, the request is rejected with 409 Conflict if it does not match the current server value.
+    example: "2026-06-19T12:34:56Z"
   name:
     type: string
     minLength: 1

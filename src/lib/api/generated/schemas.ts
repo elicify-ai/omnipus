@@ -111,6 +111,7 @@ type Agent = {
   stats?: AgentStats | undefined;
   default?: boolean | undefined;
   skills?: Array<string> | undefined;
+  updated_at?: string | undefined;
   delegation_policy?:
     | Partial<{
         to: Array<{
@@ -178,7 +179,9 @@ type ExecutorConfig = Partial<{
 }>;
 type AgentCreateRequest = {
   name: string;
-  type?: ("Main" | "Subagent" | "subagent_3p" | "core" | "system") | undefined;
+  type?:
+    | ("Main" | "Subagent" | "subagent_3p" | "core" | "system" | "worker")
+    | undefined;
   description?: string | undefined;
   model?: string | undefined;
   color?: string | undefined;
@@ -234,6 +237,7 @@ type delegation_policy = Partial<{
   }>;
 }>;
 type AgentUpdateRequest = Partial<{
+  updated_at: string;
   name: string;
   description: string;
   model: string;
@@ -1020,6 +1024,7 @@ export const Agent: z.ZodType<Agent> = z
     stats: AgentStats.optional(),
     default: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
+    updated_at: z.string().datetime({ offset: true }).optional(),
     delegation_policy: z
       .object({
         to: z.array(
@@ -1058,10 +1063,10 @@ export const delegation_policy: z.ZodType<delegation_policy> = z
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   name: z.string().min(1),
   type: z
-    .enum(["Main", "Subagent", "subagent_3p", "core", "system"])
+    .enum(["Main", "Subagent", "subagent_3p", "core", "system", "worker"])
     .optional()
     .default("Main"),
-  description: z.string().min(1).optional(),
+  description: z.string().optional(),
   model: z.string().optional(),
   color: z
     .string()
@@ -1108,6 +1113,7 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
 });
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
   .object({
+    updated_at: z.string().datetime({ offset: true }),
     name: z.string().min(1),
     description: z.string(),
     model: z.string(),
