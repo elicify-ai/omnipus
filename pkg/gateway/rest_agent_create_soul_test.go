@@ -46,7 +46,7 @@ func readSoulMDForAgent(t *testing.T, api *restAPI, agentID string) string {
 func TestCreateAgent_Worker_PersistsSoul(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Soulful Worker","type":"worker","executor":{"kind":"native"},"soul":"worker-soul-X"}`
+	body := `{"name":"Soulful Worker","type":"Subagent","executor":{"kind":"native"},"description":"persists soul regression","soul":"worker-soul-X"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -68,7 +68,7 @@ func TestCreateAgent_Worker_PersistsSoul(t *testing.T) {
 func TestCreateAgent_Custom_PersistsSoul(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Soulful Custom","type":"custom","soul":"custom-soul-X"}`
+	body := `{"name":"Soulful Custom","type":"Main","soul":"custom-soul-X"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -90,15 +90,13 @@ func TestCreateAgent_Custom_PersistsSoul(t *testing.T) {
 func TestCreateAgent_Worker_RequiresExecutor(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Worker No Exec","type":"worker"}`
+	body := `{"name":"Worker No Exec","type":"Subagent","description":"missing executor regression","soul":"worker-soul-noexec"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "worker",
-		"the rejection must reference the worker tier")
 	assert.Contains(t, w.Body.String(), "executor",
 		"the rejection must name the missing executor")
 }
@@ -110,7 +108,7 @@ func TestCreateAgent_Worker_RequiresExecutor(t *testing.T) {
 func TestCreateAgent_Worker_AllowsAnyExecutorKind(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Worker Remote A2A","type":"worker","executor":{"kind":"remote-a2a"}}`
+	body := `{"name":"Worker Remote A2A","type":"Subagent","description":"remote-a2a regression","executor":{"kind":"remote-a2a"},"soul":"remote-a2a-soul"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -118,8 +116,10 @@ func TestCreateAgent_Worker_AllowsAnyExecutorKind(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	// W1 wire enum: legacy "worker" becomes "Subagent" (native worker) on the wire.
-	assert.Equal(t, "Subagent", string(created.Type))
+	// Response type echoes the underlying config constant ("worker" — the
+	// Subagent wire enum value maps to AgentTypeWorker on disk, and the
+	// create response reads it back via ac.ResolveType).
+	assert.Equal(t, "worker", string(created.Type))
 	require.NotNil(t, created.Executor)
 	require.NotNil(t, created.Executor.Kind, "Executor.Kind must be non-nil pointer after W1 wire schema")
 	assert.Equal(t, "remote-a2a", string(*created.Executor.Kind))

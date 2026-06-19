@@ -183,10 +183,16 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				slog.Warn("invalid skill from "+source, "name", info.Name, "error", err)
 				continue
 			}
-			if seen[info.Name] {
+			// Dedup by ID (the directory slug), not by Name (the frontmatter
+			// display name): two skills with the same slug but different display
+			// names (e.g. a workspace "summarize" with name "summarize" and a
+			// global "summarize" with name "Summarize") are the SAME skill and
+			// must surface once. ID is the stable identifier — Name is human
+			// text and may legitimately differ across copies.
+			if seen[info.ID] {
 				continue
 			}
-			seen[info.Name] = true
+			seen[info.ID] = true
 			skills = append(skills, info)
 		}
 	}

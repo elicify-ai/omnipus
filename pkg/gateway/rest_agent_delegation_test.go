@@ -265,7 +265,7 @@ func TestUpdateAgent_DelegationPreservesInertAcceptFrom(t *testing.T) {
 func TestCreateAgent_DelegationPolicyPersists(t *testing.T) {
 	api := buildDelegationTestAPI(t)
 
-	body := `{"name":"Delegator","delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["await"],"depth":1}}`
+	body := `{"name":"Delegator","soul":"delegator-soul","delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["await"],"depth":1}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

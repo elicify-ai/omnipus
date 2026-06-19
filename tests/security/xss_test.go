@@ -95,6 +95,7 @@ func TestChatMarkdownXSS(t *testing.T) {
 				"name":        "xss-test-agent-" + randSuffix(),
 				"description": payload,
 				"model":       "scripted-model",
+				"soul":        "test-soul",
 			}
 			bb, err := json.Marshal(body)
 			require.NoError(t, err)
@@ -316,6 +317,7 @@ func TestXSSPayloadHTMLParsing(t *testing.T) {
 				"name":        "xss-html-parse-" + randSuffix(),
 				"description": payload,
 				"model":       "scripted-model",
+				"soul":        "test-soul",
 			}
 			bb, err := json.Marshal(body)
 			require.NoError(t, err)
