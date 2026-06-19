@@ -37,6 +37,7 @@ properties:
       - Main
       - Subagent
       - subagent_3p
+      - worker
     description: >
       Agent lifecycle classification.
       "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray).
@@ -46,6 +47,15 @@ properties:
       "Subagent" = user-defined delegation-only worker on the Omnipus engine.
       "subagent_3p" = user-defined delegation-only worker on an external CLI
       (claude-code / codex / opencode).
+      "worker" = legacy build-time/seed config constant (the seed `Worker` entry
+      in `pkg/config/worker_helpers_test.go` ships with this type; the build-time
+      string is preserved for backward compatibility with the on-disk seeded
+      `Worker` row that the gateway returns in GET /api/v1/agents). The
+      frontend's `isWorker()` helper already accepts this value; it is
+      functionally a Subagent. The W6-A wire enum is the canonical one for
+      new user-created agents; `worker` survives in the contract for the
+      legacy seed and for any operator-defined entries that predate the
+      W6-A type widening.
       Built-in agents return type: "core" with locked: true; the "Main" enum value is only
       for user-created chat agents.
     example: "core"
