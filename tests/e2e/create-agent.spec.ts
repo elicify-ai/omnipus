@@ -87,7 +87,10 @@ test.describe('create agent wizard', () => {
 
     const modal = page.locator('[role="dialog"]')
     await expect(modal).toBeVisible()
-    await expect(page.getByTestId('wizard-cli-chooser')).toBeVisible()
+    // The roster pre-locks the CLI, so the chooser is hidden and a locked
+    // CLI chip is shown instead.
+    await expect(page.getByTestId('wizard-cli-chip')).toBeVisible()
+    await expect(page.getByTestId('wizard-cli-path')).toBeVisible()
 
     await fillIdentityStep(page, { type: 'subagent_3p' })
     await page.getByTestId('wizard-cli-path').fill('/usr/local/bin/claude')
