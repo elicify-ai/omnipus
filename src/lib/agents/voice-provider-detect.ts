@@ -15,8 +15,13 @@
 // `voice-provider-change` event on save; the agent-edit slide-over listens
 // and re-calls detectVoiceProvider() on receipt. The SWR cache is invalidated
 // by bumpVersion() so the next read re-fetches immediately.
+//
+// The fetch goes through `fetchVoiceProvider()` in `src/lib/api.ts` which
+// validates the response against the generated `VoiceProvider` Zod schema
+// — no raw `fetch()` and no `as VoiceProvider` cast (the contract is the
+// source of truth).
 
-import type { VoiceProvider } from '@/lib/api/generated/openapi-types'
+import { fetchVoiceProvider, ApiError } from '@/lib/api'
 
 export type VoiceProviderMode = 'enum' | 'free-text' | 'disabled'
 
@@ -70,25 +75,15 @@ export async function detectVoiceProvider(): Promise<VoiceProviderDetectResult> 
 
   inflight = (async (): Promise<VoiceProviderDetectResult> => {
     const versionAtFetch = cacheVersion
-    let result: VoiceProviderDetectResult
+    // Initialized to `undefined` to satisfy strict-mode "definitely assigned"
+    // analysis; the `try`/`catch` arms above both set this before return.
+    let result: VoiceProviderDetectResult | undefined
     try {
-      const resp = await fetch('/api/v1/voice/provider', {
-        credentials: 'include',
-        headers: { Accept: 'application/json' },
-      })
-
-      if (!resp.ok) {
-        result = disabledResult(`Voice provider unavailable (HTTP ${resp.status})`)
-        return result
-      }
-
-      let body: VoiceProvider | null = null
-      try {
-        body = (await resp.json()) as VoiceProvider
-      } catch {
-        result = disabledResult('Voice provider unavailable (malformed response)')
-        return result
-      }
+      // fetchVoiceProvider goes through `request<T>` with the generated
+      // `VoiceProvider` Zod schema. The Zod parse runs server-side-style:
+      // a malformed response surfaces as a thrown `ApiSchemaError` from
+      // the helpers, which we map to `disabled` below.
+      const body = await fetchVoiceProvider()
 
       if (!body || body.provider == null) {
         result = disabledResult('Voice provider unavailable (no provider configured)')
@@ -111,14 +106,21 @@ export async function detectVoiceProvider(): Promise<VoiceProviderDetectResult> 
       }
       return result
     } catch (err) {
-      // Network failure / fetch threw.
-      result = disabledResult(
-        `Voice provider unavailable (${err instanceof Error ? err.message : 'network'})`,
-      )
+      // Network / schema / server failure → disabled.
+      const reason =
+        err instanceof ApiError && err.status
+          ? `Voice provider unavailable (HTTP ${err.status})`
+          : err instanceof Error
+            ? `Voice provider unavailable (${err.message})`
+            : 'Voice provider unavailable (network)'
+      result = disabledResult(reason)
       return result
     } finally {
       inflight = null
       // Only commit to cache if no version bump happened during the fetch.
+      // `result` is assigned in both try and catch above; the strict-mode
+      // TS error comes from the nested function's "definitely assigned"
+      // analysis missing the early-returns. Belt-and-braces: assert.
       if (cacheVersion === versionAtFetch && result !== undefined) {
         cache = { result, fetchedAtMs: Date.now() }
       }

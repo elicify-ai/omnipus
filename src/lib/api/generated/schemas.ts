@@ -84,7 +84,7 @@ type ToolCall = {
 type Agent = {
   id: string;
   name: string;
-  type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
+  type: "core" | "system" | "Main" | "Subagent" | "subagent_3p" | "worker";
   locked: boolean;
   color?: string | undefined;
   icon?: string | undefined;
@@ -983,7 +983,14 @@ export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
     name: z.string().min(1).max(100),
-    type: z.enum(["core", "system", "Main", "Subagent", "subagent_3p"]),
+    type: z.enum([
+      "core",
+      "system",
+      "Main",
+      "Subagent",
+      "subagent_3p",
+      "worker",
+    ]),
     locked: z.boolean(),
     color: z
       .string()
@@ -4930,6 +4937,44 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/skills/:name",
+    alias: "deleteSkill",
+    description: `Removes an installed skill from the local skills directory. The skill must not be the default skill, in use by any agent, or required by a seeded dependency. On success the gateway removes the skill directory and returns 204 No Content.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
         schema: ErrorResponse,
       },
     ],

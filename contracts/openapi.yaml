@@ -57,6 +57,8 @@ tags:
   description: Workspace milestones — group tasks under named milestones with optional due dates.
 - name: Stats
   description: Usage statistics and aggregations.
+- name: system
+  description: System-level probes (e.g. host-CLI availability) — read-only diagnostics used by the SPA roster UI.
 components:
   securitySchemes:
     BearerAuth:
@@ -1495,6 +1497,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Agent'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    delete:
+      operationId: deleteAgent
+      summary: Delete a custom agent
+      description: >
+        Removes a custom (non-core, non-system) agent from config.json and
+        reloads the live config. Built-in core/system agents (locked) and the
+        `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`).
+        Deleting an agent also clears its session history and on-disk
+        workspace artifacts via the cascade pipeline. Audited (severity INFO,
+        event `agent.delete`).
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: 550e8400-e29b-41d4-a716-446655440000
+      responses:
+        '204':
+          description: Agent deleted.
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -3534,6 +3571,37 @@ paths:
           $ref: '#/components/responses/409Conflict'
         '502':
           $ref: '#/components/responses/502BadGateway'
+  /skills/{name}:
+    delete:
+      operationId: deleteSkill
+      summary: Delete an installed skill
+      description: >
+        Removes an installed skill from the local skills directory. The skill
+        must not be the default skill, in use by any agent, or required by a
+        seeded dependency. On success the gateway removes the skill directory
+        and returns 204 No Content.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: name
+        in: path
+        required: true
+        description: Skill slug (matches the `id` field on Skill).
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Skill removed.
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
   /chat:
     post:
       operationId: postChat
@@ -5032,6 +5100,30 @@ paths:
                 $ref: '#/components/schemas/TokenUsageSummary'
         '400':
           $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /system/cli-detect:
+    get:
+      operationId: getHostCliDetect
+      summary: Probe host PATH for the three external-CLI runners
+      description: >
+        Reports whether the gateway process can locate each of the three
+        external-CLI runners on its PATH. Read-only, idempotent, and
+        unaudited — the SPA roster uses this to grey-out CLIs the host
+        cannot run instead of letting the operator hit a wizard failure at
+        runtime. Pure Go probe (no shell-out).
+      tags:
+      - system
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: CLI availability probe result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CliDetect'
         '401':
           $ref: '#/components/responses/401Unauthorized'
 

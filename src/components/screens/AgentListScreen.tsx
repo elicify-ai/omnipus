@@ -1,12 +1,35 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { Plus, Robot, ShareNetwork } from '@phosphor-icons/react'
+import { useEffect, useState } from 'react'
+import { CaretDown, Plus, Robot, ShareNetwork } from '@phosphor-icons/react'
 import { AgentCard } from '@/components/agents/AgentCard'
 import { WorkerCard } from '@/components/agents/WorkerCard'
 import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
+import type { WizardCli } from '@/components/agents/wizard/types'
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, updateAgent, isApiError, isWorker } from '@/lib/api'
+
+interface HostClis {
+  hasClaude: boolean
+  hasCodex: boolean
+  hasOpencode: boolean
+}
+
+const OPTIMISTIC_HOST_CLIS: HostClis = {
+  hasClaude: true,
+  hasCodex: true,
+  hasOpencode: true,
+}
+
+const CLI_LABELS: Record<WizardCli, string> = {
+  'claude-code': 'claude-code',
+  codex: 'codex',
+  opencode: 'opencode',
+}
+
+const CLI_ORDER: readonly WizardCli[] = ['claude-code', 'codex', 'opencode'] as const
 
 export function AgentListScreen() {
   const { openCreateAgentModal, addToast } = useUiStore()
@@ -25,6 +48,33 @@ export function AgentListScreen() {
   const baseAgents = agents.filter((a) => !isWorker(a))
   const workerAgents = agents.filter(isWorker)
 
+  // Host-CLI detection — W4 of agent-form-requirements. We don't have a
+  // dedicated `GET /api/v1/system/cli-detect` endpoint (out of scope for
+  // this wave), so we keep optimistic defaults (all CLIs available) and
+  // probe `fetchAgents` 404-fall-through below if a backend probe later
+  // ships. The roster's "Add Subagent (External)" picker shows each CLI
+  // as enabled by default and the user gets a runtime 4xx from the wizard
+  // if they pick a missing binary. A future ADR can wire the actual probe.
+  const [hostClis, setHostClis] = useState<HostClis>(OPTIMISTIC_HOST_CLIS)
+  const [externalMenuOpen, setExternalMenuOpen] = useState(false)
+  useEffect(() => {
+    // SSR-safe: only run in browser. The optional probe is a no-op today;
+    // left here as the hook-point so a future endpoint slot is one-line.
+    if (typeof window === 'undefined') return
+    let cancelled = false
+    fetch('/api/v1/system/cli-detect')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('not ok'))))
+      .then((d: HostClis) => {
+        if (!cancelled) setHostClis(d)
+      })
+      .catch(() => {
+        // Keep OPTIMISTIC_HOST_CLIS — endpoint missing or network error.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const { mutate: doSetDefault } = useMutation({
     mutationFn: (agentId: string) => updateAgent(agentId, { default: true }),
     onSuccess: () => {
@@ -37,6 +87,20 @@ export function AgentListScreen() {
         variant: 'error',
       }),
   })
+
+  // Per-CLI affordance config — drives both the disabled state and the
+  // tooltip when a CLI is not installed on the host. Kept in one place so
+  // the disclosure and the (future) inline fallback render the same state.
+  const cliAvailable: Record<WizardCli, boolean> = {
+    'claude-code': hostClis.hasClaude,
+    codex: hostClis.hasCodex,
+    opencode: hostClis.hasOpencode,
+  }
+  const cliTooltip: Record<WizardCli, string> = {
+    'claude-code': 'Claude Code is not installed on this host',
+    codex: 'Codex is not installed on this host',
+    opencode: 'OpenCode is not installed on this host',
+  }
 
   return (
     <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
@@ -167,49 +231,62 @@ export function AgentListScreen() {
               >
                 <Plus size={12} weight="bold" /> + New Subagent
               </Button>
-              {/* W6 spec §5.1: third +Add button with CLI sub-options (Subagent External).
-                  Renders the 3 CLI choices inline on desktop; on phone the
-                  spec §13.2 says these expand as a vertical list — the buttons
-                  below already stack vertically because the parent row is
-                  `flex-col sm:flex-row`. */}
-              <div className="flex flex-col sm:flex-row gap-1.5 ml-0 sm:ml-2 shrink-0">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => openCreateAgentModal('subagent_3p')}
-                  className="gap-1.5 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-                  data-testid="add-subagent-external-button"
+              {/* W4 of agent-form-requirements: third +Add with CLI sub-options
+                  (Subagent External). Single trigger opens a Radix Popover
+                  listing the 3 supported CLIs (claude-code / codex / opencode).
+                  Each sub-option passes its CLI choice through to the store
+                  via `openCreateAgentModal('subagent_3p', cli)` so the wizard
+                  pre-fills Step 1 + Step 3. CLIs not detected on host render
+                  disabled with an explanatory tooltip. W4 spec §5.1, §13.2. */}
+              <Popover open={externalMenuOpen} onOpenChange={setExternalMenuOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="gap-1.5 ml-0 sm:ml-2 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                    data-testid="add-external-trigger"
+                    aria-haspopup="menu"
+                    aria-expanded={externalMenuOpen}
+                  >
+                    <Plus size={12} weight="bold" /> + Add Subagent (External)
+                    <CaretDown size={10} weight="bold" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  sideOffset={6}
+                  className="w-56 p-1"
+                  data-testid="add-external-menu"
                 >
-                  <Plus size={12} weight="bold" /> + New Subagent (External)
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => openCreateAgentModal('subagent_3p')}
-                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-                  data-testid="add-external-claude-code"
-                >
-                  claude-code
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => openCreateAgentModal('subagent_3p')}
-                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-                  data-testid="add-external-codex"
-                >
-                  codex
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => openCreateAgentModal('subagent_3p')}
-                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-                  data-testid="add-external-opencode"
-                >
-                  opencode
-                </Button>
-              </div>
+                  <div role="menu" aria-label="Choose a third-party CLI">
+                    {CLI_ORDER.map((cli) => {
+                      const available = cliAvailable[cli]
+                      return (
+                        <button
+                          key={cli}
+                          type="button"
+                          role="menuitem"
+                          disabled={!available}
+                          title={available ? undefined : cliTooltip[cli]}
+                          onClick={() => {
+                            openCreateAgentModal('subagent_3p', cli)
+                            setExternalMenuOpen(false)
+                          }}
+                          data-testid={`add-external-${cli}`}
+                          className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                        >
+                          <span className="font-mono">{CLI_LABELS[cli]}</span>
+                          {!available && (
+                            <span className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+                              not installed
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
             {workerAgents.length === 0 ? (
               <div

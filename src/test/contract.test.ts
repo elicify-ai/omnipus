@@ -69,8 +69,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       instructions: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
-      steering_mode: 'loop',
-      tool_feedback: true,
+      steering_mode: 'one-at-a-time',
       heartbeat_enabled: false,
       heartbeat_interval: 300,
     } satisfies Agent
@@ -86,7 +85,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       id: 'my-agent',
       name: 'My Agent',
       description: '',
-      type: 'custom' as const,
+      type: 'Main' as const,
       locked: false,
       model: 'claude-sonnet-4-6',
       status: 'idle' as const,
@@ -95,13 +94,12 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       instructions: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
-      steering_mode: 'loop',
-      tool_feedback: true,
+      steering_mode: 'one-at-a-time',
       heartbeat_enabled: false,
       heartbeat_interval: 300,
     } satisfies Agent
 
-    expect(mock.type).toBe('custom')
+    expect(mock.type).toBe('Main')
   })
 
   // ── Task ──────────────────────────────────────────────────────────────────

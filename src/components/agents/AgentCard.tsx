@@ -13,12 +13,14 @@ interface AgentCardProps {
   onSetDefault?: () => void
 }
 
-const typeBadgeVariant = {
+const typeBadgeVariant: Record<string, 'secondary' | 'outline' | 'default'> = {
   core: 'secondary',
-  custom: 'outline',
   system: 'default',
-  worker: 'secondary',
-} as const
+}
+
+function badgeVariantFor(type: string): 'secondary' | 'outline' | 'default' {
+  return typeBadgeVariant[type] ?? 'outline'
+}
 
 export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
   const openEditAgentSlideOver = useUiStore((s) => s.openEditAgentSlideOver)
@@ -84,7 +86,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               ) : agent.status === 'error' ? (
                 <Badge variant="destructive" className="text-[var(--color-error)] border-[var(--color-error)]/30 bg-[var(--color-error)]/10">error</Badge>
               ) : (
-                <Badge variant={typeBadgeVariant[agent.type]} className="font-normal">
+                <Badge variant={badgeVariantFor(agent.type)} className="font-normal">
                   {agent.type}
                 </Badge>
               )}
@@ -97,7 +99,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                 </span>
               )}
             </div>
-            {agent.status === 'draft' && agent.type === 'custom' && (
+            {agent.status === 'draft' && agent.type === 'Main' && (
               <p className="text-xs text-[var(--color-warning)]/70 mt-1">
                 Set up SOUL.md to activate this agent
               </p>

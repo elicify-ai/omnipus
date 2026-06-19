@@ -1506,6 +1506,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skills/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete an installed skill
+         * @description Removes an installed skill from the local skills directory. The skill must not be the default skill, in use by any agent, or required by a seeded dependency. On success the gateway removes the skill directory and returns 204 No Content.
+         */
+        delete: operations["deleteSkill"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat": {
         parameters: {
             query?: never;
@@ -2864,11 +2884,11 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
+             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). "worker" = legacy build-time/seed config constant (the seed `Worker` entry in `pkg/config/worker_helpers_test.go` ships with this type; the build-time string is preserved for backward compatibility with the on-disk seeded `Worker` row that the gateway returns in GET /api/v1/agents). The frontend's `isWorker()` helper already accepts this value; it is functionally a Subagent. The W6-A wire enum is the canonical one for new user-created agents; `worker` survives in the contract for the legacy seed and for any operator-defined entries that predate the W6-A type widening. Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
              * @example core
              * @enum {string}
              */
-            type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
+            type: "core" | "system" | "Main" | "Subagent" | "subagent_3p" | "worker";
             /**
              * @description When true, name, description, soul, heartbeat, and instructions are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
              * @example false
@@ -9957,6 +9977,31 @@ export interface operations {
             404: components["responses"]["404NotFound"];
             409: components["responses"]["409Conflict"];
             502: components["responses"]["502BadGateway"];
+        };
+    };
+    deleteSkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Skill slug (matches the `id` field on Skill). */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Skill removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
         };
     };
     postChat: {

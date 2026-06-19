@@ -108,18 +108,11 @@ describe('W2-29 _validateOutboundFrame', () => {
     // To test the failure path, we mock MessageFrameSchema.safeParse to
     // return a failure result. sendMessage must STILL call
     // connection.send and the toast must fire.
-    const toastSpy = vi.fn()
-    act(() => {
-      useUiStore.setState({ addToast: toastSpy })
-    })
-
-    // We can't easily mock the imported `MessageFrameSchema` (it's
-    // imported at module load), so we exercise the validator through
-    // the public surface that produces a malformed frame: invoke
-    // `_validateOutboundFrame` with a known-bad payload, observe the
-    // warn + toast, and separately assert that sendMessage is called
-    // even when the validator has fired (i.e. the two are
-    // independent).
+    //
+    // We assert against the real addToast by reading the toasts array
+    // (NOT by replacing addToast with a spy — vi.spyOn does not
+    // reliably restore on Zustand state properties, and a manual spy
+    // would leak into the W4-15 test below).
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     // Direct call: validator sees a payload that fails the schema
@@ -131,10 +124,12 @@ describe('W2-29 _validateOutboundFrame', () => {
     })
     expect(warnSpy).toHaveBeenCalledTimes(1)
     expect(warnSpy.mock.calls[0][0]).toContain('outbound MessageFrame failed schema validation')
-    // Dev toast must fire on schema failure.
-    expect(toastSpy).toHaveBeenCalled()
-    const toastMsg = (toastSpy.mock.calls[0][0] as { message: string }).message
-    expect(toastMsg).toMatch(/outbound frame validation failed/i)
+    // Dev toast must fire on schema failure — assert on the real
+    // toasts array so we don't leak an addToast spy into the next test.
+    const toasts = useUiStore.getState().toasts
+    expect(toasts.length).toBeGreaterThan(0)
+    const lastToast = toasts[toasts.length - 1]
+    expect(lastToast.message).toMatch(/outbound frame validation failed/i)
 
     // Independent assertion: sendMessage called the connection.send
     // spy — proves the validator's failure did NOT block the wire

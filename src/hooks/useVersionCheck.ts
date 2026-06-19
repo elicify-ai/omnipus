@@ -1,20 +1,15 @@
 import { useEffect, useRef } from 'react'
 import { useUiStore } from '@/store/ui'
-
-interface VersionResponse {
-  version: string
-  build_sha: string
-}
-
-async function fetchVersion(): Promise<VersionResponse> {
-  const res = await fetch('/api/v1/version')
-  if (!res.ok) throw new Error(`version fetch failed: ${res.status}`)
-  return res.json() as Promise<VersionResponse>
-}
+import { fetchVersion } from '@/lib/api'
 
 /**
  * useVersionCheck — polls /api/v1/version on mount, window focus, and every 60s.
  * If build_sha changes from the initial value, shows a "New version available" toast (#110).
+ *
+ * The version fetch goes through the shared `request<T>` helper in
+ * `src/lib/api.ts` so the response is validated by the generated
+ * `VersionResponse` Zod schema — no raw `fetch()` and no hand-written
+ * `VersionResponse` interface (the contract is the source of truth).
  */
 export function useVersionCheck() {
   const addToast = useUiStore((s) => s.addToast)

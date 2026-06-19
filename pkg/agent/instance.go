@@ -499,10 +499,74 @@ func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandid
 		}
 		pool[name] = p
 	}
+
+	// Defensive fallback: if a candidate's Provider (which may be a vendor
+	// namespace like "zai" or "z-ai" leaked from re-parsing the slash in
+	// mc.Model) doesn't match any configured provider, scan cfg.Providers
+	// for a passthrough entry whose Model matches the candidate's Model.
+	// This is the safety net behind the resolver fix — if any future
+	// change reintroduces the seeded-agent bug, the agent still routes
+	// through the openrouter entry that has the matching model.
+	// The original candidate's name is preserved as the pool key so the
+	// agent's GetProviderForCandidate lookup still works.
+	for _, c := range candidates {
+		name := strings.TrimSpace(c.Provider)
+		if name == "" {
+			continue
+		}
+		if _, ok := pool[name]; ok {
+			continue
+		}
+		if mc := findPassthroughForModel(cfg, c.Model); mc != nil {
+			p, _, err := providers.CreateProviderFromConfig(mc)
+			if err != nil {
+				logger.WarnCF("agent", "buildProviderPool: passthrough fallback CreateProviderFromConfig failed; pool entry skipped",
+					map[string]any{"provider": name, "model": c.Model, "error": err.Error()})
+				continue
+			}
+			pool[name] = p
+			logger.InfoCF("agent", "buildProviderPool: candidate provider not configured; routed through passthrough entry with matching model",
+				map[string]any{"candidate_provider": name, "candidate_model": c.Model, "passthrough_provider": mc.Provider})
+		}
+	}
+
 	if len(pool) == 0 {
 		return nil
 	}
 	return pool
+}
+
+// findPassthroughForModel scans cfg.Providers for a passthrough entry
+// (openrouter, vivgrid) whose Model field equals or contains the given
+// model string. Returns nil if no passthrough carries the model. Used as a
+// defensive fallback in buildProviderPool when a candidate's Provider
+// (e.g. a vendor namespace) doesn't match any configured provider entry.
+func findPassthroughForModel(cfg *config.Config, model string) *config.ModelConfig {
+	if cfg == nil || strings.TrimSpace(model) == "" {
+		return nil
+	}
+	for _, mc := range cfg.Providers {
+		if mc == nil {
+			continue
+		}
+		if !providers.IsPassthroughProvider(strings.TrimSpace(mc.Provider), mc.APIBase) {
+			continue
+		}
+		// Exact match — e.g. mc.Model = "z-ai/glm-5.2", model = "z-ai/glm-5.2".
+		if strings.EqualFold(strings.TrimSpace(mc.Model), model) {
+			clone := *mc
+			return &clone
+		}
+		// Suffix match — one openrouter entry may have a wildcard Model like
+		// "openrouter/*" or a base model that covers many variants. The
+		// candidate's Model is the full "vendor/model" form, the entry's
+		// Model is the canonical form.
+		if strings.EqualFold(strings.TrimSpace(mc.ModelName), model) {
+			clone := *mc
+			return &clone
+		}
+	}
+	return nil
 }
 
 // findModelConfigForProvider returns a clone of the ModelConfig whose

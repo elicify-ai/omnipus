@@ -158,6 +158,22 @@ func (fc *FallbackChain) candidateBudget(
 	return attemptCtx, attemptCancel
 }
 
+// ResolvedRef is the typed result of a model_list lookup. The provider
+// builder / candidate builder use it to construct FallbackCandidate with
+// the correct Provider and Model fields sourced from the SAME matched
+// ModelConfig — never mixing the prefix of one entry's Model with another
+// entry's Provider.
+//
+// Field invariants:
+//   - Model: the canonical wire form (e.g. "openrouter/z-ai/glm-5.2" or
+//     "z-ai/glm-5.2" verbatim when the matched entry has Provider set).
+//   - Provider: the matched entry's Provider field (e.g. "openrouter").
+//     Empty when the lookup produced no match.
+type ResolvedRef struct {
+	Model    string
+	Provider string
+}
+
 // ResolveCandidates parses model config into a deduplicated candidate list.
 func ResolveCandidates(cfg ModelConfig, defaultProvider string) []FallbackCandidate {
 	return ResolveCandidatesWithLookup(cfg, defaultProvider, nil)
@@ -166,7 +182,7 @@ func ResolveCandidates(cfg ModelConfig, defaultProvider string) []FallbackCandid
 func ResolveCandidatesWithLookup(
 	cfg ModelConfig,
 	defaultProvider string,
-	lookup func(raw string) (resolved string, ok bool),
+	lookup func(raw string) (ResolvedRef, bool),
 ) []FallbackCandidate {
 	seen := make(map[string]bool)
 	var candidates []FallbackCandidate
@@ -175,7 +191,66 @@ func ResolveCandidatesWithLookup(
 		candidateRaw := strings.TrimSpace(raw)
 		if lookup != nil {
 			if resolved, ok := lookup(candidateRaw); ok {
-				candidateRaw = resolved
+				// Use the matched entry's Provider as the candidate's
+				// Provider — this is the fix for the seeded-agent bug where
+				// mc.Model == "z-ai/glm-5.2" (vendor namespace, not a
+				// configured provider) used to leak as Provider: "zai" into
+				// the candidate. The matched entry's Provider is the
+				// configured provider (e.g. "openrouter") that owns the
+				// credentials.
+				//
+				// When resolved.Provider is empty (legacy entry that didn't
+				// set the Provider field), apply the ensureProtocol heuristic
+				// to the model: bare slugs (no "/") get an implicit "openai/"
+				// prefix so downstream consumers that rely on
+				// ParseModelRef's slash-based provider inference see a
+				// non-empty provider. Slash-prefixed models (e.g.
+				// "openai/gpt-4o") are split on the first "/" and the
+				// prefix becomes the candidate's Provider.
+				//
+				// Strip the provider prefix from Model when it equals the
+				// resolved Provider (canonical "openrouter/foo" → "foo").
+				// Keep the full string when the prefix is a vendor namespace
+				// that doesn't match resolved.Provider (e.g. mc.Model =
+				// "z-ai/glm-5.2", resolved.Provider = "openrouter" → Model
+				// stays "z-ai/glm-5.2"). This preserves dedup against the
+				// same model expressed as a literal slash-form string.
+				provider := resolved.Provider
+				if provider == "" {
+					// Legacy entry: no Provider set. Apply ensureProtocol
+					// and parse the model as if it were a wire-format string.
+					modelWithPrefix := ensureProtocol(resolved.Model)
+					ref := ParseModelRef(modelWithPrefix, defaultProvider)
+					if ref == nil {
+						return
+					}
+					provider = ref.Provider
+					// stripProviderPrefix in this case would split the
+					// re-prepended prefix right back off — but we want the
+					// final Model to be the bare slug, not the prefixed
+					// form. So we use ref.Model directly.
+					key := ModelKey(provider, ref.Model)
+					if seen[key] {
+						return
+					}
+					seen[key] = true
+					candidates = append(candidates, FallbackCandidate{
+						Provider: provider,
+						Model:    ref.Model,
+					})
+					return
+				}
+				model := stripProviderPrefix(resolved.Model, provider)
+				key := ModelKey(provider, model)
+				if seen[key] {
+					return
+				}
+				seen[key] = true
+				candidates = append(candidates, FallbackCandidate{
+					Provider: provider,
+					Model:    model,
+				})
+				return
 			} else if kind == "fallback" && candidateRaw != "" && !strings.Contains(candidateRaw, "/") {
 				// Lookup didn't recognize this fallback slug and it has no
 				// provider prefix to anchor on — the next LLM call will
@@ -200,6 +275,11 @@ func ResolveCandidatesWithLookup(
 			}
 		}
 
+		// No matched entry in cfg.Providers — fall back to ParseModelRef
+		// with defaultProvider. This is the legacy path for entries that
+		// predate the model_list (e.g. a literal "claude-sonnet-4-6" with
+		// no slash). For slash-prefixed entries the slash is treated as
+		// the provider per ParseModelRef's contract.
 		ref := ParseModelRef(candidateRaw, defaultProvider)
 		if ref == nil {
 			return
@@ -472,4 +552,42 @@ func (e *FallbackExhaustedError) Error() string {
 		}
 	}
 	return sb.String()
+}
+
+// stripProviderPrefix removes the "<provider>/" prefix from model when it
+// matches provider. Returns model unchanged when the prefix doesn't match
+// (vendor namespace case) or model has no slash. Case-insensitive on the
+// provider portion so "OpenRouter/foo" matches provider="openrouter".
+func stripProviderPrefix(model, provider string) string {
+	model = strings.TrimSpace(model)
+	provider = strings.TrimSpace(provider)
+	if model == "" || provider == "" {
+		return model
+	}
+	prefix := provider + "/"
+	if len(model) > len(prefix) && strings.EqualFold(model[:len(prefix)], prefix) {
+		return model[len(prefix):]
+	}
+	return model
+}
+
+// ensureProtocol applies the historical protocol-prefix heuristic to a model
+// string. Bare slugs (no "/") get an implicit "openai/" prefix; already
+// slash-prefixed strings pass through unchanged. Used to bridge legacy
+// provider entries that do not set the Provider field — downstream code
+// (CreateProviderFromConfig, the candidate builder) expects a slash-form
+// model when no Provider is set.
+//
+// New code should set Provider explicitly on every entry so this helper
+// is never reached; it exists for backward compatibility with pre-wire
+// configs.
+func ensureProtocol(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ""
+	}
+	if strings.Contains(model, "/") {
+		return model
+	}
+	return "openai/" + model
 }

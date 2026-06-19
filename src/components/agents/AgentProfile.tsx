@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   X,
@@ -16,6 +16,7 @@ import {
   Warning,
   Lock,
   WarningCircle,
+  Trash,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
@@ -29,13 +30,23 @@ import { ModelSelector } from '@/components/ui/model-selector'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { isKnownModelSlug } from '@/lib/agents/model-validation'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
-import { BehaviorFields } from './AgentFormFields'
+import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader } from './AgentFormFields'
 import { SchedulesList } from '@/components/command-center/SchedulesList'
 import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -43,6 +54,7 @@ import {
   fetchAgent,
   fetchAppState,
   updateAgent,
+  deleteAgent,
   fetchProviders,
   fetchAgentSessions,
   fetchActivity,
@@ -58,9 +70,8 @@ import {
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
-import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import type { FallbackModel } from '@/lib/api/generated/openapi-types'
-import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
+import { type IconName } from '@/lib/agentIcons'
 
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
 type FallbackEntry = FallbackModel & { provider: string }
@@ -200,11 +211,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [heartbeat, setHeartbeat] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState(0)
   const [maxToolIterations, setMaxToolIterations] = useState(50)
-  const [steeringMode, setSteeringMode] = useState('one-at-a-time')
-  const [toolFeedback, setToolFeedback] = useState(false)
+  const [steeringMode, setSteeringMode] = useState<'one-at-a-time' | 'queue-and-process'>('one-at-a-time')
   const [heartbeatEnabled, setHeartbeatEnabled] = useState(false)
   const [heartbeatInterval, setHeartbeatInterval] = useState(30)
   const [creatingSchedule, setCreatingSchedule] = useState(false)
+  // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
+  // Opens an AlertDialog; the confirm mutation invalidates the list and
+  // closes the slide-over. Locked agents do not render the trigger.
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [toolsCfg, setToolsCfg] = useState<AgentToolsCfg>({
     builtin: { default_policy: 'allow' },
   })
@@ -272,8 +286,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setHeartbeat(agent.heartbeat ?? '')
     setTimeoutSeconds(agent.timeout_seconds ?? 0)
     setMaxToolIterations(agent.max_tool_iterations ?? 50)
-    setSteeringMode(agent.steering_mode ?? 'one-at-a-time')
-    setToolFeedback(agent.tool_feedback ?? false)
+    setSteeringMode((agent.steering_mode ?? 'one-at-a-time') as 'one-at-a-time' | 'queue-and-process')
     setHeartbeatEnabled(agent.heartbeat_enabled ?? false)
     setHeartbeatInterval(agent.heartbeat_interval ?? 30)
     setSandboxProfile(agent.sandbox_profile)
@@ -333,7 +346,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     timeout_seconds: timeoutSeconds > 0 ? timeoutSeconds : undefined,
     max_tool_iterations: maxToolIterations,
     steering_mode: steeringMode,
-    tool_feedback: toolFeedback,
     heartbeat_enabled: heartbeatEnabled,
     heartbeat_interval: heartbeatInterval,
     // 'none' is a UI-only marker meaning "inherit global default". Strip it before
@@ -358,7 +370,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     name, description, model, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, instructions, voice, heartbeat,
-    timeoutSeconds, maxToolIterations, steeringMode, toolFeedback,
+    timeoutSeconds, maxToolIterations, steeringMode,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
     toolsCfg, agentSkills, executor,
   ])
@@ -535,7 +547,38 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   }
 
   const recentSessions = agentSessions.slice(0, 10)
-  const AvatarIcon = getIconComponent(selectedIcon)
+
+  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation. Mirrors the
+  // pattern from SchedulesList (`doDelete`): the mutation invalidates
+  // the list cache on success, surfaces the API error inline on failure,
+  // and closes the slide-over only on success (so a network blip keeps
+  // the operator on the same page). The button itself is hidden for
+  // locked agents (see SheetFooter below).
+  const deleteAgentMutation = useMutation({
+    mutationFn: (id: string) => deleteAgent(id),
+    onSuccess: () => {
+      // Drop the deleted agent from the list cache immediately so no
+      // per-id GET refetch fires for a resource that no longer exists.
+      queryClient.setQueryData(['agents'], (prev: unknown) => {
+        if (!Array.isArray(prev)) return prev
+        return prev.filter((a) => (a as { id?: string }).id !== agentId)
+      })
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
+      setDeleteOpen(false)
+      closeEditAgentSlideOver()
+      addToast({ message: 'Agent deleted', variant: 'success' })
+    },
+    onError: (err: unknown) => {
+      const msg = isApiError(err)
+        ? err.userMessage
+        : err instanceof Error
+          ? err.message
+          : 'Delete failed'
+      addToast({ message: `Delete failed: ${msg}`, variant: 'error' })
+      setDeleteOpen(false)
+    },
+  })
 
   if (isLoading) {
     return (
@@ -622,31 +665,45 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     >
       <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
           <div className="flex items-center gap-4">
-            <div
-              className="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
-              style={{ backgroundColor: selectedColor ?? 'var(--color-surface-3)' }}
-        >
-          <AvatarIcon size={22} className="text-[var(--color-primary)]" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)]">{agent.name}</h1>
-          <div className="flex items-center gap-2 mt-1">
-            <Badge variant={agent.type === 'core' ? 'secondary' : 'outline'}>
-              {agent.type}
-            </Badge>
-            {agent.locked && (
-              <Badge variant="outline" className="text-[var(--color-muted)] border-[var(--color-border)]">
-                read-only
-              </Badge>
-            )}
-            <span className="text-xs text-[var(--color-muted)]">{agent.description}</span>
+            <AvatarHeader color={selectedColor} />
+            <div className="min-w-0">
+              <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)]">{agent.name}</h1>
+              <div className="flex items-center gap-2 mt-1">
+                <Badge variant={agent.type === 'core' ? 'secondary' : 'outline'}>
+                  {agent.type}
+                </Badge>
+                {agent.locked && (
+                  <Badge variant="outline" className="text-[var(--color-muted)] border-[var(--color-border)]">
+                    read-only
+                  </Badge>
+                )}
+                <span className="text-xs text-[var(--color-muted)]">{agent.description}</span>
           </div>
         </div>
-        <div className="ml-auto">
-          <AutoSaveIndicator status={saveStatus} error={saveError} />
         </div>
-      </div>
         </SheetHeader>
+
+      {/* Wave 5 / spec §6 BDD #13 + §6.4: locked-banner for built-in core
+          agents. Pinned at the top of the body, above the tab bar, so the
+          operator sees it before any field interactions. Uses the same
+          amber/warning visual language as the executor-external-cli
+          callout (sibling concept — "this agent is special, read the
+          caveat before editing"). Hidden for non-locked agents. */}
+      {agent.type === 'core' && agent.locked && (
+        <div
+          role="alert"
+          data-testid="locked-banner"
+          className="mx-8 mt-4 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
+        >
+          <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" aria-hidden="true" />
+          <div className="text-sm">
+            <div className="font-semibold text-[var(--color-error)]">This is a built-in core agent</div>
+            <div className="text-[var(--color-muted)] mt-1">
+              Most fields are read-only. To create your own chat colleague, use the + Add Main button.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
       <div className="flex-1 overflow-y-auto">
@@ -697,24 +754,40 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </div>
         </div>
       )}
-      <Accordion
-        type="multiple"
-        defaultValue={isWorkerAgent
-          ? ['identity', 'sandbox', 'executor', 'tools']
-          : ['identity', 'sandbox', 'model', 'behavior']}
-        className="rounded-lg border border-[var(--color-border)] divide-y divide-[var(--color-border)] overflow-hidden"
-      >
-        {/* Identity — always rendered; read-only for locked (core) agents */}
-        <AccordionItem value="identity" className="border-0">
-          {/* W6-B1 / I3: 14 px / 600. Explicit `text-[14px]` (not `text-sm`) so
-              the size cannot drift if Tailwind defaults change; `font-semibold`
-              (600) per the spec — lighter than the prior 700/bold so the
-              section heading reads as an H2, not a button label. */}
-          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-            Identity
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
+      {/* Wave 5 / spec §6: Edit slide-over layout is a Tab bar (4–5 tabs
+          depending on type) instead of the prior 10-section Accordion. The
+          `Tabs` primitive is a controlled Radix Tabs component — see
+          `src/components/ui/tabs.tsx`. Section content is grouped as
+          specified in §6.2 (Main), §6.3 (Subagent), §6.4 (Subagent External).
+          Sessions / Schedules / Activity are NOT inside the tab bar — they
+          are reference surfaces (default-collapsed accordions below) so the
+          primary tab bar is not crowded with non-editing affordances. */}
+      <Tabs defaultValue="basics" className="w-full">
+        <TabsList className="w-full justify-start overflow-x-auto">
+          <TabsTrigger value="basics" data-testid="tab-basics" className="font-headline">Basics</TabsTrigger>
+          <TabsTrigger value="personality" data-testid="tab-personality" className="font-headline">Personality</TabsTrigger>
+          <TabsTrigger value="tools" data-testid="tab-tools" className="font-headline">Tools</TabsTrigger>
+          {agent.type === 'subagent_3p' && (
+            <TabsTrigger value="runtime" data-testid="tab-runtime" className="font-headline">Runtime</TabsTrigger>
+          )}
+          <TabsTrigger value="advanced" data-testid="tab-advanced" className="font-headline">Advanced</TabsTrigger>
+        </TabsList>
+
+        {/* ── BASICS TAB ─────────────────────────────────────────────────
+            Identity (name/description/default toggle/delegation policy
+            summary/avatar color/icon) + Model Configuration (model selector,
+            fallback editor, sampling parameters) + Sandbox (per agent
+            type: editable for custom, read-only for locked, hidden for
+            native workers). The Executor (Spec-4) is a worker-only
+            concern — for subagent_3p it is the headline of the Runtime
+            tab below; for native workers (no external-cli selected) the
+            whole thing is inherited from the caller so it is shown as a
+            read-only summary in Advanced. */}
+        <TabsContent value="basics" className="space-y-6">
+          {/* Identity — always rendered; read-only for locked (core) agents */}
+          <section className="space-y-3">
+            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Identity</p>
+            <div className="space-y-3">
               <div className="space-y-2">
                 <Input
                   data-testid="agent-name-input"
@@ -735,15 +808,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 )}
               </div>
-              {/* W6-B4 / G3: Default agent toggle. The wire field `default` is
-                  a boolean on Agent / AgentUpdateRequest; at most one agent
-                  across the roster is default. Previously, the only way to
-                  change the default was from the Agents list ("Set as default"
-                  link on each card). This toggle brings the action into the
-                  Edit profile so users do not have to leave the slide-over.
-                  Hidden for locked core agents (locked roster: Mia is the
-                  seeded default and the field is immutable for them). */}
-              {canEdit && (
+              {/* W6-B4 / G3: Default agent toggle. Hidden for locked core
+                  agents (locked roster: Mia is the seeded default and the
+                  field is immutable for them). Hidden for workers — the
+                  locked concept makes "default" a non-worker concept. */}
+              {canEdit && !isWorkerAgent && (
                 <div
                   data-testid="default-toggle-row"
                   className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
@@ -768,18 +837,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     onCheckedChange={(v) => {
                       markDirty()
                       setIsDefault(v)
-                      // W6-B4 / G3 (Reviewer 2): optimistic UI clear. The
-                      // toggle change triggers the auto-save (500ms debounce)
-                      // but the AgentListScreen / AgentCard stars depend on
-                      // the `['agents']` query. Without this invalidation,
-                      // the star would only move after the next list refetch.
-                      // Fire the invalidation synchronously so the star
-                      // transitions to the new state in real time across
-                      // every visible card.
                       queryClient.invalidateQueries({ queryKey: ['agents'] })
-                      // Surface the action so users get explicit feedback —
-                      // a default toggle is a global roster change, not a
-                      // local edit.
                       addToast({
                         message: v
                           ? `${name || agent.name} is now the default agent`
@@ -791,25 +849,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 </div>
               )}
-              {/* W6-C1 / G2: Delegation policy summary link. The
-                  `delegation_policy` shape (DelegationPolicy.yaml) has five
-                  editable sub-fields (to, accept_from, modes, depth, budget)
-                  but the Edit profile does not surface them — they live in
-                  the Trust editor. Instead of cloning the editor here we
-                  expose a single summary line that counts the rules and
-                  links to `/agents/trust?agent=<id>` so the operator can
-                  jump straight into the per-agent row. Hidden for locked
-                  core agents (their delegation policy is built-in and not
-                  user-editable in v0.1.0). Hidden for workers too — workers
-                  are delegation-only labour agents; their `to` list is
-                  configured on the *caller* agent, not on the worker
-                  itself, so a "Delegation policy" link here would point at
-                  the wrong surface. */}
               {canEdit && !isWorkerAgent && (() => {
                 const dp = agent.delegation_policy
-                // Sum non-empty sub-fields so the user sees "0 rules" for
-                // an unset policy rather than "5 rules" (which would imply
-                // allow-by-default — the schema is deny-by-default).
                 const toCount = dp?.to?.length ?? 0
                 const acceptFromCount = dp?.accept_from?.length ?? 0
                 const modesCount = dp?.modes?.length ?? 0
@@ -843,53 +884,115 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               {canEdit && (
                 <div className="space-y-1.5">
                   <p className="text-xs text-[var(--color-muted)]">Avatar color</p>
-                  <div className="flex gap-2">
-                    {AVATAR_COLORS.map((color) => {
-                      // W6-B4 / M7: aria-label and title use the semantic
-                      // name (e.g. "Forge Gold") instead of the raw hex.
-                      const name = AVATAR_COLORS_BY_NAME[color] ?? color
-                      return (
-                        <button
-                          key={color}
-                          type="button"
-                          onClick={() => { markDirty(); setSelectedColor(color) }}
-                          className="w-7 h-7 rounded-full transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-1 focus:ring-offset-[var(--color-primary)]"
-                          style={{
-                            backgroundColor: color,
-                            boxShadow: selectedColor === color ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,
-                          }}
-                          aria-label={name}
-                          title={name}
-                        />
-                      )
-                    })}
-                  </div>
+                  <AvatarColorPicker
+                    value={selectedColor ?? ''}
+                    onChange={(color) => { markDirty(); setSelectedColor(color) }}
+                    testIdPrefix="avatar-color"
+                  />
                 </div>
               )}
               {canEdit && (
                 <div className="space-y-1.5">
                   <p className="text-xs text-[var(--color-muted)]">Avatar icon</p>
-                  <SmartSelect
+                  <IconPicker
                     value={selectedIcon}
-                    onValueChange={(v) => { markDirty(); setSelectedIcon(v as IconName) }}
-                    triggerClassName="w-48"
-                    items={ICON_OPTIONS.map(({ name: iconName }) => ({ value: iconName, label: iconName }))}
+                    onChange={(icon) => { markDirty(); setSelectedIcon(icon) }}
+                    triggerTestId="avatar-icon-trigger"
                   />
                 </div>
               )}
             </div>
-          </AccordionContent>
-        </AccordionItem>
+          </section>
 
-        {/* Sandbox — editable for custom agents, read-only for locked core agents.
-            W6-C1 / M11: hidden entirely for native workers (delegation-only
-            labour agents; sandbox is inherited from the caller). */}
-        {!isLocked && !isNativeWorkerAgent ? (
-          <AccordionItem value="sandbox" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
+          <Separator />
+
+          {/* Model Configuration — picker, unresolved-slug indicator, fallback editor */}
+          <section className="space-y-3">
+            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Model</p>
+            {providersError && (
+              <p className="text-xs text-[var(--color-warning)]">
+                Could not load providers. You can still enter a model slug manually.
+              </p>
+            )}
+            <ModelSelector
+              models={availableModels}
+              value={model}
+              onChange={(v) => { markDirty(); setModel(v) }}
+              placeholder="Provider default"
+              providerGroups={providerGroups}
+              onUnknownModel={(m) => addToast({
+                message: `"${m}" isn't listed by any connected provider — saving anyway, but the call may not work.`,
+                variant: 'warning',
+              })}
+            />
+            {primaryModelUnresolved && (
+              <p
+                data-testid="primary-model-unresolved"
+                role="status"
+                className="flex items-start gap-1.5 text-[11px] text-[var(--color-warning)] leading-snug"
+              >
+                <WarningCircle size={12} weight="fill" className="shrink-0 mt-0.5" aria-hidden="true" />
+                <span>
+                  Model not in any connected provider — calls will fail until you add a provider that supports this model.
+                </span>
+              </p>
+            )}
+            {/* Sampling parameters — collapsed disclosure */}
+            {canEdit && (
+              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setAdvancedOpen((o) => !o)}
+                  className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+                >
+                  <span>Sampling parameters</span>
+                  {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
+                </button>
+                {advancedOpen && (
+                  <div className="px-3 pb-3 space-y-4 border-t border-[var(--color-border)]">
+                    <RangeField
+                      label="Temperature"
+                      caption="Higher = more creative / less predictable (0–2, default 1)"
+                      value={temperature}
+                      min={0}
+                      max={2}
+                      step={0.05}
+                      onChange={(v) => { markDirty(); setTemperature(v) }}
+                      format={(v) => v.toFixed(2)}
+                    />
+                    <RangeField
+                      label="Max tokens"
+                      caption="Maximum length of each reply"
+                      value={maxTokens}
+                      min={256}
+                      max={32768}
+                      step={256}
+                      onChange={(v) => { markDirty(); setMaxTokens(v) }}
+                      format={(v) => v.toLocaleString()}
+                    />
+                    <RangeField
+                      label="Top P"
+                      caption="Nucleus sampling mass — 1.0 disables it (default 1)"
+                      value={topP}
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      onChange={(v) => { markDirty(); setTopP(v) }}
+                      format={(v) => v.toFixed(2)}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* Sandbox — editable for custom agents, read-only for locked core
+              agents, hidden for native workers (delegation-only labour
+              agents; sandbox is inherited from the caller). */}
+          {!isNativeWorkerAgent && (
+            <section className="space-y-3">
               <div className="flex items-center gap-2">
-                <span>Sandbox</span>
-                {/* #335 (US-D3): standing warning badge on accordion header when a widened profile is active */}
+                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Sandbox</p>
                 {(sandboxProfile === 'workspace+net' || sandboxProfile === 'off') && (
                   <span
                     data-testid="sandbox-accordion-widening-badge"
@@ -900,465 +1003,532 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 )}
                 <SandboxInfoTooltip />
               </div>
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="px-4 space-y-4">
-                {/* G10: when the worker's executor is external-cli, Omnipus'
-                    sandbox_profile is ignored at runtime — the external CLI
-                    manages its own isolation. Surface this so the operator
-                    doesn't think the chosen profile is enforcing anything.
-                    Only show when a non-off profile is selected (off itself
-                    is already documented; warning would be redundant). */}
-                {isWorkerAgent && executor?.kind === 'external-cli' && sandboxProfile && sandboxProfile !== 'off' && (
-                  <div
-                    data-testid="sandbox-external-cli-ignored-callout"
-                    role="note"
-                    aria-live="polite"
-                    className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
-                  >
-                    <WarningCircle size={14} weight="fill" className="text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
-                    <p className="text-[11px] text-amber-200 leading-snug">
-                      Sandbox profile is ignored when executor.kind=external-cli.
-                      The external CLI manages its own isolation.
+              {isLocked ? (
+                <div className="space-y-3">
+                  <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mb-1">
+                      Profile
+                    </p>
+                    <p className="text-sm font-medium text-[var(--color-secondary)]">
+                      {sandboxProfile
+                        ? `${formatSandboxProfileLabel(sandboxProfile)} (built-in, locked)`
+                        : 'Built-in (locked)'}
+                    </p>
+                    <p className="text-xs text-[var(--color-muted)] mt-2">
+                      Locked core agents use a built-in sandbox profile that cannot be changed from
+                      the UI. To adjust the global default for new custom agents, see{' '}
+                      <strong>Settings → Security</strong>.
                     </p>
                   </div>
-                )}
-                <SandboxProfileSelector
-                  value={sandboxProfile}
-                  agentName={name || agent.name}
-                  godModeAvailable={appState?.god_mode_available ?? false}
-                  godModeOptedIn={appState?.god_mode_opted_in ?? false}
-                  onChange={(p) => { markDirty(); setSandboxProfile(p) }}
-                />
+                  {shellDenyPatterns.length > 0 && (
+                    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
+                      <p className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mb-1.5">
+                        Shell deny patterns
+                      </p>
+                      <ul className="space-y-1">
+                        {shellDenyPatterns.map((p, i) => (
+                          <li key={i} className="font-mono text-xs text-[var(--color-secondary)]">
+                            {p}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {isWorkerAgent && executor?.kind === 'external-cli' && sandboxProfile && sandboxProfile !== 'off' && (
+                    <div
+                      data-testid="sandbox-external-cli-ignored-callout"
+                      role="note"
+                      aria-live="polite"
+                      className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
+                    >
+                      <WarningCircle size={14} weight="fill" className="text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
+                      <p className="text-[11px] text-amber-200 leading-snug">
+                        Sandbox profile is ignored when executor.kind=external-cli.
+                        The external CLI manages its own isolation.
+                      </p>
+                    </div>
+                  )}
+                  <SandboxProfileSelector
+                    value={sandboxProfile}
+                    agentName={name || agent.name}
+                    godModeAvailable={appState?.god_mode_available ?? false}
+                    godModeOptedIn={appState?.god_mode_opted_in ?? false}
+                    onChange={(p) => { markDirty(); setSandboxProfile(p) }}
+                  />
+                  <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setShellAdvancedOpen((o) => !o)}
+                      className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+                      aria-expanded={shellAdvancedOpen}
+                    >
+                      <span className="text-xs">Shell deny patterns</span>
+                      {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
+                    </button>
+                    {shellAdvancedOpen && (
+                      <div className="px-3 pb-3 border-t border-[var(--color-border)]">
+                        <ShellDenyPatternsEditor
+                          value={shellDenyPatterns}
+                          onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+        </TabsContent>
 
-                {/* Advanced: shell deny patterns */}
-                <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setShellAdvancedOpen((o) => !o)}
-                    className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                    aria-expanded={shellAdvancedOpen}
-                  >
-                    <span className="text-xs">Shell deny patterns</span>
-                    {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                  </button>
-                  {shellAdvancedOpen && (
-                    <div className="px-3 pb-3 border-t border-[var(--color-border)]">
-                      <ShellDenyPatternsEditor
-                        value={shellDenyPatterns}
-                        onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
+        {/* ── PERSONALITY TAB ────────────────────────────────────────────
+            BehaviorFields (SOUL.md / Task prompt + Additional Instructions
+            + Voice), and the Heartbeat sub-block for base agents (workers
+            are delegation-only labour agents and never run on a schedule).
+            The Execution params (timeout / max_iter / steering) live in
+            the Advanced tab per the spec matrix. */}
+        <TabsContent value="personality" className="space-y-5">
+          <BehaviorFields
+            isWorker={isWorkerAgent}
+            soul={soul}
+            setSoul={(v) => { markDirty(); setSoul(v) }}
+            instructions={instructions}
+            setInstructions={(v) => { markDirty(); setInstructions(v) }}
+            voice={voice}
+            setVoice={(v) => { markDirty(); setVoice(v) }}
+            renderUploadButton={(_, onUpload) => <UploadButton onUpload={onUpload} />}
+          />
+
+          {/* Heartbeat — base-only. Workers never run on a schedule. */}
+          {!isWorkerAgent && (
+            <>
+              <Separator />
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-[var(--color-secondary)]">Background tasks / periodic instructions</p>
+                <p className="text-xs text-[var(--color-muted)]">
+                  Instructions the agent runs on a recurring schedule — check queues, summarize,
+                  or perform any background work. Stored as <span className="font-mono text-[11px]">HEARTBEAT.md</span>.
+                </p>
+                <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
+                      <p className="text-xs text-[var(--color-muted)]">Run on a recurring schedule</p>
+                    </div>
+                    <Switch
+                      checked={heartbeatEnabled}
+                      onCheckedChange={(v) => { markDirty(); setHeartbeatEnabled(v) }}
+                    />
+                  </div>
+                  {heartbeatEnabled && (
+                    <div className="flex items-center gap-3 pt-1 border-t border-[var(--color-border)]">
+                      <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Interval (seconds)</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={heartbeatInterval}
+                        onChange={(e) => { markDirty(); setHeartbeatInterval(Number(e.target.value)) }}
+                        className="text-xs h-8"
                       />
                     </div>
                   )}
                 </div>
+                <Textarea
+                  value={heartbeat}
+                  onChange={(e) => { markDirty(); setHeartbeat(e.target.value) }}
+                  placeholder="# Heartbeat&#10;&#10;Write persistent context for this agent..."
+                  rows={4}
+                  className="text-xs font-mono resize-none"
+                />
+                <UploadButton onUpload={setHeartbeat} />
               </div>
-            </AccordionContent>
-          </AccordionItem>
-        ) : !isNativeWorkerAgent ? (
-          <AccordionItem value="sandbox" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-              <div className="flex items-center gap-2">
-                <span>Sandbox</span>
-                <SandboxInfoTooltip />
-              </div>
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="px-4 space-y-3">
-                <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mb-1">
-                    Profile
-                  </p>
-                  {/* W6-C1 / G5: surface the actual inherited profile name.
-                      Previously the locked branch always rendered "Built-in
-                      (locked)" with no profile name, which left the operator
-                      guessing whether Mia runs workspace or workspace+net.
-                      The wire `sandbox_profile` is populated on locked core
-                      agents (Jim is seeded with workspace+net, the others
-                      inherit the global default = workspace) so we read it
-                      directly and append " (built-in, locked)" so the
-                      un-editable nature is still signalled. Falls back to
-                      the bare "Built-in (locked)" only when the field is
-                      empty (pre-seed fresh install before the idempotent
-                      migration runs). The label set is shared with the
-                      editable branch above via `formatSandboxProfileLabel`. */}
-                  <p className="text-sm font-medium text-[var(--color-secondary)]">
-                    {sandboxProfile
-                      ? `${formatSandboxProfileLabel(sandboxProfile)} (built-in, locked)`
-                      : 'Built-in (locked)'}
-                  </p>
-                  <p className="text-xs text-[var(--color-muted)] mt-2">
-                    Locked core agents use a built-in sandbox profile that cannot be changed from
-                    the UI. To adjust the global default for new custom agents, see{' '}
-                    <strong>Settings → Security</strong>.
+            </>
+          )}
+        </TabsContent>
+
+        {/* ── TOOLS TAB ─────────────────────────────────────────────────
+            Tool policy editor + Skills picker. Native workers (no
+            user-added overrides) collapse the editor to a read-only
+            summary; external-cli workers see the full editor. The
+            fallback models editor stays here too — FR-007 says fallbacks
+            are part of the tool chain. */}
+        <TabsContent value="tools" className="space-y-6">
+          {/* Fallback models */}
+          <section className="space-y-3">
+            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Fallback models</p>
+            <p className="text-xs text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
+            {isLocked ? (
+              <div
+                data-testid="fallback-summary-locked"
+                className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+              >
+                <div className="flex items-center gap-2 text-[var(--color-muted)]">
+                  <Lock size={12} weight="fill" aria-hidden="true" />
+                  <p className="text-[11px]">
+                    Locked: fallback models are inherited from the locked core config.
                   </p>
                 </div>
-                {shellDenyPatterns.length > 0 && (
-                  <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
-                    <p className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mb-1.5">
-                      Shell deny patterns
-                    </p>
-                    <ul className="space-y-1">
-                      {shellDenyPatterns.map((p, i) => (
-                        <li key={i} className="font-mono text-xs text-[var(--color-secondary)]">
-                          {p}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-        ) : null}
-
-        {/* Executor — Spec-4 FR-4.1: sub-agent runtime selector + runner test.
-            Worker-only. Base agents run native/in-process only — there is no
-            third-party executor for them, so the entire accordion is omitted
-            rather than rendered disabled. Read-only for locked core workers. */}
-        {isWorkerAgent && (
-          <AccordionItem value="executor" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-              <div className="flex items-center gap-2">
-                <span>Executor</span>
-                {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
-                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
-                    {executor.kind === 'external-cli' ? (executor.cli ?? 'external') : 'A2A'}
-                  </span>
-                )}
-                {/* W6-C1: surface the native kind too so the accordion
-                    header always shows the active runtime — `native` is
-                    the default and previously rendered as a bare "Executor"
-                    label with no kind chip. "Native (in-process)" is the
-                    user-facing copy the operator sees in the
-                    WorkerCard badge and on the executor selector; the
-                    header mirrors it for consistency. */}
-                {(!executor || executor.kind === 'native') && (
-                  <span
-                    data-testid="executor-native-badge"
-                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]"
-                  >
-                    Native (in-process)
-                  </span>
-                )}
-              </div>
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="px-4">
-                <ExecutorSelector
-                  value={executor}
-                  agentId={resolvedAgentId}
-                  disabled={isLocked}
-                  onChange={(next) => { markDirty(); setExecutor(next) }}
-                />
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-        )}
-
-        {/* Model Configuration — default CLOSED */}
-        <AccordionItem value="model" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-            Model Configuration
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              {providersError && (
-                <p className="text-xs text-[var(--color-warning)]">
-                  Could not load providers. You can still enter a model slug manually.
-                </p>
-              )}
-              <ModelSelector
-                models={availableModels}
-                value={model}
-                onChange={(v) => { markDirty(); setModel(v) }}
-                placeholder="Provider default"
-                providerGroups={providerGroups}
-                onUnknownModel={(m) => addToast({
-                  message: `"${m}" isn't listed by any connected provider — saving anyway, but the call may not work.`,
-                  variant: 'warning',
-                })}
-              />
-              {/* W6-C4 / G12: persistent inline indicator for unresolved slugs.
-                  The ModelSelector's own trigger already shows the "Unresolved"
-                  chip; this line gives the user the actionable next step per
-                  the ticket's product copy. Only renders when the user has
-                  actually picked something — an empty picker is the default
-                  state, not an unresolved one. */}
-              {primaryModelUnresolved && (
-                <p
-                  data-testid="primary-model-unresolved"
-                  role="status"
-                  className="flex items-start gap-1.5 text-[11px] text-[var(--color-warning)] leading-snug"
-                >
-                  <WarningCircle size={12} weight="fill" className="shrink-0 mt-0.5" aria-hidden="true" />
-                  <span>
-                    Model not in any connected provider — calls will fail until you add a provider that supports this model.
-                  </span>
-                </p>
-              )}
-              {/* W6-C2: Fallback editor — visible for both editable and locked
-                  core agents. Editable agents get the full editor (provider
-                  picker + reorder + persistent indicator + remove + add).
-                  Locked agents (G6) get a read-only summary so operators can
-                  still see the configured fallback chain. */}
-              <div className="space-y-1.5">
-                <p className="text-xs text-[var(--color-muted)]">Fallback models (tried in order if primary fails)</p>
-                {isLocked ? (
-                  // W6-C2 / G6: read-only summary for the locked roster.
-                  // `fallback_models` IS allowed on the wire for locked
-                  // core agents (per AgentUpdateRequest.yaml), but the
-                  // editor was previously stripped via `canEdit`. Operators
-                  // had no way to see what the locked core compiled with;
-                  // now we surface the configured chain so the operator
-                  // can verify the inherited fallback.
-                  <div
-                    data-testid="fallback-summary-locked"
-                    className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
-                  >
-                    <div className="flex items-center gap-2 text-[var(--color-muted)]">
-                      <Lock size={12} weight="fill" aria-hidden="true" />
-                      <p className="text-[11px]">
-                        Locked: fallback models are inherited from the locked core config.
-                      </p>
-                    </div>
-                    {fallbackModels.length === 0 ? (
-                      <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
-                    ) : (
-                      <ol className="space-y-1" data-testid="fallback-summary-locked-list">
-                        {fallbackModels.map((entry, idx) => (
-                          <li
-                            key={entry.model}
-                            className="flex items-center gap-2 text-xs font-mono text-[var(--color-secondary)]"
-                          >
-                            <span className="text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
-                            <span
-                              data-testid={`fallback-summary-provider-${entry.model}`}
-                              className="inline-flex items-center px-1.5 rounded text-[10px] font-semibold"
-                              style={{
-                                backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
-                                color: 'var(--color-accent)',
-                                border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
-                              }}
-                            >
-                              {entry.provider || '—'}
-                            </span>
-                            <span data-testid={`fallback-summary-model-${entry.model}`}>{entry.model}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    )}
-                  </div>
+                {fallbackModels.length === 0 ? (
+                  <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
                 ) : (
-                  <div className="flex flex-wrap gap-1.5 p-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
-                    {fallbackModels.map((entry, idx) => {
-                      // W6-C2 / I11: persistent indicator. When the chip's
-                      // `provider` field is empty, the model is not in any
-                      // connected provider — the runtime cannot resolve
-                      // it, so the fallback would silently fail. Surface
-                      // the warning directly on the chip (aria-label is
-                      // the canonical accessible name; the visible icon is
-                      // redundant signaling for sighted users).
-                      const providerMissing = entry.provider === ''
-                      // W6-C2 / I9: badge shows the provider's display
-                      // name (or the routing key when unconnected),
-                      // while the picker emits the provider ID on
-                      // change. Display names are layered for UX only;
-                      // the wire value is the ID.
-                      const providerLabel = providerMissing
-                        ? '—'
-                        : (connectedProviders.find((p) => p.id === entry.provider)?.display_name
-                            ?? connectedProviders.find((p) => p.id === entry.provider)?.name
-                            ?? entry.provider)
-                      return (
-                      <span
+                  <ol className="space-y-1" data-testid="fallback-summary-locked-list">
+                    {fallbackModels.map((entry, idx) => (
+                      <li
                         key={entry.model}
-                        data-testid={`fallback-chip-model-${entry.model}`}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
+                        className="flex items-center gap-2 text-xs font-mono text-[var(--color-secondary)]"
                       >
-                        {/* Provider badge — color-coded by provider name
-                            hash so visually distinct entries don't all
-                            look identical. Empty provider is rendered as
-                            a muted dash so the badge slot is always
-                            present (consistent height). The text content
-                            is the display name, but the chip's stored
-                            field is the provider id (see I9). */}
+                        <span className="text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
                         <span
-                          data-testid={`fallback-chip-provider-${entry.model}`}
-                          className="inline-flex items-center px-1 rounded text-[9px] font-semibold"
+                          data-testid={`fallback-summary-provider-${entry.model}`}
+                          className="inline-flex items-center px-1.5 rounded text-[10px] font-semibold"
                           style={{
                             backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
                             color: 'var(--color-accent)',
                             border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
                           }}
                         >
-                          {providerLabel}
+                          {entry.provider || '—'}
                         </span>
-                        {/* W6-C2 / I9: provider combobox for this chip.
-                            Options are the connected provider ids; "—"
-                            maps to the empty routing key (which surfaces
-                            the persistent warning — I11). Emits the
-                            provider ID (not display name) so the wire
-                            value stays 1:1 with FR-007. */}
-                        <span className="relative inline-block">
-                          <select
-                            data-testid={`fallback-provider-select-${entry.model}`}
-                            aria-label={`Provider for fallback ${entry.model}`}
-                            value={entry.provider}
-                            onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
-                            className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-1 pr-3 py-0 text-[9px] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] rounded cursor-pointer"
-                          >
-                            <option value="" data-testid={`fallback-provider-option-empty-${entry.model}`}>—</option>
-                            {connectedProviders.map((p) => (
-                              <option
-                                key={p.id}
-                                value={p.id}
-                                data-testid={`fallback-provider-option-${p.id}-${entry.model}`}
-                              >
-                                {p.display_name ?? p.name ?? p.id}
-                              </option>
-                            ))}
-                          </select>
-                          <CaretDown
-                            size={9}
-                            className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
-                            aria-hidden="true"
-                          />
-                        </span>
-                        <span>{entry.model}</span>
-                        {/* W6-C2 / I10: reorder controls. Up disabled for
-                            index 0, down disabled for last index — no
-                            wrap-around. The data-testid pattern is
-                            `fallback-chip-up-<model>` /
-                            `fallback-chip-down-<model>` so tests can
-                            target each chip. */}
-                        <button
-                          type="button"
-                          data-testid={`fallback-chip-up-${entry.model}`}
-                          aria-label={`Move fallback ${entry.model} up`}
-                          disabled={idx === 0}
-                          onClick={() => moveFallback(entry.model, -1)}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)]"
-                        >
-                          <ArrowUp size={10} />
-                        </button>
-                        <button
-                          type="button"
-                          data-testid={`fallback-chip-down-${entry.model}`}
-                          aria-label={`Move fallback ${entry.model} down`}
-                          disabled={idx === fallbackModels.length - 1}
-                          onClick={() => moveFallback(entry.model, 1)}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)]"
-                        >
-                          <ArrowDown size={10} />
-                        </button>
-                        <button
-                          type="button"
-                          data-testid={`fallback-chip-remove-${entry.model}`}
-                          aria-label={`Remove fallback ${entry.model}`}
-                          onClick={() => removeFallback(entry.model)}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
-                        >
-                          <X size={10} />
-                        </button>
-                        {providerMissing && (
-                          // W6-C2 / I11: persistent warning indicator.
-                          // The aria-label is the canonical accessible
-                          // name for screen readers; the visible icon
-                          // is redundant signaling so sighted users
-                          // also catch the issue.
-                          <span
-                            data-testid={`fallback-chip-warning-${entry.model}`}
-                            role="img"
-                            aria-label="Provider not connected — fallback will not be used at runtime"
-                            title="Provider not connected — fallback will not be used at runtime"
-                            className="inline-flex items-center text-amber-400"
-                          >
-                            <Warning size={11} weight="fill" />
-                          </span>
-                        )}
+                        <span data-testid={`fallback-summary-model-${entry.model}`}>{entry.model}</span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5 p-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
+                {fallbackModels.map((entry, idx) => {
+                  const providerMissing = entry.provider === ''
+                  const providerLabel = providerMissing
+                    ? '—'
+                    : (connectedProviders.find((p) => p.id === entry.provider)?.display_name
+                        ?? connectedProviders.find((p) => p.id === entry.provider)?.name
+                        ?? entry.provider)
+                  return (
+                    <span
+                      key={entry.model}
+                      data-testid={`fallback-chip-model-${entry.model}`}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
+                    >
+                      <span
+                        data-testid={`fallback-chip-provider-${entry.model}`}
+                        className="inline-flex items-center px-1 rounded text-[9px] font-semibold"
+                        style={{
+                          backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
+                          color: 'var(--color-accent)',
+                          border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
+                        }}
+                      >
+                        {providerLabel}
                       </span>
+                      <span className="relative inline-block">
+                        <select
+                          data-testid={`fallback-provider-select-${entry.model}`}
+                          aria-label={`Provider for fallback ${entry.model}`}
+                          value={entry.provider}
+                          onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
+                          className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-1 pr-3 py-0 text-[9px] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] rounded cursor-pointer"
+                        >
+                          <option value="" data-testid={`fallback-provider-option-empty-${entry.model}`}>—</option>
+                          {connectedProviders.map((p) => (
+                            <option
+                              key={p.id}
+                              value={p.id}
+                              data-testid={`fallback-provider-option-${p.id}-${entry.model}`}
+                            >
+                              {p.display_name ?? p.name ?? p.id}
+                            </option>
+                          ))}
+                        </select>
+                        <CaretDown
+                          size={9}
+                          className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
+                          aria-hidden="true"
+                        />
+                      </span>
+                      <span>{entry.model}</span>
+                      <button
+                        type="button"
+                        data-testid={`fallback-chip-up-${entry.model}`}
+                        aria-label={`Move fallback ${entry.model} up`}
+                        disabled={idx === 0}
+                        onClick={() => moveFallback(entry.model, -1)}
+                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)]"
+                      >
+                        <ArrowUp size={10} />
+                      </button>
+                      <button
+                        type="button"
+                        data-testid={`fallback-chip-down-${entry.model}`}
+                        aria-label={`Move fallback ${entry.model} down`}
+                        disabled={idx === fallbackModels.length - 1}
+                        onClick={() => moveFallback(entry.model, 1)}
+                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)]"
+                      >
+                        <ArrowDown size={10} />
+                      </button>
+                      <button
+                        type="button"
+                        data-testid={`fallback-chip-remove-${entry.model}`}
+                        aria-label={`Remove fallback ${entry.model}`}
+                        onClick={() => removeFallback(entry.model)}
+                        className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                      >
+                        <X size={10} />
+                      </button>
+                      {providerMissing && (
+                        <span
+                          data-testid={`fallback-chip-warning-${entry.model}`}
+                          role="img"
+                          aria-label="Provider not connected — fallback will not be used at runtime"
+                          title="Provider not connected — fallback will not be used at runtime"
+                          className="inline-flex items-center text-amber-400"
+                        >
+                          <Warning size={11} weight="fill" />
+                        </span>
+                      )}
+                    </span>
+                  )
+                })}
+                <div className="min-w-[220px] flex-1">
+                  <ModelSelector
+                    models={availableModels}
+                    value=""
+                    onChange={(v) => { markDirty(); addFallbackFromSelector(v) }}
+                    placeholder="Add fallback…"
+                    providerGroups={providerGroups}
+                    triggerTestId="fallback-add-trigger"
+                    itemTestIdPrefix="fallback-add-item-"
+                    disabled={availableModels.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))}
+                  />
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Tools & Permissions */}
+          {(!isNativeWorkerAgent || Object.keys(toolsCfg.builtin?.policies ?? {}).length > 0) && (
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Tools &amp; Permissions</p>
+                {(() => {
+                  const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
+                  if (overrideCount === 0) return null
+                  return (
+                    <span className="text-xs text-[var(--color-muted)] font-normal">
+                      {overrideCount} overrides
+                    </span>
+                  )
+                })()}
+              </div>
+              {(() => {
+                const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
+                const collapseToReadOnly = isNativeWorkerAgent && overrideCount === 0
+                if (!collapseToReadOnly) {
+                  return (
+                    <ToolsAndPermissions
+                      agentId={agentId}
+                      agentType={agent.type}
+                      isLocked={isLocked}
+                      tools={toolsCfg}
+                      onChange={setToolsCfg}
+                    />
+                  )
+                }
+                return (
+                  <div
+                    data-testid="native-worker-tools-readonly"
+                    className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+                  >
+                    <p className="text-sm text-[var(--color-secondary)]">
+                      Built-in tool policies (read-only)
+                    </p>
+                    <p className="text-[11px] text-[var(--color-muted)] leading-snug mt-0.5">
+                      Native workers run with a compiled allow/deny rail — the seeded
+                      system and memory entries cannot be edited from the UI. Add
+                      explicit overrides only if your task requires non-default behaviour;
+                      otherwise leave this empty to inherit the inherited rail.
+                    </p>
+                  </div>
+                )
+              })()}
+            </section>
+          )}
+
+          {/* Skills — hidden for native workers (M11). */}
+          {!isNativeWorkerAgent && (
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Skills</p>
+                {agentSkills.length > 0 && (
+                  <span className="text-xs text-[var(--color-muted)] font-normal">
+                    {agentSkills.length} granted
+                  </span>
+                )}
+              </div>
+              <div className="space-y-3">
+                {isLocked ? (
+                  <p className="text-xs text-[var(--color-muted)]">
+                    Skill assignment is read-only for locked core agents.
+                  </p>
+                ) : (
+                  <p className="text-xs text-[var(--color-muted)]">
+                    Grant specific installed skills to this agent. Only skills listed here
+                    are available during this agent's runs. Empty means no skills.
+                  </p>
+                )}
+                {availableSkills.length === 0 ? (
+                  <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-4 text-center">
+                    <Sparkle size={16} className="text-[var(--color-muted)] mx-auto mb-1.5" />
+                    <p className="text-xs text-[var(--color-muted)]">No skills installed.</p>
+                    <p className="text-xs text-[var(--color-muted)]/70 mt-0.5">
+                      Install skills from the Skills &amp; Tools screen.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {availableSkills.map((skill) => {
+                      const granted = agentSkills.includes(skill.id)
+                      return (
+                        <label
+                          key={skill.id}
+                          className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-2)]'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={granted}
+                            disabled={isLocked}
+                            onChange={isLocked ? undefined : (e) => {
+                              markDirty()
+                              if (e.target.checked) {
+                                setAgentSkills((prev) => [...prev, skill.id])
+                              } else {
+                                setAgentSkills((prev) => prev.filter((s) => s !== skill.id))
+                              }
+                            }}
+                            className="mt-0.5 shrink-0 accent-[var(--color-accent)] disabled:opacity-50"
+                            data-testid={`skill-checkbox-${skill.id}`}
+                          />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-[var(--color-secondary)] leading-tight">
+                              {skill.name}
+                            </p>
+                            {skill.description && (
+                              <p className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-snug">
+                                {skill.description}
+                              </p>
+                            )}
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-[10px] font-mono text-[var(--color-muted)]/70">
+                                {skill.id}
+                              </span>
+                              {skill.verified && (
+                                <span className="text-[9px] px-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                  verified
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </label>
                       )
                     })}
-                    {/* Add UI: a second <ModelSelector> dedicated to the
-                        fallback list. It mounts as a separate combobox so the
-                        primary model selector above stays untouched. The
-                        add-trigger is identified by data-testid
-                        `fallback-add-trigger` and each pickable item is
-                        `fallback-add-item-<model>`. */}
-                    <div className="min-w-[220px] flex-1">
-                      <ModelSelector
-                        models={availableModels}
-                        value=""
-                        onChange={(v) => { markDirty(); addFallbackFromSelector(v) }}
-                        placeholder="Add fallback…"
-                        providerGroups={providerGroups}
-                        triggerTestId="fallback-add-trigger"
-                        itemTestIdPrefix="fallback-add-item-"
-                        disabled={availableModels.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))}
-                      />
-                    </div>
                   </div>
                 )}
               </div>
-              {/* #335 (US-D3): temperature/top-p under "Sampling parameters" with plain captions */}
-              {canEdit && (
-                <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setAdvancedOpen((o) => !o)}
-                    className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                  >
-                    <span>Sampling parameters</span>
-                    {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                  </button>
-                  {advancedOpen && (
-                    <div className="px-3 pb-3 space-y-4 border-t border-[var(--color-border)]">
-                      <RangeField
-                        label="Temperature"
-                        caption="Higher = more creative / less predictable (0–2, default 1)"
-                        value={temperature}
-                        min={0}
-                        max={2}
-                        step={0.05}
-                        onChange={(v) => { markDirty(); setTemperature(v) }}
-                        format={(v) => v.toFixed(2)}
-                      />
-                      <RangeField
-                        label="Max tokens"
-                        caption="Maximum length of each reply"
-                        value={maxTokens}
-                        min={256}
-                        max={32768}
-                        step={256}
-                        onChange={(v) => { markDirty(); setMaxTokens(v) }}
-                        format={(v) => v.toLocaleString()}
-                      />
-                      <RangeField
-                        label="Top P"
-                        caption="Nucleus sampling mass — 1.0 disables it (default 1)"
-                        value={topP}
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        onChange={(v) => { markDirty(); setTopP(v) }}
-                        format={(v) => v.toFixed(2)}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </AccordionContent>
-        </AccordionItem>
+            </section>
+          )}
+        </TabsContent>
 
-        {/* Rate Limits — default CLOSED */}
-        {!isLocked && (
-          <AccordionItem value="rate-limits" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-              Rate Limits
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="px-4 space-y-3">
+        {/* ── RUNTIME TAB (subagent_3p only) ─────────────────────────────
+            Spec-4 / §6.4: the Runtime tab is rendered for
+            `subagent_3p` agents only (external CLI workers). The CLI
+            itself is shown as a read-only chip (locked concept — the
+            runtime kind is a property of the agent, not editable in
+            v0.1.0), while cli_path / env_overrides / cli_args are the
+            operator-tunable inputs (F-14). */}
+        {agent.type === 'subagent_3p' && (
+          <TabsContent value="runtime" className="space-y-5">
+            <section className="space-y-3">
+              <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Runtime</p>
+              {/* CLI — read-only badge. The kind+cli tuple is the agent's
+                  defining property; the operator can change which CLI is
+                  used by recreating the agent (post v0.3 the wizard will
+                  surface this, per the spec matrix). */}
+              <div
+                data-testid="profile-cli-locked"
+                className="flex items-center gap-2 px-3 py-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+              >
+                <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)]">CLI</span>
+                <span className="font-mono text-xs text-[var(--color-secondary)]">
+                  {executor?.cli ?? 'claude-code'}
+                </span>
+                <span className="text-[10px] text-[var(--color-muted)]">(locked)</span>
+              </div>
+              <div
+                data-testid="profile-cli-path"
+                className="flex items-center gap-3"
+              >
+                <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI path</label>
+                <Input
+                  value={executor?.cli_path ?? ''}
+                  onChange={(e) => {
+                    markDirty()
+                    setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_path: e.target.value }))
+                  }}
+                  placeholder="/usr/local/bin/claude"
+                  className="text-xs h-8 font-mono"
+                  disabled={isLocked}
+                />
+              </div>
+              <div data-testid="profile-env-overrides" className="space-y-2">
+                <label className="text-xs text-[var(--color-muted)]">Environment overrides</label>
+                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                  KEY=value pairs passed to the CLI process. Empty means no overrides.
+                </p>
+                <EnvironmentOverridesEditor
+                  value={executor?.env_overrides ?? {}}
+                  onChange={(next) => {
+                    markDirty()
+                    setExecutor((prev) => ({
+                      ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }),
+                      env_overrides: next,
+                    }))
+                  }}
+                  disabled={isLocked}
+                />
+              </div>
+              <div data-testid="profile-cli-args" className="flex items-center gap-3">
+                <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI arguments</label>
+                <Input
+                  value={executor?.cli_args ?? ''}
+                  onChange={(e) => {
+                    markDirty()
+                    setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_args: e.target.value }))
+                  }}
+                  placeholder="--no-update-check"
+                  className="text-xs h-8 font-mono"
+                  disabled={isLocked}
+                />
+              </div>
+            </section>
+          </TabsContent>
+        )}
+
+        {/* ── ADVANCED TAB ──────────────────────────────────────────────
+            Rate limits, Execution params (timeout / max_iter / steering —
+            Main only per the spec matrix), Executor summary (workers
+            only; subagent_3p gets the full editor in the Runtime tab),
+            Sessions, Schedules (base-only), Activity. The Executor
+            here is a compact summary for native workers; subagent_3p's
+            editor is in Runtime. */}
+        <TabsContent value="advanced" className="space-y-6">
+          {/* Rate Limits — editable for unlocked agents, hidden for locked. */}
+          {!isLocked && (
+            <section className="space-y-3">
+              <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Rate Limits</p>
+              <div className="space-y-3">
                 <div className="flex items-center justify-between py-1">
                   <div>
                     <p className="text-sm text-[var(--color-secondary)]">Use global defaults</p>
@@ -1412,455 +1582,231 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   </div>
                 )}
               </div>
-            </AccordionContent>
-          </AccordionItem>
-        )}
+            </section>
+          )}
 
-        {/* Behavior — default CLOSED.
-            Tier-branched: base agents keep the full set (SOUL persona +
-            instructions + heartbeat + execution). Workers get a slimmer
-            section — a relabeled "Task prompt (optional)" instead of the
-            "Personality & instructions" framing, and NO heartbeat. The
-            task prompt is optional (empty is valid) per the locked concept
-            (`.preview-doc/agents.html`); the backend treats worker SOUL.md
-            as optional. Both tiers still get Execution params — they're
-            per-agent engine settings, not persona or scheduling. */}
-        {canEdit && (
-          <AccordionItem value="behavior" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-              Behavior
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="px-4 space-y-5">
-                {/* Shared "Behavior" block: SOUL/task-prompt + Additional Instructions.
-                    Delegates to the same component used by the create modal so
-                    the two surfaces cannot drift. The profile renders an Upload
-                    button per field; the modal does not (it has no file-upload
-                    affordance for soul/instructions). */}
-                <BehaviorFields
-                  isWorker={isWorkerAgent}
-                  soul={soul}
-                  setSoul={(v) => { markDirty(); setSoul(v) }}
-                  instructions={instructions}
-                  setInstructions={(v) => { markDirty(); setInstructions(v) }}
-                  // W6-B4 / G1: per-agent persona voice (TTS voice name / model ID).
-                  // Schema-pinned; not active until v0.2.0 TTS.
-                  voice={voice}
-                  setVoice={(v) => { markDirty(); setVoice(v) }}
-                  renderUploadButton={(_, onUpload) => <UploadButton onUpload={onUpload} />}
-                />
-
-                {/* #335 (US-D3): relabeled HEARTBEAT.md → "Background tasks / periodic instructions".
-                    Base-only. Workers never run on a schedule (delegation-only
-                    labour agents), so this whole sub-block is omitted. */}
+          {/* Execution — base agents and external-cli workers. Locked core
+              agents skip this sub-block (they run on a built-in policy). */}
+          {!isLocked && (
+            <section className="space-y-3">
+              <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Execution</p>
+              <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                    Turn timeout
+                    <span className="block text-[10px] text-[var(--color-muted)]/70">
+                      Max seconds per turn. 0 = no limit.
+                    </span>
+                  </label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={timeoutSeconds}
+                    onChange={(e) => { markDirty(); setTimeoutSeconds(Number(e.target.value)) }}
+                    className="text-xs h-8"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                    Max tool calls per turn
+                    <span className="block text-[10px] text-[var(--color-muted)]/70">
+                      Stops runaway loops. Default: 50.
+                    </span>
+                  </label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={maxToolIterations}
+                    onChange={(e) => { markDirty(); setMaxToolIterations(Number(e.target.value)) }}
+                    className="text-xs h-8"
+                  />
+                </div>
+                {/* Steering mode — Main only. Workers and subagent_3p do
+                    not have a chat surface that consumes concurrent
+                    messages, so steering is a Main concept. */}
                 {!isWorkerAgent && (
-                  <>
-                    <Separator />
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium text-[var(--color-secondary)]">Background tasks / periodic instructions</p>
-                      <p className="text-xs text-[var(--color-muted)]">
-                        Instructions the agent runs on a recurring schedule — check queues, summarize,
-                        or perform any background work. Stored as <span className="font-mono text-[11px]">HEARTBEAT.md</span>.
-                      </p>
-                      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
-                            <p className="text-xs text-[var(--color-muted)]">Run on a recurring schedule</p>
-                          </div>
-                          <Switch
-                            checked={heartbeatEnabled}
-                            onCheckedChange={(v) => { markDirty(); setHeartbeatEnabled(v) }}
-                          />
-                        </div>
-                        {heartbeatEnabled && (
-                          <div className="flex items-center gap-3 pt-1 border-t border-[var(--color-border)]">
-                            <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Interval (seconds)</label>
-                            <Input
-                              type="number"
-                              min={1}
-                              value={heartbeatInterval}
-                              onChange={(e) => { markDirty(); setHeartbeatInterval(Number(e.target.value)) }}
-                              className="text-xs h-8"
-                            />
-                          </div>
-                        )}
-                      </div>
-                      <Textarea
-                        value={heartbeat}
-                        onChange={(e) => { markDirty(); setHeartbeat(e.target.value) }}
-                        placeholder="# Heartbeat&#10;&#10;Write persistent context for this agent..."
-                        rows={4}
-                        className="text-xs font-mono resize-none"
-                      />
-                      <UploadButton onUpload={setHeartbeat} />
-                    </div>
-                  </>
-                )}
-
-                <Separator />
-
-                {/* Execution — both tiers. Per-agent engine settings, not
-                    persona or scheduling. Locked core agents skip this
-                    sub-block (they run on a built-in policy). */}
-                {!isLocked && (
-                  <div className="space-y-2">
-                    <p className="text-xs font-medium text-[var(--color-secondary)]">Execution</p>
-                    {/* #335 (US-D3): plain captions for execution parameters */}
-                  <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
-                      <div className="flex items-center gap-3">
-                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
-                          Turn timeout
-                          <span className="block text-[10px] text-[var(--color-muted)]/70">
-                            Max seconds per turn. 0 = no limit.
-                          </span>
-                        </label>
-                        <Input
-                          type="number"
-                          min={0}
-                          value={timeoutSeconds}
-                          onChange={(e) => { markDirty(); setTimeoutSeconds(Number(e.target.value)) }}
-                          className="text-xs h-8"
-                        />
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
-                          Max tool calls per turn
-                          <span className="block text-[10px] text-[var(--color-muted)]/70">
-                            Stops runaway loops. Default: 50.
-                          </span>
-                        </label>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={maxToolIterations}
-                          onChange={(e) => { markDirty(); setMaxToolIterations(Number(e.target.value)) }}
-                          className="text-xs h-8"
-                        />
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
-                          Message handling
-                          <span className="block text-[10px] text-[var(--color-muted)]/70">
-                            How concurrent messages are processed.
-                          </span>
-                        </label>
-                        <SmartSelect
-                          value={steeringMode}
-                          onValueChange={(v) => { markDirty(); setSteeringMode(v) }}
-                          triggerClassName="text-xs h-8"
-                          items={[
-                            { value: 'one-at-a-time', label: 'One at a time' },
-                            { value: 'parallel', label: 'Parallel' },
-                            { value: 'queue', label: 'Queue' },
-                          ]}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between py-1">
-                        <div>
-                          <p className="text-sm text-[var(--color-secondary)]">Show tool progress</p>
-                          <p className="text-xs text-[var(--color-muted)]">
-                            Echo tool results back to the agent as it works.
-                          </p>
-                        </div>
-                        <Switch
-                          checked={toolFeedback}
-                          onCheckedChange={(v) => { markDirty(); setToolFeedback(v) }}
-                        />
-                      </div>
-                    </div>
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                      Message handling
+                      <span className="block text-[10px] text-[var(--color-muted)]/70">
+                        How concurrent messages are processed.
+                      </span>
+                    </label>
+                    <SmartSelect
+                      value={steeringMode}
+                      onValueChange={(v) => { markDirty(); setSteeringMode(v as 'one-at-a-time' | 'queue-and-process') }}
+                      triggerClassName="text-xs h-8"
+                      items={[
+                        { value: 'one-at-a-time', label: 'One at a time' },
+                        { value: 'parallel', label: 'Parallel' },
+                        { value: 'queue', label: 'Queue' },
+                      ]}
+                    />
                   </div>
                 )}
               </div>
-            </AccordionContent>
-          </AccordionItem>
-        )}
+            </section>
+          )}
 
-        {/* Tools & Permissions — default CLOSED.
-            W6-C1 / G8: native workers (default executor.kind) carry 4
-            seeded tool overrides (system.* → deny + the 3 memory
-            allow-entries), and the editable ToolsAndPermissions surface
-            invited the operator to edit those overrides — even though
-            those overrides are compiled-in for native workers and the
-            edits never reach a real native runtime. Collapse the editor
-            to a compact read-only summary for native workers whose
-            `tools_cfg.builtin.policies` is empty/non-overridden. If the
-            operator has explicitly added overrides (`policies` non-empty)
-            we keep the editor open so they can still manage them — the
-            ticket carves out this case ("...unless tools_cfg.overrides
-            is non-empty"). External-cli workers always get the editor
-            because their executor respects the policy. The override
-            count in the accordion trigger is updated to surface the
-            seeded count too so the badge is accurate. */}
-        {/*
-          W6-C1 / G8 + M11: native workers carry a compiled rail and the
-          edits never reach a native runtime. Two-layer handling:
-            - Native worker WITH user-added overrides → keep the editor
-              open so the operator can manage them (G8 carve-out).
-            - Native worker with NO overrides → hide the entire
-              accordion (M11 hides inapplicable sections); the
-              delegation-only callout at the top of the profile
-              already explains the omission.
-          External-cli workers always see the editor.
-        */}
-        {(!isNativeWorkerAgent || Object.keys(toolsCfg.builtin?.policies ?? {}).length > 0) && (
-          <AccordionItem value="tools" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-              <span>Tools &amp; Permissions</span>
-              {(() => {
-                const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
-                if (overrideCount === 0) return null
-                return (
-                  <span className="text-xs text-[var(--color-muted)] font-normal ml-2">
-                    {overrideCount} overrides
+          {/* Executor summary — all workers (base + external). subagent_3p's
+              full editor is in the Runtime tab. Locked core workers are
+              handled by their locked-banner and field-level disable. The
+              selector itself shows "native" for native workers; the
+              native-worker-delegation-callout at the top of the body
+              already explains why the editable Tools / Skills / Sandbox
+              accordions are collapsed to a summary. */}
+          {isWorkerAgent && agent.type !== 'subagent_3p' && (
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Executor</p>
+                {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
+                    {executor.kind === 'external-cli' ? (executor.cli ?? 'external') : 'A2A'}
                   </span>
-                )
-              })()}
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="px-4">
-                {(() => {
-                  // Native workers with no user-added overrides: collapse
-                  // to a read-only summary. The seed pre-populates a
-                  // compiled rail (allow-by-default + system.* deny + the
-                  // 3 memory allow entries) that the operator cannot and
-                  // should not edit from the UI.
-                  const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
-                  const collapseToReadOnly = isNativeWorkerAgent && overrideCount === 0
-                  if (!collapseToReadOnly) {
-                    // #332 (US-D5 / B-2): isLocked=true → read-only editor, no writes
-                    return (
-                      <ToolsAndPermissions
-                        agentId={agentId}
-                        agentType={agent.type}
-                        isLocked={isLocked}
-                        tools={toolsCfg}
-                        onChange={setToolsCfg}
-                      />
-                    )
-                  }
-                  return (
-                    <div
-                      data-testid="native-worker-tools-readonly"
-                      className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
-                    >
-                      <p className="text-sm text-[var(--color-secondary)]">
-                        Built-in tool policies (read-only)
-                      </p>
-                      <p className="text-[11px] text-[var(--color-muted)] leading-snug mt-0.5">
-                        Native workers run with a compiled allow/deny rail — the seeded
-                        system and memory entries cannot be edited from the UI. Add
-                        explicit overrides only if your task requires non-default behaviour;
-                        otherwise leave this empty to inherit the inherited rail.
-                      </p>
-                    </div>
-                  )
-                })()}
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-        )}
-
-        {/* Skills — US-E6: per-agent skill assignment, opt-in, default none.
-            W6-C1 / M11: hidden for native workers — skills are inherited
-            from the caller on a native runtime. External-cli workers
-            still get this section because the external runner respects
-            the per-agent skill list. */}
-        {!isNativeWorkerAgent && (
-        <AccordionItem value="skills" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-            <div className="flex items-center gap-2">
-              <span>Skills</span>
-              {agentSkills.length > 0 && (
-                <span className="text-xs text-[var(--color-muted)] font-normal">
-                  {agentSkills.length} granted
-                </span>
-              )}
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              {isLocked ? (
-                <p className="text-xs text-[var(--color-muted)]">
-                  Skill assignment is read-only for locked core agents.
-                </p>
-              ) : (
-                <p className="text-xs text-[var(--color-muted)]">
-                  Grant specific installed skills to this agent. Only skills listed here
-                  are available during this agent's runs. Empty means no skills.
-                </p>
-              )}
-              {availableSkills.length === 0 ? (
-                <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-4 text-center">
-                  <Sparkle size={16} className="text-[var(--color-muted)] mx-auto mb-1.5" />
-                  <p className="text-xs text-[var(--color-muted)]">No skills installed.</p>
-                  <p className="text-xs text-[var(--color-muted)]/70 mt-0.5">
-                    Install skills from the Skills &amp; Tools screen.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {availableSkills.map((skill) => {
-                    const granted = agentSkills.includes(skill.id)
-                    return (
-                      <label
-                        key={skill.id}
-                        className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-2)]'}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={granted}
-                          disabled={isLocked}
-                          onChange={isLocked ? undefined : (e) => {
-                            markDirty()
-                            if (e.target.checked) {
-                              setAgentSkills((prev) => [...prev, skill.id])
-                            } else {
-                              setAgentSkills((prev) => prev.filter((s) => s !== skill.id))
-                            }
-                          }}
-                          className="mt-0.5 shrink-0 accent-[var(--color-accent)] disabled:opacity-50"
-                          data-testid={`skill-checkbox-${skill.id}`}
-                        />
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-[var(--color-secondary)] leading-tight">
-                            {skill.name}
-                          </p>
-                          {skill.description && (
-                            <p className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-snug">
-                              {skill.description}
-                            </p>
-                          )}
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[10px] font-mono text-[var(--color-muted)]/70">
-                              {skill.id}
-                            </span>
-                            {skill.verified && (
-                              <span className="text-[9px] px-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                                verified
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </label>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          </AccordionContent>
-        </AccordionItem>
-        )}
-
-        {/* Sessions — default CLOSED */}
-        <AccordionItem value="sessions" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-            Sessions
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4">
-              {sessionsError ? (
-                <p className="text-sm text-[var(--color-error)]">Failed to load sessions</p>
-              ) : recentSessions.length > 0 ? (
-                <div className="space-y-1">
-                  {recentSessions.map((s) => (
-                    <SessionRow key={s.id} session={s} />
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-[var(--color-muted)]">No sessions yet.</p>
-              )}
-            </div>
-          </AccordionContent>
-        </AccordionItem>
-
-        {/* Schedules — default CLOSED (#264). Base-only. Workers are
-            delegation-only labour agents and never own a schedule, so the
-            whole accordion is omitted. The schedule-owner picker on the
-            create form also filters workers out (see ScheduleFormSheet). */}
-        {!isWorkerAgent && (
-          <AccordionItem value="schedules" className="border-0">
-            <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-              Schedules
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="px-4 space-y-3">
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setCreatingSchedule(true)}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                )}
+                {(!executor || executor.kind === 'native') && (
+                  <span
+                    data-testid="executor-native-badge"
+                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]"
                   >
-                    <Plus size={13} />
-                    New schedule
-                  </button>
-                </div>
-                <SchedulesList agentId={resolvedAgentId} />
+                    Native (in-process)
+                  </span>
+                )}
               </div>
-            </AccordionContent>
-          </AccordionItem>
-        )}
+              <ExecutorSelector
+                value={executor}
+                agentId={resolvedAgentId}
+                disabled={isLocked}
+                onChange={(next) => { markDirty(); setExecutor(next) }}
+              />
+            </section>
+          )}
 
-        {/* Activity — default CLOSED */}
-        <AccordionItem value="activity" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-semibold text-[14px]">
-            Activity
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4">
-              {agent.stats && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-                  <StatCard label="Sessions" value={agent.stats.total_sessions.toString()} />
-                  <StatCard
-                    label="Tokens"
-                    value={
-                      agent.stats.total_tokens >= 1000
-                        ? `${(agent.stats.total_tokens / 1000).toFixed(1)}k`
-                        : agent.stats.total_tokens.toString()
-                    }
-                  />
-                  <StatCard label="Cost" value={`$${agent.stats.total_cost.toFixed(4)}`} />
-                  <StatCard
-                    label="Last active"
-                    value={
-                      agent.stats.last_active
-                        ? new Date(agent.stats.last_active).toLocaleDateString()
-                        : '—'
-                    }
-                  />
-                </div>
-              )}
-              {activityError ? (
-                <p className="text-sm text-[var(--color-error)]">Failed to load activity</p>
-              ) : recentActivity.length === 0 ? (
-                <p className="text-xs text-[var(--color-muted)]">No recent activity for this agent.</p>
-              ) : (
-                <div className="space-y-1">
-                  {recentActivity.map((event) => (
-                    <ActivityRow key={event.id} event={event} />
-                  ))}
-                </div>
-              )}
-            </div>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
-        </div>
+          {/* Sessions */}
+          <section className="space-y-3">
+            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Sessions</p>
+            {sessionsError ? (
+              <p className="text-sm text-[var(--color-error)]">Failed to load sessions</p>
+            ) : recentSessions.length > 0 ? (
+              <div className="space-y-1">
+                {recentSessions.map((s) => (
+                  <SessionRow key={s.id} session={s} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--color-muted)]">No sessions yet.</p>
+            )}
+          </section>
+
+          {/* Schedules — base-only. Workers are delegation-only labour
+              agents and never own a schedule. */}
+          {!isWorkerAgent && (
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Schedules</p>
+                <button
+                  type="button"
+                  onClick={() => setCreatingSchedule(true)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                >
+                  <Plus size={13} />
+                  New schedule
+                </button>
+              </div>
+              <SchedulesList agentId={resolvedAgentId} />
+            </section>
+          )}
+
+          {/* Activity */}
+          <section className="space-y-3">
+            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Activity</p>
+            {agent.stats && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <StatCard label="Sessions" value={agent.stats.total_sessions.toString()} />
+                <StatCard
+                  label="Tokens"
+                  value={
+                    agent.stats.total_tokens >= 1000
+                      ? `${(agent.stats.total_tokens / 1000).toFixed(1)}k`
+                      : agent.stats.total_tokens.toString()
+                  }
+                />
+                <StatCard label="Cost" value={`$${agent.stats.total_cost.toFixed(4)}`} />
+                <StatCard
+                  label="Last active"
+                  value={
+                    agent.stats.last_active
+                      ? new Date(agent.stats.last_active).toLocaleDateString()
+                      : '—'
+                  }
+                />
+              </div>
+            )}
+            {activityError ? (
+              <p className="text-sm text-[var(--color-error)]">Failed to load activity</p>
+            ) : recentActivity.length === 0 ? (
+              <p className="text-xs text-[var(--color-muted)]">No recent activity for this agent.</p>
+            ) : (
+              <div className="space-y-1">
+                {recentActivity.map((event) => (
+                  <ActivityRow key={event.id} event={event} />
+                ))}
+              </div>
+            )}
+          </section>
+        </TabsContent>
+      </Tabs>
+      </div>
       </div>
 
-      {/* Sticky footer — always present so the user has an explicit dismiss
-          affordance; the Radix X in the top-right is also wired here via
-          SheetContent's onOpenChange. */}
+      {/* Sticky footer — Wave 5 / spec §6.1: the footer carries the auto-save
+          indicator (left, data-testid="last-saved-indicator") and a
+          destructive Delete button (right, data-testid="delete-agent-button").
+          Per spec there is NO Apply button (autosave-only) and no separate
+          Close button — the Radix X in the top-right corner is the dismiss
+          affordance, and SheetContent's onOpenChange wires it back here. */}
       <div className="px-8 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-3">
-        <AutoSaveIndicator status={saveStatus} error={saveError} />
-        <Button
-          variant="outline"
-          onClick={closeEditAgentSlideOver}
-          data-testid="agent-profile-close"
-        >
-          Close
-        </Button>
+        <div data-testid="last-saved-indicator">
+          <AutoSaveIndicator status={saveStatus} error={saveError} />
+        </div>
+        {!isLocked && (
+          <Button
+            variant="destructive"
+            data-testid="delete-agent-button"
+            onClick={() => setDeleteOpen(true)}
+            className="ml-auto"
+          >
+            <Trash size={13} className="mr-1.5" />
+            Delete agent
+          </Button>
+        )}
       </div>
+
+      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog. Mirrors the
+          SchedulesList pattern (`AlertDialog` + `AlertDialogAction`) so the
+          destructive-confirm flow is identical across the app. The confirm
+          fires the deleteAgentMutation; on success the slide-over closes
+          and the agent is removed from the list cache. */}
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {formData.name || agent.name}?</AlertDialogTitle>
+            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteAgentMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleteAgentMutation.isPending}
+              onClick={() => {
+                if (agentId) deleteAgentMutation.mutate(agentId)
+              }}
+            >
+              {deleteAgentMutation.isPending ? 'Deleting…' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* New schedule slide-over — owner pre-filled to this agent (#264) */}
       {creatingSchedule && (
@@ -2043,6 +1989,78 @@ function ActivityRow({ event }: { event: ActivityEvent }) {
       <span className="text-[10px] text-[var(--color-muted)] shrink-0 mt-0.5">
         {date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
       </span>
+    </div>
+  )
+}
+
+// Wave 5 / spec §6.4: KEY=value editor for `ExecutorConfig.env_overrides`.
+// The wire shape is `Record<string, string>` (per ExecutorConfig.yaml).
+// Each row is two inputs (key, value) plus a remove button. New rows are
+// appended; empty rows are dropped on save. Locked agents get a read-only
+// static list. Renders inline within the Runtime tab.
+function EnvironmentOverridesEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: Record<string, string>
+  onChange: (next: Record<string, string>) => void
+  disabled?: boolean
+}) {
+  const entries = Object.entries(value)
+  return (
+    <div className="space-y-1.5">
+      {entries.length === 0 ? (
+        <p className="text-[11px] text-[var(--color-muted)] italic">No overrides configured.</p>
+      ) : (
+        entries.map(([k, v], idx) => (
+          <div
+            key={`${k}-${idx}`}
+            className="flex items-center gap-2"
+            data-testid={`profile-env-row-${idx}`}
+          >
+            <Input
+              value={k}
+              onChange={(e) => {
+                const nextKey = e.target.value
+                onChange(Object.fromEntries(entries.map(([ek], i) => [i === idx ? nextKey : ek, v])))
+              }}
+              placeholder="KEY"
+              className="text-xs h-8 font-mono flex-1"
+              disabled={disabled}
+            />
+            <span className="text-[var(--color-muted)]">=</span>
+            <Input
+              value={v}
+              onChange={(e) => {
+                onChange({ ...value, [k]: e.target.value })
+              }}
+              placeholder="value"
+              className="text-xs h-8 font-mono flex-1"
+              disabled={disabled}
+            />
+            <button
+              type="button"
+              onClick={() => onChange(Object.fromEntries(entries.filter((_, i) => i !== idx)))}
+              className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors disabled:opacity-50"
+              aria-label={`Remove env override ${k}`}
+              disabled={disabled}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ))
+      )}
+      {!disabled && (
+        <button
+          type="button"
+          data-testid="profile-env-add"
+          onClick={() => onChange({ ...value, '': '' })}
+          className="text-[10px] text-[var(--color-accent)] hover:underline"
+        >
+          + Add override
+        </button>
+      )}
     </div>
   )
 }

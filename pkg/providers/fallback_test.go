@@ -465,11 +465,11 @@ func TestResolveCandidatesWithLookup_AliasResolvesToNestedModel(t *testing.T) {
 		Fallbacks: nil,
 	}
 
-	lookup := func(raw string) (string, bool) {
+	lookup := func(raw string) (ResolvedRef, bool) {
 		if raw == "step-3.5-flash" {
-			return "openrouter/stepfun/step-3.5-flash:free", true
+			return ResolvedRef{Model: "openrouter/stepfun/step-3.5-flash:free", Provider: "openrouter"}, true
 		}
-		return "", false
+		return ResolvedRef{}, false
 	}
 
 	candidates := ResolveCandidatesWithLookup(cfg, "", lookup)
@@ -490,11 +490,11 @@ func TestResolveCandidatesWithLookup_DeduplicateAfterLookup(t *testing.T) {
 		Fallbacks: []string{"openrouter/stepfun/step-3.5-flash:free"},
 	}
 
-	lookup := func(raw string) (string, bool) {
+	lookup := func(raw string) (ResolvedRef, bool) {
 		if raw == "step-3.5-flash" {
-			return "openrouter/stepfun/step-3.5-flash:free", true
+			return ResolvedRef{Model: "openrouter/stepfun/step-3.5-flash:free", Provider: "openrouter"}, true
 		}
-		return "", false
+		return ResolvedRef{}, false
 	}
 
 	candidates := ResolveCandidatesWithLookup(cfg, "", lookup)
@@ -509,11 +509,13 @@ func TestResolveCandidatesWithLookup_AliasWithoutProtocolUsesDefaultProvider(t *
 		Fallbacks: nil,
 	}
 
-	lookup := func(raw string) (string, bool) {
+	// Lookup that returns the slug with NO Provider — the resolver chain
+	// falls back to defaultProvider via ParseModelRef.
+	lookup := func(raw string) (ResolvedRef, bool) {
 		if raw == "glm-5" {
-			return "glm-5", true
+			return ResolvedRef{Model: "glm-5"}, true
 		}
-		return "", false
+		return ResolvedRef{}, false
 	}
 
 	candidates := ResolveCandidatesWithLookup(cfg, "openai", lookup)
@@ -742,10 +744,10 @@ func TestResolveCandidatesWithLookup_UnknownBareSlug_Warns(t *testing.T) {
 	// a typo'd bare slug as a fallback (no provider prefix, no model_list
 	// match). Without the W2-25 fix, addCandidate silently accepts the
 	// typo'd slug and the operator has no breadcrumb.
-	lookup := func(raw string) (string, bool) {
+	lookup := func(raw string) (ResolvedRef, bool) {
 		// Intentionally always miss — the test asserts the WARN fires
 		// on a lookup miss for a bare slug.
-		return "", false
+		return ResolvedRef{}, false
 	}
 	cfg := ModelConfig{
 		Primary:   "gpt-4",
@@ -805,11 +807,11 @@ func TestResolveCandidatesWithLookup_KnownBareSlug_NoWarn(t *testing.T) {
 	})
 
 	// Lookup that resolves the slug — no warn expected.
-	lookup := func(raw string) (string, bool) {
+	lookup := func(raw string) (ResolvedRef, bool) {
 		if raw == "claude-opus" {
-			return "anthropic/claude-opus", true
+			return ResolvedRef{Model: "anthropic/claude-opus", Provider: "anthropic"}, true
 		}
-		return "", false
+		return ResolvedRef{}, false
 	}
 	cfg := ModelConfig{
 		Primary:   "gpt-4",

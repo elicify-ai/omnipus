@@ -1194,7 +1194,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const result = MessageFrameSchema.safeParse(payload)
       if (result.success) return
       console.warn('[chat] outbound MessageFrame failed schema validation', result.error)
-      if (import.meta.env.DEV) {
+      // Gate the dev-toast on MODE (not DEV) so the toast also fires in
+      // Vitest's 'test' mode, which bakes DEV=false at compile time. MODE
+      // is 'production' for shipped builds so the toast is suppressed
+      // there. Without this gate change the W2-29 / W4-15 dev-toast test
+      // is unreachable (it has always been — see pre-W4 history).
+      if (import.meta.env.MODE !== 'production') {
         // Focused 1-line Zod message (matches src/lib/ws.ts parseFrameSafe).
         // result.error.message is multi-line JSON; the toast only needs the
         // first failing field + its issue so the dev sees what to fix.

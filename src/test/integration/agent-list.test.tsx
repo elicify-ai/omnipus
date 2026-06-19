@@ -40,8 +40,7 @@ const agentDefaults = {
   instructions: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
-  steering_mode: 'loop',
-  tool_feedback: true,
+  steering_mode: 'one-at-a-time' as const,
   heartbeat_enabled: false,
   heartbeat_interval: 300,
 }
@@ -50,7 +49,7 @@ const mockAgents = [
   { id: 'mia', name: 'Mia', type: 'core' as const, locked: true, color: '#6366f1', status: 'active' as const, model: 'claude-opus-4-6', description: 'General purpose assistant', ...agentDefaults },
   { id: 'general-assistant', name: 'General Assistant', type: 'core' as const, locked: false, color: 'green', status: 'active' as const, model: 'claude-sonnet-4-6', description: 'General assistant', ...agentDefaults },
   { id: 'researcher', name: 'Researcher', type: 'core' as const, locked: false, color: 'blue', status: 'idle' as const, model: 'claude-opus-4-6', description: 'Research specialist', ...agentDefaults },
-  { id: 'content-creator', name: 'Content Creator', type: 'custom' as const, locked: false, color: 'purple', status: 'idle' as const, model: 'claude-sonnet-4-6', description: 'Content writer', ...agentDefaults },
+  { id: 'content-creator', name: 'Content Creator', type: 'Main' as const, locked: false, color: 'purple', status: 'idle' as const, model: 'claude-sonnet-4-6', description: 'Content writer', ...agentDefaults },
 ]
 
 function makeClient() {
@@ -83,12 +82,15 @@ describe('agent list integration (test #26) — data fetching', () => {
     })
   })
 
-  it('shows "+ New Agent" button in the agent list', async () => {
-    // Traces to: wave5a-wire-ui-spec.md — US-6 AC4: "+ New Agent" button
+  it('shows "+ New Main" button in the agent list', async () => {
+    // W6 (US-6 AC4) replaces the single top-level "+ New Agent" button with
+    // per-section buttons. The base section renders "+ New Main" and the
+    // worker section renders "+ New Subagent". Asserting on the section
+    // testids proves the per-section split is in effect.
     render(<AgentListScreen />, { wrapper })
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /new agent/i })).toBeInTheDocument()
+      expect(screen.getByTestId('add-main-button')).toBeInTheDocument()
     })
   })
 

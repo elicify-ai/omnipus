@@ -23,8 +23,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     instructions: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
-    steering_mode: 'loop',
-    tool_feedback: true,
+    steering_mode: 'one-at-a-time',
     heartbeat_enabled: false,
     heartbeat_interval: 300,
     ...overrides,
@@ -61,7 +60,7 @@ describe('AgentCard — rendering (test #12)', () => {
   it('renders without crashing when icon is unrecognized', () => {
     // Dataset: Agent Card Rendering row 3 — unrecognized icon → fallback initial letter
     expect(() =>
-      render(<AgentCard agent={makeAgent({ icon: 'unknown-icon-xyz', type: 'custom' })} />)
+      render(<AgentCard agent={makeAgent({ icon: 'unknown-icon-xyz', type: 'Main' })} />)
     ).not.toThrow()
   })
 

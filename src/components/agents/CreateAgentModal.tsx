@@ -17,12 +17,17 @@
 // compatibility — we map them to the new wire enum ('custom' → 'Main',
 // 'worker' → 'Subagent').
 
-import * as React from 'react'
 import { useCallback } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useUiStore } from '@/store/ui'
-import { createAgent, isApiError } from '@/lib/api'
+import {
+  createAgent,
+  fetchProviders,
+  fetchRegistryTools,
+  fetchSkills,
+  isApiError,
+} from '@/lib/api'
 import type { Agent, AgentCreateRequest } from '@/lib/api'
 
 import {
@@ -62,29 +67,38 @@ function normalizeWizardType(
   return t
 }
 
-/** Convert the wizard's submit payload to a wire AgentCreateRequest. */
+/** Convert the wizard's submit payload to a wire AgentCreateRequest.
+ *
+ *  - Description / instructions are omitted when empty (Main agents
+ *    treat them as optional; the server schema accepts `undefined`).
+ *  - Executor block is only emitted when at least one of cli / path /
+ *    env_overrides / cli_args is set; the server defaults `kind` to
+ *    `native` for non-External agents when the block is absent.
+ *  - Tools_cfg / fallback_models are forwarded as-is (the wizard
+ *    types them properly, so no `as` cast is required here).
+ *  - All string fields are `.trim()`-ed to match the wizard's step
+ *    gating (which validates `.trim().length > 0`).
+ */
 function payloadToCreateRequest(
   payload: WizardSubmitPayload,
 ): AgentCreateRequest {
   const req: AgentCreateRequest = {
     type: payload.type,
-    name: payload.name,
-    description: payload.description,
+    name: payload.name.trim(),
     color: payload.color,
     icon: payload.icon,
-    model: payload.model,
-    soul: payload.soul,
-    instructions: payload.instructions || '',
+    model: payload.model.trim(),
+    soul: payload.soul.trim(),
   }
+  if (payload.description.trim()) req.description = payload.description.trim()
+  if (payload.instructions.trim()) req.instructions = payload.instructions.trim()
   if (payload.heartbeat !== undefined) req.heartbeat = payload.heartbeat
   if (payload.heartbeat_enabled !== undefined) req.heartbeat_enabled = payload.heartbeat_enabled
   if (payload.heartbeat_interval !== undefined) req.heartbeat_interval = payload.heartbeat_interval
-  if (payload.voice !== undefined) req.voice = payload.voice
-  if (payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg as AgentCreateRequest['tools_cfg']
+  if (payload.voice !== undefined && payload.voice !== '') req.voice = payload.voice
+  if (payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
   if (payload.skills !== undefined) req.skills = payload.skills
-  if (payload.fallback_models !== undefined) {
-    req.fallback_models = payload.fallback_models as AgentCreateRequest['fallback_models']
-  }
+  if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
   if (payload.cli || payload.executor_cli_path || payload.executor_env_overrides || payload.executor_cli_args) {
     req.executor = {
       kind: payload.type === 'subagent_3p' ? 'external-cli' : 'native',
@@ -107,6 +121,7 @@ export function CreateAgentModal({
   const {
     createAgentModalOpen,
     createAgentModalType,
+    createAgentModalCli,
     closeCreateAgentModal,
     addToast,
   } = useUiStore()
@@ -122,28 +137,38 @@ export function CreateAgentModal({
     'Main',
   )
 
-  const createAgentMutation = useMutation({
-    mutationFn: onCreateProp ?? ((data: AgentCreateRequest) => createAgent(data)),
+  // Store-driven CLI lock (for roster-launched external wizards); explicit
+  // prop wins over the store so callers can pin the CLI per-test.
+  const effectiveCli: WizardCli | undefined =
+    initialCli ?? (createAgentModalCli as WizardCli | undefined)
+
+  const createAgentMutation = useMutation<Agent, Error, AgentCreateRequest>({
+    mutationFn: (data) =>
+      onCreateProp
+        ? // Legacy / test prop returns Promise<void>; synthesize an Agent
+          // with the wire fields so the success path can still fire
+          // (toast, query invalidation, close).
+          onCreateProp(data).then(() => data as unknown as Agent)
+        : createAgent(data),
     onSuccess: (agent: Agent) => {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
       addToast({
-        id: `agent-created-${agent.id}`,
         message: `Created agent "${agent.name}"`,
         variant: 'success',
       })
       handleClose()
     },
     onError: (err: unknown) => {
+      // The wizard surfaces the same error inline (role=alert). Firing a
+      // toast here is the only place the user gets a global notification,
+      // since the wizard's catch only sets state (no toast — the parent
+      // owns the lifecycle). See CreateAgentWizard.handleSubmit.
       const message = isApiError(err)
         ? err.userMessage
         : err instanceof Error
           ? err.message
           : 'Failed to create agent'
-      addToast({
-        id: 'agent-create-error',
-        message,
-        variant: 'error',
-      })
+      addToast({ message, variant: 'error' })
     },
   })
 
@@ -155,13 +180,30 @@ export function CreateAgentModal({
     [createAgentMutation],
   )
 
+  // Providers / tools / skills — fetched at the modal level (which sits
+  // inside QueryClientProvider) and forwarded as props so the wizard
+  // sub-components stay query-client-free and unit-testable.
+  const providersQuery = useQuery({ queryKey: ['providers'], queryFn: fetchProviders })
+  const toolsQuery = useQuery({ queryKey: ['registry-tools'], queryFn: fetchRegistryTools })
+  const skillsQuery = useQuery({ queryKey: ['skills'], queryFn: fetchSkills })
+
+  const connectedProviders = (providersQuery.data ?? []).filter(
+    (p) => p.status === 'connected',
+  )
+  const registryTools = toolsQuery.data ?? []
+  const skills = skillsQuery.data ?? []
+
   if (!isOpen) return null
 
   return (
     <CreateAgentWizard
       initialType={effectiveType}
-      {...(initialCli ? { initialCli } : {})}
+      {...(effectiveCli ? { initialCli: effectiveCli } : {})}
       onSubmit={handleSubmit}
+      onClose={handleClose}
+      connectedProviders={connectedProviders}
+      registryTools={registryTools}
+      skills={skills}
     />
   )
 }

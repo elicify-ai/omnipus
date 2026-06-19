@@ -2,8 +2,11 @@ import { Scroll, NotePencil, Microphone } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
+import { SmartSelect } from '@/components/ui/smart-select'
 import { ExecutorSelector } from './ExecutorSelector'
 import { FormError } from '@/components/ui/FormError'
+import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
+import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
 import type { ExecutorConfig } from '@/lib/api'
 
 // ── AgentFormFields ──────────────────────────────────────────────────────────
@@ -283,4 +286,123 @@ export function getCreateAgentFormCopy(type: 'custom' | 'worker'): AgentFormCopy
     testId: 'create-custom-modal-title',
     submitLabel: 'Create agent',
   }
+}
+
+// ── Avatar color picker (lifted from AgentProfile.tsx:843-866) ─────────────
+
+export interface AvatarColorPickerProps {
+  /** Currently selected color (hex). */
+  value: string
+  /** Called with the chosen color (hex) on click. */
+  onChange: (color: string) => void
+  /** Optional testid prefix; the full id is `${testidPrefix}-${semanticName}`. */
+  testIdPrefix?: string
+  /** Optional className for the wrapper. */
+  className?: string
+}
+
+/**
+ * 8-swatch avatar color picker. Uses the brand palette from
+ * `src/lib/constants.ts`. Each button's `aria-label` and `title` resolve the
+ * semantic name (e.g. "Forge Gold") via `avatarColorName()` so screen
+ * readers announce the brand name instead of the raw hex. The selected
+ * swatch is highlighted with a double-ring (primary + colour) so the
+ * choice is visible against any background.
+ */
+export function AvatarColorPicker({
+  value,
+  onChange,
+  testIdPrefix = 'avatar-color',
+  className,
+}: AvatarColorPickerProps) {
+  return (
+    <div className={className ?? 'flex gap-2'}>
+      {AVATAR_COLORS.map((color) => {
+        const name = AVATAR_COLORS_BY_NAME[color] ?? color
+        const isSelected = value === color
+        return (
+          <button
+            key={color}
+            type="button"
+            data-testid={`${testIdPrefix}-${name}`}
+            onClick={() => onChange(color)}
+            className="w-7 h-7 rounded-full transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-1 focus:ring-offset-[var(--color-primary)]"
+            style={{
+              backgroundColor: color,
+              boxShadow: isSelected ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,
+            }}
+            aria-label={name}
+            aria-pressed={isSelected}
+            title={name}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Avatar icon picker (lifted from AgentProfile.tsx:869-878) ──────────────
+
+export interface IconPickerProps {
+  /** Currently selected icon name. */
+  value: IconName
+  /** Called with the chosen icon name on change. */
+  onChange: (icon: IconName) => void
+  /** Optional testid applied to a wrapping div (SmartSelect trigger inherits). */
+  triggerTestId?: string
+  /** Optional className override. */
+  triggerClassName?: string
+}
+
+/**
+ * Avatar icon picker — wraps the `SmartSelect` primitive with the
+ * `ICON_OPTIONS` vocabulary from `src/lib/agentIcons.ts`. The select value
+ * is the wire-shape `IconName` (e.g. `"lightbulb"`, `"robot"`).
+ */
+export function IconPicker({
+  value,
+  onChange,
+  triggerTestId,
+  triggerClassName = 'w-48',
+}: IconPickerProps) {
+  return (
+    <div data-testid={triggerTestId}>
+      <SmartSelect
+        value={value}
+        onValueChange={(v) => onChange(v as IconName)}
+        triggerClassName={triggerClassName}
+        items={ICON_OPTIONS.map(({ name: iconName }) => ({ value: iconName, label: iconName }))}
+      />
+    </div>
+  )
+}
+
+// ── Avatar header circle (lifted from AgentProfile.tsx:625-630) ───────────
+
+export interface AvatarHeaderProps {
+  /** The hex color for the circle background. */
+  color: string | null | undefined
+  /** Optional className override. */
+  className?: string
+}
+
+/**
+ * The 12-px circle with the agent's chosen icon, used in slide-over
+ * headers. Background is the agent's color; the icon foreground is the
+ * primary (deep black) for contrast. Lifts the inline JSX that was
+ * duplicated in `AgentProfile.tsx:625-630`.
+ */
+export function AvatarHeader({ color, className }: AvatarHeaderProps) {
+  // The static Robot icon matches the wizard's Step 1 default (icon: 'Robot'
+  // per CreateAgentWizard.tsx:initialPayload). When the profile wires this
+  // to a dynamic icon, this can become a prop.
+  const Icon = getIconComponent('Robot')
+  return (
+    <div
+      className={className ?? 'w-12 h-12 rounded-full flex items-center justify-center shrink-0'}
+      style={{ backgroundColor: color ?? 'var(--color-surface-3)' }}
+    >
+      <Icon size={22} className="text-[var(--color-primary)]" />
+    </div>
+  )
 }
