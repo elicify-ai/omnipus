@@ -54,15 +54,19 @@ export interface AdvancedFields {
   }
   // Sandbox + shell hardening (Main + Subagent only).
   sandbox_profile?: 'none' | 'workspace' | 'workspace+net' | 'host' | 'off'
-  shell_policy?: { deny?: string[] }
+  shell_policy?: {
+    enable_deny_patterns?: boolean
+    custom_deny_patterns?: string[]
+  }
   rate_limits?: {
-    per_minute?: number
-    per_hour?: number
-    per_day?: number
+    use_global_defaults?: boolean
+    max_llm_calls_per_hour?: number
+    max_tool_calls_per_minute?: number
+    max_cost_per_day?: number
   }
   // Delegation / steering — Main only.
   delegation_policy?: string
-  steering_mode?: 'auto' | 'manual' | 'hybrid'
+  steering_mode?: 'one-at-a-time' | 'queue-and-process'
   // Runtime knobs (Main + Subagent only).
   timeout_seconds?: number
   max_tool_iterations?: number

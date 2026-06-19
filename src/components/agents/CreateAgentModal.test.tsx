@@ -13,12 +13,14 @@
 //     and will be re-enabled when the Advanced step lands.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import * as React from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateAgentModal } from './CreateAgentModal'
 import { useUiStore } from '@/store/ui'
-import { createAgent } from '@/lib/api'
+import { createAgent, fetchSkills } from '@/lib/api'
+import type { Skill } from '@/lib/api'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -28,6 +30,21 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchRegistryTools: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     createAgent: vi.fn(),
+  }
+})
+
+// Advanced.tsx renders a TanStack Router <Link> to the delegation-trust
+// page. Real Link needs a RouterProvider; stub it to a plain anchor so the
+// wizard can render in isolation.
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    Link: ({ children, to, ...rest }: { children?: React.ReactNode; to?: string } & Record<string, unknown>) => (
+      <a href={typeof to === 'string' ? to : '#'} {...(rest as Record<string, unknown>)}>
+        {children}
+      </a>
+    ),
   }
 })
 
@@ -46,15 +63,30 @@ function renderModal(props: Parameters<typeof CreateAgentModal>[0] = {}) {
 /** Drive the wizard through steps ① → ② → ③ with valid minimal inputs
  *  for a Main agent. Returns a promise that resolves when step 3 is
  *  visible. The caller can then click "Create agent". */
-async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' | 'subagent_3p' }) {
+async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' | 'subagent_3p'; cliPath?: string; cliArgs?: string }) {
   // Step ① — Identity. Name + model required; description also required
-  // for workers (Subagent / subagent_3p).
+  // for workers (Subagent / subagent_3p). External agents also require a
+  // non-empty CLI path before the step is considered valid.
   fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Research Bot' } })
   fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'claude-sonnet-4-6' } })
-  if (opts?.initialType && opts.initialType !== 'Main') {
+  const type = opts?.initialType ?? 'Main'
+  if (type !== 'Main') {
     fireEvent.change(screen.getByTestId('wizard-description'), {
       target: { value: 'A research sub-agent' },
     })
+  }
+  if (type === 'subagent_3p') {
+    if (screen.queryByTestId('wizard-cli-chooser')) {
+      fireEvent.click(screen.getByTestId('wizard-cli-claude-code'))
+    }
+    fireEvent.change(screen.getByTestId('wizard-cli-path'), {
+      target: { value: opts?.cliPath ?? '/usr/local/bin/claude-code' },
+    })
+    if (opts?.cliArgs) {
+      fireEvent.change(screen.getByTestId('wizard-cli-args'), {
+        target: { value: opts.cliArgs },
+      })
+    }
   }
   await waitFor(() => {
     expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled()
@@ -348,6 +380,7 @@ describe('CreateAgentModal — submit success path', () => {
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'External' } })
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'Runs in claude-code' } })
     fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'claude-sonnet-4-6' } })
+    fireEvent.change(screen.getByTestId('wizard-cli-path'), { target: { value: '/usr/local/bin/claude-code' } })
     fireEvent.click(screen.getByTestId('wizard-next-1'))
     fireEvent.change(screen.getByTestId('wizard-soul'), { target: { value: 'hi' } })
     fireEvent.click(screen.getByTestId('wizard-next-2'))
@@ -392,20 +425,129 @@ describe('CreateAgentModal — Cancel button', () => {
   })
 })
 
-// ── Deferred: Advanced step (Skills picker, Executor editor) ────────────────
-// The wizard's "Advanced" step is deferred (per CreateAgentWizard.tsx file
-// header). These test groups exercise features that will live in that
-// step. They are kept as `.skip` so a follow-up PR can light them up
-// without rewriting the test bodies.
-describe.skip('CreateAgentModal — Skills picker (US-E6, deferred to Advanced step)', () => {
-  it('new agent submits without skills when none are selected (AC1 — default none)', () => {})
-  it('shows skills in Advanced section when installed skills are present', () => {})
-  it('includes selected skills in the onCreate payload', () => {})
-  it('does not include skills in payload for a different agent that had none selected (AC2)', () => {})
+// ── Advanced step (Skills picker, Executor editor, runtime knobs) ───────────
+
+describe('CreateAgentModal — Skills picker (US-E6)', () => {
+  it('new agent submits without skills when none are selected (AC1 — default none)', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+    await fillAndAdvanceToStep3()
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.skills).toBeUndefined()
+  })
+
+  it('shows skills on Step 3 when installed skills are present', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([
+      { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: false, status: 'active' } as Skill,
+    ])
+    renderModal({ open: true, onClose: vi.fn() })
+    await fillAndAdvanceToStep3()
+    expect(screen.getByTestId('wizard-skills')).toBeInTheDocument()
+    expect(screen.getByTestId('skill-checkbox-web-research')).toBeInTheDocument()
+  })
+
+  it('includes selected skills in the onCreate payload', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([
+      { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: false, status: 'active' } as Skill,
+      { id: 'code-review', name: 'Code Review', version: '1.0.0', verified: false, status: 'active' } as Skill,
+    ])
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+    await fillAndAdvanceToStep3()
+    fireEvent.click(screen.getByTestId('skill-checkbox-web-research'))
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.skills).toEqual(['web-research'])
+  })
+
+  it('does not include skills in payload when none are selected (AC2)', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([
+      { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: false, status: 'active' } as Skill,
+    ])
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+    await fillAndAdvanceToStep3()
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.skills).toBeUndefined()
+  })
 })
 
-describe.skip('CreateAgentModal — Executor (Spec-4, deferred to Advanced step)', () => {
-  it('omits executor when left on the native default', () => {})
-  it('includes an external-cli executor in the create payload', () => {})
-  it('does not render the connection test button in the create flow (no agentId)', () => {})
+describe('CreateAgentModal — Executor (Spec-4)', () => {
+  it('omits executor when left on the native default', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+    await fillAndAdvanceToStep3()
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.executor).toBeUndefined()
+  })
+
+  it('includes an external-cli executor in the create payload', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({
+      open: true,
+      onClose: vi.fn(),
+      onCreate,
+      initialType: 'subagent_3p',
+      initialCli: 'claude-code',
+    })
+    await fillAndAdvanceToStep3({ initialType: 'subagent_3p', cliPath: '/opt/bin/claude-code', cliArgs: '--verbose' })
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.executor).toEqual({
+      kind: 'external-cli',
+      cli: 'claude-code',
+      cli_path: '/opt/bin/claude-code',
+      cli_args: '--verbose',
+    })
+  })
+
+  it('does not render the connection test button in the create flow (no agentId)', () => {
+    renderModal({ open: true, onClose: vi.fn(), initialType: 'subagent_3p', initialCli: 'claude-code' })
+    expect(screen.queryByRole('button', { name: /test connection/i })).toBeNull()
+  })
+})
+
+describe('CreateAgentModal — Advanced step fields', () => {
+  it('forwards default timeout_seconds, max_tool_iterations, and steering_mode', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+    await fillAndAdvanceToStep3()
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.timeout_seconds).toBe(300)
+    expect(call.max_tool_iterations).toBe(50)
+    expect(call.steering_mode).toBe('one-at-a-time')
+  })
+
+  it('forwards model_params and the new shell_policy shape from Advanced', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+    await fillAndAdvanceToStep3()
+
+    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
+    fireEvent.change(screen.getByLabelText('Temperature'), {
+      target: { value: '0.5' },
+    })
+    fireEvent.change(screen.getByTestId('shell-deny-patterns-textarea'), {
+      target: { value: 'rm -rf /\ncurl.*169\\.254' },
+    })
+
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.model_params).toEqual({ temperature: 0.5 })
+    expect(call.shell_policy).toEqual({
+      enable_deny_patterns: true,
+      custom_deny_patterns: ['rm -rf /', 'curl.*169\\.254'],
+    })
+  })
 })

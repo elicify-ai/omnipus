@@ -82,6 +82,10 @@ interface MainAdvancedFieldsProps {
 function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsProps) {
   const modelParams = payload.model_params ?? {}
   const rateLimits = payload.rate_limits ?? {}
+  const shellPolicy = payload.shell_policy ?? {
+    enable_deny_patterns: false,
+    custom_deny_patterns: [],
+  }
 
   function setModelParam<K extends 'temperature' | 'max_tokens' | 'top_p'>(
     key: K,
@@ -171,8 +175,15 @@ function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsPro
       <div className="space-y-2">
         <p className="text-xs font-medium text-[var(--color-secondary)]">Shell deny patterns</p>
         <ShellDenyPatternsEditor
-          value={payload.shell_policy?.deny ?? []}
-          onChange={(deny) => setField('shell_policy', deny.length > 0 ? { deny } : undefined)}
+          value={shellPolicy.custom_deny_patterns ?? []}
+          onChange={(deny) =>
+            setField(
+              'shell_policy',
+              deny.length > 0
+                ? { enable_deny_patterns: true, custom_deny_patterns: deny }
+                : { enable_deny_patterns: false, custom_deny_patterns: [] },
+            )
+          }
         />
       </div>
 
