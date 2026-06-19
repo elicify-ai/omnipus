@@ -149,9 +149,10 @@ describe('Agents screen — empty state', () => {
     AgentsScreen = mod.AgentListScreen as () => JSX.Element
   }, 60_000)
 
-  it('renders "Agents" as h1 heading', () => {
+  it('renders "Agents" as h1 heading', async () => {
     render(<AgentsScreen />, { wrapper })
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Agents')
+    const h1 = await screen.findByRole('heading', { level: 1 })
+    expect(h1).toHaveTextContent('Agents')
   })
 })
 
