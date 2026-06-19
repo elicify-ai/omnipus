@@ -88,11 +88,20 @@ export function AgentListScreen() {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
       addToast({ message: 'Default agent updated', variant: 'success' })
     },
-    onError: (err: unknown) =>
+    onError: (err: unknown) => {
+      if (isApiError(err) && err.status === 409) {
+        addToast({
+          message: 'Agent was changed elsewhere. Retrying…',
+          variant: 'error',
+        })
+        queryClient.invalidateQueries({ queryKey: ['agents'] })
+        return
+      }
       addToast({
         message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to set default',
         variant: 'error',
-      }),
+      })
+    },
   })
 
   // Per-CLI affordance config — drives both the disabled state and the

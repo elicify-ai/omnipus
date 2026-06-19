@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/sysagent"
@@ -395,4 +396,85 @@ func TestSeedConfigPreservesExistingAgents(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "existing custom agent must still be present after SeedConfig")
+}
+
+// TestToWireType is a table-driven test for coreagent.ToWireType, the
+// response-side inverse of ResolveType. It maps the persisted config.AgentConfig
+// to the canonical wire enum the SPA consumes.
+//
+// Mapping rules exercised:
+//   - core      → core
+//   - system    → system
+//   - custom    → Main
+//   - worker + native/no executor → Subagent
+//   - worker + external-cli executor → subagent_3p
+//   - empty Type + core ID → core (inferred via ResolveType)
+//   - empty Type + non-core ID → Main (inferred via ResolveType)
+//
+// Traces to: pkg/coreagent/core.go ToWireType — the resolved-type switch closes
+// the empty-Type gap that previously fell through to the default branch.
+func TestToWireType(t *testing.T) {
+	nativeKind := config.ExecutorKindNative
+	externalKind := config.ExecutorKindExternalCLI
+
+	cases := []struct {
+		name     string
+		ac       config.AgentConfig
+		expected gen.AgentType
+	}{
+		{
+			name:     "core",
+			ac:       config.AgentConfig{ID: "mia", Type: config.AgentTypeCore},
+			expected: gen.AgentTypeCore,
+		},
+		{
+			name:     "system",
+			ac:       config.AgentConfig{ID: "sys", Type: config.AgentTypeSystem},
+			expected: gen.AgentTypeSystem,
+		},
+		{
+			name:     "custom maps to Main",
+			ac:       config.AgentConfig{ID: "myagent", Type: config.AgentTypeCustom},
+			expected: gen.AgentTypeMain,
+		},
+		{
+			name:     "worker no executor maps to Subagent",
+			ac:       config.AgentConfig{ID: "w1", Type: config.AgentTypeWorker},
+			expected: gen.AgentTypeSubagent,
+		},
+		{
+			name: "worker native executor maps to Subagent",
+			ac: config.AgentConfig{
+				ID:        "w2",
+				Type:      config.AgentTypeWorker,
+				Subagents: &config.SubagentsConfig{Executor: &config.ExecutorConfig{Kind: nativeKind}},
+			},
+			expected: gen.AgentTypeSubagent,
+		},
+		{
+			name: "worker external-cli executor maps to subagent_3p",
+			ac: config.AgentConfig{
+				ID:        "w3",
+				Type:      config.AgentTypeWorker,
+				Subagents: &config.SubagentsConfig{Executor: &config.ExecutorConfig{Kind: externalKind, CLI: "codex"}},
+			},
+			expected: gen.AgentTypeSubagent3p,
+		},
+		{
+			name:     "empty type with core ID infers core",
+			ac:       config.AgentConfig{ID: "mia", Type: ""},
+			expected: gen.AgentTypeCore,
+		},
+		{
+			name:     "empty type with non-core ID infers Main",
+			ac:       config.AgentConfig{ID: "custom1", Type: ""},
+			expected: gen.AgentTypeMain,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, coreagent.ToWireType(tc.ac))
+		})
+	}
 }

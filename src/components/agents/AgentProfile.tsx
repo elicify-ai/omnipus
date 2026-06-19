@@ -67,6 +67,7 @@ import {
   fetchSkills,
   testAgentRunner,
   isWorker,
+  type Agent,
   type AgentSession,
   type ActivityEvent,
   type AgentToolsCfg,
@@ -168,10 +169,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   type ExecutorSig = { kind: ExecutorConfig['kind']; cli?: ExecutorConfig['cli']; agentId: string | null }
   const testedExecutorSig = useRef<ExecutorSig | null>(null)
 
+  // I2: conflict guard. Set in the 409 Conflict catch and cleared once the
+  // refetchAgent() triggered by the "Refresh" toast action lands. While set,
+  // the saveFn early-returns so subsequent debounced saves don't fire (and
+  // just 409 again) against the stale local state — the form is re-hydrated
+  // from the server's current row before saves resume.
+  const conflictRef = useRef(false)
+
   // Reset flags when navigating to a different agent
   useEffect(() => {
     isDirtyRef.current = false
     hasHydrated.current = false
+    conflictRef.current = false
   }, [agentId])
 
   // W6-B1 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
@@ -398,6 +407,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // Form is mounted at the layout level; its state can outlive a
       // closed sheet. Refuse a save with no id rather than PUT /null.
       if (agentId === null) return
+      // I2: a 409 Conflict was raised on a prior save and the refetch is in
+      // flight. Block subsequent debounced saves until the refetch lands and
+      // the form is re-hydrated from the server's current state — otherwise
+      // the stale form would just 409 again on every debounce tick.
+      if (conflictRef.current) return
       // I12: when the agent's executor is external-cli, run the runner-test
       // BEFORE allowing the save to commit. We re-test only when the kind+cli
       // signature actually changes (or the agent id changes) so the auto-save
@@ -464,11 +478,25 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // backend can reject stale writes with 409 Conflict.
       const payload = { ...stripped, updated_at: agent?.updated_at }
       try {
-        await updateAgent(agentId, payload)
+        const resp = await updateAgent(agentId, payload)
+        // I2: optimistically update the local agent.updated_at from the PUT
+        // response so the NEXT debounced save doesn't carry the stale pre-save
+        // timestamp and get a spurious 409 Conflict against the just-written
+        // row. The invalidateQueries below will reconcile with a fresh GET,
+        // but until that resolves the optimistic value is what the form reads.
+        if (resp?.updated_at) {
+          queryClient.setQueryData(['agent', agentId], (old: Agent | undefined) =>
+            old ? { ...old, updated_at: resp.updated_at } : old,
+          )
+        }
       } catch (err) {
         // W6-contracts: on a 409 Conflict, surface a toast with a Refresh
         // action that refetches the agent state and drops pending edits.
         if (isApiError(err) && err.status === 409) {
+          // I2: arm the conflict guard so subsequent debounced saves don't
+          // fire (and re-409) while the refetch is in flight. Cleared in the
+          // refetchAgent().then() callback below once the fresh state lands.
+          conflictRef.current = true
           addToast({
             message: 'This agent was changed elsewhere. Refresh to load the latest version.',
             variant: 'error',
@@ -477,6 +505,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               onClick: () => {
                 refetchAgent().then(() => {
                   if (isDirtyRef.current) isDirtyRef.current = false
+                  // I2: refetch landed — re-arm the save path. The form will
+                  // re-hydrate from the fresh GET and the next edit debounces
+                  // normally against the server's current updated_at.
+                  conflictRef.current = false
                 })
               },
             },
@@ -489,6 +521,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
     },
     // Locked agents can still save model and tool changes — do not disable auto-save
+    {
+      // I13: best-effort flush of pending edits on tab close / page hide /
+      // unload. The gateway validates every PUT against the per-user RBAC
+      // bearer token, so the flush must carry Authorization (sendBeacon
+      // can't, which is why useAutoSave now uses fetch keepalive). The token
+      // is read from the same store the REST client uses (sessionStorage
+      // preferred, localStorage fallback) — kept inline rather than via an
+      // exported accessor because no such accessor exists in src/lib/api.ts
+      // (getAuthHeaders is module-private) and the inline read is the
+      // established pattern (ws.ts, _app.tsx, store/auth.ts).
+      flushUrl: agentId !== null ? `/api/v1/agents/${agentId}` : undefined,
+      flushAuthToken:
+        typeof sessionStorage !== 'undefined'
+          ? (sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')) ?? undefined
+          : undefined,
+    },
   )
 
 

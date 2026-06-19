@@ -84,7 +84,7 @@ type ToolCall = {
 type Agent = {
   id: string;
   name: string;
-  type: "core" | "system" | "Main" | "Subagent" | "subagent_3p" | "worker";
+  type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
   locked: boolean;
   color?: string | undefined;
   icon?: string | undefined;
@@ -179,9 +179,7 @@ type ExecutorConfig = Partial<{
 }>;
 type AgentCreateRequest = {
   name: string;
-  type?:
-    | ("Main" | "Subagent" | "subagent_3p" | "core" | "system" | "worker")
-    | undefined;
+  type?: ("Main" | "Subagent" | "subagent_3p") | undefined;
   description?: string | undefined;
   model?: string | undefined;
   color?: string | undefined;
@@ -987,14 +985,7 @@ export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
     name: z.string().min(1).max(100),
-    type: z.enum([
-      "core",
-      "system",
-      "Main",
-      "Subagent",
-      "subagent_3p",
-      "worker",
-    ]),
+    type: z.enum(["core", "system", "Main", "Subagent", "subagent_3p"]),
     locked: z.boolean(),
     color: z
       .string()
@@ -1062,10 +1053,7 @@ export const delegation_policy: z.ZodType<delegation_policy> = z
   .partial();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   name: z.string().min(1),
-  type: z
-    .enum(["Main", "Subagent", "subagent_3p", "core", "system", "worker"])
-    .optional()
-    .default("Main"),
+  type: z.enum(["Main", "Subagent", "subagent_3p"]).optional().default("Main"),
   description: z.string().optional(),
   model: z.string().optional(),
   color: z

@@ -786,8 +786,11 @@ type AgentConfig struct {
 	// at enforcement time.
 	ShellPolicy *AgentShellPolicy `json:"shell_policy,omitempty"`
 	// UpdatedAt is the timestamp of the last successful PUT /agents/{id} update.
-	// It is returned in detail responses and used for optimistic concurrency.
-	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	// It is returned in list and detail responses and used for optimistic concurrency.
+	// Pointer so omitempty works; nil = never updated. A non-pointer time.Time
+	// is a struct type and always serialises (writing "0001-01-01T00:00:00Z"
+	// for agents that were never PUT-updated), defeating omitempty.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 // IsActive returns the effective active state of this agent.

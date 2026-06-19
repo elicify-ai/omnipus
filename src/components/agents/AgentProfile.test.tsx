@@ -100,7 +100,7 @@ const mockWorkerAgent: Agent = {
   ...mockCoreAgent,
   id: 'web-researcher',
   name: 'Web Researcher',
-  type: 'worker',
+  type: 'Subagent',
   description: 'Delegation-only labour agent — no heartbeat, optional soul',
   // Spec-4 FR-4.1: every worker has a runner. Absent → native default in
   // the component layer; we set one explicitly so the executor accordion
@@ -1331,5 +1331,96 @@ describe('AgentProfile — Runtime tab (spec §6.4)', () => {
     expect(screen.getByTestId('profile-cli-path')).toBeInTheDocument()
     expect(screen.getByTestId('profile-env-overrides')).toBeInTheDocument()
     expect(screen.getByTestId('profile-cli-args')).toBeInTheDocument()
+  })
+})
+
+// ── 409 Conflict UI ────────────────────────────────────────────────────────────
+
+describe('AgentProfile — 409 conflict handling', () => {
+  beforeEach(() => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockCoreAgent)
+    vi.mocked(updateAgent).mockReset().mockResolvedValue(mockCoreAgent)
+    vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
+  })
+
+  it('surfaces a toast with Refresh action on 409 conflict', async () => {
+    vi.mocked(updateAgent).mockRejectedValueOnce(new ApiError(409, 'conflict'))
+
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+
+    // Capture toasts via the store's subscribe mechanism
+    const { useUiStore } = await import('@/store/ui')
+    const toastsBefore = useUiStore.getState().toasts.length
+
+    // Trigger a save by changing a field
+    const nameInputs = screen.getAllByDisplayValue('General Assistant')
+    fireEvent.change(nameInputs[0], { target: { value: 'Changed Name' } })
+
+    // Wait for the debounced auto-save to fire and call updateAgent
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+
+    // Wait for the 409 catch block to add a toast
+    await waitFor(() => {
+      const toasts = useUiStore.getState().toasts
+      expect(toasts.length).toBeGreaterThan(toastsBefore)
+      expect(toasts.some((t: { message: string }) => /changed elsewhere/i.test(t.message))).toBe(true)
+    }, { timeout: 3000 })
+
+    // Verify the Refresh action is attached
+    const state = useUiStore.getState()
+    const conflictToast = state.toasts.find((t: { message: string }) => /changed elsewhere/i.test(t.message))
+    expect(conflictToast?.action?.label).toBe('Refresh')
+  })
+})
+
+// ── subagent_3p payload restriction ───────────────────────────────────────────
+
+describe('AgentProfile — subagent_3p payload restriction', () => {
+  beforeEach(() => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue({
+      ...mockWorkerAgent,
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+    })
+    vi.mocked(updateAgent).mockReset().mockResolvedValue({
+      ...mockWorkerAgent,
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+    })
+    vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
+  })
+
+  it('omits forbidden fields from the PUT payload for subagent_3p', async () => {
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+
+    // Change a field to trigger auto-save
+    const nameInputs = screen.getAllByDisplayValue('Web Researcher')
+    fireEvent.change(nameInputs[0], { target: { value: 'Renamed Worker' } })
+
+    // Wait for the debounced auto-save to fire and call updateAgent
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+
+    const callArgs = vi.mocked(updateAgent).mock.calls[0]
+    const payload = callArgs[1] as Record<string, unknown>
+
+    // Forbidden fields must NOT be present
+    expect(payload).not.toHaveProperty('tools_cfg')
+    expect(payload).not.toHaveProperty('skills')
+    expect(payload).not.toHaveProperty('sandbox_profile')
+    expect(payload).not.toHaveProperty('shell_policy')
+    expect(payload).not.toHaveProperty('fallback_models')
+    expect(payload).not.toHaveProperty('model_params')
+    expect(payload).not.toHaveProperty('delegation_policy')
+
+    // Allowed fields SHOULD be present
+    expect(payload).toHaveProperty('name')
+    expect(payload).toHaveProperty('executor')
+    expect(payload).toHaveProperty('updated_at')
   })
 })

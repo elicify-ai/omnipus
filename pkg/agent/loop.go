@@ -4152,10 +4152,15 @@ func (al *AgentLoop) handleReasoning(
 // Tool feedback is emitted only on these channels; webchat, system/cli/subagent,
 // cron schedules, and unknown/empty channels remain silent because either the UI
 // renders tool calls inline or there is no human recipient.
+//
+// NOTE: extend this list whenever a new human-messaging channel is registered in
+// pkg/channels/manager.go — a missing entry silently suppresses tool-feedback
+// on that channel.
 func isMessagingChannel(channel string) bool {
 	switch channel {
-	case "telegram", "discord", "slack", "whatsapp", "matrix", "irc",
-		"google-chat", "line", "wecom", "weixin", "dingtalk", "qq", "email":
+	case "telegram", "discord", "slack", "whatsapp", "whatsapp_native", "matrix",
+		"irc", "google-chat", "line", "wecom", "weixin", "dingtalk", "qq",
+		"feishu", "email":
 		return true
 	}
 	return false

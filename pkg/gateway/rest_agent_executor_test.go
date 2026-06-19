@@ -18,6 +18,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -686,4 +687,82 @@ func TestUpdateAgent_ModelLiveApplyFailure_ReturnsWarning(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Warning)
 	assert.Contains(t, *resp.Warning, "model saved to config but could not be applied")
+}
+
+// agentUpdatedAtFromConfig reads config.json on disk and returns the persisted
+// updated_at RFC3339 string for the named agent. This is the authoritative
+// source the optimistic-concurrency check (safeUpdateConfigJSON mutate closure)
+// compares against, so tests capture it here rather than from the PUT response
+// (which may lag the on-disk value when no reload fires).
+func agentUpdatedAtFromConfig(t *testing.T, api *restAPI, id string) string {
+	t.Helper()
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	agents, _ := m["agents"].(map[string]any)
+	require.NotNil(t, agents, "agents section missing: %s", string(raw))
+	list, _ := agents["list"].([]any)
+	for _, item := range list {
+		entry, _ := item.(map[string]any)
+		if entry == nil || entry["id"] != id {
+			continue
+		}
+		ts, _ := entry["updated_at"].(string)
+		return ts
+	}
+	return ""
+}
+
+// TestUpdateAgent_StaleUpdatedAt_Returns409 verifies the optimistic-concurrency
+// 409 path: a PUT carrying an updated_at that does not match the persisted value
+// is rejected with 409 + code:"conflict", while a PUT carrying the current
+// updated_at succeeds. The conflict check lives inside the safeUpdateConfigJSON
+// mutate closure (moved there to close a TOCTOU race between the version check
+// and the write).
+func TestUpdateAgent_StaleUpdatedAt_Returns409(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	// 1. Establish a persisted updated_at via a successful PUT (config-only
+	//    field change so no reload/model-apply side effects fire). This is the
+	//    "current" value the conflict check compares against.
+	w1 := httptest.NewRecorder()
+	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+		strings.NewReader(`{"color":"#FF0000"}`))
+	r1.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w1, r1)
+	require.Equal(t, http.StatusOK, w1.Code, "establishing PUT body: %s", w1.Body.String())
+	currentUpdatedAt := agentUpdatedAtFromConfig(t, api, "test-agent")
+	require.NotEmpty(t, currentUpdatedAt,
+		"updated_at must be persisted after a successful PUT")
+
+	// 2. Stale PUT: send an obviously-different updated_at → 409 conflict.
+	staleBody := fmt.Sprintf(`{"color":"#00FF00","updated_at":%q}`, "2000-01-01T00:00:00Z")
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+		strings.NewReader(staleBody))
+	r2.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w2, r2)
+	require.Equal(t, http.StatusConflict, w2.Code,
+		"a PUT with a stale updated_at must be rejected with 409; body: %s", w2.Body.String())
+	var errResp gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &errResp), "decode conflict body: %s", w2.Body.String())
+	require.NotNil(t, errResp.Code, "conflict response must carry a code: %s", w2.Body.String())
+	assert.Equal(t, "conflict", *errResp.Code,
+		"conflict response code must be %q (got %q)", "conflict", *errResp.Code)
+
+	// The rejected PUT must NOT have mutated the persisted updated_at.
+	afterStale := agentUpdatedAtFromConfig(t, api, "test-agent")
+	assert.Equal(t, currentUpdatedAt, afterStale,
+		"a rejected (409) PUT must not refresh the persisted updated_at")
+
+	// 3. Happy path: PUT carrying the CURRENT updated_at → 200.
+	freshBody := fmt.Sprintf(`{"color":"#0000FF","updated_at":%q}`, currentUpdatedAt)
+	w3 := httptest.NewRecorder()
+	r3 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+		strings.NewReader(freshBody))
+	r3.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w3, r3)
+	assert.Equal(t, http.StatusOK, w3.Code,
+		"a PUT with the current updated_at must succeed; body: %s", w3.Body.String())
 }

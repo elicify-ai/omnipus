@@ -67,7 +67,7 @@ function roster(): Agent[] {
     },
   })
   const ray = makeAgent({ id: 'ray', name: 'Ray', type: 'core' })
-  const worker = makeAgent({ id: 'w1', name: 'Worker One', type: 'worker' })
+  const worker = makeAgent({ id: 'w1', name: 'Worker One', type: 'Subagent' })
   return [jim, ray, worker]
 }
 
@@ -97,7 +97,7 @@ describe('buildSourceEdits — reads only to/modes/depth', () => {
     const rogueWorker = makeAgent({
       id: 'wbad',
       name: 'Rogue Worker',
-      type: 'worker',
+      type: 'Subagent',
       delegation_policy: { to: [{ kind: 'local', id: 'ray' }], modes: ['await'] },
     })
     const edits = buildSourceEdits([rogueWorker, makeAgent({ id: 'ray', name: 'Ray' })])

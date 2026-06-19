@@ -29,7 +29,12 @@ import { SandboxProfileSelector } from '../SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from '../ShellDenyPatternsEditor'
 import { ExecutorInputs } from './Step1Identity'
 import type { SandboxProfile } from '@/lib/api'
-import type { AdvancedProps } from './types'
+import type { AdvancedProps, AdvancedFields } from './types'
+
+function toWireSandbox(p: AdvancedFields['sandbox_profile']): SandboxProfile | undefined {
+  if (p === 'none' || p === undefined) return undefined
+  return p as SandboxProfile
+}
 
 export function Advanced({
   payload,
@@ -155,7 +160,7 @@ function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsPro
           Kernel-enforced file + network boundary. &quot;Use global default&quot; inherits the global Security config.
         </p>
         <SandboxProfileSelector
-          value={payload.sandbox_profile as unknown as SandboxProfile | undefined}
+          value={toWireSandbox(payload.sandbox_profile)}
           agentName={payload.name || 'this agent'}
           godModeAvailable
           godModeOptedIn

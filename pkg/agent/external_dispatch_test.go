@@ -9,9 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/session"
 )
 
 // denyApprover is a PolicyApprover stub that always denies, recording whether it
@@ -338,4 +342,126 @@ func mustGit(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+}
+
+// newRecordResultTurnState builds a minimal child turnState wired to a real
+// UnifiedStore (in a temp dir) so recordExternalToolResult's append path
+// persists a transcript entry we can read back. The in-place update path is
+// exercised but finds no matching pending "completed" entry (fresh session), so
+// it falls back to the append path — exactly what we assert on.
+func newRecordResultTurnState(t *testing.T) (*turnState, *session.UnifiedStore, string) {
+	t.Helper()
+	baseDir := filepath.Join(t.TempDir(), "sessions")
+	store, err := session.NewUnifiedStore(baseDir)
+	require.NoError(t, err)
+	const sessionID = "session_record_result_test"
+	ts := &turnState{
+		agentID:             "ext-agent",
+		turnID:              "ext-run-result",
+		transcriptSessionID: sessionID,
+		transcriptStore:     store,
+	}
+	return ts, store, sessionID
+}
+
+// lastToolCall reads the transcript for sessionID and returns the ToolCall on
+// the last entry. require-fails when the transcript is empty or the last entry
+// has no tool calls.
+func lastToolCall(t *testing.T, store *session.UnifiedStore, sessionID string) session.ToolCall {
+	t.Helper()
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries, "expected at least one transcript entry")
+	last := entries[len(entries)-1]
+	require.NotEmpty(t, last.ToolCalls,
+		"last transcript entry must carry a tool call: %+v", last)
+	return last.ToolCalls[0]
+}
+
+// TestRecordExternalToolResult covers the unexported recordExternalToolResult:
+//   - Normal JSON output → Result is parsed, status="success"
+//   - IsError=true → status="error"
+//   - Non-JSON output → Result == {"output": "<raw string>"}
+//   - Empty CallID → generated ID is non-empty and unique across two calls
+//
+// Traces to: pkg/agent/external_dispatch.go recordExternalToolResult — the
+// status/result/id derivation that mirrors an external runner's tool result
+// into the sub-agent session transcript.
+func TestRecordExternalToolResult(t *testing.T) {
+	t.Run("normal JSON output parses into Result with status success", func(t *testing.T) {
+		ts, store, sid := newRecordResultTurnState(t)
+		recordExternalToolResult(ts, &runner.ToolResultEvent{
+			CallID:   "call-json",
+			ToolName: "read_file",
+			Output:   []byte(`{"path":"/x","bytes":42}`),
+		})
+		tc := lastToolCall(t, store, sid)
+		assert.Equal(t, "success", tc.Status, "a non-error result must be status=success")
+		assert.Equal(t, "call-json", string(tc.ID))
+		assert.Equal(t, "read_file", tc.Tool)
+		require.NotNil(t, tc.Result)
+		assert.Equal(t, "/x", tc.Result["path"])
+		assert.EqualValues(t, 42, tc.Result["bytes"])
+	})
+
+	t.Run("IsError true yields status error", func(t *testing.T) {
+		ts, store, sid := newRecordResultTurnState(t)
+		recordExternalToolResult(ts, &runner.ToolResultEvent{
+			CallID:   "call-err",
+			ToolName: "write_file",
+			Output:   []byte(`{"message":"disk full"}`),
+			IsError:  true,
+		})
+		tc := lastToolCall(t, store, sid)
+		assert.Equal(t, "error", tc.Status, "an IsError result must be status=error")
+		require.NotNil(t, tc.Result)
+		assert.Equal(t, "disk full", tc.Result["message"])
+	})
+
+	t.Run("non-JSON output is wrapped as {output: raw string}", func(t *testing.T) {
+		ts, store, sid := newRecordResultTurnState(t)
+		raw := "this is not json >>>"
+		recordExternalToolResult(ts, &runner.ToolResultEvent{
+			CallID:   "call-raw",
+			ToolName: "shell",
+			Output:   []byte(raw),
+		})
+		tc := lastToolCall(t, store, sid)
+		assert.Equal(t, "success", tc.Status)
+		require.NotNil(t, tc.Result, "non-JSON output must still produce a Result map")
+		assert.Equal(t, raw, tc.Result["output"],
+			`non-JSON output must be stored under the "output" key as a raw string`)
+	})
+
+	t.Run("empty CallID generates a non-empty unique ID", func(t *testing.T) {
+		ts, store, sid := newRecordResultTurnState(t)
+
+		recordExternalToolResult(ts, &runner.ToolResultEvent{
+			CallID:   "",
+			ToolName: "shell",
+			Output:   []byte(`{"ok":true}`),
+		})
+		first := lastToolCall(t, store, sid)
+		assert.NotEmpty(t, string(first.ID),
+			"an empty CallID must yield a generated non-empty ID")
+
+		// A small gap guarantees the UnixNano-derived IDs differ even on
+		// platforms with coarse clock resolution.
+		time.Sleep(2 * time.Millisecond)
+
+		recordExternalToolResult(ts, &runner.ToolResultEvent{
+			CallID:   "",
+			ToolName: "shell",
+			Output:   []byte(`{"ok":true}`),
+		})
+		entries, err := store.ReadTranscript(sid)
+		require.NoError(t, err)
+		require.Len(t, entries, 2, "expected two appended transcript entries")
+		require.NotEmpty(t, entries[0].ToolCalls)
+		require.NotEmpty(t, entries[1].ToolCalls)
+		second := entries[1].ToolCalls[0]
+		assert.NotEmpty(t, string(second.ID), "second generated ID must be non-empty")
+		assert.NotEqual(t, first.ID, second.ID,
+			"two calls with empty CallID must produce distinct generated IDs")
+	})
 }
