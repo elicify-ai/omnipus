@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 	"golang.org/x/crypto/bcrypt"
@@ -784,6 +785,9 @@ type AgentConfig struct {
 	// When non-nil, its settings are merged with the global ShellDenyPatterns
 	// at enforcement time.
 	ShellPolicy *AgentShellPolicy `json:"shell_policy,omitempty"`
+	// UpdatedAt is the timestamp of the last successful PUT /agents/{id} update.
+	// It is returned in detail responses and used for optimistic concurrency.
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
 // IsActive returns the effective active state of this agent.

@@ -18,7 +18,7 @@ package coreagent
 import (
 	"fmt"
 
-	"github.com/dapicom-ai/omnipus/pkg/api/generated"
+	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
@@ -105,6 +105,41 @@ func IsCoreAgent(id string) bool {
 		return false
 	}
 	return ByID(cid) != nil
+}
+
+// ToWireType maps the persisted config.AgentConfig to the canonical wire enum
+// value expected by the SPA. This is the response-side inverse of ResolveType.
+//
+// Mapping rules:
+//   - core → core
+//   - system → system
+//   - AgentTypeCustom -> Main
+//   - AgentTypeWorker + native/no executor -> Subagent
+//   - AgentTypeWorker + external-cli executor -> subagent_3p
+//   - The seeded worker (IDWorker) is reported as Subagent; the legacy "worker"
+//     enum value is dropped from responses.
+func ToWireType(ac config.AgentConfig) generated.AgentType {
+	switch ac.Type {
+	case config.AgentTypeCore:
+		return generated.AgentTypeCore
+	case config.AgentTypeSystem:
+		return generated.AgentTypeSystem
+	case config.AgentTypeCustom:
+		return generated.AgentTypeMain
+	case config.AgentTypeWorker:
+		if ac.Subagents != nil && ac.Subagents.Executor != nil &&
+			ac.Subagents.Executor.EffectiveKind() == config.ExecutorKindExternalCLI {
+			return generated.AgentTypeSubagent3p
+		}
+		return generated.AgentTypeSubagent
+	default:
+		// Defensive fallback: treat the seeded worker as a Subagent and unknown
+		// persisted agents as Main.
+		if ac.ID == string(IDWorker) {
+			return generated.AgentTypeSubagent
+		}
+		return generated.AgentTypeMain
+	}
 }
 
 // init validates that every base (core) agent has a corresponding compiled

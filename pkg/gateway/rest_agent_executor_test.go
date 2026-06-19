@@ -218,13 +218,15 @@ func TestUpdateAgent_ExecutorChanges(t *testing.T) {
 		"original cli must survive the rejected PUT (cli-lock rule)")
 }
 
-// TestCreateAgent_InvalidExecutor_400 proves the validator rejects bad executors.
+// TestCreateAgent_InvalidExecutor_400 proves the validator rejects bad executors
+// on subagent_3p creates. A Main agent with an external executor is coerced to
+// native instead of rejected (covered by TestCreateAgent_Main_CoercesExternalExecutorWithWarning).
 func TestCreateAgent_InvalidExecutor_400(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
 	}{
-		{"external-cli with no cli", `{"name":"X","executor":{"kind":"external-cli"}}`},
+		{"subagent_3p external-cli with no cli", `{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli"},"soul":"s"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -423,20 +425,49 @@ func TestUpdateAgent_WorkerAllowsExternalCLIExecutor(t *testing.T) {
 	assert.Equal(t, "codex", exec["cli"])
 }
 
-// TestCreateAgent_RejectsExternalCLIExecutorOnBaseAgent verifies the create
-// path rejects a non-native executor (REST create always makes a custom
-// agent, which is a base agent and must run native).
-func TestCreateAgent_RejectsExternalCLIExecutorOnBaseAgent(t *testing.T) {
+// TestCreateAgent_Subagent_Native_NoExecutor_201 verifies that a Subagent
+// created without an executor gets kind=native derived server-side.
+func TestCreateAgent_Subagent_Native_NoExecutor_201(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
+	body := `{"name":"Helper","type":"Subagent","description":"does things","soul":"s"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"X","executor":{"kind":"external-cli","cli":"codex"}}`))
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "only sub-agent workers",
-		"the rejection must reference the worker-only rule")
+
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	created := decodeAgentResp(t, w.Body.Bytes())
+	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
+
+	// Persisted executor should be native.
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec := findExecutorInConfig(t, m, created.Id)
+	require.NotNil(t, exec, "worker with no executor must derive native: %s", string(raw))
+	assert.Equal(t, "native", exec["kind"])
+}
+
+// TestCreateAgent_Main_CoercesExternalExecutorWithWarning verifies that a Main
+// agent create with an external executor is coerced to native with a warning
+// in the response, rather than rejected.
+func TestCreateAgent_Main_CoercesExternalExecutorWithWarning(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	body := `{"name":"X","executor":{"kind":"external-cli","cli":"codex"},"soul":"s"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	created := decodeAgentResp(t, w.Body.Bytes())
+	assert.Equal(t, gen.AgentTypeMain, created.Type)
+	assert.Nil(t, created.Executor, "Main agents must not persist an external executor")
+	require.NotNil(t, created.Warning, "expected a coercion warning")
+	assert.Contains(t, *created.Warning, "coerced")
 }
 
 // TestUpdateAgent_RejectsHeartbeatOnWorker verifies the heartbeat write-time
@@ -505,4 +536,114 @@ func TestUpdateAgent_AllowsNullVoiceOnWorker(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+}
+
+// Helper: create a subagent_3p worker and return its id.
+func createSubagent3p(t *testing.T, api *restAPI) string {
+	t.Helper()
+	body := `{"name":"ExternalWorker","type":"subagent_3p","description":"external worker","soul":"s","executor":{"kind":"external-cli","cli":"codex"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusCreated, w.Code, "create subagent_3p body: %s", w.Body.String())
+	created := decodeAgentResp(t, w.Body.Bytes())
+	require.Equal(t, gen.AgentTypeSubagent3p, created.Type)
+	return created.Id
+}
+
+// TestCreateAgent_Subagent3p_ForbiddenFields rejects the 7 CLI-owned fields at create time.
+func TestCreateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"tools_cfg", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}}}`},
+		{"skills", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"skills":["summarize"]}`},
+		{"fallback_models", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"fallback_models":[{"model":"m","provider":"p"}]}`},
+		{"model_params", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"model_params":{"temperature":0.5}}`},
+		{"sandbox_profile", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"sandbox_profile":"workspace"}`},
+		{"shell_policy", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"shell_policy":{"enable_deny_patterns":true}}`},
+		{"delegation_policy", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"delegation_policy":{"to":[{"kind":"local","id":"*"}]}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := buildExecutorTestAPI(t)
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			api.HandleAgents(w, r)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "subagent_3p agents do not support "+tc.name)
+		})
+	}
+}
+
+// TestUpdateAgent_Subagent3p_ForbiddenFields rejects the 7 CLI-owned fields on PUT.
+func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	id := createSubagent3p(t, api)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"tools_cfg", `{"tools_cfg":{"builtin":{"default_policy":"deny"}}}`},
+		{"skills", `{"skills":["web-research"]}`},
+		{"fallback_models", `{"fallback_models":[{"model":"m","provider":"p"}]}`},
+		{"model_params", `{"model_params":{"temperature":0.5}}`},
+		{"sandbox_profile", `{"sandbox_profile":"workspace"}`},
+		{"shell_policy", `{"shell_policy":{"enable_deny_patterns":true}}`},
+		{"delegation_policy", `{"delegation_policy":{"to":[{"kind":"local","id":"*"}]}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			api.HandleAgents(w, r)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "subagent_3p agents do not support "+tc.name)
+		})
+	}
+}
+
+// TestUpdateAgent_ExecutorMutability verifies that cli_path, env_overrides, and
+// cli_args are mutable on a subagent_3p worker, while the cli itself is locked.
+func TestUpdateAgent_ExecutorMutability(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	id := createSubagent3p(t, api)
+
+	// Mutate CLI-owned mutable fields.
+	body := `{"executor":{"cli_path":"/opt/codex","env_overrides":{"FOO":"bar"},"cli_args":"--verbose"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec := findExecutorInConfig(t, m, id)
+	require.NotNil(t, exec)
+	assert.Equal(t, "/opt/codex", exec["cli_path"])
+	assert.Equal(t, map[string]any{"FOO": "bar"}, exec["env_overrides"])
+	assert.Equal(t, "--verbose", exec["cli_args"])
+}
+
+// TestUpdateAgent_ExecutorOMNIPUSPrefixRejected verifies that env_overrides
+// containing OMNIPUS_ keys are rejected at the write gate.
+func TestUpdateAgent_ExecutorOMNIPUSPrefixRejected(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	id := createSubagent3p(t, api)
+
+	body := `{"executor":{"env_overrides":{"OMNIPUS_MASTER_KEY":"leak"}}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "OMNIPUS_* is gateway-internal")
 }

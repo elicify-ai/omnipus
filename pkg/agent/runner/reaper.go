@@ -107,7 +107,7 @@ func ReapOrphans(ctx context.Context) (ReapResult, error) {
 		if _, err := runGit(ctx, repoRoot, "worktree", "prune"); err != nil {
 			// Non-fatal: the dir is already gone; a stale registration is
 			// cosmetic and self-heals on the next `git worktree` op.
-			slog.Debug("runner reaper: git worktree prune failed",
+			slog.Warn("runner reaper: git worktree prune failed",
 				"repo", repoRoot, "error", err)
 		}
 	}
@@ -122,9 +122,12 @@ func ReapOrphans(ctx context.Context) (ReapResult, error) {
 func reapOne(ctx context.Context, runDir string) (repoRoot string, err error) {
 	if root, ok := worktreeRepoRoot(ctx, runDir); ok {
 		repoRoot = root
-		// Best-effort unregister from the source repo; ignore the error and let
-		// RemoveAll be the source of truth for "the dir is gone".
-		_, _ = runGit(ctx, root, "worktree", "remove", "--force", runDir)
+		// Best-effort unregister from the source repo; log failures as Warn since
+		// stale worktree registrations accumulate `git worktree` metadata.
+		if _, rmErr := runGit(ctx, root, "worktree", "remove", "--force", runDir); rmErr != nil {
+			slog.Warn("runner reaper: git worktree remove failed",
+				"dir", runDir, "repo", repoRoot, "error", rmErr)
+		}
 	}
 	if rmErr := os.RemoveAll(runDir); rmErr != nil {
 		return repoRoot, fmt.Errorf("removing %q: %w", runDir, rmErr)

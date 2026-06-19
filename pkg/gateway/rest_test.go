@@ -262,7 +262,7 @@ func TestHandleAgentsCreate(t *testing.T) {
 	// not the committed pkg/gateway/config.json test fixture.
 	api := newTestRestAPIWithHome(t)
 
-	body := `{"name": "Scout", "model": "claude-sonnet-4-6"}`
+	body := `{"name": "Scout", "model": "claude-sonnet-4-6", "soul": "Scout soul"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -273,7 +273,7 @@ func TestHandleAgentsCreate(t *testing.T) {
 	var resp gen.Agent
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "Scout", resp.Name)
-	assert.Equal(t, gen.AgentType("custom"), resp.Type)
+	assert.Equal(t, gen.AgentTypeMain, resp.Type)
 	assert.NotEmpty(t, resp.Id)
 }
 
@@ -284,7 +284,7 @@ func TestHandleAgentsCreateWithExplicitID(t *testing.T) {
 	// not the committed pkg/gateway/config.json test fixture.
 	api := newTestRestAPIWithHome(t)
 
-	body := `{"id": "my-scout", "name": "Scout"}`
+	body := `{"id": "my-scout", "name": "Scout", "soul": "Scout soul"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -724,7 +724,7 @@ func TestGetAgentTools_CustomAgent(t *testing.T) {
 		Config    map[string]any `json:"config"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "custom", resp.AgentType)
+	assert.Equal(t, "Main", resp.AgentType)
 	builtin, ok := resp.Config["builtin"].(map[string]any)
 	require.True(t, ok)
 	// Legacy mode:"explicit" + visible:[...] is converted to policy format.
@@ -884,6 +884,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	body := `{
 		"name": "Research Bot",
 		"description": "A researcher",
+		"soul": "Research Bot soul",
 		"color": "#22C55E",
 		"icon": "magnifying-glass",
 		"tools_cfg": {
@@ -913,7 +914,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "Research Bot", resp.Name)
-	assert.Equal(t, "custom", resp.Type)
+	assert.Equal(t, "Main", resp.Type)
 	assert.NotEmpty(t, resp.ID)
 
 	// Verify the config.json was updated with the tools config (new format: default_policy/policies).
@@ -947,6 +948,14 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 func TestCreateAgent_WithSkills(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
+	// Install the skills used by this test so validation passes.
+	skillsRoot := t.TempDir()
+	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
+	for _, id := range []string{"web-research", "code-review"} {
+		require.NoError(t, os.MkdirAll(skillsRoot+"/"+id, 0o755))
+		require.NoError(t, os.WriteFile(skillsRoot+"/"+id+"/SKILL.md", []byte("---\nname: "+id+"\ndescription: d\n---\n"), 0o600))
+	}
+
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
 	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
@@ -966,7 +975,7 @@ func TestCreateAgent_WithSkills(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	body := `{"name":"Skill Agent","skills":["web-research","code-review"]}`
+	body := `{"name":"Skill Agent","soul":"s","skills":["daily-briefing","summarize"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)
@@ -980,7 +989,7 @@ func TestCreateAgent_WithSkills(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "Skill Agent", resp.Name)
-	assert.Equal(t, []string{"web-research", "code-review"}, resp.Skills)
+	assert.Equal(t, []string{"daily-briefing", "summarize"}, resp.Skills)
 
 	// Verify config.json persisted the skill list.
 	savedCfg, err := os.ReadFile(cfgPath)
@@ -993,8 +1002,8 @@ func TestCreateAgent_WithSkills(t *testing.T) {
 	agentMap, _ := list[0].(map[string]any)
 	skillsList, _ := agentMap["skills"].([]any)
 	require.Len(t, skillsList, 2)
-	assert.Equal(t, "web-research", skillsList[0])
-	assert.Equal(t, "code-review", skillsList[1])
+	assert.Equal(t, "daily-briefing", skillsList[0])
+	assert.Equal(t, "summarize", skillsList[1])
 }
 
 // TestCreateAgent_NoSkills verifies that a new agent with no skills field has
@@ -1027,7 +1036,7 @@ func TestCreateAgent_NoSkills(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	body := `{"name":"Skillless Agent"}`
+	body := `{"name":"Skillless Agent","soul":"s"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)
@@ -1058,15 +1067,11 @@ func TestCreateAgent_NoSkills(t *testing.T) {
 
 // TestUpdateAgent_SkillsPersist verifies that PUT /api/v1/agents/{id} with a
 // skills list persists the skills to config.json and returns them in the response.
-//
-// BDD: Given an agent exists in config,
-// When PUT /api/v1/agents/{id} is called with skills=["web-research"],
-// Then the response includes skills and config.json has the skills key.
-// Also verifies that granting skills to agent A does not affect agent B.
-//
-// Traces to: US-E6 AC2 — granting a skill to agent A does not grant it to B.
 func TestUpdateAgent_SkillsPersist(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	// Use default embedded skills (daily-briefing, plan,
+	// skill-authoring, summarize) for validation.
 
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
@@ -1093,7 +1098,7 @@ func TestUpdateAgent_SkillsPersist(t *testing.T) {
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
 	// Update agent-a with skills.
-	body := `{"skills":["web-research","data-analysis"]}`
+	body := `{"soul":"s","skills":["daily-briefing","summarize"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-a", strings.NewReader(body))
 	api.HandleAgents(w, r)
@@ -1106,7 +1111,7 @@ func TestUpdateAgent_SkillsPersist(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "agent-a", resp.ID)
-	assert.Equal(t, []string{"web-research", "data-analysis"}, resp.Skills)
+	assert.Equal(t, []string{"daily-briefing", "summarize"}, resp.Skills)
 
 	// Verify config.json: agent-a has skills, agent-b has none.
 	savedCfg, err := os.ReadFile(cfgPath)
@@ -1123,8 +1128,8 @@ func TestUpdateAgent_SkillsPersist(t *testing.T) {
 		if agentID == "agent-a" {
 			skillsRaw, _ := agentMap["skills"].([]any)
 			require.Len(t, skillsRaw, 2, "agent-a must have 2 skills in config.json")
-			assert.Equal(t, "web-research", skillsRaw[0])
-			assert.Equal(t, "data-analysis", skillsRaw[1])
+			assert.Equal(t, "daily-briefing", skillsRaw[0])
+			assert.Equal(t, "summarize", skillsRaw[1])
 		} else if agentID == "agent-b" {
 			_, hasBSkills := agentMap["skills"]
 			assert.False(t, hasBSkills, "agent-b must have no skills — granting to A must not affect B")
@@ -1232,7 +1237,7 @@ func TestCreateAgent_UnknownSkillIDRejected(t *testing.T) {
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
 	// "unknown-skill" is not installed — must be rejected 400.
-	body := `{"name":"Test Agent","skills":["unknown-skill"]}`
+	body := `{"name":"Test Agent","soul":"s","skills":["unknown-skill"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)
@@ -1249,7 +1254,7 @@ func TestCreateAgent_UnknownSkillIDRejected(t *testing.T) {
 	assert.Contains(t, resp["error"], "unknown skill id", "error must name the unknown skill")
 
 	// Known skill "web-research" must be accepted.
-	body = `{"name":"Test Agent 2","skills":["web-research"]}`
+	body = `{"name":"Test Agent 2","soul":"s","skills":["web-research"]}`
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)

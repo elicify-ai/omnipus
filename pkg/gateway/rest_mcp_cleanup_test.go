@@ -214,6 +214,10 @@ func TestAddMCPServer_Stdio_NoCommand(t *testing.T) {
 //	When POST /api/v1/agents with skills=["some-unknown-skill"],
 //	Then 201 is returned (fail-open: no installed set → accept any id).
 func TestCreateAgent_WithSkillID_NoInstalledSkills(t *testing.T) {
+	// Isolate from any real ~/.omnipus/skills directory and from the working-dir
+	// skills (if any). This gives the "no skills installed" fail-open scenario.
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	t.Setenv("OMNIPUS_BUILTIN_SKILLS", t.TempDir())
 	// newTestRestAPIWithHome uses an empty tmpDir as agentLoop's config, which
 	// provides no skills — exactly the "no skills directory" scenario.
 	api := newTestRestAPIWithHome(t)
@@ -222,6 +226,7 @@ func TestCreateAgent_WithSkillID_NoInstalledSkills(t *testing.T) {
 	skills := []string{skillID}
 	body := map[string]any{
 		"name":   "skill-test-agent",
+		"soul":   "s",
 		"skills": skills,
 	}
 	bodyBytes, err := json.Marshal(body)

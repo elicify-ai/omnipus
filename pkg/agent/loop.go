@@ -4148,6 +4148,19 @@ func (al *AgentLoop) handleReasoning(
 	}
 }
 
+// isMessagingChannel returns true for external human-messaging channel types.
+// Tool feedback is emitted only on these channels; webchat, system/cli/subagent,
+// cron schedules, and unknown/empty channels remain silent because either the UI
+// renders tool calls inline or there is no human recipient.
+func isMessagingChannel(channel string) bool {
+	switch channel {
+	case "telegram", "discord", "slack", "whatsapp", "matrix", "irc",
+		"google-chat", "line", "wecom", "weixin", "dingtalk", "qq", "email":
+		return true
+	}
+	return false
+}
+
 func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, error) {
 	// H1: guard against an already-canceled or timed-out context before doing any work.
 	if ctx.Err() != nil {
@@ -5676,14 +5689,13 @@ turnLoop:
 			)
 
 			// Per-channel tool feedback routing (agent-form spec §3.3 / F-01):
-			// the webchat surface renders tool calls inline (SessionPanel /
-			// ToolCallBadge / SubagentBlock), so re-publishing them as outbound
-			// messages on the webchat channel is duplication. Messaging channels
-			// always honour the global tool_feedback config.
-			if ts.channel != "webchat" &&
-				cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
-				ts.channel != "" &&
-				!ts.opts.SuppressToolFeedback {
+			// only messaging channels emit standalone tool-call messages; webchat,
+			// internal channels (system/cli/subagent), cron schedules, and empty
+			// channels suppress feedback because the UI already renders tool calls
+			// inline or because the channel has no human recipient.
+			if cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
+				!ts.opts.SuppressToolFeedback &&
+				isMessagingChannel(ts.channel) {
 				feedbackPreview := utils.Truncate(
 					string(argsJSON),
 					cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
