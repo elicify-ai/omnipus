@@ -101,8 +101,8 @@ func TestOnChatBotMessageReceived_DirectFallbackSenderIDUsesConversationID(t *te
 	if inbound.Peer.Kind != bus.PeerDirect || inbound.Peer.ID != "openid-user-42" {
 		t.Fatalf("peer=%+v", inbound.Peer)
 	}
-	if inbound.SenderID != "dingtalk:openid-user-42" {
-		t.Fatalf("sender_id=%q", inbound.SenderID)
+	if inbound.Sender.CanonicalID != "dingtalk:openid-user-42" {
+		t.Fatalf("sender_id=%q", inbound.Sender.CanonicalID)
 	}
 
 	if _, ok := ch.sessionWebhooks.Load("conv-direct-42"); !ok {
