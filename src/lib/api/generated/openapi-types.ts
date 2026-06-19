@@ -462,7 +462,11 @@ export interface paths {
          */
         put: operations["updateAgent"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete a custom agent
+         * @description Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`). Deleting an agent also clears its session history and on-disk workspace artifacts via the cascade pipeline. Audited (severity INFO, event `agent.delete`).
+         */
+        delete: operations["deleteAgent"];
         options?: never;
         head?: never;
         /**
@@ -2226,6 +2230,26 @@ export interface paths {
          * @description Aggregates token usage from SessionMeta.Stats across all session files for the requested period. period=month means the current calendar month UTC. No dollar estimates — token counts only.
          */
         get: operations["getTokenStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/cli-detect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Probe host PATH for the three external-CLI runners
+         * @description Reports whether the gateway process can locate each of the three external-CLI runners on its PATH. Read-only, idempotent, and unaudited — the SPA roster uses this to grey-out CLIs the host cannot run instead of letting the operator hit a wizard failure at runtime. Pure Go probe (no shell-out).
+         */
+        get: operations["getHostCliDetect"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5959,6 +5983,15 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @description Host-side CLI detection result. Probes whether each external-CLI runner binary is on PATH for the gateway process. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs that the host cannot actually run (saves the operator a wizard failure at runtime). */
+        CliDetect: {
+            /** @description Whether the `claude` binary (Claude Code, "claude-code" CLI) is on PATH for the gateway process. */
+            hasClaude: boolean;
+            /** @description Whether the `codex` binary (Codex CLI) is on PATH. */
+            hasCodex: boolean;
+            /** @description Whether the `opencode` binary is on PATH. */
+            hasOpencode: boolean;
+        };
         /**
          * RetentionUpdateRequest
          * @description Request body for PUT /api/v1/security/retention. Partial update — any subset of the two retention fields. Strict type validation rejects JSON strings for session_days, floats with fractional parts for session_days, and non-boolean values for disabled. An empty body {} is accepted as a no-op.
@@ -7652,6 +7685,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Agent"];
                 };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    deleteAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Agent ID.
+                 * @example 550e8400-e29b-41d4-a716-446655440000
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Agent deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
@@ -11425,6 +11487,27 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    getHostCliDetect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CLI availability probe result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CliDetect"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
 }
 
 // ── Named type re-exports from components.schemas ────────────────────────────
@@ -11562,6 +11645,7 @@ export type RestoreBackupRequest = components["schemas"]["RestoreBackupRequest"]
 export type AgentOwnershipUpdateRequest = components["schemas"]["AgentOwnershipUpdateRequest"];
 export type BearerToken = components["schemas"]["BearerToken"];
 export type ChannelConfigureRequest = components["schemas"]["ChannelConfigureRequest"];
+export type CliDetect = components["schemas"]["CliDetect"];
 export type RetentionUpdateRequest = components["schemas"]["RetentionUpdateRequest"];
 export type McpToolsListResponse = components["schemas"]["McpToolsListResponse"];
 export type McpToolCallRequest = components["schemas"]["McpToolCallRequest"];

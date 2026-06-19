@@ -411,6 +411,8 @@ components:
       $ref: ./components/schemas/BearerToken.yaml
     ChannelConfigureRequest:
       $ref: ./components/schemas/ChannelConfigureRequest.yaml
+    CliDetect:
+      $ref: ./components/schemas/CliDetect.yaml
     RetentionUpdateRequest:
       $ref: ./components/schemas/RetentionUpdateRequest.yaml
     McpToolsListResponse:

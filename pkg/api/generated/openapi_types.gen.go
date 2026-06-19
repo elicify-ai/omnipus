@@ -272,6 +272,7 @@ const (
 	AgentTypeSubagent   AgentType = "Subagent"
 	AgentTypeSubagent3p AgentType = "subagent_3p"
 	AgentTypeSystem     AgentType = "system"
+	AgentTypeWorker     AgentType = "worker"
 )
 
 // Valid indicates whether the value is a known member of the AgentType enum.
@@ -286,6 +287,8 @@ func (e AgentType) Valid() bool {
 	case AgentTypeSubagent3p:
 		return true
 	case AgentTypeSystem:
+		return true
+	case AgentTypeWorker:
 		return true
 	default:
 		return false
@@ -3865,7 +3868,7 @@ type Agent struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
+	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). "worker" = legacy build-time/seed config constant (the seed `Worker` entry in `pkg/config/worker_helpers_test.go` ships with this type; the build-time string is preserved for backward compatibility with the on-disk seeded `Worker` row that the gateway returns in GET /api/v1/agents). The frontend's `isWorker()` helper already accepts this value; it is functionally a Subagent. The W6-A wire enum is the canonical one for new user-created agents; `worker` survives in the contract for the legacy seed and for any operator-defined entries that predate the W6-A type widening. Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
 	Type AgentType `json:"type"`
 
 	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured. Main only.
@@ -3905,7 +3908,7 @@ type AgentToolsCfgBuiltinDefaultPolicy string
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
-// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
+// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). "worker" = legacy build-time/seed config constant (the seed `Worker` entry in `pkg/config/worker_helpers_test.go` ships with this type; the build-time string is preserved for backward compatibility with the on-disk seeded `Worker` row that the gateway returns in GET /api/v1/agents). The frontend's `isWorker()` helper already accepts this value; it is functionally a Subagent. The W6-A wire enum is the canonical one for new user-created agents; `worker` survives in the contract for the legacy seed and for any operator-defined entries that predate the W6-A type widening. Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
 type AgentType string
 
 // AgentCreateRequest Body for POST /agents. Creates a new agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet).
@@ -5032,6 +5035,18 @@ type ChannelTestResponse struct {
 
 	// Success True when all required credential fields are present.
 	Success bool `json:"success"`
+}
+
+// CliDetect Host-side CLI detection result. Probes whether each external-CLI runner binary is on PATH for the gateway process. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs that the host cannot actually run (saves the operator a wizard failure at runtime).
+type CliDetect struct {
+	// HasClaude Whether the `claude` binary (Claude Code, "claude-code" CLI) is on PATH for the gateway process.
+	HasClaude bool `json:"hasClaude"`
+
+	// HasCodex Whether the `codex` binary (Codex CLI) is on PATH.
+	HasCodex bool `json:"hasCodex"`
+
+	// HasOpencode Whether the `opencode` binary is on PATH.
+	HasOpencode bool `json:"hasOpencode"`
 }
 
 // CredentialSetRequest Request body for POST /api/v1/credentials. Stores an encrypted credential. The key must be non-empty; the value is stored AES-256-GCM encrypted.
