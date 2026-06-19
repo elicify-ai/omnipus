@@ -32,6 +32,12 @@ import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from '@/components/ui/accordion'
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -302,75 +308,83 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     hasHydrated.current = true
   }, [agentId, agent])
 
-  const formData = useMemo(() => ({
-    name,
-    description,
-    model,
-    color: selectedColor,
-    icon: selectedIcon,
-    // W6-B4 / G3: `default` flag. Always sent with the current value so the
-    // PUT payload reflects the user's intent. The wire contract says
-    // "Omitting this field leaves the flag unchanged" — but auto-save only
-    // fires on a real change, and on the real change the user has flipped
-    // this toggle, so emitting the new value is exactly right. If a future
-    // edit (say, renaming) does not flip `default`, the formData still
-    // includes the existing value; the server treats the PUT as "set to
-    // this value", which preserves the existing value — the desired
-    // behavior. PUT semantics: at most one agent is default across the
-    // roster; the backend enforces uniqueness on PUT and demotes the prior
-    // default to false in the same transaction.
-    default: isDefault,
-    // Editor state matches the wire shape 1:1; emit `undefined` for
-    // empty (treated as "no fallbacks" by the backend).
-    fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
-    model_params: { temperature, max_tokens: maxTokens, top_p: topP },
-    rate_limits: {
+  const timeoutPayload = timeoutSeconds > 0 ? timeoutSeconds : undefined
+  const formData = useMemo(() => {
+    // Spec-4 FR-4.1: subagent_3p agents run inside an external CLI, so many
+    // Omnipus-native fields are irrelevant or explicitly rejected by the
+    // backend. Build a restricted payload for that tier.
+    const isSubagent3p = agent?.type === 'subagent_3p'
+    const identity = isSubagent3p
+      ? { name, description, color: selectedColor, icon: selectedIcon }
+      : { name, description, color: selectedColor, icon: selectedIcon, default: isDefault }
+    const rateLimits = {
       use_global_defaults: useGlobalRateLimits,
       max_llm_calls_per_hour: maxLlmCallsPerHour !== '' ? maxLlmCallsPerHour : undefined,
       max_tool_calls_per_minute: maxToolCallsPerMinute !== '' ? maxToolCallsPerMinute : undefined,
       max_cost_per_day: maxCostPerDay !== '' ? maxCostPerDay : undefined,
-    },
-    soul,
-    instructions,
-    // W6-B4 / G1: voice is optional — emit only when non-empty so the backend
-    // can leave the field unchanged when the user hasn't set it. An empty
-    // string and `undefined` are semantically equivalent for the wire (both
-    // mean "no override"); sending `null` explicitly would clear an existing
-    // value, which is the right semantics for "Clear voice" but not for an
-    // untouched field. We send `undefined` (omitted) for the empty case.
-    // W6-B-fix: trim on the wire so whitespace-only inputs collapse to
-    // "no voice configured" rather than persisting a literal "   " that
-    // breaks TTS lookup at v0.2.0 release.
-    voice: voice.trim() !== '' ? voice.trim() : undefined,
-    heartbeat,
-    timeout_seconds: timeoutSeconds > 0 ? timeoutSeconds : undefined,
-    max_tool_iterations: maxToolIterations,
-    steering_mode: steeringMode,
-    heartbeat_enabled: heartbeatEnabled,
-    heartbeat_interval: heartbeatInterval,
-    // 'none' is a UI-only marker meaning "inherit global default". Strip it before
-    // submitting so the backend receives undefined (omitted) rather than a value
-    // that fails the sandbox_profile enum validation (contract does not include 'none').
-    sandbox_profile: sandboxProfile === 'none' ? undefined : sandboxProfile,
-    shell_policy: {
-      custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
-    },
-    tools_cfg: toolsCfg,
-    // US-E6: include the per-agent skill list in the auto-save payload.
-    // Send the current list (may be empty, meaning no skills). The backend
-    // treats an absent field as "leave unchanged" and an explicit empty
-    // array as "remove all skills" — we always send the current value so
-    // a deliberate clear (removing the last skill) is persisted correctly.
-    skills: agentSkills,
-    // Spec-4 FR-4.1: persist the executor only when explicitly configured.
-    // Omitting it (undefined) leaves the backend on its "native" default
-    // rather than forcing an empty value over the wire.
-    executor,
-  }), [
-    name, description, model, selectedColor, selectedIcon, isDefault, fallbackModels,
+    }
+    if (isSubagent3p) {
+      return {
+        ...identity,
+        model,
+        soul,
+        instructions,
+        rate_limits: rateLimits,
+        timeout_seconds: timeoutPayload,
+        max_tool_iterations: maxToolIterations,
+        executor,
+      }
+    }
+    return {
+      ...identity,
+      model,
+      // Editor state matches the wire shape 1:1; emit `undefined` for
+      // empty (treated as "no fallbacks" by the backend).
+      fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
+      model_params: { temperature, max_tokens: maxTokens, top_p: topP },
+      rate_limits: rateLimits,
+      soul,
+      instructions,
+      // W6-B4 / G1: voice is optional — emit only when non-empty so the backend
+      // can leave the field unchanged when the user hasn't set it. An empty
+      // string and `undefined` are semantically equivalent for the wire (both
+      // mean "no override"); sending `null` explicitly would clear an existing
+      // value, which is the right semantics for "Clear voice" but not for an
+      // untouched field. We send `undefined` (omitted) for the empty case.
+      // W6-B-fix: trim on the wire so whitespace-only inputs collapse to
+      // "no voice configured" rather than persisting a literal "   " that
+      // breaks TTS lookup at v0.2.0 release.
+      voice: voice.trim() !== '' ? voice.trim() : undefined,
+      heartbeat,
+      timeout_seconds: timeoutPayload,
+      max_tool_iterations: maxToolIterations,
+      steering_mode: steeringMode,
+      heartbeat_enabled: heartbeatEnabled,
+      heartbeat_interval: heartbeatInterval,
+      // 'none' is a UI-only marker meaning "inherit global default". Strip it before
+      // submitting so the backend receives undefined (omitted) rather than a value
+      // that fails the sandbox_profile enum validation (contract does not include 'none').
+      sandbox_profile: sandboxProfile === 'none' ? undefined : sandboxProfile,
+      shell_policy: {
+        custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
+      },
+      tools_cfg: toolsCfg,
+      // US-E6: include the per-agent skill list in the auto-save payload.
+      // Send the current list (may be empty, meaning no skills). The backend
+      // treats an absent field as "leave unchanged" and an explicit empty
+      // array as "remove all skills" — we always send the current value so
+      // a deliberate clear (removing the last skill) is persisted correctly.
+      skills: agentSkills,
+      // Spec-4 FR-4.1: persist the executor only when explicitly configured.
+      // Omitting it (undefined) leaves the backend on its "native" default
+      // rather than forcing an empty value over the wire.
+      executor,
+    }
+  }, [
+    agent?.type, name, description, model, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, instructions, voice, heartbeat,
-    timeoutSeconds, maxToolIterations, steeringMode,
+    timeoutPayload, timeoutSeconds, maxToolIterations, steeringMode,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
     toolsCfg, agentSkills, executor,
   ])
@@ -439,14 +453,37 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // stripped here (B-2 defense-in-depth on the frontend side): the
       // Skills picker is rendered disabled for locked agents, so this strip
       // is the belt-and-suspenders path for any state that may survive hydration.
-      const payload = agent?.locked
+      const stripped = agent?.locked
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
             heartbeat: _h, instructions: _ins, sandbox_profile: _sp,
             shell_policy: _shp, tools_cfg: _tc, skills: _sk, executor: _ex, ...rest
-          }) => rest)(data)
+          }) => rest)(data as Record<string, unknown>)
         : data
-      await updateAgent(agentId, payload)
+      // W6-contracts: include updated_at from the last GET response so the
+      // backend can reject stale writes with 409 Conflict.
+      const payload = { ...stripped, updated_at: agent?.updated_at }
+      try {
+        await updateAgent(agentId, payload)
+      } catch (err) {
+        // W6-contracts: on a 409 Conflict, surface a toast with a Refresh
+        // action that refetches the agent state and drops pending edits.
+        if (isApiError(err) && err.status === 409) {
+          addToast({
+            message: 'This agent was changed elsewhere. Refresh to load the latest version.',
+            variant: 'error',
+            action: {
+              label: 'Refresh',
+              onClick: () => {
+                refetchAgent().then(() => {
+                  if (isDirtyRef.current) isDirtyRef.current = false
+                })
+              },
+            },
+          })
+        }
+        throw err
+      }
       isDirtyRef.current = false
       queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
       queryClient.invalidateQueries({ queryKey: ['agents'] })
@@ -656,134 +693,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // top of the profile explains the omission.
   const isNativeWorkerAgent = isWorkerAgent && (!executor || executor.kind === 'native')
 
-  return (
-    <ProfileSheet
-      isOpen={isOpen}
-      onClose={closeEditAgentSlideOver}
-      title={`Edit ${agent.name}`}
-      onOpenAutoFocus={handleOpenAutoFocus}
-    >
-      <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
-          <div className="flex items-center gap-4">
-            <AvatarHeader color={selectedColor} />
-            <div className="min-w-0">
-              <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)]">{agent.name}</h1>
-              <div className="flex items-center gap-2 mt-1">
-                <Badge variant={agent.type === 'core' ? 'secondary' : 'outline'}>
-                  {agent.type}
-                </Badge>
-                {agent.locked && (
-                  <Badge variant="outline" className="text-[var(--color-muted)] border-[var(--color-border)]">
-                    read-only
-                  </Badge>
-                )}
-                <span className="text-xs text-[var(--color-muted)]">{agent.description}</span>
-          </div>
-        </div>
-        </div>
-        </SheetHeader>
 
-      {/* Wave 5 / spec §6 BDD #13 + §6.4: locked-banner for built-in core
-          agents. Pinned at the top of the body, above the tab bar, so the
-          operator sees it before any field interactions. Uses the same
-          amber/warning visual language as the executor-external-cli
-          callout (sibling concept — "this agent is special, read the
-          caveat before editing"). Hidden for non-locked agents. */}
-      {agent.type === 'core' && agent.locked && (
-        <div
-          role="alert"
-          data-testid="locked-banner"
-          className="mx-8 mt-4 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
-        >
-          <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" aria-hidden="true" />
-          <div className="text-sm">
-            <div className="font-semibold text-[var(--color-error)]">This is a built-in core agent</div>
-            <div className="text-[var(--color-muted)] mt-1">
-              Most fields are read-only. To create your own chat colleague, use the + Add Main button.
-            </div>
-          </div>
-        </div>
-      )}
+  // Section panels shared by desktop Tabs and mobile Accordion.
+  // basics panel
+  const basicsPanel = (
+    <div className="space-y-6">
 
-      {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-8 py-6 space-y-4">
-      {/* W6-B1 / I1: cap the visible-on-open section count at Miller's 7±2.
-          Base agents open Identity + Sandbox + Model Configuration + Behavior
-          (4 accordions — the Identity strip header is also visible above, so
-          the user sees 5 top-level chunks). Workers replace Behavior with
-          Executor + Tools & Permissions (Tools is priority for a worker since
-          it's their run-time surface; Behavior's persona/heartbeat sub-blocks
-          don't apply). Schedules, Sessions, Activity stay collapsed — they're
-          reference material, not editing surfaces. */}
-      {/* W6-C1 / M11: native-worker delegation-only callout. Native workers
-          (default executor.kind) are delegation-only labour agents — they
-          are not chat targets and they run with a compiled allow/deny
-          rail. Their Tools, Skills, and Sandbox settings are inherited
-          from the caller (the agent that delegates work to them) and
-          editing them on the worker has no runtime effect. Surface this
-          prominently at the top of the profile so the operator
-          understands why the lower accordions are absent (or collapsed
-          to a summary). External-cli workers DO need their own Tools /
-          Sandbox because the external runner respects them — the
-          callout only renders for native workers. */}
-      {isNativeWorkerAgent && (
-        <div
-          data-testid="native-worker-delegation-callout"
-          role="note"
-          aria-label="Delegation-only worker"
-          className="rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/10 px-4 py-3 flex items-start gap-3"
-        >
-          <Lightning
-            size={16}
-            weight="fill"
-            className="text-[var(--color-accent)] mt-0.5 shrink-0"
-            aria-hidden="true"
-          />
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-[var(--color-secondary)]">
-              This is a delegation-only worker
-            </p>
-            <p className="text-[12px] text-[var(--color-muted)] leading-snug mt-0.5">
-              Tools, Skills, and Sandbox settings are inherited from the
-              agent that delegates work to this worker and have no
-              effect on a native (in-process) runtime. Configure them on
-              the caller, or switch this worker to an external runtime
-              (Executor accordion) to make them local.
-            </p>
-          </div>
-        </div>
-      )}
-      {/* Wave 5 / spec §6: Edit slide-over layout is a Tab bar (4–5 tabs
-          depending on type) instead of the prior 10-section Accordion. The
-          `Tabs` primitive is a controlled Radix Tabs component — see
-          `src/components/ui/tabs.tsx`. Section content is grouped as
-          specified in §6.2 (Main), §6.3 (Subagent), §6.4 (Subagent External).
-          Sessions / Schedules / Activity are NOT inside the tab bar — they
-          are reference surfaces (default-collapsed accordions below) so the
-          primary tab bar is not crowded with non-editing affordances. */}
-      <Tabs defaultValue="basics" className="w-full">
-        <TabsList className="w-full justify-start overflow-x-auto">
-          <TabsTrigger value="basics" data-testid="tab-basics" className="font-headline">Basics</TabsTrigger>
-          <TabsTrigger value="personality" data-testid="tab-personality" className="font-headline">Personality</TabsTrigger>
-          <TabsTrigger value="tools" data-testid="tab-tools" className="font-headline">Tools</TabsTrigger>
-          {agent.type === 'subagent_3p' && (
-            <TabsTrigger value="runtime" data-testid="tab-runtime" className="font-headline">Runtime</TabsTrigger>
-          )}
-          <TabsTrigger value="advanced" data-testid="tab-advanced" className="font-headline">Advanced</TabsTrigger>
-        </TabsList>
-
-        {/* ── BASICS TAB ─────────────────────────────────────────────────
-            Identity (name/description/default toggle/delegation policy
-            summary/avatar color/icon) + Model Configuration (model selector,
-            fallback editor, sampling parameters) + Sandbox (per agent
-            type: editable for custom, read-only for locked, hidden for
-            native workers). The Executor (Spec-4) is a worker-only
-            concern — for subagent_3p it is the headline of the Runtime
-            tab below; for native workers (no external-cli selected) the
-            whole thing is inherited from the caller so it is shown as a
-            read-only summary in Advanced. */}
-        <TabsContent value="basics" className="space-y-6">
           {/* Identity — always rendered; read-only for locked (core) agents */}
           <section className="space-y-3">
             <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Identity</p>
@@ -941,7 +856,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <div className="space-y-1.5">
                 <p className="text-xs text-[var(--color-muted)]">Fallback models</p>
                 <div
-                  data-testid="fallback-summary-locked"
+                  data-testid="fallback-summary-locked-basics"
                   className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
                 >
                   <div className="flex items-center gap-2 text-[var(--color-muted)]">
@@ -953,7 +868,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   {fallbackModels.length === 0 ? (
                     <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
                   ) : (
-                    <ol className="space-y-1" data-testid="fallback-summary-locked-list">
+                    <ol className="space-y-1" data-testid="fallback-summary-locked-basics-list">
                       {fallbackModels.map((entry, idx) => (
                         <li
                           key={entry.model}
@@ -1123,15 +1038,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               )}
             </section>
           )}
-        </TabsContent>
+        
+    </div>
+  )
 
-        {/* ── PERSONALITY TAB ────────────────────────────────────────────
-            BehaviorFields (SOUL.md / Task prompt + Additional Instructions
-            + Voice), and the Heartbeat sub-block for base agents (workers
-            are delegation-only labour agents and never run on a schedule).
-            The Execution params (timeout / max_iter / steering) live in
-            the Advanced tab per the spec matrix. */}
-        <TabsContent value="personality" className="space-y-5">
+  // personality panel
+  const personalityPanel = (
+    <div className="space-y-5">
+
           <BehaviorFields
             isWorker={isWorkerAgent}
             soul={soul}
@@ -1188,22 +1102,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
             </>
           )}
-        </TabsContent>
+        
+    </div>
+  )
 
-        {/* ── TOOLS TAB ─────────────────────────────────────────────────
-            Tool policy editor + Skills picker. Native workers (no
-            user-added overrides) collapse the editor to a read-only
-            summary; external-cli workers see the full editor. The
-            fallback models editor stays here too — FR-007 says fallbacks
-            are part of the tool chain. */}
-        <TabsContent value="tools" className="space-y-6">
+  // tools panel
+  const toolsPanel = (
+    <div className="space-y-6">
+
           {/* Fallback models */}
           <section className="space-y-3">
             <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Fallback models</p>
             <p className="text-xs text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
             {isLocked ? (
               <div
-                data-testid="fallback-summary-locked"
+                data-testid="fallback-summary-locked-tools"
                 className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
               >
                 <div className="flex items-center gap-2 text-[var(--color-muted)]">
@@ -1215,7 +1128,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {fallbackModels.length === 0 ? (
                   <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
                 ) : (
-                  <ol className="space-y-1" data-testid="fallback-summary-locked-list">
+                  <ol className="space-y-1" data-testid="fallback-summary-locked-tools-list">
                     {fallbackModels.map((entry, idx) => (
                       <li
                         key={entry.model}
@@ -1481,17 +1394,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
             </section>
           )}
-        </TabsContent>
+        
+    </div>
+  )
 
-        {/* ── RUNTIME TAB (subagent_3p only) ─────────────────────────────
-            Spec-4 / §6.4: the Runtime tab is rendered for
-            `subagent_3p` agents only (external CLI workers). The CLI
-            itself is shown as a read-only chip (locked concept — the
-            runtime kind is a property of the agent, not editable in
-            v0.1.0), while cli_path / env_overrides / cli_args are the
-            operator-tunable inputs (F-14). */}
-        {agent.type === 'subagent_3p' && (
-          <TabsContent value="runtime" className="space-y-5">
+  // runtime panel
+  const runtimePanel = (
+    <div className="space-y-5">
+
             <section className="space-y-3">
               <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Runtime</p>
               {/* CLI — read-only badge. The kind+cli tuple is the agent's
@@ -1555,17 +1465,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 />
               </div>
             </section>
-          </TabsContent>
-        )}
+          
+    </div>
+  )
 
-        {/* ── ADVANCED TAB ──────────────────────────────────────────────
-            Rate limits, Execution params (timeout / max_iter / steering —
-            Main only per the spec matrix), Executor summary (workers
-            only; subagent_3p gets the full editor in the Runtime tab),
-            Sessions, Schedules (base-only), Activity. The Executor
-            here is a compact summary for native workers; subagent_3p's
-            editor is in Runtime. */}
-        <TabsContent value="advanced" className="space-y-6">
+  // advanced panel
+  const advancedPanel = (
+    <div className="space-y-6">
+
           {/* Rate Limits — editable for unlocked agents, hidden for locked. */}
           {!isLocked && (
             <section className="space-y-3">
@@ -1680,8 +1587,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       triggerClassName="text-xs h-8"
                       items={[
                         { value: 'one-at-a-time', label: 'One at a time' },
-                        { value: 'parallel', label: 'Parallel' },
-                        { value: 'queue', label: 'Queue' },
+                        { value: 'queue-and-process', label: 'Queue and process' },
                       ]}
                     />
                   </div>
@@ -1796,8 +1702,191 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
             )}
           </section>
-        </TabsContent>
+        
+    </div>
+  )
+
+  return (
+    <ProfileSheet
+      isOpen={isOpen}
+      onClose={closeEditAgentSlideOver}
+      title={`Edit ${agent.name}`}
+      onOpenAutoFocus={handleOpenAutoFocus}
+    >
+      <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
+          <div className="flex items-center gap-4">
+            <AvatarHeader color={selectedColor} />
+            <div className="min-w-0">
+              <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)]">{agent.name}</h1>
+              <div className="flex items-center gap-2 mt-1">
+                <Badge variant={agent.type === 'core' ? 'secondary' : 'outline'}>
+                  {agent.type}
+                </Badge>
+                {agent.locked && (
+                  <Badge variant="outline" className="text-[var(--color-muted)] border-[var(--color-border)]">
+                    read-only
+                  </Badge>
+                )}
+                <span className="text-xs text-[var(--color-muted)]">{agent.description}</span>
+          </div>
+        </div>
+        </div>
+        </SheetHeader>
+
+      {/* Wave 5 / spec §6 BDD #13 + §6.4: locked-banner for built-in core
+          agents. Pinned at the top of the body, above the tab bar, so the
+          operator sees it before any field interactions. Uses the same
+          amber/warning visual language as the executor-external-cli
+          callout (sibling concept — "this agent is special, read the
+          caveat before editing"). Hidden for non-locked agents. */}
+      {agent.type === 'core' && agent.locked && (
+        <div
+          role="alert"
+          data-testid="locked-banner"
+          className="mx-8 mt-4 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
+        >
+          <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" aria-hidden="true" />
+          <div className="text-sm">
+            <div className="font-semibold text-[var(--color-error)]">This is a built-in core agent</div>
+            <div className="text-[var(--color-muted)] mt-1">
+              Most fields are read-only. To create your own chat colleague, use the + Add Main button.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-2xl mx-auto px-8 py-6 space-y-4">
+      {/* W6-B1 / I1: cap the visible-on-open section count at Miller's 7±2.
+          Base agents open Identity + Sandbox + Model Configuration + Behavior
+          (4 accordions — the Identity strip header is also visible above, so
+          the user sees 5 top-level chunks). Workers replace Behavior with
+          Executor + Tools & Permissions (Tools is priority for a worker since
+          it's their run-time surface; Behavior's persona/heartbeat sub-blocks
+          don't apply). Schedules, Sessions, Activity stay collapsed — they're
+          reference material, not editing surfaces. */}
+      {/* W6-C1 / M11: native-worker delegation-only callout. Native workers
+          (default executor.kind) are delegation-only labour agents — they
+          are not chat targets and they run with a compiled allow/deny
+          rail. Their Tools, Skills, and Sandbox settings are inherited
+          from the caller (the agent that delegates work to them) and
+          editing them on the worker has no runtime effect. Surface this
+          prominently at the top of the profile so the operator
+          understands why the lower accordions are absent (or collapsed
+          to a summary). External-cli workers DO need their own Tools /
+          Sandbox because the external runner respects them — the
+          callout only renders for native workers. */}
+      {isNativeWorkerAgent && (
+        <div
+          data-testid="native-worker-delegation-callout"
+          role="note"
+          aria-label="Delegation-only worker"
+          className="rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/10 px-4 py-3 flex items-start gap-3"
+        >
+          <Lightning
+            size={16}
+            weight="fill"
+            className="text-[var(--color-accent)] mt-0.5 shrink-0"
+            aria-hidden="true"
+          />
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-[var(--color-secondary)]">
+              This is a delegation-only worker
+            </p>
+            <p className="text-[12px] text-[var(--color-muted)] leading-snug mt-0.5">
+              Tools, Skills, and Sandbox settings are inherited from the
+              agent that delegates work to this worker and have no
+              effect on a native (in-process) runtime. Configure them on
+              the caller, or switch this worker to an external runtime
+              (Executor accordion) to make them local.
+            </p>
+          </div>
+        </div>
+      )}
+            <Tabs defaultValue="basics" className="hidden sm:block w-full">
+        <TabsList className="w-full justify-start overflow-x-auto">
+          <TabsTrigger value="basics" data-testid="tab-basics" className="font-headline">Basics</TabsTrigger>
+          <TabsTrigger value="personality" data-testid="tab-personality" className="font-headline">Personality</TabsTrigger>
+          <TabsTrigger value="tools" data-testid="tab-tools" className="font-headline">Tools</TabsTrigger>
+          {agent.type === 'subagent_3p' && (
+            <TabsTrigger value="runtime" data-testid="tab-runtime" className="font-headline">Runtime</TabsTrigger>
+          )}
+          <TabsTrigger value="advanced" data-testid="tab-advanced" className="font-headline">Advanced</TabsTrigger>
+        </TabsList>
+
+        {/* ── BASICS TAB ─────────────────────────────────────────────────
+            Identity (name/description/default toggle/delegation policy
+            summary/avatar color/icon) + Model Configuration (model selector,
+            fallback editor, sampling parameters) + Sandbox (per agent
+            type: editable for custom, read-only for locked, hidden for
+            native workers). The Executor (Spec-4) is a worker-only
+            concern — for subagent_3p it is the headline of the Runtime
+            tab below; for native workers (no external-cli selected) the
+            whole thing is inherited from the caller so it is shown as a
+            read-only summary in Advanced. */}
+        <TabsContent value="basics" className="space-y-6">{basicsPanel}</TabsContent>
+
+        {/* ── PERSONALITY TAB ────────────────────────────────────────────
+            BehaviorFields (SOUL.md / Task prompt + Additional Instructions
+            + Voice), and the Heartbeat sub-block for base agents (workers
+            are delegation-only labour agents and never run on a schedule).
+            The Execution params (timeout / max_iter / steering) live in
+            the Advanced tab per the spec matrix. */}
+        <TabsContent value="personality" className="space-y-5">{personalityPanel}</TabsContent>
+
+        {/* ── TOOLS TAB ─────────────────────────────────────────────────
+            Tool policy editor + Skills picker. Native workers (no
+            user-added overrides) collapse the editor to a read-only
+            summary; external-cli workers see the full editor. The
+            fallback models editor stays here too — FR-007 says fallbacks
+            are part of the tool chain. */}
+        <TabsContent value="tools" className="space-y-6">{toolsPanel}</TabsContent>
+
+        {/* ── RUNTIME TAB (subagent_3p only) ─────────────────────────────
+            Spec-4 / §6.4: the Runtime tab is rendered for
+            `subagent_3p` agents only (external CLI workers). The CLI
+            itself is shown as a read-only chip (locked concept — the
+            runtime kind is a property of the agent, not editable in
+            v0.1.0), while cli_path / env_overrides / cli_args are the
+            operator-tunable inputs (F-14). */}
+        {agent.type === 'subagent_3p' && (
+          <TabsContent value="runtime" className="space-y-5">{runtimePanel}</TabsContent>
+        )}
+
+        {/* ── ADVANCED TAB ──────────────────────────────────────────────
+            Rate limits, Execution params (timeout / max_iter / steering —
+            Main only per the spec matrix), Executor summary (workers
+            only; subagent_3p gets the full editor in the Runtime tab),
+            Sessions, Schedules (base-only), Activity. The Executor
+            here is a compact summary for native workers; subagent_3p's
+            editor is in Runtime. */}
+        <TabsContent value="advanced" className="space-y-6">{advancedPanel}</TabsContent>
       </Tabs>
+      <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">
+        <AccordionItem value="basics">
+          <AccordionTrigger data-testid="accordion-basics" className="font-headline">Basics</AccordionTrigger>
+          <AccordionContent>{basicsPanel}</AccordionContent>
+        </AccordionItem>
+        <AccordionItem value="personality">
+          <AccordionTrigger data-testid="accordion-personality" className="font-headline">Personality</AccordionTrigger>
+          <AccordionContent>{personalityPanel}</AccordionContent>
+        </AccordionItem>
+        <AccordionItem value="tools">
+          <AccordionTrigger data-testid="accordion-tools" className="font-headline">Tools</AccordionTrigger>
+          <AccordionContent>{toolsPanel}</AccordionContent>
+        </AccordionItem>
+      {agent.type === 'subagent_3p' && (
+        <AccordionItem value="runtime">
+          <AccordionTrigger data-testid="accordion-runtime" className="font-headline">Runtime</AccordionTrigger>
+          <AccordionContent>{runtimePanel}</AccordionContent>
+        </AccordionItem>
+      )}
+        <AccordionItem value="advanced">
+          <AccordionTrigger data-testid="accordion-advanced" className="font-headline">Advanced</AccordionTrigger>
+          <AccordionContent>{advancedPanel}</AccordionContent>
+        </AccordionItem>
+      </Accordion>
       </div>
       </div>
 
