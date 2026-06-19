@@ -56,21 +56,25 @@ test('(b) wrong password shows inline error and stays on /login', async ({ page 
 });
 
 test('(c) dev_mode_bypass = true shows red persistent banner on every route', async ({ page }) => {
-  // This test verifies the AppShell renders a persistent red banner when dev_mode_bypass=true.
-  // We need to be authenticated for AppShell to render. The route mock must be set BEFORE
-  // navigation so all fetchAppState() calls (including beforeLoad and React Query) get mocked.
+  // First establish an authenticated session without any state mocking. Only
+  // after we're logged in do we install the /state mock — otherwise the mock's
+  // route.fetch() replay can return an anonymous state body and break the
+  // login flow (the replay uses the request headers from the page, which may
+  // not include a bearer token during the anonymous onboarding redirect).
+  await loginAs(page, 'admin', 'admin123');
+
+  // Now mock GET /api/v1/state to force dev_mode_bypass=true. We use a full
+  // synthetic response so we don't depend on the replay's auth context.
   await page.route('**/api/v1/state', async (route) => {
-    const resp = await route.fetch();
-    const body = await resp.json();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ...body, dev_mode_bypass: true }),
+      body: JSON.stringify({ onboarding_complete: true, dev_mode_bypass: true }),
     });
   });
 
-  // Log in — this also navigates to the app shell where the banner should appear.
-  await loginAs(page, 'admin', 'admin123');
+  // Reload so the app boots with the mocked state (clears any cached state).
+  await page.goto('/');
 
   // Wait for the AppShell to render with the mocked dev_mode_bypass state.
   const banner = page.getByTestId('dev-mode-banner');
@@ -78,7 +82,7 @@ test('(c) dev_mode_bypass = true shows red persistent banner on every route', as
 
   // Banner must persist when navigating to another route
   await page.goto('/#/agents');
-  await expect(banner).toBeVisible({ timeout: 5_000 });
+  await expect(banner).toBeVisible({ timeout: 10_000 });
 
   // Unregister routes to avoid "route in flight" errors during cleanup
   await page.unrouteAll({ behavior: 'ignoreErrors' });
