@@ -169,11 +169,17 @@ func generateAndPersistMasterKey(path string) ([]byte, error) {
 	}
 	if _, writeErr := f.WriteString(hexKey); writeErr != nil {
 		_ = f.Close()
-		_ = os.Remove(path)
+		rmErr := os.Remove(path)
+		if rmErr != nil {
+			return nil, fmt.Errorf("write key file %q: %w (cleanup remove failed: %w)", path, writeErr, rmErr)
+		}
 		return nil, fmt.Errorf("write key file %q: %w", path, writeErr)
 	}
 	if closeErr := f.Close(); closeErr != nil {
-		_ = os.Remove(path)
+		rmErr := os.Remove(path)
+		if rmErr != nil {
+			return nil, fmt.Errorf("close key file %q: %w (cleanup remove failed: %w)", path, closeErr, rmErr)
+		}
 		return nil, fmt.Errorf("close key file %q: %w", path, closeErr)
 	}
 

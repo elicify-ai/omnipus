@@ -7,6 +7,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -426,7 +427,7 @@ func TestHandleAgentsCreateConcurrent(t *testing.T) {
 			defer wg.Done()
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-				strings.NewReader(`{"name":"Agent X"}`))
+				strings.NewReader(fmt.Sprintf(`{"name":"Agent X","soul":"Agent %d soul"}`, idx)))
 			r.Header.Set("Content-Type", "application/json")
 			api.HandleAgents(w, r)
 			codes[idx] = w.Code

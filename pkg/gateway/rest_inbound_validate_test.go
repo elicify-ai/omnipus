@@ -224,7 +224,7 @@ func TestCreateAgent_ValidateInbound_InvalidBody(t *testing.T) {
 func TestCreateAgent_ValidateInbound_ValidBody(t *testing.T) {
 	api := newTestRestAPIWithValidation(t)
 
-	body := `{"name":"Test Agent","description":"desc"}`
+	body := `{"name":"Test Agent","description":"desc","soul":"s"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
 	r.Header.Set("Content-Type", "application/json")
