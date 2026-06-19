@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-ralph-loop"
+  ],
+  "agent": {
+    "build": {
+      "permission": {
+        "edit": "allow",
+        "bash": "allow",
+        "webfetch": "allow"
+      }
+    }
+  },
+  "command": {
+    "review-code": {
+      "description": "Run a comprehensive code review using the review-toolkit agents",
+      "template": "Run a comprehensive code review of the current changes or files the user specifies. First call git status / git diff to determine scope (or use the files the user provided), then fan out the appropriate project agents from the review-toolkit in parallel: code-reviewer (always), silent-failure-hunter if error handling changed, pr-test-analyzer if test files changed, comment-analyzer if comments/docs changed, and type-design-analyzer if types changed. Launch all applicable agents concurrently via the Task tool, wait for every agent to return, then run code-simplifier only if all prior agents reported no critical issues. Aggregate findings into Critical Issues, Important Issues, Suggestions, Strengths, and a Recommended Action plan. Only report issues with confidence >= 80."
+    }
+  }
+}
