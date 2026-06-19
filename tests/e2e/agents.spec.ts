@@ -1,7 +1,7 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { agentCards } from './fixtures/selectors';
+
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -27,58 +27,60 @@ test('(a) roster loads with 4 base agents (Mia/Jim/Ava/Ray) plus any custom', as
   // Max is intentionally NOT seeded — see .preview-doc/ for the retirement rationale.
   await expect(page.locator('body')).not.toContainText(/^Max$/m);
 
-  // AgentCard renders button[aria-label="View agent {name}"] (AgentCard.tsx:29)
-  await expect(agentCards(page).first()).toBeVisible({ timeout: 10_000 });
-  expect(await agentCards(page).count()).toBeGreaterThanOrEqual(4);
+  // The built-in roster is collapsed by default; expand it so the core cards render.
+  await page.getByTestId('built-in-agents-trigger').click();
+
+  // AgentCard renders data-testid="agent-card-{id}" and WorkerCard renders "worker-card-{id}"
+  const cards = page.locator('[data-testid^="agent-card-"], [data-testid^="worker-card-"]');
+  await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+  expect(await cards.count()).toBeGreaterThanOrEqual(4);
 
   await expectA11yClean(page);
 });
 
-test('(b) profile accordion expands all available sections', async ({ page }) => {
+test('(b) profile tabs render and switch sections', async ({ page }) => {
+  // The built-in roster is collapsed by default; expand to access core agent cards.
+  await page.getByTestId('built-in-agents-trigger').click();
+
   // Click the first agent card to open the agent profile slide-over.
-  // Pre-v0.1.0-foundation, clicking a card navigated to a full page route at
-  // /#/agents/{id}. The slideover refactor (commit d854b02) moved the profile
-  // into a Radix <Sheet> — see src/components/agents/AgentProfile.tsx:1238 and
-  // src/components/agents/AgentCard.tsx:25 (handleOpen defaults to
-  // openEditAgentSlideOver). The transient route /_app/agents/$agentId
-  // immediately replaces history back to /agents, so the URL stays at /#/agents
-  // (see src/routes/_app/agents.$agentId.tsx). The slide-over content lives at
-  // data-testid="agent-name-input" (or "agent-profile-close"), which is the
-  // "slideover opened" signal.
-  const firstCard = agentCards(page).first();
+  const firstCard = page.locator('[data-testid^="agent-card-"]').first();
   await expect(firstCard).toBeVisible({ timeout: 10_000 });
   await firstCard.click();
 
-  // Wait for the slide-over to mount (the agent-name-input is rendered by
-  // AgentProfile.tsx once the agent query resolves — see AgentProfile.tsx:483).
+  // Wait for profile to mount and render the editable name input.
   await expect(page.getByTestId('agent-name-input')).toBeVisible({ timeout: 10_000 });
 
-  // Accordion is a Radix Accordion — items produce [data-state="closed"|"open"] (AgentProfile.tsx:347)
-  // Each AccordionTrigger is a button. Find all accordion triggers and click them.
+  // Desktop profile uses Radix Tabs; mobile uses an accordion fallback.
+  // Try the desktop tab path first.
+  const tabTriggers = page.getByRole('tab');
+  const tabCount = await tabTriggers.count();
+
+  if (tabCount > 0) {
+    // Click each tab and assert it becomes selected.
+    for (let i = 0; i < tabCount; i++) {
+      await tabTriggers.nth(i).click();
+      await expect(tabTriggers.nth(i)).toHaveAttribute('aria-selected', 'true', { timeout: 5_000 });
+      // At least one active tab panel should be visible.
+      await expect(page.locator('[role="tabpanel"][data-state="active"]').first()).toBeVisible({ timeout: 5_000 });
+    }
+    return;
+  }
+
+  // Accordion fallback (mobile / narrow viewport).
   const accordionTriggers = page.locator('[data-radix-accordion-trigger]');
   const triggerCount = await accordionTriggers.count();
-
   if (triggerCount > 0) {
     for (let i = 0; i < triggerCount; i++) {
       await accordionTriggers.nth(i).click();
     }
-    // At least one item should be open
     const openItems = page.locator('[data-state="open"]');
     await expect(openItems.first()).toBeVisible({ timeout: 10_000 });
-  } else {
-    // Fallback: Radix accordion triggers without the data attribute — use role
-    const triggers = page.locator('[role="button"][aria-expanded]');
-    const count = await triggers.count();
-    if (count > 0) {
-      await triggers.first().click();
-      await expect(page.locator('[data-state="open"]').first()).toBeVisible({ timeout: 5_000 });
-    }
   }
 });
 
-test('(c) "New Agent" button on roster opens the create-agent modal', async ({ page }) => {
-  // Button text is "New Agent" (agents.index.tsx:29)
-  const createBtn = page.getByRole('button', { name: 'New Agent' });
+test('(c) "New Main" button on roster opens the create-agent modal', async ({ page }) => {
+  // The roster has separate buttons for Main, Subagent, and External subagents.
+  const createBtn = page.getByTestId('add-main-button');
   await expect(createBtn).toBeVisible({ timeout: 10_000 });
   await createBtn.click();
 
@@ -88,21 +90,19 @@ test('(c) "New Agent" button on roster opens the create-agent modal', async ({ p
 });
 
 test('(d) locked fields render read-only on core agents', async ({ page }) => {
-  // Click the Jim card to open the agent profile slide-over (see (b) for the
-  // slideover-refactor rationale). Jim is a locked core agent.
+  // The core agents live in the collapsed Built-in roster; expand it first.
   await page.goto('/#/agents');
-  const jimCard = page.locator('[aria-label*="Jim" i]').or(page.getByText('Jim', { exact: true })).first();
+  await page.getByTestId('built-in-agents-trigger').click();
+
+  const jimCard = page.locator('[aria-label*="Jim" i]').first();
   await expect(jimCard).toBeVisible({ timeout: 15_000 });
   await jimCard.click();
 
   // Wait for the slide-over to mount.
   await expect(page.getByTestId('agent-name-input')).toBeVisible({ timeout: 10_000 });
 
-  // The identity accordion should exist and be open (defaultValue includes 'identity')
-  const nameInput = page.getByTestId('agent-name-input');
-  // (Already waited for visible above; re-grab for the disabled assertion below.)
-
   // For a locked agent, the input must be disabled
+  const nameInput = page.getByTestId('agent-name-input');
   await expect(nameInput).toBeDisabled();
 });
 
@@ -132,8 +132,8 @@ test('(e) deleted agent URL returns branded 404 with "Back to Agents" link', asy
 });
 
 test('(f) name collision on Create Agent surfaces server 409 error in UI', async ({ page }) => {
-  // Open the create-agent modal
-  const createBtn = page.getByRole('button', { name: 'New Agent' });
+  // Open the create-agent modal via the "+ New Main" button.
+  const createBtn = page.getByTestId('add-main-button');
   await expect(createBtn).toBeVisible({ timeout: 10_000 });
   await createBtn.click();
 
@@ -183,11 +183,13 @@ test('(g) session with deleted agent shows read-only transcript and "Agent remov
   );
   const authHeaders = { Authorization: `Bearer ${bearerToken}` };
 
-  // Step 1: Create a temporary agent via API
+  // Step 1: Create a temporary agent via API. `soul` is required since the
+  // v0.1.1 agent-form refactor; type='custom' is mapped to Main on the wire.
   const resp = await page.request.post('/api/v1/agents', {
     headers: authHeaders,
     data: {
       name: `TempAgent-${Date.now()}`,
+      soul: 'Temporary agent test soul',
       type: 'custom',
       model: 'openrouter/google/gemini-2.0-flash-001',
     },
