@@ -779,14 +779,12 @@ func TestChannelRouting_BindingWinsOverNoGlobalDefault(t *testing.T) {
 
 // TestChannelRouting_PutEmptyStringTreatedAsRemove verifies that PUT with
 // default_agent_id="" (empty string) is treated the same as null — removes the binding.
-//
-// BDD: Given a channel-wildcard binding telegram → "bot-agent",
-//
-//	When PUT /api/v1/channels/telegram/routing with {"default_agent_id": ""},
-//	Then response is 200 and default_agent_id is null (binding removed),
-//	And a subsequent GET also returns null.
-//
-// Traces to: sprint/258-jun-2026 — channel routing, empty string treated as remove.
 func TestChannelRouting_PutEmptyStringTreatedAsRemove(t *testing.T) {
 	assertRemoveBindingViaPut(t, `{"default_agent_id": ""}`)
+}
+
+// TestChannelRouting_PutEmptyObjectRemovesBinding verifies that PUT with an
+// empty object {} removes the channel-wildcard binding.
+func TestChannelRouting_PutEmptyObjectRemovesBinding(t *testing.T) {
+	assertRemoveBindingViaPut(t, `{}`)
 }

@@ -2047,3 +2047,27 @@ func TestPutUserContext_ValidateInbound_400OnMissingContent(t *testing.T) {
 	assert.Contains(t, resp["error"], "UserContextRequest",
 		"error message must reference the schema name")
 }
+
+// TestDeleteAgent_SuccessAndLocked403 verifies DELETE /agents/{id}: an unlocked
+// custom agent is removed (204) and a locked core agent is rejected with 403
+// plus the agent_locked code.
+func TestDeleteAgent_SuccessAndLocked403(t *testing.T) {
+	// buildExecutorTestAPI seeds a writable config.json with an unlocked custom agent.
+	api1 := buildExecutorTestAPI(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/test-agent", nil)
+	api1.HandleAgents(w, r)
+	assert.Equal(t, http.StatusNoContent, w.Code, "custom agent delete must 204")
+	assert.Equal(t, 0, w.Body.Len(), "204 must have empty body")
+
+	// newTestRestAPI seeds the locked core roster (Mia).
+	api2, _ := newTestRestAPI(t)
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/mia", nil)
+	api2.HandleAgents(w2, r2)
+	assert.Equal(t, http.StatusForbidden, w2.Code, "locked agent delete must 403")
+	var errResp map[string]any
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &errResp))
+	assert.Equal(t, "agent_locked", errResp["code"])
+}

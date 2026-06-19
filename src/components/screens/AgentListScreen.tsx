@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { CaretDown, Plus, Robot, ShareNetwork } from '@phosphor-icons/react'
+import { CaretDown, Plus, Robot, ShareNetwork, WarningCircle } from '@phosphor-icons/react'
 import { AgentCard } from '@/components/agents/AgentCard'
 import { WorkerCard } from '@/components/agents/WorkerCard'
 import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
@@ -62,6 +62,7 @@ export function AgentListScreen() {
   // disables each CLI whose binary the gateway reports missing.
   const [hostClis, setHostClis] = useState<HostClis>(OPTIMISTIC_HOST_CLIS)
   const [externalMenuOpen, setExternalMenuOpen] = useState(false)
+  const [cliDetectFailed, setCliDetectFailed] = useState(false)
   useEffect(() => {
     // SSR-safe: only run in browser.
     if (typeof window === 'undefined') return
@@ -73,6 +74,7 @@ export function AgentListScreen() {
       })
       .catch(() => {
         // Keep OPTIMISTIC_HOST_CLIS — endpoint missing or network error.
+        if (!cancelled) setCliDetectFailed(true)
       })
     return () => {
       cancelled = true
@@ -310,6 +312,19 @@ export function AgentListScreen() {
               </Popover>
             </div>
           </div>
+
+          {cliDetectFailed && (
+            <div
+              className="flex items-start gap-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 mb-3"
+              data-testid="cli-detect-warning"
+            >
+              <WarningCircle size={16} weight="bold" className="mt-0.5 shrink-0 text-amber-400" />
+              <p className="text-xs text-amber-100">
+                Could not detect installed external CLIs. External subagent availability is assumed by default.
+              </p>
+            </div>
+          )}
+
           {workerAgents.length === 0 ? (
               <div
                 className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
