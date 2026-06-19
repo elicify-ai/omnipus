@@ -106,14 +106,14 @@ func executorConfigFromRequest(kind, cli string) (*config.ExecutorConfig, string
 //
 // Returns (updated *config.ExecutorConfig, ""), or (nil, errMsg) on lock violation.
 func executorConfigUpdate(existing *config.ExecutorConfig, req *struct {
-	Kind        string
-	CLI         string
-	CLIPath     string
-	EnvOver     map[string]string
-	CLIArgs     string
-	HasCLIPath  bool
-	HasEnvOver  bool
-	HasCLIArgs  bool
+	Kind       string
+	CLI        string
+	CLIPath    string
+	EnvOver    map[string]string
+	CLIArgs    string
+	HasCLIPath bool
+	HasEnvOver bool
+	HasCLIArgs bool
 }) (*config.ExecutorConfig, string) {
 	// Lock check: if the persisted agent has an executor.cli and the request
 	// carries a different cli value, reject 400.
@@ -196,11 +196,11 @@ func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
 	// ORDER they appear in the generated struct (Cli, CliArgs, CliPath,
 	// EnvOverrides, Kind) — Go struct literal positional initialisation.
 	exec := struct { // not-wire-format: generated gen.Agent.Executor inline shape, only populates the generated field
-		Cli          *gen.AgentExecutorCli     `json:"cli,omitempty"`
-		CliArgs      *string                   `json:"cli_args,omitempty"`
-		CliPath      *string                   `json:"cli_path,omitempty"`
-		EnvOverrides *map[string]string        `json:"env_overrides,omitempty"`
-		Kind         *gen.AgentExecutorKind    `json:"kind,omitempty"`
+		Cli          *gen.AgentExecutorCli  `json:"cli,omitempty"`
+		CliArgs      *string                `json:"cli_args,omitempty"`
+		CliPath      *string                `json:"cli_path,omitempty"`
+		EnvOverrides *map[string]string     `json:"env_overrides,omitempty"`
+		Kind         *gen.AgentExecutorKind `json:"kind,omitempty"`
 	}{}
 	if ec.CLI != "" {
 		cli := gen.AgentExecutorCli(ec.CLI)

@@ -230,12 +230,12 @@ func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
 		},
-		ChatID:   "chat-1",
-		Content:  "/use shell explain how to list files",
+		ChatID:  "chat-1",
+		Content: "/use shell explain how to list files",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -280,12 +280,12 @@ func TestHandleCommand_UseCommandRejectsUnknownSkill(t *testing.T) {
 
 	opts := processOptions{}
 	reply, handled := al.handleCommand(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
 		},
-		ChatID:   "chat-1",
-		Content:  "/use missing explain how to list files",
+		ChatID:  "chat-1",
+		Content: "/use missing explain how to list files",
 	}, agent, &opts)
 	if !handled {
 		t.Fatal("expected /use with unknown skill to be handled")
@@ -324,12 +324,12 @@ func TestProcessMessage_UseCommandArmsSkillForNextMessage(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
 		},
-		ChatID:   "chat-1",
-		Content:  "/use shell",
+		ChatID:  "chat-1",
+		Content: "/use shell",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() arm error = %v", err)
@@ -339,12 +339,12 @@ func TestProcessMessage_UseCommandArmsSkillForNextMessage(t *testing.T) {
 	}
 
 	response, _, err = al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
 		},
-		ChatID:   "chat-1",
-		Content:  "explain how to list files",
+		ChatID:  "chat-1",
+		Content: "explain how to list files",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() follow-up error = %v", err)
@@ -645,12 +645,12 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat1",
+		Channel: "telegram",
+		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		Content:  "take a screenshot of the screen and send it to me",
+		Content: "take a screenshot of the screen and send it to me",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -689,12 +689,12 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 		t.Fatal("expected default agent")
 	}
 	route, _, err := al.resolveMessageRoute(bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat1",
+		Channel: "telegram",
+		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		Content:  "take a screenshot of the screen and send it to me",
+		Content: "take a screenshot of the screen and send it to me",
 	})
 	if err != nil {
 		t.Fatalf("resolveMessageRoute() error = %v", err)
@@ -744,12 +744,12 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat1",
+		Channel: "telegram",
+		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		Content:  "take a screenshot of the screen and send it to me",
+		Content: "take a screenshot of the screen and send it to me",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -797,12 +797,12 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat1",
+		Channel: "telegram",
+		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		Content:  "take a screenshot of the screen and send it to me",
+		Content: "take a screenshot of the screen and send it to me",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1441,12 +1441,12 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	msg := bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "hello",
+		ChatID:  "chat1",
+		Content: "hello",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1503,11 +1503,11 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 	helper := testHelper{al: al}
 
 	baseMsg := bus.InboundMessage{
-		Channel:  "whatsapp",
+		Channel: "whatsapp",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
+		ChatID: "chat1",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1515,13 +1515,13 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 	}
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  baseMsg.Channel,
+		Channel: baseMsg.Channel,
 		Sender: bus.SenderInfo{
 			CanonicalID: baseMsg.Sender.CanonicalID,
 		},
-		ChatID:   baseMsg.ChatID,
-		Content:  "/show channel",
-		Peer:     baseMsg.Peer,
+		ChatID:  baseMsg.ChatID,
+		Content: "/show channel",
+		Peer:    baseMsg.Peer,
 	})
 	if showResp != "Current Channel: whatsapp" {
 		t.Fatalf("unexpected /show reply: %q", showResp)
@@ -1531,13 +1531,13 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 	}
 
 	fooResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  baseMsg.Channel,
+		Channel: baseMsg.Channel,
 		Sender: bus.SenderInfo{
 			CanonicalID: baseMsg.Sender.CanonicalID,
 		},
-		ChatID:   baseMsg.ChatID,
-		Content:  "/foo",
-		Peer:     baseMsg.Peer,
+		ChatID:  baseMsg.ChatID,
+		Content: "/foo",
+		Peer:    baseMsg.Peer,
 	})
 	if fooResp != "LLM reply" {
 		t.Fatalf("unexpected /foo reply: %q", fooResp)
@@ -1547,13 +1547,13 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 	}
 
 	newResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  baseMsg.Channel,
+		Channel: baseMsg.Channel,
 		Sender: bus.SenderInfo{
 			CanonicalID: baseMsg.Sender.CanonicalID,
 		},
-		ChatID:   baseMsg.ChatID,
-		Content:  "/new",
-		Peer:     baseMsg.Peer,
+		ChatID:  baseMsg.ChatID,
+		Content: "/new",
+		Peer:    baseMsg.Peer,
 	})
 	if newResp != "LLM reply" {
 		t.Fatalf("unexpected /new reply: %q", newResp)
@@ -1602,12 +1602,12 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 	helper := testHelper{al: al}
 
 	switchResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "/switch model to deepseek",
+		ChatID:  "chat1",
+		Content: "/switch model to deepseek",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1618,12 +1618,12 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 	}
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "/show model",
+		ChatID:  "chat1",
+		Content: "/show model",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1671,12 +1671,12 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 	helper := testHelper{al: al}
 
 	switchResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "/switch model to missing",
+		ChatID:  "chat1",
+		Content: "/switch model to missing",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1687,12 +1687,12 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 	}
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "/show model",
+		ChatID:  "chat1",
+		Content: "/show model",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1764,12 +1764,12 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 	helper := testHelper{al: al}
 
 	firstResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "hello before switch",
+		ChatID:  "chat1",
+		Content: "hello before switch",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1789,12 +1789,12 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 	}
 
 	switchResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "/switch model to deepseek",
+		ChatID:  "chat1",
+		Content: "/switch model to deepseek",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1805,12 +1805,12 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 	}
 
 	secondResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "hello after switch",
+		ChatID:  "chat1",
+		Content: "hello after switch",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1905,12 +1905,12 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 	helper := testHelper{al: al}
 
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "hi",
+		ChatID:  "chat1",
+		Content: "hi",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
@@ -1954,7 +1954,7 @@ func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 	// ReadFileTool returns SilentResult, which should not send user message
 	ctx := context.Background()
 	msg := bus.InboundMessage{
-		Channel:    "test",
+		Channel: "test",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
@@ -1998,7 +1998,7 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	// ExecTool returns UserResult, which should send user message
 	ctx := context.Background()
 	msg := bus.InboundMessage{
-		Channel:    "test",
+		Channel: "test",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
@@ -2532,12 +2532,12 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 	al.SetChannelManager(chManager)
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		ChatID:   "chat1",
-		Content:  "hello",
+		ChatID:  "chat1",
+		Content: "hello",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -2640,12 +2640,12 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
+		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user-1",
 		},
-		ChatID:   "chat-1",
-		Content:  "check tool feedback",
+		ChatID:  "chat-1",
+		Content: "check tool feedback",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -3174,8 +3174,8 @@ func TestProcessMessage_ContextOverflowRecovery(t *testing.T) {
 	}
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:    "test",
-		ChatID:     "chat1",
+		Channel: "test",
+		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
@@ -3218,12 +3218,12 @@ func TestProcessMessage_ContextOverflow_AnthropicStyle(t *testing.T) {
 	}
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "test",
-		ChatID:   "chat1",
+		Channel: "test",
+		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
-		Content:  "hello",
+		Content: "hello",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
