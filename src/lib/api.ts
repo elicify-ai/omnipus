@@ -692,14 +692,11 @@ export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent
 }
 
 // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete button.
-// The wire contract has no DELETE /agents/{id} operation yet; the server
-// returns 405 (or 404 if not implemented at all). The button is wired
-// through the same `request<void>` helper as `deleteTask` / `deleteSchedule`
-// so when the endpoint lands only this wrapper needs an update. For now
-// every confirm surfaces the API error inline — no silent failure.
+// DELETE /api/v1/agents/{id} — handler rejects locked (core/system) agents
+// with 403 + code `agent_locked`. Custom (non-locked) agents return 204 No
+// Content; 404 for unknown ids. The wrapper uses `request<void>` (no
+// response body) so the mutation consumer only sees success/failure.
 export function deleteAgent(id: string): Promise<void> {
-  // no-schema: void response; DELETE returns 204 No Content when the
-  // endpoint is implemented; 4xx/5xx otherwise.
   return request<void>(`/agents/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 

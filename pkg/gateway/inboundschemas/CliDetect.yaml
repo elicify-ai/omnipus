@@ -1,0 +1,20 @@
+type: object
+description: >
+  Host-side CLI detection result. Probes whether each external-CLI runner binary
+  is on PATH for the gateway process. Used by the roster screen's
+  "+ Add Subagent (External)" disclosure to grey-out CLIs that the host cannot
+  actually run (saves the operator a wizard failure at runtime).
+required:
+  - hasClaude
+  - hasCodex
+  - hasOpencode
+properties:
+  hasClaude:
+    type: boolean
+    description: Whether the `claude` binary (Claude Code, "claude-code" CLI) is on PATH for the gateway process.
+  hasCodex:
+    type: boolean
+    description: Whether the `codex` binary (Codex CLI) is on PATH.
+  hasOpencode:
+    type: boolean
+    description: Whether the `opencode` binary is on PATH.

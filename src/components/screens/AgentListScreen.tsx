@@ -48,18 +48,16 @@ export function AgentListScreen() {
   const baseAgents = agents.filter((a) => !isWorker(a))
   const workerAgents = agents.filter(isWorker)
 
-  // Host-CLI detection — W4 of agent-form-requirements. We don't have a
-  // dedicated `GET /api/v1/system/cli-detect` endpoint (out of scope for
-  // this wave), so we keep optimistic defaults (all CLIs available) and
-  // probe `fetchAgents` 404-fall-through below if a backend probe later
-  // ships. The roster's "Add Subagent (External)" picker shows each CLI
-  // as enabled by default and the user gets a runtime 4xx from the wizard
-  // if they pick a missing binary. A future ADR can wire the actual probe.
+  // Host-CLI detection — W4 of agent-form-requirements. We probe
+  // `GET /api/v1/system/cli-detect` on mount and fall back to optimistic
+  // defaults (all CLIs available) when the endpoint is missing or returns a
+  // network error, so the disclosure still works in degraded modes (offline,
+  // pre-onboarding, etc.). The roster's "Add Subagent (External)" picker
+  // disables each CLI whose binary the gateway reports missing.
   const [hostClis, setHostClis] = useState<HostClis>(OPTIMISTIC_HOST_CLIS)
   const [externalMenuOpen, setExternalMenuOpen] = useState(false)
   useEffect(() => {
-    // SSR-safe: only run in browser. The optional probe is a no-op today;
-    // left here as the hook-point so a future endpoint slot is one-line.
+    // SSR-safe: only run in browser.
     if (typeof window === 'undefined') return
     let cancelled = false
     fetch('/api/v1/system/cli-detect')

@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -1797,9 +1798,20 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 		return
 	}
 	if found.Locked {
-		jsonErr(w, http.StatusForbidden, "cannot delete a locked (core) agent")
+		// Surface the contract's "agent_locked" error code so the SPA can
+		// distinguish the locked-agent 403 from generic forbidden. JSON shape
+		// mirrors the ErrorResponse schema: { error, code }.
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "cannot delete a locked (core) agent",
+			"code":  "agent_locked",
+		})
 		return
 	}
+	// Snapshot the audit fields BEFORE we mutate config.json — `found` still
+	// points into the in-memory config and the safeUpdateConfigJSON callback
+	// runs before the reload returns.
+	deletedName := found.Name
+	deletedType := string(found.Type)
 	// Remove the agent from config.json.
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		agents, _ := m["agents"].(map[string]any)
@@ -1832,7 +1844,56 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
 	}
+	// Audit the destructive action. Best-effort (matches rest_workspaces
+	// conventions: emit after the write succeeds, ignore logger errors). The
+	// auditor is nil only in unit-test fixtures where audit isn't wired; the
+	// pre-existing workspace handlers use the same nil-guard pattern.
+	if a.auditor != nil {
+		_ = a.auditor.Log(&audit.Entry{
+			Event:    "agent.delete",
+			Decision: audit.DecisionAllow,
+			AgentID:  id,
+			Details: map[string]any{
+				"agent_id":   id,
+				"agent_type": deletedType,
+				"agent_name": deletedName,
+			},
+		})
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// cliProbeLookPath is the probe function used by HandleSystemCliDetect. It is
+// a package-level var (rather than a direct call to exec.LookPath) so unit
+// tests can swap in a deterministic implementation without OS-level mocking.
+// In production this is always exec.LookPath.
+var cliProbeLookPath = exec.LookPath
+
+// HandleSystemCliDetect handles GET /api/v1/system/cli-detect.
+//
+// Reports whether each of the three external-CLI runner binaries is on PATH
+// for the gateway process. The roster screen uses this to grey-out CLIs the
+// host cannot run so operators don't have to discover a missing binary inside
+// the wizard.
+//
+// Pure Go probe (no shell-out). Idempotent and unaudited — this is a
+// read-only diagnostic. LookPath returns (path, err); any non-nil error is
+// treated as "not on PATH".
+func (a *restAPI) HandleSystemCliDetect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	probe := func(binary string) bool {
+		_, err := cliProbeLookPath(binary)
+		return err == nil
+	}
+	resp := gen.CliDetect{
+		HasClaude:   probe("claude"),
+		HasCodex:    probe("codex"),
+		HasOpencode: probe("opencode"),
+	}
+	jsonOK(w, resp)
 }
 
 // isExternalSubagent reports whether the persisted agent is a subagent_3p
@@ -3560,6 +3621,7 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 // preventing "Unexpected token '<'" errors from the SPA catch-all.
 func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/state", a.withOptionalAuth(a.HandleState))
+	cm.RegisterHTTPHandler("/api/v1/system/cli-detect", a.withAuth(a.HandleSystemCliDetect))
 	cm.RegisterHTTPHandler("/api/v1/status", a.withAuth(a.HandleStatus))
 	cm.RegisterHTTPHandler("/api/v1/tasks", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))

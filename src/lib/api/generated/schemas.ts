@@ -2048,6 +2048,13 @@ export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
     period_end: z.string().datetime({ offset: true }),
   })
   .passthrough();
+export const CliDetect = z
+  .object({
+    hasClaude: z.boolean(),
+    hasCodex: z.boolean(),
+    hasOpencode: z.boolean(),
+  })
+  .passthrough();
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
 export const AgentSession = z
@@ -2253,6 +2260,49 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
     ],
     response: Agent,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/agents/:id",
+    alias: "deleteAgent",
+    description: `Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the &#x60;omnipus-system&#x60; agent CANNOT be deleted (403, code &#x60;agent_locked&#x60;). Deleting an agent also clears its session history and on-disk workspace artifacts via the cascade pipeline. Audited (severity INFO, event &#x60;agent.delete&#x60;).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
     errors: [
       {
         status: 400,
@@ -5187,6 +5237,22 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/system/cli-detect",
+    alias: "getHostCliDetect",
+    description: `Reports whether the gateway process can locate each of the three external-CLI runners on its PATH. Read-only, idempotent, and unaudited — the SPA roster uses this to grey-out CLIs the host cannot run instead of letting the operator hit a wizard failure at runtime. Pure Go probe (no shell-out).
+`,
+    requestFormat: "json",
+    response: CliDetect,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],
