@@ -62,7 +62,9 @@ import (
 )
 
 // Version is set at build time via -ldflags "-X github.com/dapicom-ai/omnipus/pkg/gateway.Version=x.y.z".
-var Version = "dev"
+// Dev builds default to a semver-compatible string so the /version endpoint still
+// passes the contract schema used by the SPA.
+var Version = "0.0.0-dev"
 
 // restAPI holds shared dependencies for all REST endpoint handlers.
 // Handlers are registered as method-dispatching http.HandlerFuncs in gateway.go.
