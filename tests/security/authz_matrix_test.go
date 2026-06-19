@@ -208,7 +208,7 @@ func authzMatrix() []matrixCase {
 			name: "anon_post_agents",
 			req: matrixRequest{
 				roleAnon, http.MethodPost, "/api/v1/agents",
-				`{"name":"a1","model":"scripted-model"}`,
+				`{"name":"a1","model":"scripted-model","soul":"test-soul"}`,
 			},
 			wantOneOf: []int{http.StatusUnauthorized, http.StatusForbidden},
 			note:      "anon on state-changing route: CSRF (403) or auth (401) is a hard deny — middleware-order dependent",
@@ -218,7 +218,7 @@ func authzMatrix() []matrixCase {
 			name: "user_post_agents",
 			req: matrixRequest{
 				roleUser, http.MethodPost, "/api/v1/agents",
-				`{"name":"authz-user-a","model":"scripted-model"}`,
+				`{"name":"authz-user-a","model":"scripted-model","soul":"test-soul"}`,
 			},
 			expect: matrixExpect{status: http.StatusCreated},
 			note:   "GAP: user can create agents (should be admin-only per Issue #98?)",
@@ -227,7 +227,7 @@ func authzMatrix() []matrixCase {
 			name: "admin_post_agents",
 			req: matrixRequest{
 				roleAdmin, http.MethodPost, "/api/v1/agents",
-				`{"name":"authz-admin-a","model":"scripted-model"}`,
+				`{"name":"authz-admin-a","model":"scripted-model","soul":"test-soul"}`,
 			},
 			expect: matrixExpect{status: http.StatusCreated},
 		},

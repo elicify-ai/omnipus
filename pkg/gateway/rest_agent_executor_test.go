@@ -81,7 +81,7 @@ func decodeAgentResp(t *testing.T, body []byte) gen.Agent {
 func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"NativeAgent","executor":{"kind":"native"}}`
+	body := `{"name":"NativeAgent","executor":{"kind":"native"},"soul":"native-soul"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -177,8 +177,12 @@ func TestGetEditPut_ExecutorRoundTripPreserved(t *testing.T) {
 	assert.Equal(t, "claude-code", exec["cli"])
 }
 
-// TestUpdateAgent_ExecutorChanges proves PUT can change the executor's cli on
-// a worker (the only agent kind allowed to carry an external executor).
+// TestUpdateAgent_ExecutorChanges proves the cli-lock rule on a worker:
+// once an agent is created with a non-empty executor.cli, the cli is
+// IMMUTABLE. Subsequent PUTs that try to switch the cli must be rejected
+// with 400, while the originally-persisted cli survives. (Pre-W2 spec the
+// cli was freely mutable; the cli-lock rule per spec §4.16 / F-10 is
+// exercised by this test.)
 func TestUpdateAgent_ExecutorChanges(t *testing.T) {
 	api := buildExecutorTestAPIWithWorker(t)
 
@@ -190,15 +194,19 @@ func TestUpdateAgent_ExecutorChanges(t *testing.T) {
 	api.HandleAgents(pw1, pr1)
 	require.Equal(t, http.StatusOK, pw1.Code)
 
-	// Change it to opencode.
+	// Attempt to change the cli to opencode — must be rejected 400 by the
+	// cli-lock rule.
 	put2 := `{"executor":{"kind":"external-cli","cli":"opencode"}}`
 	pw2 := httptest.NewRecorder()
 	pr2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker", strings.NewReader(put2))
 	pr2.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(pw2, pr2)
-	require.Equal(t, http.StatusOK, pw2.Code, "put body: %s", pw2.Body.String())
+	require.Equal(t, http.StatusBadRequest, pw2.Code,
+		"changing cli after create must be rejected by the cli-lock rule; body: %s", pw2.Body.String())
+	assert.Contains(t, pw2.Body.String(), "executor.cli is locked",
+		"the rejection must reference the cli-lock rule")
 
-	// Persisted on disk.
+	// Persisted on disk — original cli is preserved, not overwritten.
 	raw, err := os.ReadFile(api.configPath())
 	require.NoError(t, err)
 	var m map[string]any
@@ -206,7 +214,8 @@ func TestUpdateAgent_ExecutorChanges(t *testing.T) {
 	exec := findExecutorInConfig(t, m, "test-worker")
 	require.NotNil(t, exec, "executor not persisted: %s", string(raw))
 	assert.Equal(t, "external-cli", exec["kind"])
-	assert.Equal(t, "opencode", exec["cli"])
+	assert.Equal(t, "codex", exec["cli"],
+		"original cli must survive the rejected PUT (cli-lock rule)")
 }
 
 // TestCreateAgent_InvalidExecutor_400 proves the validator rejects bad executors.

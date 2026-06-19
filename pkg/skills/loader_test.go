@@ -273,21 +273,32 @@ func TestListSkillsGlobalOverridesBuiltin(t *testing.T) {
 	assert.Equal(t, "global version", skills[0].Description)
 }
 
-func TestListSkillsMetadataNameDedup(t *testing.T) {
+// TestListSkillsDistinctIDsAreDistinctSkills verifies that two skills with
+// different directory slugs (IDs) are surfaced as two separate skills, even
+// when their frontmatter display names happen to match. ID is the stable
+// identifier (the directory name); Name is human-readable display text and
+// may legitimately collide across distinct skills. This used to dedup by
+// Name and was the root cause of the per-agent allowlist returning
+// duplicate slugs — fixed by deduping on ID.
+func TestListSkillsDistinctIDsAreDistinctSkills(t *testing.T) {
 	tmp := t.TempDir()
 	ws := filepath.Join(tmp, "workspace")
 	global := filepath.Join(tmp, "global")
 
-	// Different directory names but same metadata name
+	// Different directory names (IDs) but same metadata display name.
 	createSkillDir(t, filepath.Join(ws, "skills"), "dir-a", "shared-name", "workspace version")
 	createSkillDir(t, global, "dir-b", "shared-name", "global version")
 
 	sl := NewSkillsLoader(ws, global, "")
 	skills := sl.ListSkills()
 
-	assert.Len(t, skills, 1)
-	assert.Equal(t, "shared-name", skills[0].Name)
-	assert.Equal(t, "workspace", skills[0].Source)
+	assert.Len(t, skills, 2, "different IDs are distinct skills, regardless of Name")
+	sources := map[string]string{}
+	for _, s := range skills {
+		sources[s.Source] = s.ID
+	}
+	assert.Equal(t, "dir-a", sources["workspace"])
+	assert.Equal(t, "dir-b", sources["global"])
 }
 
 func TestListSkillsMultipleDistinctSkills(t *testing.T) {
