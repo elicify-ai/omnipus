@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { generateId } from '@/lib/constants'
+import type { WizardCli, WizardType } from '@/components/agents/wizard/types'
 
 export interface Toast {
   id: string
@@ -30,7 +31,17 @@ interface UiStore {
    * locked type; the modal renders the corresponding wizard branch.
    */
   createAgentModalType: 'Main' | 'Subagent' | 'subagent_3p'
-  openCreateAgentModal: (type?: 'Main' | 'Subagent' | 'subagent_3p') => void
+  /**
+   * CLI choice for the create-agent modal. Only meaningful when
+   * `createAgentModalType === 'subagent_3p'` — wizard pre-fills the executor
+   * CLI chip (Step 1) and the executor.cli path (Step 3). Reset to `null`
+   * on every close so the next open defaults back to the bare subagent_3p
+   * shape unless an explicit opener (e.g. the per-CLI "+ Add" button on the
+   * Agents roster, W6) sets it again. W4 of agent-form-requirements added
+   * the second optional parameter to `openCreateAgentModal`.
+   */
+  createAgentModalCli: WizardCli | null
+  openCreateAgentModal: (type?: WizardType, cli?: WizardCli) => void
   closeCreateAgentModal: () => void
 
   // Edit/view agent slide-over; null = closed.
@@ -68,10 +79,19 @@ export const useUiStore = create<UiStore>((set, get) => ({
 
   createAgentModalOpen: false,
   createAgentModalType: 'Main',
-  openCreateAgentModal: (type) =>
-    set({ createAgentModalOpen: true, createAgentModalType: type ?? 'Main' }),
+  createAgentModalCli: null,
+  openCreateAgentModal: (type, cli) =>
+    set({
+      createAgentModalOpen: true,
+      createAgentModalType: type ?? 'Main',
+      createAgentModalCli: cli ?? null,
+    }),
   closeCreateAgentModal: () =>
-    set({ createAgentModalOpen: false, createAgentModalType: 'Main' }),
+    set({
+      createAgentModalOpen: false,
+      createAgentModalType: 'Main',
+      createAgentModalCli: null,
+    }),
 
   editAgentId: null,
   openEditAgentSlideOver: (agentId) => set({ editAgentId: agentId }),

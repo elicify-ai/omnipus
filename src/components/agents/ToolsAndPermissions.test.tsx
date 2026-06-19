@@ -119,7 +119,7 @@ describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
       />
@@ -133,7 +133,7 @@ describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
       />
@@ -152,7 +152,7 @@ describe('ToolsAndPermissions — source badge (FR-027)', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
       />
@@ -168,7 +168,7 @@ describe('ToolsAndPermissions — source badge (FR-027)', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
       />
@@ -200,7 +200,7 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={{ builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
       />
@@ -218,7 +218,7 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={{ builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
       />
@@ -233,7 +233,7 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={{ builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
       />
@@ -276,7 +276,7 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={conflictTools}
         onChange={NOOP_CHANGE}
       />,
@@ -296,7 +296,7 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={noConflictTools}
         onChange={NOOP_CHANGE}
       />,
@@ -310,7 +310,7 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
       />,
@@ -330,7 +330,7 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={conflictTools}
         onChange={NOOP_CHANGE}
       />,
@@ -348,7 +348,7 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
       />
@@ -365,7 +365,7 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
-        agentType="custom"
+        agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={onChange}
       />

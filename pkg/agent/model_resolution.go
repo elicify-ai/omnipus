@@ -109,9 +109,10 @@ func cloneWithWorkspace(src *config.ModelConfig, workspace string) *config.Model
 	return &clone
 }
 
-// resolveModel is the thin boolean wrapper around ResolveModelCfg used by the
-// UI selector. It returns the canonical protocol-prefixed model name when
-// found, or ("", false) on miss.
+// resolveModel is the thin boolean wrapper around ResolveModelCfg used by
+// callers that only need the canonical wire form (not the matched Provider).
+// It returns the canonical protocol-prefixed model name when found, or
+// ("", false) on miss.
 //
 // For legacy entries that do NOT set the Provider field (model_name == model
 // == bare slug), apply the historical ensureProtocol heuristic: bare slugs
@@ -121,14 +122,29 @@ func cloneWithWorkspace(src *config.ModelConfig, workspace string) *config.Model
 // shape), return mc.Model verbatim — the spec (Dataset 1 row 6) requires
 // the canonical name without an implicit prefix in that case.
 func resolveModel(cfg *config.Config, modelName string) (string, bool) {
-	mc, err := ResolveModelCfg(cfg, modelName, "")
-	if err != nil || mc == nil {
+	r, ok := resolveModelRef(cfg, modelName)
+	if !ok {
 		return "", false
 	}
-	if strings.TrimSpace(mc.Provider) == "" {
-		mc.Model = ensureProtocol(mc.Model)
+	if strings.TrimSpace(r.Provider) == "" {
+		r.Model = ensureProtocol(r.Model)
 	}
-	return mc.Model, true
+	return r.Model, true
+}
+
+// resolveModelRef returns the matched ModelConfig's canonical Model form
+// AND its Provider. The Provider field of the returned ref is the matched
+// entry's Provider (e.g. "openrouter"), not the slash-prefix from mc.Model
+// (which may be a vendor namespace like "z-ai" and not a configured
+// provider at all). This is the unified lookup used by both the candidate
+// builder (which needs Provider) and the UI selector / wire-shape
+// canonicalization paths (which need Model).
+func resolveModelRef(cfg *config.Config, modelName string) (providers.ResolvedRef, bool) {
+	mc, err := ResolveModelCfg(cfg, modelName, "")
+	if err != nil || mc == nil {
+		return providers.ResolvedRef{}, false
+	}
+	return providers.ResolvedRef{Model: mc.Model, Provider: mc.Provider}, true
 }
 
 // ensureProtocol is the historical helper that gave bare slugs an implicit
@@ -146,14 +162,20 @@ func ensureProtocol(model string) string {
 	return "openai/" + model
 }
 
-// buildModelListResolver returns a closure the UI selector uses to ask
-// "can this slug be used as a model?". After the phase-1 refactor (FR-003),
-// it delegates to resolveModel so the chat runtime and the UI selector agree
-// on every input — the historical divergence (passthrough fallback only on
-// the UI side) is closed.
-func buildModelListResolver(cfg *config.Config) func(raw string) (string, bool) {
-	return func(raw string) (string, bool) {
-		return resolveModel(cfg, raw)
+// buildModelListResolver is the SINGLE source of truth for "what is the
+// canonical (model, provider) pair for this slug?". It is used by the
+// candidate builder (which needs the matched Provider) and the UI selector
+// (which needs the canonical Model form). Both paths use the same lookup
+// so a chat runtime mismatch (passthrough fallback only on the UI side)
+// cannot happen.
+//
+// The returned closure yields a providers.ResolvedRef so the candidate
+// builder can set the candidate's Provider to the configured provider that
+// owns the credentials — not the slash-prefix from mc.Model, which may be
+// a vendor namespace like "z-ai" with no matching provider entry.
+func buildModelListResolver(cfg *config.Config) func(raw string) (providers.ResolvedRef, bool) {
+	return func(raw string) (providers.ResolvedRef, bool) {
+		return resolveModelRef(cfg, raw)
 	}
 }
 
@@ -271,11 +293,24 @@ func resolveModelCandidatesFromList(
 		if candidateRaw == "" {
 			return
 		}
+		// When the resolver matches, use the matched entry's Provider as the
+		// candidate's Provider — this is the fix for the seeded-agent bug
+		// where mc.Model == "z-ai/glm-5.2" used to leak as Provider: "zai"
+		// into the candidate. The matched entry's Provider is the
+		// configured provider (e.g. "openrouter") that owns the credentials.
 		if resolver != nil {
 			if resolved, ok := resolver(candidateRaw); ok {
-				candidateRaw = resolved
+				key := providers.ModelKey(resolved.Provider, resolved.Model)
+				if seen[key] {
+					return
+				}
+				seen[key] = true
+				out = append(out, providers.FallbackCandidate{Provider: resolved.Provider, Model: resolved.Model})
+				return
 			}
 		}
+		// No match in model_list — fall back to ParseModelRef with
+		// defaultProvider (legacy path for entries not in cfg.Providers).
 		ref := providers.ParseModelRef(candidateRaw, defaultProvider)
 		if ref == nil {
 			return
@@ -313,11 +348,16 @@ func resolveModelCandidatesFromList(
 			out = append(out, providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model})
 			return
 		}
-		// No pinned provider — defer to the legacy resolver path (same as
-		// resolveModelCandidates for a single entry).
+		// No pinned provider — use the resolver like the primary does.
 		if resolver != nil {
 			if resolved, ok := resolver(candidateRaw); ok {
-				candidateRaw = resolved
+				key := providers.ModelKey(resolved.Provider, resolved.Model)
+				if seen[key] {
+					return
+				}
+				seen[key] = true
+				out = append(out, providers.FallbackCandidate{Provider: resolved.Provider, Model: resolved.Model})
+				return
 			}
 		}
 		ref := providers.ParseModelRef(candidateRaw, defaultProvider)

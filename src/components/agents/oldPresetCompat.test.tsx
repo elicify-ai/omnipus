@@ -104,7 +104,7 @@ describe('oldPresetCompat: agents saved under removed presets round-trip unchang
     render(
       <ToolsAndPermissions
         agentId="agent-unrestricted"
-        agentType="custom"
+        agentType="Main"
         tools={unrestrictedCfg}
         onChange={onChange}
       />,
@@ -149,7 +149,7 @@ describe('oldPresetCompat: agents saved under removed presets round-trip unchang
     render(
       <ToolsAndPermissions
         agentId="agent-standard"
-        agentType="custom"
+        agentType="Main"
         tools={standardCfg}
         onChange={onChange}
       />,
@@ -193,7 +193,7 @@ describe('oldPresetCompat: agents saved under removed presets round-trip unchang
     render(
       <ToolsAndPermissions
         agentId="agent-minimal"
-        agentType="custom"
+        agentType="Main"
         tools={minimalCfg}
         onChange={onChange}
       />,
@@ -232,7 +232,7 @@ describe('oldPresetCompat: agents saved under removed presets round-trip unchang
     render(
       <ToolsAndPermissions
         agentId="agent-custom"
-        agentType="custom"
+        agentType="Main"
         tools={customCfg}
         onChange={onChange}
       />,

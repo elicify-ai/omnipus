@@ -48,10 +48,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchSkills: vi.fn(), fetchProviders: vi.fn(), testAgentRunner: vi.fn() }
+  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), deleteAgent: vi.fn(), fetchSkills: vi.fn(), fetchProviders: vi.fn(), testAgentRunner: vi.fn() }
 })
 
-import { fetchAgent, fetchSkills, updateAgent, fetchProviders, testAgentRunner } from '@/lib/api'
+import { fetchAgent, fetchSkills, updateAgent, deleteAgent, fetchProviders, testAgentRunner } from '@/lib/api'
 import { ApiError } from '@/lib/api-error'
 
 const mockCoreAgent: Agent = {
@@ -67,8 +67,7 @@ const mockCoreAgent: Agent = {
   instructions: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
-  steering_mode: 'loop',
-  tool_feedback: true,
+  steering_mode: 'one-at-a-time',
   heartbeat_enabled: false,
   heartbeat_interval: 300,
   rate_limits: { use_global_defaults: true },
@@ -88,8 +87,7 @@ const mockLockedCoreAgent: Agent = {
   instructions: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
-  steering_mode: 'loop',
-  tool_feedback: true,
+  steering_mode: 'one-at-a-time',
   heartbeat_enabled: false,
   heartbeat_interval: 300,
 }
@@ -127,6 +125,18 @@ function renderProfile(agentId: string) {
       <AgentProfile agentId={agentId} />
     </QueryClientProvider>
   )
+}
+
+// Wave 5 / Radix Tabs: the Radix Tabs trigger uses keyboard activation
+// (Enter / Space) for state changes in JSDOM — `fireEvent.click()` alone
+// does not flush the internal onValueChange. This helper mirrors the
+// focus + keyDown pattern that Radix expects, and falls back to click for
+// any test where keyboard activation is not what we want.
+function switchTab(testId: string) {
+  const trigger = screen.getByTestId(testId)
+  trigger.focus()
+  fireEvent.keyDown(trigger, { key: 'Enter' })
+  fireEvent.click(trigger)
 }
 
 beforeEach(() => {
@@ -199,37 +209,42 @@ describe('AgentProfile — core agent sections (test #13)', () => {
 
   it('shows Rate Limits section with "Use global defaults" for core agent', async () => {
     // Traces to: wave5a-wire-ui-spec.md — US-7 AC5: rate limits defaults toggle
+    // Wave 5 / spec §6.2: Rate Limits is now inside the Advanced tab; click
+    // the tab to open the panel and assert on the "Use global defaults" copy.
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    // The Rate Limits accordion trigger is always in the DOM (even when collapsed).
-    // The accordion content ("Use global defaults") is removed from DOM when closed —
-    // only assert on the trigger text to avoid a fragile DOM-state dependency.
-    expect(screen.getByText(/Rate Limits/i)).toBeInTheDocument()
+    switchTab('tab-advanced')
+    expect(await screen.findByText(/Use global defaults/i)).toBeInTheDocument()
   })
 
   it('shows Stats section when stats are present', async () => {
     // Traces to: wave5a-wire-ui-spec.md — US-7: stats section
+    // Wave 5: stats are in the Advanced tab. Click it before asserting.
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    expect(screen.getByText('Sessions')).toBeInTheDocument()
+    switchTab('tab-advanced')
+    // Activity heading is the stat section container.
+    expect(await screen.findByText(/^Activity$/i)).toBeInTheDocument()
   })
 
-  it('shows the slide-over footer (Close button) when the profile is fully rendered', async () => {
+  it('shows the slide-over footer when the profile is fully rendered', async () => {
     // Traces to: wave5a-wire-ui-spec.md — US-7 AC2: editable sections for core.
-    // The in-page back button is gone after the slide-over refactor; assert
-    // on the explicit data-testid to disambiguate from the Radix sr-only X.
+    // Wave 5 / spec §6.1: footer shows last-saved-indicator + delete-agent-button
+    // (no separate Close button). Assert on the spec-mandated testids.
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    expect(screen.getByTestId('agent-profile-close')).toBeInTheDocument()
+    expect(screen.getByTestId('last-saved-indicator')).toBeInTheDocument()
+    expect(screen.getByTestId('delete-agent-button')).toBeInTheDocument()
   })
 
   it('shows tools & permissions section when tools are present', async () => {
     // Traces to: wave5a-wire-ui-spec.md — US-7: tools section
-    // NOTE: The accordion is labeled "Tools & Permissions" in the component (not "Tools & Skills").
-    // The trigger text is always in the DOM regardless of accordion open/closed state.
+    // Wave 5: Tools & Permissions now lives inside the Tools tab; click it
+    // before asserting on the section heading.
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    expect(screen.getByText(/Tools.*Permissions/i)).toBeInTheDocument()
+    switchTab('tab-tools')
+    expect(await screen.findByText(/Tools.*Permissions/i)).toBeInTheDocument()
   })
 })
 
@@ -240,9 +255,15 @@ describe('AgentProfile — locked core agent sections (test #13)', () => {
 
   it('does NOT show Rate Limits for locked core agents', async () => {
     // Traces to: wave5a-wire-ui-spec.md — US-7 AC3: locked agents hide rate limits
+    // Wave 5: open the Advanced tab and confirm the "Use global defaults"
+    // copy is absent (the entire Rate Limits section is omitted for
+    // locked agents).
     renderProfile('mia')
     await screen.findByText('Mia')
-    expect(screen.queryByText(/Rate Limits/i)).toBeNull()
+    switchTab('tab-advanced')
+    // Use a small wait to let Radix activate the panel.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByText(/Use global defaults/i)).toBeNull()
   })
 
   it('does NOT show Save button for locked core agent', async () => {
@@ -256,19 +277,22 @@ describe('AgentProfile — locked core agent sections (test #13)', () => {
 // US-E6: per-agent skill assignment tests
 // Traces to: nontech-ux-hardening-spec.md §6.5, F-06
 describe('AgentProfile — Skills picker (US-E6)', () => {
-  it('always shows "Skills" accordion trigger', async () => {
-    // The accordion trigger is always in the DOM regardless of open/closed state.
+  it('always shows "Skills" section heading', async () => {
+    // Wave 5: Skills now lives inside the Tools tab. Open the tab and
+    // assert the section heading is present (the heading is always
+    // visible inside the tab panel).
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    expect(screen.getByText(/^Skills$/i)).toBeInTheDocument()
+    switchTab('tab-tools')
+    expect(await screen.findByText(/^Skills$/i)).toBeInTheDocument()
   })
 
   it('shows empty state when no skills are installed', async () => {
     vi.mocked(fetchSkills).mockResolvedValue([])
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    // Accordion is closed by default; the trigger is still in the DOM
-    expect(screen.getByText(/^Skills$/i)).toBeInTheDocument()
+    switchTab('tab-tools')
+    expect(await screen.findByText(/^Skills$/i)).toBeInTheDocument()
   })
 
   it('new agent with no skills shows 0 granted count (not labeled)', async () => {
@@ -277,6 +301,8 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(agentNoSkills)
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
+    switchTab('tab-tools')
+    await screen.findByText(/^Skills$/i)
     // The "X granted" badge must NOT appear when skills is empty/absent.
     expect(screen.queryByText(/granted/i)).toBeNull()
   })
@@ -286,8 +312,9 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(agentWithSkills)
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    // "2 granted" badge in the accordion header
-    expect(screen.getByText(/2 granted/i)).toBeInTheDocument()
+    switchTab('tab-tools')
+    // "2 granted" badge in the section header
+    expect(await screen.findByText(/2 granted/i)).toBeInTheDocument()
   })
 
   it('granting skills to agent A does not affect agent B rendering (AC2)', async () => {
@@ -300,13 +327,16 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(agentA)
     const { unmount } = renderProfile('agent-a')
     await screen.findByText('Agent A')
-    expect(screen.getByText(/1 granted/i)).toBeInTheDocument()
+    switchTab('tab-tools')
+    expect(await screen.findByText(/1 granted/i)).toBeInTheDocument()
     unmount()
 
     // Render agent B — must show 0 granted (no badge)
     vi.mocked(fetchAgent).mockResolvedValue(agentB)
     renderProfile('agent-b')
     await screen.findByText('Agent B')
+    switchTab('tab-tools')
+    await screen.findByText(/^Skills$/i)
     expect(screen.queryByText(/granted/i)).toBeNull()
   })
 })
@@ -323,12 +353,11 @@ describe('AgentProfile — B-2: Skills picker read-only for locked agents', () =
     vi.mocked(fetchSkills).mockResolvedValue(mockSkills)
   })
 
-  it('shows "Skill assignment is read-only" notice for locked agents when accordion is open', async () => {
+  it('shows "Skill assignment is read-only" notice for locked agents when tab is open', async () => {
     renderProfile('mia')
     await screen.findByText('Mia')
-    // Open the Skills accordion
-    const trigger = screen.getByText(/^Skills$/i)
-    fireEvent.click(trigger)
+    // Open the Tools tab where Skills now lives
+    switchTab('tab-tools')
     // The read-only notice must be visible
     expect(await screen.findByText(/skill assignment is read-only/i)).toBeInTheDocument()
   })
@@ -336,9 +365,8 @@ describe('AgentProfile — B-2: Skills picker read-only for locked agents', () =
   it('renders skill checkboxes as disabled for locked agents', async () => {
     renderProfile('mia')
     await screen.findByText('Mia')
-    // Open the Skills accordion
-    const trigger = screen.getByText(/^Skills$/i)
-    fireEvent.click(trigger)
+    // Open the Tools tab where Skills now lives
+    switchTab('tab-tools')
     // Wait for skill to appear
     const checkbox = await screen.findByTestId('skill-checkbox-web-research')
     expect((checkbox as HTMLInputElement).disabled).toBe(true)
@@ -358,7 +386,7 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     // Executor is in the default-open set for workers (W6-B1 / I1); only
     // click to open if the selector is not yet on screen.
     if (!screen.queryByTestId('executor-kind-select')) {
-      fireEvent.click(screen.getByText(/^Executor$/))
+      switchTab('tab-advanced')
     }
     const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
     // Absent executor → native default.
@@ -373,7 +401,7 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
     if (!screen.queryByTestId('executor-kind-select')) {
-      fireEvent.click(screen.getByText(/^Executor$/))
+      switchTab('tab-advanced')
     }
     const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
     expect(kind.value).toBe('external-cli')
@@ -387,7 +415,7 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
     if (!screen.queryByTestId('executor-kind-select')) {
-      fireEvent.click(screen.getByText(/^Executor$/))
+      switchTab('tab-advanced')
     }
     const kind = await screen.findByTestId('executor-kind-select')
     fireEvent.change(kind, { target: { value: 'external-cli' } })
@@ -414,7 +442,7 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     renderProfile('marketplace-pack-worker')
     await screen.findByText('Marketplace Worker')
     if (!screen.queryByTestId('executor-kind-select')) {
-      fireEvent.click(screen.getByText(/^Executor$/))
+      switchTab('tab-advanced')
     }
     const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
     expect(kind.disabled).toBe(true)
@@ -432,7 +460,7 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
     if (!screen.queryByTestId('executor-kind-select')) {
-      fireEvent.click(screen.getByText(/^Executor$/))
+      switchTab('tab-advanced')
     }
     const kind = await screen.findByTestId('executor-kind-select')
     fireEvent.change(kind, { target: { value: 'external-cli' } })
@@ -454,7 +482,7 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
     if (!screen.queryByTestId('executor-kind-select')) {
-      fireEvent.click(screen.getByText(/^Executor$/))
+      switchTab('tab-advanced')
     }
     const kind = await screen.findByTestId('executor-kind-select')
     fireEvent.change(kind, { target: { value: 'external-cli' } })
@@ -552,12 +580,13 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, soul: '' })
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
-    // Worker-only: Executor accordion is present
-    expect(screen.getByText(/^Executor$/)).toBeInTheDocument()
-    // Base-only: no Schedules accordion (workers never own a schedule)
+    // Worker-only: Executor section is inside the Advanced tab.
+    switchTab('tab-advanced')
+    expect(await screen.findByText(/^Executor$/)).toBeInTheDocument()
+    // Base-only: no Schedules section in Advanced (workers never own a schedule)
     expect(screen.queryByText(/^Schedules$/)).toBeNull()
-    // Open the Behavior accordion and assert the worker relabel + no heartbeat
-    fireEvent.click(screen.getByText(/^Behavior$/))
+    // Open the Personality tab and assert the worker relabel + no heartbeat
+    switchTab('tab-personality')
     const taskPrompt = await screen.findByTestId('worker-task-prompt')
     // Optional: not required by the browser, no aria-required="true"
     expect((taskPrompt as HTMLTextAreaElement).required).toBe(false)
@@ -580,7 +609,7 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     // Executor is in the default-open set for workers (W6-B1 / I1); only
     // click to open if the runner-test button is not yet on screen.
     if (!screen.queryByTestId('runner-test-button')) {
-      fireEvent.click(screen.getByText(/^Executor$/))
+      switchTab('tab-advanced')
     }
     // Test Connection button is part of the ExecutorSelector and only
     // renders for workers. Confirms the "Test-run" action requirement.
@@ -591,15 +620,14 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    // Base: no Executor accordion
+    // Base: Schedules is in the Advanced tab. Switch to it first.
+    switchTab('tab-advanced')
+    // Base: no Executor section (only workers have one)
     expect(screen.queryByText(/^Executor$/)).toBeNull()
-    // Base: Schedules accordion IS present
-    expect(screen.getByText(/^Schedules$/)).toBeInTheDocument()
-    // Behavior may already be open by default (W6-B1 / I1) — only click
-    // the trigger to open if the heartbeat affordance is not yet on screen.
-    if (!screen.queryByText(/Enable heartbeat/i)) {
-      fireEvent.click(screen.getByText(/^Behavior$/))
-    }
+    // Base: Schedules section IS present
+    expect(await screen.findByText(/^Schedules$/)).toBeInTheDocument()
+    // Heartbeat is in the Personality tab.
+    switchTab('tab-personality')
     expect(await screen.findByText(/Enable heartbeat/i)).toBeInTheDocument()
   })
 
@@ -610,7 +638,7 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     // Behavior may already be open by default (W6-B1 / I1) — only click
     // if the framing heading is not yet on screen.
     if (!screen.queryByText(/Personality\s*&\s*instructions/i)) {
-      fireEvent.click(screen.getByText(/^Behavior$/))
+      switchTab('tab-personality')
     }
     expect(await screen.findByText(/Personality\s*&\s*instructions/i)).toBeInTheDocument()
     // Worker relabel is absent
@@ -620,11 +648,15 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
   it('custom (base) form: also hides the Executor and shows Schedules', async () => {
     // Custom agents are base-tier too — they run native only, never
     // external CLI. The split is worker vs non-worker, not core vs custom.
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'custom' })
+    // Wire contract: user-created chat agents use type='Main' (the
+    // 'custom' enum value was retired in the Wave 1 spec).
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
+    // Both Executor and Schedules live in the Advanced tab now.
+    switchTab('tab-advanced')
     expect(screen.queryByText(/^Executor$/)).toBeNull()
-    expect(screen.getByText(/^Schedules$/)).toBeInTheDocument()
+    expect(await screen.findByText(/^Schedules$/)).toBeInTheDocument()
   })
 })
 
@@ -644,14 +676,11 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     renderProfile(agent.id)
     await screen.findByText(agent.name)
     // The fallback section heading is "Fallback models (...)" inside the panel.
-    // The accordion may already be open by default (W6-B1 / I1 — Model
-    // Configuration is in the default-open set for base agents). If it is,
-    // the heading is already on screen; otherwise click the trigger to open it.
-    // Click-toggle semantics: clicking an open accordion closes it, so we
-    // only click when the heading is absent.
+    // Wave 5 / spec §6.2: the fallback editor lives inside the Tools tab
+    // (per the spec, fallbacks are a "tooling surface"). If the Tools tab
+    // is not already active, click the trigger to switch to it.
     if (!screen.queryByText(/Fallback models/i)) {
-      const trigger = screen.getByText(/^Model Configuration$/)
-      fireEvent.click(trigger)
+      switchTab('tab-tools')
     }
     await screen.findByText(/Fallback models/i)
   }
@@ -779,8 +808,10 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     })
     renderProfile('mia')
     await screen.findByText('Mia')
+    // Fallback editor is in the Tools tab. Switch to it first.
+    switchTab('tab-tools')
     // The summary panel is present (G6), the locked note is visible.
-    expect(screen.getByTestId('fallback-summary-locked')).toBeInTheDocument()
+    expect(await screen.findByTestId('fallback-summary-locked')).toBeInTheDocument()
     expect(screen.getByText(/inherited from the locked core config/i)).toBeInTheDocument()
     // The summary lists the configured fallback (model + provider).
     expect(screen.getByTestId('fallback-summary-model-claude-opus-4-6')).toHaveTextContent(/claude-opus-4-6/)
@@ -798,7 +829,9 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
     await screen.findByText('Mia')
-    expect(screen.getByTestId('fallback-summary-locked')).toBeInTheDocument()
+    // Fallback editor is in the Tools tab.
+    switchTab('tab-tools')
+    expect(await screen.findByTestId('fallback-summary-locked')).toBeInTheDocument()
     expect(screen.getByText(/no fallback chain configured/i)).toBeInTheDocument()
   })
 
@@ -962,5 +995,152 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     )
     // The connected chip does NOT show the indicator (regression guard).
     expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
+  })
+})
+
+// Wave 5 / spec §6 — Edit slide-over body uses a 4-5 tab layout (Basics,
+// Personality, Tools, Advanced [+Runtime for subagent_3p]) instead of the
+// prior 10-section Accordion. The `tab-basics` / `tab-personality` /
+// `tab-tools` / `tab-advanced` / `tab-runtime` testids anchor the tab bar;
+// tests below exercise the spec BDDs (#15/#16/#17 from agent-form-requirements.md).
+describe('AgentProfile — Wave 5 tab structure (spec §6.2-§6.4)', () => {
+  it('renders 4 tabs (basics, personality, tools, advanced) for a Main agent', async () => {
+    // Traces to: agent-form-requirements.md §9.3 — "Edit slide-over (Main) shows 4 tabs"
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    expect(screen.getByTestId('tab-basics')).toBeInTheDocument()
+    expect(screen.getByTestId('tab-personality')).toBeInTheDocument()
+    expect(screen.getByTestId('tab-tools')).toBeInTheDocument()
+    expect(screen.getByTestId('tab-advanced')).toBeInTheDocument()
+    // No Runtime tab for Main
+    expect(screen.queryByTestId('tab-runtime')).toBeNull()
+  })
+
+  it('renders 5 tabs including Runtime for a subagent_3p agent', async () => {
+    // Traces to: agent-form-requirements.md §9.3 — "Edit slide-over (Subagent External) shows 5 tabs"
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockCoreAgent,
+      id: 'external-worker',
+      name: 'External Worker',
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+    })
+    renderProfile('external-worker')
+    await screen.findByText('External Worker')
+    expect(screen.getByTestId('tab-basics')).toBeInTheDocument()
+    expect(screen.getByTestId('tab-personality')).toBeInTheDocument()
+    expect(screen.getByTestId('tab-tools')).toBeInTheDocument()
+    expect(screen.getByTestId('tab-runtime')).toBeInTheDocument()
+    expect(screen.getByTestId('tab-advanced')).toBeInTheDocument()
+  })
+
+  it('clicking the Personality tab activates the personality content', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    // Click the Personality tab and verify the soul textarea (BehaviorFields)
+    // is now in the active panel. Radix Tabs render the active panel and
+    // the inactive ones are kept in the DOM but hidden via data-state.
+    switchTab('tab-personality')
+    // The soul textarea has testid "agent-soul" in BehaviorFields.
+    expect(await screen.findByTestId('agent-soul')).toBeInTheDocument()
+  })
+})
+
+// Wave 5 / spec §6 BDD #13 — Locked agents (core + locked) show the
+// locked-banner with the spec copy at the top of the body.
+describe('AgentProfile — locked banner (spec §6 BDD #13)', () => {
+  it('renders the locked-banner for a locked core agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    const banner = screen.getByTestId('locked-banner')
+    expect(banner).toHaveAttribute('role', 'alert')
+    expect(banner).toHaveTextContent(/built-in core agent/i)
+    expect(banner).toHaveTextContent(/most fields are read-only/i)
+  })
+
+  it('does NOT render the locked-banner for a non-locked agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    expect(screen.queryByTestId('locked-banner')).toBeNull()
+  })
+})
+
+// Wave 5 / spec §6.1 — Footer: last-saved-indicator (left) + delete-agent-button
+// (right) + AlertDialog confirm. Locked agents hide the delete button.
+describe('AgentProfile — Wave 5 footer (spec §6.1)', () => {
+  it('renders last-saved-indicator and delete-agent-button for an unlocked agent', async () => {
+    // Traces to: agent-form-requirements.md §9.3 — "Edit slide-over footer shows Last saved indicator and Delete"
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    expect(screen.getByTestId('last-saved-indicator')).toBeInTheDocument()
+    const deleteBtn = screen.getByTestId('delete-agent-button')
+    expect(deleteBtn).toBeInTheDocument()
+  })
+
+  it('hides delete-agent-button for a locked core agent', async () => {
+    // Traces to: agent-form-requirements.md §9.3 — locked agents are read-only
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    expect(screen.queryByTestId('delete-agent-button')).toBeNull()
+  })
+
+  it('opens an AlertDialog with the agent name when Delete is clicked', async () => {
+    // Traces to: agent-form-requirements.md §9.3 — "Tapping Delete opens a confirmation modal"
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    fireEvent.click(screen.getByTestId('delete-agent-button'))
+    // The dialog renders the title with the agent name. Use findByText
+    // because the dialog mounts asynchronously after state update.
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/Delete General Assistant/i)
+    expect(dialog).toHaveTextContent(/cannot be undone/i)
+  })
+
+  it('calls deleteAgent when the destructive Delete is confirmed', async () => {
+    // Traces to: agent-form-requirements.md §9.3 — destructive Delete flow
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    vi.mocked(deleteAgent).mockReset().mockResolvedValue(undefined)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    fireEvent.click(screen.getByTestId('delete-agent-button'))
+    // The confirm button is the destructive one inside the dialog. Find
+    // it by its role+text — there is one Delete button (the confirm) and
+    // one Cancel button.
+    const dialog = await screen.findByRole('alertdialog')
+    const confirmBtn = dialog.querySelector('button.bg-\\[var\\(--color-error\\)\\]') as HTMLElement | null
+    expect(confirmBtn).toBeTruthy()
+    fireEvent.click(confirmBtn!)
+    await waitFor(() => expect(deleteAgent).toHaveBeenCalledWith('general-assistant'), { timeout: 3000 })
+  })
+})
+
+// Wave 5 / spec §6.4 — Runtime tab renders for subagent_3p agents only.
+describe('AgentProfile — Runtime tab (spec §6.4)', () => {
+  it('shows CLI path / env overrides / CLI args in the Runtime tab for subagent_3p', async () => {
+    // Traces to: agent-form-requirements.md §9.3 — "the Runtime tab shows CLI (locked), CLI path, Env overrides, CLI args"
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockCoreAgent,
+      id: 'external-worker',
+      name: 'External Worker',
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+    })
+    renderProfile('external-worker')
+    await screen.findByText('External Worker')
+    // Click the Runtime tab.
+    switchTab('tab-runtime')
+    // The CLI is rendered as a read-only badge.
+    expect(await screen.findByTestId('profile-cli-locked')).toBeInTheDocument()
+    // The CLI path / env overrides / CLI args rows are in the panel.
+    expect(screen.getByTestId('profile-cli-path')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-env-overrides')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-cli-args')).toBeInTheDocument()
   })
 })

@@ -6,6 +6,16 @@ import { AgentListScreen } from './AgentListScreen'
 import { useUiStore } from '@/store/ui'
 import type { Agent } from '@/lib/api'
 
+// W4 of agent-form-requirements: the roster's "+ Add Subagent (External)"
+// disclosure probes /api/v1/system/cli-detect on mount to grey-out missing
+// CLIs. The endpoint is out-of-scope for this wave — every test pins the
+// fetch mock to a deterministic shape (all available by default) so the
+// suite is stable whether or not the probe endpoint is wired up. Tests
+// that exercise the disabled-state path override the mock to return
+// `{ hasCodex: false }` via fetchMockReset.
+const fetchSpy = vi.fn()
+vi.stubGlobal('fetch', fetchSpy)
+
 // Wave 2 — the Agents roster splits into two sections: "Base agents"
 // (type !== 'worker') and "Sub-agent workers" (type === 'worker').
 
@@ -48,8 +58,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     instructions: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
-    steering_mode: 'loop',
-    tool_feedback: true,
+    steering_mode: 'one-at-a-time',
     heartbeat_enabled: false,
     heartbeat_interval: 300,
     ...overrides,
@@ -68,6 +77,13 @@ function renderScreen() {
 beforeEach(() => {
   mockNavigate.mockClear()
   vi.mocked(fetchAgents).mockReset()
+  // Default: optimistic detection — every CLI available. Tests that need a
+  // missing-CLI scenario override this in their body.
+  fetchSpy.mockReset()
+  fetchSpy.mockResolvedValue({
+    ok: true,
+    json: async () => ({ hasClaude: true, hasCodex: true, hasOpencode: true }),
+  })
 })
 
 describe('AgentListScreen — base/worker partition', () => {
@@ -77,7 +93,7 @@ describe('AgentListScreen — base/worker partition', () => {
       makeAgent({
         id: 'worker-1',
         name: 'General Worker',
-        type: 'worker',
+        type: 'Subagent',
         executor: { kind: 'native' },
       }),
     ])
@@ -112,7 +128,7 @@ describe('AgentListScreen — base/worker partition', () => {
 
   it('shows the workers section subtitle explaining delegation-only role', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([
-      makeAgent({ id: 'w', name: 'W', type: 'worker', executor: { kind: 'native' } }),
+      makeAgent({ id: 'w', name: 'W', type: 'Subagent', executor: { kind: 'native' } }),
     ])
     renderScreen()
     expect(await screen.findByText(/invoked by other agents, not chat targets/i)).toBeInTheDocument()
@@ -126,70 +142,72 @@ describe('AgentListScreen — base/worker partition', () => {
 describe('AgentListScreen — per-section New buttons', () => {
   beforeEach(() => {
     // Reset the store so the test starts with a clean modal state.
-    act(() => { useUiStore.setState({ createAgentModalOpen: false, createAgentModalType: 'custom' }) })
+    // The store's createAgentModalType union is 'Main' | 'Subagent' | 'subagent_3p'
+    // per W4 (see src/store/ui.ts:32). closeCreateAgentModal resets to 'Main'
+    // so we don't need to set it explicitly here.
+    act(() => { useUiStore.setState({ createAgentModalOpen: false }) })
   })
 
-  it('shows a "New agent" button in the base section header', async () => {
+  it('shows a "+ New Main" button in the base section header', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
     const baseSection = await screen.findByTestId('base-agents-section')
     const newBaseButton = within(baseSection).getByTestId('add-main-button')
     expect(newBaseButton).toBeInTheDocument()
-    expect(newBaseButton).toHaveTextContent(/new agent/i)
+    expect(newBaseButton).toHaveTextContent(/new main/i)
   })
 
-  it('shows a "New worker" button in the worker section header', async () => {
+  it('shows a "+ New Subagent" button in the worker section header', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([
       makeAgent({ id: 'mia', type: 'core' }),
-      makeAgent({ id: 'w1', name: 'W1', type: 'worker', executor: { kind: 'native' } }),
+      makeAgent({ id: 'w1', name: 'W1', type: 'Subagent', executor: { kind: 'native' } }),
     ])
     renderScreen()
     const workerSection = await screen.findByTestId('worker-agents-section')
     const newWorkerButton = within(workerSection).getByTestId('add-subagent-button')
     expect(newWorkerButton).toBeInTheDocument()
-    expect(newWorkerButton).toHaveTextContent(/new worker/i)
+    expect(newWorkerButton).toHaveTextContent(/new subagent/i)
   })
 
-  it('clicking the base New agent button sets modal type to custom and opens the modal', async () => {
+  it('clicking the base + New Main button sets modal type to Main and opens the modal', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
     const baseSection = await screen.findByTestId('base-agents-section')
     fireEvent.click(within(baseSection).getByTestId('add-main-button'))
     const state = useUiStore.getState()
     expect(state.createAgentModalOpen).toBe(true)
-    expect(state.createAgentModalType).toBe('custom')
+    expect(state.createAgentModalType).toBe('Main')
   })
 
-  it('clicking the worker New worker button sets modal type to worker and opens the modal', async () => {
+  it('clicking the worker + New Subagent button sets modal type to Subagent and opens the modal', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([
       makeAgent({ id: 'mia', type: 'core' }),
-      makeAgent({ id: 'w1', name: 'W1', type: 'worker', executor: { kind: 'native' } }),
+      makeAgent({ id: 'w1', name: 'W1', type: 'Subagent', executor: { kind: 'native' } }),
     ])
     renderScreen()
     const workerSection = await screen.findByTestId('worker-agents-section')
     fireEvent.click(within(workerSection).getByTestId('add-subagent-button'))
     const state = useUiStore.getState()
     expect(state.createAgentModalOpen).toBe(true)
-    expect(state.createAgentModalType).toBe('worker')
+    expect(state.createAgentModalType).toBe('Subagent')
   })
 
   it('does not render a top-of-page generic New Agent button', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
-    // Wait for the screen to settle — the (now-removed) header button was a
-    // top-level Button labeled "New Agent" with a "size=default" sm 14px icon
-    // and no section testid. The per-section buttons are the only "New…"
+    // The (now-removed) top-level "New Agent" button was a generic CTA
+    // outside any section. The per-section buttons are the only "New…"
     // affordances and live INSIDE the base/worker sections, identified by
     // their data-testid. Asserting on the section-scoped testid count
-    // (exactly one New agent in the base section when only base agents
+    // (exactly one + New Main in the base section when only base agents
     // exist) proves the per-section split.
     await screen.findByTestId('base-agents-section')
     const baseSection = screen.getByTestId('base-agents-section')
-    // Exactly one New agent button in the base section.
-    const newAgentButtons = within(baseSection).getAllByRole('button', { name: /new agent/i })
-    expect(newAgentButtons).toHaveLength(1)
-    // And no New worker button when there are no workers.
-    expect(within(baseSection).queryByRole('button', { name: /new worker/i })).not.toBeInTheDocument()
+    // Exactly one + New Main button in the base section.
+    const newMainButtons = within(baseSection).getAllByRole('button', { name: /new main/i })
+    expect(newMainButtons).toHaveLength(1)
+    // And no + New Subagent button when there are no workers.
+    expect(within(baseSection).queryByRole('button', { name: /new subagent/i })).not.toBeInTheDocument()
   })
 })
 
@@ -199,30 +217,30 @@ describe('AgentListScreen — per-section New buttons', () => {
 // buttons) on every render, even when the section body is empty.
 describe('AgentListScreen — empty-state per-section buttons', () => {
   beforeEach(() => {
-    act(() => { useUiStore.setState({ createAgentModalOpen: false, createAgentModalType: 'custom' }) })
+    act(() => { useUiStore.setState({ createAgentModalOpen: false }) })
   })
 
-  it('shows the worker section + New worker button even with no workers (fresh install)', async () => {
+  it('shows the worker section + New Subagent button even with no workers (fresh install)', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
     const workerSection = await screen.findByTestId('worker-agents-section')
-    // The New worker button lives in the worker section header, always
+    // The + New Subagent button lives in the worker section header, always
     // rendered. This is the regression: previously the entire section was
     // hidden when workerAgents.length === 0.
     const newWorkerButton = within(workerSection).getByTestId('add-subagent-button')
     expect(newWorkerButton).toBeInTheDocument()
-    expect(newWorkerButton).toHaveTextContent(/new worker/i)
+    expect(newWorkerButton).toHaveTextContent(/new subagent/i)
   })
 
-  it('shows the base section + New agent button even with no base agents (fresh install)', async () => {
+  it('shows the base section + New Main button even with no base agents (fresh install)', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([
-      makeAgent({ id: 'w1', name: 'W1', type: 'worker', executor: { kind: 'native' } }),
+      makeAgent({ id: 'w1', name: 'W1', type: 'Subagent', executor: { kind: 'native' } }),
     ])
     renderScreen()
     const baseSection = await screen.findByTestId('base-agents-section')
     const newBaseButton = within(baseSection).getByTestId('add-main-button')
     expect(newBaseButton).toBeInTheDocument()
-    expect(newBaseButton).toHaveTextContent(/new agent/i)
+    expect(newBaseButton).toHaveTextContent(/new main/i)
   })
 
   it('renders an empty-state message in each empty section', async () => {
@@ -248,7 +266,7 @@ describe('AgentListScreen — empty-state per-section buttons', () => {
     // agents. The base section renders its empty-state message + New agent
     // button — that button was previously unreachable in this scenario.
     vi.mocked(fetchAgents).mockResolvedValue([
-      makeAgent({ id: 'w1', name: 'W1', type: 'worker', executor: { kind: 'native' } }),
+      makeAgent({ id: 'w1', name: 'W1', type: 'Subagent', executor: { kind: 'native' } }),
     ])
     renderScreen()
     const baseSection = await screen.findByTestId('base-agents-section')
@@ -257,5 +275,173 @@ describe('AgentListScreen — empty-state per-section buttons', () => {
     expect(within(workerSection).queryByTestId('worker-agents-empty')).not.toBeInTheDocument()
     expect(within(baseSection).getByTestId('add-main-button')).toBeInTheDocument()
     expect(within(workerSection).getByTestId('add-subagent-button')).toBeInTheDocument()
+  })
+})
+
+// W4 of agent-form-requirements: the roster's third "+ Add" button is now
+// a disclosure that lists the 3 supported CLIs (claude-code / codex /
+// opencode). Each sub-option calls openCreateAgentModal('subagent_3p', cli)
+// so the wizard pre-fills the CLI choice in Step 1 and Step 3.
+//
+// NB: Radix Popover content is portaled to document.body (see
+// src/components/ui/popover.tsx — <PopoverPrimitive.Portal>). All
+// CLI menu items live in the portal, not inside the worker section's
+// DOM subtree, so the assertions query `screen` (not `within(workerSection)`)
+// once the disclosure is open.
+describe('AgentListScreen — external CLI sub-picker disclosure', () => {
+  beforeEach(() => {
+    act(() => {
+      useUiStore.setState({
+        createAgentModalOpen: false,
+        createAgentModalType: 'Main',
+        createAgentModalCli: null,
+      })
+    })
+  })
+
+  it('renders a single "+ Add Subagent (External) ▾" trigger in the worker section', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    const trigger = within(workerSection).getByTestId('add-external-trigger')
+    expect(trigger).toBeInTheDocument()
+    // Disclosure is collapsed by default — the per-CLI menu items should
+    // NOT be in the DOM yet (Radix Popover mounts on open).
+    expect(screen.queryByTestId('add-external-claude-code')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('add-external-codex')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('add-external-opencode')).not.toBeInTheDocument()
+  })
+
+  it('clicking the trigger opens the disclosure showing all 3 CLI sub-options', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    const trigger = within(workerSection).getByTestId('add-external-trigger')
+    fireEvent.click(trigger)
+    // All three CLIs become visible (mock returns all-available). The Radix
+    // Popover portaled content mounts to document.body so `screen.findBy*`
+    // is the right scope (within(workerSection) would only see the trigger).
+    await waitFor(() => {
+      expect(screen.getByTestId('add-external-claude-code')).toBeInTheDocument()
+      expect(screen.getByTestId('add-external-codex')).toBeInTheDocument()
+      expect(screen.getByTestId('add-external-opencode')).toBeInTheDocument()
+    })
+  })
+
+  it('clicking the claude-code sub-option calls openCreateAgentModal("subagent_3p", "claude-code")', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    fireEvent.click(within(workerSection).getByTestId('add-external-trigger'))
+    const claude = await screen.findByTestId('add-external-claude-code')
+    fireEvent.click(claude)
+    const state = useUiStore.getState()
+    expect(state.createAgentModalOpen).toBe(true)
+    expect(state.createAgentModalType).toBe('subagent_3p')
+    expect(state.createAgentModalCli).toBe('claude-code')
+  })
+
+  it('clicking the codex sub-option passes the codex CLI through to the store', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    fireEvent.click(within(workerSection).getByTestId('add-external-trigger'))
+    const codex = await screen.findByTestId('add-external-codex')
+    fireEvent.click(codex)
+    const state = useUiStore.getState()
+    expect(state.createAgentModalOpen).toBe(true)
+    expect(state.createAgentModalType).toBe('subagent_3p')
+    expect(state.createAgentModalCli).toBe('codex')
+  })
+
+  it('clicking the opencode sub-option passes the opencode CLI through to the store', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    fireEvent.click(within(workerSection).getByTestId('add-external-trigger'))
+    const opencode = await screen.findByTestId('add-external-opencode')
+    fireEvent.click(opencode)
+    const state = useUiStore.getState()
+    expect(state.createAgentModalOpen).toBe(true)
+    expect(state.createAgentModalType).toBe('subagent_3p')
+    expect(state.createAgentModalCli).toBe('opencode')
+  })
+
+  it('closeCreateAgentModal resets createAgentModalCli to null', () => {
+    act(() => {
+      useUiStore.setState({ createAgentModalCli: 'codex', createAgentModalOpen: true })
+    })
+    expect(useUiStore.getState().createAgentModalCli).toBe('codex')
+    act(() => {
+      useUiStore.getState().closeCreateAgentModal()
+    })
+    expect(useUiStore.getState().createAgentModalCli).toBeNull()
+  })
+
+  it('opens the disclosure on click and re-opens after Escape dismissal', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    const trigger = within(workerSection).getByTestId('add-external-trigger')
+
+    // Click path (primary — Radix Popover opens via the trigger's click
+    // handler on both desktop and mobile).
+    fireEvent.click(trigger)
+    await waitFor(() => {
+      expect(screen.getByTestId('add-external-claude-code')).toBeInTheDocument()
+    })
+
+    // Dismiss with Escape (Radix Popover binds this to the trigger's
+    // keydown when open — covers the keyboard path).
+    fireEvent.keyDown(trigger, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByTestId('add-external-claude-code')).not.toBeInTheDocument()
+    })
+
+    // Re-open via the same click path to confirm the disclosure is
+    // idempotent across open/close cycles.
+    fireEvent.click(trigger)
+    await waitFor(() => {
+      expect(screen.getByTestId('add-external-claude-code')).toBeInTheDocument()
+    })
+  })
+
+  it('renders the codex sub-option as disabled with a tooltip when hostClis.hasCodex is false', async () => {
+    // Override the probe to report codex missing.
+    fetchSpy.mockReset()
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ hasClaude: true, hasCodex: false, hasOpencode: true }),
+    })
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    // Wait for the probe to settle before asserting (the useEffect is async).
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith('/api/v1/system/cli-detect')
+    })
+    fireEvent.click(within(workerSection).getByTestId('add-external-trigger'))
+    const codex = await screen.findByTestId('add-external-codex')
+    expect(codex).toBeDisabled()
+    expect(codex).toHaveAttribute('title', expect.stringMatching(/codex/i))
+    // The other two CLIs remain enabled.
+    const claude = screen.getByTestId('add-external-claude-code')
+    const opencode = screen.getByTestId('add-external-opencode')
+    expect(claude).not.toBeDisabled()
+    expect(opencode).not.toBeDisabled()
+  })
+
+  it('keeps optimistic defaults when the cli-detect endpoint is missing', async () => {
+    // Endpoint 404 → optimistic defaults → all CLIs enabled.
+    fetchSpy.mockReset()
+    fetchSpy.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) })
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    fireEvent.click(within(workerSection).getByTestId('add-external-trigger'))
+    await waitFor(() => {
+      expect(screen.getByTestId('add-external-codex')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('add-external-codex')).not.toBeDisabled()
   })
 })

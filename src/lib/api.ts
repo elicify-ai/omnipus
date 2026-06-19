@@ -120,6 +120,10 @@ import {
   TranscribeResponse as TranscribeResponseSchema,
   // Spec-4 — external-CLI runner connection test (contract-first #8):
   RunnerTestResponse as RunnerTestResponseSchema,
+  // Version drift detection (used by fetchVersion → useVersionCheck):
+  VersionResponse as VersionResponseSchema,
+  // Voice provider capability detection (used by fetchVoiceProvider):
+  VoiceProvider as VoiceProviderSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -285,6 +289,7 @@ import type {
   McpServerToolsResponse,
   AgentUpdateRequest,
   AgentCreateRequest,
+  FallbackModel,
   ChannelRouting,
   // Level-1 workspaces + board tasks + token stats (contract-first #8):
   Workspace,
@@ -322,6 +327,10 @@ import type {
   // Spec-4 — sub-agent executor + external-CLI runner test (contract-first #8):
   ExecutorConfig,
   RunnerTestResponse,
+  // Version drift detection (used by useVersionCheck):
+  VersionResponse,
+  // Voice provider capability detection (used by voice-provider-detect):
+  VoiceProvider,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -398,6 +407,7 @@ export type {
   McpServerToolsResponse,
   AgentUpdateRequest,
   AgentCreateRequest,
+  FallbackModel,
   ChannelRouting,
   // Level-1 workspaces + board tasks + token stats:
   Workspace,
@@ -679,6 +689,18 @@ export function createAgent(data: AgentCreateRequest): Promise<Agent> {
 
 export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {
   return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
+}
+
+// Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete button.
+// The wire contract has no DELETE /agents/{id} operation yet; the server
+// returns 405 (or 404 if not implemented at all). The button is wired
+// through the same `request<void>` helper as `deleteTask` / `deleteSchedule`
+// so when the endpoint lands only this wrapper needs an update. For now
+// every confirm surfaces the API error inline — no silent failure.
+export function deleteAgent(id: string): Promise<void> {
+  // no-schema: void response; DELETE returns 204 No Content when the
+  // endpoint is implemented; 4xx/5xx otherwise.
+  return request<void>(`/agents/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 // Spec-4 FR-4.2 — external-CLI runner connection test.
@@ -1837,6 +1859,37 @@ export function fetchAboutInfo(): Promise<AboutInfo> {
   // (different field names: uptime_seconds vs uptime). Validating against a strict schema
   // would produce false negatives on older gateway versions.
   return request<AboutInfo>('/about')
+}
+
+/**
+ * Returns the gateway's version string and build SHA. Used by the
+ * `useVersionCheck` hook to detect version drift. The `/version` endpoint
+ * is unauthenticated and lives outside the regular auth/CSRF envelope,
+ * so we go through `request` (not raw `fetch`) to add the
+ * `Authorization` header when present and keep the request shape uniform
+ * with every other call. The response is validated by the generated
+ * `VersionResponse` Zod schema (per `contracts/openapi.yaml`).
+ */
+export function fetchVersion(): Promise<VersionResponse> {
+  return request<VersionResponse>(
+    '/version',
+    undefined,
+    VersionResponseSchema as ZodType<VersionResponse>,
+  )
+}
+
+/**
+ * Returns the active voice provider descriptor. Used by
+ * `voice-provider-detect` to decide whether the SPA should render a
+ * dropdown, a free-text input, or hide the voice field. The response is
+ * validated by the generated `VoiceProvider` Zod schema.
+ */
+export function fetchVoiceProvider(): Promise<VoiceProvider> {
+  return request<VoiceProvider>(
+    '/voice/provider',
+    undefined,
+    VoiceProviderSchema as ZodType<VoiceProvider>,
+  )
 }
 
 /**

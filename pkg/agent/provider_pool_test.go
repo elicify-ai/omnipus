@@ -252,3 +252,49 @@ func TestFindModelConfigForProvider_CaseInsensitiveMatch(t *testing.T) {
 		t.Error("findModelConfigForProvider did not return a clone — mutation leaked into cfg.Providers[0]")
 	}
 }
+
+// TestBuildProviderPool_FallsBackToPassthrough is the defensive-layer
+// safety net behind the resolver fix: when a candidate's Provider is a
+// vendor namespace that doesn't match any configured provider entry, the
+// pool builder scans cfg.Providers for a passthrough entry (openrouter /
+// vivgrid) whose Model equals the candidate's Model and uses its
+// credentials. The original candidate's name is preserved as the pool key
+// so the agent's GetProviderForCandidate lookup still works.
+func TestBuildProviderPool_FallsBackToPassthrough(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "z-ai/glm-5.2",
+				Model:     "z-ai/glm-5.2",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKeyRef: "k",
+			},
+		},
+	}
+	// A candidate whose Provider is "zai" (a vendor namespace, not a
+	// configured provider) but whose Model is "z-ai/glm-5.2" — matches the
+	// openrouter entry's Model exactly.
+	candidates := []providers.FallbackCandidate{
+		{Provider: "zai", Model: "z-ai/glm-5.2"},
+	}
+	pool := buildProviderPool(cfg, candidates)
+	if len(pool) == 0 {
+		t.Fatal("buildProviderPool returned empty pool — defensive fallback failed to route through openrouter")
+	}
+	// The candidate's name ("zai") is the pool key — that's what
+	// GetProviderForCandidate looks up against.
+	if _, ok := pool["zai"]; !ok {
+		t.Errorf("pool missing key 'zai' — defensive fallback should preserve the candidate's name as the pool key; got keys: %v", poolKeys(pool))
+	}
+}
+
+// poolKeys returns the sorted keys of a provider pool for stable error
+// messages in the test above.
+func poolKeys(pool map[string]providers.LLMProvider) []string {
+	keys := make([]string, 0, len(pool))
+	for k := range pool {
+		keys = append(keys, k)
+	}
+	return keys
+}

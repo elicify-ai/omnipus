@@ -223,7 +223,7 @@ func TestBuildModelListResolver_MatchesResolveModelCfg(t *testing.T) {
 	resolver := buildModelListResolver(cfg)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ui, ok := resolver(tc.input)
+			resolved, ok := resolver(tc.input)
 			if !ok {
 				t.Fatalf("buildModelListResolver(%q) returned false", tc.input)
 			}
@@ -231,11 +231,11 @@ func TestBuildModelListResolver_MatchesResolveModelCfg(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveModelCfg(%q): %v", tc.input, err)
 			}
-			if ui != mc.Model {
-				t.Errorf("path divergence on %q: ui=%q, chat=%q — FR-003 violated", tc.input, ui, mc.Model)
+			if resolved.Model != mc.Model {
+				t.Errorf("path divergence on %q: ui=%q, chat=%q — FR-003 violated", tc.input, resolved.Model, mc.Model)
 			}
-			if ui != tc.want {
-				t.Errorf("got %q, want %q", ui, tc.want)
+			if resolved.Model != tc.want {
+				t.Errorf("got %q, want %q", resolved.Model, tc.want)
 			}
 		})
 	}
@@ -259,11 +259,11 @@ func TestBuildModelListResolver_RejectsPrefixedPassthrough(t *testing.T) {
 	resolver := buildModelListResolver(cfg)
 	got, ok := resolver("openai/gpt-4o")
 	if ok {
-		t.Errorf("expected false for openai/gpt-4o without openai provider, got (%q, true)", got)
+		t.Errorf("expected false for openai/gpt-4o without openai provider, got (%+v, true)", got)
 	}
 	// Sanity: the helper must NOT have invented "openrouter/openai/gpt-4o".
-	if got != "" && strings.Contains(got, "openai/gpt-4o") && !strings.HasPrefix(got, "openai/") {
-		t.Errorf("passthrough should not have re-prefixed openai/gpt-4o, got %q", got)
+	if got.Model != "" && strings.Contains(got.Model, "openai/gpt-4o") && !strings.HasPrefix(got.Model, "openai/") {
+		t.Errorf("passthrough should not have re-prefixed openai/gpt-4o, got %q", got.Model)
 	}
 }
 
@@ -307,10 +307,16 @@ func TestResolveModelCandidatesFromList_PerEntryProvider(t *testing.T) {
 		t.Fatalf("candidates = %d, want 2 (primary + 1 explicit-provider fallback)", len(candidates))
 	}
 	// Primary is resolved via cfg.GetModelConfig(ModelName="gpt-5") which
-	// returns the entry's Model verbatim ("openai/gpt-5") — parsed into
-	// Provider=openai, Model=gpt-5.
-	if candidates[0].Provider != "openai" || candidates[0].Model != "gpt-5" {
-		t.Errorf("candidates[0] = %s/%s, want openai/gpt-5", candidates[0].Provider, candidates[0].Model)
+	// returns the openrouter entry with Model="openai/gpt-5" and
+	// Provider="openrouter". The candidate's Provider is the matched
+	// entry's Provider (openrouter) — the configured provider that owns
+	// the credentials. The Model stays "openai/gpt-5" verbatim because
+	// the prefix "openai" doesn't match the matched Provider "openrouter"
+	// (vendor namespace vs. routing key). The old contract treated the
+	// slash-prefix as the real provider, which leaked the unrouteable
+	// "openai" into candidates for any openrouter-passthrough entry.
+	if candidates[0].Provider != "openrouter" || candidates[0].Model != "openai/gpt-5" {
+		t.Errorf("candidates[0] = %s/%s, want openrouter/openai/gpt-5", candidates[0].Provider, candidates[0].Model)
 	}
 	// Fallback MUST carry its own Provider — anthropic, NOT openrouter.
 	// This is the FR-007 invariant the bug was violating.
@@ -354,15 +360,19 @@ func TestResolveModelCandidatesFromList_PassthroughProviderHonored(t *testing.T)
 		t.Fatalf("candidates = %d, want 2", len(candidates))
 	}
 	// Primary: matched via cfg.GetModelConfig by ModelName "gpt-5"; the
-	// entry's Model is "openai/gpt-5" → parsed into Provider=openai,
-	// Model=gpt-5. The primary's "openrouter" provider field is a routing
-	// hint for credential resolution, not what appears in the candidate's
-	// Provider field (which comes from the model-ref prefix).
-	if candidates[0].Provider != "openai" {
-		t.Errorf("candidates[0].Provider = %q, want openai", candidates[0].Provider)
+	// entry's Model is "openai/gpt-5" and Provider is "openrouter". The
+	// candidate's Provider is the matched entry's Provider (openrouter)
+	// — the configured provider that owns the credentials. The Model
+	// stays "openai/gpt-5" verbatim because the slash-prefix "openai"
+	// doesn't match the matched Provider "openrouter" (vendor namespace
+	// vs. routing key). The old contract treated the slash-prefix as
+	// the real provider, which leaked the unrouteable "openai" into
+	// candidates for any openrouter-passthrough entry.
+	if candidates[0].Provider != "openrouter" {
+		t.Errorf("candidates[0].Provider = %q, want openrouter", candidates[0].Provider)
 	}
-	if candidates[0].Model != "gpt-5" {
-		t.Errorf("candidates[0].Model = %q, want gpt-5", candidates[0].Model)
+	if candidates[0].Model != "openai/gpt-5" {
+		t.Errorf("candidates[0].Model = %q, want openai/gpt-5", candidates[0].Model)
 	}
 	// Fallback via anthropic — explicit Provider overrides any passthrough
 	// that might match the slug.
@@ -401,14 +411,12 @@ func TestResolveModelCandidatesForAgent_PicksFallbackModelsWhenSet(t *testing.T)
 
 	// Legacy wire shape: agent carries only Fallbacks []string.
 	// The legacy resolver runs the bare slug "haiku" through the model_list
-	// lookup first. "haiku" is registered as a ModelName → entry's Model
-	// "anthropic/claude-haiku-4-5". ParseModelRef parses that into
-	// {Provider:anthropic, Model:claude-haiku-4-5}. So the legacy path ALSO
-	// ends up with the anthropic provider in this case — that's a happy
-	// coincidence of how the entry was authored, not a guarantee. The
-	// contract is "legacy preserves old behavior"; modern is "fallback uses
-	// its own provider" which the explicit-Provider path guarantees
-	// regardless of how the entry is authored.
+	// lookup first. "haiku" is registered as a ModelName → entry with
+	// Model="anthropic/claude-haiku-4-5" and Provider="anthropic". The
+	// resolver returns the matched entry's Provider (anthropic) and the
+	// Model verbatim (no prefix to strip). So the legacy path also ends up
+	// with the anthropic provider in this case — that's the unified
+	// contract, not a happy coincidence.
 	legacy := &AgentInstance{
 		Model:     "gpt-5",
 		Fallbacks: []string{"haiku"},
@@ -419,9 +427,12 @@ func TestResolveModelCandidatesForAgent_PicksFallbackModelsWhenSet(t *testing.T)
 	}
 
 	// Nil agent → legacy resolver with no fallbacks → only the primary.
+	// The primary "gpt-5" matches the openrouter entry whose Model is
+	// "openai/gpt-5" (vendor namespace + model). The candidate is
+	// {Provider: openrouter, Model: openai/gpt-5}.
 	cands = resolveModelCandidatesForAgent(cfg, "openrouter", "gpt-5", nil)
-	if len(cands) != 1 || cands[0].Model != "gpt-5" {
-		t.Fatalf("nil agent: cands = %+v, want 1 entry {*,gpt-5}", cands)
+	if len(cands) != 1 || cands[0].Model != "openai/gpt-5" {
+		t.Fatalf("nil agent: cands = %+v, want 1 entry {openrouter, openai/gpt-5}", cands)
 	}
 }
 
@@ -504,5 +515,38 @@ func TestIsKnownModel_NilAndEmpty(t *testing.T) {
 	ps := []*config.ModelConfig{nil, {Model: "openai/gpt-4o", Provider: "openai"}}
 	if !IsKnownModel("openai/gpt-4o", ps) {
 		t.Errorf("IsKnownModel(slice with nil entry) = false, want true")
+	}
+}
+
+// TestResolveModelCandidatesFromList_SeededAgentStyle pins the bug fix for
+// the live preview: a primary whose Model is "z-ai/glm-5.2" (vendor
+// namespace, NOT a configured provider) MUST produce a candidate whose
+// Provider is the configured provider (openrouter) that owns the matching
+// provider entry — NOT the slash-prefix normalized to "zai" which no
+// provider is configured for. Without this fix the chat runtime fails with
+// "provider 'zai' not found in configured providers" and the agent loop
+// never starts a turn.
+func TestResolveModelCandidatesFromList_SeededAgentStyle(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "z-ai/glm-5.2",
+				Model:     "z-ai/glm-5.2",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKeyRef: "OPENROUTER_KEY",
+			},
+		},
+	}
+	cands := resolveModelCandidatesFromList(cfg, "", "z-ai/glm-5.2", nil)
+	if len(cands) != 1 {
+		t.Fatalf("len(cands) = %d, want 1: %+v", len(cands), cands)
+	}
+	if cands[0].Provider != "openrouter" {
+		t.Errorf("cands[0].Provider = %q, want %q — vendor namespace leaked into Provider (the bug)",
+			cands[0].Provider, "openrouter")
+	}
+	if cands[0].Model != "z-ai/glm-5.2" {
+		t.Errorf("cands[0].Model = %q, want %q", cands[0].Model, "z-ai/glm-5.2")
 	}
 }

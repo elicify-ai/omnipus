@@ -1,36 +1,41 @@
 // CreateAgentWizard — 3-step + Advanced wizard for creating user-creatable
-// agents. Replaces the legacy 2-tab CreateAgentModal (commit 12fa5544's Wave
-// C1 G4 signpost) with a type-aware branch per spec §5.3-§5.5.
+// agents. W4 of agent-form-requirements delivery.
 //
-// W4 of agent-form-requirements delivery. The wizard is mounted by
-// CreateAgentModal.tsx (a thin wrapper) and reads its locked type from the
-// createAgentModalType store value. The Type chip is the single source of
-// truth for the wizard's branch; the CLI chip (External wizards only) shows
-// the locked CLI choice. Per spec §11 #3 the `[×]` on the Type chip closes
-// the wizard (no confirmation even if dirty — by design).
+// Split into sub-components per the plan's file-ownership matrix:
+//   ./wizard/Step1Identity.tsx   — color, icon, name, description, model
+//   ./wizard/Step2Personality.tsx — soul, instructions, heartbeat, voice
+//   ./wizard/Step3Tools.tsx      — tools_cfg, skills, fallback_models
+//   ./wizard/Advanced.tsx       — model_params, sandbox, shell, etc. (deferred)
+// This file owns the Sheet shell, the type/CLI chips, the stepper, and the
+// footer with submit handling. Each step is given the current payload + a
+// `setField` callback so the wizard is a controlled form.
+//
+// Per spec §11 #3 the `[×]` on the Type chip closes the wizard (no
+// confirmation even if dirty — by design). On submit error the wizard
+// surfaces the error inline + keeps the modal open (silent-drop fixed
+// per silent-failure-hunter review).
 
 import * as React from 'react'
-import { useState } from 'react'
+import { useReducer, useRef } from 'react'
 
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/sheet'
+import { FormError } from '@/components/ui/FormError'
 import { X } from '@phosphor-icons/react'
 
 import { useUiStore } from '@/store/ui'
+import { isApiError, type AgentToolsCfg, type FallbackModel, type RegistryTool } from '@/lib/api'
+import { AVATAR_COLORS } from '@/lib/constants'
+import { useFocusRestore } from '@/hooks/useFocusRestore'
+import type { Provider, Skill } from '@/lib/api/generated/openapi-types'
+
+import { Step1Identity } from './wizard/Step1Identity'
+import { Step2Personality } from './wizard/Step2Personality'
+import { Step3Tools } from './wizard/Step3Tools'
+import { Advanced } from './wizard/Advanced'
 
 export type WizardType = 'Main' | 'Subagent' | 'subagent_3p'
 export type WizardCli = 'claude-code' | 'codex' | 'opencode'
-
-interface WizardProps {
-  /** Pre-selected type (set by which +Add button opened the wizard). */
-  initialType: WizardType
-  /** Pre-selected CLI (External wizards only). */
-  initialCli?: WizardCli
-  /** Called on successful submit. */
-  onSubmit: (payload: WizardSubmitPayload) => Promise<void>
-}
 
 export interface WizardSubmitPayload {
   type: WizardType
@@ -46,12 +51,59 @@ export interface WizardSubmitPayload {
   heartbeat_enabled?: boolean
   heartbeat_interval?: number
   voice?: string
-  tools_cfg?: unknown
+  // Wire-format fields — typed against the generated `AgentCreateRequest`
+  // shape so `payloadToCreateRequest` (in CreateAgentModal.tsx) can
+  // forward them verbatim without `as` casts.
+  tools_cfg?: AgentToolsCfg
   skills?: string[]
-  fallback_models?: unknown[]
+  fallback_models?: FallbackModel[]
   executor_cli_path?: string
   executor_env_overrides?: Record<string, string>
   executor_cli_args?: string
+  // Advanced disclosure fields — W5. Each field matches the
+  // `AgentCreateRequest` shape so the modal's payloadToCreateRequest
+  // can forward them as-is. All optional.
+  model_params?: {
+    temperature?: number
+    max_tokens?: number
+    top_p?: number
+  }
+  sandbox_profile?: 'workspace' | 'workspace+net' | 'host' | 'off'
+  shell_policy?: { deny?: string[] }
+  rate_limits?: {
+    use_global_defaults?: boolean
+    max_llm_calls_per_hour?: number
+    max_tool_calls_per_minute?: number
+    max_cost_per_day?: number
+  }
+  delegation_policy?: string
+  timeout_seconds?: number
+  max_tool_iterations?: number
+  steering_mode?: 'one-at-a-time' | 'queue-and-process'
+}
+
+interface WizardProps {
+  initialType: WizardType
+  initialCli?: WizardCli
+  onSubmit: (payload: WizardSubmitPayload) => Promise<void>
+  /**
+   * Called when the user dismisses the wizard (Cancel button, type chip
+   * `[×]`, or Sheet onOpenChange → false). Defaults to the store's
+   * `closeCreateAgentModal`. Wired by the prop-driven test path so a
+   * test's `onClose` mock fires.
+   */
+  onClose?: () => void
+  /**
+   * Connected providers (status === 'connected') for the Step 1 model
+   * picker and the Step 3 fallback editor. Lifted from CreateAgentModal
+   * so the wizard itself stays query-client-free (and unit-testable
+   * without a QueryClientProvider wrapper).
+   */
+  connectedProviders?: ReadonlyArray<Provider>
+  /** Registry tools for the Step 3 ToolPolicyEditor. */
+  registryTools?: ReadonlyArray<RegistryTool>
+  /** Installed skills for the Step 3 skills picker. */
+  skills?: ReadonlyArray<Skill>
 }
 
 const TYPE_CHIP_LABEL: Record<WizardType, string> = {
@@ -66,63 +118,152 @@ const CLI_CHIP_LABEL: Record<WizardCli, string> = {
   opencode: 'opencode',
 }
 
-export function CreateAgentWizard({ initialType, initialCli, onSubmit }: WizardProps) {
-  const closeCreateAgentModal = useUiStore((s) => s.closeCreateAgentModal)
+const STEP_NAMES = ['Identity', 'Personality', 'Tools'] as const
 
-  const [step, setStep] = useState<1 | 2 | 3>(1)
-  const [submitting, setSubmitting] = useState(false)
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [color] = useState('Verdant')
-  const [icon] = useState('Robot')
-  const [model, setModel] = useState('')
-  const [soul, setSoul] = useState('')
-  const [instructions, setInstructions] = useState('')
+// Action is a discriminated union of per-field setters. The mapped type
+// keeps the value type coupled to the field key so a bad assignment
+// fails at compile time (no `unknown` hole, no `as` cast in the reducer).
+type SetAction<K extends keyof WizardSubmitPayload = keyof WizardSubmitPayload> = {
+  type: 'set'
+  field: K
+  value: WizardSubmitPayload[K]
+}
+type Action = SetAction
+
+function reducer(state: WizardSubmitPayload, action: Action): WizardSubmitPayload {
+  return { ...state, [action.field]: action.value }
+}
+
+function initialPayload(initialType: WizardType, initialCli?: WizardCli): WizardSubmitPayload {
+  return {
+    type: initialType,
+    cli: initialCli,
+    name: '',
+    description: '',
+    // Default to the first brand-palette hex. The wire contract requires
+    // /^#[0-9A-Fa-f]{6}$/ — sending the semantic name ('Verdant') 400s.
+    // Step 1 can override via the color picker once wired.
+    color: AVATAR_COLORS[0],
+    icon: 'Robot',
+    model: '',
+    soul: '',
+    instructions: '',
+    heartbeat_enabled: false,
+    heartbeat_interval: 1800,
+  }
+}
+
+export function CreateAgentWizard({
+  initialType,
+  initialCli,
+  onSubmit,
+  onClose,
+  connectedProviders = [],
+  registryTools = [],
+  skills = [],
+}: WizardProps) {
+  const closeCreateAgentModal = useUiStore((s) => s.closeCreateAgentModal)
+  // Resolve close handler: tests pass `onClose`; production falls back to
+  // the store action. Either way the wizard owns the dismiss path so the
+  // prop-driven test path can spy on close without touching the store.
+  const close = onClose ?? closeCreateAgentModal
+  // NOTE: we deliberately do NOT call addToast here on submit error.
+  // The parent CreateAgentModal owns the post-mutation lifecycle (success
+  // + error toasts, modal close) via useMutation.onSuccess / onError.
+  // Firing a toast here would produce a duplicate for the user.
+
+  const [payload, dispatch] = useReducer(reducer, undefined, () => initialPayload(initialType, initialCli))
+  const [step, setStep] = React.useState<1 | 2 | 3>(1)
+  const [submitting, setSubmitting] = React.useState(false)
+  const [submitError, setSubmitError] = React.useState<string | null>(null)
+  const errorRef = useRef<HTMLDivElement | null>(null)
+
+  // useFocusRestore captures the trigger element on open so the +Add
+  // button that opened the wizard regains focus on close. The Sheet's
+  // onOpenAutoFocus fires BEFORE Radix shifts focus, which is when the
+  // hook captures document.activeElement.
+  const { onOpenAutoFocus } = useFocusRestore(true)
+
+  const setField = React.useCallback(
+    <L extends keyof WizardSubmitPayload>(field: L, value: WizardSubmitPayload[L]) => {
+      dispatch({ type: 'set', field, value })
+      // Editing a field implies the prior error (if any) is stale.
+      if (submitError) setSubmitError(null)
+    },
+    [submitError],
+  )
+
+  // Navigate between steps; clears any stale submit error so the user
+  // doesn't stare at a banner from a prior attempt while editing.
+  const goToStep = React.useCallback(
+    (next: 1 | 2 | 3) => {
+      setStep(next)
+      setSubmitError(null)
+    },
+    [],
+  )
 
   const isWorker = initialType !== 'Main'
   const isExternal = initialType === 'subagent_3p'
-  const soulLabel = isWorker ? 'Soul / task prompt' : 'Soul'
 
-  // Step gating: name + (description if worker) + model + soul are required.
-  const step1Valid = name.length > 0 && model.length > 0 && (!isWorker || description.trim().length > 0)
-  const step2Valid = soul.trim().length > 0
+  // Step gating. Step 1 requires name + model + (description if worker).
+  const step1Valid = payload.name.trim().length > 0 &&
+    payload.model.trim().length > 0 &&
+    (!isWorker || payload.description.trim().length > 0)
+  // Step 2 requires soul (whitespace-trimmed non-empty).
+  const step2Valid = payload.soul.trim().length > 0
   const canAdvance = step === 1 ? step1Valid : step === 2 ? step2Valid : true
 
   async function handleSubmit() {
     setSubmitting(true)
+    setSubmitError(null)
     try {
-      await onSubmit({
-        type: initialType,
-        cli: initialCli,
-        name,
-        description,
-        color,
-        icon,
-        model,
-        soul,
-        instructions,
-      })
-      closeCreateAgentModal()
+      // Parent owns close + success toast via useMutation.onSuccess.
+      // We only throw the error so the inline error path can render.
+      await onSubmit(payload)
+    } catch (err) {
+      // Surface the error inline + announce via role=alert (no extra
+      // toast here — the parent's onError fires its own toast).
+      const message = isApiError(err)
+        ? err.userMessage
+        : err instanceof Error
+          ? err.message
+          : 'Failed to create agent'
+      setSubmitError(message)
+      // Move focus to the error message so screen readers announce it.
+      errorRef.current?.focus()
     } finally {
       setSubmitting(false)
     }
   }
 
+  const stepProps = {
+    payload,
+    setField,
+    initialType,
+    initialCli,
+    connectedProviders,
+    registryTools,
+    skills,
+  }
+
   return (
-    <Sheet open onOpenChange={(open) => !open && closeCreateAgentModal()}>
+    <Sheet open onOpenChange={(open) => !open && close()}>
       <SheetContent
         side="right"
-        // The wizard is full-width on phone, capped at 3xl on sm+ (matches
-        // existing create-modal convention from CreateAgentModal.tsx:247).
+        // Wizard is full-width on phone, capped at 3xl on sm+ (per §13.3).
         className="w-full sm:max-w-3xl flex flex-col gap-0 p-0"
+        // useFocusRestore captures the trigger element before Radix
+        // shifts focus into the dialog, then restores focus on close.
+        onOpenAutoFocus={onOpenAutoFocus}
       >
-        <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
+        <SheetHeader className="px-4 sm:px-8 pt-5 sm:pt-7 pb-4 sm:pb-5 border-b border-[var(--color-border)] shrink-0">
           <SheetTitle>+ New agent</SheetTitle>
           <SheetDescription>
             Configure the agent's identity, personality, and tools.
           </SheetDescription>
           <div className="flex flex-col gap-2 mt-4">
-            {/* Type chip (locked). Per spec §11 #3, the [x] cancels the wizard. */}
+            {/* Type chip (locked). The [x] cancels the wizard per §11 #3. */}
             <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-border)] px-3 py-2">
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-[var(--color-muted)]">Type:</span>
@@ -135,14 +276,13 @@ export function CreateAgentWizard({ initialType, initialCli, onSubmit }: WizardP
                 type="button"
                 variant="ghost"
                 size="icon"
-                onClick={closeCreateAgentModal}
+                onClick={close}
                 aria-label="Cancel wizard"
                 className="h-11 w-11"
               >
                 <X size={18} />
               </Button>
             </div>
-            {/* CLI chip — External wizards only (locked at create). */}
             {isExternal && initialCli && (
               <div className="flex items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-sm">
                 <span className="text-[var(--color-muted)]">CLI:</span>
@@ -153,164 +293,78 @@ export function CreateAgentWizard({ initialType, initialCli, onSubmit }: WizardP
               </div>
             )}
           </div>
-          {/* Stepper. Mobile shows just dots + current step name; sm+ shows full labels. */}
-          <div className="flex items-center gap-2 mt-4 text-sm" data-testid="wizard-stepper">
-            <span className={step === 1 ? 'font-semibold' : 'text-[var(--color-muted)]'}>
-              <span className="sm:hidden">●</span>
-              <span className="hidden sm:inline">① Identity</span>
-            </span>
-            <span className="text-[var(--color-muted)]">○</span>
-            <span className={step === 2 ? 'font-semibold' : 'text-[var(--color-muted)]'}>
-              <span className="sm:hidden">○</span>
-              <span className="hidden sm:inline">② Personality</span>
-            </span>
-            <span className="text-[var(--color-muted)]">○</span>
-            <span className={step === 3 ? 'font-semibold' : 'text-[var(--color-muted)]'}>
-              <span className="sm:hidden">○</span>
-              <span className="hidden sm:inline">③ Tools</span>
-            </span>
-          </div>
+          {/* Stepper. Per WAI-ARIA APG, a stepper is a list of steps with
+              `aria-current="step"` on the active item — not a progressbar
+              (which is reserved for fill-style progress toward a single
+              completion value). The visible glyph is responsive: phone
+              shows the dot (●/○), sm+ shows the numbered label (①/②/③).
+              Both render once per step — the original code had two spans
+              emitting the same character, which stacked. */}
+          <ol
+            className="flex items-center gap-2 mt-4 text-sm"
+            aria-label={`Wizard progress: step ${step} of 3`}
+            data-testid="wizard-stepper"
+          >
+            {STEP_NAMES.map((name, idx) => {
+              const n = (idx + 1) as 1 | 2 | 3
+              const isActive = step === n
+              return (
+                <React.Fragment key={name}>
+                  <li
+                    className={isActive ? 'font-semibold' : 'text-[var(--color-muted)]'}
+                    aria-current={isActive ? 'step' : undefined}
+                  >
+                    <span className="sm:hidden" aria-hidden="true">
+                      {isActive ? '●' : '○'}
+                    </span>
+                    <span className="hidden sm:inline" aria-hidden="true">
+                      {isActive ? `● ${name}` : `○ ${name}`}
+                    </span>
+                    <span className="sr-only">Step {n}: {name}</span>
+                  </li>
+                  {idx < STEP_NAMES.length - 1 && (
+                    <li className="text-[var(--color-muted)]" aria-hidden="true">—</li>
+                  )}
+                </React.Fragment>
+              )
+            })}
+          </ol>
         </SheetHeader>
 
-        <div className="flex-1 overflow-auto px-8 py-6 space-y-4">
-          {step === 1 && (
-            <>
-              {/* Identity step. Per spec §5.3-§5.5, all three types share
-                  color/icon/name/model; Subagent / External require description. */}
-              <div className="space-y-2">
-                <label htmlFor="wizard-name" className="text-sm font-medium">
-                  Name <span aria-label="required">*</span>
-                </label>
-                <Input
-                  id="wizard-name"
-                  data-testid="wizard-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Research Assistant"
-                />
-              </div>
-              <div className="space-y-2">
-                <label htmlFor="wizard-description" className="text-sm font-medium">
-                  Description{isWorker && <span aria-label="required"> *</span>}
-                </label>
-                <Input
-                  id="wizard-description"
-                  data-testid="wizard-description"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder={
-                    isWorker
-                      ? 'What this worker handles — required for routing'
-                      : 'A short subtitle (optional for Main)'
-                  }
-                />
-              </div>
-              <div className="space-y-2">
-                <label htmlFor="wizard-model" className="text-sm font-medium">
-                  Model <span aria-label="required">*</span>
-                </label>
-                {/* Main / Subagent: model picker (filter by connected providers).
-                    External: free-text slug input. The picker is wired by
-                    AgentFormFields.tsx in a follow-up commit; the input
-                    accepts any provider/model string for now. */}
-                <Input
-                  id="wizard-model"
-                  data-testid="wizard-model"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder={isExternal ? 'claude-sonnet-4-6' : 'Pick a connected model'}
-                />
-              </div>
-            </>
+        <div
+          className="flex-1 overflow-auto px-4 sm:px-8 py-6 space-y-4"
+        >
+          {submitError && (
+            <div
+              ref={errorRef}
+              tabIndex={-1}
+              data-testid="wizard-submit-error"
+              className="rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-3 py-2 text-sm text-[var(--color-error)] focus:outline-none focus:ring-2 focus:ring-[var(--color-error)]"
+            >
+              <FormError id="wizard-submit-error-text" error={submitError} className="mt-0" />
+            </div>
           )}
-
-          {step === 2 && (
-            <>
-              {/* Personality step. soul is required for all three types (incl.
-                  External — passed as CLI prompt content). Heartbeat / voice are
-                  Main only. */}
-              <div className="space-y-2">
-                <label htmlFor="wizard-soul" className="text-sm font-medium">
-                  {soulLabel} <span aria-label="required">*</span>
-                </label>
-                <Textarea
-                  id="wizard-soul"
-                  data-testid="wizard-soul"
-                  value={soul}
-                  onChange={(e) => setSoul(e.target.value)}
-                  rows={10}
-                  placeholder="You are a focused research assistant. You answer concisely..."
-                />
-              </div>
-              <div className="space-y-2">
-                <label htmlFor="wizard-instructions" className="text-sm font-medium">
-                  Instructions (optional)
-                </label>
-                <Textarea
-                  id="wizard-instructions"
-                  value={instructions}
-                  onChange={(e) => setInstructions(e.target.value)}
-                  rows={4}
-                  placeholder="Additional runtime instructions..."
-                />
-              </div>
-              {!isWorker && (
-                <div className="space-y-2" data-testid="wizard-heartbeat">
-                  {/* Heartbeat body + enable + interval (Main only). */}
-                  <label className="text-sm font-medium">Heartbeat (Main only)</label>
-                  <Input placeholder="Periodic instruction body" />
-                </div>
-              )}
-              {!isWorker && (
-                <div className="space-y-2" data-testid="wizard-voice">
-                  {/* Voice field — Main only. Wired to voice-provider-sub.tsx in W5. */}
-                  <label className="text-sm font-medium">Voice (Main only)</label>
-                  <Input placeholder="voice id (e.g. alloy)" />
-                </div>
-              )}
-            </>
-          )}
-
+          {step === 1 && <Step1Identity {...stepProps} />}
+          {step === 2 && <Step2Personality {...stepProps} />}
           {step === 3 && (
             <>
-              {/* Tools step. tools_cfg / fallback_models hidden for External;
-                  skills[] is the only field External wizards show. */}
-              {!isExternal && (
-                <div className="space-y-2" data-testid="wizard-tools-cfg">
-                  <label className="text-sm font-medium">Tools policy</label>
-                  <p className="text-xs text-[var(--color-muted)]">
-                    Default: deny. Per-tool allow / ask / deny editor.
-                  </p>
-                </div>
-              )}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Skills</label>
-                <p className="text-xs text-[var(--color-muted)]">
-                  Multi-select chips of installed skills.
-                </p>
-              </div>
-              {!isExternal && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Fallback models (max 2)</label>
-                  <p className="text-xs text-[var(--color-muted)]">
-                    Each entry is a [{`{model, provider}`}] object. Server rejects
-                    more than 2 with 400.
-                  </p>
-                </div>
-              )}
+              <Step3Tools {...stepProps} />
+              {/* Advanced disclosure mounts on Step 3 only (so the stepper
+                  stays 3 steps), but the field edits apply to the same
+                  payload — independent of which step is visible. */}
+              <Advanced {...stepProps} />
             </>
           )}
         </div>
 
-        {/* Footer. flex-col-reverse on phone puts the primary CTA on top; sm+
-            puts them side-by-side (matches SheetFooter convention from
-            sheet.tsx:101). */}
-        <SheetFooter className="px-8 py-4 border-t border-[var(--color-border)] flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
+        {/* Footer. flex-col-reverse on phone (primary CTA on top), sm+ side-by-side. */}
+        <SheetFooter className="px-4 sm:px-8 py-4 border-t border-[var(--color-border)] flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
           <Button
             type="button"
             variant="ghost"
-            onClick={closeCreateAgentModal}
+            onClick={close}
             disabled={submitting}
+            className="h-11"
           >
             Cancel
           </Button>
@@ -318,9 +372,10 @@ export function CreateAgentWizard({ initialType, initialCli, onSubmit }: WizardP
             <Button
               type="button"
               variant="outline"
-              onClick={() => setStep((s) => (s - 1) as 1 | 2 | 3)}
+              onClick={() => goToStep((step - 1) as 1 | 2 | 3)}
               disabled={submitting}
               data-testid="wizard-back"
+              className="h-11"
             >
               ← Back
             </Button>
@@ -328,9 +383,10 @@ export function CreateAgentWizard({ initialType, initialCli, onSubmit }: WizardP
           {step < 3 ? (
             <Button
               type="button"
-              onClick={() => setStep((s) => (s + 1) as 1 | 2 | 3)}
+              onClick={() => goToStep((step + 1) as 1 | 2 | 3)}
               disabled={!canAdvance}
               data-testid={`wizard-next-${step}`}
+              className="h-11"
             >
               Next →
             </Button>
@@ -340,6 +396,7 @@ export function CreateAgentWizard({ initialType, initialCli, onSubmit }: WizardP
               onClick={handleSubmit}
               disabled={!canAdvance || submitting}
               data-testid="wizard-create"
+              className="h-11"
             >
               {submitting ? 'Creating…' : 'Create agent'}
             </Button>
