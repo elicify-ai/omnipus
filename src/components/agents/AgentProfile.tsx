@@ -389,7 +389,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     toolsCfg, agentSkills, executor,
   ])
 
-  const { status: saveStatus, error: saveError } = useAutoSave(
+  const { status: saveStatus, error: saveError, lastSavedAt: saveLastSavedAt } = useAutoSave(
     formData,
     async (data) => {
       // Do not save before the server data has been hydrated into state —
@@ -1898,7 +1898,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           affordance, and SheetContent's onOpenChange wires it back here. */}
       <div className="px-8 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-3">
         <div data-testid="last-saved-indicator">
-          <AutoSaveIndicator status={saveStatus} error={saveError} />
+          <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={saveLastSavedAt} />
         </div>
         {!isLocked && (
           <Button

@@ -17,6 +17,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -646,4 +647,43 @@ func TestUpdateAgent_ExecutorOMNIPUSPrefixRejected(t *testing.T) {
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "OMNIPUS_* is gateway-internal")
+}
+
+// TestCreateAgent_ReloadFailure_ReturnsWarning verifies that a failure during
+// TriggerReload after a successful persistence is surfaced as a warning rather
+// than failing the create request.
+func TestCreateAgent_ReloadFailure_ReturnsWarning(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	api.agentLoop.SetReloadFunc(func() error { return errors.New("reload boom") })
+
+	body := `{"name":"ReloadTest","soul":"soul content"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	var resp gen.Agent
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Warning)
+	assert.Contains(t, *resp.Warning, "config reload failed")
+}
+
+// TestUpdateAgent_ModelLiveApplyFailure_ReturnsWarning verifies that a model
+// change which persists to disk but cannot be applied to the running agent is
+// returned with a warning (not a hard failure).
+func TestUpdateAgent_ModelLiveApplyFailure_ReturnsWarning(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	body := `{"model":"unresolvable-model-no-provider"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var resp gen.Agent
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Warning)
+	assert.Contains(t, *resp.Warning, "model saved to config but could not be applied")
 }

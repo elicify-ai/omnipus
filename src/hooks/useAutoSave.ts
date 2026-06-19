@@ -8,11 +8,20 @@ interface UseAutoSaveOptions {
   debounceMs?: number
   /** If true, auto-save is disabled (e.g., for locked agents) */
   disabled?: boolean
+  /**
+   * Optional endpoint to receive a best-effort beacon of the pending data
+   * when the page is hidden or unloaded. Uses `navigator.sendBeacon` when
+   * available, falling back to `fetch(..., { keepalive: true })`. If not
+   * provided, no flush is attempted.
+   */
+  flushUrl?: string
 }
 
 interface UseAutoSaveResult {
   status: AutoSaveStatus
   error: string | undefined
+  /** Timestamp of the last successful save, or undefined if none yet. */
+  lastSavedAt: Date | undefined
   /** Call this to trigger an immediate save (no debounce) */
   saveNow: () => void
 }
@@ -32,9 +41,10 @@ export function useAutoSave<T>(
   saveFn: (data: T) => Promise<unknown>,
   options?: UseAutoSaveOptions,
 ): UseAutoSaveResult {
-  const { debounceMs = 500, disabled = false } = options ?? {}
+  const { debounceMs = 500, disabled = false, flushUrl } = options ?? {}
   const [status, setStatus] = useState<AutoSaveStatus>('idle')
   const [error, setError] = useState<string>()
+  const [lastSavedAt, setLastSavedAt] = useState<Date | undefined>(undefined)
 
   // Track whether initial hydration has happened.
   const initializedRef = useRef(false)
@@ -46,6 +56,10 @@ export function useAutoSave<T>(
   saveFnRef.current = saveFn
   latestDataRef.current = data
 
+  const hasPendingChanges = useCallback(() => {
+    return JSON.stringify(latestDataRef.current) !== previousJsonRef.current
+  }, [])
+
   const doSave = useCallback(async () => {
     if (disabled) return
     setStatus('saving')
@@ -53,6 +67,7 @@ export function useAutoSave<T>(
     try {
       await saveFnRef.current(latestDataRef.current)
       setStatus('saved')
+      setLastSavedAt(new Date())
       // Fade back to idle after 2s. Cancel any previous fade timer first to
       // avoid leaking setTimeouts when saves happen in quick succession.
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
@@ -93,6 +108,56 @@ export function useAutoSave<T>(
     }
   }, [data, debounceMs, disabled, doSave])
 
+  // Best-effort flush of pending changes when the page is hidden or unloaded.
+  // Uses `navigator.sendBeacon` when available, otherwise a fetch with
+  // `keepalive: true`. This prevents silently losing edits on tab close,
+  // browser reload, or background throttling.
+  const flushBeacon = useCallback(() => {
+    if (!flushUrl || !initializedRef.current || !hasPendingChanges()) return
+
+    const payload = JSON.stringify(latestDataRef.current)
+    const blob = new Blob([payload], { type: 'application/json' })
+
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+        if (navigator.sendBeacon(flushUrl, blob)) return
+      }
+    } catch {
+      // Fall through to keepalive fetch.
+    }
+
+    try {
+      void fetch(flushUrl, {
+        method: 'POST',
+        keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      })
+    } catch {
+      // Best-effort — browser may block outbound requests during unload.
+    }
+  }, [flushUrl, hasPendingChanges])
+
+  useEffect(() => {
+    if (!flushUrl || disabled) return
+
+    const onVisibilityChange = () => {
+      if (document.hidden) flushBeacon()
+    }
+    const onBeforeUnload = () => flushBeacon()
+    const onPageHide = () => flushBeacon()
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('beforeunload', onBeforeUnload)
+    window.addEventListener('pagehide', onPageHide)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      window.removeEventListener('pagehide', onPageHide)
+    }
+  }, [flushUrl, disabled, flushBeacon])
+
   // Cleanup on unmount: cancel timers and flush any pending save so changes
   // made just before navigation/unmount are not silently dropped.
   useEffect(() => {
@@ -109,15 +174,14 @@ export function useAutoSave<T>(
       }
       // Flush pending save (fire-and-forget — component is unmounting)
       if (initializedRef.current) {
-        const currentJson = JSON.stringify(latestDataRef.current)
-        if (currentJson !== previousJsonRef.current) {
+        if (hasPendingChanges()) {
           saveFnRef.current(latestDataRef.current).catch((err) => {
             console.error('[useAutoSave] unmount flush save failed:', err)
           })
         }
       }
     }
-  }, [])
+  }, [hasPendingChanges])
 
-  return { status, error, saveNow: doSave }
+  return { status, error, lastSavedAt, saveNow: doSave }
 }

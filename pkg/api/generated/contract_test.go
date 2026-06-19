@@ -3378,3 +3378,43 @@ func TestContract_PerformanceSettings_OutOfRange(t *testing.T) {
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "PerformanceSettings", raw),
 		"max_parallel_agents=99 must FAIL PerformanceSettings.yaml validation (maximum: 16)")
 }
+
+// ── AgentCreateRequest ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AgentCreateRequest.yaml
+
+func TestContract_AgentCreateRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "AgentCreateRequest", FixtureAgentCreateRequest_Populated())
+}
+
+func TestContract_AgentCreateRequest_InvalidType(t *testing.T) {
+	// type="not-a-valid-type" is NOT in the enum [Main, Subagent, subagent_3p, core, system, worker].
+	mustFailComponent(t, "AgentCreateRequest", FixtureAgentCreateRequest_InvalidType(),
+		"type must be one of the declared enum values")
+}
+
+// ── AgentUpdateRequest ───────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AgentUpdateRequest.yaml
+
+func TestContract_AgentUpdateRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_Populated())
+}
+
+func TestContract_AgentUpdateRequest_UpdatedAt(t *testing.T) {
+	// A patch body with only a valid updated_at timestamp satisfies minProperties:1
+	// and the date-time format constraint.
+	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_UpdatedAt())
+}
+
+// ── ChannelRouting ────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ChannelRouting.yaml
+
+func TestContract_ChannelRouting_Populated(t *testing.T) {
+	mustPassComponent(t, "ChannelRouting", FixtureChannelRouting_Populated())
+}
+
+// ── CliDetect ──────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CliDetect.yaml
+
+func TestContract_CliDetect_Populated(t *testing.T) {
+	mustPassComponent(t, "CliDetect", FixtureCliDetect_Populated())
+}
