@@ -64,6 +64,20 @@ export function MessageInput() {
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data)
       }
+      recorder.onerror = (ev: Event) => {
+        // Surface non-fatal MediaRecorder failures so the user isn't left in
+        // a stuck "recording" state. The event is an MediaRecorderErrorEvent
+        // in compliant browsers, but the DOM type is just Event in some TS
+        // versions — read the message safely.
+        releaseStream()
+        setMicState('idle')
+        const message =
+          ('error' in ev && (ev as { error?: Error }).error?.message) ||
+          ('message' in ev && typeof (ev as { message?: string }).message === 'string'
+            ? (ev as { message?: string }).message
+            : 'Recording failed')
+        addToast({ message: `Recording failed: ${message}`, variant: 'error' })
+      }
       recorder.onstop = async () => {
         releaseStream()
         const chunks = audioChunksRef.current

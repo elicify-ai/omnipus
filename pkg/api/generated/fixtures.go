@@ -2267,3 +2267,262 @@ func FixturePerformanceSettings_Populated() PerformanceSettings {
 func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 	return PerformanceSettings{}
 }
+
+// ── AgentCreateRequest ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AgentCreateRequest.yaml
+
+func FixtureAgentCreateRequest_Populated() AgentCreateRequest {
+	t := AgentCreateRequestTypeMain
+	color := "#D4AF37"
+	icon := "Robot"
+	model := "claude-sonnet-4-6"
+	enabled := true
+	defaultPolicy := AgentCreateRequestToolsCfgBuiltinDefaultPolicyAllow
+	deny := AgentCreateRequestToolsCfgBuiltinPoliciesDeny
+	sandbox := AgentCreateRequestSandboxProfileWorkspace
+	steering := AgentCreateRequestSteeringModeOneAtATime
+	mode := AgentCreateRequestDelegationPolicyModesAwait
+	toKind := AgentCreateRequestDelegationPolicyToKindLocal
+	description := "Focused research assistant"
+	temperature := 0.7
+	maxTokens := 4096
+	topP := 1.0
+	maxCost := 5.0
+	maxCalls := 100
+	maxTools := 60
+
+	return AgentCreateRequest{
+		Name:         "Research Bot",
+		Type:         &t,
+		Description:  &description,
+		Model:        &model,
+		Color:        &color,
+		Icon:         &icon,
+		Soul:         "You are a focused research assistant.",
+		Instructions: strPtr("Focus on web research and summarisation."),
+		Skills:       &[]string{"web-research"},
+		FallbackModels: &[]FallbackModel{
+			{Model: "claude-sonnet-4-6", Provider: strPtr("anthropic")},
+		},
+		ModelParams: &struct {
+			MaxTokens   *int     `json:"max_tokens,omitempty"`
+			Temperature *float64 `json:"temperature,omitempty"`
+			TopP        *float64 `json:"top_p,omitempty"`
+		}{
+			MaxTokens:   &maxTokens,
+			Temperature: &temperature,
+			TopP:        &topP,
+		},
+		RateLimits: &struct {
+			MaxCostPerDay         *float64 `json:"max_cost_per_day,omitempty"`
+			MaxLlmCallsPerHour    *int     `json:"max_llm_calls_per_hour,omitempty"`
+			MaxToolCallsPerMinute *int     `json:"max_tool_calls_per_minute,omitempty"`
+			UseGlobalDefaults     *bool    `json:"use_global_defaults,omitempty"`
+		}{
+			UseGlobalDefaults:     &enabled,
+			MaxCostPerDay:         &maxCost,
+			MaxLlmCallsPerHour:    &maxCalls,
+			MaxToolCallsPerMinute: &maxTools,
+		},
+		SandboxProfile: &sandbox,
+		ShellPolicy: &struct {
+			CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
+			EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
+		}{
+			EnableDenyPatterns: &enabled,
+			CustomDenyPatterns: &[]string{"rm -rf /"},
+		},
+		DelegationPolicy: &struct {
+			AcceptFrom *[]struct {
+				Id   string                                           `json:"id"`
+				Kind AgentCreateRequestDelegationPolicyAcceptFromKind `json:"kind"`
+			} `json:"accept_from,omitempty"`
+			Budget *struct {
+				MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+				MaxTokens  *int     `json:"max_tokens,omitempty"`
+			} `json:"budget,omitempty"`
+			Depth *int                                       `json:"depth,omitempty"`
+			Modes *[]AgentCreateRequestDelegationPolicyModes `json:"modes,omitempty"`
+			To    *[]struct {
+				Id   string                                   `json:"id"`
+				Kind AgentCreateRequestDelegationPolicyToKind `json:"kind"`
+			} `json:"to,omitempty"`
+		}{
+			Depth: intPtr(3),
+			Modes: &[]AgentCreateRequestDelegationPolicyModes{mode},
+			To: &[]struct {
+				Id   string                                   `json:"id"`
+				Kind AgentCreateRequestDelegationPolicyToKind `json:"kind"`
+			}{{Id: "ray", Kind: toKind}},
+		},
+		ToolsCfg: &struct {
+			Builtin *struct {
+				DefaultPolicy *AgentCreateRequestToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentCreateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			} `json:"builtin,omitempty"`
+			Mcp *struct {
+				Servers *[]struct {
+					Id    string    `json:"id"`
+					Tools *[]string `json:"tools,omitempty"`
+				} `json:"servers,omitempty"`
+			} `json:"mcp,omitempty"`
+		}{
+			Builtin: &struct {
+				DefaultPolicy *AgentCreateRequestToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentCreateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			}{
+				DefaultPolicy: &defaultPolicy,
+				Policies: &map[string]AgentCreateRequestToolsCfgBuiltinPolicies{
+					"system.*": deny,
+				},
+			},
+			Mcp: &struct {
+				Servers *[]struct {
+					Id    string    `json:"id"`
+					Tools *[]string `json:"tools,omitempty"`
+				} `json:"servers,omitempty"`
+			}{
+				Servers: &[]struct {
+					Id    string    `json:"id"`
+					Tools *[]string `json:"tools,omitempty"`
+				}{{Id: "my-mcp"}},
+			},
+		},
+		SteeringMode: &steering,
+	}
+}
+
+// FixtureAgentCreateRequest_InvalidType returns a request whose type value is
+// not in the enum. JSON Schema validation must reject it.
+func FixtureAgentCreateRequest_InvalidType() AgentCreateRequest {
+	t := AgentCreateRequestType("not-a-valid-type")
+	return AgentCreateRequest{
+		Name: "Bad Type",
+		Type: &t,
+		Soul: "Valid soul content.",
+	}
+}
+
+// ── AgentUpdateRequest ───────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AgentUpdateRequest.yaml
+
+func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
+	color := "#D4AF37"
+	icon := "Robot"
+	model := "gpt-4o"
+	name := "Renamed Agent"
+	description := "Updated description"
+	temperature := 0.5
+	maxTokens := 2048
+	topP := 0.9
+	defaultPolicy := AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAsk
+	allow := AgentUpdateRequestToolsCfgBuiltinPoliciesAllow
+	sandbox := AgentUpdateRequestSandboxProfileHost
+	steering := QueueAndProcess
+	mode := AgentUpdateRequestDelegationPolicyModesBackground
+	toKind := AgentUpdateRequestDelegationPolicyToKindLocal
+	heartbeat := "Check queue every hour."
+	instructions := "Focus on Python only."
+	soul := "You are a helpful assistant."
+	voice := "alloy"
+	updatedAt := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+
+	vDefault := true
+	return AgentUpdateRequest{
+		Name:           &name,
+		Description:    &description,
+		Model:          &model,
+		Color:          &color,
+		Icon:           &icon,
+		Default:        &vDefault,
+		Soul:           &soul,
+		Heartbeat:      &heartbeat,
+		Instructions:   &instructions,
+		Voice:          &voice,
+		SandboxProfile: &sandbox,
+		SteeringMode:   &steering,
+		ModelParams: &struct {
+			MaxTokens   *int     `json:"max_tokens,omitempty"`
+			Temperature *float64 `json:"temperature,omitempty"`
+			TopP        *float64 `json:"top_p,omitempty"`
+		}{
+			MaxTokens:   &maxTokens,
+			Temperature: &temperature,
+			TopP:        &topP,
+		},
+		ToolsCfg: &struct {
+			Builtin *struct {
+				DefaultPolicy *AgentUpdateRequestToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			} `json:"builtin,omitempty"`
+			Mcp *struct {
+				Servers *[]struct {
+					Id    string    `json:"id"`
+					Tools *[]string `json:"tools,omitempty"`
+				} `json:"servers,omitempty"`
+			} `json:"mcp,omitempty"`
+		}{
+			Builtin: &struct {
+				DefaultPolicy *AgentUpdateRequestToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			}{
+				DefaultPolicy: &defaultPolicy,
+				Policies: &map[string]AgentUpdateRequestToolsCfgBuiltinPolicies{
+					"workspace.shell": allow,
+				},
+			},
+		},
+		DelegationPolicy: &struct {
+			AcceptFrom *[]struct {
+				Id   string                                           `json:"id"`
+				Kind AgentUpdateRequestDelegationPolicyAcceptFromKind `json:"kind"`
+			} `json:"accept_from,omitempty"`
+			Budget *struct {
+				MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+				MaxTokens  *int     `json:"max_tokens,omitempty"`
+			} `json:"budget,omitempty"`
+			Depth *int                                       `json:"depth,omitempty"`
+			Modes *[]AgentUpdateRequestDelegationPolicyModes `json:"modes,omitempty"`
+			To    *[]struct {
+				Id   string                                   `json:"id"`
+				Kind AgentUpdateRequestDelegationPolicyToKind `json:"kind"`
+			} `json:"to,omitempty"`
+		}{
+			Depth: intPtr(2),
+			Modes: &[]AgentUpdateRequestDelegationPolicyModes{mode},
+			To: &[]struct {
+				Id   string                                   `json:"id"`
+				Kind AgentUpdateRequestDelegationPolicyToKind `json:"kind"`
+			}{{Id: "m", Kind: toKind}},
+		},
+		UpdatedAt: &updatedAt,
+	}
+}
+
+// FixtureAgentUpdateRequest_UpdatedAt returns a minimal patch whose only field
+// is a valid RFC3339 updated_at. JSON Schema validation must accept it.
+func FixtureAgentUpdateRequest_UpdatedAt() AgentUpdateRequest {
+	updatedAt := time.Date(2026, 6, 19, 12, 34, 56, 0, time.UTC)
+	return AgentUpdateRequest{
+		UpdatedAt: &updatedAt,
+	}
+}
+
+// ── ChannelRouting ────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ChannelRouting.yaml
+
+func FixtureChannelRouting_Populated() ChannelRouting {
+	id := "agent-a"
+	return ChannelRouting{DefaultAgentId: &id}
+}
+
+// ── CliDetect ─────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CliDetect.yaml
+
+func FixtureCliDetect_Populated() CliDetect {
+	return CliDetect{
+		HasClaude:   true,
+		HasCodex:    false,
+		HasOpencode: true,
+	}
+}

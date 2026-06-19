@@ -431,8 +431,8 @@ describe('AgentListScreen — external CLI sub-picker disclosure', () => {
     expect(opencode).not.toBeDisabled()
   })
 
-  it('keeps optimistic defaults when the cli-detect endpoint is missing', async () => {
-    // Endpoint 404 → optimistic defaults → all CLIs enabled.
+  it('keeps optimistic defaults when the cli-detect endpoint is missing and surfaces a warning', async () => {
+    // Endpoint 404 → optimistic defaults → all CLIs enabled, plus a warning.
     fetchSpy.mockReset()
     fetchSpy.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) })
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
@@ -443,5 +443,6 @@ describe('AgentListScreen — external CLI sub-picker disclosure', () => {
       expect(screen.getByTestId('add-external-codex')).toBeInTheDocument()
     })
     expect(screen.getByTestId('add-external-codex')).not.toBeDisabled()
+    expect(screen.getByTestId('cli-detect-warning')).toBeInTheDocument()
   })
 })
