@@ -26,15 +26,19 @@ async function isAuthenticated(page: Page): Promise<boolean> {
  * Step 3 — Fill #admin-username / #admin-password / #admin-password-confirm → "Create Account"
  * Step 4 — "Start Exploring"
  *
- * The API key is sourced from OPENROUTER_API_KEY_CI env var; tests will fail
- * with a real connection error if it is absent — that is intentional.
+ * The API key is sourced from OPENROUTER_API_KEY_CI (or OPENROUTER_API_KEY as a
+ * fallback for local worker runs); tests will fail with a real connection error
+ * if it is absent — that is intentional.
  *
  * IMPORTANT: pressSequentially() is used instead of fill() because React's synthetic
  * onChange is not triggered by fill() on controlled inputs — the submit button stays
  * disabled={!username.trim() || !password} without real keystroke events.
  */
 async function completeOnboarding(page: Page, creds: Credentials): Promise<void> {
-  const apiKey = process.env.OPENROUTER_API_KEY_CI ?? 'sk-test-placeholder';
+  const apiKey =
+    process.env.OPENROUTER_API_KEY_CI ??
+    process.env.OPENROUTER_API_KEY ??
+    'sk-test-placeholder';
 
   // ── Step 1 ────────────────────────────────────────────────────────────────
   await expect(page).toHaveURL(/onboarding/, { timeout: 15_000 });

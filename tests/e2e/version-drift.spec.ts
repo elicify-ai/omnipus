@@ -9,7 +9,7 @@ test('mock stale build hash triggers "New version available" toast', async ({ pa
   let callCount = 0;
   await page.route('**/api/v1/version', async (route) => {
     callCount++;
-    const sha = callCount === 1 ? 'sha-v1-old' : 'sha-v2-new';
+    const sha = callCount === 1 ? 'aaaaaaa' : 'bbbbbbb';
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
