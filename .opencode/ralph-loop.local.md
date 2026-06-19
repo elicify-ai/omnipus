@@ -1,7 +1,8 @@
 ---
 active: true
-iteration: 0
+iteration: 1
 maxIterations: 100
+sessionId: ses_1208a599dffeGIqBtQdyMhabMV
 ---
 
 Implement the finalized hotfix/v0.1.1 agent-form refactor end-to-end. Follow the worktree fan-out plan:
