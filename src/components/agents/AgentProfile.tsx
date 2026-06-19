@@ -32,12 +32,6 @@ import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
-  Accordion,
-  AccordionItem,
-  AccordionTrigger,
-  AccordionContent,
-} from '@/components/ui/accordion'
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -308,83 +302,75 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     hasHydrated.current = true
   }, [agentId, agent])
 
-  const timeoutPayload = timeoutSeconds > 0 ? timeoutSeconds : undefined
-  const formData = useMemo(() => {
-    // Spec-4 FR-4.1: subagent_3p agents run inside an external CLI, so many
-    // Omnipus-native fields are irrelevant or explicitly rejected by the
-    // backend. Build a restricted payload for that tier.
-    const isSubagent3p = agent?.type === 'subagent_3p'
-    const identity = isSubagent3p
-      ? { name, description, color: selectedColor, icon: selectedIcon }
-      : { name, description, color: selectedColor, icon: selectedIcon, default: isDefault }
-    const rateLimits = {
+  const formData = useMemo(() => ({
+    name,
+    description,
+    model,
+    color: selectedColor,
+    icon: selectedIcon,
+    // W6-B4 / G3: `default` flag. Always sent with the current value so the
+    // PUT payload reflects the user's intent. The wire contract says
+    // "Omitting this field leaves the flag unchanged" — but auto-save only
+    // fires on a real change, and on the real change the user has flipped
+    // this toggle, so emitting the new value is exactly right. If a future
+    // edit (say, renaming) does not flip `default`, the formData still
+    // includes the existing value; the server treats the PUT as "set to
+    // this value", which preserves the existing value — the desired
+    // behavior. PUT semantics: at most one agent is default across the
+    // roster; the backend enforces uniqueness on PUT and demotes the prior
+    // default to false in the same transaction.
+    default: isDefault,
+    // Editor state matches the wire shape 1:1; emit `undefined` for
+    // empty (treated as "no fallbacks" by the backend).
+    fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
+    model_params: { temperature, max_tokens: maxTokens, top_p: topP },
+    rate_limits: {
       use_global_defaults: useGlobalRateLimits,
       max_llm_calls_per_hour: maxLlmCallsPerHour !== '' ? maxLlmCallsPerHour : undefined,
       max_tool_calls_per_minute: maxToolCallsPerMinute !== '' ? maxToolCallsPerMinute : undefined,
       max_cost_per_day: maxCostPerDay !== '' ? maxCostPerDay : undefined,
-    }
-    if (isSubagent3p) {
-      return {
-        ...identity,
-        model,
-        soul,
-        instructions,
-        rate_limits: rateLimits,
-        timeout_seconds: timeoutPayload,
-        max_tool_iterations: maxToolIterations,
-        executor,
-      }
-    }
-    return {
-      ...identity,
-      model,
-      // Editor state matches the wire shape 1:1; emit `undefined` for
-      // empty (treated as "no fallbacks" by the backend).
-      fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
-      model_params: { temperature, max_tokens: maxTokens, top_p: topP },
-      rate_limits: rateLimits,
-      soul,
-      instructions,
-      // W6-B4 / G1: voice is optional — emit only when non-empty so the backend
-      // can leave the field unchanged when the user hasn't set it. An empty
-      // string and `undefined` are semantically equivalent for the wire (both
-      // mean "no override"); sending `null` explicitly would clear an existing
-      // value, which is the right semantics for "Clear voice" but not for an
-      // untouched field. We send `undefined` (omitted) for the empty case.
-      // W6-B-fix: trim on the wire so whitespace-only inputs collapse to
-      // "no voice configured" rather than persisting a literal "   " that
-      // breaks TTS lookup at v0.2.0 release.
-      voice: voice.trim() !== '' ? voice.trim() : undefined,
-      heartbeat,
-      timeout_seconds: timeoutPayload,
-      max_tool_iterations: maxToolIterations,
-      steering_mode: steeringMode,
-      heartbeat_enabled: heartbeatEnabled,
-      heartbeat_interval: heartbeatInterval,
-      // 'none' is a UI-only marker meaning "inherit global default". Strip it before
-      // submitting so the backend receives undefined (omitted) rather than a value
-      // that fails the sandbox_profile enum validation (contract does not include 'none').
-      sandbox_profile: sandboxProfile === 'none' ? undefined : sandboxProfile,
-      shell_policy: {
-        custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
-      },
-      tools_cfg: toolsCfg,
-      // US-E6: include the per-agent skill list in the auto-save payload.
-      // Send the current list (may be empty, meaning no skills). The backend
-      // treats an absent field as "leave unchanged" and an explicit empty
-      // array as "remove all skills" — we always send the current value so
-      // a deliberate clear (removing the last skill) is persisted correctly.
-      skills: agentSkills,
-      // Spec-4 FR-4.1: persist the executor only when explicitly configured.
-      // Omitting it (undefined) leaves the backend on its "native" default
-      // rather than forcing an empty value over the wire.
-      executor,
-    }
-  }, [
-    agent?.type, name, description, model, selectedColor, selectedIcon, isDefault, fallbackModels,
+    },
+    soul,
+    instructions,
+    // W6-B4 / G1: voice is optional — emit only when non-empty so the backend
+    // can leave the field unchanged when the user hasn't set it. An empty
+    // string and `undefined` are semantically equivalent for the wire (both
+    // mean "no override"); sending `null` explicitly would clear an existing
+    // value, which is the right semantics for "Clear voice" but not for an
+    // untouched field. We send `undefined` (omitted) for the empty case.
+    // W6-B-fix: trim on the wire so whitespace-only inputs collapse to
+    // "no voice configured" rather than persisting a literal "   " that
+    // breaks TTS lookup at v0.2.0 release.
+    voice: voice.trim() !== '' ? voice.trim() : undefined,
+    heartbeat,
+    timeout_seconds: timeoutSeconds > 0 ? timeoutSeconds : undefined,
+    max_tool_iterations: maxToolIterations,
+    steering_mode: steeringMode,
+    heartbeat_enabled: heartbeatEnabled,
+    heartbeat_interval: heartbeatInterval,
+    // 'none' is a UI-only marker meaning "inherit global default". Strip it before
+    // submitting so the backend receives undefined (omitted) rather than a value
+    // that fails the sandbox_profile enum validation (contract does not include 'none').
+    sandbox_profile: sandboxProfile === 'none' ? undefined : sandboxProfile,
+    shell_policy: {
+      custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
+    },
+    tools_cfg: toolsCfg,
+    // US-E6: include the per-agent skill list in the auto-save payload.
+    // Send the current list (may be empty, meaning no skills). The backend
+    // treats an absent field as "leave unchanged" and an explicit empty
+    // array as "remove all skills" — we always send the current value so
+    // a deliberate clear (removing the last skill) is persisted correctly.
+    skills: agentSkills,
+    // Spec-4 FR-4.1: persist the executor only when explicitly configured.
+    // Omitting it (undefined) leaves the backend on its "native" default
+    // rather than forcing an empty value over the wire.
+    executor,
+  }), [
+    name, description, model, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, instructions, voice, heartbeat,
-    timeoutPayload, timeoutSeconds, maxToolIterations, steeringMode,
+    timeoutSeconds, maxToolIterations, steeringMode,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
     toolsCfg, agentSkills, executor,
   ])
@@ -453,37 +439,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // stripped here (B-2 defense-in-depth on the frontend side): the
       // Skills picker is rendered disabled for locked agents, so this strip
       // is the belt-and-suspenders path for any state that may survive hydration.
-      const stripped = agent?.locked
+      const payload = agent?.locked
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
             heartbeat: _h, instructions: _ins, sandbox_profile: _sp,
             shell_policy: _shp, tools_cfg: _tc, skills: _sk, executor: _ex, ...rest
-          }) => rest)(data as Record<string, unknown>)
+          }) => rest)(data)
         : data
-      // W6-contracts: include updated_at from the last GET response so the
-      // backend can reject stale writes with 409 Conflict.
-      const payload = { ...stripped, updated_at: agent?.updated_at }
-      try {
-        await updateAgent(agentId, payload)
-      } catch (err) {
-        // W6-contracts: on a 409 Conflict, surface a toast with a Refresh
-        // action that refetches the agent state and drops pending edits.
-        if (isApiError(err) && err.status === 409) {
-          addToast({
-            message: 'This agent was changed elsewhere. Refresh to load the latest version.',
-            variant: 'error',
-            action: {
-              label: 'Refresh',
-              onClick: () => {
-                refetchAgent().then(() => {
-                  if (isDirtyRef.current) isDirtyRef.current = false
-                })
-              },
-            },
-          })
-        }
-        throw err
-      }
+      await updateAgent(agentId, payload)
       isDirtyRef.current = false
       queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
       queryClient.invalidateQueries({ queryKey: ['agents'] })
@@ -549,153 +512,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   }
 
   function UploadButton({ onUpload }: { onUpload: (content: string) => void }) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          const input = document.createElement('input')
-          input.type = 'file'
-          input.accept = '.md,.markdown,.txt'
-          input.onchange = (e) => {
-            const file = (e.target as HTMLInputElement).files?.[0]
-            if (!file) return
-            if (file.size > 1_000_000) {
-              addToast({ message: `File too large (${(file.size / 1_000_000).toFixed(1)}MB). Max 1MB for markdown files.`, variant: 'error' })
-              return
-            }
-            const reader = new FileReader()
-            reader.onload = () => {
-              onUpload(reader.result as string)
-              markDirty()
-            }
-            reader.onerror = () => {
-              addToast({ message: `Failed to read ${file.name}: ${reader.error?.message ?? 'unknown error'}`, variant: 'error' })
-            }
-            reader.readAsText(file)
-          }
-          input.click()
-        }}
-        className="h-7 px-2 text-xs rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-1"
-      >
-        <UploadSimple size={12} />
-        Upload .md
-      </button>
-    )
-  }
-
-  const recentSessions = agentSessions.slice(0, 10)
-
-  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation. Mirrors the
-  // pattern from SchedulesList (`doDelete`): the mutation invalidates
-  // the list cache on success, surfaces the API error inline on failure,
-  // and closes the slide-over only on success (so a network blip keeps
-  // the operator on the same page). The button itself is hidden for
-  // locked agents (see SheetFooter below).
-  const deleteAgentMutation = useMutation({
-    mutationFn: (id: string) => deleteAgent(id),
-    onSuccess: () => {
-      // Drop the deleted agent from the list cache immediately so no
-      // per-id GET refetch fires for a resource that no longer exists.
-      queryClient.setQueryData(['agents'], (prev: unknown) => {
-        if (!Array.isArray(prev)) return prev
-        return prev.filter((a) => (a as { id?: string }).id !== agentId)
-      })
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-      setDeleteOpen(false)
-      closeEditAgentSlideOver()
-      addToast({ message: 'Agent deleted', variant: 'success' })
-    },
-    onError: (err: unknown) => {
-      const msg = isApiError(err)
-        ? err.userMessage
-        : err instanceof Error
-          ? err.message
-          : 'Delete failed'
-      addToast({ message: `Delete failed: ${msg}`, variant: 'error' })
-      setDeleteOpen(false)
-    },
-  })
-
-  if (isLoading) {
-    return (
-      <ProfileSheet
-        isOpen={isOpen}
-        onClose={closeEditAgentSlideOver}
-        title="Edit agent"
-        onOpenAutoFocus={handleOpenAutoFocus}
-      >
-        <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
-          Loading agent...
-        </div>
-      </ProfileSheet>
-    )
-  }
-
-  if (isError || !agent) {
-    // Distinguish "this agent does not exist" (404) from transient errors so
-    // the user gets the right copy and the right path forward. The previous
-    // version lumped every error into "Agent not found", which misled users
-    // on 500s / 401s / 502s and gave them no retry affordance.
-    const isNotFound = isApiError(agentError) && agentError.status === 404
-    const title = isNotFound ? 'Agent not found' : "Couldn't load agent"
-    const detail = isNotFound
-      ? 'This agent may have been deleted.'
-      : isApiError(agentError)
-        ? agentError.userMessage
-        : agentError instanceof Error
-          ? agentError.message
-          : 'Check your connection and try again.'
-    return (
-      <ProfileSheet
-        isOpen={isOpen}
-        onClose={closeEditAgentSlideOver}
-        title={isNotFound ? 'Agent not found' : "Couldn't load agent"}
-        onOpenAutoFocus={handleOpenAutoFocus}
-      >
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-          <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
-          <p className="text-xs text-[var(--color-muted)] max-w-sm">{detail}</p>
-          <div className="flex gap-2">
-            {!isNotFound && (
-              <Button variant="outline" size="sm" onClick={() => refetchAgent()}>
-                Retry
-              </Button>
-            )}
-            <Button variant="outline" size="sm" onClick={closeEditAgentSlideOver}>
-              Back to Agents
-            </Button>
-          </div>
-        </div>
-      </ProfileSheet>
-    )
-  }
-
-  const isLocked = agent.locked === true
-  const canEdit = !isLocked
-  // Past the early returns, `agent` is non-null and `agentId` is the id used
-  // to fetch it. Narrow once for child components that take `string`.
-  const resolvedAgentId = agentId as string
-  // Tier-branched form. Workers are delegation-only labour agents: never a chat
-  // target, no heartbeat, never the default, and carry an executor (the worker's
-  // defining property). Base agents (core/custom/system) run native/in-process
-  // only — no third-party executor is selectable for them. The locked concept
-  // (`.preview-doc/agents.html`) makes the worker-vs-base split a property of
-  // the agent itself, so we branch once here and let the JSX ask `isWorkerAgent`
-  // to decide which accordions render. See the contract schema for the
-  // `worker` type value: contracts/components/schemas/Agent.yaml.
-  const isWorkerAgent = isWorker(agent)
-  // W6-C1 / M11: native workers are delegation-only labour agents. Their
-  // Tools / Skills / Sandbox settings are inherited from the caller and
-  // have no effect on a native runtime, so the lower accordions are
-  // hidden for them. External-cli workers still need those accordions
-  // because the external runner respects the policy. The callout at the
-  // top of the profile explains the omission.
-  const isNativeWorkerAgent = isWorkerAgent && (!executor || executor.kind === 'native')
-
-
-  // Section panels shared by desktop Tabs and mobile Accordion.
-  // basics panel
+    // Section panels shared by desktop Tabs and mobile Accordion.
   const basicsPanel = (
     <div className="space-y-6">
 
@@ -856,7 +673,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <div className="space-y-1.5">
                 <p className="text-xs text-[var(--color-muted)]">Fallback models</p>
                 <div
-                  data-testid="fallback-summary-locked-basics"
+                  data-testid="fallback-summary-locked"
                   className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
                 >
                   <div className="flex items-center gap-2 text-[var(--color-muted)]">
@@ -868,7 +685,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   {fallbackModels.length === 0 ? (
                     <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
                   ) : (
-                    <ol className="space-y-1" data-testid="fallback-summary-locked-basics-list">
+                    <ol className="space-y-1" data-testid="fallback-summary-locked-list">
                       {fallbackModels.map((entry, idx) => (
                         <li
                           key={entry.model}
@@ -1042,7 +859,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
-  // personality panel
   const personalityPanel = (
     <div className="space-y-5">
 
@@ -1106,7 +922,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
-  // tools panel
   const toolsPanel = (
     <div className="space-y-6">
 
@@ -1116,7 +931,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             <p className="text-xs text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
             {isLocked ? (
               <div
-                data-testid="fallback-summary-locked-tools"
+                data-testid="fallback-summary-locked"
                 className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
               >
                 <div className="flex items-center gap-2 text-[var(--color-muted)]">
@@ -1128,7 +943,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {fallbackModels.length === 0 ? (
                   <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
                 ) : (
-                  <ol className="space-y-1" data-testid="fallback-summary-locked-tools-list">
+                  <ol className="space-y-1" data-testid="fallback-summary-locked-list">
                     {fallbackModels.map((entry, idx) => (
                       <li
                         key={entry.model}
@@ -1398,7 +1213,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
-  // runtime panel
   const runtimePanel = (
     <div className="space-y-5">
 
@@ -1469,7 +1283,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
-  // advanced panel
   const advancedPanel = (
     <div className="space-y-6">
 
@@ -1587,7 +1400,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       triggerClassName="text-xs h-8"
                       items={[
                         { value: 'one-at-a-time', label: 'One at a time' },
-                        { value: 'queue-and-process', label: 'Queue and process' },
+                        { value: 'parallel', label: 'Parallel' },
+                        { value: 'queue', label: 'Queue' },
                       ]}
                     />
                   </div>
@@ -1707,6 +1521,150 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   )
 
   return (
+      <button
+        type="button"
+        onClick={() => {
+          const input = document.createElement('input')
+          input.type = 'file'
+          input.accept = '.md,.markdown,.txt'
+          input.onchange = (e) => {
+            const file = (e.target as HTMLInputElement).files?.[0]
+            if (!file) return
+            if (file.size > 1_000_000) {
+              addToast({ message: `File too large (${(file.size / 1_000_000).toFixed(1)}MB). Max 1MB for markdown files.`, variant: 'error' })
+              return
+            }
+            const reader = new FileReader()
+            reader.onload = () => {
+              onUpload(reader.result as string)
+              markDirty()
+            }
+            reader.onerror = () => {
+              addToast({ message: `Failed to read ${file.name}: ${reader.error?.message ?? 'unknown error'}`, variant: 'error' })
+            }
+            reader.readAsText(file)
+          }
+          input.click()
+        }}
+        className="h-7 px-2 text-xs rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-1"
+      >
+        <UploadSimple size={12} />
+        Upload .md
+      </button>
+    )
+  }
+
+  const recentSessions = agentSessions.slice(0, 10)
+
+  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation. Mirrors the
+  // pattern from SchedulesList (`doDelete`): the mutation invalidates
+  // the list cache on success, surfaces the API error inline on failure,
+  // and closes the slide-over only on success (so a network blip keeps
+  // the operator on the same page). The button itself is hidden for
+  // locked agents (see SheetFooter below).
+  const deleteAgentMutation = useMutation({
+    mutationFn: (id: string) => deleteAgent(id),
+    onSuccess: () => {
+      // Drop the deleted agent from the list cache immediately so no
+      // per-id GET refetch fires for a resource that no longer exists.
+      queryClient.setQueryData(['agents'], (prev: unknown) => {
+        if (!Array.isArray(prev)) return prev
+        return prev.filter((a) => (a as { id?: string }).id !== agentId)
+      })
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
+      setDeleteOpen(false)
+      closeEditAgentSlideOver()
+      addToast({ message: 'Agent deleted', variant: 'success' })
+    },
+    onError: (err: unknown) => {
+      const msg = isApiError(err)
+        ? err.userMessage
+        : err instanceof Error
+          ? err.message
+          : 'Delete failed'
+      addToast({ message: `Delete failed: ${msg}`, variant: 'error' })
+      setDeleteOpen(false)
+    },
+  })
+
+  if (isLoading) {
+    return (
+      <ProfileSheet
+        isOpen={isOpen}
+        onClose={closeEditAgentSlideOver}
+        title="Edit agent"
+        onOpenAutoFocus={handleOpenAutoFocus}
+      >
+        <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
+          Loading agent...
+        </div>
+      </ProfileSheet>
+    )
+  }
+
+  if (isError || !agent) {
+    // Distinguish "this agent does not exist" (404) from transient errors so
+    // the user gets the right copy and the right path forward. The previous
+    // version lumped every error into "Agent not found", which misled users
+    // on 500s / 401s / 502s and gave them no retry affordance.
+    const isNotFound = isApiError(agentError) && agentError.status === 404
+    const title = isNotFound ? 'Agent not found' : "Couldn't load agent"
+    const detail = isNotFound
+      ? 'This agent may have been deleted.'
+      : isApiError(agentError)
+        ? agentError.userMessage
+        : agentError instanceof Error
+          ? agentError.message
+          : 'Check your connection and try again.'
+    return (
+      <ProfileSheet
+        isOpen={isOpen}
+        onClose={closeEditAgentSlideOver}
+        title={isNotFound ? 'Agent not found' : "Couldn't load agent"}
+        onOpenAutoFocus={handleOpenAutoFocus}
+      >
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+          <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
+          <p className="text-xs text-[var(--color-muted)] max-w-sm">{detail}</p>
+          <div className="flex gap-2">
+            {!isNotFound && (
+              <Button variant="outline" size="sm" onClick={() => refetchAgent()}>
+                Retry
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={closeEditAgentSlideOver}>
+              Back to Agents
+            </Button>
+          </div>
+        </div>
+      </ProfileSheet>
+    )
+  }
+
+  const isLocked = agent.locked === true
+  const canEdit = !isLocked
+  // Past the early returns, `agent` is non-null and `agentId` is the id used
+  // to fetch it. Narrow once for child components that take `string`.
+  const resolvedAgentId = agentId as string
+  // Tier-branched form. Workers are delegation-only labour agents: never a chat
+  // target, no heartbeat, never the default, and carry an executor (the worker's
+  // defining property). Base agents (core/custom/system) run native/in-process
+  // only — no third-party executor is selectable for them. The locked concept
+  // (`.preview-doc/agents.html`) makes the worker-vs-base split a property of
+  // the agent itself, so we branch once here and let the JSX ask `isWorkerAgent`
+  // to decide which accordions render. See the contract schema for the
+  // `worker` type value: contracts/components/schemas/Agent.yaml.
+  const isWorkerAgent = isWorker(agent)
+  // W6-C1 / M11: native workers are delegation-only labour agents. Their
+  // Tools / Skills / Sandbox settings are inherited from the caller and
+  // have no effect on a native runtime, so the lower accordions are
+  // hidden for them. External-cli workers still need those accordions
+  // because the external runner respects the policy. The callout at the
+  // top of the profile explains the omission.
+  const isNativeWorkerAgent = isWorkerAgent && (!executor || executor.kind === 'native')
+
+  return (
     <ProfileSheet
       isOpen={isOpen}
       onClose={closeEditAgentSlideOver}
@@ -1804,7 +1762,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </div>
         </div>
       )}
-            <Tabs defaultValue="basics" className="hidden sm:block w-full">
+      {/* Wave 5 / spec §6: Edit slide-over layout is a Tab bar (4–5 tabs
+          depending on type) instead of the prior 10-section Accordion. The
+          `Tabs` primitive is a controlled Radix Tabs component — see
+          `src/components/ui/tabs.tsx`. Section content is grouped as
+          specified in §6.2 (Main), §6.3 (Subagent), §6.4 (Subagent External).
+          Sessions / Schedules / Activity are NOT inside the tab bar — they
+          are reference surfaces (default-collapsed accordions below) so the
+          primary tab bar is not crowded with non-editing affordances. */}
+      <Tabs defaultValue="basics" className="hidden sm:block w-full">
         <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="basics" data-testid="tab-basics" className="font-headline">Basics</TabsTrigger>
           <TabsTrigger value="personality" data-testid="tab-personality" className="font-headline">Personality</TabsTrigger>
