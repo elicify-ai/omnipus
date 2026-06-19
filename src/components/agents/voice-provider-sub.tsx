@@ -11,7 +11,6 @@
 // runtime TTS config, not identity). Workers (Subagent / Subagent (External))
 // do NOT render this field at all — they never have voice.
 
-import * as React from 'react'
 import { useEffect, useState } from 'react'
 
 import {

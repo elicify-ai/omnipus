@@ -84,7 +84,7 @@ type ToolCall = {
 type Agent = {
   id: string;
   name: string;
-  type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
+  type: "core" | "system" | "Main" | "Subagent" | "subagent_3p" | "worker";
   locked: boolean;
   color?: string | undefined;
   icon?: string | undefined;
@@ -179,7 +179,9 @@ type ExecutorConfig = Partial<{
 }>;
 type AgentCreateRequest = {
   name: string;
-  type?: ("Main" | "Subagent" | "subagent_3p") | undefined;
+  type?:
+    | ("Main" | "Subagent" | "subagent_3p" | "core" | "system" | "worker")
+    | undefined;
   description?: string | undefined;
   model?: string | undefined;
   color?: string | undefined;
@@ -234,53 +236,45 @@ type delegation_policy = Partial<{
     max_tokens: number;
   }>;
 }>;
-type AgentUpdateRequest = {
+type AgentUpdateRequest = Partial<{
   updated_at: string;
-  name?: string | undefined;
-  description?: string | undefined;
-  model?: string | undefined;
-  soul?: string | undefined;
-  heartbeat?: string | undefined;
-  instructions?: string | undefined;
-  timeout_seconds?: number | undefined;
-  max_tool_iterations?: number | undefined;
-  steering_mode?: ("one-at-a-time" | "queue-and-process") | undefined;
-  heartbeat_enabled?: boolean | undefined;
-  heartbeat_interval?: number | undefined;
-  sandbox_profile?:
-    | ("workspace" | "workspace+net" | "host" | "off")
-    | undefined;
-  shell_policy?:
-    | Partial<{
-        enable_deny_patterns: boolean;
-        custom_deny_patterns: Array<string>;
-      }>
-    | undefined;
-  color?: string | undefined;
-  icon?: string | undefined;
-  fallback_models?: Array<FallbackModel> | undefined;
-  model_params?:
-    | Partial<{
-        temperature: number;
-        max_tokens: number;
-        top_p: number;
-      }>
-    | undefined;
-  rate_limits?:
-    | Partial<{
-        use_global_defaults: boolean;
-        max_llm_calls_per_hour: number;
-        max_tool_calls_per_minute: number;
-        max_cost_per_day: number;
-      }>
-    | undefined;
-  tools_cfg?: AgentToolsCfg | undefined;
-  default?: boolean | undefined;
-  skills?: Array<string> | undefined;
-  delegation_policy?: delegation_policy | undefined;
-  voice?: (string | null) | undefined;
-  executor?: ExecutorConfig | undefined;
-};
+  name: string;
+  description: string;
+  model: string;
+  soul: string;
+  heartbeat: string;
+  instructions: string;
+  timeout_seconds: number;
+  max_tool_iterations: number;
+  steering_mode: "one-at-a-time" | "queue-and-process";
+  heartbeat_enabled: boolean;
+  heartbeat_interval: number;
+  sandbox_profile: "workspace" | "workspace+net" | "host" | "off";
+  shell_policy: Partial<{
+    enable_deny_patterns: boolean;
+    custom_deny_patterns: Array<string>;
+  }>;
+  color: string;
+  icon: string;
+  fallback_models: Array<FallbackModel>;
+  model_params: Partial<{
+    temperature: number;
+    max_tokens: number;
+    top_p: number;
+  }>;
+  rate_limits: Partial<{
+    use_global_defaults: boolean;
+    max_llm_calls_per_hour: number;
+    max_tool_calls_per_minute: number;
+    max_cost_per_day: number;
+  }>;
+  tools_cfg: AgentToolsCfg;
+  default: boolean;
+  skills: Array<string>;
+  delegation_policy: delegation_policy;
+  voice: string | null;
+  executor: ExecutorConfig;
+}>;
 type ChannelEntry = {
   id: ChannelId;
   instance_id?: string | undefined;
@@ -993,7 +987,14 @@ export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
     name: z.string().min(1).max(100),
-    type: z.enum(["core", "system", "Main", "Subagent", "subagent_3p"]),
+    type: z.enum([
+      "core",
+      "system",
+      "Main",
+      "Subagent",
+      "subagent_3p",
+      "worker",
+    ]),
     locked: z.boolean(),
     color: z
       .string()
@@ -1061,7 +1062,10 @@ export const delegation_policy: z.ZodType<delegation_policy> = z
   .partial();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   name: z.string().min(1),
-  type: z.enum(["Main", "Subagent", "subagent_3p"]).optional().default("Main"),
+  type: z
+    .enum(["Main", "Subagent", "subagent_3p", "core", "system", "worker"])
+    .optional()
+    .default("Main"),
   description: z.string().optional(),
   model: z.string().optional(),
   color: z
@@ -1107,62 +1111,56 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   max_tool_iterations: z.number().int().gte(0).optional(),
   steering_mode: z.enum(["one-at-a-time", "queue-and-process"]).optional(),
 });
-export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
-  updated_at: z.string().datetime({ offset: true }),
-  name: z.string().min(1).optional(),
-  description: z.string().optional(),
-  model: z.string().optional(),
-  soul: z.string().min(1).optional(),
-  heartbeat: z.string().optional(),
-  instructions: z.string().optional(),
-  timeout_seconds: z.number().int().optional(),
-  max_tool_iterations: z.number().int().optional(),
-  steering_mode: z.enum(["one-at-a-time", "queue-and-process"]).optional(),
-  heartbeat_enabled: z.boolean().optional(),
-  heartbeat_interval: z.number().int().optional(),
-  sandbox_profile: z
-    .enum(["workspace", "workspace+net", "host", "off"])
-    .optional(),
-  shell_policy: z
-    .object({
-      enable_deny_patterns: z.boolean(),
-      custom_deny_patterns: z.array(z.string()),
-    })
-    .partial()
-    .passthrough()
-    .optional(),
-  color: z
-    .string()
-    .regex(/^#[0-9A-Fa-f]{6}$/)
-    .optional(),
-  icon: z.string().max(50).optional(),
-  fallback_models: z.array(FallbackModel).max(2).optional(),
-  model_params: z
-    .object({
-      temperature: z.number(),
-      max_tokens: z.number().int(),
-      top_p: z.number(),
-    })
-    .partial()
-    .passthrough()
-    .optional(),
-  rate_limits: z
-    .object({
-      use_global_defaults: z.boolean(),
-      max_llm_calls_per_hour: z.number().int(),
-      max_tool_calls_per_minute: z.number().int(),
-      max_cost_per_day: z.number(),
-    })
-    .partial()
-    .passthrough()
-    .optional(),
-  tools_cfg: AgentToolsCfg.optional(),
-  default: z.boolean().optional(),
-  skills: z.array(z.string()).optional(),
-  delegation_policy: delegation_policy.optional(),
-  voice: z.string().nullish(),
-  executor: ExecutorConfig.optional(),
-});
+export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
+  .object({
+    updated_at: z.string().datetime({ offset: true }),
+    name: z.string().min(1),
+    description: z.string(),
+    model: z.string(),
+    soul: z.string().min(1),
+    heartbeat: z.string(),
+    instructions: z.string(),
+    timeout_seconds: z.number().int(),
+    max_tool_iterations: z.number().int(),
+    steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
+    heartbeat_enabled: z.boolean(),
+    heartbeat_interval: z.number().int(),
+    sandbox_profile: z.enum(["workspace", "workspace+net", "host", "off"]),
+    shell_policy: z
+      .object({
+        enable_deny_patterns: z.boolean(),
+        custom_deny_patterns: z.array(z.string()),
+      })
+      .partial()
+      .passthrough(),
+    color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+    icon: z.string().max(50),
+    fallback_models: z.array(FallbackModel).max(2),
+    model_params: z
+      .object({
+        temperature: z.number(),
+        max_tokens: z.number().int(),
+        top_p: z.number(),
+      })
+      .partial()
+      .passthrough(),
+    rate_limits: z
+      .object({
+        use_global_defaults: z.boolean(),
+        max_llm_calls_per_hour: z.number().int(),
+        max_tool_calls_per_minute: z.number().int(),
+        max_cost_per_day: z.number(),
+      })
+      .partial()
+      .passthrough(),
+    tools_cfg: AgentToolsCfg,
+    default: z.boolean(),
+    skills: z.array(z.string()),
+    delegation_policy: delegation_policy,
+    voice: z.string().nullable(),
+    executor: ExecutorConfig,
+  })
+  .partial();
 export const AgentOwnershipUpdateRequest = z
   .object({ owner_username: z.string() })
   .partial();

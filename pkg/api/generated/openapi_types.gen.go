@@ -485,6 +485,7 @@ const (
 	AgentCreateRequestTypeSubagent   AgentCreateRequestType = "Subagent"
 	AgentCreateRequestTypeSubagent3p AgentCreateRequestType = "subagent_3p"
 	AgentCreateRequestTypeSystem     AgentCreateRequestType = "system"
+	AgentCreateRequestTypeWorker     AgentCreateRequestType = "worker"
 )
 
 // Valid indicates whether the value is a known member of the AgentCreateRequestType enum.
@@ -499,6 +500,8 @@ func (e AgentCreateRequestType) Valid() bool {
 	case AgentCreateRequestTypeSubagent3p:
 		return true
 	case AgentCreateRequestTypeSystem:
+		return true
+	case AgentCreateRequestTypeWorker:
 		return true
 	default:
 		return false
@@ -3667,7 +3670,7 @@ type ActivityEventsResponse struct {
 // ActivityEventsResponseEventsType Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
 type ActivityEventsResponseEventsType string
 
-// Agent An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the Go agentResponse struct and the TypeScript Agent interface in src/lib/api.ts. Core (locked) agents suppress soul/instructions in list responses and forbid identity mutations via PUT.
+// Agent An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul/instructions in list responses and forbid identity mutations via PUT.
 type Agent struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
@@ -3757,7 +3760,7 @@ type Agent struct {
 	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
 	Icon *string `json:"icon,omitempty"`
 
-	// Id Unique agent identifier. UUID for custom agents; well-known strings for core agents (e.g. "jim").
+	// Id Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
 	Id string `json:"id"`
 
 	// Instructions Body of AGENT.md (everything after the closing frontmatter delimiter) — additional runtime instructions. Empty string when not set. Always present on detail responses (never null).
@@ -3868,8 +3871,11 @@ type Agent struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). "worker" = legacy build-time/seed config constant (the seed `Worker` entry in `pkg/config/worker_helpers_test.go` ships with this type; the build-time string is preserved for backward compatibility with the on-disk seeded `Worker` row that the gateway returns in GET /api/v1/agents). The frontend's `isWorker()` helper already accepts this value; it is functionally a Subagent. The W6-A wire enum is the canonical one for new user-created agents; `worker` survives in the contract for the legacy seed and for any operator-defined entries that predate the W6-A type widening. Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
+	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). "worker" = legacy build-time/seed config constant. It is functionally a Subagent; it survives here only for backward compatibility with pre-W4 seeded configs. New code should treat it as Subagent.
 	Type AgentType `json:"type"`
+
+	// UpdatedAt ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in detail responses.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 
 	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured. Main only.
 	Voice *string `json:"voice,omitempty"`
@@ -3908,7 +3914,7 @@ type AgentToolsCfgBuiltinDefaultPolicy string
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
-// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). "worker" = legacy build-time/seed config constant (the seed `Worker` entry in `pkg/config/worker_helpers_test.go` ships with this type; the build-time string is preserved for backward compatibility with the on-disk seeded `Worker` row that the gateway returns in GET /api/v1/agents). The frontend's `isWorker()` helper already accepts this value; it is functionally a Subagent. The W6-A wire enum is the canonical one for new user-created agents; `worker` survives in the contract for the legacy seed and for any operator-defined entries that predate the W6-A type widening. Built-in agents return type: "core" with locked: true; the "Main" enum value is only for user-created chat agents.
+// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). "worker" = legacy build-time/seed config constant. It is functionally a Subagent; it survives here only for backward compatibility with pre-W4 seeded configs. New code should treat it as Subagent.
 type AgentType string
 
 // AgentCreateRequest Body for POST /agents. Creates a new agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet).
@@ -4085,7 +4091,7 @@ type AgentCreateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode). "core" and "system" are reserved and cannot be created via this endpoint.
+	// Type Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode). "core", "system", and "worker" are reserved/legacy values and are rejected by the gateway if explicitly supplied; the enum keeps them only for backward compatibility with older clients.
 	Type *AgentCreateRequestType `json:"type,omitempty"`
 
 	// Voice Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
@@ -4119,7 +4125,7 @@ type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
 // AgentCreateRequestToolsCfgBuiltinPolicies defines model for AgentCreateRequest.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestToolsCfgBuiltinPolicies string
 
-// AgentCreateRequestType Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode). "core" and "system" are reserved and cannot be created via this endpoint.
+// AgentCreateRequestType Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode). "core", "system", and "worker" are reserved/legacy values and are rejected by the gateway if explicitly supplied; the enum keeps them only for backward compatibility with older clients.
 type AgentCreateRequestType string
 
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
@@ -4539,6 +4545,9 @@ type AgentUpdateRequest struct {
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
+
+	// UpdatedAt ISO 8601 timestamp from the last GET /agents/{id} response. When provided, the request is rejected with 409 Conflict if it does not match the current server value.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 
 	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
 	Voice *string `json:"voice,omitempty"`
