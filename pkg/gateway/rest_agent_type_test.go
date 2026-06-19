@@ -9,8 +9,10 @@
 //      edit it. Response echoes "worker".
 //   3. type="core" / "system" / anything else → 400.
 //   4. updateAgent does NOT change Type (a custom stays custom).
-//   5. Worker create with a non-native executor (external-cli) → 200.
-//   6. Non-worker create with a non-native executor → 400 (unchanged guard).
+//   5. Worker create with a non-native executor (external-cli) → 200, and
+//      the wire response type is subagent_3p.
+//   6. Non-worker create with a non-native executor → coerced to native with
+//      a warning rather than a 400.
 //   7. Worker create with a delegation_policy that has a non-empty to[] → 400
 //      (worker-leaf guard, owned by buildDelegationPolicy).
 //
@@ -30,6 +32,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
 
 // readTypeTestConfigMap parses the current config.json on disk into a
@@ -81,7 +85,7 @@ func TestCreateAgent_TypeOmitted_DefaultsToCustom(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 
 	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, "custom", string(created.Type))
+	assert.Equal(t, gen.AgentTypeMain, created.Type)
 
 	raw := readTypeTestConfigMap(t, api.configPath())
 	entry := findTypeTestAgentInConfig(t, raw, "Typed Omit")
@@ -102,7 +106,7 @@ func TestCreateAgent_TypeCustom_Explicit(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, "custom", string(created.Type))
+	assert.Equal(t, gen.AgentTypeMain, created.Type)
 
 	raw := readTypeTestConfigMap(t, api.configPath())
 	entry := findTypeTestAgentInConfig(t, raw, "Typed Custom")
@@ -125,7 +129,7 @@ func TestCreateAgent_TypeWorker_PersistsAndEchoes(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, "worker", string(created.Type))
+	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
 	// Locked must be false: a freshly-created worker is editable. The seeded
 	// default general-purpose worker is locked by coreagent.SeedConfig, but
 	// that path is not the REST create path.
@@ -155,7 +159,12 @@ func TestCreateAgent_TypeWorker_AllowsNonNativeExecutor(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, "worker", string(created.Type))
+	assert.Equal(t, gen.AgentTypeSubagent3p, created.Type)
+	require.NotNil(t, created.Executor, "subagent_3p response must echo executor")
+	require.NotNil(t, created.Executor.Kind, "executor.kind must be present")
+	assert.Equal(t, gen.AgentExecutorKindExternalCli, *created.Executor.Kind)
+	require.NotNil(t, created.Executor.Cli, "executor.cli must be present")
+	assert.Equal(t, gen.AgentExecutorCliCodex, *created.Executor.Cli)
 
 	raw := readTypeTestConfigMap(t, api.configPath())
 	entry := findTypeTestAgentInConfig(t, raw, "Worker External")
@@ -170,21 +179,23 @@ func TestCreateAgent_TypeWorker_AllowsNonNativeExecutor(t *testing.T) {
 
 // TestCreateAgent_NonWorker_RejectsNonNativeExecutor is the regression guard
 // for the native-only-for-non-workers rule: a custom (non-worker) create
-// that supplies external-cli or remote-a2a is 400. Same as the
-// TestCreateAgent_RejectsExternalCLIExecutorOnBaseAgent test but stated in
-// terms of the new type field semantics.
-func TestCreateAgent_NonWorker_RejectsNonNativeExecutor(t *testing.T) {
+// that supplies external-cli or remote-a2a is coerced to native with a
+// warning in the response.
+func TestCreateAgent_NonWorker_CoercesExternalExecutorWithWarning(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"Bad Custom","type":"Main","executor":{"kind":"external-cli","cli":"codex"}}`))
+		strings.NewReader(`{"name":"Bad Custom","type":"Main","executor":{"kind":"external-cli","cli":"codex"},"soul":"soul-text"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "only sub-agent workers",
-		"the rejection must reference the worker-only rule")
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	created := decodeAgentResp(t, w.Body.Bytes())
+	assert.Equal(t, gen.AgentTypeMain, created.Type)
+	assert.Nil(t, created.Executor, "Main agents must not persist an external executor")
+	require.NotNil(t, created.Warning, "expected a coercion warning")
+	assert.Contains(t, *created.Warning, "coerced")
 }
 
 // TestCreateAgent_TypeCore_Rejected proves "core" is a seeded-only
@@ -247,7 +258,7 @@ func TestUpdateAgent_DoesNotChangeType(t *testing.T) {
 	// Create a custom agent.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"Sticky Custom","type":"Main"}`))
+		strings.NewReader(`{"name":"Sticky Custom","type":"Main","soul":"sticky-custom-soul"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusCreated, w.Code, "create body: %s", w.Body.String())
@@ -256,7 +267,7 @@ func TestUpdateAgent_DoesNotChangeType(t *testing.T) {
 	// PUT an unrelated field. The on-disk type must stay "custom".
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
-		strings.NewReader(`{"description":"updated description"}`))
+		strings.NewReader(`{"soul":"sticky-custom-soul","description":"updated description"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "put body: %s", w.Body.String())
@@ -281,12 +292,12 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusCreated, w.Code, "create body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, "worker", string(created.Type))
+	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
 
 	// PUT an unrelated field.
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
-		strings.NewReader(`{"description":"updated description"}`))
+		strings.NewReader(`{"soul":"sticky-worker-soul","description":"updated description"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "put body: %s", w.Body.String())
@@ -332,5 +343,5 @@ func TestCreateAgent_Worker_AllowsEmptyToList(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, "worker", string(created.Type))
+	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
 }

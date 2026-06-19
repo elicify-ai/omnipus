@@ -1318,7 +1318,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		if ac.Icon != "" {
 			ag.Icon = &ac.Icon
 		}
-		ag.Type = gen.AgentType(ac.ResolveType(coreagent.IsCoreAgent))
+		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
 		ag.Model = &model
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
@@ -1331,6 +1331,9 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		}
 		setAgentExecutorResponse(&ag, ac.Subagents)
 		setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
+		if !ac.UpdatedAt.IsZero() {
+			ag.UpdatedAt = &ac.UpdatedAt
+		}
 		agents = append(agents, ag)
 	}
 
@@ -1369,7 +1372,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if ac.Icon != "" {
 				ag.Icon = &ac.Icon
 			}
-			ag.Type = gen.AgentType(ac.ResolveType(coreagent.IsCoreAgent))
+			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked
 			ag.Model = &model
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
@@ -1384,6 +1387,9 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			}
 			setAgentExecutorResponse(&ag, ac.Subagents)
 			setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
+			if !ac.UpdatedAt.IsZero() {
+				ag.UpdatedAt = &ac.UpdatedAt
+			}
 			jsonOK(w, ag)
 			return
 		}
@@ -1423,34 +1429,23 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Worker property-model correction: a worker must declare an executor.
-	// Workers run via delegation, not native — dispatch needs a target runtime
-	// (native, external-cli, or remote-a2a). The pre-existing FE rule was not
-	// mirrored here, so a worker with no executor would persist as a draft that
-	// the delegation path could not actually run. Reject at the write gate with
-	// the same kind of 400 we use for other property-model mismatches, and let
-	// any kind through (kind validation is the executor block's job below).
+	// Derive / coerce executor for non-worker and worker-without-executor cases.
+	// Main (and legacy custom) agents always run native on the Omnipus engine; an
+	// external executor in the request is coerced to native with a warning.
+	// Workers without an executor derive kind=native so dispatch has a concrete
+	// runtime target.
+	effectiveExecutor := req.Executor
+	var createExecutorWarning string
 	if createType == config.AgentTypeWorker && req.Executor == nil {
-		jsonErr(w, http.StatusBadRequest,
-			"a worker must declare an executor (workers run via delegation, not native)")
-		return
+		// Subagent with no executor: default to native runtime. The actual
+		// config record is created further down; we record the intent and
+		// materialise the native executor there.
 	}
-	// Native-only executor on a non-worker (worker property-model correction):
-	// a freshly-created non-worker (type=custom) must run native, so reject a
-	// non-native executor on a custom create. A worker is the only legitimate
-	// user of an external executor in v0.1.0; this keeps the dispatch path
-	// coherent and surfaces the constraint at write time rather than on the
-	// first delegated run. The executor itself is then mapped into
-	// ac.Subagents in the executor block further down.
 	if createType != config.AgentTypeWorker && req.Executor != nil {
-		kind := ""
-		if req.Executor.Kind != nil {
-			kind = string(*req.Executor.Kind)
-		}
+		kind := executorKindStr(req.Executor.Kind)
 		if kind == string(config.ExecutorKindExternalCLI) || kind == string(config.ExecutorKindRemoteA2A) {
-			jsonErr(w, http.StatusBadRequest,
-				"only sub-agent workers can use an external executor; base agents run native")
-			return
+			createExecutorWarning = "executor.kind was coerced to native because Main agents run on the Omnipus engine"
+			effectiveExecutor = nil
 		}
 	}
 	// Referential validation: reject unknown skill IDs before doing any work.
@@ -1477,40 +1472,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if req.FallbackModels != nil && len(*req.FallbackModels) > 2 {
 		jsonErr(w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
 		return
-	}
-	// W2 spec §4.19.1 / §9.2 (mirror of PUT path): subagent_3p forbids
-	// runtime mutation of tools_cfg / skills / fallback_models / model_params /
-	// sandbox_profile / shell_policy / delegation_policy at create time too.
-	if createType == config.AgentTypeWorker && req.Executor != nil &&
-		executorKindStr(req.Executor.Kind) == string(config.ExecutorKindExternalCLI) {
-		if req.ToolsCfg != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support tools_cfg; this is fixed at create time.")
-			return
-		}
-		if req.Skills != nil && len(*req.Skills) > 0 {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support skills; this is fixed at create time.")
-			return
-		}
-		if req.FallbackModels != nil && len(*req.FallbackModels) > 0 {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support fallback_models; this is fixed at create time.")
-			return
-		}
-		if req.ModelParams != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support model_params; this is fixed at create time.")
-			return
-		}
-		if req.SandboxProfile != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support sandbox_profile; this is fixed at create time.")
-			return
-		}
-		if req.ShellPolicy != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support shell_policy; this is fixed at create time.")
-			return
-		}
-		if req.DelegationPolicy != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support delegation_policy; this is fixed at create time.")
-			return
-		}
 	}
 	// W2 spec §4.7 / §9.2 row 8: whitespace-only soul is rejected (the wire
 	// schema enforces minLength:1; whitespace-only is the natural
@@ -1560,15 +1521,31 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		copy(ac.Skills, *req.Skills)
 	}
 	// Sub-agent executor (kind/cli). Mapped into AgentConfig.Subagents.Executor so
-	// it is actually persisted (previously the contract field was write-dropped).
-	if req.Executor != nil {
-		execCfg, errMsg := executorConfigFromRequest(executorKindStr(req.Executor.Kind), executorCliStr(req.Executor.Cli))
+	// it is actually persisted. Workers created without an executor get a native
+	// runtime derived here; Main agents have any external executor request
+	// coerced to native earlier with a warning.
+	if createType == config.AgentTypeWorker && req.Executor == nil {
+		ac.Subagents = &config.SubagentsConfig{
+			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
+		}
+	}
+	if effectiveExecutor != nil {
+		execCfg, errMsg := executorConfigFromRequest(executorKindStr(effectiveExecutor.Kind), executorCliStr(effectiveExecutor.Cli))
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
 		}
 		if execCfg != nil {
 			ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
+		}
+	}
+	// subagent_3p forbidden-field guard. Any worker created/pointed at an
+	// external-cli executor cannot receive the seven CLI-owned fields.
+	if createType == config.AgentTypeWorker && isExternalSubagent(ac) {
+		if field, forbidden := firstForbiddenSubagent3pField(&req); forbidden {
+			jsonErr(w, http.StatusBadRequest,
+				fmt.Sprintf("subagent_3p agents do not support %s; this is fixed at create time.", field))
+			return
 		}
 	}
 	// Delegation policy (to/modes/depth enforced; accept_from/budget inert). Mapped
@@ -1759,7 +1736,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// "worker" it surfaces the create-time choice so the response — and
 	// subsequent GET / list reads via coreagent.ResolveType — round-trips the
 	// agent kind the caller actually created (Main/Subagent/subagent_3p on the wire).
-	ag.Type = gen.AgentType(ac.ResolveType(coreagent.IsCoreAgent))
+	ag.Type = coreagent.ToWireType(ac)
 	ag.Locked = ac.Locked
 	ag.Model = &model
 	// Echo the just-persisted soul so the FE round-trip works (req.Soul was
@@ -1775,8 +1752,16 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	setAgentExecutorResponse(&ag, ac.Subagents)
 	setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
+	warnings := []string{}
+	if createExecutorWarning != "" {
+		warnings = append(warnings, createExecutorWarning)
+	}
 	if createReloadWarning != "" {
-		ag.Warning = &createReloadWarning
+		warnings = append(warnings, createReloadWarning)
+	}
+	if len(warnings) > 0 {
+		w := strings.Join(warnings, "; ")
+		ag.Warning = &w
 	}
 	jsonCreated(w, ag)
 }
@@ -1909,6 +1894,66 @@ func isExternalSubagent(ac config.AgentConfig) bool {
 	return ac.Subagents.Executor.EffectiveKind() == config.ExecutorKindExternalCLI
 }
 
+// forbiddenSubagent3pField defines the CLI-owned fields that subagent_3p agents
+// reject at runtime. The value is used in the 400 error message.
+type forbiddenSubagent3pField struct {
+	Name    string
+	Present func() bool
+}
+
+// firstForbiddenSubagent3pField returns the first forbidden field supplied on
+// a create/update request, or ("", false). Both gen.AgentCreateRequest and
+// gen.AgentUpdateRequest are handled by a type switch.
+func firstForbiddenSubagent3pField(req any) (string, bool) {
+	switch r := req.(type) {
+	case *gen.AgentCreateRequest:
+		if r.ToolsCfg != nil {
+			return "tools_cfg", true
+		}
+		if r.Skills != nil && len(*r.Skills) > 0 {
+			return "skills", true
+		}
+		if r.FallbackModels != nil && len(*r.FallbackModels) > 0 {
+			return "fallback_models", true
+		}
+		if r.ModelParams != nil {
+			return "model_params", true
+		}
+		if r.SandboxProfile != nil {
+			return "sandbox_profile", true
+		}
+		if r.ShellPolicy != nil {
+			return "shell_policy", true
+		}
+		if r.DelegationPolicy != nil {
+			return "delegation_policy", true
+		}
+	case *gen.AgentUpdateRequest:
+		if r.ToolsCfg != nil {
+			return "tools_cfg", true
+		}
+		if r.Skills != nil {
+			return "skills", true
+		}
+		if r.FallbackModels != nil {
+			return "fallback_models", true
+		}
+		if r.ModelParams != nil {
+			return "model_params", true
+		}
+		if r.SandboxProfile != nil {
+			return "sandbox_profile", true
+		}
+		if r.ShellPolicy != nil {
+			return "shell_policy", true
+		}
+		if r.DelegationPolicy != nil {
+			return "delegation_policy", true
+		}
+	}
+	return "", false
+}
+
 func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string) {
 	cfg := a.agentLoop.GetConfig()
 	var foundIdx int = -1
@@ -1927,6 +1972,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if !decodeAndValidate(w, r, "AgentUpdateRequest", &req, validateEnabled) {
 		return
 	}
+	// Timestamp applied to the persisted agent on every successful save.
+	now := time.Now().UTC()
 	// Enforce god-mode latches (1) and (2) at the REST write gate.
 	// Reject sandbox_profile=off unless both sandbox.GodModeAvailable (build
 	// tag) and a.allowGodMode (--allow-god-mode boot flag) are true.
@@ -1955,6 +2002,16 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Locked core agents: reject identity and prompt mutations.
 	// Allowed: model selection, heartbeat schedule (enabled/interval), tools (via updateAgentTools).
 	foundAgent := cfg.Agents.List[foundIdx]
+	// Optimistic concurrency: if the caller sent an updated_at value, it must
+	// match the persisted value exactly, otherwise another edit raced. Conflicts
+	// return a standard 409 with {error, code}.
+	if req.UpdatedAt != nil && !req.UpdatedAt.Equal(foundAgent.UpdatedAt) {
+		writeJSON(w, http.StatusConflict, gen.ErrorResponse{
+			Error: "conflict",
+			Code:  strPtr("conflict"),
+		})
+		return
+	}
 	// Worker agents can never be the routing default — they are not chat targets
 	// (invoked only via delegation). Reject an attempt to star a worker before
 	// any work is done so the single-default invariant and routing stay coherent.
@@ -1994,39 +2051,13 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 
 	// W2 spec §4.19.1 / §9.2: subagent_3p agents (External CLI workers) reject
-	// PUTs on any of the 7 forbidden fields with the literal "subagent_3p
-	// agents do not support <field>; this is fixed at create time." message.
-	// These properties are CLI-owned and cannot be tuned at runtime — they
-	// are fixed at the create call when the executor was wired. A silent-drop
-	// would be a foot-gun (the operator sets it, the gateway swallows it,
-	// nothing changes).
+	// PUTs on any of the 7 forbidden fields. These properties are CLI-owned and
+	// cannot be tuned at runtime — they are fixed at the create call when the
+	// executor was wired. A silent-drop would be a foot-gun.
 	if isExternalSubagent(foundAgent) {
-		if req.ToolsCfg != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support tools_cfg; this is fixed at create time.")
-			return
-		}
-		if req.Skills != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support skills; this is fixed at create time.")
-			return
-		}
-		if req.FallbackModels != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support fallback_models; this is fixed at create time.")
-			return
-		}
-		if req.ModelParams != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support model_params; this is fixed at create time.")
-			return
-		}
-		if req.SandboxProfile != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support sandbox_profile; this is fixed at create time.")
-			return
-		}
-		if req.ShellPolicy != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support shell_policy; this is fixed at create time.")
-			return
-		}
-		if req.DelegationPolicy != nil {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p agents do not support delegation_policy; this is fixed at create time.")
+		if field, forbidden := firstForbiddenSubagent3pField(&req); forbidden {
+			jsonErr(w, http.StatusBadRequest,
+				fmt.Sprintf("subagent_3p agents do not support %s; this is fixed at create time.", field))
 			return
 		}
 	}
@@ -2110,20 +2141,48 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
 		}
+		// Merge the request into the existing executor so mutable CLI-owned
+		// fields (cli_path, env_overrides, cli_args) and any supplied kind/cli
+		// survive the update. If there is no existing executor, fall back to
+		// the validated config from the request.
+		var merged *config.ExecutorConfig
+		if foundAgent.Subagents != nil && foundAgent.Subagents.Executor != nil {
+			cp := *foundAgent.Subagents.Executor
+			merged = &cp
+		} else {
+			merged = execCfg
+		}
+		if merged == nil {
+			merged = &config.ExecutorConfig{Kind: config.ExecutorKindNative}
+		}
+		if execCfg != nil {
+			if execCfg.Kind != "" {
+				merged.Kind = execCfg.Kind
+			}
+			if execCfg.CLI != "" {
+				merged.CLI = execCfg.CLI
+			}
+		}
+		if req.Executor.CliPath != nil {
+			merged.CLIPath = *req.Executor.CliPath
+		}
+		if req.Executor.EnvOverrides != nil {
+			merged.EnvOverrides = *req.Executor.EnvOverrides
+		}
+		if req.Executor.CliArgs != nil {
+			merged.CLIArgs = *req.Executor.CliArgs
+		}
 		// Native-only executor on a non-worker (worker property-model
 		// correction): only a sub-agent worker may declare a non-native
 		// executor. A base or custom agent updated to kind="external-cli"
 		// or "remote-a2a" is rejected at the update gate. A native (or
 		// absent) executor on a non-worker stays allowed.
-		if !foundAgent.IsWorker() && execCfg != nil {
-			kind := execCfg.EffectiveKind()
-			if kind == config.ExecutorKindExternalCLI || kind == config.ExecutorKindRemoteA2A {
-				jsonErr(w, http.StatusBadRequest,
-					"only sub-agent workers can use an external executor; base agents run native")
-				return
-			}
+		if !foundAgent.IsWorker() && merged.EffectiveKind() != config.ExecutorKindNative {
+			jsonErr(w, http.StatusBadRequest,
+				"only sub-agent workers can use an external executor; base agents run native")
+			return
 		}
-		updatedExecutor = execCfg
+		updatedExecutor = merged
 	}
 	// Delegation policy (to/modes/depth enforced; accept_from/budget inert).
 	// MERGE semantics: when req.DelegationPolicy is non-nil, set to/modes/depth from
@@ -2355,6 +2414,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 						delete(agentMap, "delegation_policy")
 					}
 				}
+				// Optimistic concurrency timestamp: refresh on every successful save.
+				agentMap["updated_at"] = now.Format(time.RFC3339)
 				break
 			}
 		}
@@ -2528,7 +2589,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			}
 		}
 	}
-	ag.Type = gen.AgentType(foundAgent.ResolveType(coreagent.IsCoreAgent))
+	ag.Type = coreagent.ToWireType(foundAgent)
 	ag.Locked = foundAgent.Locked
 	ag.Model = &model
 	ag.Status = gen.AgentStatus(computeAgentStatus(agentID, activeIDs, soul, foundAgent.Locked))
@@ -2556,6 +2617,9 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				}
 				setAgentExecutorResponse(&ag, ac.Subagents)
 				setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
+				if !ac.UpdatedAt.IsZero() {
+					ag.UpdatedAt = &ac.UpdatedAt
+				}
 				break
 			}
 		}
@@ -2816,6 +2880,9 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 	if a.selfWriteReg != nil {
 		if finalBytes, readErr := os.ReadFile(a.configPath()); readErr == nil {
 			a.selfWriteReg.register(sha256.Sum256(finalBytes))
+		} else {
+			slog.Warn("rest: safeUpdateConfigJSON: could not read final config hash",
+				"path", a.configPath(), "error", readErr)
 		}
 	}
 	// FR-061 single chokepoint: every config mutation invalidates all cached

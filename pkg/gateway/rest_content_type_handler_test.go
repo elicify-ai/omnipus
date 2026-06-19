@@ -21,7 +21,7 @@ func TestHandleAgentsCreate_201IsJSON(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"name":"Scout"}`))
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"name":"Scout","soul":"Scout soul"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
