@@ -1,3 +1,4 @@
+<!-- Rev: reconciled with ADR-019 operator decisions + implementation state (W0-A) -->
 # Spec-4 — External-Agent Runners & the Executor Tier (v0.1.0 Foundation)
 
 - **Spec:** 4 of 6 (v0.1.0 Foundation)
@@ -80,13 +81,14 @@ Scenario: External run streams events and routes a permission request
   Then the request surfaces to the consent layer
   And the decision is sent back to the process
   And output/tool-call/diff events stream out
+  # Note: in v0.1.0, consent is best-effort post-hoc — a DENY cancels the entire run, not the individual tool call. Pre-emptive call-level veto is a future enhancement.
 
 Scenario: Run is own-process, sandboxed, worktree-isolated
   Traces to: US-5 / AC-1
   Category: Happy Path
   Given an external run
   When it starts
-  Then it is a child process under Landlock/seccomp with an egress allow-list
+  Then it is a child process under the CLI's OWN sandbox (Claude Code permissions / Codex Landlock+seccomp) + Omnipus egress allowlist + git-worktree isolation
   And it executes inside a dedicated git worktree
   And it cannot read outside its allow-list
 
