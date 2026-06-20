@@ -3856,6 +3856,9 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// FR-12.1). GET lists; PUT (gated by the re-auth consent token) configures.
 	cm.RegisterHTTPHandler("/api/v1/integrations/providers", a.withAuth(a.HandleIntegrationProviders))
 	cm.RegisterHTTPHandler("/api/v1/integrations/providers/", a.withAuth(a.HandleIntegrationProviders))
+	// Automations — trigger→action display projection over schedules (W3-AC
+	// UI reframe). Read-only; writes go through /api/v1/schedules.
+	cm.RegisterHTTPHandler("/api/v1/automations", a.withAuth(a.HandleAutomations))
 	// Composer mic — voice transcription (Spec-6 FR-12.1).
 	cm.RegisterHTTPHandler("/api/v1/voice/transcribe", a.withAuth(a.HandleTranscribe))
 	// Voice provider descriptor (agent-form spec §4.10.1). Drives the dropdown /

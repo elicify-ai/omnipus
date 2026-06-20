@@ -165,6 +165,81 @@ func TestIntegrationProviders_List(t *testing.T) {
 	assert.Equal(t, false, ddg["requires_key"])
 }
 
+// TestIntegrationProviders_List_AllProviders verifies the expanded catalogue
+// surfaces every implemented search (Brave/Tavily/Perplexity/DuckDuckGo/
+// SearXNG/GLM/Baidu) and voice (ElevenLabs/Groq/audio-model) provider
+// (FR-12.1). The keyed providers that have no key stored report configured=false.
+func TestIntegrationProviders_List_AllProviders(t *testing.T) {
+	api, user := newReAuthTestAPI(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/providers", nil)
+	req = req.WithContext(context.WithValue(req.Context(), UserContextKey{}, user))
+	w := httptest.NewRecorder()
+	api.HandleIntegrationProviders(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Search []map[string]any `json:"search"`
+		Voice  []map[string]any `json:"voice"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	wantSearch := map[string]bool{
+		"brave": true, "tavily": true, "perplexity": true,
+		"duckduckgo": true, "searxng": true, "glm": true, "baidu": true,
+	}
+	gotSearch := map[string]bool{}
+	for _, p := range resp.Search {
+		gotSearch[p["id"].(string)] = true
+	}
+	for id := range wantSearch {
+		assert.True(t, gotSearch[id], "search provider %q must be in the catalogue", id)
+	}
+
+	wantVoice := map[string]bool{
+		"elevenlabs": true, "groq": true, "audio-model": true,
+	}
+	gotVoice := map[string]bool{}
+	for _, p := range resp.Voice {
+		gotVoice[p["id"].(string)] = true
+	}
+	for id := range wantVoice {
+		assert.True(t, gotVoice[id], "voice provider %q must be in the catalogue", id)
+	}
+
+	// SearXNG is keyless but needs a base_url; with no base_url set it must
+	// report configured=false (distinct from DuckDuckGo, which is always on).
+	for _, p := range resp.Search {
+		if p["id"] == "searxng" {
+			assert.Equal(t, false, p["requires_key"])
+			assert.Equal(t, false, p["configured"], "searxng without base_url must be unconfigured")
+		}
+	}
+	// audio-model is keyless but needs voice.model_name; unconfigured by default.
+	for _, p := range resp.Voice {
+		if p["id"] == "audio-model" {
+			assert.Equal(t, false, p["requires_key"])
+			assert.Equal(t, false, p["configured"], "audio-model without model_name must be unconfigured")
+		}
+	}
+}
+
+// TestIntegrationProviderUpdate_SearXNGActivation_NeedsBaseURL verifies that
+// activating SearXNG without a base_url is rejected 400 (keyless but with a
+// prerequisite), and that a valid re-auth token is still required first.
+func TestIntegrationProviderUpdate_SearXNGActivation_NeedsBaseURL(t *testing.T) {
+	api, user := newReAuthTestAPI(t)
+	// Re-auth first so the ONLY rejection is the missing base_url.
+	rw := doReAuth(api, user, reAuthTestPassword)
+	require.Equal(t, http.StatusOK, rw.Code)
+	var rresp map[string]any
+	require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &rresp))
+	token := rresp["token"].(string)
+
+	w := putIntegration(api, user, "searxng", `{"kind":"search","active":true}`, token)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, strings.ToLower(w.Body.String()), "base url")
+}
+
 // TestIntegrationProviderUpdate_RequiresReAuth verifies that a sensitive
 // integration change WITHOUT a valid re-auth token is rejected with 403 — the
 // core negative test for the new consent primitive (FR-12.2). This is NOT the

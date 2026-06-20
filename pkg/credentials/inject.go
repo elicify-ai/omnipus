@@ -120,6 +120,7 @@ func ResolveAll(cfg *config.Config, store *Store) (map[string]string, []error) {
 	// Non-channel credential refs.
 	nonChannelRefs := []string{
 		cfg.Voice.ElevenLabsAPIKeyRef,
+		cfg.Voice.GroqAPIKeyRef,
 		cfg.Tools.Web.Brave.APIKeyRef,
 		cfg.Tools.Web.Tavily.APIKeyRef,
 		cfg.Tools.Web.Perplexity.APIKeyRef,
