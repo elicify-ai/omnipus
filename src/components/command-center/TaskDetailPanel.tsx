@@ -129,7 +129,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
-  const { data: projects = [] } = useQuery({
+  const { data: workspaces = [] } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
@@ -308,12 +308,12 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
       <Field label="Workspace">
         <p className="text-xs text-[var(--color-muted)]">
           {task.workspace_id
-            ? (projects.find((p) => p.id === task.workspace_id)?.name ?? task.workspace_id)
+            ? (workspaces.find((p) => p.id === task.workspace_id)?.name ?? task.workspace_id)
             : '—'}
         </p>
       </Field>
 
-      {/* Milestone — filtered to selected project */}
+      {/* Milestone — filtered to selected workspace */}
       <Field label="Milestone">
         <SmartSelect
           value={task.milestone_id ?? '__none__'}
@@ -416,7 +416,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
 
 // ── Workflow Task Detail Panel ─────────────────────────────────────────────────
 // The legacy workflow-task variant of the detail panel (Task wire type), kept
-// for the sessions route and project task slide-over consumers.
+// for the sessions route and workspace task slide-over consumers.
 
 function WorkflowTaskDetailPanel({
   task,

@@ -1,26 +1,26 @@
 /**
- * ProjectDetailScreen.test.tsx
+ * WorkspaceDetailScreen.test.tsx
  *
- * Tests for the inbox-redirect useEffect inside ProjectDetailScreen.
+ * Tests for the inbox-redirect useEffect inside WorkspaceDetailScreen.
  *
  * The component has a useEffect that redirects workspaceId === 'inbox' to the
  * real default workspace UUID:
  *
  *   useEffect(() => {
  *     if (workspaceId !== 'inbox') return
- *     if (projects.length === 0) return
- *     const defaultProject = projects.find((p) => p.is_default)
- *     if (defaultProject) {
- *       void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: defaultProject.id }, replace: true })
+ *     if (workspaces.length === 0) return
+ *     const defaultWorkspace = workspaces.find((p) => p.is_default)
+ *     if (defaultWorkspace) {
+ *       void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: defaultWorkspace.id }, replace: true })
  *     }
- *   }, [workspaceId, projects, navigate])
+ *   }, [workspaceId, workspaces, navigate])
  *
  * Scenarios tested:
  *   1. Redirect to default workspace — workspaceId='inbox', data has is_default=true workspace → navigate called
  *   2. No redirect when workspaces loading — workspaceId='inbox', empty data → navigate NOT called
  *   3. No redirect when no default workspace — workspaceId='inbox', list without is_default → navigate NOT called
  *
- * Traces to: ProjectDetailScreen.tsx lines 49–57 — inbox redirect useEffect.
+ * Traces to: WorkspaceDetailScreen.tsx lines 49–57 — inbox redirect useEffect.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -57,7 +57,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-// Mock workspacesStore — the useEffect resets activeMilestoneId on project change;
+// Mock workspacesStore — the useEffect resets activeMilestoneId on workspace change;
 // we stub it so we don't need a real Zustand store.
 vi.mock('@/store/workspacesStore', () => ({
   useWorkspacesStore: vi.fn(() => ({
@@ -67,36 +67,36 @@ vi.mock('@/store/workspacesStore', () => ({
 }))
 
 // Stub heavy sub-components to keep this test fast and isolated.
-vi.mock('@/components/projects/ProjectHeader', () => ({
-  ProjectHeader: () => null,
+vi.mock('@/components/workspaces/WorkspaceHeader', () => ({
+  WorkspaceHeader: () => null,
 }))
 
-vi.mock('@/components/projects/MilestoneFilterPills', () => ({
+vi.mock('@/components/workspaces/MilestoneFilterPills', () => ({
   MilestoneFilterPills: () => null,
   MILESTONE_FILTER_UNSCHEDULED: '__unscheduled__',
 }))
 
-vi.mock('@/components/projects/BoardView', () => ({
+vi.mock('@/components/workspaces/BoardView', () => ({
   BoardView: () => null,
 }))
 
-vi.mock('@/components/projects/ListView', () => ({
+vi.mock('@/components/workspaces/ListView', () => ({
   ListView: () => null,
 }))
 
-vi.mock('@/components/projects/ExecutionView', () => ({
+vi.mock('@/components/workspaces/ExecutionView', () => ({
   ExecutionView: () => null,
 }))
 
-vi.mock('@/components/projects/TaskDetailSlideOver', () => ({
+vi.mock('@/components/workspaces/TaskDetailSlideOver', () => ({
   TaskDetailSlideOver: () => null,
 }))
 
-vi.mock('@/components/projects/CreateTaskSlideOver', () => ({
+vi.mock('@/components/workspaces/CreateTaskSlideOver', () => ({
   CreateTaskSlideOver: () => null,
 }))
 
-vi.mock('@/components/projects/CreateMilestoneSlideOver', () => ({
+vi.mock('@/components/workspaces/CreateMilestoneSlideOver', () => ({
   CreateMilestoneSlideOver: () => null,
 }))
 
@@ -113,7 +113,7 @@ vi.mock('@phosphor-icons/react', () => ({
 import { fetchWorkspaces, fetchBoardTasks, fetchMilestones, fetchAgents } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 
-import { ProjectDetailScreen } from '@/components/screens/ProjectDetailScreen'
+import { WorkspaceDetailScreen } from '@/components/screens/WorkspaceDetailScreen'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -127,7 +127,7 @@ function renderScreen(workspaceId: string) {
   const client = makeQueryClient()
   return render(
     <QueryClientProvider client={client}>
-      <ProjectDetailScreen workspaceId={workspaceId} />
+      <WorkspaceDetailScreen workspaceId={workspaceId} />
     </QueryClientProvider>,
   )
 }
@@ -135,7 +135,7 @@ function renderScreen(workspaceId: string) {
 /**
  * Build a minimal Workspace fixture from the generated OpenAPI type.
  */
-function makeProject(overrides: Partial<Workspace> = {}): Workspace {
+function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
     id: 'proj-default-uuid',
     name: 'Inbox',
@@ -162,19 +162,19 @@ beforeEach(() => {
   vi.mocked(fetchAgents).mockReturnValue(new Promise(() => {}) as never)
 })
 
-// ── describe: redirect to default project ─────────────────────────────────────
-// Traces to: ProjectDetailScreen.tsx lines 49–57 — inbox redirect useEffect.
+// ── describe: redirect to default workspace ─────────────────────────────────────
+// Traces to: WorkspaceDetailScreen.tsx lines 49–57 — inbox redirect useEffect.
 
-describe('ProjectDetailScreen — inbox redirect', () => {
+describe('WorkspaceDetailScreen — inbox redirect', () => {
   it('navigates to default workspace UUID when workspaceId is "inbox" and is_default workspace exists', async () => {
     // BDD: Given workspaceId='inbox' and fetchWorkspaces returns a workspace with is_default=true
     // When the component mounts and the workspaces query resolves
     // Then navigate is called with the default workspace's id and replace: true
     //
-    // Traces to: ProjectDetailScreen.tsx line 54
+    // Traces to: WorkspaceDetailScreen.tsx line 54
 
-    const defaultProject = makeProject({ id: 'abc-123', name: 'Inbox', is_default: true })
-    vi.mocked(fetchWorkspaces).mockResolvedValue([defaultProject])
+    const defaultWorkspace = makeWorkspace({ id: 'abc-123', name: 'Inbox', is_default: true })
+    vi.mocked(fetchWorkspaces).mockResolvedValue([defaultWorkspace])
 
     renderScreen('inbox')
 
@@ -192,10 +192,10 @@ describe('ProjectDetailScreen — inbox redirect', () => {
     // navigate calls.  A hardcoded response would return the same id regardless
     // of what fetchWorkspaces returns.
     //
-    // Traces to: ProjectDetailScreen.tsx line 54
+    // Traces to: WorkspaceDetailScreen.tsx line 54
 
-    const defaultProject = makeProject({ id: 'xyz-999', name: 'Inbox', is_default: true })
-    vi.mocked(fetchWorkspaces).mockResolvedValue([defaultProject])
+    const defaultWorkspace = makeWorkspace({ id: 'xyz-999', name: 'Inbox', is_default: true })
+    vi.mocked(fetchWorkspaces).mockResolvedValue([defaultWorkspace])
 
     renderScreen('inbox')
 
@@ -214,10 +214,10 @@ describe('ProjectDetailScreen — inbox redirect', () => {
   it('does NOT call navigate when workspaceId is NOT "inbox"', async () => {
     // Content test: the guard `if (workspaceId !== 'inbox') return` means navigate
     // must never be called for a real UUID.
-    // Traces to: ProjectDetailScreen.tsx line 50
+    // Traces to: WorkspaceDetailScreen.tsx line 50
 
-    const realProject = makeProject({ id: 'real-uuid-001', name: 'My Workspace', is_default: false })
-    vi.mocked(fetchWorkspaces).mockResolvedValue([realProject])
+    const realWorkspace = makeWorkspace({ id: 'real-uuid-001', name: 'My Workspace', is_default: false })
+    vi.mocked(fetchWorkspaces).mockResolvedValue([realWorkspace])
 
     renderScreen('real-uuid-001')
 
@@ -230,19 +230,19 @@ describe('ProjectDetailScreen — inbox redirect', () => {
   })
 })
 
-// ── describe: no redirect while projects loading ───────────────────────────────
-// Traces to: ProjectDetailScreen.tsx line 51 — `if (projects.length === 0) return`
+// ── describe: no redirect while workspaces loading ───────────────────────────────
+// Traces to: WorkspaceDetailScreen.tsx line 51 — `if (workspaces.length === 0) return`
 
-describe('ProjectDetailScreen — no redirect while projects still loading', () => {
+describe('WorkspaceDetailScreen — no redirect while workspaces still loading', () => {
   it('does NOT call navigate when workspaces query has not resolved yet (empty default)', async () => {
     // BDD: Given workspaceId='inbox' and fetchWorkspaces is pending (data defaults to [])
     // When the component mounts
-    // Then navigate is NOT called because projects.length === 0
+    // Then navigate is NOT called because workspaces.length === 0
     //
-    // The guard `if (projects.length === 0) return` prevents a premature
+    // The guard `if (workspaces.length === 0) return` prevents a premature
     // redirect before data is available.
     //
-    // Traces to: ProjectDetailScreen.tsx line 51
+    // Traces to: WorkspaceDetailScreen.tsx line 51
 
     // Never-resolving promise → query stays in loading state → data = [] (default)
     vi.mocked(fetchWorkspaces).mockReturnValue(new Promise(() => {}) as never)
@@ -256,23 +256,23 @@ describe('ProjectDetailScreen — no redirect while projects still loading', () 
   })
 })
 
-// ── describe: no redirect when no default project ─────────────────────────────
-// Traces to: ProjectDetailScreen.tsx lines 52–55 — defaultProject guard
+// ── describe: no redirect when no default workspace ─────────────────────────────
+// Traces to: WorkspaceDetailScreen.tsx lines 52–55 — defaultWorkspace guard
 
-describe('ProjectDetailScreen — no redirect when no default workspace in list', () => {
+describe('WorkspaceDetailScreen — no redirect when no default workspace in list', () => {
   it('does NOT call navigate when workspaces list has entries but none is is_default', async () => {
     // BDD: Given workspaceId='inbox' and fetchWorkspaces returns workspaces without is_default=true
     // When the component mounts
     // Then navigate is NOT called (falls through to "not found" state)
     //
-    // Traces to: ProjectDetailScreen.tsx lines 52–55 — `if (defaultProject)` guard.
+    // Traces to: WorkspaceDetailScreen.tsx lines 52–55 — `if (defaultWorkspace)` guard.
     //
     // Rejection test: a workspace list without is_default set must not trigger a
     // redirect to a wrong ID.
 
     vi.mocked(fetchWorkspaces).mockResolvedValue([
-      makeProject({ id: 'proj-a', name: 'Alpha', is_default: false }),
-      makeProject({ id: 'proj-b', name: 'Beta', is_default: false }),
+      makeWorkspace({ id: 'proj-a', name: 'Alpha', is_default: false }),
+      makeWorkspace({ id: 'proj-b', name: 'Beta', is_default: false }),
     ])
 
     renderScreen('inbox')
@@ -292,7 +292,7 @@ describe('ProjectDetailScreen — no redirect when no default workspace in list'
     // Persistence test: even with multiple workspaces all having is_default=false,
     // navigate stays silent.
     vi.mocked(fetchWorkspaces).mockResolvedValue([
-      makeProject({ id: 'proj-x', name: 'X', is_default: false }),
+      makeWorkspace({ id: 'proj-x', name: 'X', is_default: false }),
     ])
 
     renderScreen('inbox')

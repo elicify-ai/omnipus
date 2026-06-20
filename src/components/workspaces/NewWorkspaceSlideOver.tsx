@@ -22,7 +22,7 @@ import { X } from '@phosphor-icons/react'
 import { createWorkspace, fetchAgents, isWorker, isApiError, workspacesQueryKeys } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
-interface NewProjectSlideOverProps {
+interface NewWorkspaceSlideOverProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -36,7 +36,7 @@ interface FormState {
 
 const INITIAL_FORM: FormState = { name: '', description: '', repository: '', core_team: [] }
 
-export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverProps) {
+export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
@@ -112,21 +112,21 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-5 py-4">
           {/* Name */}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-project-name" className="text-[var(--color-secondary)]">
+            <Label htmlFor="new-workspace-name" className="text-[var(--color-secondary)]">
               Name <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Input
-              id="new-project-name"
+              id="new-workspace-name"
               value={form.name}
               onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
               placeholder="My workspace"
               maxLength={200}
               autoFocus
               aria-invalid={!!fieldErrors.name}
-              aria-describedby={fieldErrors.name ? 'new-project-name-error' : undefined}
+              aria-describedby={fieldErrors.name ? 'new-workspace-name-error' : undefined}
             />
             {fieldErrors.name && (
-              <p id="new-project-name-error" className="text-xs text-[var(--color-error)]">
+              <p id="new-workspace-name-error" className="text-xs text-[var(--color-error)]">
                 {fieldErrors.name}
               </p>
             )}
@@ -134,21 +134,21 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
 
           {/* Description */}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-project-desc" className="text-[var(--color-secondary)]">
+            <Label htmlFor="new-workspace-desc" className="text-[var(--color-secondary)]">
               Description
             </Label>
             <Textarea
-              id="new-project-desc"
+              id="new-workspace-desc"
               value={form.description}
               onChange={(e) => setForm((s) => ({ ...s, description: e.target.value }))}
               placeholder="Optional workspace description"
               rows={3}
               maxLength={2000}
               aria-invalid={!!fieldErrors.description}
-              aria-describedby={fieldErrors.description ? 'new-project-desc-error' : undefined}
+              aria-describedby={fieldErrors.description ? 'new-workspace-desc-error' : undefined}
             />
             {fieldErrors.description && (
-              <p id="new-project-desc-error" className="text-xs text-[var(--color-error)]">
+              <p id="new-workspace-desc-error" className="text-xs text-[var(--color-error)]">
                 {fieldErrors.description}
               </p>
             )}
@@ -156,20 +156,20 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
 
           {/* Repository */}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-project-repo" className="text-[var(--color-secondary)]">
+            <Label htmlFor="new-workspace-repo" className="text-[var(--color-secondary)]">
               Repository
             </Label>
             <Input
-              id="new-project-repo"
+              id="new-workspace-repo"
               value={form.repository}
               onChange={(e) => setForm((s) => ({ ...s, repository: e.target.value }))}
               placeholder="https://github.com/..."
               maxLength={500}
               aria-invalid={!!fieldErrors.repository}
-              aria-describedby={fieldErrors.repository ? 'new-project-repo-error' : undefined}
+              aria-describedby={fieldErrors.repository ? 'new-workspace-repo-error' : undefined}
             />
             {fieldErrors.repository && (
-              <p id="new-project-repo-error" className="text-xs text-[var(--color-error)]">
+              <p id="new-workspace-repo-error" className="text-xs text-[var(--color-error)]">
                 {fieldErrors.repository}
               </p>
             )}
@@ -177,7 +177,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
 
           {/* Core team — agent multi-select (US-10 AC #5) */}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-project-core-team" className="text-[var(--color-secondary)]">
+            <Label htmlFor="new-workspace-core-team" className="text-[var(--color-secondary)]">
               Core team
             </Label>
             {/* Selected agent chips */}
@@ -210,7 +210,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
                   Could not load agents — enter agent IDs manually
                 </p>
                 <Input
-                  id="new-project-core-team"
+                  id="new-workspace-core-team"
                   value={form.core_team.join(', ')}
                   onChange={(e) =>
                     setForm((s) => ({
@@ -228,7 +228,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
             ) : agentsLoading ? (
               <Select disabled value="">
                 <SelectTrigger
-                  id="new-project-core-team"
+                  id="new-workspace-core-team"
                   className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
                 >
                   <SelectValue placeholder="Loading agents…" />
@@ -245,7 +245,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
                 }}
               >
                 <SelectTrigger
-                  id="new-project-core-team"
+                  id="new-workspace-core-team"
                   className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
                 >
                   <SelectValue placeholder="Add agent to core team" />

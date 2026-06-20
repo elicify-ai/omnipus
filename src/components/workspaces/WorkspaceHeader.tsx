@@ -9,28 +9,28 @@ import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 
-interface ProjectHeaderProps {
-  project: Workspace
+interface WorkspaceHeaderProps {
+  workspace: Workspace
 }
 
-export function ProjectHeader({ project }: ProjectHeaderProps) {
+export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const [editingName, setEditingName] = useState(false)
-  const [nameDraft, setNameDraft] = useState(project.name)
+  const [nameDraft, setNameDraft] = useState(workspace.name)
 
   // Fetch milestones for progress bars
   const { data: milestones = [] } = useQuery({
-    queryKey: milestonesQueryKeys.list(project.id),
-    queryFn: () => fetchMilestones(project.id),
+    queryKey: milestonesQueryKeys.list(workspace.id),
+    queryFn: () => fetchMilestones(workspace.id),
     staleTime: 30_000,
   })
 
   const updateMutation = useMutation({
-    mutationFn: (name: string) => updateWorkspace(project.id, { name }),
+    mutationFn: (name: string) => updateWorkspace(workspace.id, { name }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
-      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.detail(project.id) })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.detail(workspace.id) })
       addToast({ message: 'Workspace updated', variant: 'success' })
       setEditingName(false)
     },
@@ -43,7 +43,7 @@ export function ProjectHeader({ project }: ProjectHeaderProps) {
   function handleSaveName() {
     const trimmed = nameDraft.trim()
     if (!trimmed) return
-    if (trimmed === project.name) {
+    if (trimmed === workspace.name) {
       setEditingName(false)
       return
     }
@@ -51,13 +51,13 @@ export function ProjectHeader({ project }: ProjectHeaderProps) {
   }
 
   function handleCancelEdit() {
-    setNameDraft(project.name)
+    setNameDraft(workspace.name)
     setEditingName(false)
   }
 
   return (
     <div className="px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
-      {/* Project name row */}
+      {/* Workspace name row */}
       <div className="flex items-center gap-2 mb-1">
         {editingName ? (
           <div className="flex items-center gap-2 flex-1">
@@ -93,12 +93,12 @@ export function ProjectHeader({ project }: ProjectHeaderProps) {
         ) : (
           <>
             <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)] flex-1 truncate">
-              {project.name}
+              {workspace.name}
             </h1>
             <button
               type="button"
               onClick={() => {
-                setNameDraft(project.name)
+                setNameDraft(workspace.name)
                 setEditingName(true)
               }}
               aria-label="Edit workspace name"
@@ -112,24 +112,24 @@ export function ProjectHeader({ project }: ProjectHeaderProps) {
 
       {/* Description + repo */}
       <div className="flex items-center gap-4 flex-wrap mb-2">
-        {project.description && (
+        {workspace.description && (
           <p className="text-xs text-[var(--color-muted)] flex-shrink-0 max-w-xl">
-            {project.description}
+            {workspace.description}
           </p>
         )}
-        {project.repository && (() => {
+        {workspace.repository && (() => {
           // SEC-5: Only render an anchor when the URL has a safe http/https protocol.
           // javascript: and data: URIs would execute arbitrary code as the user.
           let isSafeUrl = false
           try {
-            const proto = new URL(project.repository).protocol
+            const proto = new URL(workspace.repository).protocol
             isSafeUrl = proto === 'http:' || proto === 'https:'
           } catch {
             // Unparseable URL — fall through to plain text.
           }
           return isSafeUrl ? (
             <a
-              href={project.repository}
+              href={workspace.repository}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline flex-shrink-0"
@@ -140,15 +140,15 @@ export function ProjectHeader({ project }: ProjectHeaderProps) {
           ) : (
             <span className="flex items-center gap-1 text-xs text-[var(--color-muted)] flex-shrink-0">
               <Link size={12} />
-              {project.repository}
+              {workspace.repository}
             </span>
           )
         })()}
         <span className={cn(
           'text-xs text-[var(--color-muted)] flex-shrink-0',
-          project.task_count === 0 && 'hidden',
+          workspace.task_count === 0 && 'hidden',
         )}>
-          {project.task_count} task{project.task_count !== 1 ? 's' : ''}
+          {workspace.task_count} task{workspace.task_count !== 1 ? 's' : ''}
         </span>
       </div>
 

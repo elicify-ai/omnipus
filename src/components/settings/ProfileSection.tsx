@@ -321,7 +321,7 @@ export function ProfileSection() {
         </div>
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
           <p className="text-xs text-[var(--color-muted)]">
-            Shared context available to all agents — your role, preferences, and project information.
+            Shared context available to all agents — your role, preferences, and workspace information.
           </p>
           {userContextError ? (
             <div className="flex flex-col items-center gap-3 py-4 text-center">
