@@ -9,11 +9,10 @@ import {
   SpinnerGap,
   CheckCircle,
   XCircle,
-  ShieldCheck,
-  Lightning,
-  Cube,
   User,
   Key,
+  Star,
+  ChatCircle,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,9 +23,15 @@ import { PROVIDER_HINTS } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 
-// First-launch onboarding flow — full-screen, outside AppShell
+// First-launch onboarding flow — full-screen, outside AppShell.
+//
+// Spec-6 FR-12.3: three numbered steps — name → password → model key — followed
+// by an unnumbered "Meet your Assistant" completion screen that introduces Mia
+// (the default ⭐ Assistant agent, auto-provisioned by coreagent.SeedConfig at
+// gateway boot). The step indicator tracks the 3 numbered steps only; the
+// completion screen is not a numbered step.
 
-type Step = 1 | 2 | 3 | 4
+type Step = 1 | 2 | 3
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 
 // All supported providers. Providers with /v1/models get a searchable dropdown;
@@ -66,12 +71,6 @@ export function sortProvidersByPriority<T extends { id: string }>(list: T[]): T[
     .sort((a, b) => rank(a.p.id) - rank(b.p.id) || a.index - b.index)
     .map(({ p }) => p)
 }
-
-const WELCOME_FEATURES = [
-  { Icon: ShieldCheck, text: 'Kernel-level sandboxing — agents operate in security boundaries by default' },
-  { Icon: Lightning, text: 'Zero-IPC channels — Discord, Slack, Telegram compiled into the binary' },
-  { Icon: Cube, text: 'Single Go binary — no runtime dependencies, runs anywhere' },
-]
 
 // Lightweight, dependency-free password strength heuristic. Scores on length
 // plus character-class diversity (lower / upper / digit / symbol). Returns a
@@ -161,13 +160,15 @@ function OnboardingWizard() {
   const { addToast } = useUiStore()
   const { appStateBannerMessage } = useRouteContext({ from: '/onboarding' })
 
-  // Fetch provider list from API for model info; use built-in provider list for onboarding UI
-
   // Always show all available providers in onboarding, regardless of API results
   const providers = AVAILABLE_PROVIDERS
 
   const [step, setStep] = useState<Step>(1)
   const [direction, setDirection] = useState(1)
+  // `completed` flips true once completeOnboardingTransaction succeeds; the
+  // numbered step indicator is hidden and the unnumbered "Meet your Assistant"
+  // completion screen is rendered instead.
+  const [completed, setCompleted] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -176,18 +177,18 @@ function OnboardingWizard() {
   const [selectedModel, setSelectedModel] = useState('')
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [isSaving, setIsSaving] = useState(false)
-  // Surfaced inline on the final step when completeOnboardingTransaction fails,
-  // so the user stays on the step and can retry rather than failing silently.
+  // Surfaced inline on the model-key step when completeOnboardingTransaction
+  // fails, so the user stays on the step and can retry rather than failing
+  // silently.
   const [finishError, setFinishError] = useState('')
-  // Account step (Step 3) — single-user: one username + password
+  // Step 1 — name/username
   const [adminUsername, setAdminUsername] = useState('')
+  // Step 2 — password + confirm
   const [adminPassword, setAdminPassword] = useState('')
   const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('')
   const [showAdminPassword, setShowAdminPassword] = useState(false)
-  const [adminStatus, setAdminStatus] = useState<'idle' | 'saving' | 'error'>('idle')
   const [adminError, setAdminError] = useState('')
 
-  const providerDef = providers.find((p) => p.id === selectedProvider)
   const providerHintText = selectedProvider ? PROVIDER_HINTS[selectedProvider] : undefined
 
   const goTo = (next: Step) => {
@@ -219,8 +220,8 @@ function OnboardingWizard() {
     try {
       // Non-persistent test + fetch: the server probes the provider with the
       // supplied key and returns the model list in one response. Nothing is
-      // saved to disk until the user clicks "Complete" on step 4, which fires
-      // /onboarding/complete with the full payload atomically.
+      // saved to disk until the user clicks "Complete setup" on step 3, which
+      // fires /onboarding/complete with the full payload atomically.
       const result = await probeProvider(selectedProvider, apiKey.trim())
       if (result.success) {
         setTestStatus('success')
@@ -242,7 +243,35 @@ function OnboardingWizard() {
   // intentionally do NOT fire a PUT /providers/{id} here — that would require
   // a __Host-csrf cookie the browser cannot install over plain HTTP.
 
-  const handleFinish = async () => {
+  // Step 1 → 2: validate the username before advancing.
+  const handleNameContinue = () => {
+    if (!adminUsername.trim()) {
+      setAdminError('Choose a username to continue')
+      return
+    }
+    setAdminError('')
+    goTo(2)
+  }
+
+  // Step 2 → 3: validate the password before advancing.
+  const handlePasswordContinue = () => {
+    if (adminPassword.length < 8) {
+      setAdminError('Password must be at least 8 characters')
+      return
+    }
+    if (adminPassword !== adminPasswordConfirm) {
+      setAdminError('Passwords do not match')
+      return
+    }
+    setAdminError('')
+    goTo(3)
+  }
+
+  // Step 3 → completion: fire the atomic onboarding transaction. On success,
+  // store the auth token and reveal the "Meet your Assistant" screen. On
+  // failure, surface the error inline on step 3 so the user can retry without
+  // losing their place.
+  const handleComplete = async () => {
     setIsSaving(true)
     setFinishError('')
     try {
@@ -258,9 +287,9 @@ function OnboardingWizard() {
         },
       })
       useAuthStore.getState().setToken(resp.token, resp.role, resp.username)
-      navigate({ to: '/' })
+      setCompleted(true)
     } catch (err) {
-      // Surface the failure both inline (so the user stays on step 4 and can
+      // Surface the failure both inline (so the user stays on step 3 and can
       // retry) and as a toast — never strand the error silently.
       const message = `Could not complete setup: ${err instanceof Error ? err.message : 'Unknown error'}`
       setFinishError(message)
@@ -270,25 +299,8 @@ function OnboardingWizard() {
     }
   }
 
-  const handleRegisterAdmin = () => {
-    if (!adminUsername.trim() || !adminPassword) {
-      setAdminError('Username and password are required')
-      setAdminStatus('error')
-      return
-    }
-    if (adminPassword.length < 8) {
-      setAdminError('Password must be at least 8 characters')
-      setAdminStatus('error')
-      return
-    }
-    if (adminPassword !== adminPasswordConfirm) {
-      setAdminError('Passwords do not match')
-      setAdminStatus('error')
-      return
-    }
-    setAdminStatus('idle')
-    setAdminError('')
-    goTo(4)
+  const handleStartChatting = () => {
+    navigate({ to: '/' })
   }
 
   return (
@@ -328,49 +340,64 @@ function OnboardingWizard() {
       {/* Step indicator — labeled for assistive tech so screen readers announce
           progress. The dots themselves are decorative (aria-hidden); the
           progressbar role + valuenow/min/max + aria-label carry the semantics,
-          and the sr-only line gives a plain-text "Step X of N" announcement. */}
-      <div className="flex flex-col items-center gap-2 mb-12 z-10">
-        {/* Visible step counter for sighted users — the dots alone are unlabeled. */}
-        <span
-          aria-hidden
-          className="text-xs font-medium tracking-wide"
-          style={{ color: 'var(--color-muted)' }}
-        >
-          Step {step} of 4
-        </span>
-        <div
-          className="flex items-center gap-2"
-          role="progressbar"
-          aria-valuenow={step}
-          aria-valuemin={1}
-          aria-valuemax={4}
-          aria-label={`Onboarding progress: step ${step} of 4`}
-        >
-          <span className="sr-only">Step {step} of 4</span>
-          {([1, 2, 3, 4] as Step[]).map((s) => (
-          <motion.div
-            key={s}
+          and the sr-only line gives a plain-text "Step X of N" announcement.
+          Hidden on the unnumbered "Meet your Assistant" completion screen. */}
+      {!completed && (
+        <div className="flex flex-col items-center gap-2 mb-12 z-10">
+          {/* Visible step counter for sighted users — the dots alone are unlabeled. */}
+          <span
             aria-hidden
-            animate={{
-              width: s === step ? 24 : 8,
-              backgroundColor:
-                s === step
-                  ? '#d4af37'
-                  : s < step
-                  ? 'rgba(212,175,55,0.45)'
-                  : '#2d3748',
-            }}
-            transition={{ duration: 0.3, ease: 'easeInOut' }}
-            className="h-2 rounded-full"
-          />
-          ))}
+            className="text-xs font-medium tracking-wide"
+            style={{ color: 'var(--color-muted)' }}
+          >
+            Step {step} of 3
+          </span>
+          <div
+            className="flex items-center gap-2"
+            role="progressbar"
+            aria-valuenow={step}
+            aria-valuemin={1}
+            aria-valuemax={3}
+            aria-label={`Onboarding progress: step ${step} of 3`}
+          >
+            <span className="sr-only">Step {step} of 3</span>
+            {([1, 2, 3] as Step[]).map((s) => (
+              <motion.div
+                key={s}
+                aria-hidden
+                animate={{
+                  width: s === step ? 24 : 8,
+                  backgroundColor:
+                    s === step
+                      ? '#d4af37'
+                      : s < step
+                      ? 'rgba(212,175,55,0.45)'
+                      : '#2d3748',
+                }}
+                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                className="h-2 rounded-full"
+              />
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Animated step content */}
       <div className="w-full max-w-md z-10">
         <AnimatePresence mode="wait" custom={direction}>
-          {step === 1 && (
+          {completed ? (
+            <motion.div
+              key="meet-assistant"
+              custom={direction}
+              variants={stepVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{ duration: 0.22, ease: 'easeInOut' }}
+            >
+              <MeetAssistantStep onStartChatting={handleStartChatting} />
+            </motion.div>
+          ) : step === 1 ? (
             <motion.div
               key="step1"
               custom={direction}
@@ -380,10 +407,14 @@ function OnboardingWizard() {
               exit="exit"
               transition={{ duration: 0.22, ease: 'easeInOut' }}
             >
-              <WelcomeStep onGetStarted={() => goTo(2)} />
+              <NameStep
+                username={adminUsername}
+                onUsernameChange={setAdminUsername}
+                error={adminError}
+                onContinue={handleNameContinue}
+              />
             </motion.div>
-          )}
-          {step === 2 && (
+          ) : step === 2 ? (
             <motion.div
               key="step2"
               custom={direction}
@@ -393,7 +424,29 @@ function OnboardingWizard() {
               exit="exit"
               transition={{ duration: 0.22, ease: 'easeInOut' }}
             >
-              <ProviderStep
+              <PasswordStep
+                password={adminPassword}
+                onPasswordChange={setAdminPassword}
+                passwordConfirm={adminPasswordConfirm}
+                onPasswordConfirmChange={setAdminPasswordConfirm}
+                showPassword={showAdminPassword}
+                onToggleShowPassword={() => setShowAdminPassword((v) => !v)}
+                error={adminError}
+                onContinue={handlePasswordContinue}
+                onBack={() => goTo(1)}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="step3"
+              custom={direction}
+              variants={stepVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{ duration: 0.22, ease: 'easeInOut' }}
+            >
+              <ModelKeyStep
                 providers={providers}
                 selectedProvider={selectedProvider}
                 onSelect={handleSelectProvider}
@@ -404,56 +457,14 @@ function OnboardingWizard() {
                 testStatus={testStatus}
                 testError={testError}
                 onTest={handleTest}
-                onBack={() => goTo(1)}
-                onContinue={() => goTo(3)}
+                onBack={() => goTo(2)}
+                onComplete={handleComplete}
                 providerHint={providerHintText}
                 availableModels={availableModels}
                 selectedModel={selectedModel}
                 onSelectModel={setSelectedModel}
-              />
-            </motion.div>
-          )}
-          {step === 3 && (
-            <motion.div
-              key="step3"
-              custom={direction}
-              variants={stepVariants}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={{ duration: 0.22, ease: 'easeInOut' }}
-            >
-              <AdminCredentialsStep
-                username={adminUsername}
-                onUsernameChange={setAdminUsername}
-                password={adminPassword}
-                onPasswordChange={setAdminPassword}
-                passwordConfirm={adminPasswordConfirm}
-                onPasswordConfirmChange={setAdminPasswordConfirm}
-                showPassword={showAdminPassword}
-                onToggleShowPassword={() => setShowAdminPassword((v) => !v)}
-                status={adminStatus}
-                error={adminError}
-                onRegister={handleRegisterAdmin}
-                onBack={() => goTo(2)}
-              />
-            </motion.div>
-          )}
-          {step === 4 && (
-            <motion.div
-              key="step4"
-              custom={direction}
-              variants={stepVariants}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={{ duration: 0.22, ease: 'easeInOut' }}
-            >
-              <DoneStep
-                providerName={providerDef?.display_name ?? selectedProvider}
                 isSaving={isSaving}
-                onFinish={handleFinish}
-                error={finishError}
+                finishError={finishError}
               />
             </motion.div>
           )}
@@ -463,83 +474,95 @@ function OnboardingWizard() {
   )
 }
 
-// ── Step 1: Welcome ────────────────────────────────────────────────────────────
+// ── Step 1: What should I call you? ────────────────────────────────────────────
 
-function WelcomeStep({ onGetStarted }: { onGetStarted: () => void }) {
+function NameStep({
+  username,
+  onUsernameChange,
+  error,
+  onContinue,
+}: {
+  username: string
+  onUsernameChange: (v: string) => void
+  error: string
+  onContinue: () => void
+}) {
   return (
-    <div className="flex flex-col items-center text-center gap-8">
-      {/* Mascot with Forge Gold glow halo */}
+    <div className="flex flex-col items-center text-center gap-6">
       <motion.div
-        initial={{ scale: 0.75, opacity: 0 }}
+        initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        transition={{ duration: 0.5, ease: [0.34, 1.56, 0.64, 1] }}
-        className="relative"
+        transition={{ duration: 0.4 }}
       >
         <div
-          aria-hidden
-          className="absolute rounded-full blur-3xl pointer-events-none"
-          style={{
-            inset: '-40%',
-            background: 'rgba(212,175,55,0.14)',
-          }}
-        />
-        <img
-          src={OmnipusAvatar}
-          alt="Omnipus — Master Tasker"
-          className="relative h-28 w-28 sm:h-36 sm:w-36 drop-shadow-2xl"
-        />
+          className="h-16 w-16 rounded-full flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(212,175,55,0.12)' }}
+        >
+          <User size={28} weight="duotone" style={{ color: 'var(--color-accent)' }} />
+        </div>
       </motion.div>
 
       <motion.div
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.18, duration: 0.38 }}
+        transition={{ delay: 0.15, duration: 0.38 }}
       >
-        <h1 className="font-headline text-4xl sm:text-5xl font-bold leading-tight mb-2"
+        <h2 className="font-headline text-3xl font-bold mb-2"
           style={{ color: 'var(--color-secondary)' }}>
-          Welcome to Omnipus
-        </h1>
-        <p className="font-headline text-base font-bold tracking-wide"
-          style={{ color: 'var(--color-accent)' }}>
-          Elite Simplicity. Sovereign Control.
+          What should I call you?
+        </h2>
+        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+          Choose a username — this is the one account for your Omnipus
         </p>
       </motion.div>
 
       <motion.div
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.28, duration: 0.38 }}
-        className="w-full space-y-2.5"
+        transition={{ delay: 0.25, duration: 0.38 }}
+        className="w-full space-y-4"
       >
-        {WELCOME_FEATURES.map(({ Icon, text }, i) => (
-          <div
-            key={i}
-            className="flex items-start gap-3 p-3 rounded-lg border text-left"
-            style={{
-              borderColor: 'var(--color-border)',
-              backgroundColor: 'var(--color-surface-1)',
+        <div>
+          <label htmlFor="admin-username" className="text-xs font-medium mb-1.5 block"
+            style={{ color: 'var(--color-muted)' }}>
+            Username
+          </label>
+          <Input
+            id="admin-username"
+            type="text"
+            value={username}
+            onChange={(e) => onUsernameChange(e.target.value)}
+            placeholder="admin"
+            autoComplete="username"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onContinue()
             }}
-          >
-            <Icon size={17} weight="duotone" className="shrink-0 mt-0.5"
-              style={{ color: 'var(--color-accent)' }} />
-            <p className="text-sm leading-snug" style={{ color: 'var(--color-muted)' }}>
-              {text}
-            </p>
+          />
+        </div>
+
+        {/* Error feedback */}
+        {error && (
+          <div data-testid="onboarding-error" className="flex items-start gap-2 text-sm" style={{ color: 'var(--color-error)' }}>
+            <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
+            <span>{error}</span>
           </div>
-        ))}
+        )}
       </motion.div>
 
+      {/* Navigation */}
       <motion.div
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.38, duration: 0.38 }}
+        transition={{ delay: 0.35, duration: 0.38 }}
         className="w-full"
       >
         <Button
           className="w-full h-11 gap-2 font-headline font-bold text-base"
-          onClick={onGetStarted}
+          onClick={onContinue}
+          disabled={!username.trim()}
         >
-          Get Started
+          Continue
           <ArrowRight size={16} weight="bold" />
         </Button>
       </motion.div>
@@ -547,9 +570,187 @@ function WelcomeStep({ onGetStarted }: { onGetStarted: () => void }) {
   )
 }
 
-// ── Step 2: Provider Setup ─────────────────────────────────────────────────────
+// ── Step 2: Set your password ──────────────────────────────────────────────────
 
-function ProviderStep({
+function PasswordStep({
+  password,
+  onPasswordChange,
+  passwordConfirm,
+  onPasswordConfirmChange,
+  showPassword,
+  onToggleShowPassword,
+  error,
+  onContinue,
+  onBack,
+}: {
+  password: string
+  onPasswordChange: (v: string) => void
+  passwordConfirm: string
+  onPasswordConfirmChange: (v: string) => void
+  showPassword: boolean
+  onToggleShowPassword: () => void
+  error: string
+  onContinue: () => void
+  onBack: () => void
+}) {
+  const isValid = password.length >= 8 && password === passwordConfirm
+  const strength = evaluatePasswordStrength(password)
+  return (
+    <div className="flex flex-col items-center text-center gap-6">
+      <motion.div
+        initial={{ scale: 0.8, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 0.4 }}
+      >
+        <div
+          className="h-16 w-16 rounded-full flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(212,175,55,0.12)' }}
+        >
+          <Key size={28} weight="duotone" style={{ color: 'var(--color-accent)' }} />
+        </div>
+      </motion.div>
+
+      <motion.div
+        initial={{ y: 14, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.15, duration: 0.38 }}
+      >
+        <h2 className="font-headline text-3xl font-bold mb-2"
+          style={{ color: 'var(--color-secondary)' }}>
+          Set your password
+        </h2>
+        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+          This unlocks your Omnipus — store it somewhere safe
+        </p>
+      </motion.div>
+
+      <motion.div
+        initial={{ y: 14, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.25, duration: 0.38 }}
+        className="w-full space-y-4"
+      >
+        {/* Password */}
+        <div>
+          <label htmlFor="admin-password" className="text-xs font-medium mb-1.5 block"
+            style={{ color: 'var(--color-muted)' }}>
+            Password
+          </label>
+          <div className="relative">
+            <Input
+              id="admin-password"
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => onPasswordChange(e.target.value)}
+              placeholder="Min. 8 characters"
+              autoComplete="new-password"
+              className="pr-9"
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={onToggleShowPassword}
+              className={EYE_TOGGLE_CLASS}
+              style={{ color: 'var(--color-muted)' }}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+            >
+              {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+          {/* Inline password-strength meter — length + character-class heuristic. */}
+          {strength && (
+            <div className="mt-2" data-testid="password-strength">
+              <div
+                className="flex gap-1"
+                role="meter"
+                aria-label="Password strength"
+                aria-valuenow={strength.score}
+                aria-valuemin={0}
+                aria-valuemax={4}
+                aria-valuetext={strength.label}
+              >
+                {[1, 2, 3, 4].map((seg) => (
+                  <div
+                    key={seg}
+                    className="h-1 flex-1 rounded-full transition-colors duration-200"
+                    style={{
+                      backgroundColor:
+                        seg <= strength.score ? strength.color : 'var(--color-surface-2)',
+                    }}
+                  />
+                ))}
+              </div>
+              <p className="text-[10px] mt-1 font-medium" style={{ color: strength.color }}>
+                {strength.label}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Confirm Password */}
+        <div>
+          <label htmlFor="admin-password-confirm" className="text-xs font-medium mb-1.5 block"
+            style={{ color: 'var(--color-muted)' }}>
+            Confirm Password
+          </label>
+          <div className="relative">
+            <Input
+              id="admin-password-confirm"
+              type={showPassword ? 'text' : 'password'}
+              value={passwordConfirm}
+              onChange={(e) => onPasswordConfirmChange(e.target.value)}
+              placeholder="Repeat password"
+              autoComplete="new-password"
+              className="pr-9"
+            />
+            <button
+              type="button"
+              onClick={onToggleShowPassword}
+              className={EYE_TOGGLE_CLASS}
+              style={{ color: 'var(--color-muted)' }}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+            >
+              {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+        </div>
+
+        {/* Error feedback */}
+        {error && (
+          <div data-testid="onboarding-error" className="flex items-start gap-2 text-sm" style={{ color: 'var(--color-error)' }}>
+            <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+      </motion.div>
+
+      {/* Navigation */}
+      <motion.div
+        initial={{ y: 14, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.35, duration: 0.38 }}
+        className="flex items-center gap-3 pt-2 w-full"
+      >
+        <Button variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
+          <ArrowLeft size={14} />
+          Back
+        </Button>
+        <Button
+          className="flex-1 gap-2 font-headline font-bold"
+          onClick={onContinue}
+          disabled={!isValid}
+        >
+          Continue
+          <ArrowRight size={14} weight="bold" />
+        </Button>
+      </motion.div>
+    </div>
+  )
+}
+
+// ── Step 3: Add a model key ────────────────────────────────────────────────────
+
+function ModelKeyStep({
   providers,
   selectedProvider,
   onSelect,
@@ -561,11 +762,13 @@ function ProviderStep({
   testError,
   onTest,
   onBack,
-  onContinue,
+  onComplete,
   providerHint,
   availableModels,
   selectedModel,
   onSelectModel,
+  isSaving,
+  finishError,
 }: {
   providers: { id: string; display_name: string }[]
   selectedProvider: string
@@ -578,11 +781,13 @@ function ProviderStep({
   testError: string
   onTest: () => void
   onBack: () => void
-  onContinue: () => void
+  onComplete: () => void
   providerHint?: string
   availableModels: string[]
   selectedModel: string
   onSelectModel: (model: string) => void
+  isSaving: boolean
+  finishError: string
 }) {
   // Order the rendered provider list with the popular providers first (stable).
   const orderedProviders = sortProvidersByPriority(providers)
@@ -592,12 +797,13 @@ function ProviderStep({
     availableModels.length > 0 && providerDef
       ? [{ providerName: providerDef.display_name, models: availableModels }]
       : []
+  const continueEnabled = testStatus === 'success' && !!selectedModel.trim()
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="font-headline text-2xl font-bold mb-1"
           style={{ color: 'var(--color-secondary)' }}>
-          Connect a provider
+          Add a model key
         </h2>
         <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
           Omnipus needs an AI provider to power your agents.
@@ -776,28 +982,60 @@ function ProviderStep({
         )}
       </AnimatePresence>
 
+      {/* Inline finish failure — keeps the user on this step so they can retry. */}
+      {finishError && (
+        <div
+          role="alert"
+          data-testid="onboarding-error"
+          className="flex items-start gap-2 text-sm text-left"
+          style={{ color: 'var(--color-error)' }}
+        >
+          <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
+          <span>{finishError}</span>
+        </div>
+      )}
+
       {/* Navigation */}
       <div className="flex items-center gap-3 pt-2">
-        <Button variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
+        <Button
+          variant="ghost"
+          className="gap-1.5 min-h-11 sm:min-h-0"
+          onClick={onBack}
+          disabled={isSaving}
+        >
           <ArrowLeft size={14} />
           Back
         </Button>
         {(() => {
-          // Until Connect succeeds AND a model is chosen, render Continue with a
-          // clearly-disabled ghost/outline treatment (not dimmed gold, which reads
-          // as enabled on touch). Once enabled it becomes the gold default CTA, so
-          // the Connect-then-Continue sequence is visually obvious. Scoped to the
-          // onboarding CTA — does NOT touch the global button.tsx disabled style.
-          const continueEnabled = testStatus === 'success' && !!selectedModel.trim()
+          // Until Connect succeeds AND a model is chosen, render Complete setup
+          // with a clearly-disabled outline treatment (not dimmed gold, which
+          // reads as enabled on touch). Once enabled it becomes the gold CTA,
+          // so the Connect-then-Complete sequence is visually obvious. Scoped
+          // to the onboarding CTA — does NOT touch the global button.tsx
+          // disabled style.
           return (
             <Button
               variant={continueEnabled ? 'default' : 'outline'}
               className="flex-1 gap-2 font-headline font-bold"
-              onClick={onContinue}
-              disabled={!continueEnabled}
+              onClick={onComplete}
+              disabled={!continueEnabled || isSaving}
             >
-              Continue
-              <ArrowRight size={14} weight="bold" />
+              {isSaving ? (
+                <>
+                  <SpinnerGap size={14} className="animate-spin" />
+                  Setting up...
+                </>
+              ) : finishError ? (
+                <>
+                  Retry Setup
+                  <ArrowRight size={14} weight="bold" />
+                </>
+              ) : (
+                <>
+                  Complete Setup
+                  <ArrowRight size={14} weight="bold" />
+                </>
+              )}
             </Button>
           )
         })()}
@@ -806,289 +1044,99 @@ function ProviderStep({
   )
 }
 
-// ── Step 3: Your Account ───────────────────────────────────────────────────────
+// ── Completion: Meet your Assistant ────────────────────────────────────────────
+//
+// Shown after completeOnboardingTransaction succeeds. Introduces Mia — the
+// default ⭐ Assistant agent — who was auto-provisioned by coreagent.SeedConfig
+// at gateway boot (pkg/gateway/gateway.go). This screen is NOT a numbered step,
+// so the step indicator is hidden while it is shown.
 
-function AdminCredentialsStep({
-  username,
-  onUsernameChange,
-  password,
-  onPasswordChange,
-  passwordConfirm,
-  onPasswordConfirmChange,
-  showPassword,
-  onToggleShowPassword,
-  status,
-  error,
-  onRegister,
-  onBack,
-}: {
-  username: string
-  onUsernameChange: (v: string) => void
-  password: string
-  onPasswordChange: (v: string) => void
-  passwordConfirm: string
-  onPasswordConfirmChange: (v: string) => void
-  showPassword: boolean
-  onToggleShowPassword: () => void
-  status: 'idle' | 'saving' | 'error'
-  error: string
-  onRegister: () => void
-  onBack: () => void
-}) {
-  const isValid = username.trim().length > 0 && password.length >= 8 && password === passwordConfirm
-  const strength = evaluatePasswordStrength(password)
-  return (
-    <div className="flex flex-col items-center text-center gap-6">
-      <motion.div
-        initial={{ scale: 0.8, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ duration: 0.4 }}
-      >
-        <div
-          className="h-16 w-16 rounded-full flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(212,175,55,0.12)' }}
-        >
-          <User size={28} weight="duotone" style={{ color: 'var(--color-accent)' }} />
-        </div>
-      </motion.div>
-
-      <motion.div
-        initial={{ y: 14, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.15, duration: 0.38 }}
-      >
-        <h2 className="font-headline text-3xl font-bold mb-2"
-          style={{ color: 'var(--color-secondary)' }}>
-          Your Account
-        </h2>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-          Choose a username and password — this is the one account for your Omnipus
-        </p>
-      </motion.div>
-
-      <motion.div
-        initial={{ y: 14, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.25, duration: 0.38 }}
-        className="w-full space-y-4"
-      >
-        {/* Username */}
-        <div>
-          <label htmlFor="admin-username" className="text-xs font-medium mb-1.5 block"
-            style={{ color: 'var(--color-muted)' }}>
-            Username
-          </label>
-          <Input
-            id="admin-username"
-            type="text"
-            value={username}
-            onChange={(e) => onUsernameChange(e.target.value)}
-            placeholder="admin"
-            autoComplete="username"
-            autoFocus
-          />
-        </div>
-
-        {/* Password */}
-        <div>
-          <label htmlFor="admin-password" className="text-xs font-medium mb-1.5 block"
-            style={{ color: 'var(--color-muted)' }}>
-            Password
-          </label>
-          <div className="relative">
-            <Input
-              id="admin-password"
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => onPasswordChange(e.target.value)}
-              placeholder="Min. 8 characters"
-              autoComplete="new-password"
-              className="pr-9"
-            />
-            <button
-              type="button"
-              onClick={onToggleShowPassword}
-              className={EYE_TOGGLE_CLASS}
-              style={{ color: 'var(--color-muted)' }}
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
-            >
-              {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
-            </button>
-          </div>
-          {/* Inline password-strength meter — length + character-class heuristic. */}
-          {strength && (
-            <div className="mt-2" data-testid="password-strength">
-              <div
-                className="flex gap-1"
-                role="meter"
-                aria-label="Password strength"
-                aria-valuenow={strength.score}
-                aria-valuemin={0}
-                aria-valuemax={4}
-                aria-valuetext={strength.label}
-              >
-                {[1, 2, 3, 4].map((seg) => (
-                  <div
-                    key={seg}
-                    className="h-1 flex-1 rounded-full transition-colors duration-200"
-                    style={{
-                      backgroundColor:
-                        seg <= strength.score ? strength.color : 'var(--color-surface-2)',
-                    }}
-                  />
-                ))}
-              </div>
-              <p className="text-[10px] mt-1 font-medium" style={{ color: strength.color }}>
-                {strength.label}
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Confirm Password */}
-        <div>
-          <label htmlFor="admin-password-confirm" className="text-xs font-medium mb-1.5 block"
-            style={{ color: 'var(--color-muted)' }}>
-            Confirm Password
-          </label>
-          <div className="relative">
-            <Input
-              id="admin-password-confirm"
-              type={showPassword ? 'text' : 'password'}
-              value={passwordConfirm}
-              onChange={(e) => onPasswordConfirmChange(e.target.value)}
-              placeholder="Repeat password"
-              autoComplete="new-password"
-              className="pr-9"
-            />
-            <button
-              type="button"
-              onClick={onToggleShowPassword}
-              className={EYE_TOGGLE_CLASS}
-              style={{ color: 'var(--color-muted)' }}
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
-            >
-              {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
-            </button>
-          </div>
-        </div>
-
-        {/* Error feedback */}
-        {status === 'error' && error && (
-          <div data-testid="onboarding-error" className="flex items-start gap-2 text-sm" style={{ color: 'var(--color-error)' }}>
-            <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
-            <span>{error}</span>
-          </div>
-        )}
-      </motion.div>
-
-      {/* Navigation */}
-      <div className="flex items-center gap-3 pt-2 w-full">
-        <Button variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
-          <ArrowLeft size={14} />
-          Back
-        </Button>
-        <Button
-          className="flex-1 gap-2 font-headline font-bold"
-          onClick={onRegister}
-          disabled={!isValid || status === 'saving'}
-        >
-          {status === 'saving' ? (
-            <>
-              <SpinnerGap size={13} className="animate-spin" />
-              Setting up...
-            </>
-          ) : (
-            <>
-              <Key size={13} weight="duotone" />
-              Create Account
-            </>
-          )}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-// ── Step 4: Done ───────────────────────────────────────────────────────────────
-
-function DoneStep({
-  providerName,
-  isSaving,
-  onFinish,
-  error,
-}: {
-  providerName: string
-  isSaving: boolean
-  onFinish: () => void
-  error?: string
-}) {
+function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void }) {
   return (
     <div className="flex flex-col items-center text-center gap-8">
+      {/* Mascot with Forge Gold glow halo */}
       <motion.div
-        initial={{ scale: 0, opacity: 0 }}
+        initial={{ scale: 0.75, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        transition={{ duration: 0.48, ease: [0.34, 1.56, 0.64, 1] }}
+        transition={{ duration: 0.5, ease: [0.34, 1.56, 0.64, 1] }}
+        className="relative"
       >
-        <CheckCircle size={80} weight="fill" style={{ color: 'var(--color-accent)' }} />
+        <div
+          aria-hidden
+          className="absolute rounded-full blur-3xl pointer-events-none"
+          style={{
+            inset: '-40%',
+            background: 'rgba(212,175,55,0.14)',
+          }}
+        />
+        <img
+          src={OmnipusAvatar}
+          alt="Omnipus — Master Tasker"
+          className="relative h-28 w-28 sm:h-36 sm:w-36 drop-shadow-2xl"
+        />
       </motion.div>
 
       <motion.div
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.2, duration: 0.38 }}
+        transition={{ delay: 0.18, duration: 0.38 }}
       >
-        <h2 className="font-headline text-3xl font-bold mb-2"
-          style={{ color: 'var(--color-secondary)' }}>
-          You&apos;re all set
-        </h2>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-          {providerName
-            ? `${providerName} connected.`
-            : 'Provider connected.'}{' '}
-          Omnipus is ready to work.
+        <div className="flex items-center justify-center gap-2 mb-2">
+          <h1 className="font-headline text-3xl sm:text-4xl font-bold leading-tight"
+            style={{ color: 'var(--color-secondary)' }}>
+            Mia — Assistant
+          </h1>
+          <Star
+            size={22}
+            weight="fill"
+            style={{ color: 'var(--color-accent)' }}
+            aria-label="Default agent"
+          />
+        </div>
+        <p className="font-headline text-sm font-bold tracking-wide"
+          style={{ color: 'var(--color-accent)' }}>
+          Your personal Assistant
         </p>
       </motion.div>
 
       <motion.div
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.32, duration: 0.38 }}
-        className="w-full space-y-3"
+        transition={{ delay: 0.28, duration: 0.38 }}
+        className="w-full"
       >
-        {/* Inline failure — keeps the user on this step so they can retry. */}
-        {error && (
-          <div
-            role="alert"
-            data-testid="onboarding-error"
-            className="flex items-start gap-2 text-sm text-left"
-            style={{ color: 'var(--color-error)' }}
-          >
-            <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
-            <span>{error}</span>
-          </div>
-        )}
+        <div
+          className="flex items-start gap-3 p-3 rounded-lg border text-left"
+          style={{
+            borderColor: 'var(--color-border)',
+            backgroundColor: 'var(--color-surface-1)',
+          }}
+        >
+          <User size={17} weight="duotone" className="shrink-0 mt-0.5"
+            style={{ color: 'var(--color-accent)' }} />
+          <p className="text-sm leading-snug" style={{ color: 'var(--color-muted)' }}>
+            Your personal Assistant — memory-rich, cross-workspace recall, runs your
+            tasks, email, and calendar.
+          </p>
+        </div>
+      </motion.div>
+
+      <motion.div
+        initial={{ y: 14, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.38, duration: 0.38 }}
+        className="w-full"
+      >
+        <p className="text-sm leading-relaxed mb-6" style={{ color: 'var(--color-muted)' }}>
+          Mia is your default agent. She&apos;s bound to My Workspace and knows you
+          across all your workspaces. Start chatting to begin.
+        </p>
         <Button
           className="w-full h-11 gap-2 font-headline font-bold text-base"
-          onClick={onFinish}
-          disabled={isSaving}
+          onClick={onStartChatting}
         >
-          {isSaving ? (
-            <>
-              <SpinnerGap size={16} className="animate-spin" />
-              Loading...
-            </>
-          ) : error ? (
-            <>
-              Retry Setup
-              <ArrowRight size={16} weight="bold" />
-            </>
-          ) : (
-            <>
-              Start Exploring
-              <ArrowRight size={16} weight="bold" />
-            </>
-          )}
+          <ChatCircle size={16} weight="fill" />
+          Start chatting
         </Button>
       </motion.div>
     </div>
