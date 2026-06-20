@@ -31,20 +31,26 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAuditLog: vi.fn(),
     fetchTokenStats: vi.fn(),
+    fetchSchedules: vi.fn().mockResolvedValue([]),
+    fetchAgents: vi.fn().mockResolvedValue([]),
     tokenStatsQueryKeys: actual.tokenStatsQueryKeys,
     auditLogQueryKeys: actual.auditLogQueryKeys,
   }
 })
 
-// Mock heavy sub-components that MonitorScreen renders — we only care about
-// AuditLogSection in this test file, so we stub the rest to no-ops.
-vi.mock('@/components/command-center/SchedulesList', () => ({
-  SchedulesList: () => null,
-}))
+// Mock heavy sub-components that AutomationsScreen renders — we only care about
+// AuditLogSection in this test file, so we stub the default component to null
+// while preserving the named helper exports (triggerSummary / sessionModeLabel)
+// that AutomationsScreen imports.
+vi.mock('@/components/command-center/SchedulesList', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/command-center/SchedulesList')>()
+  return { ...actual, SchedulesList: () => null }
+})
 
-vi.mock('@/components/command-center/ScheduleFormSheet', () => ({
-  ScheduleFormSheet: () => null,
-}))
+vi.mock('@/components/command-center/ScheduleFormSheet', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/command-center/ScheduleFormSheet')>()
+  return { ...actual, ScheduleFormSheet: () => null }
+})
 
 // Phosphor icons (used by MonitorScreen header)
 vi.mock('@phosphor-icons/react', () => ({
@@ -57,9 +63,9 @@ import { useAuthStore } from '@/store/auth'
 import { fetchAuditLog, fetchTokenStats } from '@/lib/api'
 import type { AuditEntry } from '@/lib/api'
 
-// Import the real MonitorScreen — it exports the parent; AuditLogSection is
-// nested inside and exercised via MonitorScreen.
-import { MonitorScreen } from '@/components/screens/MonitorScreen'
+// Import the real AutomationsScreen — it exports the parent; AuditLogSection is
+// nested inside and exercised via AutomationsScreen.
+import { AutomationsScreen } from '@/components/screens/AutomationsScreen'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -70,14 +76,14 @@ function makeQueryClient() {
 }
 
 /**
- * Render MonitorScreen (which contains AuditLogSection) inside a fresh
+ * Render AutomationsScreen (which contains AuditLogSection) inside a fresh
  * QueryClientProvider.  The caller sets up store/API mocks beforehand.
  */
 function renderMonitor() {
   const client = makeQueryClient()
   return render(
     <QueryClientProvider client={client}>
-      <MonitorScreen />
+      <AutomationsScreen />
     </QueryClientProvider>,
   )
 }

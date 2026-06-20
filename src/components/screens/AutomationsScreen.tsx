@@ -1,11 +1,109 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus } from '@phosphor-icons/react'
-import { SchedulesList } from '@/components/command-center/SchedulesList'
-import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
-import { fetchTokenStats, tokenStatsQueryKeys, fetchAuditLog, auditLogQueryKeys } from '@/lib/api'
+import {
+  fetchSchedules,
+  fetchAgents,
+  fetchTokenStats,
+  tokenStatsQueryKeys,
+  fetchAuditLog,
+  auditLogQueryKeys,
+} from '@/lib/api'
 import type { AuditEntry } from '@/lib/api'
+import type { Schedule, ScheduleTrigger } from '@/lib/api/generated/openapi-types'
 import { useAuthStore } from '@/store/auth'
+import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
+import { Badge } from '@/components/ui/badge'
+import { triggerSummary } from '@/components/command-center/SchedulesList'
+import { sessionModeLabel } from '@/components/command-center/ScheduleFormSheet'
+
+// ── Trigger → Action rules (read-only) ────────────────────────────────────────
+
+// actionSummary describes what a schedule does when it fires. A deliver=true
+// schedule sends its message straight to the channel; otherwise the owning
+// agent processes it (autonomy).
+function actionSummary(schedule: Schedule): string {
+  if (schedule.deliver) {
+    const target = schedule.chat_id
+      ? `${schedule.channel ?? 'channel'} · ${schedule.chat_id}`
+      : (schedule.channel ?? 'channel')
+    return `Send to ${target}`
+  }
+  return `Run agent`
+}
+
+function triggerLabel(trigger: ScheduleTrigger): string {
+  return triggerSummary(trigger)
+}
+
+function AutomationRulesSection() {
+  const { data: schedules = [], isLoading, isError } = useQuery({
+    queryKey: ['schedules'],
+    queryFn: fetchSchedules,
+  })
+
+  const { data: agents = [] } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+  })
+  const agentName = (id: string) => agents.find((a) => a.id === id)?.name ?? id
+
+  return (
+    <div className="px-4 py-2">
+      {isError ? (
+        <ErrorState message="Could not load automations." />
+      ) : isLoading ? (
+        <SkeletonList />
+      ) : schedules.length === 0 ? (
+        <EmptyState
+          icon={<span className="text-2xl text-[var(--color-muted)]">⚡</span>}
+          message="No automations yet."
+        />
+      ) : (
+        <div className="space-y-2">
+          {schedules.map((schedule) => (
+            <div
+              key={schedule.id}
+              data-testid={`automation-card-${schedule.id}`}
+              className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+            >
+              <div className="flex items-center gap-2 flex-wrap mb-2">
+                <span className="font-medium text-sm text-[var(--color-secondary)] truncate">
+                  {schedule.name}
+                </span>
+                <Badge variant={schedule.enabled ? 'success' : 'muted'} className="text-[10px]">
+                  {schedule.enabled ? 'Active' : 'Paused'}
+                </Badge>
+                <Badge variant="secondary" className="text-[10px]">
+                  {sessionModeLabel(schedule.session_mode)}
+                </Badge>
+              </div>
+              {/* Trigger → Action framing */}
+              <div className="flex items-center gap-2 text-sm flex-wrap">
+                <span className="text-[var(--color-muted)]">When</span>
+                <span className="text-[var(--color-secondary)] font-medium">
+                  {triggerLabel(schedule.trigger)}
+                </span>
+                <span className="text-[var(--color-accent)]" aria-hidden>→</span>
+                <span className="text-[var(--color-muted)]">Do</span>
+                <span className="text-[var(--color-secondary)] font-medium">
+                  {actionSummary(schedule)}
+                </span>
+              </div>
+              <div className="mt-1.5 flex items-center gap-2 flex-wrap text-[11px] text-[var(--color-muted)]">
+                <span>Agent: {agentName(schedule.owner_agent_id)}</span>
+                {schedule.state?.next_run_at_ms && (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>Next: {new Date(schedule.state.next_run_at_ms).toLocaleString()}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── Token Usage table ─────────────────────────────────────────────────────────
 
@@ -146,38 +244,29 @@ function AuditLogSection() {
   )
 }
 
-// ── MonitorScreen ─────────────────────────────────────────────────────────────
+// ── AutomationsScreen ─────────────────────────────────────────────────────────
 
-export function MonitorScreen() {
-  const [creatingSchedule, setCreatingSchedule] = useState(false)
-
+export function AutomationsScreen() {
   return (
     <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
       {/* Page header */}
       <div className="px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] sticky top-0 z-10">
         <h2 className="font-headline text-lg font-semibold text-[var(--color-secondary)]">
-          Monitor
+          Automations
         </h2>
+        <p className="text-xs text-[var(--color-muted)] mt-0.5">
+          Trigger → Action rules that run agents on a schedule. Read-only — manage rules from the Command Center.
+        </p>
       </div>
 
-      {/* Schedules section */}
+      {/* Trigger → Action rules section (read-only) */}
       <section className="border-b border-[var(--color-border)]">
-        <div className="flex items-center justify-between px-4 py-2.5">
+        <div className="px-4 py-2.5">
           <h3 className="text-xs font-semibold uppercase tracking-widest text-[var(--color-muted)]">
-            Schedules
+            Rules
           </h3>
-          <button
-            type="button"
-            onClick={() => setCreatingSchedule(true)}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
-          >
-            <Plus size={13} />
-            New schedule
-          </button>
         </div>
-        <div className="px-4 py-2">
-          <SchedulesList />
-        </div>
+        <AutomationRulesSection />
       </section>
 
       {/* Token Usage section */}
@@ -199,16 +288,6 @@ export function MonitorScreen() {
         </div>
         <AuditLogSection />
       </section>
-
-      {/* New schedule slide-over */}
-      {creatingSchedule && (
-        <ScheduleFormSheet
-          open={true}
-          onOpenChange={(open) => {
-            if (!open) setCreatingSchedule(false)
-          }}
-        />
-      )}
     </div>
   )
 }
