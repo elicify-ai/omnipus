@@ -6,8 +6,8 @@
 import { request } from '@playwright/test';
 import fs from 'fs';
 
-const [baseURL, outPath, apiKey] = process.argv.slice(2);
-const MODEL = 'openrouter/google/gemini-2.5-flash';
+const [baseURL, outPath, apiKey, modelArg] = process.argv.slice(2);
+const MODEL = modelArg || 'openrouter/google/gemini-2.5-flash';
 
 const ctx = await request.newContext({ baseURL });
 try {
