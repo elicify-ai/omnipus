@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -63,6 +65,70 @@ func TestNormalizeChannelMap_PopulatesTypeFromKey(t *testing.T) {
 	// And the normalized map passes cap-1 with one instance.
 	if err := ValidateChannelsCap1(out); err != nil {
 		t.Errorf("normalized single instance failed cap-1: %v", err)
+	}
+}
+
+// TestLoadConfig_RejectsDuplicateChannelType is the FR-2.3 / N5 load-path guard:
+// a hand-edited config.json carrying two instances of the same channel type
+// (here "telegram" + "telegram-2" both with type:telegram) MUST be rejected by
+// LoadConfig — not silently accepted and dropped by normalizeChannelMap. The
+// error must wrap ErrChannelsCap1Violated so the gateway can map it to a 422.
+// This locks in that cap-1 is enforced at config LOAD time (in addition to the
+// API 422 path), which is the N5 gap closure.
+func TestLoadConfig_RejectsDuplicateChannelType(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(
+		configPath,
+		[]byte(`{
+  "version": 1,
+  "agents": {"defaults": {"workspace": "./workspace"}},
+  "channels": {
+    "telegram":   {"type": "telegram", "enabled": true},
+    "telegram-2": {"type": "telegram", "enabled": true}
+  }
+}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("LoadConfig accepted a config with two telegram instances; want cap-1 rejection (N5)")
+	}
+	if !errors.Is(err, ErrChannelsCap1Violated) {
+		t.Fatalf("LoadConfig error does not wrap ErrChannelsCap1Violated: %v", err)
+	}
+}
+
+// TestLoadConfig_AcceptsSingleInstancePerType is the FR-2.3 load-path happy
+// path: a config with one instance per type loads cleanly (guards against the
+// validator over-rejecting valid configs).
+func TestLoadConfig_AcceptsSingleInstancePerType(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(
+		configPath,
+		[]byte(`{
+  "version": 1,
+  "agents": {"defaults": {"workspace": "./workspace"}},
+  "channels": {
+    "telegram": {"type": "telegram", "enabled": true},
+    "discord":  {"type": "discord",  "enabled": false}
+  }
+}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig rejected a valid one-per-type config: %v", err)
+	}
+	if len(cfg.Channels) != 2 {
+		t.Errorf("expected 2 channel instances, got %d", len(cfg.Channels))
 	}
 }
 
