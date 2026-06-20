@@ -52,9 +52,10 @@ vi.mock('@/components/command-center/ScheduleFormSheet', async (importOriginal) 
   return { ...actual, ScheduleFormSheet: () => null }
 })
 
-// Phosphor icons (used by MonitorScreen header)
+// Phosphor icons (used by AutomationsScreen header + empty state)
 vi.mock('@phosphor-icons/react', () => ({
   Plus: () => null,
+  Lightning: () => null,
 }))
 
 // ── Import mocked modules ─────────────────────────────────────────────────────

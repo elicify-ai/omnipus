@@ -2752,12 +2752,18 @@ type SkillsToolsConfig struct {
 //
 // Secret fields use credential REFS (env-var names resolved at boot via
 // credentials.InjectFromConfig, SEC-23) — never plaintext values.
+// MarketplaceType values for MarketplaceConfig.Type.
+const (
+	MarketplaceTypeClawHub = "clawhub"
+	MarketplaceTypeGitHub  = "github"
+)
+
 type MarketplaceConfig struct {
 	// Name is the unique display name (e.g. "clawhub", "github"). Defaults to
 	// Type when empty.
 	Name string `json:"name"`
-	// Type selects the registry implementation: "clawhub" | "github"
-	// (future: "omnipus").
+	// Type selects the registry implementation: MarketplaceTypeClawHub |
+	// MarketplaceTypeGitHub (future: "omnipus").
 	Type string `json:"type"`
 	// Enabled controls whether this marketplace is active.
 	Enabled bool `json:"enabled"`

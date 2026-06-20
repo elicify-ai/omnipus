@@ -17,8 +17,8 @@ the reader should know what to do next within ten seconds.
 
 ## What to gather
 
-1. **Open tasks** — pull the current task list (`task_list`). Surface what is in
-   progress and what is blocked, newest-relevant first.
+1. **Open tasks** — pull the current task list (`system.task.list`). Surface
+   what is in progress and what is blocked, newest-relevant first.
 2. **Upcoming deadlines** — from the task list, surface anything with a `due`
    date in the next 0–3 days (the `due` and `start` fields, plus `recurrence`
    for repeating tasks, are the calendar signal — there is no separate calendar

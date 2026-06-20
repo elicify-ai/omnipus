@@ -110,4 +110,39 @@ describe('PerformanceSection', () => {
     )
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
+
+  it('shows the over-limit warning when input exceeds the recommended ceiling', async () => {
+    // effective_max_parallel_agents = 4 → recommended = 4
+    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
+      max_parallel_agents: 4,
+      effective_max_parallel_agents: 4,
+    } as never)
+
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    // Type a value within [2,16] but above the recommended 4
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('performance-over-limit-warning')).toBeInTheDocument()
+    })
+    // Warning text mentions both the typed value and the recommended value
+    expect(screen.getByTestId('performance-over-limit-warning').textContent).toContain('8')
+    expect(screen.getByTestId('performance-over-limit-warning').textContent).toContain('4')
+  })
+
+  it('does not show the over-limit warning when input is within the recommended ceiling', async () => {
+    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
+      max_parallel_agents: 8,
+      effective_max_parallel_agents: 8,
+    } as never)
+
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '4' } })
+
+    expect(screen.queryByTestId('performance-over-limit-warning')).not.toBeInTheDocument()
+  })
 })

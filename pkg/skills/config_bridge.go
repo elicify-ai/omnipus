@@ -47,10 +47,10 @@ func MarketplacesFromConfig(
 			Token:           resolve(m.TokenRef),
 			Proxy:           m.Proxy,
 		}
-		if m.Type == "clawhub" && ssrfClient != nil {
+		if m.Type == config.MarketplaceTypeClawHub && ssrfClient != nil {
 			entry.HTTPClient = ssrfClient
 		}
-		if m.Type == "github" && entry.Workspace == "" {
+		if m.Type == config.MarketplaceTypeGitHub && entry.Workspace == "" {
 			entry.Workspace = githubWorkspace
 		}
 		out = append(out, entry)
@@ -75,12 +75,12 @@ func ClawHubMarketplaceFromConfig(
 	for _, m := range cfg.Tools.Skills.Marketplaces {
 		// Match the ClawHub entry: explicit Type=="clawhub", or an untyped
 		// entry named "clawhub" (defensive against hand-edited configs).
-		if m.Type != "clawhub" && !(m.Type == "" && m.Name == "clawhub") {
+		if m.Type != config.MarketplaceTypeClawHub && !(m.Type == "" && m.Name == "clawhub") {
 			continue
 		}
 		entry := MarketplaceConfig{
 			Name:            m.Name,
-			Type:            "clawhub",
+			Type:            config.MarketplaceTypeClawHub,
 			Enabled:         m.Enabled,
 			BaseURL:         m.BaseURL,
 			AuthToken:       resolve(m.AuthTokenRef),
@@ -111,7 +111,7 @@ func FirstGitHubMarketplaceCreds(
 		return "", ""
 	}
 	for _, m := range cfg.Tools.Skills.Marketplaces {
-		if m.Type != "github" {
+		if m.Type != config.MarketplaceTypeGitHub {
 			continue
 		}
 		return resolve(m.TokenRef), m.Proxy

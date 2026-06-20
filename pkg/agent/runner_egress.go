@@ -42,6 +42,19 @@ func (al *AgentLoop) runnerEgressProxyAddr() string {
 			slog.Warn("external-cli: runner egress proxy start failed; dispatch will run without HTTP_PROXY injection",
 				"error", err)
 			al.runnerEgressProxy = nil
+			// Audit the degradation so operators have a record that egress
+			// control is inactive for subsequent external-CLI dispatches.
+			if al.auditLogger != nil {
+				_ = al.auditLogger.Log(&audit.Entry{
+					Event:    audit.EventSSRF,
+					Decision: audit.DecisionError,
+					Details: map[string]any{
+						"reason": "egress proxy start failed",
+						"impact": "external CLI dispatch runs without HTTP_PROXY injection (SSRF internal-CIDR blocking inactive)",
+						"error":  err.Error(),
+					},
+				})
+			}
 			return
 		}
 		al.runnerEgressProxy = p

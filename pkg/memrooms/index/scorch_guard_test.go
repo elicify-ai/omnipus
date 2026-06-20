@@ -59,10 +59,9 @@ func TestBleve_OpenOrCreate_ProducesWorkingScorchIndex(t *testing.T) {
 	require.NoError(t, os.MkdirAll(memoriesDir, 0o700))
 
 	room := memrooms.Room{
-		Root:            root,
-		MemoriesDir:     memoriesDir,
-		CountersPath:    filepath.Join(root, "counters.jsonl"),
-		LastSessionPath: filepath.Join(root, "last-session.md"),
+		Root:         root,
+		MemoriesDir:  memoriesDir,
+		CountersPath: filepath.Join(root, "counters.jsonl"),
 	}
 
 	ri, err := memindex.OpenOrCreate(room)

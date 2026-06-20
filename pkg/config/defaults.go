@@ -362,7 +362,7 @@ func DefaultConfig() *Config {
 				Marketplaces: []MarketplaceConfig{
 					{
 						Name:    "clawhub",
-						Type:    "clawhub",
+						Type:    MarketplaceTypeClawHub,
 						Enabled: true,
 						BaseURL: "https://clawhub.ai",
 					},

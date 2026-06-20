@@ -30,10 +30,10 @@ This is the Orchestrator's default reflex: think first, sequence, then execute.
    what information is missing.
 6. **Assign / delegate.** For each step, decide who does it — yourself, a tool, or a
    delegated agent (`spawn` / `subagent` / `handoff`).
-7. **Track.** Materialise the plan as tasks (`task_create`) so progress is visible
-   and nothing is dropped. Link dependencies with `blocked_by` to form a DAG the
-   task system can sequence — a task with an open `blocked_by` will not be picked
-   up until its predecessor completes.
+7. **Track.** Materialise the plan as tasks (`system.task.create`) so progress
+   is visible and nothing is dropped. Link dependencies with `blocked_by` to
+   form a DAG the task system can sequence — a task with an open `blocked_by`
+   will not be picked up until its predecessor completes.
 
 ## Output shape
 

@@ -107,6 +107,8 @@ func (c *citationTracker) EmitCitations(assistantText string) {
 		if countersPath == "" {
 			// Memory no longer on disk (deleted between recall and citation).
 			// Mark emitted so we don't repeatedly re-scan a missing file.
+			logger.DebugCF("agent.memory", "citation: memory deleted before citation emit",
+				map[string]any{"memory_id": m.id})
 			c.mu.Lock()
 			c.emitted[m.id] = true
 			c.mu.Unlock()
@@ -121,6 +123,12 @@ func (c *citationTracker) EmitCitations(assistantText string) {
 		if err := memrooms.AppendCounterRecord(countersPath, rec); err != nil {
 			logger.WarnCF("agent.memory", "citation: failed to append op:cited counter",
 				map[string]any{"memory_id": m.id, "error": err.Error()})
+			// Mark emitted to suppress repeated WARN noise on persistent
+			// write failures (e.g. read-only filesystem). The citation is
+			// best-effort; a transient failure will not be retried.
+			c.mu.Lock()
+			c.emitted[m.id] = true
+			c.mu.Unlock()
 			continue
 		}
 		c.mu.Lock()

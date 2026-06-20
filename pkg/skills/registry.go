@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 const (
@@ -229,9 +231,9 @@ func NewRegistryManagerFromConfig(cfg RegistryConfig) *RegistryManager {
 			name = m.Type
 		}
 		switch m.Type {
-		case "clawhub":
+		case config.MarketplaceTypeClawHub:
 			rm.AddRegistry(NewClawHubRegistry(clawHubConfigFromMarketplace(m)))
-		case "github":
+		case config.MarketplaceTypeGitHub:
 			ghCfg := gitHubConfigFromMarketplace(m)
 			reg, err := NewGitHubRegistry(ghCfg)
 			if err != nil {
