@@ -8,7 +8,6 @@ import {
   PlugsConnected,
   PuzzlePiece,
   Gear,
-  UserCircle,
   PushPin,
   PushPinSlash,
   SignOut,
@@ -34,9 +33,9 @@ import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 const NAV_ITEMS = [
   { to: '/', label: 'Chat', Icon: ChatCircle },
   { to: '/tasks', label: 'Tasks', Icon: ClipboardText },
-  { to: '/monitor', label: 'Monitor', Icon: ChartBar },
+  { to: '/automations', label: 'Automations', Icon: ChartBar },
   { to: '/agents', label: 'Agents', Icon: Robot },
-  { to: '/channels', label: 'Channels', Icon: PlugsConnected },
+  { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
 ] as const
 
@@ -413,27 +412,8 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Bottom: Profile + Settings + Pin toggle */}
+      {/* Bottom: Settings + Pin toggle (Profile moved to TopBar dropdown) */}
       <div className="border-t border-[var(--color-border)] py-3">
-        <Link
-          to="/profile"
-          aria-label="Profile"
-          aria-current={location.pathname === '/profile' ? 'page' : undefined}
-          onClick={() => { if (!effectivelyPinned) close() }}
-          className={cn(
-            'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors',
-            location.pathname === '/profile'
-              ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
-              : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
-          )}
-        >
-          <UserCircle
-            size={18}
-            weight={location.pathname === '/profile' ? 'fill' : 'regular'}
-          />
-          Profile
-        </Link>
-
         <Link
           to="/settings"
           aria-label="Settings"

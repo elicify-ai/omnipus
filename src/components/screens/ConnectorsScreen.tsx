@@ -7,7 +7,7 @@ import { useUiStore } from '@/store/ui'
 import { ChannelConfigPanel } from '@/components/skills/ChannelConfigPanel'
 import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
 
-export function ChannelsScreen() {
+export function ConnectorsScreen() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
@@ -34,7 +34,7 @@ export function ChannelsScreen() {
       <div className="max-w-4xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Channels</h1>
+          <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Connectors</h1>
           <p className="text-sm text-[var(--color-muted)] mt-0.5">
             Connect Telegram, Discord, Slack and more, and choose which agent answers each.
           </p>

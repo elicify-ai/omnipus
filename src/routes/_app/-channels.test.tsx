@@ -86,9 +86,9 @@ import {
 } from '@/lib/api'
 import type { ChannelEntry } from '@/lib/api'
 import { ChannelConfigPanel } from '@/components/skills/ChannelConfigPanel'
-// The channels route now lazy-loads its screen; import the screen module
+// The connectors route now lazy-loads its screen; import the screen module
 // directly so the test renders real content (not the Suspense fallback).
-import { ChannelsScreen } from '@/components/screens/ChannelsScreen'
+import { ConnectorsScreen } from '@/components/screens/ConnectorsScreen'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -474,9 +474,9 @@ describe('ChannelConfigPanel — Routing section', () => {
 // ── Section 3: ChannelsScreen degraded state ──────────────────────────────────
 // Traces to: issue #299 — UI must not show degraded channels as healthy.
 
-// ChannelsScreen is imported directly from its (eager) module so the test
+// ConnectorsScreen is imported directly from its (eager) module so the test
 // renders real content rather than the route's lazy Suspense fallback.
-const RealChannelsScreen = ChannelsScreen
+const RealChannelsScreen = ConnectorsScreen
 
 function renderRealChannelsScreen() {
   const client = makeQueryClient()
