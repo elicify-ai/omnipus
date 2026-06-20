@@ -233,6 +233,52 @@ jobs:
           # in sync with the `go` directive in go.mod.
           go-version-input: '1.26.4'
 
+  cgo-gate:
+    name: CGO_ENABLED=0 Build Gate
+    # Omnipus is a pure-Go single binary (CLAUDE.md hard constraint #2: no CGo,
+    # no external C libs). This gate runs an explicit CGO_ENABLED=0 build of the
+    # entire module so a CGo dependency sneaking into any package fails CI
+    # loudly and early — independent of the test job. Among other things this
+    # protects bleve's pure-Go scorch backend (no leveldb/rocksdb CGo kvstore).
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Build SPA
+        # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
+        # gitignored. Vite builds into dist/spa; we copy it into the embed
+        # target so the CGO=0 build can resolve the //go:embed directive.
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          rm -rf pkg/gateway/spa
+          cp -r dist/spa pkg/gateway/spa
+
+      - name: CGO_ENABLED=0 build (all packages)
+        # Build every package in the module with CGO disabled. Any package that
+        # transitively requires CGo (cgo import, or a dep tagged //go:build cgo)
+        # fails to compile here. The canonical build tags match CI/release.
+        run: go build -tags goolm,stdjson ./...
+
+      - name: CGO_ENABLED=0 vet (smoke)
+        # go vet under CGO=0 catches pure-Go build-constraint regressions on the
+        # gateway files (//go:build !cgo) that a CGO=1 vet would silently skip.
+        run: go vet -tags goolm,stdjson ./...
+
   test:
     name: Tests
     runs-on: ubuntu-latest
