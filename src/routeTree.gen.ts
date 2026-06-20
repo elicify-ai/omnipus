@@ -19,9 +19,9 @@ import { Route as AppSkillsRouteImport } from './routes/_app/skills'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppProfileRouteImport } from './routes/_app/profile'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
-import { Route as AppMonitorRouteImport } from './routes/_app/monitor'
+import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
-import { Route as AppChannelsRouteImport } from './routes/_app/channels'
+import { Route as AppAutomationsRouteImport } from './routes/_app/automations'
 import { Route as AppAgentsRouteImport } from './routes/_app/agents'
 import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
@@ -80,9 +80,9 @@ const AppPoliciesRoute = AppPoliciesRouteImport.update({
   path: '/policies',
   getParentRoute: () => AppRoute,
 } as any)
-const AppMonitorRoute = AppMonitorRouteImport.update({
-  id: '/monitor',
-  path: '/monitor',
+const AppConnectorsRoute = AppConnectorsRouteImport.update({
+  id: '/connectors',
+  path: '/connectors',
   getParentRoute: () => AppRoute,
 } as any)
 const AppCommandCenterRoute = AppCommandCenterRouteImport.update({
@@ -90,9 +90,9 @@ const AppCommandCenterRoute = AppCommandCenterRouteImport.update({
   path: '/command-center',
   getParentRoute: () => AppRoute,
 } as any)
-const AppChannelsRoute = AppChannelsRouteImport.update({
-  id: '/channels',
-  path: '/channels',
+const AppAutomationsRoute = AppAutomationsRouteImport.update({
+  id: '/automations',
+  path: '/automations',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAgentsRoute = AppAgentsRouteImport.update({
@@ -144,9 +144,9 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/agents': typeof AppAgentsRouteWithChildren
-  '/channels': typeof AppChannelsRoute
+  '/automations': typeof AppAutomationsRoute
   '/command-center': typeof AppCommandCenterRoute
-  '/monitor': typeof AppMonitorRoute
+  '/connectors': typeof AppConnectorsRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -164,9 +164,9 @@ export interface FileRoutesByTo {
   '/landing': typeof LandingRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
-  '/channels': typeof AppChannelsRoute
+  '/automations': typeof AppAutomationsRoute
   '/command-center': typeof AppCommandCenterRoute
-  '/monitor': typeof AppMonitorRoute
+  '/connectors': typeof AppConnectorsRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -188,9 +188,9 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/_app/agents': typeof AppAgentsRouteWithChildren
-  '/_app/channels': typeof AppChannelsRoute
+  '/_app/automations': typeof AppAutomationsRoute
   '/_app/command-center': typeof AppCommandCenterRoute
-  '/_app/monitor': typeof AppMonitorRoute
+  '/_app/connectors': typeof AppConnectorsRoute
   '/_app/policies': typeof AppPoliciesRoute
   '/_app/profile': typeof AppProfileRoute
   '/_app/settings': typeof AppSettingsRoute
@@ -213,9 +213,9 @@ export interface FileRouteTypes {
     | '/login'
     | '/onboarding'
     | '/agents'
-    | '/channels'
+    | '/automations'
     | '/command-center'
-    | '/monitor'
+    | '/connectors'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -233,9 +233,9 @@ export interface FileRouteTypes {
     | '/landing'
     | '/login'
     | '/onboarding'
-    | '/channels'
+    | '/automations'
     | '/command-center'
-    | '/monitor'
+    | '/connectors'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -256,9 +256,9 @@ export interface FileRouteTypes {
     | '/login'
     | '/onboarding'
     | '/_app/agents'
-    | '/_app/channels'
+    | '/_app/automations'
     | '/_app/command-center'
-    | '/_app/monitor'
+    | '/_app/connectors'
     | '/_app/policies'
     | '/_app/profile'
     | '/_app/settings'
@@ -353,11 +353,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPoliciesRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/monitor': {
-      id: '/_app/monitor'
-      path: '/monitor'
-      fullPath: '/monitor'
-      preLoaderRoute: typeof AppMonitorRouteImport
+    '/_app/connectors': {
+      id: '/_app/connectors'
+      path: '/connectors'
+      fullPath: '/connectors'
+      preLoaderRoute: typeof AppConnectorsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/command-center': {
@@ -367,11 +367,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCommandCenterRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/channels': {
-      id: '/_app/channels'
-      path: '/channels'
-      fullPath: '/channels'
-      preLoaderRoute: typeof AppChannelsRouteImport
+    '/_app/automations': {
+      id: '/_app/automations'
+      path: '/automations'
+      fullPath: '/automations'
+      preLoaderRoute: typeof AppAutomationsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/agents': {
@@ -466,9 +466,9 @@ const AppWorkspacesWorkspaceIdRouteWithChildren =
 
 interface AppRouteChildren {
   AppAgentsRoute: typeof AppAgentsRouteWithChildren
-  AppChannelsRoute: typeof AppChannelsRoute
+  AppAutomationsRoute: typeof AppAutomationsRoute
   AppCommandCenterRoute: typeof AppCommandCenterRoute
-  AppMonitorRoute: typeof AppMonitorRoute
+  AppConnectorsRoute: typeof AppConnectorsRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
   AppProfileRoute: typeof AppProfileRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -482,9 +482,9 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppAgentsRoute: AppAgentsRouteWithChildren,
-  AppChannelsRoute: AppChannelsRoute,
+  AppAutomationsRoute: AppAutomationsRoute,
   AppCommandCenterRoute: AppCommandCenterRoute,
-  AppMonitorRoute: AppMonitorRoute,
+  AppConnectorsRoute: AppConnectorsRoute,
   AppPoliciesRoute: AppPoliciesRoute,
   AppProfileRoute: AppProfileRoute,
   AppSettingsRoute: AppSettingsRoute,

@@ -8,7 +8,7 @@
 
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Cpu, Info } from '@phosphor-icons/react'
+import { Cpu, Info, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -110,6 +110,30 @@ export function PerformanceSection(): React.ReactElement {
 
   const effective = data?.effective_max_parallel_agents ?? '?'
 
+  // Live system recommendation. The browser exposes logical core count via
+  // navigator.hardwareConcurrency; the auto-detect formula clamps the
+  // configured value to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16.
+  // The effective value returned by the API already applies this clamp, so we
+  // surface it as the recommended concurrency. RAM is not exposed to the
+  // browser for privacy reasons, so the recommendation is CPU-bounded here.
+  const cpuCores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined
+  const cpuUpperBound = cpuCores ? Math.min(Math.max(cpuCores - 2, 2), 16) : undefined
+  const recommended = typeof effective === 'number' ? effective : cpuUpperBound
+
+  // Over-limit warning: when the user has typed a value above the recommended
+  // ceiling, surface a yellow inline warning so they understand the runtime
+  // will clamp it down.
+  const inputValueNum = inputValue.trim() === '' ? null : parseInt(inputValue, 10)
+  const overLimit =
+    inputValueNum !== null &&
+    !isNaN(inputValueNum) &&
+    typeof recommended === 'number' &&
+    inputValueNum > recommended
+
+  const coresPart = cpuCores ? `${cpuCores} cores` : 'cores unavailable'
+  const recPart = typeof recommended === 'number' ? `${recommended} parallel agents` : 'auto-detect'
+  const recommendationText = `Your system: ${coresPart} → Recommended: ${recPart}`
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -118,12 +142,24 @@ export function PerformanceSection(): React.ReactElement {
         <h2 className="text-sm font-semibold text-[var(--color-secondary)]">Agent Concurrency</h2>
       </div>
 
+      {/* Live recommendation card — shown above the input */}
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 flex items-start gap-2">
+        <Info size={14} className="text-[var(--color-accent)] mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-[var(--color-secondary)] leading-relaxed">
+            {recommendationText}
+          </p>
+          <p className="text-[11px] text-[var(--color-muted)] mt-0.5">
+            Auto-detected from CPU/RAM heuristics. The runtime clamps to <span className="font-mono">[2, min(NumCPU-2, RAM_GB/1.5)]</span> with a ceiling of 16.
+          </p>
+        </div>
+      </div>
+
       {/* Card */}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
         <div className="space-y-1">
           <p className="text-xs text-[var(--color-muted)] leading-relaxed">
             Controls how many tasks and subagents may run concurrently across all agents.
-            The runtime clamps the value to <span className="font-mono">[2, min(NumCPU-2, RAM_GB/1.5)]</span> with a ceiling of 16.
             Leave blank to use the auto-detected default.
           </p>
           <div className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
@@ -160,6 +196,20 @@ export function PerformanceSection(): React.ReactElement {
           </Button>
           <SaveStatus state={saveStatus} />
         </div>
+
+        {/* Over-limit warning — yellow inline notice */}
+        {overLimit && (
+          <div
+            data-testid="performance-over-limit-warning"
+            className="flex items-start gap-2 p-2.5 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-xs text-[var(--color-warning)]"
+          >
+            <Warning size={14} className="mt-0.5 shrink-0" />
+            <span>
+              {inputValueNum} exceeds the recommended {recommended}. The runtime will clamp
+              the effective value to {recommended} — consider lowering the setting.
+            </span>
+          </div>
+        )}
       </div>
 
       <ReAuthDialog

@@ -103,13 +103,13 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // Sidebar renders 6 primary nav items (Chat, Tasks, Monitor, Agents, Channels,
+    // Sidebar renders 6 primary nav items (Chat, Tasks, Automations, Agents, Connectors,
     // Skills & Tools) plus Settings at the bottom. This test asserts a subset of
     // those labels (Tasks is omitted here, not removed from the sidebar).
     expect(screen.getByText('Chat')).toBeTruthy()
-    expect(screen.getByText('Monitor')).toBeTruthy()
+    expect(screen.getByText('Automations')).toBeTruthy()
     expect(screen.getByText('Agents')).toBeTruthy()
-    expect(screen.getByText('Channels')).toBeTruthy()
+    expect(screen.getByText('Connectors')).toBeTruthy()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
     expect(screen.getByText('Settings')).toBeTruthy()
   })
@@ -171,32 +171,32 @@ describe('Sidebar — pinned mode rendering', () => {
   })
 })
 
-// ── sprint/258 — Channels nav item ────────────────────────────────────────────
-// Traces to: sprint/258-jun-2026 — Sidebar "Channels" nav item + /channels route.
+// ── sprint/258 — Connectors nav item ──────────────────────────────────────────
+// Traces to: sprint/258-jun-2026 — Sidebar "Connectors" nav item + /connectors route.
 
-describe('Sidebar — Channels nav item (sprint/258)', () => {
-  it('renders a "Channels" nav link pointing to /channels', () => {
-    // Content test: the Channels item is present and links to the correct route.
+describe('Sidebar — Connectors nav item (sprint/258)', () => {
+  it('renders a "Connectors" nav link pointing to /connectors', () => {
+    // Content test: the Connectors item is present and links to the correct route.
     //
-    // Note: The Sidebar.test.tsx Link mock renders <a href={to}> where to="/channels".
-    // In the real app, TanStack Router HashRouter renders "/#/channels" — the mock
-    // uses the plain route path. We assert on href="/channels" to match the mock.
+    // Note: The Sidebar.test.tsx Link mock renders <a href={to}> where to="/connectors".
+    // In the real app, TanStack Router HashRouter renders "/#/connectors" — the mock
+    // uses the plain route path. We assert on href="/connectors" to match the mock.
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // The label text must be "Channels".
-    expect(screen.getByText('Channels')).toBeTruthy()
+    // The label text must be "Connectors".
+    expect(screen.getByText('Connectors')).toBeTruthy()
 
-    // The anchor element must have href="/channels" (mock renders to= as href).
-    const link = container.querySelector('a[href="/channels"]') as HTMLAnchorElement | null
+    // The anchor element must have href="/connectors" (mock renders to= as href).
+    const link = container.querySelector('a[href="/connectors"]') as HTMLAnchorElement | null
     expect(link).not.toBeNull()
   })
 
-  it('Channels link is NOT rendered when sidebar is closed', () => {
+  it('Connectors link is NOT rendered when sidebar is closed', () => {
     // Differentiation test: nav items only appear in the open sidebar.
     act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
-    expect(screen.queryByText('Channels')).toBeNull()
+    expect(screen.queryByText('Connectors')).toBeNull()
   })
 })
 
