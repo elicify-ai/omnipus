@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
+	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/dapicom-ai/omnipus/pkg/onboarding"
+	"github.com/dapicom-ai/omnipus/pkg/taskstore"
 )
 
 // reauthGateAdminUser is the username re-auth-gated tests authenticate as. It is
@@ -290,4 +296,131 @@ func TestReAuthToken_Fresh_NotExpired(t *testing.T) {
 	require.NotEmpty(t, token)
 	// The TTL is 5 minutes; the entry must be live immediately after minting.
 	assert.True(t, store.consume(token, user), "a token within its TTL must consume successfully")
+}
+
+// --- Credential vault (Spec-6 FR-12.2 / ADR-022) ---
+//
+// setCredential and deleteCredential mutate the encrypted credential vault —
+// the highest-blast-radius excluded mutation in ADR-021's scope (they store API
+// keys and channel tokens). ADR-022 expands ADR-021's v0.2 deferral to v0.1.0,
+// gating both with requireReAuth. These mirror the existing 6-gate pattern:
+// negative (no token → 403) and positive (valid token → success).
+
+// newCredVaultReAuthTestAPI builds a restAPI whose credential store is present
+// AND unlocked, so the positive path can actually write/delete a credential.
+// Without an unlocked store the gate would still fire first (negative path),
+// but the positive path needs Set/Delete to succeed to prove the gate passed.
+func newCredVaultReAuthTestAPI(t *testing.T) *restAPI {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	credStore := credentials.NewStore(tmpDir + "/credentials.json")
+	if err := credentials.Unlock(credStore); err != nil {
+		t.Fatalf("unlock credential store: %v", err)
+	}
+	return &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		homePath:      tmpDir,
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskLock:      boardtask.TaskFileLock,
+		credStore:     credStore,
+	}
+}
+
+// TestSetCredential_RequiresReAuth proves a credential-vault write (POST
+// /api/v1/credentials) carrying the admin user but no re-auth consent token is
+// rejected (403). The gate fires before the request body is decoded, so an empty
+// body still exercises the gate.
+func TestSetCredential_RequiresReAuth(t *testing.T) {
+	api := newCredVaultReAuthTestAPI(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/credentials",
+		strings.NewReader(`{"key":"TEST_KEY","value":"hunter2"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdminNoToken(r)
+	w := httptest.NewRecorder()
+	api.HandleCredentials(w, r)
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"credential POST without a re-auth token must be 403; body=%s", w.Body.String())
+	assert.Contains(t, strings.ToLower(w.Body.String()), "re-typing your password")
+}
+
+// TestSetCredential_WithReAuth_Succeeds proves the same POST succeeds once a
+// valid consent token is supplied — the credential is written to the encrypted
+// store and 201 is returned.
+func TestSetCredential_WithReAuth_Succeeds(t *testing.T) {
+	api := newCredVaultReAuthTestAPI(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/credentials",
+		strings.NewReader(`{"key":"TEST_KEY","value":"hunter2"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdmin(t, api, r)
+	w := httptest.NewRecorder()
+	api.HandleCredentials(w, r)
+	require.Equal(t, http.StatusCreated, w.Code,
+		"valid re-auth must allow the credential write; body=%s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "TEST_KEY", resp["key"])
+
+	// Confirm the secret actually landed in the store (and is retrievable).
+	val, err := api.credStore.Get("TEST_KEY")
+	require.NoError(t, err)
+	assert.Equal(t, "hunter2", val)
+}
+
+// TestDeleteCredential_RequiresReAuth proves a credential-vault delete (DELETE
+// /api/v1/credentials/{key}) carrying the admin user but no re-auth consent
+// token is rejected (403). Deleting a stored secret mid-session can revoke a
+// channel or provider, so it is gated just like the write.
+func TestDeleteCredential_RequiresReAuth(t *testing.T) {
+	api := newCredVaultReAuthTestAPI(t)
+	// Seed a credential so the delete would otherwise succeed — proving the 403
+	// is from the gate, not a missing-key 404.
+	require.NoError(t, api.credStore.Set("DOOMED_KEY", "secret"))
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/credentials/DOOMED_KEY", nil)
+	r = withReAuthAdminNoToken(r)
+	w := httptest.NewRecorder()
+	api.HandleCredentials(w, r)
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"credential DELETE without a re-auth token must be 403; body=%s", w.Body.String())
+	assert.Contains(t, strings.ToLower(w.Body.String()), "re-typing your password")
+
+	// The gate must have fired BEFORE the delete — the seeded key still exists.
+	keys, err := api.credStore.List()
+	require.NoError(t, err)
+	assert.Contains(t, keys, "DOOMED_KEY", "the gate must not have deleted the credential")
+}
+
+// TestDeleteCredential_WithReAuth_Succeeds proves the same DELETE succeeds once
+// a valid consent token is supplied — the credential is removed and 200 returned.
+func TestDeleteCredential_WithReAuth_Succeeds(t *testing.T) {
+	api := newCredVaultReAuthTestAPI(t)
+	require.NoError(t, api.credStore.Set("DOOMED_KEY", "secret"))
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/credentials/DOOMED_KEY", nil)
+	r = withReAuthAdmin(t, api, r)
+	w := httptest.NewRecorder()
+	api.HandleCredentials(w, r)
+	require.Equal(t, http.StatusOK, w.Code,
+		"valid re-auth must allow the credential delete; body=%s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "removed", resp["status"])
+
+	// Confirm the secret is actually gone from the store.
+	keys, err := api.credStore.List()
+	require.NoError(t, err)
+	assert.NotContains(t, keys, "DOOMED_KEY", "the credential must have been deleted")
 }

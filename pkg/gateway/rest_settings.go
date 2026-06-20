@@ -23,6 +23,7 @@ import (
 	"time"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 )
 
@@ -99,7 +100,7 @@ func (a *restAPI) HandleCredentials(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && sub == "":
 		a.setCredential(w, r)
 	case r.Method == http.MethodDelete && sub != "":
-		a.deleteCredential(w, sub)
+		a.deleteCredential(w, r, sub)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -123,8 +124,18 @@ func (a *restAPI) listCredentials(w http.ResponseWriter) {
 	jsonOK(w, keys)
 }
 
-// setCredential adds or updates an encrypted credential.
+// setCredential adds or updates an encrypted credential. Credential-vault writes
+// are the highest-blast-radius excluded mutation (they store API keys, channel
+// tokens), so this handler requires a re-auth consent token (FR-12.2, ADR-022).
 func (a *restAPI) setCredential(w http.ResponseWriter, r *http.Request) {
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
 	var req gen.CredentialSetRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "CredentialSetRequest", &req, validateEnabled) {
@@ -157,8 +168,18 @@ func (a *restAPI) setCredential(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"key": req.Key})
 }
 
-// deleteCredential removes a credential by key.
-func (a *restAPI) deleteCredential(w http.ResponseWriter, key string) {
+// deleteCredential removes a credential by key. Like setCredential, it requires
+// a re-auth consent token (FR-12.2, ADR-022) — deleting a stored secret is as
+// disruptive as writing one (it can revoke a channel or provider mid-session).
+func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key string) {
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
 	if err := validateEntityID(key); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid credential key")
 		return
