@@ -74,6 +74,10 @@ const (
 	// (e.g. a scheduled run failed). Delivered live only to the recipient user's
 	// WebSocket connections (#264).
 	EventKindNotification
+	// EventKindTaskStatusChanged is emitted when a workflow task transitions
+	// status (queued→running→completed/failed). The WS forwarder turns it into a
+	// task_status_changed frame so the SPA can invalidate its tasks cache.
+	EventKindTaskStatusChanged
 
 	eventKindCount
 )
@@ -108,6 +112,7 @@ var eventKindNames = [...]string{
 	"rate_limit",
 	"whatsapp_pairing",
 	"notification",
+	"task_status_changed",
 }
 
 // String returns the stable string form of an EventKind.
@@ -488,4 +493,16 @@ type WhatsAppPairingPayload struct {
 	Status    channels.PairingStatus `json:"status"`
 	QR        string                 `json:"qr,omitempty"`
 	Message   string                 `json:"message,omitempty"`
+}
+
+// TaskStatusChangedPayload carries a workflow task status transition for the
+// SPA. The WS forwarder turns this into a task_status_changed frame so the SPA
+// invalidates its tasks TanStack Query cache. SessionID is the task's session
+// (falls back to "task:<id>" when no session has been created yet so the
+// contract-required session_id field is always populated).
+type TaskStatusChangedPayload struct {
+	TaskID    string `json:"task_id"`
+	Status    string `json:"status"`
+	SessionID string `json:"session_id"`
+	AgentID   string `json:"agent_id,omitempty"`
 }

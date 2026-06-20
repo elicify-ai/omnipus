@@ -123,7 +123,7 @@ func (b *EventBus) Emit(evt Event) {
 //     never updates (M1) — same class as #283.
 func isStateCriticalEventKind(kind EventKind) bool {
 	switch kind {
-	case EventKindWhatsAppPairing, EventKindNotification:
+	case EventKindWhatsAppPairing, EventKindNotification, EventKindTaskStatusChanged:
 		return true
 	default:
 		return false

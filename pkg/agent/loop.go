@@ -1612,6 +1612,14 @@ func registerSharedTools(
 				currentAgentID, agentCfg, cfg.Agents.Defaults,
 				config.DelegationModeTask, registry,
 			))
+			taskCreate.SetOnCreate(func(entity *taskstore.TaskEntity) {
+				al.EmitTaskStatusChanged(TaskStatusChangedPayload{
+					TaskID:    entity.ID,
+					Status:    entity.Status,
+					SessionID: "task:" + entity.ID,
+					AgentID:   entity.AgentID,
+				})
+			})
 			agent.Tools.Register(taskCreate)
 
 			taskUpdate := tools.NewTaskUpdateTool(al.taskStore)
@@ -2368,6 +2376,15 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 // goroutine — the bus drops to a full subscriber rather than blocking.
 func (al *AgentLoop) EmitNotification(p NotificationPayload) {
 	al.emitEvent(EventKindNotification, EventMeta{Source: "schedule"}, p)
+}
+
+// EmitTaskStatusChanged publishes a workflow task status transition onto the
+// event bus so every connected SPA WebSocket client receives a
+// task_status_changed frame (the SPA invalidates its tasks query cache on
+// receipt). Safe to call from any goroutine — the bus drops to a full
+// subscriber rather than blocking.
+func (al *AgentLoop) EmitTaskStatusChanged(p TaskStatusChangedPayload) {
+	al.emitEvent(EventKindTaskStatusChanged, EventMeta{AgentID: p.AgentID, Source: "task_executor"}, p)
 }
 
 func cloneEventArguments(args map[string]any) map[string]any {
