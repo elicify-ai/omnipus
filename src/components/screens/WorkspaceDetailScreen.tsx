@@ -2,14 +2,14 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { List, SquaresFour, Lightning, Plus } from '@phosphor-icons/react'
-import { ProjectHeader } from '@/components/projects/ProjectHeader'
-import { MilestoneFilterPills, MILESTONE_FILTER_UNSCHEDULED } from '@/components/projects/MilestoneFilterPills'
-import { BoardView } from '@/components/projects/BoardView'
-import { ListView } from '@/components/projects/ListView'
-import { ExecutionView } from '@/components/projects/ExecutionView'
-import { TaskDetailSlideOver } from '@/components/projects/TaskDetailSlideOver'
-import { CreateTaskSlideOver } from '@/components/projects/CreateTaskSlideOver'
-import { CreateMilestoneSlideOver } from '@/components/projects/CreateMilestoneSlideOver'
+import { WorkspaceHeader } from '@/components/workspaces/WorkspaceHeader'
+import { MilestoneFilterPills, MILESTONE_FILTER_UNSCHEDULED } from '@/components/workspaces/MilestoneFilterPills'
+import { BoardView } from '@/components/workspaces/BoardView'
+import { ListView } from '@/components/workspaces/ListView'
+import { ExecutionView } from '@/components/workspaces/ExecutionView'
+import { TaskDetailSlideOver } from '@/components/workspaces/TaskDetailSlideOver'
+import { CreateTaskSlideOver } from '@/components/workspaces/CreateTaskSlideOver'
+import { CreateMilestoneSlideOver } from '@/components/workspaces/CreateMilestoneSlideOver'
 import {
   fetchBoardTasks,
   fetchWorkspaces,
@@ -24,11 +24,11 @@ import { cn } from '@/lib/utils'
 
 type ViewMode = 'board' | 'list' | 'execution'
 
-interface ProjectDetailScreenProps {
+interface WorkspaceDetailScreenProps {
   workspaceId: string
 }
 
-export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
+export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProps) {
   const navigate = useNavigate()
   const { activeMilestoneId, setActiveMilestoneId } = useWorkspacesStore()
   const [viewMode, setViewMode] = useState<ViewMode>('board')
@@ -39,7 +39,7 @@ export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
   const [createMilestoneOpen, setCreateMilestoneOpen] = useState(false)
 
   // Load workspaces to find this workspace's metadata
-  const { data: projects = [], isError: projectsError, isLoading: projectsLoading } = useQuery({
+  const { data: workspaces = [], isError: workspacesError, isLoading: workspacesLoading } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
@@ -49,13 +49,13 @@ export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
   // "inbox" is a human-readable alias; the actual workspace has a real UUID.
   useEffect(() => {
     if (workspaceId !== 'inbox') return
-    if (projects.length === 0) return
-    const defaultProject = projects.find((p) => p.is_default)
-    if (defaultProject) {
-      void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: defaultProject.id }, replace: true })
+    if (workspaces.length === 0) return
+    const defaultWorkspace = workspaces.find((p) => p.is_default)
+    if (defaultWorkspace) {
+      void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: defaultWorkspace.id }, replace: true })
     }
     // No default workspace — fall through so the "not found" state renders below.
-  }, [workspaceId, projects, navigate])
+  }, [workspaceId, workspaces, navigate])
 
   // Reset milestone filter whenever the active workspace changes.
   useEffect(() => {
@@ -63,15 +63,15 @@ export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
   }, [workspaceId, setActiveMilestoneId])
 
   // Also try archived workspaces for direct URL access
-  const { data: archivedProjects = [], isLoading: archivedLoading } = useQuery({
+  const { data: archivedWorkspaces = [], isLoading: archivedLoading } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'archived' }),
     queryFn: () => fetchWorkspaces({ status: 'archived' }),
     staleTime: 60_000,
-    enabled: projects.length > 0 && !projects.find((p) => p.id === workspaceId),
+    enabled: workspaces.length > 0 && !workspaces.find((p) => p.id === workspaceId),
   })
 
-  const project = projects.find((p) => p.id === workspaceId)
-    ?? archivedProjects.find((p) => p.id === workspaceId)
+  const workspace = workspaces.find((p) => p.id === workspaceId)
+    ?? archivedWorkspaces.find((p) => p.id === workspaceId)
 
   // Milestones for this workspace
   const { data: milestones = [], isError: milestonesError } = useQuery({
@@ -108,10 +108,10 @@ export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
 
   // 'inbox' is a redirect alias — suppress render while the useEffect navigates to the real workspace ID.
   // Without this, archivedLoading can flip to false before navigate() completes, causing a crash
-  // on any render path that accesses `project.name` when project is still undefined.
+  // on any render path that accesses `workspace.name` when workspace is still undefined.
   if (workspaceId === 'inbox') return null
 
-  if (projectsError) {
+  if (workspacesError) {
     return (
       <div className="flex items-center justify-center h-full p-8 text-[var(--color-muted)] text-sm">
         Failed to load workspace. Check your connection and try again.
@@ -119,8 +119,8 @@ export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
     )
   }
 
-  // Show loading skeleton while projects list hasn't resolved yet
-  if (projectsLoading) {
+  // Show loading skeleton while workspaces list hasn't resolved yet
+  if (workspacesLoading) {
     return (
       <div className="flex flex-col h-full">
         <div className="h-16 bg-[var(--color-surface-1)] border-b border-[var(--color-border)] animate-pulse" />
@@ -133,7 +133,7 @@ export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
     )
   }
 
-  if (!project) {
+  if (!workspace) {
     if (archivedLoading) {
       return (
         <div className="flex flex-col h-full">
@@ -158,8 +158,8 @@ export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
-      {/* Project header */}
-      <ProjectHeader project={project} />
+      {/* Workspace header */}
+      <WorkspaceHeader workspace={workspace} />
 
       {/* View toggle + milestone filter + new task button */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">

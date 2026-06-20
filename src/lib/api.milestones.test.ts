@@ -4,7 +4,7 @@
  * Tests for the milestone API functions: fetchMilestones, createMilestone,
  * deleteMilestone, and updateMilestone.
  *
- * Uses the same fetch-spy + cookie stub pattern as api.projects.test.ts.
+ * Uses the same fetch-spy + cookie stub pattern as api.workspaces.test.ts.
  * Traces to: project-task-management-level1-spec.md — milestone API layer tests
  */
 
@@ -239,7 +239,7 @@ describe('createMilestone', () => {
 // ── deleteMilestone ───────────────────────────────────────────────────────────
 
 describe('deleteMilestone', () => {
-  it('calls DELETE /api/v1/projects/{id}/milestones/{milestoneId}', async () => {
+  it('calls DELETE /api/v1/workspaces/{id}/milestones/{milestoneId}', async () => {
     // BDD: Given an existing project and milestone,
     // When deleteMilestone('p1', 'm1') is called,
     // Then DELETE /api/v1/workspaces/p1/milestones/m1 is requested,
