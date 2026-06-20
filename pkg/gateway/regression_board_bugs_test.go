@@ -73,7 +73,7 @@ func TestRegression_TaskstoreList_DoesNotCorruptGTDFiles(t *testing.T) {
 	projID := createWorkspaceViaAPI(t, api, "CollisionProject", "")
 	task := createBoardTaskViaAPI(t, api, "GTD Task Under Test", "inbox")
 
-	// Attach the task to the project so project_id is set on disk.
+	// Attach the task to the project so workspace_id is set on disk.
 	putBody := fmt.Sprintf(`{"workspace_id":%q}`, projID)
 	wPut := httptest.NewRecorder()
 	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, strings.NewReader(putBody))
@@ -368,13 +368,13 @@ func TestRegression_RESTPut_PreservesAllFields(t *testing.T) {
 
 // TestRegression_RestartPersistence verifies that projects and board tasks
 // written via one restAPI instance are fully readable from a FRESH restAPI
-// instance over the same home dir, including agent_id, owner, and project_id.
+// instance over the same home dir, including agent_id, owner, and workspace_id.
 //
 // This is the "survive gateway restart" scenario that had no coverage before.
 //
 // BDD: Given projects and board tasks created via restAPI instance A,
 // When a fresh restAPI B is constructed over the same home directory,
-// Then GET /projects and GET /board/tasks return the same data with all fields intact.
+// Then GET /workspaces and GET /board/tasks return the same data with all fields intact.
 //
 // Traces to: feat/level1-project-task-mgmt — #403 + general restart persistence
 func TestRegression_RestartPersistence(t *testing.T) {
@@ -506,7 +506,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 
 // ── REP: repository scheme validation ───────────────────────────────────────
 
-// TestRegression_Repository_SchemeValidation verifies that POST /api/v1/projects
+// TestRegression_Repository_SchemeValidation verifies that POST /api/v1/workspaces
 // rejects non-http/https repository URLs and accepts empty or valid URLs.
 //
 // BDD:
