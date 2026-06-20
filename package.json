@@ -80,7 +80,7 @@
     "@asyncapi/parser": "^3.6.0",
     "@axe-core/playwright": "^4.10.0",
     "@playwright/test": "^1.49.0",
-    "@redocly/cli": "^2.31.6",
+    "@redocly/cli": "^2.34.0",
     "@tailwindcss/vite": "^4.1.3",
     "@tanstack/router-vite-plugin": "^1.167.18",
     "@testing-library/dom": "^10.4.1",
