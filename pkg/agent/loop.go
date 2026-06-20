@@ -4225,6 +4225,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		turnCtx = tools.WithWorkspaceID(turnCtx, ts.opts.WorkspaceID)
 	}
 
+	// FR-7.5 / NFR-1: install a per-turn citation tracker so recall_memory can
+	// report surfaced memories and the loop can emit op:cited counter events
+	// when the LLM references them by ID/title. Nil for the main gateway agent
+	// (no memory store); WithCitationTracker is a no-op in that case.
+	citationTracker := newCitationTracker(ts.agent.ContextBuilder.Memory())
+	turnCtx = tools.WithCitationTracker(turnCtx, citationTracker)
+
 	al.registerActiveTurn(ts)
 	// B1: Finish must run before clearActiveTurn so that IsAlive() goes false
 	// and the onCancelFinish callback fires on natural turn completion, not only
@@ -5290,6 +5297,11 @@ turnLoop:
 			if responseContent == "" && response.ReasoningContent != "" {
 				responseContent = response.ReasoningContent
 			}
+			// FR-7.5/NFR-1: scan the assistant's final answer for references to
+			// memories recalled earlier this turn and emit op:cited events.
+			if citationTracker != nil {
+				citationTracker.EmitCitations(responseContent)
+			}
 			if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 				logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
 					map[string]any{
@@ -5400,6 +5412,13 @@ turnLoop:
 				"count":     len(normalizedToolCalls),
 				"iteration": iteration,
 			})
+
+		// FR-7.5/NFR-1: the narration text accompanying this round of tool
+		// calls may reference memories recalled in a prior iteration. Scan it
+		// for citations before executing the tools.
+		if citationTracker != nil {
+			citationTracker.EmitCitations(response.Content)
+		}
 
 		assistantMsg := providers.Message{
 			Role:             "assistant",

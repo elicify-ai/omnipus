@@ -90,6 +90,11 @@ type LongTermEntry struct {
 	Timestamp time.Time
 	Category  MemoryCategory
 	Content   string
+	// ID is the recalled memory's stable identifier (ULID). Surfaced to the
+	// tools layer so the recall result can include it (FR-7.5 cited_in).
+	ID string
+	// Title is the recalled memory's human-readable title (FR-7.5 cited_in).
+	Title string
 }
 
 // Retro is a structured retrospective record.
@@ -958,6 +963,8 @@ func memoryFileToEntry(mf memrooms.MemoryFile, ts time.Time) LongTermEntry {
 		Timestamp: ts.UTC(),
 		Category:  memoryTypeToCategory(mf.Frontmatter.Type),
 		Content:   mf.Body,
+		ID:        mf.Frontmatter.ID,
+		Title:     mf.Frontmatter.Title,
 	}
 }
 

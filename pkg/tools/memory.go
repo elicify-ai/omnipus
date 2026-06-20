@@ -22,6 +22,13 @@ type MemoryEntry struct {
 	Timestamp time.Time
 	Category  string
 	Content   string
+	// ID is the recalled memory's stable identifier (ULID). Empty for legacy
+	// stores that do not surface per-memory IDs. Citation detection (FR-7.5)
+	// scans the agent's response text for this ID.
+	ID string
+	// Title is the recalled memory's human-readable title. Empty when unset.
+	// Citation detection also scans the agent's response text for the title.
+	Title string
 }
 
 // MemoryRetro is the retro record passed to MemoryWriter.AppendRetro.
@@ -370,6 +377,12 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("recall_memory: %v", err))
 		}
+		// FR-7.5/NFR-1: report the surfaced memories to the turn's citation
+		// tracker so the agent loop can emit op:cited when the LLM references
+		// them by ID/title in its response. No-op when no tracker is installed.
+		if tracker := CitationTrackerFromContext(ctx); tracker != nil {
+			tracker.RecordRecalled(entries)
+		}
 		return formatRecallResult(entries)
 	}
 
@@ -377,6 +390,9 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 	entries, err := t.store.SearchEntries(query, limit)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("recall_memory: %v", err))
+	}
+	if tracker := CitationTrackerFromContext(ctx); tracker != nil {
+		tracker.RecordRecalled(entries)
 	}
 	return formatRecallResult(entries)
 }
@@ -391,7 +407,20 @@ func formatRecallResult(entries []MemoryEntry) *ToolResult {
 			sb.WriteString("\n\n---\n\n")
 		}
 		ts := e.Timestamp.UTC().Format("2006-01-02T15:04:05Z")
-		fmt.Fprintf(&sb, "[%s | %s]\n%s", ts, e.Category, e.Content)
+		// FR-7.5/NFR-1: surface the memory ID (and title, when present) so the
+		// agent can reference it by ID/title in its response — that reference is
+		// what cited_in (op:cited) detection scans for. When the store does not
+		// surface per-memory IDs (legacy/test doubles), fall back to the
+		// original [ts | category] header.
+		if e.ID != "" {
+			fmt.Fprintf(&sb, "[id:%s | %s | %s]\n", e.ID, ts, e.Category)
+			if e.Title != "" {
+				fmt.Fprintf(&sb, "title: %s\n", e.Title)
+			}
+			sb.WriteString(e.Content)
+		} else {
+			fmt.Fprintf(&sb, "[%s | %s]\n%s", ts, e.Category, e.Content)
+		}
 	}
 	return NewToolResult(sb.String())
 }
