@@ -40,7 +40,7 @@ type milestoneResponse struct { // not-wire-format: test-local decode struct mat
 	Progress    float64   `json:"progress"`
 }
 
-// milestoneListResponse matches the JSON shape from GET /projects/{id}/milestones.
+// milestoneListResponse matches the JSON shape from GET /workspaces/{id}/milestones.
 type milestoneListResponse struct { // not-wire-format: test-local decode struct matching handleMilestoneList shim
 	Milestones []milestoneResponse `json:"milestones"`
 	Total      int                 `json:"total"`
@@ -155,7 +155,7 @@ func getMilestoneViaAPI(
 // TestHandleMilestones_Create
 // ---------------------------------------------------------------------------
 
-// TestHandleMilestones_Create verifies POST /projects/{id}/milestones returns 201 with
+// TestHandleMilestones_Create verifies POST /workspaces/{id}/milestones returns 201 with
 // milestone fields and progress=0.
 // BDD: Given a valid project,
 // When POST /api/v1/workspaces/{id}/milestones with {"name":"Sprint 1"},
@@ -177,7 +177,7 @@ func TestHandleMilestones_Create(t *testing.T) {
 		t,
 		http.StatusCreated,
 		w.Code,
-		"POST /projects/{id}/milestones must return 201; body=%s",
+		"POST /workspaces/{id}/milestones must return 201; body=%s",
 		w.Body.String(),
 	)
 	var m milestoneResponse
@@ -225,7 +225,7 @@ func TestHandleMilestones_Create_ProjectNotFound(t *testing.T) {
 	api.HandleMilestones(w, r)
 
 	assert.Equal(t, http.StatusNotFound, w.Code,
-		"POST /projects/missing/milestones must return 404; body=%s", w.Body.String())
+		"POST /workspaces/missing/milestones must return 404; body=%s", w.Body.String())
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +257,7 @@ func TestHandleMilestones_Create_NameTooLong(t *testing.T) {
 		t,
 		http.StatusBadRequest,
 		w.Code,
-		"POST /projects/{id}/milestones with name > 200 chars must return 400; body=%s",
+		"POST /workspaces/{id}/milestones with name > 200 chars must return 400; body=%s",
 		w.Body.String(),
 	)
 
@@ -275,7 +275,7 @@ func TestHandleMilestones_Create_NameTooLong(t *testing.T) {
 		t,
 		http.StatusCreated,
 		w200.Code,
-		"POST /projects/{id}/milestones with name exactly 200 chars must return 201; body=%s",
+		"POST /workspaces/{id}/milestones with name exactly 200 chars must return 201; body=%s",
 		w200.Body.String(),
 	)
 }
@@ -309,7 +309,7 @@ func TestHandleMilestones_Create_DescriptionTooLong(t *testing.T) {
 		t,
 		http.StatusBadRequest,
 		w.Code,
-		"POST /projects/{id}/milestones with description > 2000 chars must return 400; body=%s",
+		"POST /workspaces/{id}/milestones with description > 2000 chars must return 400; body=%s",
 		w.Body.String(),
 	)
 
@@ -327,7 +327,7 @@ func TestHandleMilestones_Create_DescriptionTooLong(t *testing.T) {
 		t,
 		http.StatusCreated,
 		w2000.Code,
-		"POST /projects/{id}/milestones with description exactly 2000 chars must return 201; body=%s",
+		"POST /workspaces/{id}/milestones with description exactly 2000 chars must return 201; body=%s",
 		w2000.Body.String(),
 	)
 }
@@ -336,7 +336,7 @@ func TestHandleMilestones_Create_DescriptionTooLong(t *testing.T) {
 // TestHandleMilestones_Get
 // ---------------------------------------------------------------------------
 
-// TestHandleMilestones_Get verifies GET /projects/{id}/milestones/{mid} returns 200 with correct fields.
+// TestHandleMilestones_Get verifies GET /workspaces/{id}/milestones/{mid} returns 200 with correct fields.
 // BDD: Given an existing milestone M in project P,
 // When GET /api/v1/workspaces/P/milestones/M,
 // Then 200 with id=M, name matching create request, workspace_id=P, progress=0.
@@ -349,7 +349,7 @@ func TestHandleMilestones_Get(t *testing.T) {
 
 	got, code := getMilestoneViaAPI(t, api, projID, m.ID)
 
-	require.Equal(t, http.StatusOK, code, "GET /projects/{id}/milestones/{mid} must return 200")
+	require.Equal(t, http.StatusOK, code, "GET /workspaces/{id}/milestones/{mid} must return 200")
 	// Content test: verify all key fields match what was created.
 	assert.Equal(t, m.ID, got.ID, "GET must return the correct milestone id")
 	assert.Equal(t, "Alpha Release", got.Name, "GET must return the correct name")
@@ -382,14 +382,14 @@ func TestHandleMilestones_Get_NotFound(t *testing.T) {
 	api.HandleMilestones(w, r)
 
 	assert.Equal(t, http.StatusNotFound, w.Code,
-		"GET /projects/{id}/milestones/nonexistent must return 404; body=%s", w.Body.String())
+		"GET /workspaces/{id}/milestones/nonexistent must return 404; body=%s", w.Body.String())
 }
 
 // ---------------------------------------------------------------------------
 // TestHandleMilestones_List
 // ---------------------------------------------------------------------------
 
-// TestHandleMilestones_List verifies GET /projects/{id}/milestones returns all milestones for the project.
+// TestHandleMilestones_List verifies GET /workspaces/{id}/milestones returns all milestones for the project.
 // BDD: Given project P with 2 milestones,
 // When GET /api/v1/workspaces/P/milestones,
 // Then 200 with total=2 and both milestones present.
@@ -410,7 +410,7 @@ func TestHandleMilestones_List(t *testing.T) {
 		t,
 		http.StatusOK,
 		w.Code,
-		"GET /projects/{id}/milestones must return 200; body=%s",
+		"GET /workspaces/{id}/milestones must return 200; body=%s",
 		w.Body.String(),
 	)
 	var resp milestoneListResponse
@@ -460,7 +460,7 @@ func TestHandleMilestones_List_SortedByDueDate(t *testing.T) {
 		t,
 		http.StatusOK,
 		w.Code,
-		"GET /projects/{id}/milestones must return 200; body=%s",
+		"GET /workspaces/{id}/milestones must return 200; body=%s",
 		w.Body.String(),
 	)
 	var resp milestoneListResponse
@@ -684,7 +684,7 @@ func TestHandleMilestones_Delete(t *testing.T) {
 	// GET after delete → 404.
 	_, code := getMilestoneViaAPI(t, api, projID, m.ID)
 	assert.Equal(t, http.StatusNotFound, code,
-		"GET /projects/{id}/milestones/{mid} after delete must return 404")
+		"GET /workspaces/{id}/milestones/{mid} after delete must return 404")
 
 	// Persistence test: milestone file must not exist on disk.
 	milestoneFile := filepath.Join(api.homePath, "milestones", m.ID+".json")

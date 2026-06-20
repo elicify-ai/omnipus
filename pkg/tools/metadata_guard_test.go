@@ -413,10 +413,10 @@ func TestMetadataGuard_TrailingSlashBlocked(t *testing.T) {
 // Traces to: issue #240 METADATA-GUARD finding 8 (nested-agents dir).
 func TestMetadataGuard_NestedAgentsDirBlocked(t *testing.T) {
 	home := t.TempDir()
-	// Layout: <home>/projects/agents/nested-agent/HEARTBEAT.md, with the
-	// workspace rooted at <home>/projects so the relative path crosses an
+	// Layout: <home>/workspaces/agents/nested-agent/HEARTBEAT.md, with the
+	// workspace rooted at <home>/workspaces so the relative path crosses an
 	// agents/<id>/ boundary.
-	ws := filepath.Join(home, "projects")
+	ws := filepath.Join(home, "workspaces")
 	nested := filepath.Join(ws, "agents", "nested-agent")
 	if err := os.MkdirAll(nested, 0o700); err != nil {
 		t.Fatalf("setup nested: %v", err)

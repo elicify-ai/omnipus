@@ -1493,9 +1493,9 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 //
 //	Given a fresh home directory,
 //	When ensureDefaultWorkspace is called,
-//	Then GET /api/v1/projects?status=active returns exactly one project with is_default=true and name="My Workspace".
+//	Then GET /api/v1/workspaces?status=active returns exactly one project with is_default=true and name="My Workspace".
 //	When ensureDefaultWorkspace is called again,
-//	Then GET /api/v1/projects?status=active still returns exactly one default project (idempotent).
+//	Then GET /api/v1/workspaces?status=active still returns exactly one default project (idempotent).
 //
 // Traces to: FR-L2-001 (auto-create Inbox project)
 func TestEnsureDefaultWorkspace(t *testing.T) {
@@ -1508,12 +1508,12 @@ func TestEnsureDefaultWorkspace(t *testing.T) {
 		"first ensureDefaultWorkspace call must not return an error",
 	)
 
-	// GET /api/v1/projects → must contain exactly one default project named "My Workspace".
+	// GET /api/v1/workspaces → must contain exactly one default project named "My Workspace".
 	wList := httptest.NewRecorder()
 	rList := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	rList.URL.Path = "/api/v1/workspaces"
 	api.HandleWorkspaces(wList, rList)
-	require.Equal(t, http.StatusOK, wList.Code, "GET /projects must return 200")
+	require.Equal(t, http.StatusOK, wList.Code, "GET /workspaces must return 200")
 
 	var projects []gen.Workspace
 	require.NoError(t, json.Unmarshal(wList.Body.Bytes(), &projects))
