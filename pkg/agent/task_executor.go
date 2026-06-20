@@ -151,6 +151,11 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 	}
 	task = claimed
 
+	// Emit a task_status_changed frame for the queued→running transition so
+	// the SPA can update its tasks view in real time. ClaimForRun has already
+	// persisted the new status on the returned entity.
+	te.emitStatusChanged(claimed, "running")
+
 	taskCtx, cancel := context.WithCancel(ctx)
 	te.mu.Lock()
 	te.running[taskID] = cancel
@@ -382,8 +387,8 @@ func (te *TaskExecutor) buildPrompt(task *taskstore.TaskEntity) string {
 //
 // This is the sole wiring point for the Orchestrator coordinator — it is
 // called by TaskUpdateTool.SetOnComplete (loop.go:1487) and by the
-// auto-complete path at the bottom of runTask. There is no separate
-// task_status_changed WS subscription because no such emitter exists.
+// auto-complete path at the bottom of runTask. The task_status_changed WS
+// frame is emitted at every status transition (see emitStatusChanged).
 // notifyParentIfAllSiblingsDone resumes the parent agent once every child task
 // of parentID has reached a terminal state. It is safe under concurrent sibling
 // completions: the parent follow-up is launched at most once, guarded by an
@@ -454,6 +459,12 @@ func (te *TaskExecutor) notifyParentIfAllSiblingsDone(parentID string) {
 }
 
 func (te *TaskExecutor) onTaskComplete(task *taskstore.TaskEntity) {
+	// Emit a task_status_changed frame for the terminal transition. This covers
+	// both the auto-complete path (runTask calls onTaskComplete) and the
+	// task_update tool path (SetOnComplete → onTaskComplete). The task's status
+	// is already terminal on the entity at this point.
+	te.emitStatusChanged(task, task.Status)
+
 	// ── 1. Parent notification ──────────────────────────────────────────────
 	if task.ParentTaskID != "" {
 		te.notifyParentIfAllSiblingsDone(task.ParentTaskID)
@@ -537,17 +548,45 @@ func (te *TaskExecutor) buildChildSummary(children []taskstore.TaskEntity) strin
 	return sb.String()
 }
 
+// emitStatusChanged publishes a task_status_changed event onto the agent event
+// bus so the WS forwarder can deliver a task_status_changed frame to connected
+// SPA clients. It is a best-effort emit — a nil agentLoop or nil eventBus is
+// silently skipped (e.g. in unit tests that construct a TaskExecutor directly).
+// sessionID falls back to "task:<id>" when the task has no session yet so the
+// contract-required session_id field is always populated.
+func (te *TaskExecutor) emitStatusChanged(task *taskstore.TaskEntity, status string) {
+	if te.agentLoop == nil {
+		return
+	}
+	sessionID := task.SessionID
+	if sessionID == "" {
+		sessionID = "task:" + task.ID
+	}
+	te.agentLoop.EmitTaskStatusChanged(TaskStatusChangedPayload{
+		TaskID:    task.ID,
+		Status:    status,
+		SessionID: sessionID,
+		AgentID:   task.AgentID,
+	})
+}
+
 // failTask marks a task as failed with the given reason.
 func (te *TaskExecutor) failTask(taskID, reason string) {
 	now := time.Now().UTC()
-	if _, err := te.store.Update(taskID, taskstore.TaskPatch{
+	updated, err := te.store.Update(taskID, taskstore.TaskPatch{
 		Status:      ptrStr("failed"),
 		Result:      &reason,
 		CompletedAt: &now,
-	}); err != nil {
+	})
+	if err != nil {
 		logger.ErrorCF("task_executor", "Could not mark task failed",
 			map[string]any{"task_id": taskID, "error": err.Error()})
+		return
 	}
+	// Emit a task_status_changed frame for the →failed transition. failTask is
+	// called for executor-internal failures (agent-not-found, execution error)
+	// which do NOT flow through onTaskComplete, so emit here directly.
+	te.emitStatusChanged(updated, "failed")
 }
 
 // ResizeDispatchSema updates the global dispatch semaphore capacity.

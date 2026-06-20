@@ -2402,6 +2402,26 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				notifF.AgentId = &aid
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeNotification), notifF)
+		case agent.EventKindTaskStatusChanged:
+			// A workflow task's status changed (queued→running→completed/failed).
+			// Not tied to a specific chatID — broadcast to every connection so
+			// any admin viewing the tasks board sees live updates. The SPA
+			// invalidates its tasks TanStack Query cache on receipt.
+			p, ok := evt.Payload.(agent.TaskStatusChangedPayload)
+			if !ok {
+				continue
+			}
+			taskF := generated.TaskStatusChangedFrame{
+				Type:      string(generated.WsFrameTypeTaskStatusChanged),
+				SessionId: p.SessionID,
+				TaskId:    p.TaskID,
+				Status:    p.Status,
+			}
+			if p.AgentID != "" {
+				aid := p.AgentID
+				taskF.AgentId = &aid
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskStatusChanged), taskF)
 		}
 	}
 }

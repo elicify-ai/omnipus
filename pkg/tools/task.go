@@ -85,6 +85,9 @@ type TaskCreateTool struct {
 	// reason to DENY or "" to ALLOW. Takes precedence over delegateCheck so a
 	// rejected task delegation surfaces a clear reason to the LLM.
 	delegationDeny func(ctx context.Context, targetAgentID string) string
+	// onCreate, when non-nil, is invoked after a task is successfully created
+	// (status "queued") so the caller can emit a task_status_changed event.
+	onCreate func(*taskstore.TaskEntity)
 }
 
 func NewTaskCreateTool(store *taskstore.TaskStore) *TaskCreateTool {
@@ -101,6 +104,13 @@ func (t *TaskCreateTool) SetDelegateChecker(fn func(targetAgentID string) bool) 
 // to ALLOW. When set, it takes precedence over the boolean delegateCheck.
 func (t *TaskCreateTool) SetDelegationDenyChecker(fn func(ctx context.Context, targetAgentID string) string) {
 	t.delegationDeny = fn
+}
+
+// SetOnCreate sets the callback invoked after a task is successfully created
+// (status "queued"). Used to emit a task_status_changed event for the creation
+// transition so the SPA can update its tasks view in real time.
+func (t *TaskCreateTool) SetOnCreate(fn func(*taskstore.TaskEntity)) {
+	t.onCreate = fn
 }
 
 func (t *TaskCreateTool) Name() string     { return "task_create" }
@@ -200,6 +210,10 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	if err := t.store.Create(entity); err != nil {
 		return ErrorResult(fmt.Sprintf("task_create failed: %v", err))
+	}
+
+	if t.onCreate != nil {
+		t.onCreate(entity)
 	}
 
 	return NewToolResult(fmt.Sprintf(`{"task_id":%q,"status":"queued"}`, entity.ID))
