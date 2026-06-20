@@ -25,6 +25,10 @@ import (
 type EventKind string
 
 const (
+	// EventKindStart signals that a run has begun. It is the first event
+	// emitted on the Run channel and carries the detected CLI version
+	// (FR-5.6 / N3) so the run log and SPA can pin the stream schema.
+	EventKindStart EventKind = "start"
 	// EventKindOutput is a text output chunk from the external agent.
 	EventKindOutput EventKind = "output"
 	// EventKindToolCall is a tool invocation emitted by the external agent.
@@ -53,6 +57,8 @@ type RunEvent struct {
 	// Timestamp is when the event was produced (UTC).
 	Timestamp time.Time
 
+	// Start holds run-start metadata (CLI + pinned version). Set when Kind=EventKindStart.
+	Start *StartEvent
 	// Output holds text output content. Set when Kind=EventKindOutput.
 	Output *OutputEvent
 	// ToolCall holds a tool invocation. Set when Kind=EventKindToolCall.
@@ -77,6 +83,23 @@ type ToolResultEvent struct {
 	Output []byte
 	// IsError is true when the tool itself reported an error.
 	IsError bool
+}
+
+// StartEvent carries run-start metadata emitted as the first event of every
+// external-CLI run (FR-5.6 / N3). It pins the detected CLI version so the run
+// log and SPA can record which stream schema the run used, and whether that
+// version is recognized by the driver (graceful-degradation signal).
+type StartEvent struct {
+	// CLI is the external CLI binary name (e.g. "claude", "codex", "opencode").
+	CLI string
+	// Version is the detected CLI version string (parsed from `--version`).
+	// Empty when the version could not be detected — the driver still proceeds
+	// with graceful degradation (FR-5.6).
+	Version string
+	// VersionKnown is true when the detected version matches a prefix the
+	// driver has been validated against. False means the driver will proceed
+	// but the JSON stream schema may drift; the SPA SHOULD surface a warning.
+	VersionKnown bool
 }
 
 // OutputEvent carries a text output chunk from the external agent.

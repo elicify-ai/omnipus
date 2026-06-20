@@ -92,13 +92,8 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 		return nil, fmt.Errorf("claude driver: Run called while a run is already active")
 	}
 
-	// Detect and pin CLI version (FR-5.6).
-	if ver, err := detectCLIVersion(ctx, claudeBinName); err != nil {
-		slog.Warn("runner/claude: version check failed — proceeding with unknown version",
-			"err", err)
-	} else {
-		d.logVersionCheck(claudeBinName, ver)
-	}
+	// Detect and pin CLI version (FR-5.6 / N3).
+	ver, verKnown := detectAndPinVersion(ctx, claudeBinName, "runner/claude", knownClaudeVersionPrefixes)
 
 	runID := opts.RunID
 	if runID == "" {
@@ -140,6 +135,19 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 	d.eventCh = ch
 	d.cancel = cancelFn
 	d.cmd = cmd
+
+	// Emit the Start event first so the run log / SPA can pin the CLI version
+	// (FR-5.6 / N3). Buffered channel; this cannot block here.
+	ch <- RunEvent{
+		Kind:      EventKindStart,
+		RunID:     runID,
+		Timestamp: time.Now().UTC(),
+		Start: &StartEvent{
+			CLI:          claudeBinName,
+			Version:      ver,
+			VersionKnown: verKnown,
+		},
+	}
 
 	// Goroutine: pipe stderr lines to slog (Debug) AND retain a bounded tail so a
 	// non-zero exit can surface the real diagnostic at Warn/Error (see below).
@@ -498,16 +506,18 @@ func (d *ClaudeDriver) Test(ctx context.Context) ConnectionTestResult {
 	}
 }
 
-// logVersionCheck logs a warning for unknown version strings (FR-5.6).
-func (d *ClaudeDriver) logVersionCheck(binary, ver string) {
+// logVersionCheck logs a warning for unknown version strings (FR-5.6). It
+// returns true when the version matches a known prefix.
+func (d *ClaudeDriver) logVersionCheck(binary, ver string) bool {
 	for _, prefix := range knownClaudeVersionPrefixes {
 		if strings.Contains(ver, prefix) {
 			slog.Info("runner/claude: CLI version", "binary", binary, "version", ver)
-			return
+			return true
 		}
 	}
 	slog.Warn("runner/claude: unknown CLI version — proceeding with graceful degradation",
 		"binary", binary, "version", ver)
+	return false
 }
 
 // compile-time interface assertion

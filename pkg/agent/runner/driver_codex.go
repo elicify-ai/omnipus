@@ -98,12 +98,8 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 		return nil, fmt.Errorf("codex driver: Run called while a run is already active")
 	}
 
-	// Detect and pin CLI version (FR-5.6).
-	if ver, err := detectCLIVersion(ctx, codexBinName); err != nil {
-		slog.Warn("runner/codex: version check failed — proceeding with unknown version", "err", err)
-	} else {
-		d.logVersionCheck(ver)
-	}
+	// Detect and pin CLI version (FR-5.6 / N3).
+	ver, verKnown := detectAndPinVersion(ctx, codexBinName, "runner/codex", knownCodexVersionPrefixes)
 
 	runID := opts.RunID
 	if runID == "" {
@@ -144,6 +140,19 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 	d.eventCh = ch
 	d.cancel = cancelFn
 	d.cmd = cmd
+
+	// Emit the Start event first so the run log / SPA can pin the CLI version
+	// (FR-5.6 / N3). Buffered channel; this cannot block here.
+	ch <- RunEvent{
+		Kind:      EventKindStart,
+		RunID:     runID,
+		Timestamp: time.Now().UTC(),
+		Start: &StartEvent{
+			CLI:          codexBinName,
+			Version:      ver,
+			VersionKnown: verKnown,
+		},
+	}
 
 	// Pipe stderr to slog (Debug) AND retain a bounded tail so a non-zero exit
 	// can surface the real diagnostic at Warn/Error (see below).
@@ -442,15 +451,17 @@ func (d *CodexDriver) Test(ctx context.Context) ConnectionTestResult {
 	}
 }
 
-// logVersionCheck logs a warning for unknown version strings (FR-5.6).
-func (d *CodexDriver) logVersionCheck(ver string) {
+// logVersionCheck logs a warning for unknown version strings (FR-5.6). It
+// returns true when the version matches a known prefix.
+func (d *CodexDriver) logVersionCheck(ver string) bool {
 	for _, prefix := range knownCodexVersionPrefixes {
 		if strings.Contains(ver, prefix) {
 			slog.Info("runner/codex: CLI version", "version", ver)
-			return
+			return true
 		}
 	}
 	slog.Warn("runner/codex: unknown CLI version — proceeding with graceful degradation", "version", ver)
+	return false
 }
 
 // compile-time interface assertion
