@@ -57,9 +57,9 @@ vi.mock('@/store/workspacesStore', () => ({
   },
 }))
 
-// Mock NewProjectSlideOver — it imports more dependencies we don't need in these tests
-vi.mock('@/components/projects/NewProjectSlideOver', () => ({
-  NewProjectSlideOver: () => null,
+// Mock NewWorkspaceSlideOver — it imports more dependencies we don't need in these tests
+vi.mock('@/components/workspaces/NewWorkspaceSlideOver', () => ({
+  NewWorkspaceSlideOver: () => null,
 }))
 
 function makeWrapper() {

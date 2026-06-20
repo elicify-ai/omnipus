@@ -44,7 +44,7 @@ afterEach(() => {
   restoreCookie()
 })
 
-// ── fetchProjects ─────────────────────────────────────────────────────────────
+// ── fetchWorkspaces ─────────────────────────────────────────────────────────────
 
 describe('fetchWorkspaces', () => {
   it('calls GET /api/v1/workspaces and returns the Workspace array', async () => {
@@ -89,7 +89,7 @@ describe('fetchWorkspaces', () => {
   })
 })
 
-// ── createProject ─────────────────────────────────────────────────────────────
+// ── createWorkspace ─────────────────────────────────────────────────────────────
 
 describe('createWorkspace', () => {
   it('calls POST /api/v1/workspaces and returns the created Workspace', async () => {
@@ -149,7 +149,7 @@ describe('createWorkspace', () => {
   })
 })
 
-// ── deleteProject ─────────────────────────────────────────────────────────────
+// ── deleteWorkspace ─────────────────────────────────────────────────────────────
 
 describe('deleteWorkspace', () => {
   it('calls DELETE /api/v1/workspaces/{id} with the correct URL and method', async () => {
@@ -172,9 +172,9 @@ describe('deleteWorkspace', () => {
 
   it('sends the correct encoded id in the URL', async () => {
     // BDD: Given a project id,
-    // When deleteProject is called,
+    // When deleteWorkspace is called,
     // Then the URL contains the id.
-    // Traces to: wave4-level1-project-task-mgmt spec — deleteProject URL encoding
+    // Traces to: wave4-level1-project-task-mgmt spec — deleteWorkspace URL encoding
     fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
 
     const { deleteWorkspace } = await import('./api')
@@ -186,9 +186,9 @@ describe('deleteWorkspace', () => {
 
   it('throws ApiError on 404 response', async () => {
     // BDD: Given a project id that does not exist,
-    // When deleteProject is called,
+    // When deleteWorkspace is called,
     // Then an ApiError with status 404 is thrown.
-    // Traces to: project-task-management-level1-spec.md — deleteProject error path
+    // Traces to: project-task-management-level1-spec.md — deleteWorkspace error path
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ error: 'project not found' }), {
         status: 404,
@@ -208,7 +208,7 @@ describe('deleteWorkspace', () => {
   })
 })
 
-// ── updateProject ─────────────────────────────────────────────────────────────
+// ── updateWorkspace ─────────────────────────────────────────────────────────────
 
 describe('updateWorkspace', () => {
   it('calls PUT /api/v1/workspaces/{id} and returns the updated Workspace', async () => {
@@ -249,7 +249,7 @@ describe('updateWorkspace', () => {
 
   it('differentiation test: updating two different projects returns different results', async () => {
     // Anti-hardcode: two PUT calls with different ids and bodies must produce different results.
-    // Traces to: project-task-management-level1-spec.md — updateProject differentiation
+    // Traces to: project-task-management-level1-spec.md — updateWorkspace differentiation
     const first = { id: 'id-one', name: 'First Updated', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-08T01:00:00Z' }
     const second = { id: 'id-two', name: 'Archived Project', status: 'archived', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-08T02:00:00Z' }
 
@@ -269,9 +269,9 @@ describe('updateWorkspace', () => {
 
   it('throws ApiError on 404 response', async () => {
     // BDD: Given a project id that does not exist,
-    // When updateProject is called,
+    // When updateWorkspace is called,
     // Then an ApiError with status 404 is thrown.
-    // Traces to: project-task-management-level1-spec.md — updateProject error path
+    // Traces to: project-task-management-level1-spec.md — updateWorkspace error path
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ error: 'project not found' }), {
         status: 404,
@@ -291,7 +291,7 @@ describe('updateWorkspace', () => {
   })
 })
 
-// ── fetchProjectSessions ──────────────────────────────────────────────────────
+// ── fetchWorkspaceSessions ──────────────────────────────────────────────────────
 
 describe('fetchWorkspaceSessions', () => {
   it('calls GET /api/v1/workspaces/{id}/sessions and returns WorkspaceSessionLink array', async () => {

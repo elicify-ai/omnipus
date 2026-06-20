@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { NewProjectSlideOver } from './NewProjectSlideOver'
+import { NewWorkspaceSlideOver } from './NewWorkspaceSlideOver'
 import { useUiStore } from '@/store/ui'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -29,7 +29,7 @@ function makeClient() {
 function renderSlideOver() {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <NewProjectSlideOver open onOpenChange={vi.fn()} />
+      <NewWorkspaceSlideOver open onOpenChange={vi.fn()} />
     </QueryClientProvider>,
   )
 }
@@ -40,7 +40,7 @@ beforeEach(() => {
   })
 })
 
-describe('NewProjectSlideOver — core_team graceful degradation', () => {
+describe('NewWorkspaceSlideOver — core_team graceful degradation', () => {
   it('shows error message when agent fetch fails', async () => {
     // Given: the backend agent list endpoint is unavailable
     vi.mocked(fetchAgents).mockRejectedValue(new Error('network down'))
@@ -56,8 +56,8 @@ describe('NewProjectSlideOver — core_team graceful degradation', () => {
   })
 })
 
-// Traces to: project-task-management-level1-spec.md — TC-003 NewProjectSlideOver create flow
-describe('NewProjectSlideOver — create flow', () => {
+// Traces to: project-task-management-level1-spec.md — TC-003 NewWorkspaceSlideOver create flow
+describe('NewWorkspaceSlideOver — create flow', () => {
   beforeEach(() => {
     // Most create-flow tests use a successful agents fetch so the Select renders.
     vi.mocked(fetchAgents).mockResolvedValue([])
@@ -120,7 +120,7 @@ describe('NewProjectSlideOver — create flow', () => {
 
     render(
       <QueryClientProvider client={makeClient()}>
-        <NewProjectSlideOver open onOpenChange={onOpenChange} />
+        <NewWorkspaceSlideOver open onOpenChange={onOpenChange} />
       </QueryClientProvider>,
     )
 
@@ -159,7 +159,7 @@ describe('NewProjectSlideOver — create flow', () => {
 
     render(
       <QueryClientProvider client={makeClient()}>
-        <NewProjectSlideOver open onOpenChange={onOpenChange} />
+        <NewWorkspaceSlideOver open onOpenChange={onOpenChange} />
       </QueryClientProvider>,
     )
 
@@ -224,7 +224,7 @@ describe('NewProjectSlideOver — create flow', () => {
 
     render(
       <QueryClientProvider client={makeClient()}>
-        <NewProjectSlideOver open onOpenChange={onOpenChange} />
+        <NewWorkspaceSlideOver open onOpenChange={onOpenChange} />
       </QueryClientProvider>,
     )
 
