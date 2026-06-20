@@ -22,6 +22,16 @@ type TranscriptionResponse struct {
 }
 
 func supportsAudioTranscription(model string) bool {
+	return ModelSupportsAudioTranscription(model)
+}
+
+// ModelSupportsAudioTranscription reports whether a model identifier (in
+// protocol-prefixed form, e.g. "openai/gpt-4o-audio-preview") is routed through
+// an OpenAI-compatible provider path capable of supplying the audio media payload
+// shape expected by NewAudioModelTranscriber. Exported so the Integrations
+// catalogue (pkg/gateway) can detect the active voice transcriber without
+// duplicating the protocol list.
+func ModelSupportsAudioTranscription(model string) bool {
 	protocol, _ := providers.ExtractProtocol(model)
 
 	switch protocol {
@@ -63,6 +73,13 @@ func DetectTranscriber(cfg *config.Config, secrets credentials.SecretBundle) Tra
 	// SecretBundle so child processes never see it via /proc/<pid>/environ.
 	if key := strings.TrimSpace(secrets.GetString(cfg.Voice.ElevenLabsAPIKeyRef)); key != "" {
 		return NewElevenLabsTranscriber(key)
+	}
+	// Groq transcriber via the dedicated voice.groq_api_key_ref (FR-12.1
+	// integrations surface). Resolved from the SecretBundle, same rationale as
+	// ElevenLabs above. Takes precedence over the legacy providers-list fallback
+	// so the Integrations picker is the single source of truth when set.
+	if key := strings.TrimSpace(secrets.GetString(cfg.Voice.GroqAPIKeyRef)); key != "" {
+		return NewGroqTranscriber(key)
 	}
 	// Fall back to any model-list entry that uses the groq/ protocol.
 	for _, mc := range cfg.Providers {
