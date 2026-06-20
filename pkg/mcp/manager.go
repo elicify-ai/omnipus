@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -19,6 +22,141 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
+
+// sandboxedCommandTransport is an mcp.Transport that spawns a stdio MCP server
+// subprocess via sandbox.StartLocked so the child inherits the gateway's
+// Landlock domain (ADR-019). It is a drop-in replacement for mcp.CommandTransport
+// that does NOT bypass the kernel sandbox.
+//
+// Why not use mcp.CommandTransport directly? CommandTransport.Connect calls
+// cmd.Start() on whatever OS thread Go's M:N scheduler happens to have routed
+// the spawning goroutine onto — almost always a worker thread that never had
+// restrict_self applied, so the child silently escapes the gateway's Landlock
+// domain. StartLocked locks a fresh OS thread, re-applies the Landlock domain
+// to it, forks the child from THAT thread, and exits without unlocking so the
+// runtime retires the (now-restricted) thread. On non-Linux platforms or when
+// the sandbox is disabled, StartLocked is a thin wrapper around cmd.Start() —
+// graceful degradation per the "graceful degradation" hard constraint.
+//
+// Process lifecycle (Wait/SIGTERM/SIGKILL on Close) mirrors
+// mcp.CommandTransport.pipeRWC.Close so behaviour is identical to the upstream
+// SDK transport. The Connection returned by Connect is the SDK's own ioConn
+// (built via mcp.IOTransport) wrapped in a sandboxedStdioConn that adds the
+// process reaping — we cannot construct an ioConn directly because newIOConn is
+// unexported in the SDK.
+type sandboxedCommandTransport struct {
+	cmd *exec.Cmd
+	// terminateDuration is how long Close waits after closing stdin for the
+	// child to exit before sending SIGTERM, then SIGKILL. Defaults to 5s.
+	terminateDuration time.Duration
+}
+
+// newSandboxedCommandTransport wraps an *exec.Cmd (already populated with Env,
+// Dir, etc. by the caller) in a sandboxedCommandTransport. The cmd must NOT
+// have been Start()ed — Connect does that via StartLocked.
+func newSandboxedCommandTransport(cmd *exec.Cmd) *sandboxedCommandTransport {
+	return &sandboxedCommandTransport{cmd: cmd, terminateDuration: 5 * time.Second}
+}
+
+// Connect implements mcp.Transport. It sets up the stdin/stdout pipes, spawns
+// the child through sandbox.StartLocked (inheriting the gateway Landlock
+// domain), and returns a Connection that reaps the process on Close.
+func (t *sandboxedCommandTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	// StdoutPipe / StdinPipe must be called BEFORE Start — they install the
+	// pipe FDs on cmd.Stdout / cmd.Stdin. Mirrors mcp.CommandTransport.Connect.
+	stdout, err := t.cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("mcp stdio: stdout pipe: %w", err)
+	}
+	// NopCloser on stdout so the SDK only closes the write side (stdin) —
+	// matches CommandTransport.pipeRWC semantics ("close the connection by
+	// closing stdin, not stdout").
+	stdout = io.NopCloser(stdout)
+	stdin, err := t.cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("mcp stdio: stdin pipe: %w", err)
+	}
+
+	// ADR-019: route the spawn through StartLocked so the forked child
+	// inherits the gateway's Landlock domain. On non-Linux / fallback
+	// sandbox this is a thin wrapper around cmd.Start().
+	if err := sandbox.StartLocked(t.cmd); err != nil {
+		return nil, fmt.Errorf("mcp stdio: sandboxed start: %w", err)
+	}
+
+	// Build the Connection via the SDK's exported IOTransport (newIOConn is
+	// unexported, so this is the only public way to get an ioConn over raw
+	// reader/writer pipes).
+	baseConn, err := (&mcp.IOTransport{Reader: stdout, Writer: stdin}).Connect(ctx)
+	if err != nil {
+		// Spawned but connection setup failed — kill the orphan so we don't
+		// leak a process. Best-effort; logged by the caller.
+		_ = t.cmd.Process.Kill()
+		_, _ = t.cmd.Process.Wait()
+		return nil, fmt.Errorf("mcp stdio: io transport connect: %w", err)
+	}
+	return &sandboxedStdioConn{
+		Connection:        baseConn,
+		cmd:               t.cmd,
+		terminateDuration: t.terminateDuration,
+	}, nil
+}
+
+// sandboxedStdioConn wraps the mcp.IOTransport Connection and adds process
+// lifecycle reaping on Close (Wait → SIGTERM → SIGKILL), mirroring
+// mcp.CommandTransport.pipeRWC.Close. Without this, the child would become a
+// zombie when the session ends because IOTransport.Close only closes the pipes.
+type sandboxedStdioConn struct {
+	mcp.Connection
+	cmd               *exec.Cmd
+	terminateDuration time.Duration
+}
+
+// Close closes the underlying pipes (EOF to child via stdin) and then reaps
+// the process. Errors from both phases are joined.
+func (s *sandboxedStdioConn) Close() error {
+	innerErr := s.Connection.Close()
+	reapErr := s.reap()
+	return errors.Join(innerErr, reapErr)
+}
+
+// reap waits for the child to exit, escalating to SIGTERM then SIGKILL if it
+// does not exit within terminateDuration. This is the same sequence
+// mcp.CommandTransport uses.
+func (s *sandboxedStdioConn) reap() error {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return nil
+	}
+	td := s.terminateDuration
+	if td <= 0 {
+		td = 5 * time.Second
+	}
+	resChan := make(chan error, 1)
+	go func() { resChan <- s.cmd.Wait() }()
+	wait := func() (error, bool) {
+		select {
+		case err := <-resChan:
+			return err, true
+		case <-time.After(td):
+		}
+		return nil, false
+	}
+	if err, ok := wait(); ok {
+		return err
+	}
+	if err := s.cmd.Process.Signal(syscall.SIGTERM); err == nil {
+		if err, ok := wait(); ok {
+			return err
+		}
+	}
+	if err := s.cmd.Process.Kill(); err != nil {
+		return err
+	}
+	if err, ok := wait(); ok {
+		return err
+	}
+	return fmt.Errorf("unresponsive MCP stdio subprocess")
+}
 
 // headerTransport is an http.RoundTripper that adds custom headers to requests
 type headerTransport struct {
@@ -343,6 +481,19 @@ func (m *Manager) ConnectServer(
 		if cfg.URL == "" {
 			return fmt.Errorf("URL is required for SSE/HTTP transport")
 		}
+		// Data-leaves-machine warning: a remote MCP URL sends prompts, tool
+		// arguments, and tool results to a third-party endpoint over HTTP/SSE.
+		// The operator should be aware this is NOT a local stdio subprocess —
+		// every request body leaves the machine. Logged at WARN on every
+		// connect so it is visible without a separate consent gate (the
+		// ws_approval infrastructure is per-tool-call, not per-server-config;
+		// a full consent gate is tracked separately).
+		logger.WarnCF("mcp", "Remote MCP server configured — data leaves the machine",
+			map[string]any{
+				"server": name,
+				"url":    cfg.URL,
+				"note":   "prompts, tool args, and tool results are sent to this remote endpoint",
+			})
 		logger.DebugCF("mcp", "Using SSE/HTTP transport",
 			map[string]any{
 				"server": name,
@@ -379,7 +530,11 @@ func (m *Manager) ConnectServer(
 				"server":  name,
 				"command": cfg.Command,
 			})
-		// Create command with context
+		// ADR-019 / FR-5.3: spawn via sandbox.StartLocked so the child
+		// inherits the gateway's Landlock domain. The previous raw
+		// exec.CommandContext + mcp.CommandTransport path bypassed
+		// StartLocked, so the fork happened on an unrestricted worker thread
+		// and the child silently escaped the kernel sandbox.
 		cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
 
 		env, err := buildStdioServerEnv(name, cfg)
@@ -388,7 +543,7 @@ func (m *Manager) ConnectServer(
 		}
 		cmd.Env = env
 
-		transport = &mcp.CommandTransport{Command: cmd}
+		transport = newSandboxedCommandTransport(cmd)
 	default:
 		return fmt.Errorf(
 			"unsupported transport type: %s (supported: stdio, sse, http)",
