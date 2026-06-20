@@ -7556,10 +7556,17 @@ func inboundMetadata(msg bus.InboundMessage, key string) string {
 
 // inboundInstanceID returns the channel-instance key a message arrived on
 // (Spec-2 FR-2.5). Channels MAY tag the instance explicitly via the
-// "instance_id" metadata key; in v0.1 (cap-1/type) the instance key equals the
-// channel type, so an untagged message falls back to msg.Channel. The result is
-// lower-cased to match the config map keys (which are channel-type names).
+// InboundMessage.InstanceID field (ADR-019 FR-4b) or, during the transition
+// off the metadata-smuggling pattern, the legacy "instance_id" metadata key;
+// in v0.1 (cap-1/type) the instance key equals the channel type, so an
+// untagged message falls back to msg.Channel. The result is lower-cased to
+// match the config map keys (which are channel-type names).
 func inboundInstanceID(msg bus.InboundMessage) string {
+	if id := strings.TrimSpace(msg.InstanceID); id != "" {
+		return strings.ToLower(id)
+	}
+	// Backward-compat fallback: channels still using the legacy metadata key
+	// during the FR-4b transition continue to work.
 	if id := strings.TrimSpace(inboundMetadata(msg, metadataKeyInstanceID)); id != "" {
 		return strings.ToLower(id)
 	}
