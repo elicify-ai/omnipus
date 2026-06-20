@@ -125,6 +125,12 @@ type MemoryStore struct {
 	// privateRoom is the per-agent private room. Never nil after NewMemoryStore.
 	privateRoom memrooms.Room
 
+	// agentID is the wired agent ID used as the memory author. Set via
+	// SetAgentID (called from ContextBuilder.WithAgentInfo). When empty,
+	// resolveAuthor falls back to deriving it from the private room's path —
+	// kept for tests that construct a MemoryStore directly without agent info.
+	agentID string
+
 	// omnipusHome is the resolved $OMNIPUS_HOME used to build workspace room paths.
 	omnipusHome string
 
@@ -174,6 +180,13 @@ func (ms *MemoryStore) SetClock(now func() time.Time) {
 		return
 	}
 	ms.now = func() time.Time { return now().UTC() }
+}
+
+// SetAgentID wires the agent ID used as the memory author. Called by
+// ContextBuilder.WithAgentInfo once the agent ID is known. When not called,
+// resolveAuthor falls back to deriving the ID from the private room's path.
+func (ms *MemoryStore) SetAgentID(id string) {
+	ms.agentID = id
 }
 
 // NewMemoryStore creates a MemoryStore with the given agent workspace directory.
@@ -873,13 +886,17 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 }
 
 // WriteLastSession atomically writes content to the private room's last-session.md.
+// last-session.md is a private-room-only artifact (D19); the shared workspace
+// room has no last-session.md.
 func (ms *MemoryStore) WriteLastSession(content string) error {
-	return fileutil.WriteFileAtomic(ms.privateRoom.LastSessionPath, []byte(content), 0o600)
+	path := filepath.Join(ms.privateRoom.Root, memrooms.LastSessionFile)
+	return fileutil.WriteFileAtomic(path, []byte(content), 0o600)
 }
 
 // ReadLastSession returns the contents of last-session.md, or "" if absent.
 func (ms *MemoryStore) ReadLastSession() (string, error) {
-	data, err := os.ReadFile(ms.privateRoom.LastSessionPath)
+	path := filepath.Join(ms.privateRoom.Root, memrooms.LastSessionFile)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -931,8 +948,12 @@ func (ms *MemoryStore) SharedRoom() *memrooms.Room {
 // --- helpers ---------------------------------------------------------------
 
 // resolveAuthor returns the agent ID to record as the memory author.
-// Since MemoryStore doesn't carry the agent ID directly, we read the directory name.
+// Prefers the wired agent ID (SetAgentID); falls back to the directory name
+// of the agent workspace for callers (e.g. tests) that don't wire it.
 func (ms *MemoryStore) resolveAuthor() string {
+	if ms.agentID != "" {
+		return ms.agentID
+	}
 	return filepath.Base(filepath.Dir(ms.privateRoom.Root))
 }
 

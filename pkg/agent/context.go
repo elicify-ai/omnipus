@@ -90,6 +90,11 @@ func (cb *ContextBuilder) WithSplitOnMarker(enabled bool) *ContextBuilder {
 func (cb *ContextBuilder) WithAgentInfo(id, name string) *ContextBuilder {
 	cb.agentID = id
 	cb.agentName = name
+	// Wire the agent ID into the memory store so memory authorship is recorded
+	// from the known identity rather than derived from the workspace path.
+	if cb.memory != nil {
+		cb.memory.SetAgentID(id)
+	}
 	return cb
 }
 
