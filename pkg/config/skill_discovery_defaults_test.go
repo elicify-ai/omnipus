@@ -56,7 +56,7 @@ func TestRestoreSkillDiscoveryDefaults_OnboardedConfigWithZeroValues(t *testing.
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	ch := cfg.Tools.Skills.Registries.ClawHub
+	ch := clawHubMarketplace(cfg)
 	if !ch.Enabled {
 		t.Errorf("clawhub.Enabled = false; want true (default restored)")
 	}
@@ -87,7 +87,7 @@ func TestRestoreSkillDiscoveryDefaults_DefaultRoundTrip(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	ch := cfg.Tools.Skills.Registries.ClawHub
+	ch := clawHubMarketplace(cfg)
 	if !ch.Enabled || ch.BaseURL != clawHubDefaultURL {
 		t.Errorf("clawhub = {enabled:%v base_url:%q}; want {true %q}", ch.Enabled, ch.BaseURL, clawHubDefaultURL)
 	}
@@ -123,10 +123,11 @@ func TestRestoreSkillDiscoveryDefaults_RespectsExplicitDisable(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	if cfg.Tools.Skills.Registries.ClawHub.Enabled {
+	ch := clawHubMarketplace(cfg)
+	if ch.Enabled {
 		t.Errorf("clawhub.Enabled = true; want false (explicit operator disable preserved)")
 	}
-	if got := cfg.Tools.Skills.Registries.ClawHub.BaseURL; got != "https://example.test" {
+	if got := ch.BaseURL; got != "https://example.test" {
 		t.Errorf("clawhub.BaseURL = %q; want %q (explicit URL preserved)", got, "https://example.test")
 	}
 	if cfg.Tools.FindSkills.Enabled {
@@ -160,7 +161,7 @@ func TestRestoreSkillDiscoveryDefaults_EmptyBaseURLHealedEvenWhenPresent(t *test
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	ch := cfg.Tools.Skills.Registries.ClawHub
+	ch := clawHubMarketplace(cfg)
 	if ch.BaseURL != clawHubDefaultURL {
 		t.Errorf("clawhub.BaseURL = %q; want %q (empty URL healed)", ch.BaseURL, clawHubDefaultURL)
 	}
@@ -185,7 +186,7 @@ func TestRestoreSkillDiscoveryDefaults_NoToolsSectionAtAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	ch := cfg.Tools.Skills.Registries.ClawHub
+	ch := clawHubMarketplace(cfg)
 	if !ch.Enabled || ch.BaseURL != clawHubDefaultURL {
 		t.Errorf("clawhub = {enabled:%v base_url:%q}; want {true %q}", ch.Enabled, ch.BaseURL, clawHubDefaultURL)
 	}
@@ -198,11 +199,24 @@ func TestRestoreSkillDiscoveryDefaults_NoToolsSectionAtAll(t *testing.T) {
 // sanity check that DefaultConfig itself is the source of truth we assert on.
 func TestDefaultConfig_SkillDiscoveryDefaults(t *testing.T) {
 	def := DefaultConfig()
-	b, _ := json.Marshal(def.Tools.Skills.Registries.ClawHub)
-	t.Logf("default clawhub: %s", b)
-	if !def.Tools.Skills.Registries.ClawHub.Enabled ||
-		def.Tools.Skills.Registries.ClawHub.BaseURL != clawHubDefaultURL ||
+	ch := clawHubMarketplace(def)
+	b, _ := json.Marshal(ch)
+	t.Logf("default clawhub marketplace: %s", b)
+	if !ch.Enabled ||
+		ch.BaseURL != clawHubDefaultURL ||
 		!def.Tools.FindSkills.Enabled || !def.Tools.InstallSkill.Enabled {
 		t.Fatalf("DefaultConfig skill-discovery defaults regressed")
 	}
+}
+
+// clawHubMarketplace returns the ClawHub entry from cfg's marketplaces list
+// (located by Type=="clawhub"). Returns a zero MarketplaceConfig if no such
+// entry exists.
+func clawHubMarketplace(cfg *Config) MarketplaceConfig {
+	for _, m := range cfg.Tools.Skills.Marketplaces {
+		if m.Type == "clawhub" {
+			return m
+		}
+	}
+	return MarketplaceConfig{}
 }

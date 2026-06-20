@@ -3311,14 +3311,20 @@ func (a *restAPI) validateSkillIDs(ids []string) string {
 // marketplaceEnabled reports whether at least one skill marketplace registry is
 // enabled, read live from the current config. When false the search and
 // slug-install endpoints refuse with 409 and the SPA hides its skill-browse UI.
-// A marketplace is available when ClawHub is enabled OR a GitHub registry token
-// is configured. ClawHub is enabled by default, so the default behavior is "on".
+// A marketplace is available when any entry in the unified Marketplaces list
+// (FR-10.1) is enabled. ClawHub is enabled by default, so the default behavior
+// is "on".
 func (a *restAPI) marketplaceEnabled() bool {
 	cfg := a.agentLoop.GetConfig()
 	if cfg == nil {
 		return false
 	}
-	return cfg.Tools.Skills.Registries.ClawHub.Enabled || cfg.Tools.Skills.Github.TokenRef != ""
+	for _, m := range cfg.Tools.Skills.Marketplaces {
+		if m.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // skillMarketplaceStatus handles GET /api/v1/skills/marketplace. It reports
@@ -3327,25 +3333,21 @@ func (a *restAPI) marketplaceEnabled() bool {
 func (a *restAPI) skillMarketplaceStatus(w http.ResponseWriter) {
 	cfg := a.agentLoop.GetConfig()
 
-	clawhubEnabled := false
-	githubEnabled := false
+	status := gen.SkillMarketplaceStatus{}
 	if cfg != nil {
-		clawhubEnabled = cfg.Tools.Skills.Registries.ClawHub.Enabled
-		githubEnabled = cfg.Tools.Skills.Github.TokenRef != ""
-	}
-
-	status := gen.SkillMarketplaceStatus{
-		Enabled: clawhubEnabled || githubEnabled,
-	}
-	status.Registries = append(status.Registries, struct {
-		Enabled bool   `json:"enabled"`
-		Name    string `json:"name"`
-	}{Enabled: clawhubEnabled, Name: "clawhub"})
-	if githubEnabled {
-		status.Registries = append(status.Registries, struct {
-			Enabled bool   `json:"enabled"`
-			Name    string `json:"name"`
-		}{Enabled: true, Name: "github"})
+		for _, m := range cfg.Tools.Skills.Marketplaces {
+			name := m.Name
+			if name == "" {
+				name = m.Type
+			}
+			if m.Enabled {
+				status.Enabled = true
+			}
+			status.Registries = append(status.Registries, struct {
+				Enabled bool   `json:"enabled"`
+				Name    string `json:"name"`
+			}{Enabled: m.Enabled, Name: name})
+		}
 	}
 
 	jsonOK(w, status)
