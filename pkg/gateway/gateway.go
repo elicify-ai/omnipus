@@ -785,34 +785,25 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// built-in produces a user override rather than mutating the shipped built-in.
 	sysSkillWriter := skills.NewSkillWriter(skillsGlobalDir)
 
-	// RegistryManager: fans out search/install to all configured registries.
-	// The SSRF checker (nil when SSRF is disabled) is injected into the ClawHub
-	// HTTP client so outbound registry traffic honors the SSRF policy (SEC-24).
-	clawHubCfg := cfg.Tools.Skills.Registries.ClawHub
-	regCfg := skills.RegistryConfig{
-		ClawHub: skills.ClawHubConfig{
-			Enabled:         clawHubCfg.Enabled,
-			BaseURL:         clawHubCfg.BaseURL,
-			AuthToken:       bundle.GetString(clawHubCfg.AuthTokenRef),
-			SearchPath:      clawHubCfg.SearchPath,
-			SkillsPath:      clawHubCfg.SkillsPath,
-			DownloadPath:    clawHubCfg.DownloadPath,
-			Timeout:         clawHubCfg.Timeout,
-			MaxZipSize:      clawHubCfg.MaxZipSize,
-			MaxResponseSize: clawHubCfg.MaxResponseSize,
-		},
-		MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
-	}
+	// RegistryManager: fans out search/install to all configured marketplaces
+	// (FR-10.1 unified list). The SSRF checker (nil when SSRF is disabled) is
+	// injected into the ClawHub HTTP client so outbound registry traffic honors
+	// the SSRF policy (SEC-24).
 	ssrfChecker := agent.GetSSRFChecker(agentLoop)
+	var ssrfClient *http.Client
 	if ssrfChecker != nil {
-		regCfg.ClawHub.HTTPClient = ssrfChecker.SafeClient()
+		ssrfClient = ssrfChecker.SafeClient()
+	}
+	regCfg := skills.RegistryConfig{
+		Marketplaces:          skills.MarketplacesFromConfig(cfg, bundle.GetString, ssrfClient, skillsWorkspace),
+		MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
 	}
 	sysRegistryManager := skills.NewRegistryManagerFromConfig(regCfg)
 
 	// SkillInstaller: downloads and installs skills into the operator workspace.
-	// GitHub token from credentials (optional; nil → unauthenticated API calls).
-	githubToken := bundle.GetString(cfg.Tools.Skills.Github.TokenRef)
-	githubProxy := cfg.Tools.Skills.Github.Proxy
+	// GitHub token/proxy from the first github marketplace entry (optional;
+	// empty → unauthenticated API calls).
+	githubToken, githubProxy := skills.FirstGitHubMarketplaceCreds(cfg, bundle.GetString)
 	sysSkillInstaller, err := skills.NewSkillInstallerWithSSRF(
 		skillsWorkspace, githubToken, githubProxy, ssrfChecker,
 	)
@@ -1469,26 +1460,29 @@ func setupAndStartServices(
 	runningServices.selfWriteReg = selfWriteReg
 
 	// ClawHub marketplace registry backing GET /api/v1/skills/search and
-	// install-by-slug. Built with the SSRF-safe HTTP client (SEC-24) so outbound
-	// registry traffic honors the SSRF policy. The client defaults BaseURL to
-	// https://clawhub.ai when unset. Auth token (optional) is resolved from the
-	// credential bundle.
-	skillSearchCfg := cfg.Tools.Skills.Registries.ClawHub
-	skillRegistryCfg := skills.ClawHubConfig{
-		Enabled:         skillSearchCfg.Enabled,
-		BaseURL:         skillSearchCfg.BaseURL,
-		AuthToken:       bundle.GetString(skillSearchCfg.AuthTokenRef),
-		SearchPath:      skillSearchCfg.SearchPath,
-		SkillsPath:      skillSearchCfg.SkillsPath,
-		DownloadPath:    skillSearchCfg.DownloadPath,
-		Timeout:         skillSearchCfg.Timeout,
-		MaxZipSize:      skillSearchCfg.MaxZipSize,
-		MaxResponseSize: skillSearchCfg.MaxResponseSize,
-	}
+	// install-by-slug. Built from the unified Marketplaces list (FR-10.1) with
+	// the SSRF-safe HTTP client (SEC-24) so outbound registry traffic honors
+	// the SSRF policy. The client defaults BaseURL to https://clawhub.ai when
+	// unset. Auth token (optional) is resolved from the credential bundle.
+	var restSSRFClient *http.Client
 	if restSSRF := agent.GetSSRFChecker(agentLoop); restSSRF != nil {
-		skillRegistryCfg.HTTPClient = restSSRF.SafeClient()
+		restSSRFClient = restSSRF.SafeClient()
 	}
-	skillRegistry := skills.NewClawHubRegistry(skillRegistryCfg)
+	var skillRegistry skills.SkillRegistry
+	if chEntry, ok := skills.ClawHubMarketplaceFromConfig(cfg, bundle.GetString, restSSRFClient); ok {
+		skillRegistry = skills.NewClawHubRegistry(skills.ClawHubConfig{
+			Enabled:         chEntry.Enabled,
+			BaseURL:         chEntry.BaseURL,
+			AuthToken:       chEntry.AuthToken,
+			SearchPath:      chEntry.SearchPath,
+			SkillsPath:      chEntry.SkillsPath,
+			DownloadPath:    chEntry.DownloadPath,
+			Timeout:         chEntry.Timeout,
+			MaxZipSize:      chEntry.MaxZipSize,
+			MaxResponseSize: chEntry.MaxResponseSize,
+			HTTPClient:      chEntry.HTTPClient,
+		})
+	}
 
 	api := &restAPI{
 		agentLoop:       agentLoop,

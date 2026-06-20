@@ -2736,10 +2736,41 @@ type ExecConfig struct {
 
 type SkillsToolsConfig struct {
 	ToolConfig            `                       yaml:"-"                 envPrefix:"OMNIPUS_TOOLS_SKILLS_"`
-	Registries            SkillsRegistriesConfig `yaml:",inline,omitempty"                                   json:"registries"`
-	Github                SkillsGithubConfig     `yaml:"github,omitempty"                                    json:"github"`
-	MaxConcurrentSearches int                    `yaml:"-"                                                   json:"max_concurrent_searches" env:"OMNIPUS_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
-	SearchCache           SearchCacheConfig      `yaml:"-"                                                   json:"search_cache"`
+	Marketplaces          []MarketplaceConfig `yaml:"-"                                                   json:"marketplaces,omitempty"`
+	MaxConcurrentSearches int                 `yaml:"-"                                                   json:"max_concurrent_searches" env:"OMNIPUS_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
+	SearchCache           SearchCacheConfig   `yaml:"-"                                                   json:"search_cache"`
+}
+
+// MarketplaceConfig is the persisted shape of one skill-marketplace entry
+// (FR-10.1). Each entry describes one marketplace registry (ClawHub, GitHub,
+// or a future "omnipus" registry). Type selects the registry implementation;
+// the remaining fields are interpreted per Type.
+//
+// Secret fields use credential REFS (env-var names resolved at boot via
+// credentials.InjectFromConfig, SEC-23) — never plaintext values.
+type MarketplaceConfig struct {
+	// Name is the unique display name (e.g. "clawhub", "github"). Defaults to
+	// Type when empty.
+	Name string `json:"name"`
+	// Type selects the registry implementation: "clawhub" | "github"
+	// (future: "omnipus").
+	Type string `json:"type"`
+	// Enabled controls whether this marketplace is active.
+	Enabled bool `json:"enabled"`
+
+	// ClawHub-specific fields (Type == "clawhub").
+	BaseURL         string `json:"base_url,omitempty"`
+	AuthTokenRef    string `json:"auth_token_ref,omitempty"` // env-var name (credential ref)
+	SearchPath      string `json:"search_path,omitempty"`
+	SkillsPath      string `json:"skills_path,omitempty"`
+	DownloadPath    string `json:"download_path,omitempty"`
+	Timeout         int    `json:"timeout,omitempty"`
+	MaxZipSize      int    `json:"max_zip_size,omitempty"`
+	MaxResponseSize int    `json:"max_response_size,omitempty"`
+
+	// GitHub-specific fields (Type == "github").
+	TokenRef string `json:"token_ref,omitempty"` // env-var name (credential ref)
+	Proxy    string `json:"proxy,omitempty"`
 }
 
 type MediaCleanupConfig struct {
@@ -2876,31 +2907,6 @@ func (c *ToolsConfig) GetFilterMinLength() int {
 type SearchCacheConfig struct {
 	MaxSize    int `json:"max_size"    env:"OMNIPUS_SKILLS_SEARCH_CACHE_MAX_SIZE"`
 	TTLSeconds int `json:"ttl_seconds" env:"OMNIPUS_SKILLS_SEARCH_CACHE_TTL_SECONDS"`
-}
-
-type SkillsRegistriesConfig struct {
-	ClawHub ClawHubRegistryConfig `json:"clawhub" yaml:"clawhub,omitempty"`
-}
-
-type SkillsGithubConfig struct {
-	// TokenRef is the env-var name whose value holds the GitHub personal access token.
-	// Resolved at boot via credentials.InjectFromConfig; never store the token value here.
-	TokenRef string `json:"token_ref,omitempty" yaml:"-" env:"OMNIPUS_TOOLS_SKILLS_GITHUB_TOKEN_REF"`
-	Proxy    string `json:"proxy,omitempty"     yaml:"-" env:"OMNIPUS_TOOLS_SKILLS_GITHUB_PROXY"`
-}
-
-type ClawHubRegistryConfig struct {
-	Enabled bool   `json:"enabled"  yaml:"-" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_ENABLED"`
-	BaseURL string `json:"base_url" yaml:"-" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_BASE_URL"`
-	// AuthTokenRef is the env-var name whose value holds the ClawHub authentication token.
-	// Resolved at boot via credentials.InjectFromConfig; never store the token value here.
-	AuthTokenRef    string `json:"auth_token_ref,omitempty" yaml:"-" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN_REF"`
-	SearchPath      string `json:"search_path"              yaml:"-" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_SEARCH_PATH"`
-	SkillsPath      string `json:"skills_path"              yaml:"-" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_SKILLS_PATH"`
-	DownloadPath    string `json:"download_path"            yaml:"-" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_DOWNLOAD_PATH"`
-	Timeout         int    `json:"timeout"                  yaml:"-" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_TIMEOUT"`
-	MaxZipSize      int    `json:"max_zip_size"             yaml:"-" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_MAX_ZIP_SIZE"`
-	MaxResponseSize int    `json:"max_response_size"        yaml:"-" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_MAX_RESPONSE_SIZE"`
 }
 
 // MCPServerConfig defines configuration for a single MCP server
@@ -3110,6 +3116,13 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// security.tool_policies deny entries so operator intent is enforced
 	// by the policy engine rather than silently ignored (issue #237).
 	migrateDeprecatedToolEnableFlags(cfg, data)
+
+	// Migrate the pre-FR-10.1 skills config shape (typed ClawHub singleton +
+	// separate Github block) into the unified Marketplaces list. Idempotent:
+	// a no-op when the raw config already carries a "marketplaces" key. Runs
+	// BEFORE restoreSkillDiscoveryDefaults so the healer sees the migrated
+	// list (and so operator values from the old shape are preserved).
+	migrateMarketplaces(cfg, data)
 
 	// Restore skill-discovery tool defaults (find_skills/install_skill enabled,
 	// ClawHub {enabled:true, base_url:"https://clawhub.ai"}) for configs that

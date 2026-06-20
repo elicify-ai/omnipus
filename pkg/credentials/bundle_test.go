@@ -172,14 +172,18 @@ func TestResolveBundle_AllChannelRefs(t *testing.T) {
 			refName: "SKILLS_GITHUB_TOKEN",
 			want:    "github-token",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Tools.Skills.Github.TokenRef = ref
+				cfg.Tools.Skills.Marketplaces = append(cfg.Tools.Skills.Marketplaces, config.MarketplaceConfig{
+					Name: "github", Type: "github", Enabled: true, TokenRef: ref,
+				})
 			},
 		},
 		{
 			refName: "CLAWHUB_AUTH_TOKEN",
 			want:    "clawhub-token",
 			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Tools.Skills.Registries.ClawHub.AuthTokenRef = ref
+				cfg.Tools.Skills.Marketplaces = append(cfg.Tools.Skills.Marketplaces, config.MarketplaceConfig{
+					Name: "clawhub", Type: "clawhub", Enabled: true, AuthTokenRef: ref,
+				})
 			},
 		},
 		{

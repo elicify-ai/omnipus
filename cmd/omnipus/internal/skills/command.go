@@ -30,10 +30,11 @@ func NewSkillsCommand() *cobra.Command {
 			}
 
 			d.workspace = cfg.WorkspacePath()
+			githubToken, githubProxy := skills.FirstGitHubMarketplaceCreds(cfg, os.Getenv)
 			installer, err := skills.NewSkillInstaller(
 				d.workspace,
-				os.Getenv(cfg.Tools.Skills.Github.TokenRef),
-				cfg.Tools.Skills.Github.Proxy,
+				githubToken,
+				githubProxy,
 			)
 			if err != nil {
 				return fmt.Errorf("error creating skills installer: %w", err)

@@ -23,20 +23,11 @@ const skillsSearchMaxResults = 20
 // buildRegistryManager creates a RegistryManager from the application config.
 // Used by install, update, and search commands.
 func buildRegistryManager(cfg *config.Config) *skills.RegistryManager {
-	ch := cfg.Tools.Skills.Registries.ClawHub
 	return skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
+		Marketplaces: skills.MarketplacesFromConfig(
+			cfg, os.Getenv, nil /* no SSRF client in CLI */, cfg.WorkspacePath(),
+		),
 		MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
-		ClawHub: skills.ClawHubConfig{
-			Enabled:         ch.Enabled,
-			BaseURL:         ch.BaseURL,
-			AuthToken:       os.Getenv(ch.AuthTokenRef),
-			SearchPath:      ch.SearchPath,
-			SkillsPath:      ch.SkillsPath,
-			DownloadPath:    ch.DownloadPath,
-			Timeout:         ch.Timeout,
-			MaxZipSize:      ch.MaxZipSize,
-			MaxResponseSize: ch.MaxResponseSize,
-		},
 	})
 }
 

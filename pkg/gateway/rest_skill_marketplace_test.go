@@ -38,8 +38,14 @@ func newTestRestAPIWithClawHub(t *testing.T, clawhubEnabled bool, githubTokenRef
 			},
 		},
 	}
-	cfg.Tools.Skills.Registries.ClawHub.Enabled = clawhubEnabled
-	cfg.Tools.Skills.Github.TokenRef = githubTokenRef
+	cfg.Tools.Skills.Marketplaces = []config.MarketplaceConfig{
+		{Name: "clawhub", Type: "clawhub", Enabled: clawhubEnabled, BaseURL: "https://clawhub.ai"},
+	}
+	if githubTokenRef != "" {
+		cfg.Tools.Skills.Marketplaces = append(cfg.Tools.Skills.Marketplaces, config.MarketplaceConfig{
+			Name: "github", Type: "github", Enabled: true, TokenRef: githubTokenRef,
+		})
+	}
 	seedTestAgents(cfg)
 
 	msgBus := bus.NewMessageBus()
