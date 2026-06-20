@@ -1,3 +1,4 @@
+<!-- Rev: reconciled with ADR-019 operator decisions + implementation state (W0-A) -->
 # Spec-6 — Skills + Self-Improvement, Plugin/Marketplace Shape, Integrations & Auth (v0.1.0 Foundation)
 
 - **Spec:** 6 of 6 (v0.1.0 Foundation)
@@ -47,7 +48,7 @@
 
 **US-4 — Per-agent allowlist + progressive disclosure (P0).** 1. **Given** the base agents, **When** skills load, **Then** each agent sees only its allowlisted skills, loaded on demand (anti-bloat); the matrix: summarize→Mia/Ray, plan→Jim, skill-authoring→Ava, daily-briefing→Mia.
 
-**US-5 — Marketplace-provider list (P0).** 1. **Given** `RegistryConfig` as a **list**, **When** I configure ClawHub + GitHub, **Then** `recall`/search fans out across both (the manager already supports N registries); the installer UI is deferred (shape only).
+**US-5 — Marketplace-provider list (P0).** 1. **Given** `RegistryConfig` as a **list**, **When** I configure ClawHub + GitHub, **Then** search fans out across ClawHub (searchable) + GitHub (install-only, participates via partial-result semantics — `ErrGitHubSearchNotSupported` by design; the manager already supports N registries); the installer UI is deferred (shape only).
 
 **US-6 — Plugin bundle-manifest shape (P0, shape only).** 1. **Given** the component-level-hybrid manifest, **Then** the SHAPE is defined (reuse `SKILL.md` + `.mcp.json`; native agents/channels/providers) — the installer is deferred.
 
@@ -103,7 +104,7 @@ Scenario: Marketplace search fans out across the list
   Category: Happy Path
   Given RegistryConfig lists ClawHub and GitHub
   When search runs
-  Then it fans out across both registries
+  Then it fans out across ClawHub (searchable) + GitHub (install-only, participates via partial-result semantics)
 
 Scenario: Sensitive setting requires the one password
   Traces to: US-8 / AC-1
@@ -154,7 +155,7 @@ Scenario: Onboarding auto-provisions Mia
 - **FR-12.3:** MUST ship the **3-step onboarding** (name → password → model key) → auto-provision **Mia·Assistant** in My Workspace.
 
 **Success Criteria**
-- **SC-1:** the 4 skill tools return real engine results (0 "stub" placeholders). · **SC-2:** `system.skill.create`/`edit` exist, consent-gated, versioned; built-in edits = override. · **SC-3:** fresh install seeds the 4 default skills from `go:embed`. · **SC-4:** each base agent sees only its allowlisted skills. · **SC-5:** `RegistryConfig` is a list; search fans out across ≥2 registries. · **SC-6:** the bundle-manifest shape is documented. · **SC-7:** a sensitive setting without password re-type is rejected. · **SC-8:** onboarding provisions Mia. · **SC-9:** build + typecheck + verify-contracts exit 0 (CI authority; local scoped).
+- **SC-1:** the 4 skill tools return real engine results (0 "stub" placeholders). · **SC-2:** `system.skill.create`/`edit` exist, consent-gated, versioned; built-in edits = override. · **SC-3:** fresh install seeds the 4 default skills from `go:embed`. · **SC-4:** each base agent sees only its allowlisted skills. · **SC-5:** `RegistryConfig` is a list; search fans out across ≥1 searchable registry + install-only registries participate without failing. · **SC-6:** the bundle-manifest shape is documented. · **SC-7:** a sensitive setting without password re-type is rejected. · **SC-8:** onboarding provisions Mia. · **SC-9:** build + typecheck + verify-contracts exit 0 (CI authority; local scoped).
 
 ## 8. Traceability Matrix
 

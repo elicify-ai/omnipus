@@ -1,3 +1,4 @@
+<!-- Rev: reconciled with ADR-019 operator decisions + implementation state (W0-A) -->
 # Spec-2 — Connection-as-Instance Migration, Connectors UI & Basic Email (v0.1.0 Foundation)
 
 - **Spec:** 2 of 6 (v0.1.0 Foundation)
