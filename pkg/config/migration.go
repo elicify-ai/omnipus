@@ -879,7 +879,7 @@ func restoreSkillDiscoveryDefaults(cfg *Config, raw []byte) {
 		}
 		entry := MarketplaceConfig{
 			Name:    "clawhub",
-			Type:    "clawhub",
+			Type:    MarketplaceTypeClawHub,
 			Enabled: enabled,
 			BaseURL: defaults.Tools.Skills.Marketplaces[0].BaseURL,
 		}
@@ -1055,7 +1055,7 @@ func migrateMarketplaces(cfg *Config, raw []byte) {
 			if json.Unmarshal(reg.ClawHub, &ch) == nil {
 				marketplaces = append(marketplaces, MarketplaceConfig{
 					Name:            "clawhub",
-					Type:            "clawhub",
+					Type:            MarketplaceTypeClawHub,
 					Enabled:         ch.Enabled,
 					BaseURL:         ch.BaseURL,
 					AuthTokenRef:    ch.AuthTokenRef,
@@ -1079,7 +1079,7 @@ func migrateMarketplaces(cfg *Config, raw []byte) {
 		if json.Unmarshal(skills.Github, &gh) == nil && (gh.TokenRef != "" || gh.Proxy != "") {
 			marketplaces = append(marketplaces, MarketplaceConfig{
 				Name:     "github",
-				Type:     "github",
+				Type:     MarketplaceTypeGitHub,
 				Enabled:  true,
 				TokenRef: gh.TokenRef,
 				Proxy:    gh.Proxy,

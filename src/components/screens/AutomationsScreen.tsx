@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { Lightning } from '@phosphor-icons/react'
 import {
   fetchSchedules,
   fetchAgents,
@@ -54,7 +55,7 @@ function AutomationRulesSection() {
         <SkeletonList />
       ) : schedules.length === 0 ? (
         <EmptyState
-          icon={<span className="text-2xl text-[var(--color-muted)]">⚡</span>}
+          icon={<Lightning size={32} className="text-[var(--color-muted)]" />}
           message="No automations yet."
         />
       ) : (

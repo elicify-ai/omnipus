@@ -21,11 +21,15 @@ import (
 // W3-AC reframes the schedules surface as "Automations" (Trigger → Action). The
 // underlying storage is unchanged (cron.CronJob); this endpoint is a computed
 // display projection that pairs each schedule with human-readable trigger and
-// action strings the SPA can render verbatim without re-implementing cron
-// humanisation or agent-name resolution in TypeScript.
+// action strings.
 //
-// This is a read-only view over the existing /schedules data — it does not
-// introduce a new storage format. Writes still go through /api/v1/schedules.
+// NOTE (future-use): the SPA's AutomationsScreen currently computes trigger/action
+// summaries client-side via triggerSummary (SchedulesList). This server-side
+// projection is retained as a future replacement for the client-side logic
+// (centralising cron humanisation + agent-name resolution). It is read-only,
+// exercised by tests, and does not affect the persisted schedule contract.
+// Writes still go through /api/v1/schedules.
+//
 // The response reuses the generated gen.Schedule for the raw fields and adds
 // the two computed display strings alongside it; because the display strings
 // are a derived presentational projection (not a persisted wire format), the
