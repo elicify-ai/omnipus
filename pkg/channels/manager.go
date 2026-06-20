@@ -635,81 +635,14 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 			continue
 		}
 
-		// Per-type prerequisite checks (misconfiguration guard).
-		switch inst.Type {
-		case "telegram":
-			if inst.TokenRef == "" {
-				warnMisconfigured("Telegram", "token")
-				continue
-			}
-		case "discord":
-			if inst.TokenRef == "" {
-				warnMisconfigured("Discord", "token")
-				continue
-			}
-		case "dingtalk":
-			if inst.ClientID == "" {
-				warnMisconfigured("DingTalk", "client_id")
-				continue
-			}
-		case "slack":
-			if inst.BotTokenRef == "" {
-				warnMisconfigured("Slack", "bot_token")
-				continue
-			}
-		case "matrix":
-			// Validate THIS instance's matrix config (instanceID may differ from the
-			// "matrix" type key — a hardcoded m.config.Channels["matrix"] lookup would
-			// validate the wrong/absent instance and mis-gate a correctly-named one).
-			if inst.Homeserver == "" || inst.UserID == "" || inst.AccessTokenRef == "" {
-				warnMisconfigured("Matrix", "homeserver, user_id, access_token")
-				continue
-			}
-		case "line":
-			if inst.ChannelAccessTokenRef == "" {
-				warnMisconfigured("LINE", "channel_access_token")
-				continue
-			}
-		case "wecom":
-			if inst.BotID == "" || inst.SecretRef == "" {
-				warnMisconfigured("WeCom", "bot_id, secret")
-				continue
-			}
-		case "weixin":
-			if inst.TokenRef == "" {
-				warnMisconfigured("Weixin", "token")
-				continue
-			}
-		case "irc":
-			if inst.Server == "" {
-				warnMisconfigured("IRC", "server")
-				continue
-			}
-		case "google-chat":
-			gc := inst
-			if gc.WebhookURLRef == "" &&
-				gc.ServiceAccountJSONRef == "" &&
-				gc.WebhookURL.String() == "" &&
-				gc.ServiceAccountJSON.String() == "" &&
-				gc.ServiceAccountFile == "" {
-				warnMisconfigured("Google Chat", "webhook_url, service_account_json, or service_account_file")
-				continue
-			}
-		case "email":
-			if inst.IMAPHost == "" {
-				warnMisconfigured("Email", "imap_host")
-				continue
-			}
-			if inst.SMTPHost == "" {
-				warnMisconfigured("Email", "smtp_host")
-				continue
-			}
-			if inst.EmailUsername == "" {
-				warnMisconfigured("Email", "username")
-				continue
-			}
-			if inst.PasswordRef == "" {
-				warnMisconfigured("Email", "password")
+		// Per-type prerequisite checks (misconfiguration guard). Data-driven:
+		// each channel type registers a PrerequisiteChecker (see
+		// prerequisites.go / channel subpackage init). A type with no
+		// registered checker activates without gating.
+		if checker, ok := getPrerequisite(inst.Type); ok {
+			missing, ok := checker(inst)
+			if !ok {
+				warnMisconfigured(inst.Type, missing)
 				continue
 			}
 		}

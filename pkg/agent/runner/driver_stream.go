@@ -169,17 +169,55 @@ func streamParser(
 	return emittedFatal
 }
 
-// detectCLIVersion runs `<binary> --version` and returns the version string.
-// On failure it returns ("", err). The caller SHOULD log a warning on unknown
-// versions and degrade gracefully (FR-5.6).
+// detectCLIVersion runs `<binary> --version` and returns the parsed version
+// string (a clean version token, not the raw output line). On failure it
+// returns ("", err). The caller SHOULD log a warning on unknown versions and
+// degrade gracefully (FR-5.6).
+//
+// Both stdout and stderr are considered: some CLIs print their version to
+// stderr, so CombinedOutput is used (mirroring conntest.probeVersion).
 func detectCLIVersion(ctx context.Context, binary string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, binary, "--version").Output()
+	out, err := exec.CommandContext(ctx, binary, "--version").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("version check for %q: %w", binary, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	text := strings.TrimSpace(string(out))
+	v := extractVersion(text)
+	if v == "" {
+		// The binary ran (no error) but emitted nothing version-looking. Return
+		// the trimmed first line as a best-effort handshake signal so the caller
+		// can still log a degraded-version warning rather than treating it as a
+		// hard detection failure.
+		return firstLine(text), nil
+	}
+	return v, nil
+}
+
+// detectAndPinVersion detects the CLI version, classifies it against the
+// driver's known version prefixes, logs the result, and returns the parsed
+// version string plus a known flag (FR-5.6 / N3). On detection failure it
+// returns ("", false) and logs a warning — the caller proceeds with graceful
+// degradation rather than aborting the run. logTag is a short driver label
+// (e.g. "runner/claude") used in log lines.
+func detectAndPinVersion(ctx context.Context, binary, logTag string, knownPrefixes []string) (version string, known bool) {
+	ver, err := detectCLIVersion(ctx, binary)
+	if err != nil {
+		slog.Warn(logTag+": version check failed — proceeding with unknown version",
+			"binary", binary, "err", err)
+		return "", false
+	}
+	for _, prefix := range knownPrefixes {
+		if strings.Contains(ver, prefix) {
+			slog.Info(logTag+": CLI version pinned",
+				"binary", binary, "version", ver)
+			return ver, true
+		}
+	}
+	slog.Warn(logTag+": unknown CLI version — proceeding with graceful degradation",
+		"binary", binary, "version", ver)
+	return ver, false
 }
 
 // rawJSONField extracts a string field from raw JSON bytes without full

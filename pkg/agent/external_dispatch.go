@@ -213,6 +213,21 @@ func drainExternalRun(
 				goto done
 			}
 			switch ev.Kind {
+			case runner.EventKindStart:
+				// FR-5.6 / N3: the run's first event pins the external CLI version.
+				// Log it so the run log records which stream schema the run used;
+				// an unknown version (graceful-degradation) is surfaced at WARN.
+				if ev.Start != nil {
+					if ev.Start.VersionKnown {
+						slog.Info("external-cli dispatch: run started",
+							"run_id", runID, "cli", ev.Start.CLI, "version", ev.Start.Version)
+					} else {
+						slog.Warn("external-cli dispatch: run started with unknown/unpinned CLI version — graceful degradation",
+							"run_id", runID, "cli", ev.Start.CLI, "version", ev.Start.Version)
+					}
+				} else {
+					slog.Info("external-cli dispatch: run started", "run_id", runID, "cli", cli)
+				}
 			case runner.EventKindOutput:
 				if ev.Output != nil && ev.Output.Text != "" {
 					sb.WriteString(ev.Output.Text)
