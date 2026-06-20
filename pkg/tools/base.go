@@ -110,6 +110,7 @@ var (
 	ctxKeyProcTracker         = &toolCtxKey{"procTracker"}
 	ctxKeySessionOwner        = &toolCtxKey{"sessionOwner"}
 	ctxKeyWorkspaceID         = &toolCtxKey{"workspaceID"}
+	ctxKeyCitationTracker     = &toolCtxKey{"citationTracker"}
 )
 
 // ProcessTrackerFunc records a child PID spawned by a tool so a caller (e.g. the
@@ -220,6 +221,34 @@ func WithWorkspaceID(ctx context.Context, workspaceID string) context.Context {
 // Workspace; the memory store falls back to the private room only.
 func ToolWorkspaceID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyWorkspaceID).(string)
+	return v
+}
+
+// CitationTracker is installed on the tool context by the agent loop so the
+// recall_memory tool can report which memories it surfaced in the current turn.
+// The agent loop later scans the LLM's response text for references to those
+// memories' IDs/titles and emits the cited_in (op:cited) counter event
+// (FR-7.5 / NFR-1). Implementations live in pkg/agent (which can reach the
+// room counters.jsonl paths); pkg/tools only sees the interface to avoid an
+// import cycle. A nil/absent tracker (tests, legacy stores) makes
+// RecordRecalled a no-op — recall still works, just without citation tracking.
+type CitationTracker interface {
+	// RecordRecalled reports the memories surfaced by a recall_memory call in
+	// the current turn. Entries without an ID are ignored.
+	RecordRecalled(entries []MemoryEntry)
+}
+
+// WithCitationTracker returns a child context carrying a CitationTracker.
+func WithCitationTracker(ctx context.Context, t CitationTracker) context.Context {
+	if t == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyCitationTracker, t)
+}
+
+// CitationTrackerFromContext returns the CitationTracker on ctx, or nil.
+func CitationTrackerFromContext(ctx context.Context) CitationTracker {
+	v, _ := ctx.Value(ctxKeyCitationTracker).(CitationTracker)
 	return v
 }
 
