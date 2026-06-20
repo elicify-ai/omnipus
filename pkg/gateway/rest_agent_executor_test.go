@@ -228,7 +228,9 @@ func TestCreateAgent_InvalidExecutor_400(t *testing.T) {
 		name string
 		body string
 	}{
-		{"subagent_3p external-cli with no cli", `{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli"},"soul":"s"}`},
+		{"subagent_3p external-cli with no cli", `{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli_path":"/usr/local/bin/codex"},"soul":"s"}`},
+		{"subagent_3p external-cli with no cli_path", `{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli":"codex"},"soul":"s"}`},
+		{"subagent_3p external-cli with empty cli_path", `{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli":"codex","cli_path":"  "},"soul":"s"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -543,7 +545,7 @@ func TestUpdateAgent_AllowsNullVoiceOnWorker(t *testing.T) {
 // Helper: create a subagent_3p worker and return its id.
 func createSubagent3p(t *testing.T, api *restAPI) string {
 	t.Helper()
-	body := `{"name":"ExternalWorker","type":"subagent_3p","description":"external worker","soul":"s","executor":{"kind":"external-cli","cli":"codex"}}`
+	body := `{"name":"ExternalWorker","type":"subagent_3p","description":"external worker","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -560,13 +562,13 @@ func TestCreateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 		name string
 		body string
 	}{
-		{"tools_cfg", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}}}`},
-		{"skills", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"skills":["summarize"]}`},
-		{"fallback_models", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"fallback_models":[{"model":"m","provider":"p"}]}`},
-		{"model_params", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"model_params":{"temperature":0.5}}`},
-		{"sandbox_profile", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"sandbox_profile":"workspace"}`},
-		{"shell_policy", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"shell_policy":{"enable_deny_patterns":true}}`},
-		{"delegation_policy", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex"},"delegation_policy":{"to":[{"kind":"local","id":"*"}]}}`},
+		{"tools_cfg", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}}}`},
+		{"skills", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"skills":["summarize"]}`},
+		{"fallback_models", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"fallback_models":[{"model":"m","provider":"p"}]}`},
+		{"model_params", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"model_params":{"temperature":0.5}}`},
+		{"sandbox_profile", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"sandbox_profile":"workspace"}`},
+		{"shell_policy", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"shell_policy":{"enable_deny_patterns":true}}`},
+		{"delegation_policy", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"delegation_policy":{"to":[{"kind":"local","id":"*"}]}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -765,4 +767,117 @@ func TestUpdateAgent_StaleUpdatedAt_Returns409(t *testing.T) {
 	api.HandleAgents(w3, r3)
 	assert.Equal(t, http.StatusOK, w3.Code,
 		"a PUT with the current updated_at must succeed; body: %s", w3.Body.String())
+}
+
+// TestUpdateAgent_ExecutorCliImmutable_Returns400 verifies that executor.cli is
+// locked after create: a PUT that tries to switch the CLI (e.g. codex →
+// claude-code) is rejected with 400. The guard lives in executorConfigUpdate
+// (rest_agent_executor.go). Spec §4.16 / §9.2 "PUT External, executor.cli:codex
+// → 400".
+func TestUpdateAgent_ExecutorCliImmutable_Returns400(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	id := createSubagent3p(t, api) // created with cli:"codex"
+
+	// Attempt to switch CLI from codex → claude-code.
+	body := `{"executor":{"cli":"claude-code"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"switching executor.cli after create must be rejected with 400; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "executor.cli is locked",
+		"error message must explain that cli is locked; body: %s", w.Body.String())
+
+	// Verify the persisted cli is still the original.
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec := findExecutorInConfig(t, m, id)
+	require.NotNil(t, exec)
+	assert.Equal(t, "codex", exec["cli"],
+		"persisted executor.cli must be unchanged after a rejected mutation")
+}
+
+// TestCreateAgent_Subagent3p_CliPathRequired verifies that cli_path is required
+// on POST create for subagent_3p agents. Spec §9.2: "POST subagent_3p,
+// cli:claude-code, no cli_path → 400 — cli_path is required".
+func TestCreateAgent_Subagent3p_CliPathRequired(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"missing cli_path", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code"}}`},
+		{"empty cli_path", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":""}}`},
+		{"whitespace cli_path", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":"   "}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			api.HandleAgents(w, r)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "cli_path is required",
+				"error must mention cli_path is required; body: %s", w.Body.String())
+		})
+	}
+}
+
+// TestCreateAgent_Subagent3p_WithCliPath_Succeeds verifies the happy path: a
+// subagent_3p created with cli + cli_path succeeds and the cli_path is
+// persisted. Spec §9.2 acceptance: "POST subagent_3p, cli:claude-code,
+// cli_path:/usr/local/bin/claude → 201".
+func TestCreateAgent_Subagent3p_WithCliPath_Succeeds(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	body := `{"name":"CliPathOK","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":"/usr/local/bin/claude"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	created := decodeAgentResp(t, w.Body.Bytes())
+	require.NotNil(t, created.Executor, "response must include executor")
+	require.NotNil(t, created.Executor.CliPath, "response executor must include cli_path")
+	assert.Equal(t, "/usr/local/bin/claude", *created.Executor.CliPath)
+
+	// Verify persistence.
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec := findExecutorInConfig(t, m, created.Id)
+	require.NotNil(t, exec)
+	assert.Equal(t, "/usr/local/bin/claude", exec["cli_path"])
+}
+
+// TestUpdateAgent_ExecutorCliPathMutable verifies that cli_path IS mutable on
+// PUT for a subagent_3p agent (binary upgrade without re-creating the agent).
+// Spec §9.2: "PUT executor.cli_path: /new/path → 200".
+func TestUpdateAgent_ExecutorCliPathMutable(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	id := createSubagent3p(t, api) // cli_path: /usr/local/bin/codex
+
+	body := `{"executor":{"cli_path":"/opt/codex-v2"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec := findExecutorInConfig(t, m, id)
+	require.NotNil(t, exec)
+	assert.Equal(t, "/opt/codex-v2", exec["cli_path"],
+		"cli_path must be updated to the new value")
 }
