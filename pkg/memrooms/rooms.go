@@ -9,12 +9,12 @@
 //	workspaces/<workspace_id>/.omnipus/
 //	    memories/          ← per-memory .md files (FR-7.2 frontmatter)
 //	    counters.jsonl     ← frozen access/cited log (FR-7.5)
-//	    last-session.md    ← last session summary
+//	    (no last-session.md — D19: continuity is the agent's, not the workspace's)
 //
 //	agents/<agent_id>/.omnipus/
 //	    memories/
 //	    counters.jsonl
-//	    last-session.md
+//	    last-session.md    ← last session summary (private room only, D19)
 //
 // The ".index/" subtree (bleve, edges.jsonl, tags.json, minhash.jsonl) is a
 // DERIVED artifact — it is NOT included here and is rebuilt from the .md
@@ -56,8 +56,6 @@ type Room struct {
 	MemoriesDir string
 	// CountersPath is Root/counters.jsonl.
 	CountersPath string
-	// LastSessionPath is Root/last-session.md.
-	LastSessionPath string
 }
 
 // Rooms pairs the two rooms for one agent turn.
@@ -134,10 +132,9 @@ func ResolveWorkspaceSharedRoom(omnipusHome, workspaceID string) Room {
 // buildRoom constructs a Room from the given root path.
 func buildRoom(root string) Room {
 	return Room{
-		Root:            root,
-		MemoriesDir:     filepath.Join(root, MemoriesSubdir),
-		CountersPath:    filepath.Join(root, CountersFile),
-		LastSessionPath: filepath.Join(root, LastSessionFile),
+		Root:         root,
+		MemoriesDir:  filepath.Join(root, MemoriesSubdir),
+		CountersPath: filepath.Join(root, CountersFile),
 	}
 }
 

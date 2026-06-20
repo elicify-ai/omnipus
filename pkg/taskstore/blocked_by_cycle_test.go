@@ -2,6 +2,7 @@ package taskstore
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -124,5 +125,73 @@ func TestValidateBlockedBy_RejectsMissingDependency(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("missing dependency error should mention 'not found', got %v", err)
+	}
+}
+
+// TestValidateBlockedBy_RejectsDeepChain confirms the DFS walk is bounded by
+// maxParentDepth: a blocked_by chain longer than the depth bound is rejected
+// (returned as ErrCycle — the depth guard fires before any loop is found, so
+// a pre-existing on-disk cycle can never loop forever). This is the
+// regression test for the depth-bound requirement (N7).
+//
+// selfID ("root") is deliberately NOT part of the chain so this isolates the
+// depth bound from cycle detection: the DFS never finds "root", it just runs
+// out of depth budget.
+func TestValidateBlockedBy_RejectsDeepChain(t *testing.T) {
+	s := New(t.TempDir())
+
+	// Build a linear chain t0 ← t1 ← t2 ← ... ← tN where each ti is
+	// blocked_by t(i-1). N must exceed maxParentDepth (10) so the DFS from
+	// the proposed dep exceeds the depth bound.
+	const chainLen = maxParentDepth + 5 // 15 > 10
+	if err := s.Create(newBlockedTask("t0", nil)); err != nil {
+		t.Fatalf("create t0: %v", err)
+	}
+	for i := 1; i <= chainLen; i++ {
+		prev := fmt.Sprintf("t%d", i-1)
+		id := fmt.Sprintf("t%d", i)
+		if err := s.Create(newBlockedTask(id, []string{prev})); err != nil {
+			t.Fatalf("create %s(blocked_by=%s): %v", id, prev, err)
+		}
+	}
+
+	// Propose "root" blocked_by tN. The DFS walks tN→t(N-1)→... for > 10
+	// hops looking for "root" (never found); the depth bound fires and the
+	// proposal is rejected with ErrCycle.
+	err := s.ValidateBlockedBy("root", []string{fmt.Sprintf("t%d", chainLen)})
+	if err == nil {
+		t.Fatal("deep blocked_by chain exceeding maxParentDepth must be rejected, got nil")
+	}
+	if !errors.Is(err, ErrCycle) {
+		t.Fatalf("deep chain must be rejected with ErrCycle (depth bound), got %v", err)
+	}
+}
+
+// TestValidateBlockedBy_AcceptsChainWithinDepth confirms a chain that stays
+// within the depth bound is accepted, so the depth guard does not over-reject.
+//
+// selfID ("root") is NOT in the chain, so there is no cycle; the only question
+// is whether the DFS completes within the depth budget.
+func TestValidateBlockedBy_AcceptsChainWithinDepth(t *testing.T) {
+	s := New(t.TempDir())
+
+	// Chain of length maxParentDepth-1 (9 hops) — within the bound.
+	const chainLen = maxParentDepth - 1 // 9 < 10
+	if err := s.Create(newBlockedTask("u0", nil)); err != nil {
+		t.Fatalf("create u0: %v", err)
+	}
+	for i := 1; i <= chainLen; i++ {
+		prev := fmt.Sprintf("u%d", i-1)
+		id := fmt.Sprintf("u%d", i)
+		if err := s.Create(newBlockedTask(id, []string{prev})); err != nil {
+			t.Fatalf("create %s(blocked_by=%s): %v", id, prev, err)
+		}
+	}
+
+	// "root" blocked_by uN — DFS walks N hops (9 < 10) looking for "root"
+	// (never found, no cycle); within budget, so it must be accepted.
+	err := s.ValidateBlockedBy("root", []string{fmt.Sprintf("u%d", chainLen)})
+	if err != nil {
+		t.Fatalf("chain within depth bound must be accepted, got %v", err)
 	}
 }

@@ -28,10 +28,9 @@ func makeTestRoom(t *testing.T) memrooms.Room {
 		t.Fatalf("makeTestRoom: mkdir %s: %v", memoriesDir, err)
 	}
 	return memrooms.Room{
-		Root:            root,
-		MemoriesDir:     memoriesDir,
-		CountersPath:    filepath.Join(root, "counters.jsonl"),
-		LastSessionPath: filepath.Join(root, "last-session.md"),
+		Root:         root,
+		MemoriesDir:  memoriesDir,
+		CountersPath: filepath.Join(root, "counters.jsonl"),
 	}
 }
 
