@@ -97,6 +97,8 @@ func (a *MemoryStoreAdapter) SearchEntriesInRoom(query string, limit int, scope 
 			Timestamp: e.Timestamp,
 			Category:  string(e.Category),
 			Content:   e.Content,
+			ID:        e.ID,
+			Title:     e.Title,
 		}
 	}
 	return result, nil
