@@ -16,6 +16,10 @@ const (
 type Peer struct {
 	Kind PeerKind `json:"kind"` // PeerDirect | PeerGroup | PeerChannel | ""
 	ID   string   `json:"id"`
+	// InstanceID is the channel-instance key this peer belongs to
+	// (ADR-019 FR-4b). Optional; channels that know their instance set it
+	// directly instead of smuggling it through InboundMessage.Metadata.
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
 // SenderInfo provides structured sender identity information.
@@ -25,6 +29,10 @@ type SenderInfo struct {
 	CanonicalID string `json:"canonical_id,omitempty"` // "platform:id" format
 	Username    string `json:"username,omitempty"`     // username (e.g. @alice)
 	DisplayName string `json:"display_name,omitempty"` // display name
+	// InstanceID is the channel-instance key the sender is associated with
+	// (ADR-019 FR-4b). Optional; populated by channels that know their
+	// instance instead of smuggling it through InboundMessage.Metadata.
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
 type InboundMessage struct {
@@ -45,8 +53,13 @@ type InboundMessage struct {
 	// (the gateway mints a new id when the SPA sends one without it). Used
 	// by routing, handoff override, and per-agent history keying so two
 	// concurrent sessions in the same browser remain isolated.
-	SessionID string            `json:"session_id,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	// InstanceID is the channel-instance key this message arrived on
+	// (ADR-019 FR-4b / NFR-1). Channels that know their instance set this
+	// directly; inboundInstanceID prefers it over Metadata for the
+	// transition off the metadata-map smuggling pattern.
+	InstanceID string            `json:"instance_id,omitempty"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
 type OutboundMessage struct {
@@ -55,7 +68,11 @@ type OutboundMessage struct {
 	// SessionID is the transcript-store session this message belongs to.
 	// Populated by the agent loop from the originating turn so channels
 	// (and the SPA) can route the frame to the right session bucket.
-	SessionID        string `json:"session_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	// InstanceID is the channel-instance key this message is bound for
+	// (ADR-019 FR-4b / NFR-1). Optional; channels that know their instance
+	// set it directly instead of relying on Channel alone.
+	InstanceID       string `json:"instance_id,omitempty"`
 	Content          string `json:"content"`
 	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
 }
