@@ -141,6 +141,16 @@ func runExternalCLISubTurn(
 	// fallback, so the master key never reaches the child.
 	childEnv := sandbox.ScrubGatewayEnvForRunner()
 
+	// FR-5.3 egress allowlist: inject HTTP_PROXY/HTTPS_PROXY pointing at the
+	// runner egress proxy so the CLI's HTTP/HTTPS traffic is forced through a
+	// loopback proxy with SSRF internal-CIDR blocking (prevents the CLI from
+	// reaching internal services / cloud metadata). Per ADR-019 FR-5.3 there is
+	// NO new confiner — the CLI self-sandboxes; Omnipus controls egress via
+	// proxy injection. Graceful degradation: an empty address (proxy could not
+	// start) means no injection — the run proceeds under the CLI's own sandbox +
+	// the git-worktree FS boundary.
+	childEnv = injectRunnerEgressProxy(childEnv, al.runnerEgressProxyAddr())
+
 	evCh, err := driver.Run(runCtx, runner.RunOptions{
 		RunID:          runID,
 		WorkDir:        ws.Dir,

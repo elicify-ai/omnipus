@@ -165,6 +165,16 @@ type AgentLoop struct {
 	// hardened-exec path.
 	sandboxEgressProxy *sandbox.EgressProxy
 
+	// runnerEgressProxy is a SEPARATE egress proxy for external-runner CLI
+	// children (Spec-4 FR-5.3). Unlike sandboxEgressProxy (Tier2/Tier3, host
+	// allow-list deny-by-default), the runner proxy applies SSRF internal-CIDR
+	// blocking and allows all external hosts — external CLIs need broad egress
+	// to reach their model providers. Lazily started on first external-CLI
+	// dispatch (runnerEgressProxyOnce); nil when the proxy could not start
+	// (dispatch degrades gracefully without HTTP_PROXY injection).
+	runnerEgressProxy     *sandbox.EgressProxy
+	runnerEgressProxyOnce sync.Once
+
 	// appliedSandboxMode is the mode actually applied by the kernel sandbox at
 	// boot (from SandboxApplyResult.Mode), set via SetAppliedSandboxMode. This
 	// is the authoritative source for ExecToolDeps.SandboxMode — using the boot

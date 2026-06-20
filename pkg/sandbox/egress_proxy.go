@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/security"
 )
 
 // EgressAuditFunc is invoked for every denied egress request, and for any
@@ -70,6 +71,23 @@ type EgressProxy struct {
 	server    *http.Server
 	audit     EgressAuditFunc
 	addr      string
+
+	// allowAll short-circuits hostAllowed to true for every host. Used by the
+	// external-runner proxy (NewRunnerEgressProxy) when no host allow-list is
+	// configured: external CLIs need broad external egress to reach their model
+	// providers, so the gate becomes SSRF internal-CIDR blocking (ssrf) rather
+	// than a narrow host allow-list. When false (the Tier2/Tier3 proxy, or a
+	// runner proxy with an explicit allow-list), the compiled patterns govern.
+	allowAll bool
+
+	// ssrf, when non-nil, blocks egress to internal/reserved IP ranges
+	// (RFC 1918, loopback, link-local, cloud metadata, …) on BOTH the plain-HTTP
+	// and CONNECT paths. It is the primary control for external-runner children
+	// (Spec-4 FR-5.3 — prevent a CLI from reaching internal services / cloud
+	// metadata via DNS rebinding or a literal-IP host). Nil on the Tier2/Tier3
+	// proxy, which relies on its host allow-list instead.
+	ssrf          *security.SSRFChecker
+	ssrfTransport *http.Transport // cached transport from ssrf.SafeTransport(); nil when ssrf == nil
 
 	// tunnels tracks active CONNECT-tunnel goroutines so Close can
 	// wait for them to drain rather than leaking them past Shutdown.
@@ -134,6 +152,44 @@ func NewEgressProxy(allowList []string, audit EgressAuditFunc) (*EgressProxy, er
 // "127.0.0.1:54321"). Suitable for assignment to Limits.EgressProxyAddr.
 func (p *EgressProxy) Addr() string {
 	return p.addr
+}
+
+// NewRunnerEgressProxy creates an egress proxy dedicated to external-runner CLI
+// children (claude-code / codex / opencode — Spec-4 FR-5.3).
+//
+// Policy (per ADR-019 FR-5.3 operator decision: NO new confiner — CLIs
+// self-sandbox; Omnipus controls egress via proxy injection):
+//
+//   - SSRF internal-CIDR blocking is ALWAYS ON. A literal-IP or DNS-rebound
+//     host that resolves to a private/reserved range (RFC 1918, loopback,
+//     link-local, cloud metadata 169.254.169.254, …) is denied. This is the
+//     security-relevant boundary for external runners: it prevents a CLI from
+//     reaching internal services or cloud-metadata endpoints over HTTP/HTTPS.
+//   - When allowList is EMPTY, ALL external hosts are permitted (the SSRF
+//     filter is the only gate). External CLIs need broad egress to reach their
+//     model providers (api.anthropic.com, api.openai.com, …) and the providers'
+//     CDN/infra; a narrow default allow-list would break them out of the box.
+//   - When allowList is NON-EMPTY, it is enforced as an additional host
+//     allow-list on top of SSRF (both must pass).
+//
+// This differs from NewEgressProxy (Tier2/Tier3 build/web_serve children), which
+// is deny-by-default on the host allow-list and applies no SSRF filtering.
+func NewRunnerEgressProxy(allowList []string, audit EgressAuditFunc) (*EgressProxy, error) {
+	p, err := NewEgressProxy(allowList, audit)
+	if err != nil {
+		return nil, err
+	}
+	p.ssrf = security.NewSSRFChecker(nil) // block all internal ranges, no allowlist
+	p.ssrfTransport = p.ssrf.SafeTransport()
+	p.allowAll = len(allowList) == 0
+	return p, nil
+}
+
+// SSRFEnabled reports whether this proxy applies SSRF internal-CIDR blocking.
+// True for runner proxies (NewRunnerEgressProxy); false for the Tier2/Tier3
+// proxy (NewEgressProxy). Exposed for tests and audit tooling.
+func (p *EgressProxy) SSRFEnabled() bool {
+	return p.ssrf != nil
 }
 
 // AllowList returns a copy of the operator-supplied allow-list. Used by
@@ -211,6 +267,14 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// Default Director sets r.URL.Host = target.Host but preserves the
 	// path; that's correct for proxy mode.
 	//
+	// SSRF (runner mode): route the upstream dial through the SSRF-safe
+	// transport so a host that passed the allow-list but resolves to an
+	// internal IP (DNS rebinding) or is a literal internal IP is blocked
+	// before connect. Tier2/Tier3 proxy leaves the default transport.
+	if p.ssrfTransport != nil {
+		rp.Transport = p.ssrfTransport
+	}
+	//
 	// HIGH-2 (silent-failure-hunter): the upstream error message can leak
 	// resolved-IP information, TLS handshake details (e.g. certificate
 	// expiration timestamps), and DNS-lookup metadata to the agent's
@@ -219,6 +283,12 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// 502. We also surface the upstream-error event to audit so
 	// operators can correlate with proxy denials and reachability issues.
 	rp.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
+		// SSRF block from the safe transport: surface as a distinct SSRF
+		// deny rather than a generic upstream error.
+		if p.isSSRFError(err) {
+			p.denySSRF(rw, host, err)
+			return
+		}
 		slog.Warn("egress_proxy: upstream error",
 			"host", host, "error", err)
 		if p.audit != nil {
@@ -271,12 +341,34 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Dial upstream first, BEFORE hijacking, so failures can be
 	// reported as a normal HTTP response.
 	//
+	// SSRF (runner mode): route the dial through the SSRF-safe transport so
+	// a literal internal-IP host or a DNS-rebound host that resolves to a
+	// private range is blocked before connect. The SSRF deny is surfaced as
+	// a distinct audit event (egress_ssrf_blocked) so operators can
+	// distinguish it from an allow-list deny or an upstream-unreachable error.
+	//
 	// HIGH-2: as with handleHTTP, we do NOT echo the dial error back to
 	// the child (it can leak DNS / IP / firewall topology info). Operators
 	// see the full error in gateway logs. The audit hook is reused with a
 	// distinguishing prefix so the gateway can emit a structured
 	// upstream-error audit entry.
-	upstream, err := net.DialTimeout("tcp", hostPort, 10*time.Second)
+	var upstream net.Conn
+	if p.ssrfTransport != nil {
+		dialCtx, dialCancel := context.WithTimeout(r.Context(), 10*time.Second)
+		conn, dErr := p.ssrfTransport.DialContext(dialCtx, "tcp", hostPort)
+		dialCancel()
+		if dErr != nil {
+			if p.isSSRFError(dErr) {
+				p.denySSRF(w, host, dErr)
+				return
+			}
+			err = dErr
+		} else {
+			upstream = conn
+		}
+	} else {
+		upstream, err = net.DialTimeout("tcp", hostPort, 10*time.Second)
+	}
 	if err != nil {
 		slog.Warn("egress_proxy: connect dial failed",
 			"host", host, "error", err)
@@ -373,6 +465,35 @@ func (p *EgressProxy) deny(w http.ResponseWriter, host string) {
 	http.Error(w, fmt.Sprintf("egress_proxy: host %q not in allow-list", host), http.StatusForbidden)
 }
 
+// denySSRF writes a 403 for an SSRF-blocked destination and emits a distinct
+// audit entry (event="egress_ssrf_blocked") so operators can differentiate SSRF
+// denials from allow-list denials and upstream errors. Falls back to slog.Warn
+// when no audit hook is wired.
+func (p *EgressProxy) denySSRF(w http.ResponseWriter, host string, err error) {
+	slog.Info("egress_proxy: SSRF blocked", "host", host, "error", err)
+	if p.audit != nil {
+		p.audit(&audit.Entry{
+			Event:    "egress_ssrf_blocked",
+			Decision: audit.DecisionDeny,
+			Details: map[string]any{
+				"host":   host,
+				"error":  err.Error(),
+				"reason": "destination resolves to a blocked internal/reserved IP range",
+			},
+		})
+	}
+	http.Error(w, "egress_proxy: destination blocked by SSRF policy", http.StatusForbidden)
+}
+
+// isSSRFError reports whether err originated from the SSRF checker (a blocked
+// internal/private IP). The SSRF checker prefixes its errors with "SSRF:".
+func (p *EgressProxy) isSSRFError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.HasPrefix(err.Error(), "SSRF:")
+}
+
 // hostAllowed reports whether host matches any compiled pattern.
 //
 // Algorithm:
@@ -396,6 +517,12 @@ func (p *EgressProxy) hostAllowed(host string) bool {
 		if b < 0x21 || b > 0x7E {
 			return false
 		}
+	}
+
+	// Runner mode with no host allow-list: permit every host. SSRF
+	// internal-CIDR blocking (checked in the dial path) is the gate.
+	if p.allowAll {
+		return true
 	}
 
 	for _, pat := range p.patterns {
