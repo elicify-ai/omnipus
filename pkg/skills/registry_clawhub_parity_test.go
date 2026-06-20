@@ -46,10 +46,12 @@ func TestRegistryManagerFromConfig_IncludesClawHub(t *testing.T) {
 	// stub server).
 	mgr := NewRegistryManagerFromConfig(RegistryConfig{
 		MaxConcurrentSearches: 2,
-		ClawHub: ClawHubConfig{
+		Marketplaces: []MarketplaceConfig{{
+			Name:    "clawhub",
+			Type:    "clawhub",
 			Enabled: true,
 			BaseURL: srv.URL,
-		},
+		}},
 	})
 
 	if reg := mgr.GetRegistry("clawhub"); reg == nil {
@@ -76,10 +78,12 @@ func TestRegistryManagerFromConfig_IncludesClawHub(t *testing.T) {
 // manager with no ClawHub registry (SearchAll has nothing to query).
 func TestRegistryManagerFromConfig_SkipsExplicitlyDisabledClawHub(t *testing.T) {
 	mgr := NewRegistryManagerFromConfig(RegistryConfig{
-		ClawHub: ClawHubConfig{
+		Marketplaces: []MarketplaceConfig{{
+			Name:    "clawhub",
+			Type:    "clawhub",
 			Enabled: false,
 			BaseURL: "https://clawhub.ai",
-		},
+		}},
 	})
 	if reg := mgr.GetRegistry("clawhub"); reg != nil {
 		t.Fatalf("clawhub registry present despite Enabled=false; deny-by-explicit-operator-intent broken")

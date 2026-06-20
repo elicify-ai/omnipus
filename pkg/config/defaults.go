@@ -359,8 +359,10 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: true,
 				},
-				Registries: SkillsRegistriesConfig{
-					ClawHub: ClawHubRegistryConfig{
+				Marketplaces: []MarketplaceConfig{
+					{
+						Name:    "clawhub",
+						Type:    "clawhub",
 						Enabled: true,
 						BaseURL: "https://clawhub.ai",
 					},

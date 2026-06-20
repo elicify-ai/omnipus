@@ -88,18 +88,54 @@ type GitHubRegistryConfig struct {
 	Workspace string
 }
 
-// RegistryConfig holds configuration for all skill registries.
+// MarketplaceConfig is a unified entry in the skill-marketplace list (FR-10.1).
+// Each entry describes one marketplace registry (ClawHub, GitHub, or a future
+// "omnipus" registry). Type selects which registry implementation backs the
+// entry; the remaining fields are interpreted per Type.
+//
+// Tokens are the RESOLVED credential values (not refs) — callers resolve
+// credential refs via the credential store (SEC-23) before constructing a
+// MarketplaceConfig. This mirrors the resolved-token contract on ClawHubConfig
+// and GitHubRegistryConfig.
+type MarketplaceConfig struct {
+	// Name is the unique display name for this marketplace (e.g. "clawhub",
+	// "github", a future "omnipus"). Defaults to Type when empty.
+	Name string `json:"name"`
+	// Type selects the registry implementation: "clawhub" | "github"
+	// (future: "omnipus").
+	Type string `json:"type"`
+	// Enabled controls whether this marketplace is active.
+	Enabled bool `json:"enabled"`
+
+	// ClawHub-specific fields (used when Type == "clawhub").
+	BaseURL         string `json:"base_url,omitempty"`
+	AuthToken       string `json:"auth_token,omitempty"` // resolved token
+	SearchPath      string `json:"search_path,omitempty"`
+	SkillsPath      string `json:"skills_path,omitempty"`
+	DownloadPath    string `json:"download_path,omitempty"`
+	Timeout         int    `json:"timeout,omitempty"`
+	MaxZipSize      int    `json:"max_zip_size,omitempty"`
+	MaxResponseSize int    `json:"max_response_size,omitempty"`
+	// HTTPClient overrides the default ClawHub HTTP client. When non-nil it is
+	// used as-is. Not serialized — injected at runtime (e.g. SSRF-safe client).
+	HTTPClient *http.Client `json:"-"`
+
+	// GitHub-specific fields (used when Type == "github").
+	Token     string `json:"token,omitempty"` // resolved token
+	Proxy     string `json:"proxy,omitempty"`
+	Workspace string `json:"workspace,omitempty"` // base dir for skill install
+}
+
+// RegistryConfig holds configuration for all skill marketplaces.
 // This is the input to NewRegistryManagerFromConfig.
 //
-// ClawHub is the primary searchable marketplace registry.
-// GitHubRegistries is a list of GitHub-hosted skill sources; each item
-// corresponds to one configured GitHub registry (e.g., a corporate or
-// personal skills repository). The RegistryManager fans out Search across
-// all enabled registries; GitHub registries participate in fan-out but
-// return ErrGitHubSearchNotSupported (partial-result semantics apply).
+// Marketplaces is a unified list (FR-10.1): each entry is one configured
+// marketplace registry (ClawHub, GitHub, or a future "omnipus" registry). The
+// RegistryManager fans out Search across all enabled entries; GitHub entries
+// participate in fan-out but return ErrGitHubSearchNotSupported (partial-result
+// semantics apply).
 type RegistryConfig struct {
-	ClawHub               ClawHubConfig
-	GitHubRegistries      []GitHubRegistryConfig
+	Marketplaces          []MarketplaceConfig
 	MaxConcurrentSearches int
 }
 
@@ -122,6 +158,39 @@ type ClawHubConfig struct {
 	HTTPClient *http.Client `json:"-"`
 }
 
+// clawHubConfigFromMarketplace adapts a MarketplaceConfig (Type=="clawhub") into
+// the ClawHubConfig consumed by NewClawHubRegistry.
+func clawHubConfigFromMarketplace(m MarketplaceConfig) ClawHubConfig {
+	return ClawHubConfig{
+		Enabled:         m.Enabled,
+		BaseURL:         m.BaseURL,
+		AuthToken:       m.AuthToken,
+		SearchPath:      m.SearchPath,
+		SkillsPath:      m.SkillsPath,
+		DownloadPath:    m.DownloadPath,
+		Timeout:         m.Timeout,
+		MaxZipSize:      m.MaxZipSize,
+		MaxResponseSize: m.MaxResponseSize,
+		HTTPClient:      m.HTTPClient,
+	}
+}
+
+// gitHubConfigFromMarketplace adapts a MarketplaceConfig (Type=="github") into
+// the GitHubRegistryConfig consumed by NewGitHubRegistry.
+func gitHubConfigFromMarketplace(m MarketplaceConfig) GitHubRegistryConfig {
+	name := m.Name
+	if name == "" {
+		name = "github"
+	}
+	return GitHubRegistryConfig{
+		Enabled:   m.Enabled,
+		Name:      name,
+		Token:     m.Token,
+		Proxy:     m.Proxy,
+		Workspace: m.Workspace,
+	}
+}
+
 // RegistryManager coordinates multiple skill registries.
 // It fans out search requests and routes installs to the correct registry.
 type RegistryManager struct {
@@ -139,34 +208,46 @@ func NewRegistryManager() *RegistryManager {
 }
 
 // NewRegistryManagerFromConfig builds a RegistryManager from config,
-// instantiating only the enabled registries.
+// instantiating only the enabled marketplaces.
 //
-// ClawHub is instantiated first when enabled. Then each GitHub registry in
-// GitHubRegistries is instantiated in order when enabled. If a GitHub
-// registry fails to initialise (e.g., bad workspace path or proxy URL), it
-// is logged at Warn level and skipped — the manager still starts with the
-// remaining registries.
+// The Marketplaces list is iterated in order. Each enabled entry is
+// instantiated by Type: "clawhub" → ClawHubRegistry, "github" → GitHubRegistry.
+// If a GitHub entry fails to initialise (e.g., bad workspace path or proxy
+// URL), it is logged at Warn level and skipped — the manager still starts with
+// the remaining entries. Unknown types are logged and skipped.
 func NewRegistryManagerFromConfig(cfg RegistryConfig) *RegistryManager {
 	rm := NewRegistryManager()
 	if cfg.MaxConcurrentSearches > 0 {
 		rm.maxConcurrent = cfg.MaxConcurrentSearches
 	}
-	if cfg.ClawHub.Enabled {
-		rm.AddRegistry(NewClawHubRegistry(cfg.ClawHub))
-	}
-	for _, ghCfg := range cfg.GitHubRegistries {
-		if !ghCfg.Enabled {
+	for _, m := range cfg.Marketplaces {
+		if !m.Enabled {
 			continue
 		}
-		reg, err := NewGitHubRegistry(ghCfg)
-		if err != nil {
-			slog.Warn("skills: failed to initialise GitHub registry — skipping",
-				"name", ghCfg.Name,
-				"error", err,
+		name := m.Name
+		if name == "" {
+			name = m.Type
+		}
+		switch m.Type {
+		case "clawhub":
+			rm.AddRegistry(NewClawHubRegistry(clawHubConfigFromMarketplace(m)))
+		case "github":
+			ghCfg := gitHubConfigFromMarketplace(m)
+			reg, err := NewGitHubRegistry(ghCfg)
+			if err != nil {
+				slog.Warn("skills: failed to initialise GitHub marketplace — skipping",
+					"name", ghCfg.Name,
+					"error", err,
+				)
+				continue
+			}
+			rm.AddRegistry(reg)
+		default:
+			slog.Warn("skills: unknown marketplace type — skipping",
+				"name", name,
+				"type", m.Type,
 			)
-			continue
 		}
-		rm.AddRegistry(reg)
 	}
 	return rm
 }

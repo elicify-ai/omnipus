@@ -1114,41 +1114,46 @@ type clawHubRegistryConfigV0 struct {
 	SkillsPath string `json:"skills_path" env:"OMNIPUS_SKILLS_REGISTRIES_CLAWHUB_SKILLS_PATH"`
 }
 
-func (v *clawHubRegistryConfigV0) ToClawHubRegistryConfig() ClawHubRegistryConfig {
-	return ClawHubRegistryConfig{
-		Enabled:    v.Enabled,
-		BaseURL:    v.BaseURL,
-		SearchPath: v.SearchPath,
-		SkillsPath: v.SkillsPath,
-	}
-}
-
 type skillsGithubConfigV0 struct {
 	Token string `json:"token"           env:"OMNIPUS_TOOLS_SKILLS_GITHUB_TOKEN"`
 	Proxy string `json:"proxy,omitempty" env:"OMNIPUS_TOOLS_SKILLS_GITHUB_PROXY"`
 }
 
-func (v *skillsGithubConfigV0) ToSkillsGithubConfig() SkillsGithubConfig {
-	return SkillsGithubConfig{
-		Proxy: v.Proxy,
-	}
-}
-
-func (v *skillsRegistriesConfigV0) ToSkillsRegistriesConfig() SkillsRegistriesConfig {
-	clawHub := v.ClawHub.ToClawHubRegistryConfig()
-
-	return SkillsRegistriesConfig{
-		ClawHub: clawHub,
-	}
-}
-
+// ToSkillsToolsConfig converts the v0 skills config (typed ClawHub singleton +
+// separate Github block) into the unified Marketplaces list shape (FR-10.1).
+// The ClawHub entry is always seeded (preserving the agent↔UI parity guarantee
+// that clawhub is present in the list); a GitHub entry is seeded only when a
+// token/proxy was configured. Plaintext v0 secrets (AuthToken, Token) are
+// intentionally NOT carried over — they are dropped, matching the pre-refactor
+// v0 migration behaviour (MigrateWithStore does not migrate these; operators
+// re-onboard them via the credential vault).
 func (v *skillsToolsConfigV0) ToSkillsToolsConfig() SkillsToolsConfig {
-	registries := v.Registries.ToSkillsRegistriesConfig()
-	github := v.Github.ToSkillsGithubConfig()
+	marketplaces := make([]MarketplaceConfig, 0, 2)
+
+	ch := v.Registries.ClawHub
+	marketplaces = append(marketplaces, MarketplaceConfig{
+		Name:       "clawhub",
+		Type:       "clawhub",
+		Enabled:    ch.Enabled,
+		BaseURL:    ch.BaseURL,
+		SearchPath: ch.SearchPath,
+		SkillsPath: ch.SkillsPath,
+	})
+
+	if v.Github.Token != "" || v.Github.Proxy != "" {
+		marketplaces = append(marketplaces, MarketplaceConfig{
+			Name:    "github",
+			Type:    "github",
+			Enabled: true,
+			Proxy:   v.Github.Proxy,
+			// TokenRef left empty: v0 stored plaintext, which we drop. The
+			// operator re-onboards the GitHub token via the credential vault.
+		})
+	}
+
 	return SkillsToolsConfig{
 		ToolConfig:            v.ToolConfig,
-		Registries:            registries,
-		Github:                github,
+		Marketplaces:          marketplaces,
 		MaxConcurrentSearches: v.MaxConcurrentSearches,
 		SearchCache:           v.SearchCache,
 	}

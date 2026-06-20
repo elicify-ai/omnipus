@@ -80,7 +80,9 @@ func newTestRestAPIWithSkillsDirs(t *testing.T, builtinDir string) *restAPI {
 	}
 	// Enable the ClawHub marketplace so search/install handlers exercise the
 	// registry path rather than the "no marketplace enabled" 409 gate.
-	cfg.Tools.Skills.Registries.ClawHub.Enabled = true
+	cfg.Tools.Skills.Marketplaces = []config.MarketplaceConfig{
+		{Name: "clawhub", Type: "clawhub", Enabled: true, BaseURL: "https://clawhub.ai"},
+	}
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), minimalCfg, 0o600))
 

@@ -308,22 +308,38 @@ func TestChannelConfig_AllRefsRoundTrip(t *testing.T) {
 		{
 			name: "skills/github/token_ref",
 			setup: func(c *Config) {
-				c.Tools.Skills.Github.TokenRef = "GITHUB_TOKEN_TEST"
+				c.Tools.Skills.Marketplaces = []MarketplaceConfig{
+					{Name: "github", Type: "github", Enabled: true, TokenRef: "GITHUB_TOKEN_TEST"},
+				}
 			},
 			verify: func(t *testing.T, c *Config) {
-				if c.Tools.Skills.Github.TokenRef != "GITHUB_TOKEN_TEST" {
-					t.Errorf("got %q, want GITHUB_TOKEN_TEST", c.Tools.Skills.Github.TokenRef)
+				var ref string
+				for _, m := range c.Tools.Skills.Marketplaces {
+					if m.Type == "github" {
+						ref = m.TokenRef
+					}
+				}
+				if ref != "GITHUB_TOKEN_TEST" {
+					t.Errorf("got %q, want GITHUB_TOKEN_TEST", ref)
 				}
 			},
 		},
 		{
 			name: "skills/clawhub/auth_token_ref",
 			setup: func(c *Config) {
-				c.Tools.Skills.Registries.ClawHub.AuthTokenRef = "CLAWHUB_TOKEN_TEST"
+				c.Tools.Skills.Marketplaces = []MarketplaceConfig{
+					{Name: "clawhub", Type: "clawhub", Enabled: true, AuthTokenRef: "CLAWHUB_TOKEN_TEST"},
+				}
 			},
 			verify: func(t *testing.T, c *Config) {
-				if c.Tools.Skills.Registries.ClawHub.AuthTokenRef != "CLAWHUB_TOKEN_TEST" {
-					t.Errorf("got %q, want CLAWHUB_TOKEN_TEST", c.Tools.Skills.Registries.ClawHub.AuthTokenRef)
+				var ref string
+				for _, m := range c.Tools.Skills.Marketplaces {
+					if m.Type == "clawhub" {
+						ref = m.AuthTokenRef
+					}
+				}
+				if ref != "CLAWHUB_TOKEN_TEST" {
+					t.Errorf("got %q, want CLAWHUB_TOKEN_TEST", ref)
 				}
 			},
 		},
