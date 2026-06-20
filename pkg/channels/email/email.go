@@ -79,6 +79,11 @@ type EmailChannel struct {
 	// done is closed when the background run loop exits. Stop waits on it so the
 	// IMAP client is fully torn down (and m.client cleared) before Stop returns.
 	done chan struct{}
+
+	// runLoopFn is the per-session dial+idle function driven by run. It defaults
+	// to c.runLoop in Start; tests may override it to inject deterministic
+	// permanent/transient errors without standing up a real IMAP server (N4).
+	runLoopFn func(context.Context) error
 }
 
 // NewEmailChannel creates a new EmailChannel. Returns an error (wrapping
@@ -134,6 +139,10 @@ func (c *EmailChannel) Start(ctx context.Context) error {
 	c.done = make(chan struct{})
 	c.SetRunning(true)
 
+	if c.runLoopFn == nil {
+		c.runLoopFn = c.runLoop
+	}
+
 	slog.Info("email channel: starting", "imap_host", c.cfg.IMAPHost, "username", c.cfg.Username)
 
 	go c.run(c.ctx)
@@ -158,7 +167,7 @@ func (c *EmailChannel) run(ctx context.Context) {
 		}
 
 		sessionStart := time.Now()
-		err := c.runLoop(ctx)
+		err := c.runLoopFn(ctx)
 		if err == nil {
 			// Normal shutdown via ctx cancellation.
 			return
