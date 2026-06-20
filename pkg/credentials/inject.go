@@ -118,16 +118,21 @@ func ResolveAll(cfg *config.Config, store *Store) (map[string]string, []error) {
 	}
 
 	// Non-channel credential refs.
-	for _, ref := range []string{
+	nonChannelRefs := []string{
 		cfg.Voice.ElevenLabsAPIKeyRef,
-		cfg.Tools.Skills.Github.TokenRef,
-		cfg.Tools.Skills.Registries.ClawHub.AuthTokenRef,
 		cfg.Tools.Web.Brave.APIKeyRef,
 		cfg.Tools.Web.Tavily.APIKeyRef,
 		cfg.Tools.Web.Perplexity.APIKeyRef,
 		cfg.Tools.Web.GLMSearch.APIKeyRef,
 		cfg.Tools.Web.BaiduSearch.APIKeyRef,
-	} {
+	}
+	// Skill marketplace credential refs (FR-10.1 unified list): each
+	// marketplace entry may carry a ClawHub AuthTokenRef and/or a GitHub
+	// TokenRef, both resolved via the credential store (SEC-23).
+	for _, m := range cfg.Tools.Skills.Marketplaces {
+		nonChannelRefs = append(nonChannelRefs, m.AuthTokenRef, m.TokenRef)
+	}
+	for _, ref := range nonChannelRefs {
 		addRef(ref)
 	}
 

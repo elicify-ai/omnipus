@@ -161,14 +161,17 @@ func TestGitHubRegistry_DownloadAndInstall_WritesSkillDir(t *testing.T) {
 func TestRegistryConfig_List_FanOut_ClawHubAndGitHub(t *testing.T) {
 	ws := t.TempDir()
 	cfg := RegistryConfig{
-		ClawHub: ClawHubConfig{
-			Enabled: true,
-			BaseURL: "https://clawhub.ai",
-		},
-		GitHubRegistries: []GitHubRegistryConfig{
+		Marketplaces: []MarketplaceConfig{
 			{
-				Enabled:   true,
+				Name:    "clawhub",
+				Type:    "clawhub",
+				Enabled: true,
+				BaseURL: "https://clawhub.ai",
+			},
+			{
 				Name:      "github",
+				Type:      "github",
+				Enabled:   true,
 				Workspace: ws,
 			},
 		},
@@ -193,9 +196,9 @@ func TestRegistryConfig_List_MultipleGitHub(t *testing.T) {
 	ws1 := t.TempDir()
 	ws2 := t.TempDir()
 	cfg := RegistryConfig{
-		GitHubRegistries: []GitHubRegistryConfig{
-			{Enabled: true, Name: "github-public", Workspace: ws1},
-			{Enabled: true, Name: "github-corp", Workspace: ws2},
+		Marketplaces: []MarketplaceConfig{
+			{Name: "github-public", Type: "github", Enabled: true, Workspace: ws1},
+			{Name: "github-corp", Type: "github", Enabled: true, Workspace: ws2},
 		},
 	}
 
@@ -210,8 +213,8 @@ func TestRegistryConfig_List_MultipleGitHub(t *testing.T) {
 func TestRegistryConfig_List_DisabledGitHubSkipped(t *testing.T) {
 	ws := t.TempDir()
 	cfg := RegistryConfig{
-		GitHubRegistries: []GitHubRegistryConfig{
-			{Enabled: false, Name: "github", Workspace: ws},
+		Marketplaces: []MarketplaceConfig{
+			{Name: "github", Type: "github", Enabled: false, Workspace: ws},
 		},
 	}
 
@@ -224,11 +227,11 @@ func TestRegistryConfig_List_DisabledGitHubSkipped(t *testing.T) {
 // or failing the whole manager construction.
 func TestRegistryConfig_List_BadWorkspaceSkipped(t *testing.T) {
 	cfg := RegistryConfig{
-		GitHubRegistries: []GitHubRegistryConfig{
+		Marketplaces: []MarketplaceConfig{
 			// Empty workspace — constructor must fail; NewRegistryManagerFromConfig skips it.
-			{Enabled: true, Name: "github-bad", Workspace: ""},
+			{Name: "github-bad", Type: "github", Enabled: true, Workspace: ""},
 			// This one has a valid workspace and must succeed.
-			{Enabled: true, Name: "github-good", Workspace: t.TempDir()},
+			{Name: "github-good", Type: "github", Enabled: true, Workspace: t.TempDir()},
 		},
 	}
 

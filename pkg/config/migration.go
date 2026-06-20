@@ -790,6 +790,14 @@ func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) {
 // present, because an empty base_url is never a meaningful operator choice and
 // the UI already treats empty-as-default (NewClawHubRegistry). This keeps
 // agent↔UI parity: both reach https://clawhub.ai when no URL is configured.
+//
+// Operates on the unified Marketplaces list (FR-10.1). The clawhub entry is
+// located by Type=="clawhub" (or Name=="clawhub"); if no such entry exists, one
+// is appended with the defaults. Operator intent for the clawhub entry's
+// "enabled" flag is detected in the raw JSON across BOTH shapes: the new
+// "marketplaces" list shape and the legacy "registries.clawhub" singleton
+// shape (which migrateMarketplaces has already converted into the list by the
+// time this runs).
 func restoreSkillDiscoveryDefaults(cfg *Config, raw []byte) {
 	if cfg == nil {
 		return
@@ -842,15 +850,244 @@ func restoreSkillDiscoveryDefaults(cfg *Config, raw []byte) {
 		cfg.Tools.InstallSkill.Enabled = defaults.Tools.InstallSkill.Enabled
 	}
 
-	// tools.skills.registries.clawhub.enabled — restore default (true) unless
-	// the operator explicitly set it.
-	if !jsonKeyPresent("skills", "registries", "clawhub", "enabled") {
-		cfg.Tools.Skills.Registries.ClawHub.Enabled = defaults.Tools.Skills.Registries.ClawHub.Enabled
+	// ClawHub marketplace entry: heal Enabled (when no operator intent) and
+	// BaseURL (always, when empty). Intent is detected across both shapes.
+	clawHubEnabledExplicit, clawHubEnabledValue := clawHubEnabledIntent(top.Tools)
+	if idx := findClawHubMarketplace(cfg); idx >= 0 {
+		// Entry present — heal in place.
+		if !clawHubEnabledExplicit {
+			cfg.Tools.Skills.Marketplaces[idx].Enabled = defaults.Tools.Skills.Marketplaces[0].Enabled
+		}
+		if cfg.Tools.Skills.Marketplaces[idx].BaseURL == "" {
+			cfg.Tools.Skills.Marketplaces[idx].BaseURL = defaults.Tools.Skills.Marketplaces[0].BaseURL
+		}
+		// Ensure the entry is typed as clawhub (defensive: a hand-edited entry
+		// missing Type would otherwise be skipped by NewRegistryManagerFromConfig).
+		if cfg.Tools.Skills.Marketplaces[idx].Type == "" {
+			cfg.Tools.Skills.Marketplaces[idx].Type = "clawhub"
+		}
+		if cfg.Tools.Skills.Marketplaces[idx].Name == "" {
+			cfg.Tools.Skills.Marketplaces[idx].Name = "clawhub"
+		}
+	} else {
+		// No clawhub entry at all — append one. Enabled follows intent
+		// detection (default true when no explicit disable); BaseURL is the
+		// default.
+		enabled := defaults.Tools.Skills.Marketplaces[0].Enabled
+		if clawHubEnabledExplicit {
+			enabled = clawHubEnabledValue
+		}
+		entry := MarketplaceConfig{
+			Name:    "clawhub",
+			Type:    "clawhub",
+			Enabled: enabled,
+			BaseURL: defaults.Tools.Skills.Marketplaces[0].BaseURL,
+		}
+		cfg.Tools.Skills.Marketplaces = append(cfg.Tools.Skills.Marketplaces, entry)
 	}
-	// tools.skills.registries.clawhub.base_url — default the URL whenever it is
-	// empty (absent OR explicitly blank). An empty URL is never a meaningful
-	// operator choice; the UI already treats empty-as-default.
-	if cfg.Tools.Skills.Registries.ClawHub.BaseURL == "" {
-		cfg.Tools.Skills.Registries.ClawHub.BaseURL = defaults.Tools.Skills.Registries.ClawHub.BaseURL
+	_ = clawHubEnabledValue // (read above via the tuple return)
+}
+
+// findClawHubMarketplace returns the index of the first marketplace entry
+// identified as ClawHub (Type=="clawhub", or Name=="clawhub" when Type is
+// empty), or -1 when none is present.
+func findClawHubMarketplace(cfg *Config) int {
+	for i, m := range cfg.Tools.Skills.Marketplaces {
+		if m.Type == "clawhub" || (m.Type == "" && m.Name == "clawhub") {
+			return i
+		}
+	}
+	return -1
+}
+
+// clawHubEnabledIntent reports whether the raw tools JSON carries an explicit
+// "enabled" value for the ClawHub marketplace, and if so, its value. It probes
+// BOTH shapes:
+//   - New shape: tools.skills.marketplaces[] → find entry where type=="clawhub"
+//     (or name=="clawhub") and check for an "enabled" key.
+//   - Legacy shape: tools.skills.registries.clawhub.enabled.
+//
+// The legacy probe runs even when the new-shape list is present, so a config
+// in transition (both keys written) is handled conservatively: an explicit
+// legacy enabled=false is honored.
+func clawHubEnabledIntent(tools map[string]json.RawMessage) (explicit bool, value bool) {
+	// Legacy singleton shape: tools.skills.registries.clawhub.enabled
+	skillsRaw, ok := tools["skills"]
+	if ok {
+		var skills struct {
+			Registries   json.RawMessage `json:"registries"`
+			Marketplaces json.RawMessage `json:"marketplaces"`
+		}
+		if json.Unmarshal(skillsRaw, &skills) == nil {
+			// Legacy path.
+			if len(skills.Registries) > 0 {
+				var reg struct {
+					ClawHub json.RawMessage `json:"clawhub"`
+				}
+				if json.Unmarshal(skills.Registries, &reg) == nil && len(reg.ClawHub) > 0 {
+					var ch struct {
+						Enabled *bool `json:"enabled"`
+					}
+					if json.Unmarshal(reg.ClawHub, &ch) == nil && ch.Enabled != nil {
+						return true, *ch.Enabled
+					}
+				}
+			}
+			// New list shape: tools.skills.marketplaces[]
+			if len(skills.Marketplaces) > 0 {
+				var list []map[string]json.RawMessage
+				if json.Unmarshal(skills.Marketplaces, &list) == nil {
+					for _, entry := range list {
+						typeRaw, hasType := entry["type"]
+						nameRaw, hasName := entry["name"]
+						isClawHub := false
+						if hasType {
+							var t string
+							if json.Unmarshal(typeRaw, &t) == nil && t == "clawhub" {
+								isClawHub = true
+							}
+						}
+						if !isClawHub && hasName {
+							var n string
+							if json.Unmarshal(nameRaw, &n) == nil && n == "clawhub" {
+								isClawHub = true
+							}
+						}
+						if !isClawHub {
+							continue
+						}
+						enabledRaw, hasEnabled := entry["enabled"]
+						if !hasEnabled {
+							continue
+						}
+						var b bool
+						if json.Unmarshal(enabledRaw, &b) == nil {
+							return true, b
+						}
+					}
+				}
+			}
+		}
+	}
+	return false, false
+}
+
+// migrateMarketplaces converts the pre-FR-10.1 skills config shape (a typed
+// ClawHub singleton under tools.skills.registries plus a separate
+// tools.skills.github block) into the unified tools.skills.marketplaces list.
+//
+// Idempotency is keyed off the RAW JSON, not the in-memory cfg: loadConfig
+// starts from DefaultConfig() which pre-seeds Marketplaces with a clawhub
+// entry, so a "len > 0" guard would short-circuit and never migrate old-shape
+// configs. Instead:
+//   - If the raw config carries a "marketplaces" key under tools.skills → it is
+//     already new-shape (unmarshal populated cfg correctly) → no-op.
+//   - Else if it carries legacy "registries" and/or "github" keys → build the
+//     list from those keys, OVERWRITING any default-seeded entries so operator
+//     values (enabled, base_url, paths, token_ref, proxy) are honored.
+//   - Else (no skills section at all) → leave cfg as-is (DefaultConfig's
+//     clawhub entry stands; restoreSkillDiscoveryDefaults will heal it).
+func migrateMarketplaces(cfg *Config, raw []byte) {
+	if cfg == nil || len(raw) == 0 {
+		return
+	}
+
+	// v0 configs already build the Marketplaces list via configV0.Migrate() /
+	// ToSkillsToolsConfig; re-parsing the v0 raw shape here would only lose
+	// information (v0 github stored a plaintext token, dropped during Migrate).
+	// Skip migration for v0 — only v1 configs (old-shape or new-shape) need it.
+	var ver struct {
+		Version int `json:"version"`
+	}
+	if json.Unmarshal(raw, &ver) == nil && ver.Version == 0 {
+		return
+	}
+
+	var top struct {
+		Tools map[string]json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return
+	}
+	skillsRaw, ok := top.Tools["skills"]
+	if !ok {
+		return
+	}
+
+	var skills struct {
+		Marketplaces json.RawMessage `json:"marketplaces"`
+		Registries   json.RawMessage `json:"registries"`
+		Github       json.RawMessage `json:"github"`
+	}
+	if err := json.Unmarshal(skillsRaw, &skills); err != nil {
+		return
+	}
+
+	// Already new-shape on disk → unmarshal populated cfg correctly; nothing to do.
+	if len(skills.Marketplaces) > 0 {
+		return
+	}
+
+	// No legacy keys either → leave DefaultConfig's clawhub entry in place.
+	if len(skills.Registries) == 0 && len(skills.Github) == 0 {
+		return
+	}
+
+	marketplaces := make([]MarketplaceConfig, 0, 2)
+
+	// ClawHub singleton → clawhub marketplace entry.
+	if len(skills.Registries) > 0 {
+		var reg struct {
+			ClawHub json.RawMessage `json:"clawhub"`
+		}
+		if json.Unmarshal(skills.Registries, &reg) == nil && len(reg.ClawHub) > 0 {
+			var ch struct {
+				Enabled         bool   `json:"enabled"`
+				BaseURL         string `json:"base_url"`
+				AuthTokenRef    string `json:"auth_token_ref"`
+				SearchPath      string `json:"search_path"`
+				SkillsPath      string `json:"skills_path"`
+				DownloadPath    string `json:"download_path"`
+				Timeout         int    `json:"timeout"`
+				MaxZipSize      int    `json:"max_zip_size"`
+				MaxResponseSize int    `json:"max_response_size"`
+			}
+			if json.Unmarshal(reg.ClawHub, &ch) == nil {
+				marketplaces = append(marketplaces, MarketplaceConfig{
+					Name:            "clawhub",
+					Type:            "clawhub",
+					Enabled:         ch.Enabled,
+					BaseURL:         ch.BaseURL,
+					AuthTokenRef:    ch.AuthTokenRef,
+					SearchPath:      ch.SearchPath,
+					SkillsPath:      ch.SkillsPath,
+					DownloadPath:    ch.DownloadPath,
+					Timeout:         ch.Timeout,
+					MaxZipSize:      ch.MaxZipSize,
+					MaxResponseSize: ch.MaxResponseSize,
+				})
+			}
+		}
+	}
+
+	// Separate github block → github marketplace entry (only when configured).
+	if len(skills.Github) > 0 {
+		var gh struct {
+			TokenRef string `json:"token_ref"`
+			Proxy    string `json:"proxy"`
+		}
+		if json.Unmarshal(skills.Github, &gh) == nil && (gh.TokenRef != "" || gh.Proxy != "") {
+			marketplaces = append(marketplaces, MarketplaceConfig{
+				Name:     "github",
+				Type:     "github",
+				Enabled:  true,
+				TokenRef: gh.TokenRef,
+				Proxy:    gh.Proxy,
+			})
+		}
+	}
+
+	if len(marketplaces) > 0 {
+		cfg.Tools.Skills.Marketplaces = marketplaces
 	}
 }

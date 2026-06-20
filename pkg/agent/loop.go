@@ -1425,53 +1425,17 @@ func registerSharedTools(
 		// Runtime failures (ClawHub unreachable, no auth token) surface at call
 		// time with clear errors.
 		{
-			clawHubConfig := cfg.Tools.Skills.Registries.ClawHub
-			githubConfig := cfg.Tools.Skills.Github
-
-			// GitHub registry: enabled when a token ref is configured.
-			// The token is resolved via the credential store (SEC-23): credentials.InjectFromConfig
-			// writes the secret into the env-var named by TokenRef before this point.
-			var githubRegistries []skills.GitHubRegistryConfig
-			if githubConfig.TokenRef != "" {
-				githubRegistries = []skills.GitHubRegistryConfig{
-					{
-						Enabled:   true,
-						Name:      "github",
-						Token:     os.Getenv(githubConfig.TokenRef),
-						Proxy:     githubConfig.Proxy,
-						Workspace: agent.Workspace,
-					},
-				}
-			}
-
-			// Agent↔UI parity: the UI builds its ClawHub client directly via
-			// skills.NewClawHubRegistry, which defaults BaseURL to
-			// https://clawhub.ai when empty. Mirror that here so the agent's
-			// find_skills/install_skill reach the SAME ClawHub the UI does.
-			// (config.restoreSkillDiscoveryDefaults already heals Enabled/BaseURL
-			// for configs that never explicitly disabled ClawHub; this is a
-			// belt-and-suspenders default so an empty URL never yields a broken
-			// registry.) An operator who explicitly disabled ClawHub keeps
-			// Enabled=false and ClawHub is skipped downstream.
-			clawHubBaseURL := clawHubConfig.BaseURL
-			if clawHubBaseURL == "" {
-				clawHubBaseURL = "https://clawhub.ai"
-			}
-
+			// Skill marketplaces are configured as a unified list (FR-10.1):
+			// ClawHub + GitHub (+ future "omnipus") entries under
+			// tools.skills.marketplaces. Credential refs are resolved via
+			// os.Getenv (populated by credentials.InjectFromConfig, SEC-23).
+			// GitHub entries get the agent workspace injected (the persisted
+			// shape carries no workspace field).
 			registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
+				Marketplaces: skills.MarketplacesFromConfig(
+					cfg, os.Getenv, nil /* SSRF handled per-registry at the gateway */, agent.Workspace,
+				),
 				MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
-				ClawHub: skills.ClawHubConfig{
-					Enabled:         clawHubConfig.Enabled,
-					BaseURL:         clawHubBaseURL,
-					AuthToken:       os.Getenv(clawHubConfig.AuthTokenRef),
-					SearchPath:      clawHubConfig.SearchPath,
-					SkillsPath:      clawHubConfig.SkillsPath,
-					DownloadPath:    clawHubConfig.DownloadPath,
-					Timeout:         clawHubConfig.Timeout,
-					MaxZipSize:      clawHubConfig.MaxZipSize,
-					MaxResponseSize: clawHubConfig.MaxResponseSize,
-				},
-				GitHubRegistries: githubRegistries,
 			})
 
 			searchCache := skills.NewSearchCache(
