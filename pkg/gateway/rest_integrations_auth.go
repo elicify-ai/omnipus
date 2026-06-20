@@ -230,13 +230,22 @@ type integrationDef struct {
 
 // integrationCatalogue is the fixed set of providers surfaced in the UI. It
 // mirrors the providers wired in pkg/tools/web.go and pkg/voice. Keyless
-// providers (DuckDuckGo) have requiresKey=false and an empty credRef.
+// providers (DuckDuckGo, SearXNG, audio-model) have requiresKey=false and an
+// empty credRef; SearXNG additionally needs a base_url and audio-model needs a
+// voice.model_name (checked at activation time).
 var integrationCatalogue = []integrationDef{
+	// Search providers (pkg/tools/web.go SearchProvider implementations).
 	{id: "brave", kind: "search", displayName: "Brave Search", requiresKey: true, credRef: "BRAVE_API_KEY"},
 	{id: "tavily", kind: "search", displayName: "Tavily", requiresKey: true, credRef: "TAVILY_API_KEY"},
 	{id: "perplexity", kind: "search", displayName: "Perplexity", requiresKey: true, credRef: "PERPLEXITY_API_KEY"},
 	{id: "duckduckgo", kind: "search", displayName: "DuckDuckGo", requiresKey: false, credRef: ""},
+	{id: "searxng", kind: "search", displayName: "SearXNG", requiresKey: false, credRef: ""},
+	{id: "glm", kind: "search", displayName: "GLM Search", requiresKey: true, credRef: "GLM_API_KEY"},
+	{id: "baidu", kind: "search", displayName: "Baidu Search", requiresKey: true, credRef: "BAIDU_API_KEY"},
+	// Voice transcribers (pkg/voice Transcriber implementations).
 	{id: "elevenlabs", kind: "voice", displayName: "ElevenLabs Scribe", requiresKey: true, credRef: "ELEVENLABS_API_KEY"},
+	{id: "groq", kind: "voice", displayName: "Groq Whisper", requiresKey: true, credRef: "GROQ_API_KEY"},
+	{id: "audio-model", kind: "voice", displayName: "Audio Model (provider)", requiresKey: false, credRef: ""},
 }
 
 // integrationDefByID returns the catalogue entry for id, or false.
@@ -274,17 +283,7 @@ func (a *restAPI) buildIntegrationResponse(cfg *config.Config) gen.IntegrationPr
 	resp.Voice = []gen.IntegrationProvider{}
 
 	for _, d := range integrationCatalogue {
-		configured := !d.requiresKey
-		if d.requiresKey {
-			ok, err := a.credentialRefResolves(d.credRef)
-			if err != nil {
-				// Store fault — treat as not-configured but log so the operator
-				// can diagnose a locked store rather than silently swallowing it.
-				slog.Warn("integrations: credential ref check failed",
-					"provider", d.id, "ref", d.credRef, "error", err)
-			}
-			configured = ok
-		}
+		configured := a.integrationConfigured(cfg, d)
 		active := (d.kind == "search" && d.id == activeSearch) ||
 			(d.kind == "voice" && d.id == activeVoice)
 		activeCopy := active
@@ -311,29 +310,94 @@ func (a *restAPI) buildIntegrationResponse(cfg *config.Config) gen.IntegrationPr
 	return resp
 }
 
+// integrationConfigured reports whether provider d is usable given cfg. Keyed
+// providers are configured when their credential ref resolves in the store.
+// Keyless providers have provider-specific prerequisites: DuckDuckGo is always
+// available; SearXNG needs a base_url; audio-model needs a voice.model_name.
+func (a *restAPI) integrationConfigured(cfg *config.Config, d integrationDef) bool {
+	if d.requiresKey {
+		ok, err := a.credentialRefResolves(d.credRef)
+		if err != nil {
+			// Store fault — treat as not-configured but log so the operator
+			// can diagnose a locked store rather than silently swallowing it.
+			slog.Warn("integrations: credential ref check failed",
+				"provider", d.id, "ref", d.credRef, "error", err)
+		}
+		return ok
+	}
+	switch d.id {
+	case "duckduckgo":
+		return true
+	case "searxng":
+		return strings.TrimSpace(cfg.Tools.Web.SearXNG.BaseURL) != ""
+	case "audio-model":
+		return strings.TrimSpace(cfg.Voice.ModelName) != ""
+	default:
+		return true
+	}
+}
+
+// integrationActivationReady reports whether the provider's prerequisites for
+// activation are met. Keyed providers need a key (checked elsewhere via
+// requiresKey); keyless providers with prerequisites (SearXNG base_url,
+// audio-model model_name) are checked here. Returns true when activation may
+// proceed, plus a human-readable reason when not.
+func (a *restAPI) integrationActivationReady(cfg *config.Config, def integrationDef) (bool, string) {
+	switch def.id {
+	case "searxng":
+		if strings.TrimSpace(cfg.Tools.Web.SearXNG.BaseURL) == "" {
+			return false, "SearXNG requires a base URL (configure tools.web.searxng.base_url) before it can be activated"
+		}
+	case "audio-model":
+		if strings.TrimSpace(cfg.Voice.ModelName) == "" {
+			return false, "audio-model requires a voice model (configure voice.model_name under Providers) before it can be activated"
+		}
+	}
+	return true, ""
+}
+
 // activeSearchProviderID derives the currently-selected search provider from the
-// web tools config. The selection is encoded as a configured key on exactly one
-// provider; DuckDuckGo (keyless) is the fallback when no keyed provider is set.
+// web tools config. The selection priority mirrors NewWebSearchTool
+// (pkg/tools/web.go): Perplexity > Brave > SearXNG > Tavily > DuckDuckGo >
+// Baidu > GLM. DuckDuckGo (keyless) is the fallback when no keyed provider is
+// configured; SearXNG (keyless) is selected only when enabled with a base_url.
 func (a *restAPI) activeSearchProviderID(cfg *config.Config) string {
 	web := cfg.Tools.Web
 	switch {
-	case strings.TrimSpace(web.Brave.APIKeyRef) != "":
-		return "brave"
-	case strings.TrimSpace(web.Tavily.APIKeyRef) != "":
-		return "tavily"
 	case strings.TrimSpace(web.Perplexity.APIKeyRef) != "":
 		return "perplexity"
+	case strings.TrimSpace(web.Brave.APIKeyRef) != "":
+		return "brave"
+	case web.SearXNG.Enabled && strings.TrimSpace(web.SearXNG.BaseURL) != "":
+		return "searxng"
+	case strings.TrimSpace(web.Tavily.APIKeyRef) != "":
+		return "tavily"
+	case strings.TrimSpace(web.BaiduSearch.APIKeyRef) != "":
+		return "baidu"
+	case strings.TrimSpace(web.GLMSearch.APIKeyRef) != "":
+		return "glm"
 	default:
 		return "duckduckgo"
 	}
 }
 
-// activeVoiceProviderID derives the active transcriber. ElevenLabs is the only
-// key-configurable voice integration surfaced here; model-based transcription is
-// configured under Providers, not Integrations.
+// activeVoiceProviderID derives the active transcriber, mirroring
+// DetectTranscriber's priority (pkg/voice/transcriber.go): model_name
+// (audio-capable) > ElevenLabs > Groq > Groq-provider-fallback. The
+// audio-model entry is active when voice.model_name resolves to an
+// audio-capable model; elevenlabs/groq are active when their respective
+// credential refs are set.
 func (a *restAPI) activeVoiceProviderID(cfg *config.Config) string {
+	if mn := strings.TrimSpace(cfg.Voice.ModelName); mn != "" {
+		if mc, err := cfg.GetModelConfig(mn); err == nil && voice.ModelSupportsAudioTranscription(mc.Model) {
+			return "audio-model"
+		}
+	}
 	if strings.TrimSpace(cfg.Voice.ElevenLabsAPIKeyRef) != "" {
 		return "elevenlabs"
+	}
+	if strings.TrimSpace(cfg.Voice.GroqAPIKeyRef) != "" {
+		return "groq"
 	}
 	return ""
 }
@@ -398,6 +462,14 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 			return
 		}
 	}
+	if !def.requiresKey && body.Active != nil && *body.Active {
+		// Keyless providers with prerequisites (SearXNG base_url, audio-model
+		// model_name) must have those set before activation.
+		if ok, reason := a.integrationActivationReady(a.agentLoop.GetConfig(), def); !ok {
+			jsonErr(w, http.StatusBadRequest, reason)
+			return
+		}
+	}
 
 	// Store the key (if supplied) in the encrypted credential store BEFORE
 	// writing the ref to config.json (SEC-23: no plaintext fallback).
@@ -444,8 +516,11 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 // ref on the provider when a key was stored and (b) select the provider as
 // active for its kind. For search, "active" means: set this provider's
 // api_key_ref and clear the OTHER keyed search providers' refs so exactly one is
-// active (DuckDuckGo, keyless, is the implicit fallback when none is keyed). For
-// voice, "active" sets cfg.voice.elevenlabs_api_key_ref.
+// active (DuckDuckGo/SearXNG, keyless, are the implicit fallbacks when none is
+// keyed; SearXNG toggles its enabled flag). For voice, "active" sets the
+// provider's api_key_ref (elevenlabs/groq) and clears the other keyed
+// transcriber's ref; audio-model activation clears both keyed refs so
+// DetectTranscriber falls through to voice.model_name.
 func applyIntegrationConfig(m map[string]any, def integrationDef, keySet, makeActive bool) error {
 	switch def.kind {
 	case "search":
@@ -463,6 +538,8 @@ var searchRefKeyByID = map[string]struct{ section string }{
 	"brave":      {"brave"},
 	"tavily":     {"tavily"},
 	"perplexity": {"perplexity"},
+	"glm":        {"glm_search"},
+	"baidu":      {"baidu_search"},
 }
 
 func applySearchIntegration(m map[string]any, def integrationDef, keySet, makeActive bool) error {
@@ -479,7 +556,8 @@ func applySearchIntegration(m map[string]any, def integrationDef, keySet, makeAc
 	}
 
 	// Activation: ensure exactly one keyed search provider is active by clearing
-	// the others' refs. DuckDuckGo activation clears all keyed refs (falls back).
+	// the others' refs. DuckDuckGo/SearXNG activation clears all keyed refs
+	// (falls back to the keyless provider); SearXNG additionally sets enabled.
 	if makeActive {
 		for pid, sec := range searchRefKeyByID {
 			section := mapChild(web, sec.section)
@@ -491,22 +569,58 @@ func applySearchIntegration(m map[string]any, def integrationDef, keySet, makeAc
 				delete(section, "api_key_ref")
 			}
 		}
+		// Toggle the keyless providers' enabled flags so the active one is
+		// enabled and the other is not (DuckDuckGo needs no flag — it is the
+		// implicit fallback when no keyed provider is set).
+		searxng := mapChild(web, "searxng")
+		if def.id == "searxng" {
+			searxng["enabled"] = true
+		} else {
+			searxng["enabled"] = false
+		}
 	}
 	return nil
 }
 
 func applyVoiceIntegration(m map[string]any, def integrationDef, keySet, makeActive bool) error {
 	voiceCfg := mapChild(m, "voice")
-	if def.id == "elevenlabs" {
+	switch def.id {
+	case "elevenlabs":
 		if keySet && def.credRef != "" {
 			voiceCfg["elevenlabs_api_key_ref"] = def.credRef
 		}
 		if makeActive {
 			// Activation with no stored key is rejected upstream; here a key is
-			// guaranteed present, so point the ref at it.
+			// guaranteed present, so point the ref at it. Clear the Groq ref so
+			// exactly one keyed transcriber is active (DetectTranscriber checks
+			// elevenlabs before groq, but keeping a single ref avoids ambiguity
+			// in the Integrations picker).
 			if def.credRef != "" {
 				voiceCfg["elevenlabs_api_key_ref"] = def.credRef
 			}
+			delete(voiceCfg, "groq_api_key_ref")
+		}
+	case "groq":
+		if keySet && def.credRef != "" {
+			voiceCfg["groq_api_key_ref"] = def.credRef
+		}
+		if makeActive {
+			if def.credRef != "" {
+				voiceCfg["groq_api_key_ref"] = def.credRef
+			}
+			// Clear the ElevenLabs ref so Groq is the active keyed transcriber.
+			// voice.model_name (audio-model) is left untouched — it is
+			// configured under Providers and takes precedence in
+			// DetectTranscriber when set to an audio-capable model.
+			delete(voiceCfg, "elevenlabs_api_key_ref")
+		}
+	case "audio-model":
+		// Keyless: activation clears the keyed transcriber refs so
+		// DetectTranscriber falls through to voice.model_name (which must be
+		// set — checked by integrationActivationReady). No key is stored.
+		if makeActive {
+			delete(voiceCfg, "elevenlabs_api_key_ref")
+			delete(voiceCfg, "groq_api_key_ref")
 		}
 	}
 	return nil

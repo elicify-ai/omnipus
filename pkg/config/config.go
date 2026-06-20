@@ -2272,6 +2272,10 @@ type VoiceConfig struct {
 	// ElevenLabsAPIKeyRef is the env-var name whose value holds the ElevenLabs API key.
 	// Resolved at boot via credentials.InjectFromConfig; never store the key value here.
 	ElevenLabsAPIKeyRef string `json:"elevenlabs_api_key_ref,omitempty" env:"OMNIPUS_VOICE_ELEVENLABS_API_KEY_REF"`
+	// GroqAPIKeyRef is the env-var name whose value holds the Groq API key used by
+	// the Groq transcriber (pkg/voice/groq_transcriber.go). Resolved at boot via
+	// credentials.InjectFromConfig; never store the key value here.
+	GroqAPIKeyRef string `json:"groq_api_key_ref,omitempty" env:"OMNIPUS_VOICE_GROQ_API_KEY_REF"`
 }
 
 // ModelConfig represents a model-centric provider configuration.
