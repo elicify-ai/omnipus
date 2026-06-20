@@ -62,12 +62,8 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 		return nil, fmt.Errorf("opencode driver: Run called while a run is already active")
 	}
 
-	// Detect and pin CLI version (FR-5.6).
-	if ver, err := detectCLIVersion(ctx, opencodeBinName); err != nil {
-		slog.Warn("runner/opencode: version check failed — proceeding with unknown version", "err", err)
-	} else {
-		d.logVersionCheck(ver)
-	}
+	// Detect and pin CLI version (FR-5.6 / N3).
+	ver, verKnown := detectAndPinVersion(ctx, opencodeBinName, "runner/opencode", knownOpencodeVersionPrefixes)
 
 	runID := opts.RunID
 	if runID == "" {
@@ -107,6 +103,19 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 	d.eventCh = ch
 	d.cancel = cancelFn
 	d.cmd = cmd
+
+	// Emit the Start event first so the run log / SPA can pin the CLI version
+	// (FR-5.6 / N3). Buffered channel; this cannot block here.
+	ch <- RunEvent{
+		Kind:      EventKindStart,
+		RunID:     runID,
+		Timestamp: time.Now().UTC(),
+		Start: &StartEvent{
+			CLI:          opencodeBinName,
+			Version:      ver,
+			VersionKnown: verKnown,
+		},
+	}
 
 	// Pipe stderr to slog (Debug) AND retain a bounded tail so a non-zero exit
 	// can surface the real diagnostic at Warn/Error (see below).
@@ -371,15 +380,17 @@ func (d *OpencodeDriver) Test(ctx context.Context) ConnectionTestResult {
 	return result
 }
 
-// logVersionCheck logs a warning for unknown version strings (FR-5.6).
-func (d *OpencodeDriver) logVersionCheck(ver string) {
+// logVersionCheck logs a warning for unknown version strings (FR-5.6). It
+// returns true when the version matches a known prefix.
+func (d *OpencodeDriver) logVersionCheck(ver string) bool {
 	for _, prefix := range knownOpencodeVersionPrefixes {
 		if strings.Contains(ver, prefix) {
 			slog.Info("runner/opencode: CLI version", "version", ver)
-			return
+			return true
 		}
 	}
 	slog.Warn("runner/opencode: unknown CLI version — proceeding with graceful degradation", "version", ver)
+	return false
 }
 
 // compile-time interface assertion
