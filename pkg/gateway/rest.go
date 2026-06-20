@@ -1450,6 +1450,11 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "subagent_3p requires executor.kind=external-cli")
 			return
 		}
+		// Spec §9.2: cli_path is required for subagent_3p on create.
+		if req.Executor.CliPath == nil || strings.TrimSpace(*req.Executor.CliPath) == "" {
+			jsonErr(w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
+			return
+		}
 	}
 	// Derive / coerce executor for non-worker and worker-without-executor cases.
 	// Main (and legacy custom) agents always run native on the Omnipus engine; an
@@ -1558,6 +1563,19 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if execCfg != nil {
+			// executorConfigFromRequest only maps kind+cli. Copy the
+			// remaining executor fields (cli_path, env_overrides, cli_args)
+			// from the request so they persist on create. The PUT handler
+			// does this via executorConfigUpdate; create needs it here.
+			if effectiveExecutor.CliPath != nil {
+				execCfg.CLIPath = *effectiveExecutor.CliPath
+			}
+			if effectiveExecutor.EnvOverrides != nil {
+				execCfg.EnvOverrides = *effectiveExecutor.EnvOverrides
+			}
+			if effectiveExecutor.CliArgs != nil {
+				execCfg.CLIArgs = *effectiveExecutor.CliArgs
+			}
 			ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
 		}
 	}
