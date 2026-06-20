@@ -359,21 +359,16 @@ func (d *OpencodeDriver) Resume(ctx context.Context, runID string) (<-chan RunEv
 	return d.Run(ctx, RunOptions{RunID: runID})
 }
 
-// Test validates the opencode CLI is present.
+// Test runs the binary-present → handshake → authed health check (FR-4.2) by
+// delegating to runner.TestConnection, so the missing-binary vs unauthed
+// distinction is uniform across all external CLIs and the auth leg is not
+// skipped. It does NOT execute any real work.
 func (d *OpencodeDriver) Test(ctx context.Context) ConnectionTestResult {
-	ver, err := detectCLIVersion(ctx, "opencode")
-	if err != nil {
-		return ConnectionTestResult{
-			OK:      false,
-			Message: fmt.Sprintf("opencode binary check failed: %v", err),
-		}
+	result := TestConnection(ctx, "opencode")
+	if result.OK {
+		d.logVersionCheck(result.CLIVersion)
 	}
-	d.logVersionCheck(ver)
-	return ConnectionTestResult{
-		OK:         true,
-		Message:    "opencode CLI found and responding",
-		CLIVersion: ver,
-	}
+	return result
 }
 
 // logVersionCheck logs a warning for unknown version strings (FR-5.6).

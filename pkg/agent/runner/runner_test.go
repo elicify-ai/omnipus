@@ -292,6 +292,36 @@ func TestOpencodeDriver_ImplementsInterface(t *testing.T) {
 	var _ runner.ExternalAgentRunner = (*runner.OpencodeDriver)(nil)
 }
 
+// TestOpencodeDriver_Test_DelegatesToTestConnection verifies the opencode
+// driver's Test() runs the full 3-step health check (binary → handshake → auth)
+// by delegating to runner.TestConnection, rather than only probing the binary
+// version (FR-4.2 — the missing-binary vs unauthed distinction must be uniform
+// across all external CLIs, and the auth leg must not be skipped).
+func TestOpencodeDriver_Test_DelegatesToTestConnection(t *testing.T) {
+	ctx := context.Background()
+	d := &runner.OpencodeDriver{}
+
+	got := d.Test(ctx)
+	want := runner.TestConnection(ctx, "opencode")
+
+	// The driver may log on the OK path; the observable contract is that the
+	// result matches TestConnection exactly (OK, Reason, CLIVersion, Message).
+	if got.OK != want.OK {
+		t.Errorf("Test().OK = %v, want %v (TestConnection)", got.OK, want.OK)
+	}
+	if got.Reason != want.Reason {
+		t.Errorf("Test().Reason = %q, want %q (TestConnection)", got.Reason, want.Reason)
+	}
+	if got.CLIVersion != want.CLIVersion {
+		t.Errorf("Test().CLIVersion = %q, want %q (TestConnection)", got.CLIVersion, want.CLIVersion)
+	}
+	// When unauthenticated, TestConnection surfaces the auth leg failure; a
+	// driver that only checked the binary would report OK=true here.
+	if !got.OK && got.Reason == runner.ReasonUnauthenticated {
+		t.Logf("auth leg exercised: %s", got.Message)
+	}
+}
+
 // TestClaudeDriver_ParsesStreamJSONFixture verifies that the Claude driver
 // correctly parses a recorded stream-json fixture (TDD #8 per spec, FR-5.2).
 // Uses a recorded fixture under testdata/fixtures/ — no real CLI invoked.
