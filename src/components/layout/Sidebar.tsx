@@ -27,7 +27,7 @@ import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
-import { NewProjectSlideOver } from '@/components/projects/NewProjectSlideOver'
+import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
 import { cn } from '@/lib/utils'
 import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 
@@ -479,7 +479,7 @@ export function Sidebar() {
       </div>
 
       {/* New workspace slide-over — rendered inside nav to avoid stacking context issues */}
-      <NewProjectSlideOver open={newProjectOpen} onOpenChange={setNewProjectOpen} />
+      <NewWorkspaceSlideOver open={newProjectOpen} onOpenChange={setNewProjectOpen} />
     </nav>
   )
 
