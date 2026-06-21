@@ -11,8 +11,7 @@
 //   - MIG (workflow-vs-GTD discriminator) DELETED — unified store, one entity type.
 //
 // Tests that remain:
-//   - newTestRestAPIWithAgent / newTestRestAPIWithAgentDrained / newTestRestAPIWithProvider — KEPT
-//   - panicMockProvider — KEPT (for future /dispatch-task tests)
+//   - newTestRestAPIWithAgent — KEPT (shared helper)
 //   - REC — reconcileStuckTasks (Sprint 2 successor to reconcileStuckBoardTasks)
 //   - REC2 — reconcileOrphanBlockedByEdges
 //
@@ -21,7 +20,6 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -39,7 +37,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
@@ -92,85 +89,6 @@ func newTestRestAPIWithAgent(t *testing.T) *restAPI {
 	return api
 }
 
-// newTestRestAPIWithAgentDrained wraps newTestRestAPIWithAgent and registers a
-// t.Cleanup that drains WaitForActiveRequests before the TempDir cleanup fires.
-// Use this for any test that exercises the real agent goroutine path.
-// LIFO cleanup ordering ensures: WaitForActiveRequests → al.Close → TempDir.
-func newTestRestAPIWithAgentDrained(t *testing.T) *restAPI {
-	t.Helper()
-	api := newTestRestAPIWithAgent(t)
-	t.Cleanup(func() { api.agentLoop.WaitForActiveRequests() })
-	return api
-}
-
-// ── Mock providers ────────────────────────────────────────────────────────────
-
-// panicMockProvider is an LLMProvider that panics on every Chat call.
-// Kept for future tests that exercise agent-dispatch panic recovery.
-type panicMockProvider struct{}
-
-func (p *panicMockProvider) Chat(
-	_ context.Context,
-	_ []providers.Message,
-	_ []providers.ToolDefinition,
-	_ string,
-	_ map[string]any,
-) (*providers.LLMResponse, error) {
-	panic("simulated agent panic for test")
-}
-
-func (p *panicMockProvider) GetDefaultModel() string { return "test-model" }
-
-// ── newTestRestAPIWithProvider ────────────────────────────────────────────────
-
-// newTestRestAPIWithProvider creates a restAPI with one enabled default agent,
-// backed by the given provider. The config mirrors newTestRestAPIWithAgent.
-// A t.Cleanup draining WaitForActiveRequests is registered automatically (H1).
-func newTestRestAPIWithProvider(t *testing.T, provider providers.LLMProvider) *restAPI {
-	t.Helper()
-	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-	tmpDir := t.TempDir()
-	agentWorkspace := filepath.Join(tmpDir, "agents", "01JXTESTAGENTSTARTTEST001")
-	require.NoError(t, os.MkdirAll(agentWorkspace, 0o700))
-	agentEnabled := true
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
-			},
-			List: []config.AgentConfig{
-				{
-					ID:        "01JXTESTAGENTSTARTTEST001",
-					Name:      "Test Agent",
-					Default:   true,
-					Enabled:   &agentEnabled,
-					Type:      config.AgentTypeCustom,
-					Workspace: agentWorkspace,
-				},
-			},
-		},
-	}
-	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), minimalCfg, 0o600))
-
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, provider)
-	api := &restAPI{
-		agentLoop:     al,
-		allowedOrigin: "http://localhost:3000",
-		onboardingMgr: onboarding.NewManager(tmpDir),
-		homePath:      tmpDir,
-		taskStore:     task.New(tmpDir + "/tasks"),
-		taskLock:      task.TaskFileLock,
-	}
-	// H1: drain goroutines before TempDir cleanup.
-	t.Cleanup(func() { api.agentLoop.WaitForActiveRequests() })
-	return api
-}
-
 // ── REC: reconcileStuckTasks ─────────────────────────────────────────────────
 
 // TestReconcileStuckTasks verifies the boot reconciler resets stuck tasks.
@@ -202,7 +120,10 @@ func TestReconcileStuckTasks(t *testing.T) {
 	const inProgID = "test-reconcile-in-prog-001"
 	inProgData := fmt.Sprintf(
 		`{"id":%q,"title":"StuckInProgressTask","action":"llm","status":"in_progress","workspace_id":%q,"session_id":"orphaned","created_at":%q,"updated_at":%q}`,
-		inProgID, wsID, now, now,
+		inProgID,
+		wsID,
+		now,
+		now,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, inProgID+".json"), []byte(inProgData), 0o600))
 
@@ -210,7 +131,10 @@ func TestReconcileStuckTasks(t *testing.T) {
 	const doneID = "test-reconcile-done-001"
 	doneData := fmt.Sprintf(
 		`{"id":%q,"title":"DoneTask","action":"llm","status":"done","workspace_id":%q,"result":"all tests passed","created_at":%q,"updated_at":%q}`,
-		doneID, wsID, now, now,
+		doneID,
+		wsID,
+		now,
+		now,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, doneID+".json"), []byte(doneData), 0o600))
 
@@ -285,7 +209,12 @@ func TestReconcileOrphanBlockedByEdges(t *testing.T) {
 	const orphanCID = "test-orphan-c-nonexistent"
 	bData := fmt.Sprintf(
 		`{"id":%q,"title":"TaskB","action":"llm","status":"blocked","workspace_id":%q,"blocked_by":[%q,%q],"created_at":%q,"updated_at":%q}`,
-		bID, wsID, aID, orphanCID, now, now,
+		bID,
+		wsID,
+		aID,
+		orphanCID,
+		now,
+		now,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, bID+".json"), []byte(bData), 0o600))
 

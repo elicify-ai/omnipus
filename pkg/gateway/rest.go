@@ -792,7 +792,7 @@ func firstEnabledAgentID(cfg *config.Config) string {
 // isWorkerAgentID reports whether agentID resolves to a worker agent in the config.
 // Returns false for an unknown agent ID (existence is validated separately by the
 // caller). Used by gateway session-binding chokepoints to reject a worker as a chat
-// target — a worker is a delegation-only labour tier, never a live chat persona.
+// target — a worker is a delegation-only labor tier, never a live chat persona.
 func isWorkerAgentID(cfg *config.Config, agentID string) bool {
 	if cfg == nil || agentID == "" {
 		return false
@@ -833,7 +833,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("agent %q not found", agentID))
 		return
 	}
-	// A worker is a delegation-only labour tier — never a chat target. A session
+	// A worker is a delegation-only labor tier — never a chat target. A session
 	// backs a live chat, so an explicit worker agent_id must be rejected (mirrors
 	// setChannelRouting's worker 400). Both no-agent fallbacks above already skip
 	// workers, so this only ever rejects an explicitly-supplied worker.
@@ -1495,7 +1495,8 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// native-defaulting below so that defaulting only applies to plain
 	// Subagent, never to subagent_3p.
 	if req.Type != nil && *req.Type == gen.AgentCreateRequestTypeSubagent3p {
-		if req.Executor == nil || req.Executor.Kind == nil || *req.Executor.Kind != gen.AgentCreateRequestExecutorKindExternalCli {
+		if req.Executor == nil || req.Executor.Kind == nil ||
+			*req.Executor.Kind != gen.AgentCreateRequestExecutorKindExternalCli {
 			jsonErr(w, http.StatusBadRequest, "subagent_3p requires executor.kind=external-cli")
 			return
 		}
@@ -1515,7 +1516,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if createType == config.AgentTypeWorker && req.Executor == nil {
 		// Subagent with no executor: default to native runtime. The actual
 		// config record is created further down; we record the intent and
-		// materialise the native executor there.
+		// materialize the native executor there.
 	}
 	if createType != config.AgentTypeWorker && req.Executor != nil {
 		kind := executorKindStr(req.Executor.Kind)
@@ -1635,7 +1636,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if effectiveExecutor != nil {
-		execCfg, errMsg := executorConfigFromRequest(executorKindStr(effectiveExecutor.Kind), executorCliStr(effectiveExecutor.Cli))
+		execCfg, errMsg := executorConfigFromRequest(
+			executorKindStr(effectiveExecutor.Kind),
+			executorCliStr(effectiveExecutor.Cli),
+		)
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
@@ -1864,7 +1868,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		ag.Icon = &ac.Icon
 	}
 	// Type reflects the chosen classification (custom or worker). For
-	// "custom" this matches the pre-existing hardcoded behaviour. For
+	// "custom" this matches the pre-existing hardcoded behavior. For
 	// "worker" it surfaces the create-time choice so the response — and
 	// subsequent GET / list reads via coreagent.ResolveType — round-trips the
 	// agent kind the caller actually created (Main/Subagent/subagent_3p on the wire).
@@ -2147,7 +2151,11 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// (invoked only via delegation). Reject an attempt to star a worker before
 	// any work is done so the single-default invariant and routing stay coherent.
 	if req.Default != nil && *req.Default && foundAgent.IsWorker() {
-		jsonErr(w, http.StatusBadRequest, "a worker agent cannot be set as the default agent (workers are not chat targets)")
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			"a worker agent cannot be set as the default agent (workers are not chat targets)",
+		)
 		return
 	}
 	// Worker agents have no heartbeat — they execute one delegated task at a
@@ -2167,7 +2175,11 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		if (req.HeartbeatEnabled != nil && *req.HeartbeatEnabled) ||
 			(req.HeartbeatInterval != nil && *req.HeartbeatInterval > 0) ||
 			(req.Heartbeat != nil && strings.TrimSpace(*req.Heartbeat) != "") {
-			jsonErr(w, http.StatusBadRequest, "a worker cannot have heartbeat enabled (workers run only via delegation)")
+			jsonErr(
+				w,
+				http.StatusBadRequest,
+				"a worker cannot have heartbeat enabled (workers run only via delegation)",
+			)
 			return
 		}
 	}
@@ -2257,7 +2269,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		// env_overrides OMNIPUS_-prefix guard (spec §4.18 / F-04 STRIDE).
 		// A user-submitted env_overrides key starting with OMNIPUS_ would
 		// override gateway-managed secrets (master key, audit chain, etc.)
-		// for the spawned CLI process — a defence-in-depth gap.
+		// for the spawned CLI process — a defense-in-depth gap.
 		if req.Executor.EnvOverrides != nil {
 			for k := range *req.Executor.EnvOverrides {
 				if strings.HasPrefix(strings.ToUpper(k), "OMNIPUS_") {
@@ -2267,7 +2279,10 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				}
 			}
 		}
-		execCfg, errMsg := executorConfigFromRequest(executorKindStr(req.Executor.Kind), executorCliStr(req.Executor.Cli))
+		execCfg, errMsg := executorConfigFromRequest(
+			executorKindStr(req.Executor.Kind),
+			executorCliStr(req.Executor.Cli),
+		)
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
@@ -2438,7 +2453,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					agentMap["steering_mode"] = sm
 				}
 				// tool_feedback was removed from the wire in W1 (it's now per-channel
-				// runtime behaviour driven by pkg/agent/loop.go: webchat skips). The
+				// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 				// global config-level agents.defaults.tool_feedback stays.
 				if req.SandboxProfile != nil {
 					if *req.SandboxProfile == "" {
@@ -2860,7 +2875,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		sm := gen.AgentSteeringMode(steeringModeOrDefault(string(*req.SteeringMode)))
 		ag.SteeringMode = sm
 	}
-	// tool_feedback removed from the wire in W1 (per-channel runtime behaviour now).
+	// tool_feedback removed from the wire in W1 (per-channel runtime behavior now).
 	if req.HeartbeatEnabled != nil {
 		ag.HeartbeatEnabled = *req.HeartbeatEnabled
 	}
@@ -5435,10 +5450,34 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			Enabled:     channelEnabledByType("weixin"),
 			Description: "Weixin (WeChat) Official Account",
 		},
-		{Id: "line", Name: "LINE", Transport: "webhook", Enabled: channelEnabledByType("line"), Description: "LINE Messaging API"},
-		{Id: "qq", Name: "QQ", Transport: "websocket", Enabled: channelEnabledByType("qq"), Description: "QQ via napcat"},
-		{Id: "irc", Name: "IRC", Transport: "tcp", Enabled: channelEnabledByType("irc"), Description: "Internet Relay Chat"},
-		{Id: "matrix", Name: "Matrix", Transport: "http", Enabled: channelEnabledByType("matrix"), Description: "Matrix protocol"},
+		{
+			Id:          "line",
+			Name:        "LINE",
+			Transport:   "webhook",
+			Enabled:     channelEnabledByType("line"),
+			Description: "LINE Messaging API",
+		},
+		{
+			Id:          "qq",
+			Name:        "QQ",
+			Transport:   "websocket",
+			Enabled:     channelEnabledByType("qq"),
+			Description: "QQ via napcat",
+		},
+		{
+			Id:          "irc",
+			Name:        "IRC",
+			Transport:   "tcp",
+			Enabled:     channelEnabledByType("irc"),
+			Description: "Internet Relay Chat",
+		},
+		{
+			Id:          "matrix",
+			Name:        "Matrix",
+			Transport:   "http",
+			Enabled:     channelEnabledByType("matrix"),
+			Description: "Matrix protocol",
+		},
 		{
 			Id:          "google-chat",
 			Name:        "Google Chat",
@@ -5581,7 +5620,9 @@ func applyInstanceOverlay(channelList []gen.ChannelEntry, instances map[string]c
 		ident := struct { // not-wire-format: composite literal of the generated gen.ChannelEntry.Identity anonymous field type — not a parallel wire type
 			Id   *string                      `json:"id,omitempty"`
 			Kind gen.ChannelEntryIdentityKind `json:"kind"`
-		}{Kind: entryKind}
+		}{
+			Kind: entryKind,
+		}
 		if id := strings.TrimSpace(meta.identity.ID); id != "" {
 			idCopy := id
 			ident.Id = &idCopy
@@ -5793,7 +5834,15 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		// is a client-correctable constraint violation, not a server fault —
 		// return a clean 422 "one-per-type" rather than an opaque 500.
 		if errors.Is(err, config.ErrChannelsCap1Violated) {
-			slog.Warn("rest: set channel enabled rejected by cap-1", "channel", channelID, "enabled", enabled, "error", err)
+			slog.Warn(
+				"rest: set channel enabled rejected by cap-1",
+				"channel",
+				channelID,
+				"enabled",
+				enabled,
+				"error",
+				err,
+			)
 			jsonErr(w, http.StatusUnprocessableEntity, "one-per-type in v0.1.0: "+err.Error())
 			return
 		}

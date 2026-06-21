@@ -359,7 +359,13 @@ func TestRegression_RestartPersistence(t *testing.T) {
 	rGetTask2 := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+createdTask2.Id, nil)
 	rGetTask2.URL.Path = "/api/v1/tasks/" + createdTask2.Id
 	apiB.HandleTasks(wGetTask2, rGetTask2)
-	require.Equal(t, http.StatusOK, wGetTask2.Code, "GET bob's task via apiB must return 200; body=%s", wGetTask2.Body.String())
+	require.Equal(
+		t,
+		http.StatusOK,
+		wGetTask2.Code,
+		"GET bob's task via apiB must return 200; body=%s",
+		wGetTask2.Body.String(),
+	)
 	var persistedTask2 gen.Task
 	require.NoError(t, json.Unmarshal(wGetTask2.Body.Bytes(), &persistedTask2))
 	assert.Equal(t, "BobTask", persistedTask2.Title, "bob's task title must persist")
@@ -534,7 +540,10 @@ func TestRegression_Task_EmptyOwner_AccessibleToAll(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	legacyData := fmt.Sprintf(
 		`{"id":%q,"title":"LegacyTask","action":"llm","status":"inbox","workspace_id":%q,"created_at":%q,"updated_at":%q}`,
-		legacyID, wsID, now, now,
+		legacyID,
+		wsID,
+		now,
+		now,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, legacyID+".json"), []byte(legacyData), 0o600))
 

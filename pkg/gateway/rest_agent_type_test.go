@@ -3,7 +3,7 @@
 // REST create-by-type tests for the AgentCreateRequest.type enum
 // (custom | worker). Proves:
 //   1. Omitted type / type="custom" → persisted as "custom" (regression guard
-//      for the pre-existing behaviour).
+//      for the pre-existing behavior).
 //   2. type="worker" → persisted as "worker" (no default, not a chat target),
 //      and is unlocked so the operator can edit it. Response echoes "worker".
 //   3. type="core" / "system" / anything else → 400.
@@ -71,7 +71,7 @@ func findTypeTestAgentInConfig(t *testing.T, m map[string]any, name string) map[
 }
 
 // TestCreateAgent_TypeOmitted_DefaultsToCustom is the regression guard:
-// omitting the `type` field must preserve the pre-existing behaviour (the
+// omitting the `type` field must preserve the pre-existing behavior (the
 // new field is purely additive). The on-disk type is "custom".
 func TestCreateAgent_TypeOmitted_DefaultsToCustom(t *testing.T) {
 	api := buildExecutorTestAPI(t)

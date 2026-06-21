@@ -14,6 +14,7 @@
 //     scrubbed) child env. Omnipus-internal keys (OMNIPUS_*) and the master-key
 //     env vars are NEVER overridable, so a misconfigured override cannot leak
 //     the gateway master key or spoof the agent identity vars.
+
 package runner
 
 import (
@@ -42,7 +43,7 @@ func isProtectedEnvKey(key string) bool {
 }
 
 // resolveCLIBinary returns the binary the driver should exec. When cliPath is a
-// non-empty (trimmed) value it is used verbatim — an absolute path is honoured,
+// non-empty (trimmed) value it is used verbatim — an absolute path is honored,
 // a bare name is resolved via $PATH by exec. When empty, the driver's default
 // binary name is used (resolved via $PATH). This implements the
 // ExecutorConfig.cli_path "fall back to $PATH when empty" rule.
@@ -68,7 +69,7 @@ const shellInjectionChars = "|&;<>()$`\\\"'\n"
 // ParseCLIArgs is the exported entry point for the dispatch site
 // (pkg/agent/external_dispatch.go) to tokenise an ExecutorConfig.cli_args string
 // into an argv slice. See parseCLIArgs for the tokenisation rules and the
-// warn-not-reject shell-metacharacter behaviour.
+// warn-not-reject shell-metacharacter behavior.
 func ParseCLIArgs(raw, runLabel string) []string {
 	return parseCLIArgs(raw, runLabel)
 }
@@ -93,8 +94,13 @@ func parseCLIArgs(raw, runLabel string) []string {
 	// e.g. `--flag $(whoami)` intended. We do not reject: the schema mandates
 	// warn-not-reject because execve makes the literal pass-through safe.
 	if strings.ContainsAny(raw, shellInjectionChars) {
-		slog.Warn("runner: cli_args contains shell-metacharacters — passed literally to execve (no shell interpolation)",
-			"run", runLabel, "cli_args", raw)
+		slog.Warn(
+			"runner: cli_args contains shell-metacharacters — passed literally to execve (no shell interpolation)",
+			"run",
+			runLabel,
+			"cli_args",
+			raw,
+		)
 	}
 
 	return tokenizeArgs(raw)
@@ -169,8 +175,8 @@ func mergeEnvOverrides(baseEnv []string, overrides map[string]string, runLabel s
 	}
 
 	// Index existing keys → position in the output slice for in-place replace.
-	out := make([]string, len(baseEnv))
-	copy(out, baseEnv)
+	out := make([]string, 0, len(baseEnv))
+	out = append(out, baseEnv...)
 	idx := make(map[string]int, len(out))
 	for i, kv := range out {
 		if eq := strings.IndexByte(kv, '='); eq > 0 {

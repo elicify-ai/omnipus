@@ -288,8 +288,8 @@ func TestDropOrphanEdges(t *testing.T) {
 	}
 	// Remove dep's file out-of-band (simulate manual deletion / crash) so a's
 	// edge now dangles, WITHOUT going through Delete (which would cascade-clean).
-	if err := removeFileRaw(s, dep.ID); err != nil {
-		t.Fatal(err)
+	if rerr := removeFileRaw(s, dep.ID); rerr != nil {
+		t.Fatal(rerr)
 	}
 	removed, err = s.DropOrphanEdges()
 	if err != nil {

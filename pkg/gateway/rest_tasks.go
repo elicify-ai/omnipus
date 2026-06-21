@@ -325,7 +325,10 @@ func (a *restAPI) validateTaskAgentID(agentID string) error {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
 	if reg.IsWorker(agentID) {
-		return fmt.Errorf("agent %q is a worker and cannot be directly assigned a task — workers are invoked via delegation", agentID)
+		return fmt.Errorf(
+			"agent %q is a worker and cannot be directly assigned a task — workers are invoked via delegation",
+			agentID,
+		)
 	}
 	return nil
 }
@@ -554,7 +557,12 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Trigger != nil {
-		t.Trigger = buildTrigger(string(req.Trigger.Type), req.Trigger.Config.AtMs, req.Trigger.Config.EveryMs, req.Trigger.Config.CronExpr)
+		t.Trigger = buildTrigger(
+			string(req.Trigger.Type),
+			req.Trigger.Config.AtMs,
+			req.Trigger.Config.EveryMs,
+			req.Trigger.Config.CronExpr,
+		)
 	}
 
 	if err := a.taskStore.Create(t); err != nil {
@@ -616,7 +624,11 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			hasPrompt = true
 		}
 		if !hasPrompt {
-			jsonErr(w, http.StatusUnprocessableEntity, "a partial task cannot be advanced to next — add a prompt or description first")
+			jsonErr(
+				w,
+				http.StatusUnprocessableEntity,
+				"a partial task cannot be advanced to next — add a prompt or description first",
+			)
 			return
 		}
 	}
@@ -658,7 +670,12 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		patch.Todos = &todos
 	}
 	if req.Trigger != nil {
-		tr := buildTrigger(string(req.Trigger.Type), req.Trigger.Config.AtMs, req.Trigger.Config.EveryMs, req.Trigger.Config.CronExpr)
+		tr := buildTrigger(
+			string(req.Trigger.Type),
+			req.Trigger.Config.AtMs,
+			req.Trigger.Config.EveryMs,
+			req.Trigger.Config.CronExpr,
+		)
 		patch.Trigger = &tr
 	}
 	if req.Due != nil {
@@ -747,7 +764,13 @@ func (a *restAPI) handleTaskDelete(w http.ResponseWriter, id string) {
 			slog.Warn("rest: task delete: advance unblocked dependent failed", "id", depID, "error", uErr)
 			continue
 		}
-		slog.Info("rest: deleted task advanced unblocked dependent blocked→next", "deleted_id", id, "advanced_id", depID)
+		slog.Info(
+			"rest: deleted task advanced unblocked dependent blocked→next",
+			"deleted_id",
+			id,
+			"advanced_id",
+			depID,
+		)
 	}
 	// Remove the deleted task's time-trigger cron job (if any) so it does not
 	// fire against a missing task.

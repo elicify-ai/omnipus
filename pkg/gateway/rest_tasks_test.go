@@ -20,6 +20,7 @@
 //	PATCH /tasks/{id} with an illegal transition → 400 (store ErrValidation).
 //
 // Traces to: project-task-management-level1-spec.md
+
 package gateway
 
 import (
@@ -385,7 +386,12 @@ func TestTaskDelete_Blocker_AdvancesMultiDepDependent(t *testing.T) {
 	now := "2026-06-01T00:00:00Z"
 	tcData := fmt.Sprintf(
 		`{"id":%q,"title":"TC","action":"llm","status":"blocked","workspace_id":%q,"blocked_by":[%q,%q],"created_at":%q,"updated_at":%q}`,
-		tcID, wsID, tB.Id, tDone.Id, now, now,
+		tcID,
+		wsID,
+		tB.Id,
+		tDone.Id,
+		now,
+		now,
 	)
 	require.NoError(t, os.WriteFile(tasksDir+"/"+tcID+".json", []byte(tcData), 0o600))
 

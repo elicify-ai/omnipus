@@ -21,7 +21,6 @@ package gateway
 
 import (
 	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -207,17 +206,3 @@ func TestHandleTasks_DeleteAdvancesBlockedDependent(t *testing.T) {
 	require.Equal(t, gen.TaskStatus("next"), getTaskStatus(t, api, bID),
 		"B must be advanced blocked→next after its only blocker A is deleted (FR-6.5 cascade delete advance)")
 }
-
-// newTestHTTPRecorder is a minimal helper that dispatches a request with no body
-// and returns the recorder.
-func newTestHTTPRecorder(t *testing.T, api *restAPI, method, path, _ string) *httptest.ResponseRecorder {
-	t.Helper()
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(method, path, nil)
-	r.URL.Path = path
-	api.HandleTasks(w, r)
-	return w
-}
-
-// _ ensures the net/http import is used for the httptest.NewRequest call pattern.
-var _ = http.MethodDelete

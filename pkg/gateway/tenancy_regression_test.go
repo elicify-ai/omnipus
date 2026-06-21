@@ -232,7 +232,9 @@ func TestTaskCreateTool_Rule2_SessionOwner(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	wsJSON := fmt.Sprintf(
 		`{"id":%q,"name":"Rule2 Workspace","status":"active","pinned":false,"pin_order":0,"is_default":true,"created_at":%q,"updated_at":%q}`,
-		wsID, now, now,
+		wsID,
+		now,
+		now,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), []byte(wsJSON), 0o600))
 
@@ -292,7 +294,9 @@ func TestTaskCreateTool_Rule2_NoSession_OwnerEmpty(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	wsJSON := fmt.Sprintf(
 		`{"id":%q,"name":"Rule3 Workspace","status":"active","pinned":false,"pin_order":0,"is_default":true,"created_at":%q,"updated_at":%q}`,
-		wsID, now, now,
+		wsID,
+		now,
+		now,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), []byte(wsJSON), 0o600))
 

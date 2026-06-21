@@ -14,6 +14,7 @@
 // The 3 tools (remember/recall_memory/retrospective) are re-pointed here.
 //
 // GREENFIELD: old MEMORY.md data is not migrated (FR-7.6 / operator D2 decision).
+
 package agent
 
 import (

@@ -602,7 +602,15 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// so the transition guard does not reject blocked→next.
 	for _, depID := range unblocked {
 		if _, uErr := t.store.AdvanceUnblocked(depID); uErr != nil {
-			slog.Warn("task_delete: advance unblocked dependent failed", "deleted_id", taskID, "dependent_id", depID, "error", uErr)
+			slog.Warn(
+				"task_delete: advance unblocked dependent failed",
+				"deleted_id",
+				taskID,
+				"dependent_id",
+				depID,
+				"error",
+				uErr,
+			)
 			continue
 		}
 		slog.Info("task_delete: advanced unblocked dependent blocked→next", "deleted_id", taskID, "advanced_id", depID)

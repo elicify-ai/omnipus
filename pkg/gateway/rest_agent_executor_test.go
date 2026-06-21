@@ -46,7 +46,7 @@ func buildExecutorTestAPI(t *testing.T) *restAPI {
 	// disk-config reads resolve under tmpDir instead of the developer's real
 	// ~/.omnipus. Without this, config.OmnipusHomeDir() falls back to ~/.omnipus,
 	// and a machine with a configured provider + credentials makes model-apply
-	// succeed where the test expects it to fail (hermeticity bug, not behaviour).
+	// succeed where the test expects it to fail (hermeticity bug, not behavior).
 	t.Setenv("OMNIPUS_HOME", tmpDir)
 	cfgPath := filepath.Join(tmpDir, "config.json")
 	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"test-agent","name":"Test Agent","type":"custom"}]}}`
