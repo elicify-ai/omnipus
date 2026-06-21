@@ -26,7 +26,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // newEnableReloadTestAPI builds a restAPI backed by a real AgentLoop and an
@@ -79,7 +79,7 @@ func newEnableReloadTestAPI(t *testing.T, reloadFn func() error) (*restAPI, *int
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 	return api, &reloadCalls
 }

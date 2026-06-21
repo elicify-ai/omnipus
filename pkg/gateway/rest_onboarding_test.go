@@ -20,7 +20,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // testMasterKey is a deterministic hex master key used only in tests.
@@ -40,7 +40,7 @@ func newOnboardingTestAPI(t *testing.T, tmpDir string, al *agent.AgentLoop) *res
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 		credStore:     credStore,
 	}
 }
@@ -117,7 +117,7 @@ func TestHandleCompleteOnboarding_AlreadyComplete(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboardingMgr,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 
 	// Mark onboarding as complete
@@ -628,7 +628,7 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboardingMgr,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 		credStore:     credStore,
 	}
 
@@ -701,7 +701,7 @@ func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 		credStore:     credStore,
 	}
 

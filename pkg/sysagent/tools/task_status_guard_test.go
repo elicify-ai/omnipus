@@ -4,11 +4,18 @@
 
 package systools_test
 
-// H3: A4 sysagent status-guard tests for feat/level1-project-task-mgmt.
+// H3: sysagent status-guard tests for the unified 7-state task vocabulary.
 //
-// The A4 guard in TaskUpdateTool.Execute rejects status="active" — only /start
-// may set that value. This prevents an agent from bypassing the striped-mutex
-// check-and-set sequence by writing "active" directly via system.task.update.
+// The old A4 guard ("status=active only via /start") has been REMOVED in Sprint
+// 2: the new store accepts any of the 7 valid statuses without a transition
+// machine. Invalid status values (not in the 7-state vocab) are silently ignored
+// by the update tool — the tool still returns success, but the status is left
+// unchanged. This file verifies that behaviour.
+//
+// Deleted: TestSysagentTaskUpdate_A4_StatusActiveRejected — the A4 guard that
+// rejected status="active" was removed when the 7-state vocabulary replaced the
+// old board vocab; "active" is simply not in the enum, so it is ignored.
+// Deleted: TestSysagentTaskUpdate_A4_Differentiation — same reason.
 
 import (
 	"context"
@@ -21,47 +28,51 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
-// seedGTDTask writes a minimal GTD task to disk for use in tool tests.
-func seedGTDTask(t *testing.T, home, id, name, status string) {
+// testWorkspaceID is the workspace ID seeded in test helpers.
+const testWorkspaceID = "01JXTEST_WORKSPACE000001"
+
+// seedWorkspace writes a minimal workspace JSON file so system.task.create
+// (which validates workspace_id existence) can find it.
+func seedWorkspace(t *testing.T, home, id string) {
 	t.Helper()
-	tasksDir := filepath.Join(home, "tasks")
-	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
+	wsDir := filepath.Join(home, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
 	now := time.Now().UTC().Format(time.RFC3339)
-	tk := boardtask.Task{
-		ID:        id,
-		Name:      name,
-		Status:    boardtask.Status(status),
-		CreatedAt: now,
-		UpdatedAt: now,
+	ws := map[string]any{
+		"id":         id,
+		"name":       "Test Workspace",
+		"status":     "active",
+		"created_at": now,
+		"updated_at": now,
 	}
-	data, err := json.Marshal(tk)
+	data, err := json.Marshal(ws)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, id+".json"), data, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, id+".json"), data, 0o600))
 }
 
-// TestSysagentTaskUpdate_A4_StatusActiveRejected verifies that the A4 guard in
-// TaskUpdateTool.Execute returns IsError=true when the caller tries to set
-// status="active" directly, and that the task's status is not changed.
+// TestSysagentTaskUpdate_InvalidStatusIgnored verifies that an invalid status
+// value (one not in the 7-state vocabulary) is silently ignored: the tool
+// returns IsError=false and the task's on-disk status is unchanged.
 //
 // BDD:
 //
-//	Given a GTD task in status=inbox,
+//	Given a task in status=inbox,
 //	When system.task.update is called with {"id":..., "status":"active"},
-//	Then the result has IsError=true,
-//	And the result message contains "active",
+//	Then the result has IsError=false (no guard error — invalid status is ignored),
 //	And the task's on-disk status is still "inbox".
 //
-// Traces to: project-task-management-level1-spec.md — A4 (sysagent cannot set active)
-func TestSysagentTaskUpdate_A4_StatusActiveRejected(t *testing.T) {
-	// Traces to: A4 — TaskUpdateTool must reject status="active" with IsError=true.
+// Traces to: Sprint-2 unified task store — invalid status silently ignored
+// (isValidTaskStatus gate in task.go Execute).
+func TestSysagentTaskUpdate_InvalidStatusIgnored(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
-	const taskID = "01JXSTATUSGUARD_ACTIVE0001"
-	seedGTDTask(t, home, taskID, "WriteTests", "inbox")
+	const taskID = "01JXSTATUSGUARD_INVAL0001"
+	// "active" is NOT in the 7-state vocab: it is silently ignored by the new tool.
+	seedTask(t, home, taskID, "WriteTests", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
@@ -69,37 +80,31 @@ func TestSysagentTaskUpdate_A4_StatusActiveRejected(t *testing.T) {
 		"status": "active",
 	})
 
-	assert.True(t, result.IsError,
-		"system.task.update with status='active' must return IsError=true")
-	assert.Contains(t, result.ForLLM, "active",
-		"error message must mention 'active' to explain what went wrong")
+	// The tool no longer guards against "active" — it simply skips it.
+	assert.False(t, result.IsError,
+		"system.task.update with an unknown status must NOT return IsError (invalid status is silently ignored)")
 
-	// On-disk status must remain "inbox" (guard must not have written the file).
-	var onDisk boardtask.Task
-	data, err := os.ReadFile(filepath.Join(home, "tasks", taskID+".json"))
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(data, &onDisk))
-	assert.Equal(t, boardtask.StatusInbox, onDisk.Status,
-		"on-disk status must still be 'inbox' — the A4 guard must not write the file")
+	// On-disk status must remain "inbox" (the invalid status was not applied).
+	assert.Equal(t, task.StatusInbox, diskTaskStatus(t, home, taskID),
+		"on-disk status must still be 'inbox' — the invalid status was silently ignored")
 }
 
-// TestSysagentTaskUpdate_A4_StatusNextAllowed verifies the positive control:
-// status="next" must succeed (IsError=false) and the task must be updated.
+// TestSysagentTaskUpdate_ValidStatusApplied verifies that a valid 7-state status
+// (status="next") is applied successfully and the on-disk status is updated.
 //
 // BDD:
 //
-//	Given a GTD task in status=inbox,
+//	Given a task in status=inbox,
 //	When system.task.update is called with {"id":..., "status":"next"},
 //	Then the result has IsError=false,
 //	And the task's on-disk status is "next".
 //
-// Traces to: project-task-management-level1-spec.md — A4 positive control
-func TestSysagentTaskUpdate_A4_StatusNextAllowed(t *testing.T) {
-	// Traces to: A4 positive control — "next" is a valid transition via the tool.
+// Traces to: Sprint-2 unified task store — valid status transition applied.
+func TestSysagentTaskUpdate_ValidStatusApplied(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
-	const taskID = "01JXSTATUSGUARD_NEXT00001"
-	seedGTDTask(t, home, taskID, "DeployService", "inbox")
+	const taskID = "01JXSTATUSGUARD_VALID0001"
+	seedTask(t, home, taskID, "DeployService", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
@@ -110,43 +115,85 @@ func TestSysagentTaskUpdate_A4_StatusNextAllowed(t *testing.T) {
 	assert.False(t, result.IsError,
 		"system.task.update with status='next' must return IsError=false; got: %s", result.ForLLM)
 
-	// On-disk status must be "next".
-	var onDisk boardtask.Task
-	data, err := os.ReadFile(filepath.Join(home, "tasks", taskID+".json"))
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(data, &onDisk))
-	assert.Equal(t, boardtask.StatusNext, onDisk.Status,
+	assert.Equal(t, task.StatusNext, diskTaskStatus(t, home, taskID),
 		"on-disk status must be 'next' after a successful update")
 }
 
-// TestSysagentTaskUpdate_A4_Differentiation verifies that setting status="active"
-// and status="next" produce different outcomes (not both IsError=true, not hardcoded).
+// TestSysagentTaskUpdate_AllSevenStatusesApplied verifies that every canonical
+// 7-state status can be set via system.task.update (differentiation test: each
+// produces a different on-disk status, proving no hardcoding).
 //
-// Traces to: project-task-management-level1-spec.md — A4 differentiation
-func TestSysagentTaskUpdate_A4_Differentiation(t *testing.T) {
-	// Traces to: A4 — two different status values produce two different tool outcomes.
+// Traces to: Sprint-2 unified task store — 7-state vocabulary is fully writable.
+func TestSysagentTaskUpdate_AllSevenStatusesApplied(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
-	const activeTaskID = "01JXSTATUSGUARD_DIFFA0001"
-	const nextTaskID = "01JXSTATUSGUARD_DIFFN0001"
-	seedGTDTask(t, home, activeTaskID, "TaskForActive", "inbox")
-	seedGTDTask(t, home, nextTaskID, "TaskForNext", "inbox")
+	statuses := []task.Status{
+		task.StatusInbox,
+		task.StatusNext,
+		task.StatusPlanning,
+		task.StatusInProgress,
+		task.StatusBlocked,
+		task.StatusDone,
+		task.StatusFailed,
+	}
+
+	for _, st := range statuses {
+		id := "01JXSTATUSGUARD_" + string(st)[:4] + "00001"
+		// Seed at a different starting status so the update produces a real change.
+		var seedStatus task.Status
+		if st == task.StatusInbox {
+			seedStatus = task.StatusNext
+		} else {
+			seedStatus = task.StatusInbox
+		}
+		seedTask(t, home, id, "Task for "+string(st), seedStatus, nil)
+
+		tool := systools.NewTaskUpdateTool(deps)
+		result := tool.Execute(context.Background(), map[string]any{
+			"id":     id,
+			"status": string(st),
+		})
+
+		assert.False(t, result.IsError,
+			"system.task.update with status=%q must succeed; got: %s", st, result.ForLLM)
+		assert.Equal(t, st, diskTaskStatus(t, home, id),
+			"on-disk status must be %q after update", st)
+	}
+}
+
+// TestSysagentTaskUpdate_Differentiation verifies that two different valid
+// status values produce two different on-disk outcomes (not hardcoded).
+//
+// Traces to: Sprint-2 unified task store — differentiation: different inputs → different outputs.
+func TestSysagentTaskUpdate_Differentiation(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+
+	const inboxTaskID = "01JXSTATUSGUARD_DIFF_IN01"
+	const nextTaskID = "01JXSTATUSGUARD_DIFF_NX01"
+	seedTask(t, home, inboxTaskID, "TaskForInbox", task.StatusNext, nil)
+	seedTask(t, home, nextTaskID, "TaskForNext", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
 
-	resultActive := tool.Execute(context.Background(), map[string]any{
-		"id":     activeTaskID,
-		"status": "active",
+	resultInbox := tool.Execute(context.Background(), map[string]any{
+		"id":     inboxTaskID,
+		"status": "inbox",
 	})
 	resultNext := tool.Execute(context.Background(), map[string]any{
 		"id":     nextTaskID,
 		"status": "next",
 	})
 
-	assert.True(t, resultActive.IsError,
-		"active must produce an error")
-	assert.False(t, resultNext.IsError,
-		"next must not produce an error")
-	assert.NotEqual(t, resultActive.IsError, resultNext.IsError,
-		"active and next must produce different IsError outcomes (not both true, not hardcoded)")
+	assert.False(t, resultInbox.IsError, "inbox update must succeed")
+	assert.False(t, resultNext.IsError, "next update must succeed")
+
+	assert.Equal(t, task.StatusInbox, diskTaskStatus(t, home, inboxTaskID),
+		"first task must have status=inbox on disk")
+	assert.Equal(t, task.StatusNext, diskTaskStatus(t, home, nextTaskID),
+		"second task must have status=next on disk")
+	assert.NotEqual(t,
+		diskTaskStatus(t, home, inboxTaskID),
+		diskTaskStatus(t, home, nextTaskID),
+		"two different status updates must produce two different on-disk statuses (not hardcoded)",
+	)
 }

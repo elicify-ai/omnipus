@@ -246,7 +246,7 @@
   },
   {
     "name": "system.task.create",
-    "description": "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), workspace_id (optional, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox), start (optional, RFC 3339 start date/time), due (optional, RFC 3339 due date/time), recurrence (optional, RRULE string e.g. 'FREQ=WEEKLY;BYDAY=MO'), blocked_by (optional, array of task IDs this task is blocked by).",
+    "description": "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, planning, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), blocked_by (optional, array of task IDs this task is blocked by).",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -267,7 +267,7 @@
   },
   {
     "name": "system.task.update",
-    "description": "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id. If linking to a workspace by name, call system.workspace.list first to get the workspace_id.\nParameters: id (required, from system.task.list), name, description, workspace_id (from system.workspace.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete), start (RFC 3339 start date/time), due (RFC 3339 due date/time), recurrence (RRULE string), blocked_by (array of task IDs). Only provided fields are updated.",
+    "description": "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id.\nParameters: id (required, from system.task.list), name, description, prompt, workspace_id, agent_id, status (inbox/next/planning/in_progress/blocked/done/failed), due (RFC 3339), blocked_by (array of task IDs, replaces existing list). Only provided fields are updated.",
     "scope": "core",
     "category": "system",
     "source": "builtin"

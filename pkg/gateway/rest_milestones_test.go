@@ -80,25 +80,27 @@ func createMilestoneViaAPI(
 	return m
 }
 
-// createBoardTaskWithMilestone creates a board task linked to a milestone via REST.
+// createBoardTaskWithMilestone creates a unified task linked to a milestone via REST.
+// Sprint 2: renamed from createBoardTaskWithMilestone; now uses /api/v1/tasks (unified store).
+// "name" field is renamed to "title"; "action":"llm" is required.
 func createBoardTaskWithMilestone(
 	t *testing.T,
 	api *restAPI,
 	name, projectID, milestoneID, status string,
 ) string {
 	t.Helper()
-	body := fmt.Sprintf(`{"name":%q,"workspace_id":%q,"milestone_id":%q,"status":%q}`,
+	body := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q,"milestone_id":%q,"status":%q}`,
 		name, projectID, milestoneID, status)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/board/tasks"
-	api.HandleBoardTasks(w, r)
+	r.URL.Path = "/api/v1/tasks"
+	api.HandleTasks(w, r)
 	require.Equal(
 		t,
 		http.StatusCreated,
 		w.Code,
-		"create board task must return 201; body=%s",
+		"create task must return 201; body=%s",
 		w.Body.String(),
 	)
 	var resp struct {
@@ -108,22 +110,21 @@ func createBoardTaskWithMilestone(
 	return resp.ID
 }
 
-// setTaskDoneViaAPI updates a board task status to "done" via REST.
+// setTaskStatusViaAPI updates a unified task status via PATCH /api/v1/tasks/{id}.
+// Sprint 2: uses PATCH (not PUT) and /api/v1/tasks (not /board/tasks).
 func setTaskStatusViaAPI(t *testing.T, api *restAPI, taskID, newStatus string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"status":%q}`, newStatus)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+taskID, strings.NewReader(body))
+	r := httptest.NewRequest(http.MethodPatch, "/api/v1/tasks/"+taskID, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	// "active" requires agent context; use agent context header for any status here.
-	r.Header.Set("X-Omnipus-Agent-Context", "true")
-	r.URL.Path = "/api/v1/board/tasks/" + taskID
-	api.HandleBoardTasks(w, r)
+	r.URL.Path = "/api/v1/tasks/" + taskID
+	api.HandleTasks(w, r)
 	require.Equal(
 		t,
 		http.StatusOK,
 		w.Code,
-		"update board task status must return 200; body=%s",
+		"PATCH task status must return 200; body=%s",
 		w.Body.String(),
 	)
 }
@@ -701,7 +702,8 @@ func TestHandleMilestones_Delete(t *testing.T) {
 // clears milestone_id on all tasks that referenced it (FR-L2-011).
 // BDD: Given task T with milestone_id=M,
 // When DELETE /api/v1/workspaces/P/milestones/M,
-// Then 204; GET /api/v1/board/tasks/T → milestone_id absent.
+// Then 204; GET /api/v1/tasks/T → milestone_id absent.
+// Sprint 2: GET via /api/v1/tasks (unified surface replaces /board/tasks).
 // Traces to: project-task-milestone-spec.md — FR-L2-011 (cascade clear milestone_id)
 func TestHandleMilestones_Delete_ClearsMilestoneIDOnTasks(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-011
@@ -714,9 +716,9 @@ func TestHandleMilestones_Delete_ClearsMilestoneIDOnTasks(t *testing.T) {
 
 	// Verify task has milestone_id before delete.
 	wGet := httptest.NewRecorder()
-	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+taskID, nil)
-	rGet.URL.Path = "/api/v1/board/tasks/" + taskID
-	api.HandleBoardTasks(wGet, rGet)
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID, nil)
+	rGet.URL.Path = "/api/v1/tasks/" + taskID
+	api.HandleTasks(wGet, rGet)
 	require.Equal(t, http.StatusOK, wGet.Code)
 	var taskBefore struct {
 		MilestoneID *string `json:"milestone_id,omitempty"`
@@ -743,9 +745,9 @@ func TestHandleMilestones_Delete_ClearsMilestoneIDOnTasks(t *testing.T) {
 
 	// GET task after milestone delete → milestone_id must be absent.
 	wGetAfter := httptest.NewRecorder()
-	rGetAfter := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+taskID, nil)
-	rGetAfter.URL.Path = "/api/v1/board/tasks/" + taskID
-	api.HandleBoardTasks(wGetAfter, rGetAfter)
+	rGetAfter := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID, nil)
+	rGetAfter.URL.Path = "/api/v1/tasks/" + taskID
+	api.HandleTasks(wGetAfter, rGetAfter)
 	require.Equal(t, http.StatusOK, wGetAfter.Code)
 	var taskAfter struct {
 		MilestoneID *string `json:"milestone_id,omitempty"`

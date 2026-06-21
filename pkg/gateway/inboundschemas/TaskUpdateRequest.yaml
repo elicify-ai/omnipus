@@ -1,59 +1,108 @@
 title: TaskUpdateRequest
 description: >
-  Request body for PUT /api/v1/tasks/{id}. Updates fields on an existing task.
-  All fields are optional — only provided fields are updated.
-  The fields name/description are backward-compat aliases for title/result.
+  Request body for PATCH /tasks/{id} — the unified partial-update body that
+  replaces the two legacy update bodies (`TaskUpdateRequest` and
+  `BoardTaskUpdateRequest`). No back-compat aliases. All fields are optional; only
+  provided fields are updated (PATCH semantics). At least one field is required.
+
+  `status` accepts the full 7-state vocabulary. Note: `blocked` is normally an
+  AUTO side-state managed by the dependency engine (set when a `blocked_by` dep is
+  unmet, cleared to `next` when deps complete); setting it directly is allowed but
+  the engine may override on the next dependency evaluation. Advancing a partial
+  task to `next` is rejected server-side (Detail #8 — only fully-captured tasks may
+  be triaged to `next`).
 type: object
 additionalProperties: false
 minProperties: 1
 properties:
+  title:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: New task title.
+    example: "Updated task title"
+  description:
+    type: string
+    maxLength: 2000
+    description: New free-form description.
+    example: "Revised notes."
+  prompt:
+    type: string
+    maxLength: 10000
+    description: New agent prompt.
+    example: "Re-run the analysis over 14 days instead of 7."
   status:
     type: string
     enum:
-      - queued
-      - assigned
-      - running
-      - completed
+      - inbox
+      - next
+      - planning
+      - in_progress
+      - blocked
+      - done
       - failed
-    description: New task status.
-    example: "completed"
+    description: New task status (7-state lifecycle, Detail #1).
+    example: "in_progress"
+  agent_id:
+    type: string
+    description: Re-assign the task to this agent.
+    example: "jim"
+  priority:
+    type: integer
+    minimum: 1
+    maximum: 5
+    description: New task priority (1 highest .. 5 lowest).
+    example: 2
+  blocked_by:
+    type: array
+    items:
+      type: string
+    description: >
+      Replacement dependency set (replaces the current `blocked_by` atomically).
+      Write-time cycle validator rejects self-edges and cycles; max depth 50.
+    example: []
+  todos:
+    type: array
+    items:
+      $ref: ./Todo.yaml
+    description: Replacement checklist (replaces the current `todos` atomically).
+  trigger:
+    $ref: ./TaskTrigger.yaml
+  due:
+    type: string
+    format: date-time
+    description: New deadline (RFC 3339 UTC).
+    example: "2026-08-15T17:00:00Z"
+  milestone_id:
+    type: string
+    description: New milestone grouping.
+    example: "m-5678"
+  surface:
+    type: string
+    enum:
+      - user
+      - heartbeat
+    description: New UI surface ownership (Detail #5).
+    example: "user"
   result:
     type: string
+    maxLength: 50000
     description: Task result or output summary.
-    example: "Logs analyzed successfully."
+    example: "Logs analyzed; 3 anomalies found."
   artifacts:
     type: array
     items:
       type: string
-    description: List of artifact paths produced by the task.
-    example: ["output.txt"]
-  title:
-    type: string
-    description: New task title.
-    example: "Updated task title"
-  agent_id:
-    type: string
-    description: Agent to re-assign the task to.
-    example: "jim"
-  priority:
-    type: integer
-    description: New task priority.
-    example: 3
+    description: Replacement list of artifact paths produced by the task.
+    example:
+      - "/workspace/report.pdf"
   started_at:
     type: string
     format: date-time
     description: When the task started execution.
-    example: "2026-05-16T10:00:00Z"
+    example: "2026-06-20T10:00:00Z"
   completed_at:
     type: string
     format: date-time
-    description: When the task completed execution.
-    example: "2026-05-16T10:05:00Z"
-  name:
-    type: string
-    description: Backward-compat alias for title.
-    example: "Updated task title"
-  description:
-    type: string
-    description: Backward-compat alias for result.
-    example: "Logs analyzed successfully."
+    description: When the task completed or failed.
+    example: "2026-06-20T10:05:00Z"

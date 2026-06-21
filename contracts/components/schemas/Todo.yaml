@@ -1,0 +1,23 @@
+title: Todo
+description: >
+  A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the
+  three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent,
+  no status enum, no trigger, and no ID — it is a simple `{text, done}` pair. Use a
+  subtask (a full child Task with `parent_task_id`) when you need independent
+  status/agent/trigger.
+type: object
+required:
+  - text
+  - done
+additionalProperties: false
+properties:
+  text:
+    type: string
+    minLength: 1
+    maxLength: 500
+    description: The checklist item text.
+    example: "Draft the summary section"
+  done:
+    type: boolean
+    description: Whether the checklist item is complete.
+    example: false

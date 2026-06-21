@@ -27,7 +27,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 func TestSensitiveDataReplacer_ReducesResolvedKey(t *testing.T) {
@@ -137,7 +137,7 @@ func TestRefreshConfigAfterSave_PreservesRedaction(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
+		taskStore:     task.New(filepath.Join(tmpDir, "tasks")),
 		credStore:     credStore,
 	}
 

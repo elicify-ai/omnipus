@@ -32,7 +32,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // newTestRestAPIWithValidation returns a restAPI with validate_inbound=true.
@@ -64,7 +64,7 @@ func newTestRestAPIWithValidation(t *testing.T) *restAPI {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 }
 
@@ -377,7 +377,7 @@ func newTestRestAPIWithValidationAndAgent(t *testing.T) *restAPI {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 }
 

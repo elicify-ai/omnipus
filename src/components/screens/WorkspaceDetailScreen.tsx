@@ -1,28 +1,29 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { List, SquaresFour, Lightning, Plus } from '@phosphor-icons/react'
+import { List, SquaresFour, CalendarBlank, Plus } from '@phosphor-icons/react'
 import { WorkspaceHeader } from '@/components/workspaces/WorkspaceHeader'
 import { MilestoneFilterPills, MILESTONE_FILTER_UNSCHEDULED } from '@/components/workspaces/MilestoneFilterPills'
 import { BoardView } from '@/components/workspaces/BoardView'
 import { ListView } from '@/components/workspaces/ListView'
-import { ExecutionView } from '@/components/workspaces/ExecutionView'
+import { CalendarScreen } from '@/components/screens/CalendarScreen'
 import { TaskDetailSlideOver } from '@/components/workspaces/TaskDetailSlideOver'
 import { CreateTaskSlideOver } from '@/components/workspaces/CreateTaskSlideOver'
 import { CreateMilestoneSlideOver } from '@/components/workspaces/CreateMilestoneSlideOver'
 import {
-  fetchBoardTasks,
+  fetchTasks,
   fetchWorkspaces,
   fetchMilestones,
   fetchAgents,
-  boardTasksQueryKeys,
+  tasksQueryKeys,
   workspacesQueryKeys,
   milestonesQueryKeys,
 } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { cn } from '@/lib/utils'
 
-type ViewMode = 'board' | 'list' | 'execution'
+// Graph DAG view is Sprint 4 — placeholder only (do NOT build)
+type ViewMode = 'board' | 'list' | 'calendar'
 
 interface WorkspaceDetailScreenProps {
   workspaceId: string
@@ -32,7 +33,7 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
   const navigate = useNavigate()
   const { activeMilestoneId, setActiveMilestoneId } = useWorkspacesStore()
   const [viewMode, setViewMode] = useState<ViewMode>('board')
-  // F2 fix: store task id only; derive the displayed task from live query data
+  // Store task id only; derive the displayed task from live query data
   // so the detail panel reflects post-mutation state immediately.
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
@@ -46,7 +47,6 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
   })
 
   // Redirect /workspaces/inbox to the real default workspace ID.
-  // "inbox" is a human-readable alias; the actual workspace has a real UUID.
   useEffect(() => {
     if (workspaceId !== 'inbox') return
     if (workspaces.length === 0) return
@@ -54,7 +54,6 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
     if (defaultWorkspace) {
       void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: defaultWorkspace.id }, replace: true })
     }
-    // No default workspace — fall through so the "not found" state renders below.
   }, [workspaceId, workspaces, navigate])
 
   // Reset milestone filter whenever the active workspace changes.
@@ -81,14 +80,14 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
     enabled: !!workspaceId && workspaceId !== 'inbox',
   })
 
-  // Board tasks filtered by workspace
+  // Unified tasks filtered by workspace (user-surface only for general views)
   const {
     data: tasks = [],
     isLoading: tasksLoading,
     isError: tasksError,
   } = useQuery({
-    queryKey: boardTasksQueryKeys.list({ workspace_id: workspaceId }),
-    queryFn: () => fetchBoardTasks({ workspace_id: workspaceId }),
+    queryKey: tasksQueryKeys.list({ workspace_id: workspaceId, surface: 'user' }),
+    queryFn: () => fetchTasks({ workspace_id: workspaceId, surface: 'user' }),
     refetchInterval: 15_000,
     staleTime: 10_000,
     enabled: !!workspaceId && workspaceId !== 'inbox',
@@ -101,14 +100,11 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
     staleTime: 60_000,
   })
 
-  // F2 fix: derive the selected task from the live query array so the detail
-  // panel always reflects post-mutation state (Start/Update/Retry refetches the
-  // board-tasks query; the panel reads from the fresh array, not the snapshot).
+  // Derive the selected task from the live query array so the detail
+  // panel always reflects post-mutation state.
   const selectedTask = selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
 
-  // 'inbox' is a redirect alias — suppress render while the useEffect navigates to the real workspace ID.
-  // Without this, archivedLoading can flip to false before navigate() completes, causing a crash
-  // on any render path that accesses `workspace.name` when workspace is still undefined.
+  // 'inbox' is a redirect alias — suppress render while the useEffect navigates.
   if (workspaceId === 'inbox') return null
 
   if (workspacesError) {
@@ -119,13 +115,12 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
     )
   }
 
-  // Show loading skeleton while workspaces list hasn't resolved yet
   if (workspacesLoading) {
     return (
       <div className="flex flex-col h-full">
         <div className="h-16 bg-[var(--color-surface-1)] border-b border-[var(--color-border)] animate-pulse" />
         <div className="flex gap-3 p-4">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
+          {[1, 2, 3, 4, 5, 6, 7].map((i) => (
             <div key={i} className="flex-1 min-w-[180px] h-48 rounded-xl border border-[var(--color-border)] animate-pulse bg-[var(--color-surface-1)]" />
           ))}
         </div>
@@ -139,7 +134,7 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
         <div className="flex flex-col h-full">
           <div className="h-16 bg-[var(--color-surface-1)] border-b border-[var(--color-border)] animate-pulse" />
           <div className="flex gap-3 p-4">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
+            {[1, 2, 3, 4, 5, 6, 7].map((i) => (
               <div
                 key={i}
                 className="flex-1 min-w-[180px] h-48 rounded-xl border border-[var(--color-border)] animate-pulse bg-[var(--color-surface-1)]"
@@ -182,13 +177,18 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
             <span>List</span>
           </ViewToggleButton>
           <ViewToggleButton
-            active={viewMode === 'execution'}
-            onClick={() => setViewMode('execution')}
-            aria-label="Execution view"
+            active={viewMode === 'calendar'}
+            onClick={() => setViewMode('calendar')}
+            aria-label="Calendar view"
           >
-            <Lightning size={14} />
-            <span>Execution</span>
+            <CalendarBlank size={14} />
+            <span>Calendar</span>
           </ViewToggleButton>
+          {/* Graph DAG view placeholder — Sprint 4 */}
+          {/* <ViewToggleButton active={viewMode === 'graph'} onClick={() => setViewMode('graph')} aria-label="Graph view">
+            <Graph size={14} />
+            <span>Graph</span>
+          </ViewToggleButton> */}
         </div>
 
         <div className="flex-1" />
@@ -204,8 +204,8 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
         </button>
       </div>
 
-      {/* Milestone filter pills — only shown when milestones exist */}
-      {milestones.length > 0 && (
+      {/* Milestone filter pills — only shown for board/list views, not calendar */}
+      {viewMode !== 'calendar' && milestones.length > 0 && (
         <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
           <MilestoneFilterPills
             milestones={milestones}
@@ -216,8 +216,8 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
         </div>
       )}
 
-      {/* When no milestones: show the new milestone button in a simpler form */}
-      {milestones.length === 0 && !milestonesError && (
+      {/* When no milestones and not calendar: show add milestone button */}
+      {viewMode !== 'calendar' && milestones.length === 0 && !milestonesError && (
         <div className="px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
           <button
             type="button"
@@ -231,7 +231,9 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
       )}
 
       {/* Main content area */}
-      {tasksLoading ? (
+      {viewMode === 'calendar' ? (
+        <CalendarScreen workspaceId={workspaceId} />
+      ) : tasksLoading ? (
         <BoardSkeleton />
       ) : tasksError && tasks.length === 0 ? (
         <div className="flex items-center justify-center flex-1 p-8 text-[var(--color-muted)] text-sm">
@@ -244,12 +246,6 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
           activeMilestoneId={activeMilestoneId}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
           onNewTask={() => setCreateTaskOpen(true)}
-        />
-      ) : viewMode === 'execution' ? (
-        <ExecutionView
-          tasks={tasks}
-          milestones={milestones}
-          onTaskClick={(task) => setSelectedTaskId(task.id)}
         />
       ) : (
         <ListView
@@ -320,10 +316,10 @@ function ViewToggleButton({
 function BoardSkeleton() {
   return (
     <div className="flex gap-3 p-4 overflow-x-auto flex-1">
-      {[1, 2, 3, 4, 5, 6].map((i) => (
+      {[1, 2, 3, 4, 5, 6, 7].map((i) => (
         <div
           key={i}
-          className="flex flex-col min-w-[220px] flex-1 rounded-xl border border-[var(--color-border)] animate-pulse"
+          className="flex flex-col min-w-[180px] flex-1 rounded-xl border border-[var(--color-border)] animate-pulse"
         >
           <div className="h-10 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]" />
           <div className="flex flex-col gap-2 p-2">

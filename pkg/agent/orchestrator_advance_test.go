@@ -12,16 +12,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
-// newTestTaskExecutor builds a minimal TaskExecutor backed by a real TaskStore
-// in a temp directory.  agentLoop is nil (tests must not call methods that
-// need it).
-func newTestTaskExecutor(t *testing.T) (*TaskExecutor, *taskstore.TaskStore) {
+// ptrStatus returns a pointer to a task.Status value, for use with task.Patch.
+func ptrStatus(s task.Status) *task.Status { return &s }
+
+// ptrTime returns a pointer to a time.Time value formatted as RFC 3339 string,
+// for use with task.Patch StartedAt / CompletedAt fields (which are *string).
+func ptrTimeStr(t time.Time) *string { s := t.UTC().Format(time.RFC3339); return &s }
+
+// newTestTaskExecutor builds a minimal TaskExecutor backed by a real task.Store
+// in a temp directory. agentLoop is nil (tests must not call methods that need it).
+func newTestTaskExecutor(t *testing.T) (*TaskExecutor, *task.Store) {
 	t.Helper()
 	dir := t.TempDir()
-	store := taskstore.New(filepath.Join(dir, "tasks"))
+	store := task.New(filepath.Join(dir, "tasks"))
 	te := &TaskExecutor{
 		agentLoop:     nil, // not needed for orchestrator/store logic
 		store:         store,
@@ -32,54 +38,90 @@ func newTestTaskExecutor(t *testing.T) (*TaskExecutor, *taskstore.TaskStore) {
 	return te, store
 }
 
-func createTask(t *testing.T, store *taskstore.TaskStore, status string, blockedBy []string) *taskstore.TaskEntity {
+// createTask creates a task.Task with the given status and blocked_by list.
+// The new 7-state vocabulary maps old "queued"→next, "running"→in_progress,
+// "completed"→done, "failed"→failed.
+//
+// readyBlockedCandidates looks for tasks in StatusNext that still carry the
+// completed dep in their BlockedBy list, so downstream tasks are created with
+// StatusNext (not StatusBlocked) to match the post-advance state that
+// AdvanceBlockedDependents would produce.
+func createTask(t *testing.T, store *task.Store, status string, blockedBy []string) *task.Task {
 	t.Helper()
-	e := &taskstore.TaskEntity{
+	// Map legacy status names to the 7-state vocab.
+	var initialStatus task.Status
+	switch status {
+	case "completed", "done":
+		initialStatus = task.StatusDone
+	case "running", "in_progress":
+		initialStatus = task.StatusInProgress
+	case "failed":
+		initialStatus = task.StatusFailed
+	default:
+		// "queued" → next (dispatchable); any blocked downstream task is also
+		// seeded as next so readyBlockedCandidates can find it.
+		initialStatus = task.StatusNext
+	}
+
+	e := &task.Task{
 		Title:       "test",
 		Prompt:      "do thing",
 		AgentID:     "jim",
 		Priority:    3,
-		TriggerType: "manual",
-		Status:      "queued",
+		Action:      task.ActionLLM,
+		Status:      initialStatus,
+		WorkspaceID: "default",
 		BlockedBy:   blockedBy,
 	}
 	if err := store.Create(e); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
-	if status != "queued" {
-		now := time.Now().UTC()
-		var patch taskstore.TaskPatch
-		switch status {
-		case "running":
-			patch = taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}
-		case "completed":
-			// queued → running → completed requires two transitions.
-			patch = taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}
-			updated, err := store.Update(e.ID, patch)
-			if err != nil {
-				t.Fatalf("update to running: %v", err)
-			}
-			e = updated
-			patch = taskstore.TaskPatch{Status: ptrStr("completed"), CompletedAt: &now}
-		case "failed":
-			patch = taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}
-			updated, err := store.Update(e.ID, patch)
-			if err != nil {
-				t.Fatalf("update to running: %v", err)
-			}
-			e = updated
-			patch = taskstore.TaskPatch{Status: ptrStr("failed"), CompletedAt: &now}
-		}
-		updated, err := store.Update(e.ID, patch)
+
+	// If we need a terminal status that requires intermediate transitions:
+	// The new store has NO transition state machine, so we can set any status
+	// directly via Update.
+	switch status {
+	case "completed", "done":
+		// Already set to Done via initial status above; just stamp timestamps.
+		now := time.Now().UTC().Format(time.RFC3339)
+		updated, err := store.Update(e.ID, task.Patch{
+			Status:      ptrStatus(task.StatusDone),
+			CompletedAt: &now,
+		})
 		if err != nil {
-			t.Fatalf("update to %q: %v", status, err)
+			t.Fatalf("stamp done timestamps: %v", err)
 		}
-		e = updated
+		return updated
+	case "running", "in_progress":
+		now := time.Now().UTC().Format(time.RFC3339)
+		updated, err := store.Update(e.ID, task.Patch{
+			Status:    ptrStatus(task.StatusInProgress),
+			StartedAt: &now,
+		})
+		if err != nil {
+			t.Fatalf("stamp in_progress timestamps: %v", err)
+		}
+		return updated
+	case "failed":
+		now := time.Now().UTC().Format(time.RFC3339)
+		updated, err := store.Update(e.ID, task.Patch{
+			Status:      ptrStatus(task.StatusFailed),
+			CompletedAt: &now,
+		})
+		if err != nil {
+			t.Fatalf("stamp failed timestamps: %v", err)
+		}
+		return updated
 	}
-	return e
+	// For "queued"/"next": task is already StatusNext with no extra stamps.
+	got, err := store.Get(e.ID)
+	if err != nil {
+		t.Fatalf("get task after create: %v", err)
+	}
+	return got
 }
 
-// sortedSet returns ids as a set for order-independent comparison.
+// idSet returns ids as a set for order-independent comparison.
 func idSet(ids []string) map[string]bool {
 	m := make(map[string]bool, len(ids))
 	for _, id := range ids {
@@ -89,8 +131,11 @@ func idSet(ids []string) map[string]bool {
 }
 
 // TestOrchestratorAdvance_UnblockedTaskFoundAfterDep drives the REAL
-// readyBlockedCandidates decision: when the sole dependency is completed, the
-// downstream task must be reported as ready to advance.
+// readyBlockedCandidates decision: when the sole dependency is done, the
+// downstream task (StatusNext, still carries dep in BlockedBy) must be
+// reported as ready to advance.
+//
+// Traces to: wave spec — DAG auto-advance: blocked→next on dep done.
 func TestOrchestratorAdvance_UnblockedTaskFoundAfterDep(t *testing.T) {
 	te, store := newTestTaskExecutor(t)
 
@@ -104,8 +149,10 @@ func TestOrchestratorAdvance_UnblockedTaskFoundAfterDep(t *testing.T) {
 }
 
 // TestOrchestratorAdvance_StillBlockedWhenDepNotComplete drives the REAL
-// readyBlockedCandidates: a task gated on two deps where one is still queued
+// readyBlockedCandidates: a task gated on two deps where one is still next
 // must NOT be reported ready, even though the OTHER dep just completed.
+//
+// Traces to: wave spec — DAG auto-advance: all deps must be done.
 func TestOrchestratorAdvance_StillBlockedWhenDepNotComplete(t *testing.T) {
 	te, store := newTestTaskExecutor(t)
 
@@ -114,20 +161,17 @@ func TestOrchestratorAdvance_StillBlockedWhenDepNotComplete(t *testing.T) {
 
 	_ = createTask(t, store, "queued", []string{depA.ID, depB.ID})
 
-	// depA completed → advance check keyed on depA. depB is still queued, so the
+	// depA completed → advance check keyed on depA. depB is still next, so the
 	// downstream task's FULL dependency set is not satisfied: nothing is ready.
 	ready := te.readyBlockedCandidates(depA.ID)
 	if len(ready) != 0 {
-		t.Fatalf("readyBlockedCandidates(%q) = %v, want [] (depB still queued)", depA.ID, ready)
+		t.Fatalf("readyBlockedCandidates(%q) = %v, want [] (depB still next)", depA.ID, ready)
 	}
 
 	// Now complete depB and re-check keyed on depB — the downstream task is ready.
-	now := time.Now().UTC()
-	if _, err := store.Update(depB.ID, taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}); err != nil {
-		t.Fatalf("update depB→running: %v", err)
-	}
-	if _, err := store.Update(depB.ID, taskstore.TaskPatch{Status: ptrStr("completed"), CompletedAt: &now}); err != nil {
-		t.Fatalf("update depB→completed: %v", err)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := store.Update(depB.ID, task.Patch{Status: ptrStatus(task.StatusDone), CompletedAt: &now}); err != nil {
+		t.Fatalf("update depB→done: %v", err)
 	}
 	ready = te.readyBlockedCandidates(depB.ID)
 	if len(ready) != 1 {
@@ -137,7 +181,9 @@ func TestOrchestratorAdvance_StillBlockedWhenDepNotComplete(t *testing.T) {
 
 // TestOrchestratorAdvance_FailedDepDoesNotUnblock drives the REAL
 // readyBlockedCandidates: a FAILED dependency must NOT satisfy the gate — only
-// "completed" unblocks.
+// "done" unblocks.
+//
+// Traces to: wave spec — DAG auto-advance: failed dep does not unblock.
 func TestOrchestratorAdvance_FailedDepDoesNotUnblock(t *testing.T) {
 	te, store := newTestTaskExecutor(t)
 
@@ -146,13 +192,15 @@ func TestOrchestratorAdvance_FailedDepDoesNotUnblock(t *testing.T) {
 
 	ready := te.readyBlockedCandidates(dep.ID)
 	if len(ready) != 0 {
-		t.Fatalf("readyBlockedCandidates(%q) = %v, want [] (dep failed, not completed)", dep.ID, ready)
+		t.Fatalf("readyBlockedCandidates(%q) = %v, want [] (dep failed, not done)", dep.ID, ready)
 	}
 }
 
 // TestOrchestratorAdvance_MultipleDownstreamTasks drives the REAL
-// readyBlockedCandidates: every task gated solely on a just-completed dep must be
-// reported ready, not just the first one.
+// readyBlockedCandidates: every task gated solely on a just-completed dep must
+// be reported ready, not just the first one.
+//
+// Traces to: wave spec — DAG auto-advance: multiple dependents advance.
 func TestOrchestratorAdvance_MultipleDownstreamTasks(t *testing.T) {
 	te, store := newTestTaskExecutor(t)
 
@@ -175,57 +223,80 @@ func TestOrchestratorAdvance_MultipleDownstreamTasks(t *testing.T) {
 }
 
 // createChild creates a child task with the given parent and status.
-func createChild(t *testing.T, store *taskstore.TaskStore, parentID, status string) *taskstore.TaskEntity {
+func createChild(t *testing.T, store *task.Store, parentID, status string) *task.Task {
 	t.Helper()
-	e := &taskstore.TaskEntity{
+	e := &task.Task{
 		Title:        "child",
 		Prompt:       "do thing",
 		AgentID:      "jim",
 		Priority:     3,
-		TriggerType:  "manual",
-		Status:       "queued",
+		Action:       task.ActionLLM,
+		Status:       task.StatusNext,
+		WorkspaceID:  "default",
 		ParentTaskID: parentID,
 	}
 	if err := store.Create(e); err != nil {
 		t.Fatalf("create child: %v", err)
 	}
-	now := time.Now().UTC()
-	if _, err := store.Update(e.ID, taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}); err != nil {
-		t.Fatalf("child→running: %v", err)
-	}
-	final := status
-	if final == "queued" || final == "running" {
-		got, err := store.Get(e.ID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	switch status {
+	case "running", "in_progress":
+		got, err := store.Update(e.ID, task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now})
 		if err != nil {
-			t.Fatalf("get child: %v", err)
+			t.Fatalf("child→in_progress: %v", err)
+		}
+		return got
+	case "completed", "done":
+		// Transition: next → in_progress → done (no state machine, but use two
+		// steps to stamp both StartedAt and CompletedAt realistically).
+		if _, err := store.Update(e.ID, task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now}); err != nil {
+			t.Fatalf("child→in_progress: %v", err)
+		}
+		got, err := store.Update(e.ID, task.Patch{Status: ptrStatus(task.StatusDone), CompletedAt: &now})
+		if err != nil {
+			t.Fatalf("child→done: %v", err)
+		}
+		return got
+	case "failed":
+		got, err := store.Update(e.ID, task.Patch{Status: ptrStatus(task.StatusFailed), CompletedAt: &now})
+		if err != nil {
+			t.Fatalf("child→failed: %v", err)
 		}
 		return got
 	}
-	updated, err := store.Update(e.ID, taskstore.TaskPatch{Status: ptrStr(final), CompletedAt: &now})
+	// "queued" / "next" / default — leave as StatusNext.
+	got, err := store.Get(e.ID)
 	if err != nil {
-		t.Fatalf("child→%s: %v", final, err)
+		t.Fatalf("get child: %v", err)
 	}
-	return updated
+	return got
 }
 
 // TestParentFollowUp_ConcurrentSiblings_ExactlyOne is the duplicate-parent-
 // follow-up race regression test. N sibling-completion callbacks fire
-// concurrently for the same running parent with all children already done; the
-// atomic ClaimParentFollowUp must ensure the parent follow-up fires exactly once.
+// concurrently for the same in_progress parent with all children already done;
+// the atomic ClaimParentFollowUp must ensure the parent follow-up fires exactly once.
+//
+// Traces to: wave spec — ClaimParentFollowUp exactly-once under concurrent siblings.
 func TestParentFollowUp_ConcurrentSiblings_ExactlyOne(t *testing.T) {
 	te, store := newTestTaskExecutor(t)
 
-	// Parent in "running" state.
-	parent := &taskstore.TaskEntity{
-		Title: "parent", Prompt: "p", AgentID: "jim", Priority: 3,
-		TriggerType: "manual", Status: "queued",
+	// Parent in "in_progress" state.
+	parent := &task.Task{
+		Title:       "parent",
+		Prompt:      "p",
+		AgentID:     "jim",
+		Priority:    3,
+		Action:      task.ActionLLM,
+		Status:      task.StatusNext,
+		WorkspaceID: "default",
 	}
 	if err := store.Create(parent); err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
-	now := time.Now().UTC()
-	if _, err := store.Update(parent.ID, taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}); err != nil {
-		t.Fatalf("parent→running: %v", err)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := store.Update(parent.ID, task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now}); err != nil {
+		t.Fatalf("parent→in_progress: %v", err)
 	}
 
 	// All children already completed (so every concurrent caller observes allDone).
@@ -270,20 +341,27 @@ func TestParentFollowUp_ConcurrentSiblings_ExactlyOne(t *testing.T) {
 }
 
 // TestParentFollowUp_NotAllSiblingsDone verifies no follow-up fires while a
-// sibling is still running.
+// sibling is still in_progress.
+//
+// Traces to: wave spec — parent follow-up: only fires when ALL siblings are terminal.
 func TestParentFollowUp_NotAllSiblingsDone(t *testing.T) {
 	te, store := newTestTaskExecutor(t)
 
-	parent := &taskstore.TaskEntity{
-		Title: "parent", Prompt: "p", AgentID: "jim", Priority: 3,
-		TriggerType: "manual", Status: "queued",
+	parent := &task.Task{
+		Title:       "parent",
+		Prompt:      "p",
+		AgentID:     "jim",
+		Priority:    3,
+		Action:      task.ActionLLM,
+		Status:      task.StatusNext,
+		WorkspaceID: "default",
 	}
 	if err := store.Create(parent); err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
-	now := time.Now().UTC()
-	if _, err := store.Update(parent.ID, taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}); err != nil {
-		t.Fatalf("parent→running: %v", err)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := store.Update(parent.ID, task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now}); err != nil {
+		t.Fatalf("parent→in_progress: %v", err)
 	}
 
 	createChild(t, store, parent.ID, "completed")
@@ -295,20 +373,22 @@ func TestParentFollowUp_NotAllSiblingsDone(t *testing.T) {
 	te.notifyParentIfAllSiblingsDone(parent.ID)
 
 	if got := atomic.LoadInt64(&fires); got != 0 {
-		t.Fatalf("follow-up fired %d times while a sibling is still running, want 0", got)
+		t.Fatalf("follow-up fired %d times while a sibling is still in_progress, want 0", got)
 	}
 }
 
 // TestDispatchSema_TaskExecutor_ExecuteTask_SemaRejection verifies that
 // ExecuteTask respects the dispatch semaphore cap.
+//
+// Traces to: wave spec — dispatch semaphore: global cap enforced.
 func TestDispatchSema_TaskExecutor_ExecuteTask_SemaRejection(t *testing.T) {
 	_, store := newTestTaskExecutor(t)
 
-	// Create a task that is "queued" with no blocked_by.
-	task := createTask(t, store, "queued", nil)
+	// Create a task that is "next" with no blocked_by.
+	tk := createTask(t, store, "queued", nil)
 
-	// Build a minimal TaskExecutor with cap=0 (which clamps to 1) — but then
-	// fill the semaphore manually so TryAcquire fails.
+	// Build a minimal TaskExecutor with cap=1 — then fill the semaphore manually
+	// so TryAcquire fails.
 	te := &TaskExecutor{
 		agentLoop:     nil,
 		store:         store,
@@ -325,7 +405,7 @@ func TestDispatchSema_TaskExecutor_ExecuteTask_SemaRejection(t *testing.T) {
 	defer release()
 
 	// ExecuteTask should fail with a concurrency error, not a nil-deref.
-	err := te.ExecuteTask(context.Background(), task.ID)
+	err := te.ExecuteTask(context.Background(), tk.ID)
 	if err == nil {
 		t.Fatal("expected error when dispatch sema is full")
 	}

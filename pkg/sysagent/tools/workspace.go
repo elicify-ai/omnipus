@@ -75,13 +75,13 @@ func workspaceFromFile(data []byte) (workspace, error) {
 // Only GTD tasks (status ∈ {inbox,next,active,waiting,done,failed}) are counted;
 // workflow tasks (queued/assigned/running/completed) are excluded.
 func computeWorkspaceTaskCount(home, workspaceID string) int {
-	tasks, err := listEntities[gtdTask](tasksDir(home))
+	tasks, err := listEntities[unifiedTask](tasksDir(home))
 	if err != nil {
 		return 0
 	}
 	n := 0
 	for i := range tasks {
-		if !gtdStatusSet[string(tasks[i].Status)] {
+		if !isValidTaskStatus(string(tasks[i].Status)) {
 			continue
 		}
 		if tasks[i].WorkspaceID == workspaceID {
@@ -95,12 +95,12 @@ func computeWorkspaceTaskCount(home, workspaceID string) int {
 // Only GTD tasks are counted; workflow tasks are excluded.
 func computeWorkspaceTaskCounts(home string) map[string]int {
 	counts := make(map[string]int)
-	tasks, err := listEntities[gtdTask](tasksDir(home))
+	tasks, err := listEntities[unifiedTask](tasksDir(home))
 	if err != nil {
 		return counts
 	}
 	for i := range tasks {
-		if !gtdStatusSet[string(tasks[i].Status)] {
+		if !isValidTaskStatus(string(tasks[i].Status)) {
 			continue
 		}
 		if tasks[i].WorkspaceID != "" {
@@ -351,14 +351,14 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 	}
 
 	// Step 1: cascade-delete tasks
-	tasks, err := listEntities[gtdTask](tasksDir(t.deps.Home))
+	tasks, err := listEntities[unifiedTask](tasksDir(t.deps.Home))
 	if err != nil {
 		slog.Error("sysagent: workspace cascade delete: failed to list tasks", "workspace_id", id, "error", err)
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", "could not list tasks for cascade delete: "+err.Error(), ""))
 	}
 	tasksDeleted := 0
 	for _, tk := range tasks {
-		if !gtdStatusSet[string(tk.Status)] {
+		if !isValidTaskStatus(string(tk.Status)) {
 			continue
 		}
 		if tk.WorkspaceID == id {

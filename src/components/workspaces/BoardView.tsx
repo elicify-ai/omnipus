@@ -1,38 +1,42 @@
 import { Plus } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
 import { cn } from '@/lib/utils'
-import type { BoardTask } from '@/lib/api'
+import type { Task } from '@/lib/api'
 import type { Milestone } from '@/lib/api'
 import { MILESTONE_FILTER_UNSCHEDULED } from './MilestoneFilterPills'
 
-type BoardStatus = BoardTask['status']
+type TaskStatus = Task['status']
 
 interface ColumnConfig {
-  status: BoardStatus
+  status: TaskStatus
   label: string
   headerClassName: string
 }
 
+// 7-state lifecycle: inbox → next → planning → in_progress → blocked → done → failed
 const COLUMNS: ColumnConfig[] = [
-  { status: 'inbox',   label: 'Inbox',   headerClassName: 'text-[var(--color-muted)]' },
-  { status: 'next',    label: 'Next',    headerClassName: 'text-blue-400' },
-  { status: 'active',  label: 'Active',  headerClassName: 'text-yellow-400' },
-  { status: 'waiting', label: 'Waiting', headerClassName: 'text-purple-400' },
-  { status: 'done',    label: 'Done',    headerClassName: 'text-green-400' },
-  { status: 'failed',  label: 'Failed',  headerClassName: 'text-red-400' },
+  { status: 'inbox',       label: 'Inbox',       headerClassName: 'text-[var(--color-muted)]' },
+  { status: 'next',        label: 'Next',        headerClassName: 'text-blue-400' },
+  { status: 'planning',    label: 'Planning',    headerClassName: 'text-purple-400' },
+  { status: 'in_progress', label: 'In Progress', headerClassName: 'text-yellow-400' },
+  { status: 'blocked',     label: 'Blocked',     headerClassName: 'text-orange-400' },
+  { status: 'done',        label: 'Done',        headerClassName: 'text-green-400' },
+  { status: 'failed',      label: 'Failed',      headerClassName: 'text-red-400' },
 ]
 
 interface BoardViewProps {
-  tasks: BoardTask[]
+  tasks: Task[]
   milestones: Milestone[]
   activeMilestoneId: string | null
-  onTaskClick: (task: BoardTask) => void
-  onNewTask: (status?: BoardStatus) => void
+  onTaskClick: (task: Task) => void
+  onNewTask: (status?: TaskStatus) => void
 }
 
 export function BoardView({ tasks, milestones, activeMilestoneId, onTaskClick, onNewTask }: BoardViewProps) {
+  // Filter out non-user-surface tasks (e.g. heartbeat tasks are hidden from general views)
+  const userTasks = tasks.filter((t) => t.surface === 'user' || t.surface === undefined)
   // Apply milestone filter
-  const filteredTasks = filterByMilestone(tasks, activeMilestoneId)
+  const filteredTasks = filterByMilestone(userTasks, activeMilestoneId)
 
   return (
     <div className="flex gap-2 p-4 overflow-x-auto min-h-0 flex-1">
@@ -50,7 +54,7 @@ export function BoardView({ tasks, milestones, activeMilestoneId, onTaskClick, o
   )
 }
 
-function filterByMilestone(tasks: BoardTask[], activeMilestoneId: string | null): BoardTask[] {
+function filterByMilestone(tasks: Task[], activeMilestoneId: string | null): Task[] {
   if (activeMilestoneId === null) return tasks
   if (activeMilestoneId === MILESTONE_FILTER_UNSCHEDULED) {
     return tasks.filter((t) => !t.milestone_id)
@@ -60,9 +64,9 @@ function filterByMilestone(tasks: BoardTask[], activeMilestoneId: string | null)
 
 interface BoardColumnProps {
   config: ColumnConfig
-  tasks: BoardTask[]
+  tasks: Task[]
   milestones: Milestone[]
-  onTaskClick: (task: BoardTask) => void
+  onTaskClick: (task: Task) => void
   onNewTask: () => void
 }
 

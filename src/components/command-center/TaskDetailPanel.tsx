@@ -8,15 +8,13 @@ import {
   fetchMilestones,
   fetchWorkspaces,
   updateTask,
-  updateBoardTask,
-  startBoardTask,
-  startTask,
+  deleteTask,
   isApiError,
   milestonesQueryKeys,
   workspacesQueryKeys,
+  tasksQueryKeys,
 } from '@/lib/api'
-import type { Task, BoardTask, BoardTaskUpdateRequest } from '@/lib/api'
-import type { BoardTaskUpdateStatus } from '@/lib/api/generated/openapi-types'
+import type { Task, TaskUpdateRequest, Todo } from '@/lib/api'
 import {
   Sheet,
   SheetContent,
@@ -37,32 +35,34 @@ import {
   X,
   ChatCircle,
   ArrowCounterClockwise,
+  CheckSquare,
+  Square,
+  Trash,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
 // ── Status config ──────────────────────────────────────────────────────────────
 
-// Workflow task statuses (taskMode === 'workflow')
-const WORKFLOW_STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] = [
-  { value: 'queued',    label: 'Queued',    color: 'text-blue-400' },
-  { value: 'assigned',  label: 'Assigned',  color: 'text-purple-400' },
-  { value: 'running',   label: 'Running',   color: 'text-yellow-400' },
-  { value: 'completed', label: 'Completed', color: 'text-green-400' },
-  { value: 'failed',    label: 'Failed',    color: 'text-red-400' },
+// 7-state unified lifecycle
+const STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] = [
+  { value: 'inbox',       label: 'Inbox',       color: 'text-[var(--color-muted)]' },
+  { value: 'next',        label: 'Next',        color: 'text-blue-400' },
+  { value: 'planning',    label: 'Planning',    color: 'text-purple-400' },
+  { value: 'in_progress', label: 'In Progress', color: 'text-yellow-400' },
+  { value: 'blocked',     label: 'Blocked',     color: 'text-orange-400' },
+  { value: 'done',        label: 'Done',        color: 'text-green-400' },
+  { value: 'failed',      label: 'Failed',      color: 'text-red-400' },
 ]
 
-// GTD board task statuses for the status-change dropdown (taskMode === 'gtd').
-// 'active' is intentionally excluded — it is set only via /start (a dedicated API
-// action). Offering it in the change dropdown would return a 403. When the task IS
-// active the status field renders a read-only Badge instead of this dropdown.
-type GTDChangeStatus = BoardTaskUpdateStatus
-const GTD_STATUS_OPTIONS: { value: GTDChangeStatus; label: string; color: string }[] = [
-  { value: 'inbox',   label: 'Inbox',   color: 'text-[var(--color-muted)]' },
-  { value: 'next',    label: 'Next',    color: 'text-blue-400' },
-  { value: 'waiting', label: 'Waiting', color: 'text-purple-400' },
-  { value: 'done',    label: 'Done',    color: 'text-green-400' },
-  { value: 'failed',  label: 'Failed',  color: 'text-red-400' },
-]
+const STATUS_BADGE: Record<string, string> = {
+  inbox:       'text-[var(--color-muted)] bg-white/5',
+  next:        'text-blue-400 bg-blue-400/10',
+  planning:    'text-purple-400 bg-purple-400/10',
+  in_progress: 'text-yellow-400 bg-yellow-400/10',
+  blocked:     'text-orange-400 bg-orange-400/10',
+  done:        'text-green-400 bg-green-400/10',
+  failed:      'text-red-400 bg-red-400/10',
+}
 
 const PRIORITY_CONFIG: Record<number, { label: string; color: string }> = {
   1: { label: 'P1 — Critical',  color: 'text-red-400' },
@@ -72,47 +72,19 @@ const PRIORITY_CONFIG: Record<number, { label: string; color: string }> = {
   5: { label: 'P5 — Minimal',   color: 'text-[var(--color-muted)]' },
 }
 
-// ── Status badge for subtask list (workflow mode only) ─────────────────────────
-
-const STATUS_BADGE: Record<string, string> = {
-  queued:    'text-blue-400 bg-blue-400/10',
-  assigned:  'text-purple-400 bg-purple-400/10',
-  running:   'text-yellow-400 bg-yellow-400/10',
-  completed: 'text-green-400 bg-green-400/10',
-  failed:    'text-red-400 bg-red-400/10',
-}
-
 // ── Props ──────────────────────────────────────────────────────────────────────
 
-type WorkflowProps = {
-  taskMode: 'workflow'
+interface TaskDetailPanelProps {
   task: Task | null
   onClose: () => void
   onTaskSelect?: (task: Task) => void
+  /** @deprecated Kept for callers that used the old two-mode API; ignored — all tasks use the unified type now. */
+  taskMode?: string
 }
-
-type GtdProps = {
-  taskMode: 'gtd'
-  task: BoardTask | null
-  onClose: () => void
-  onTaskSelect?: never
-}
-
-type TaskDetailPanelProps = WorkflowProps | GtdProps
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export function TaskDetailPanel(props: TaskDetailPanelProps) {
-  if (props.taskMode === 'gtd') {
-    return <GTDTaskDetailPanel task={props.task} onClose={props.onClose} />
-  }
-  return <WorkflowTaskDetailPanel task={props.task} onClose={props.onClose} onTaskSelect={props.onTaskSelect} />
-}
-
-// ── GTD Task Detail Panel ──────────────────────────────────────────────────────
-// FR-L2-023: All GTD fields; FR-L2-024: NO subtasks section
-
-function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose: () => void }) {
+export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -135,7 +107,6 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     staleTime: 30_000,
   })
 
-  // Milestones for the task's assigned workspace
   const { data: milestones = [] } = useQuery({
     queryKey: milestonesQueryKeys.list(selectedWorkspaceId),
     queryFn: () => fetchMilestones(selectedWorkspaceId),
@@ -143,26 +114,33 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     staleTime: 30_000,
   })
 
+  const { data: subtasks = [] } = useQuery({
+    queryKey: tasksQueryKeys.subtasks(task?.id ?? ''),
+    queryFn: () => fetchSubtasks(task!.id),
+    enabled: task != null && !task.parent_task_id,
+  })
+
   const { mutate: doUpdate } = useMutation({
-    mutationFn: (data: Partial<BoardTaskUpdateRequest>) => {
+    mutationFn: (data: TaskUpdateRequest) => {
       if (!task) return Promise.reject(new Error('No task selected'))
-      return updateBoardTask(task.id, data)
+      return updateTask(task.id, data)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update task', variant: 'error' }),
   })
 
+  // "Start" = PATCH status to in_progress (no /start endpoint in unified model)
   const { mutate: doStart, isPending: isStarting } = useMutation({
     mutationFn: () => {
       if (!task) return Promise.reject(new Error('No task selected'))
-      return startBoardTask(task.id)
+      return updateTask(task.id, { status: 'in_progress' })
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       if (data.session_id) {
         void navigate({ to: '/sessions/$sessionId', params: { sessionId: data.session_id } })
@@ -174,13 +152,14 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),
   })
 
+  // Retry = move failed task back to next
   const { mutate: doRetry, isPending: isRetrying } = useMutation({
     mutationFn: () => {
       if (!task) return Promise.reject(new Error('No task selected'))
-      return updateBoardTask(task.id, { status: 'next', session_id: '' })
+      return updateTask(task.id, { status: 'next' })
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       addToast({ message: 'Task retried — moved to Next.', variant: 'success' })
     },
@@ -188,12 +167,36 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to retry task', variant: 'error' }),
   })
 
+  // Delete task
+  const { mutate: doDelete, isPending: isDeleting } = useMutation({
+    mutationFn: () => {
+      if (!task) return Promise.reject(new Error('No task selected'))
+      return deleteTask(task.id)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+      addToast({ message: 'Task deleted.', variant: 'success' })
+      onClose()
+    },
+    onError: (err: unknown) =>
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to delete task', variant: 'error' }),
+  })
+
   function handleSavePrompt() {
     const trimmed = promptDraft.trim()
     if (trimmed !== (task?.prompt ?? '').trim()) {
-      doUpdate({ prompt: trimmed })
+      doUpdate({ prompt: trimmed || undefined })
     }
     setEditingPrompt(false)
+  }
+
+  function handleToggleTodo(index: number) {
+    if (!task) return
+    const todos = (task.todos ?? []).map((t, i) =>
+      i === index ? { ...t, done: !t.done } : t,
+    )
+    doUpdate({ todos })
   }
 
   async function handleCopyResult() {
@@ -206,6 +209,15 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     }
   }
 
+  async function handleCopyPath(path: string) {
+    try {
+      await navigator.clipboard.writeText(path)
+      addToast({ message: 'Path copied.', variant: 'success' })
+    } catch {
+      addToast({ message: 'Failed to copy path.', variant: 'error' })
+    }
+  }
+
   function formatDate(iso?: string) {
     if (!iso) return '—'
     return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
@@ -213,15 +225,18 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
 
   if (!task) return null
 
-  const isStartable = task.status === 'inbox' || task.status === 'next' || task.status === 'waiting'
+  const isStartable = task.status === 'inbox' || task.status === 'next' || task.status === 'planning'
   const isFailed = task.status === 'failed'
+  const isRunning = task.status === 'in_progress'
   const showResult = (task.status === 'done' || task.status === 'failed') && !!task.result
+  const todos = task.todos ?? []
+  const doneTodos = todos.filter((t: Todo) => t.done).length
 
   return (
     <div className="space-y-5">
-      {/* Name */}
-      <Field label="Name">
-        <p className="text-sm font-medium text-[var(--color-secondary)]">{task.name}</p>
+      {/* Title */}
+      <Field label="Title">
+        <p className="text-sm font-medium text-[var(--color-secondary)]">{task.title}</p>
       </Field>
 
       {/* Prompt */}
@@ -280,22 +295,18 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
         />
       </Field>
 
-      {/* Status — 'active' is a runtime state set only via /start; rendering it
-          inside the SmartSelect (which has no matching option) produces a blank
-          trigger. When active, show a read-only Badge. For all other statuses
-          show the editable dropdown (active is excluded from GTD_STATUS_OPTIONS
-          so the PUT endpoint never receives an invalid value). */}
+      {/* Status */}
       <Field label="Status">
-        {task.status === 'active' ? (
+        {isRunning ? (
           <Badge className="h-8 text-xs bg-yellow-400/10 text-yellow-400 border-transparent rounded-md px-2 inline-flex items-center">
-            Active
+            In Progress
           </Badge>
         ) : (
           <SmartSelect
             value={task.status}
-            onValueChange={(val) => doUpdate({ status: val as GTDChangeStatus })}
+            onValueChange={(val) => doUpdate({ status: val as Task['status'] })}
             triggerClassName="h-8 text-xs"
-            items={GTD_STATUS_OPTIONS.map((o) => ({
+            items={STATUS_OPTIONS.map((o) => ({
               value: o.value,
               label: o.label,
               className: cn('text-xs', o.color),
@@ -313,7 +324,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
         </p>
       </Field>
 
-      {/* Milestone — filtered to selected workspace */}
+      {/* Milestone */}
       <Field label="Milestone">
         <SmartSelect
           value={task.milestone_id ?? '__none__'}
@@ -345,7 +356,44 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
         />
       </Field>
 
-      {/* Start Task button — inbox/next/waiting tasks */}
+      {/* Todos checklist */}
+      {todos.length > 0 && (
+        <Field label={`Todos (${doneTodos}/${todos.length})`}>
+          <div className="space-y-1">
+            {todos.map((todo: Todo, idx: number) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleToggleTodo(idx)}
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs hover:bg-[var(--color-surface-1)] transition-colors text-left"
+              >
+                {todo.done ? (
+                  <CheckSquare size={13} className="shrink-0 text-green-400" />
+                ) : (
+                  <Square size={13} className="shrink-0 text-[var(--color-muted)]" />
+                )}
+                <span className={cn('flex-1 text-[var(--color-secondary)]', todo.done && 'line-through text-[var(--color-muted)]')}>
+                  {todo.text}
+                </span>
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
+
+      {/* Trigger */}
+      {task.trigger && (
+        <Field label="Trigger">
+          <p className="text-xs text-[var(--color-muted)]">
+            {task.trigger.type === 'manual' && 'Manual (drag to run)'}
+            {task.trigger.type === 'once' && `Once — ${task.trigger.config?.at_ms ? new Date(task.trigger.config.at_ms).toLocaleString() : '(unset)'}`}
+            {task.trigger.type === 'every' && `Every ${task.trigger.config?.every_ms ? Math.round(task.trigger.config.every_ms / 60000) + 'm' : '(unset)'}`}
+            {task.trigger.type === 'recurring' && `Recurring — ${task.trigger.config?.cron_expr ?? '(no cron)'}`}
+          </p>
+        </Field>
+      )}
+
+      {/* Start button — inbox / next / planning tasks */}
       {isStartable && (
         <Button
           className="w-full gap-2 text-xs h-8"
@@ -405,20 +453,88 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
         </Field>
       )}
 
+      {/* Artifacts */}
+      {(task.artifacts?.length ?? 0) > 0 && (
+        <Field label="Artifacts">
+          <div className="space-y-1">
+            {task.artifacts!.map((path) => (
+              <div key={path} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs">
+                <span className="flex-1 font-mono text-[var(--color-secondary)] truncate">{path}</span>
+                <button
+                  type="button"
+                  onClick={() => handleCopyPath(path)}
+                  className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                  aria-label={`Copy path: ${path}`}
+                >
+                  <Copy size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </Field>
+      )}
+
+      {/* Sub-tasks (children via parent_task_id) */}
+      {subtasks.length > 0 && (
+        <Field label={`Sub-tasks (${subtasks.length})`}>
+          <div className="space-y-1">
+            {subtasks.map((sub) => (
+              <button
+                key={sub.id}
+                type="button"
+                onClick={() => onTaskSelect?.(sub)}
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs hover:bg-[var(--color-surface-1)] transition-colors text-left"
+              >
+                <Badge
+                  variant="outline"
+                  className={cn('text-[9px] px-1 py-0 shrink-0 border-0', STATUS_BADGE[sub.status] ?? '')}
+                >
+                  {sub.status}
+                </Badge>
+                <span className="flex-1 text-[var(--color-secondary)] truncate">{sub.title}</span>
+                {sub.agent_name && (
+                  <span className="shrink-0 text-[var(--color-muted)] flex items-center gap-0.5">
+                    <Robot size={10} /> {sub.agent_name}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
+
       {/* Metadata */}
       <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
+        {task.created_by && <MetaRow label="Created by" value={task.created_by} />}
         <MetaRow label="Created" value={formatDate(task.created_at)} />
         <MetaRow label="Updated" value={formatDate(task.updated_at)} />
+        <MetaRow label="Started" value={formatDate(task.started_at)} />
+        <MetaRow label="Completed" value={formatDate(task.completed_at)} />
+      </div>
+
+      {/* Delete button (danger zone) */}
+      <div className="pt-2 border-t border-[var(--color-border)]">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full gap-2 text-xs h-8 text-red-400 hover:bg-red-500/10 hover:text-red-400"
+          onClick={() => doDelete()}
+          disabled={isDeleting}
+        >
+          <Trash size={13} />
+          {isDeleting ? 'Deleting…' : 'Delete task'}
+        </Button>
       </div>
     </div>
   )
 }
 
-// ── Workflow Task Detail Panel ─────────────────────────────────────────────────
-// The legacy workflow-task variant of the detail panel (Task wire type), kept
-// for the sessions route and workspace task slide-over consumers.
+// ── Workflow Task Detail Panel (legacy wrapper) ────────────────────────────────
+// This export is kept for backward-compat with WorkflowTaskDetailPanel callers
+// in the sessions route. Both old "workflow" and "gtd" modes now use the unified
+// Task type — the mode distinction is gone.
 
-function WorkflowTaskDetailPanel({
+export function WorkflowTaskDetailPanel({
   task,
   onClose,
   onTaskSelect,
@@ -427,84 +543,6 @@ function WorkflowTaskDetailPanel({
   onClose: () => void
   onTaskSelect?: (task: Task) => void
 }) {
-  const { addToast } = useUiStore()
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-
-  const [editingPrompt, setEditingPrompt] = useState(false)
-  const [promptDraft, setPromptDraft] = useState('')
-
-  useEffect(() => {
-    setPromptDraft(task?.prompt ?? '')
-    setEditingPrompt(false)
-  }, [task?.id, task?.prompt])
-
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-
-  const { data: subtasks = [] } = useQuery({
-    queryKey: ['subtasks', task?.id],
-    queryFn: () => fetchSubtasks(task!.id),
-    enabled: task != null,
-  })
-
-  const { mutate: doUpdate } = useMutation({
-    mutationFn: (data: Partial<Task>) => {
-      if (!task) return Promise.reject(new Error('No task selected'))
-      return updateTask(task.id, data)
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
-    onError: (err: unknown) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update task', variant: 'error' }),
-  })
-
-  const { mutate: doStart, isPending: isStarting } = useMutation({
-    mutationFn: () => {
-      if (!task) return Promise.reject(new Error('No task selected'))
-      return startTask(task.id)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] })
-      addToast({ message: 'Task started.', variant: 'success' })
-    },
-    onError: (err: unknown) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),
-  })
-
-  function handleSavePrompt() {
-    const trimmed = promptDraft.trim()
-    if (trimmed !== (task?.prompt ?? '').trim()) {
-      doUpdate({ prompt: trimmed })
-    }
-    setEditingPrompt(false)
-  }
-
-  async function handleCopyResult() {
-    if (!task?.result) return
-    try {
-      await navigator.clipboard.writeText(task.result)
-      addToast({ message: 'Result copied to clipboard.', variant: 'success' })
-    } catch {
-      addToast({ message: 'Failed to copy to clipboard.', variant: 'error' })
-    }
-  }
-
-  async function handleCopyPath(path: string) {
-    try {
-      await navigator.clipboard.writeText(path)
-      addToast({ message: 'Path copied.', variant: 'success' })
-    } catch {
-      addToast({ message: 'Failed to copy path.', variant: 'error' })
-    }
-  }
-
-  function formatDate(iso?: string) {
-    if (!iso) return '—'
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
-  }
-
-  const isQueued = task?.status === 'queued'
-  const showResult = task?.status === 'completed' || task?.status === 'failed'
-
   return (
     <Sheet open={task != null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SheetContent side="right" className="w-full sm:w-[380px] md:w-[460px] overflow-y-auto">
@@ -513,197 +551,7 @@ function WorkflowTaskDetailPanel({
         </SheetHeader>
 
         {task && (
-          <div className="space-y-5">
-            {/* Prompt */}
-            <Field label="Prompt / Instructions">
-              {editingPrompt ? (
-                <div className="space-y-1.5">
-                  <Textarea
-                    value={promptDraft}
-                    onChange={(e) => setPromptDraft(e.target.value)}
-                    className="text-xs min-h-[80px] font-mono"
-                    autoFocus
-                  />
-                  <div className="flex gap-1.5">
-                    <Button size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleSavePrompt}>
-                      <Check size={10} weight="bold" /> Save
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-[10px] gap-1"
-                      onClick={() => { setPromptDraft(task.prompt); setEditingPrompt(false) }}
-                    >
-                      <X size={10} /> Cancel
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="relative group">
-                  <pre className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 whitespace-pre-wrap break-words leading-relaxed">
-                    {task.prompt || <span className="text-[var(--color-muted)]">No prompt set.</span>}
-                  </pre>
-                  {isQueued && (
-                    <button
-                      type="button"
-                      onClick={() => setEditingPrompt(true)}
-                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
-                      aria-label="Edit prompt"
-                    >
-                      <PencilSimple size={12} />
-                    </button>
-                  )}
-                </div>
-              )}
-            </Field>
-
-            {/* Priority */}
-            <Field label="Priority">
-              <SmartSelect
-                value={String(task.priority)}
-                onValueChange={(val) => doUpdate({ priority: parseInt(val, 10) })}
-                disabled={!isQueued}
-                triggerClassName="h-8 text-xs"
-                items={[1, 2, 3, 4, 5].map((p) => ({
-                  value: String(p),
-                  label: PRIORITY_CONFIG[p]?.label ?? `P${p}`,
-                  className: cn('text-xs', PRIORITY_CONFIG[p]?.color),
-                }))}
-              />
-            </Field>
-
-            {/* Status */}
-            <Field label="Status">
-              <SmartSelect
-                value={task.status}
-                onValueChange={(val) => doUpdate({ status: val as Task['status'] })}
-                triggerClassName="h-8 text-xs"
-                items={WORKFLOW_STATUS_OPTIONS.map((o) => ({
-                  value: o.value,
-                  label: o.label,
-                  className: cn('text-xs', o.color),
-                }))}
-              />
-            </Field>
-
-            {/* Agent */}
-            <Field label="Agent">
-              <SmartSelect
-                value={task.agent_id ?? '__none__'}
-                onValueChange={(val) => doUpdate({ agent_id: val === '__none__' ? undefined : val })}
-                placeholder="Unassigned"
-                triggerClassName="h-8 text-xs"
-                items={[
-                  { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-                  ...agents
-                    .filter((a) => !isWorker(a))
-                    .map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
-                ]}
-              />
-            </Field>
-
-            {/* Start button */}
-            {isQueued && (
-              <Button className="w-full gap-2 text-xs h-8" onClick={() => doStart()} disabled={isStarting}>
-                <Play size={13} weight="fill" />
-                {isStarting ? 'Starting...' : 'Start Task'}
-              </Button>
-            )}
-
-            {/* Open in Chat */}
-            {task.session_id && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full gap-2 text-xs h-8"
-                onClick={() => {
-                  void navigate({ to: '/sessions/$sessionId', params: { sessionId: task.session_id! } })
-                  onClose()
-                }}
-              >
-                <ChatCircle size={13} />
-                Open in Chat
-              </Button>
-            )}
-
-            {/* Result section */}
-            {showResult && task.result && (
-              <Field label="Result">
-                <div className="relative">
-                  <pre className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed">
-                    {task.result}
-                  </pre>
-                  <button
-                    type="button"
-                    onClick={handleCopyResult}
-                    className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)] transition-colors"
-                    aria-label="Copy result"
-                  >
-                    <Copy size={11} /> Copy
-                  </button>
-                </div>
-              </Field>
-            )}
-
-            {/* Artifacts */}
-            {(task.artifacts?.length ?? 0) > 0 && (
-              <Field label="Artifacts">
-                <div className="space-y-1">
-                  {task.artifacts!.map((path) => (
-                    <div key={path} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs">
-                      <span className="flex-1 font-mono text-[var(--color-secondary)] truncate">{path}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyPath(path)}
-                        className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
-                        aria-label={`Copy path: ${path}`}
-                      >
-                        <Copy size={11} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </Field>
-            )}
-
-            {/* Sub-tasks */}
-            {subtasks.length > 0 && (
-              <Field label={`Sub-tasks (${subtasks.length})`}>
-                <div className="space-y-1">
-                  {subtasks.map((sub) => (
-                    <button
-                      key={sub.id}
-                      type="button"
-                      onClick={() => onTaskSelect?.(sub)}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs hover:bg-[var(--color-surface-1)] transition-colors text-left"
-                    >
-                      <Badge
-                        variant="outline"
-                        className={cn('text-[9px] px-1 py-0 shrink-0 border-0', STATUS_BADGE[sub.status] ?? '')}
-                      >
-                        {sub.status}
-                      </Badge>
-                      <span className="flex-1 text-[var(--color-secondary)] truncate">{sub.title}</span>
-                      {sub.agent_name && (
-                        <span className="shrink-0 text-[var(--color-muted)] flex items-center gap-0.5">
-                          <Robot size={10} /> {sub.agent_name}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </Field>
-            )}
-
-            {/* Metadata */}
-            <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
-              {task.created_by && <MetaRow label="Created by" value={task.created_by} />}
-              <MetaRow label="Created" value={formatDate(task.created_at)} />
-              <MetaRow label="Started" value={formatDate(task.started_at)} />
-              <MetaRow label="Completed" value={formatDate(task.completed_at)} />
-              <MetaRow label="Trigger" value={task.trigger_type} />
-            </div>
-          </div>
+          <TaskDetailPanel task={task} onClose={onClose} onTaskSelect={onTaskSelect} />
         )}
       </SheetContent>
     </Sheet>

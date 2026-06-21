@@ -25,12 +25,16 @@ properties:
   status:
     type: string
     enum:
-      - queued
-      - assigned
-      - running
-      - completed
+      - inbox
+      - next
+      - planning
+      - in_progress
+      - blocked
+      - done
       - failed
-    description: New status of the task. Canonical values from pkg/taskstore/store.go validStatuses.
+    description: >
+      New status of the task (7-state unified lifecycle, Detail #1). Canonical
+      values from the new pkg/task store.
   agent_id:
     type: string
     description: Agent managing this task.

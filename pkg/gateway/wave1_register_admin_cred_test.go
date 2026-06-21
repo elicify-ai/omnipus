@@ -33,7 +33,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // --- Helpers ---
@@ -65,7 +65,7 @@ func newTestAPIWithHome(t *testing.T) (*restAPI, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 	return api, tmpDir
 }
@@ -105,7 +105,7 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 	return api, tmpDir, hexKey
 }
@@ -425,7 +425,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 
 	w := httptest.NewRecorder()
@@ -743,7 +743,7 @@ func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 
 	// Step 4: GET /api/v1/providers — must include openai as connected.

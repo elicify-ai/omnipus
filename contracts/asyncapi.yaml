@@ -1455,10 +1455,12 @@ components:
         status:
           type: string
           enum:
-            - queued
-            - assigned
-            - running
-            - completed
+            - inbox
+            - next
+            - planning
+            - in_progress
+            - blocked
+            - done
             - failed
         agent_id:
           type: string

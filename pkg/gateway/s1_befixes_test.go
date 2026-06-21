@@ -24,7 +24,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // --- Issue #351: Provider status = Connected iff key resolves ---
@@ -92,7 +92,7 @@ func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 
 	w := httptest.NewRecorder()
@@ -175,7 +175,7 @@ func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 
 	w := httptest.NewRecorder()
@@ -263,7 +263,7 @@ func TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 		credStore:     credStore,
 	}
 
@@ -354,7 +354,7 @@ func TestHandleProviders_CredStoreRef_Resolved_IsConnected(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 		credStore:     credStore,
 	}
 

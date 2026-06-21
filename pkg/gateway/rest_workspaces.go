@@ -28,6 +28,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // errWorkspaceNotFound is returned by readWorkspaceFile when the workspace file
@@ -137,10 +138,10 @@ func listWorkspaceFiles(home string) ([]storedWorkspace, error) {
 	return workspaces, nil
 }
 
-// scanGTDTasks walks the tasks directory and calls fn for every file that
-// deserialises to a GTD task (status ∈ {inbox,next,active,waiting,done,failed}).
+// scanTasks walks the unified tasks directory and calls fn for every file that
+// deserialises to a valid task (status in the 7-state vocabulary).
 // Returns the first I/O error; fn errors are not propagated.
-func scanGTDTasks(home string, fn func(id string, t boardTask)) error {
+func scanTasks(home string, fn func(id string, t task.Task)) error {
 	dir := filepath.Join(home, "tasks")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -155,30 +156,21 @@ func scanGTDTasks(home string, fn func(id string, t boardTask)) error {
 		}
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			slog.Warn(
-				"rest_workspaces: scanGTDTasks: failed to read task file",
-				"file",
-				e.Name(),
-				"error",
-				err,
-			)
+			slog.Warn("rest_workspaces: scanTasks: failed to read task file", "file", e.Name(), "error", err)
 			continue
 		}
-		var t boardTask
+		var t task.Task
 		if err := json.Unmarshal(data, &t); err != nil {
-			slog.Warn(
-				"rest_workspaces: scanGTDTasks: failed to parse task file",
-				"file",
-				e.Name(),
-				"error",
-				err,
-			)
+			slog.Warn("rest_workspaces: scanTasks: failed to parse task file", "file", e.Name(), "error", err)
 			continue
 		}
-		if !isGTDTask(t.Status) {
+		if !task.IsValidStatus(t.Status) {
 			continue
 		}
 		id := strings.TrimSuffix(e.Name(), ".json")
+		if t.ID == "" {
+			t.ID = id
+		}
 		fn(id, t)
 	}
 	return nil
@@ -189,7 +181,7 @@ func scanGTDTasks(home string, fn func(id string, t boardTask)) error {
 // Only GTD tasks (status ∈ {inbox,next,active,waiting,done,failed}) are counted.
 func computeWorkspaceTaskCounts(home string) (map[string]int, error) {
 	counts := make(map[string]int)
-	if err := scanGTDTasks(home, func(_ string, t boardTask) {
+	if err := scanTasks(home, func(_ string, t task.Task) {
 		if t.WorkspaceID != "" {
 			counts[t.WorkspaceID]++
 		}
@@ -203,7 +195,7 @@ func computeWorkspaceTaskCounts(home string) (map[string]int, error) {
 // but avoids building the full map — used by single-workspace GET/PUT.
 func countTasksForWorkspace(home, workspaceID string) int {
 	count := 0
-	if err := scanGTDTasks(home, func(_ string, t boardTask) {
+	if err := scanTasks(home, func(_ string, t task.Task) {
 		if t.WorkspaceID == workspaceID {
 			count++
 		}
@@ -281,7 +273,7 @@ func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
 // Per FR-007: individual task-file deletion failures are logged and skipped (best-effort).
 func deleteTasksForWorkspace(home, workspaceID string) error {
 	tasksDir := filepath.Join(home, "tasks")
-	if err := scanGTDTasks(home, func(id string, t boardTask) {
+	if err := scanTasks(home, func(id string, t task.Task) {
 		if t.WorkspaceID == workspaceID {
 			taskPath := filepath.Join(tasksDir, id+".json")
 			if err := os.Remove(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {

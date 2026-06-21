@@ -27,7 +27,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // parseCookiesFromRecorder returns a map of Set-Cookie name → *http.Cookie.
@@ -89,7 +89,7 @@ func TestHandleLogin_IssuesSessionCookie(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 
 	body := `{"username":"cookieuser","password":"TestPass123"}`
@@ -171,7 +171,7 @@ func TestHandleLogin_BothCookiesEmitted(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 
 	w1 := httptest.NewRecorder()
@@ -230,7 +230,7 @@ func TestHandleRegisterAdmin_IssuesSessionCookie(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 
 	body := `{"username":"admin","password":"AdminPass1"}`

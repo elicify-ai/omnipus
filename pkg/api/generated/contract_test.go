@@ -1084,19 +1084,19 @@ func TestContract_PingFrame_Edge(t *testing.T) {
 
 func TestContract_Task_Populated(t *testing.T) {
 	// All required + optional fields set. Verifies a fully-hydrated task validates.
-	// Traces to: Task.yaml — required: [id, title, prompt, priority, status, trigger_type]
+	// Traces to: Task.yaml — required: [id, title, action, status, workspace_id, owner, created_by, created_at, updated_at]
 	mustPassComponent(t, "Task", FixtureTask_Populated())
 }
 
 func TestContract_Task_ZeroValue(t *testing.T) {
-	// Zero value: id="", title="", prompt="", status="" (not in enum), trigger_type="" (not in enum).
-	// Traces to: Task.yaml — status and trigger_type are enum-constrained
+	// Zero value: id="", title="", action="" (not in enum), status="" (not in enum),
+	// workspace_id="" (required). Traces to: Task.yaml.
 	mustFailComponent(t, "Task", FixtureTask_ZeroValue(),
-		"zero value has empty required fields; status and trigger_type are not valid enum values")
+		"zero value has empty required fields; action and status are not valid enum values")
 }
 
 func TestContract_Task_Edge(t *testing.T) {
-	// queued task, no agent, unicode title, maximum priority
+	// inbox task, no agent, unicode title, max priority, recurring trigger.
 	// Traces to: Task.yaml
 	mustPassComponent(t, "Task", FixtureTask_Edge())
 }
@@ -2214,32 +2214,35 @@ func TestContract_UploadFilesResponse_Differentiation(t *testing.T) {
 	mustPassComponent(t, "UploadFilesResponse", f2)
 }
 
-// ── TaskAcceptedResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/TaskAcceptedResponse.yaml
+// TaskAcceptedResponse was removed in Sprint 2 (the /start endpoint and its
+// accepted-response are gone; the unified surface uses PATCH to set in_progress).
 
-func TestContract_TaskAcceptedResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "TaskAcceptedResponse", FixtureTaskAcceptedResponse_Populated())
+// ── Todo / TaskTrigger component fixtures ────────────────────────────────────
+
+func TestContract_Todo_Populated(t *testing.T) {
+	mustPassComponent(t, "Todo", FixtureTodo_Populated())
 }
 
-func TestContract_TaskAcceptedResponse_ZeroValue(t *testing.T) {
-	// task_id="", status="" — required fields; status not in enum ["accepted"]
-	mustFailComponent(t, "TaskAcceptedResponse", FixtureTaskAcceptedResponse_ZeroValue(),
-		"zero value has empty task_id and status not in enum")
+func TestContract_Todo_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "Todo", FixtureTodo_ZeroValue(),
+		"text is \"\" (minLength: 1)")
 }
 
-func TestContract_TaskAcceptedResponse_Edge(t *testing.T) {
-	mustPassComponent(t, "TaskAcceptedResponse", FixtureTaskAcceptedResponse_Edge())
+func TestContract_Todo_Edge(t *testing.T) {
+	mustPassComponent(t, "Todo", FixtureTodo_Edge())
 }
 
-func TestContract_TaskAcceptedResponse_Differentiation(t *testing.T) {
-	f1 := FixtureTaskAcceptedResponse_Populated()
-	f2 := FixtureTaskAcceptedResponse_Edge()
-	raw1, _ := json.Marshal(f1)
-	raw2, _ := json.Marshal(f2)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"different task IDs must produce different JSON")
-	mustPassComponent(t, "TaskAcceptedResponse", f1)
-	mustPassComponent(t, "TaskAcceptedResponse", f2)
+func TestContract_TaskTrigger_Populated(t *testing.T) {
+	mustPassComponent(t, "TaskTrigger", FixtureTaskTrigger_Populated())
+}
+
+func TestContract_TaskTrigger_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "TaskTrigger", FixtureTaskTrigger_ZeroValue(),
+		"type is \"\" (not in enum)")
+}
+
+func TestContract_TaskTrigger_Edge(t *testing.T) {
+	mustPassComponent(t, "TaskTrigger", FixtureTaskTrigger_Edge())
 }
 
 // ── AgentOwnerUpdateResponse ──────────────────────────────────────────────────
@@ -2473,24 +2476,36 @@ func TestContract_ErrorFrame_MessageAtLimit(t *testing.T) {
 }
 
 // ── Task priority out of range ────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/Task.yaml (priority: minimum:0, maximum:100)
+// Traces to: contracts/components/schemas/Task.yaml (priority: minimum:1, maximum:5)
 
 func TestContract_Task_PriorityOutOfRange(t *testing.T) {
-	// Traces to: Task.yaml — priority: minimum:0, maximum:100
-	// The schema specifies minimum:0. There's no maximum in Task.yaml (checked above).
-	// We test the negative boundary.
-	validBase := map[string]any{
-		"id":           "task-uuid-1",
-		"title":        "Test task",
-		"prompt":       "Do something",
-		"status":       "queued",
-		"trigger_type": "manual",
-		"priority":     -1, // below minimum:0
+	// Sprint 2 unified Task: priority is minimum:1, maximum:5. Test both boundaries.
+	base := func() map[string]any {
+		return map[string]any{
+			"id":           "task-uuid-1",
+			"title":        "Test task",
+			"action":       "llm",
+			"status":       "inbox",
+			"workspace_id": "ws-1",
+			"owner":        "alice",
+			"created_by":   "alice",
+			"created_at":   "2026-06-20T10:00:00Z",
+			"updated_at":   "2026-06-20T10:00:00Z",
+		}
 	}
-	raw, err := json.Marshal(validBase)
+	below := base()
+	below["priority"] = 0 // below minimum:1
+	rawBelow, err := json.Marshal(below)
 	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Task", raw),
-		"priority=-1 must fail Task schema — minimum:0")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Task", rawBelow),
+		"priority=0 must fail Task schema — minimum:1")
+
+	above := base()
+	above["priority"] = 6 // above maximum:5
+	rawAbove, err := json.Marshal(above)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Task", rawAbove),
+		"priority=6 must fail Task schema — maximum:5")
 }
 
 // ── ToolApprovalRequiredFrame expires_in_ms range ────────────────────────────
@@ -3183,102 +3198,83 @@ func TestContract_Message_UnknownTypeRejected(t *testing.T) {
 // no test enforcing that — and the REST request body for POST /tasks
 // accepts any string. These tests pin the round-trip contract.
 
+// taskEntityFixture mirrors the persisted-then-served unified Task shape with
+// the minimum required fields for schema validation (Sprint 2).
 type taskEntityFixture struct {
-	ID            string    `json:"id"`
-	Title         string    `json:"title"`
-	Prompt        string    `json:"prompt"`
-	AgentID       string    `json:"agent_id,omitempty"`
-	CreatedBy     string    `json:"created_by,omitempty"`
-	ParentTaskID  string    `json:"parent_task_id,omitempty"`
-	Priority      int       `json:"priority"`
-	Status        string    `json:"status"`
-	Result        string    `json:"result,omitempty"`
-	Artifacts     []string  `json:"artifacts,omitempty"`
-	SessionID     string    `json:"session_id,omitempty"`
-	TriggerType   string    `json:"trigger_type"`
-	SourceChannel string    `json:"source_channel,omitempty"`
-	SourceChatID  string    `json:"source_chat_id,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Action      string `json:"action"`
+	Status      string `json:"status"`
+	WorkspaceID string `json:"workspace_id"`
+	Owner       string `json:"owner"`
+	CreatedBy   string `json:"created_by"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+func newTaskEntityFixture(status string) taskEntityFixture {
+	return taskEntityFixture{
+		ID:          "task-uuid",
+		Title:       "test",
+		Action:      "llm",
+		Status:      status,
+		WorkspaceID: "ws-1",
+		Owner:       "alice",
+		CreatedBy:   "alice",
+		CreatedAt:   "2026-05-21T10:00:00Z",
+		UpdatedAt:   "2026-05-21T10:00:00Z",
+	}
 }
 
 func TestContract_TaskEntity_AllStatusValues_Validate(t *testing.T) {
-	allStatuses := []string{"queued", "assigned", "running", "completed", "failed"}
+	// Sprint 2 unified 7-state vocabulary.
+	allStatuses := []string{"inbox", "next", "planning", "in_progress", "blocked", "done", "failed"}
 	for _, status := range allStatuses {
 		t.Run(status, func(t *testing.T) {
-			fx := taskEntityFixture{
-				ID:          "task-uuid",
-				Title:       "test",
-				Prompt:      "p",
-				Priority:    0,
-				Status:      status,
-				TriggerType: "manual",
-				CreatedAt:   time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
-			}
-			raw, err := json.Marshal(fx)
+			raw, err := json.Marshal(newTaskEntityFixture(status))
 			require.NoError(t, err)
 			validationErr := validateAgainstComponentSchemaRawJSON(t, "Task", raw)
 			assert.NoError(t, validationErr,
-				"TaskEntity with status=%q must validate against Task.yaml", status)
+				"unified Task with status=%q must validate against Task.yaml", status)
 		})
 	}
 }
 
-func TestContract_TaskEntity_AllTriggerTypes_Validate(t *testing.T) {
-	allTriggers := []string{"manual", "time", "event"}
-	for _, trigger := range allTriggers {
-		t.Run(trigger, func(t *testing.T) {
-			fx := taskEntityFixture{
-				ID:          "task-uuid",
-				Title:       "test",
-				Prompt:      "p",
-				Priority:    0,
-				Status:      "queued",
-				TriggerType: trigger,
-				CreatedAt:   time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
-			}
-			raw, err := json.Marshal(fx)
+func TestContract_TaskEntity_LegacyStatusValuesRejected(t *testing.T) {
+	// The legacy GTD/workflow vocabularies are gone. Any of these must FAIL —
+	// they are the canary catching a regression that re-introduces a dual enum.
+	legacy := []string{"queued", "assigned", "running", "completed", "active", "waiting"}
+	for _, status := range legacy {
+		t.Run(status, func(t *testing.T) {
+			raw, err := json.Marshal(newTaskEntityFixture(status))
 			require.NoError(t, err)
 			validationErr := validateAgainstComponentSchemaRawJSON(t, "Task", raw)
-			assert.NoError(t, validationErr,
-				"TaskEntity with trigger_type=%q must validate", trigger)
+			assert.Error(t, validationErr,
+				"legacy status=%q must FAIL the unified Task schema (7-state only)", status)
 		})
 	}
 }
 
-func TestContract_TaskEntity_LegacyInProgressStatusRejected(t *testing.T) {
-	// Legacy task files used status="in_progress". The taskstore.Store.loadOne
-	// migration code at pkg/taskstore/store.go ~L189 maps "in_progress" →
-	// "running" on read. This test verifies the post-migration value validates
-	// AND that the pre-migration value would NOT (so a future code change
-	// that skips migration would surface immediately).
-	pre := taskEntityFixture{
-		ID:          "legacy-task",
-		Title:       "old",
-		Prompt:      "x",
-		Priority:    0,
-		Status:      "in_progress", // legacy
-		TriggerType: "manual",
-		CreatedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+func TestContract_TaskTrigger_AllKinds_Validate(t *testing.T) {
+	// Tier-2 trigger kinds with their required config.
+	cases := []struct {
+		kind   string
+		config map[string]any
+	}{
+		{"manual", map[string]any{}},
+		{"once", map[string]any{"at_ms": int64(1781000000000)}},
+		{"every", map[string]any{"every_ms": int64(3600000)}},
+		{"recurring", map[string]any{"cron_expr": "0 9 * * MON"}},
 	}
-	raw, err := json.Marshal(pre)
-	require.NoError(t, err)
-	validationErr := validateAgainstComponentSchemaRawJSON(t, "Task", raw)
-	assert.Error(t, validationErr,
-		"un-migrated status=\"in_progress\" must FAIL Task.yaml validation — "+
-			"this is the canary that catches a code change skipping the migration")
-}
-
-// ── Level-1 / Spec-3 / Spec-6 REST response type contract tests ──────────────
-// Marshal-validate roundtrip coverage so a Go struct producing schema-invalid
-// JSON for a served REST response type is caught by CI.
-
-func TestContract_BoardTask_Populated(t *testing.T) {
-	mustPassComponent(t, "BoardTask", FixtureBoardTask_Populated())
-}
-
-func TestContract_BoardTask_ZeroValue(t *testing.T) {
-	mustFailComponent(t, "BoardTask", FixtureBoardTask_ZeroValue(),
-		"status is \"\" (not in enum) and name is \"\" (minLength: 1)")
+	for _, c := range cases {
+		t.Run(c.kind, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]any{"type": c.kind, "config": c.config})
+			require.NoError(t, err)
+			validationErr := validateAgainstComponentSchemaRawJSON(t, "TaskTrigger", raw)
+			assert.NoError(t, validationErr,
+				"TaskTrigger kind=%q must validate against TaskTrigger.yaml", c.kind)
+		})
+	}
 }
 
 func TestContract_Milestone_Populated(t *testing.T) {

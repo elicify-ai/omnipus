@@ -937,150 +937,6 @@ func (e AuditEntryDecision) Valid() bool {
 	}
 }
 
-// Defines values for BoardTaskStatus.
-const (
-	BoardTaskStatusActive  BoardTaskStatus = "active"
-	BoardTaskStatusDone    BoardTaskStatus = "done"
-	BoardTaskStatusFailed  BoardTaskStatus = "failed"
-	BoardTaskStatusInbox   BoardTaskStatus = "inbox"
-	BoardTaskStatusNext    BoardTaskStatus = "next"
-	BoardTaskStatusWaiting BoardTaskStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the BoardTaskStatus enum.
-func (e BoardTaskStatus) Valid() bool {
-	switch e {
-	case BoardTaskStatusActive:
-		return true
-	case BoardTaskStatusDone:
-		return true
-	case BoardTaskStatusFailed:
-		return true
-	case BoardTaskStatusInbox:
-		return true
-	case BoardTaskStatusNext:
-		return true
-	case BoardTaskStatusWaiting:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BoardTaskCreateRequestStatus.
-const (
-	BoardTaskCreateRequestStatusActive  BoardTaskCreateRequestStatus = "active"
-	BoardTaskCreateRequestStatusDone    BoardTaskCreateRequestStatus = "done"
-	BoardTaskCreateRequestStatusFailed  BoardTaskCreateRequestStatus = "failed"
-	BoardTaskCreateRequestStatusInbox   BoardTaskCreateRequestStatus = "inbox"
-	BoardTaskCreateRequestStatusNext    BoardTaskCreateRequestStatus = "next"
-	BoardTaskCreateRequestStatusWaiting BoardTaskCreateRequestStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the BoardTaskCreateRequestStatus enum.
-func (e BoardTaskCreateRequestStatus) Valid() bool {
-	switch e {
-	case BoardTaskCreateRequestStatusActive:
-		return true
-	case BoardTaskCreateRequestStatusDone:
-		return true
-	case BoardTaskCreateRequestStatusFailed:
-		return true
-	case BoardTaskCreateRequestStatusInbox:
-		return true
-	case BoardTaskCreateRequestStatusNext:
-		return true
-	case BoardTaskCreateRequestStatusWaiting:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BoardTaskListItemStatus.
-const (
-	BoardTaskListItemStatusActive  BoardTaskListItemStatus = "active"
-	BoardTaskListItemStatusDone    BoardTaskListItemStatus = "done"
-	BoardTaskListItemStatusFailed  BoardTaskListItemStatus = "failed"
-	BoardTaskListItemStatusInbox   BoardTaskListItemStatus = "inbox"
-	BoardTaskListItemStatusNext    BoardTaskListItemStatus = "next"
-	BoardTaskListItemStatusWaiting BoardTaskListItemStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the BoardTaskListItemStatus enum.
-func (e BoardTaskListItemStatus) Valid() bool {
-	switch e {
-	case BoardTaskListItemStatusActive:
-		return true
-	case BoardTaskListItemStatusDone:
-		return true
-	case BoardTaskListItemStatusFailed:
-		return true
-	case BoardTaskListItemStatusInbox:
-		return true
-	case BoardTaskListItemStatusNext:
-		return true
-	case BoardTaskListItemStatusWaiting:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BoardTaskUpdateRequestStatus.
-const (
-	BoardTaskUpdateRequestStatusDone    BoardTaskUpdateRequestStatus = "done"
-	BoardTaskUpdateRequestStatusFailed  BoardTaskUpdateRequestStatus = "failed"
-	BoardTaskUpdateRequestStatusInbox   BoardTaskUpdateRequestStatus = "inbox"
-	BoardTaskUpdateRequestStatusNext    BoardTaskUpdateRequestStatus = "next"
-	BoardTaskUpdateRequestStatusWaiting BoardTaskUpdateRequestStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the BoardTaskUpdateRequestStatus enum.
-func (e BoardTaskUpdateRequestStatus) Valid() bool {
-	switch e {
-	case BoardTaskUpdateRequestStatusDone:
-		return true
-	case BoardTaskUpdateRequestStatusFailed:
-		return true
-	case BoardTaskUpdateRequestStatusInbox:
-		return true
-	case BoardTaskUpdateRequestStatusNext:
-		return true
-	case BoardTaskUpdateRequestStatusWaiting:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BoardTaskUpdateStatus.
-const (
-	BoardTaskUpdateStatusDone    BoardTaskUpdateStatus = "done"
-	BoardTaskUpdateStatusFailed  BoardTaskUpdateStatus = "failed"
-	BoardTaskUpdateStatusInbox   BoardTaskUpdateStatus = "inbox"
-	BoardTaskUpdateStatusNext    BoardTaskUpdateStatus = "next"
-	BoardTaskUpdateStatusWaiting BoardTaskUpdateStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the BoardTaskUpdateStatus enum.
-func (e BoardTaskUpdateStatus) Valid() bool {
-	switch e {
-	case BoardTaskUpdateStatusDone:
-		return true
-	case BoardTaskUpdateStatusFailed:
-		return true
-	case BoardTaskUpdateStatusInbox:
-		return true
-	case BoardTaskUpdateStatusNext:
-		return true
-	case BoardTaskUpdateStatusWaiting:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ChannelConfigureRequestIdentityKind.
 const (
 	ChannelConfigureRequestIdentityKindAgent ChannelConfigureRequestIdentityKind = "agent"
@@ -1456,36 +1312,6 @@ func (e ExecutorConfigKind) Valid() bool {
 	case Native:
 		return true
 	case RemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for GTDBoardTaskStatus.
-const (
-	GTDBoardTaskStatusActive  GTDBoardTaskStatus = "active"
-	GTDBoardTaskStatusDone    GTDBoardTaskStatus = "done"
-	GTDBoardTaskStatusFailed  GTDBoardTaskStatus = "failed"
-	GTDBoardTaskStatusInbox   GTDBoardTaskStatus = "inbox"
-	GTDBoardTaskStatusNext    GTDBoardTaskStatus = "next"
-	GTDBoardTaskStatusWaiting GTDBoardTaskStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the GTDBoardTaskStatus enum.
-func (e GTDBoardTaskStatus) Valid() bool {
-	switch e {
-	case GTDBoardTaskStatusActive:
-		return true
-	case GTDBoardTaskStatusDone:
-		return true
-	case GTDBoardTaskStatusFailed:
-		return true
-	case GTDBoardTaskStatusInbox:
-		return true
-	case GTDBoardTaskStatusNext:
-		return true
-	case GTDBoardTaskStatusWaiting:
 		return true
 	default:
 		return false
@@ -2962,27 +2788,99 @@ func (e SkillTrustUpdateResponseAppliedLevel) Valid() bool {
 	}
 }
 
+// Defines values for TaskAction.
+const (
+	TaskActionLlm TaskAction = "llm"
+)
+
+// Valid indicates whether the value is a known member of the TaskAction enum.
+func (e TaskAction) Valid() bool {
+	switch e {
+	case TaskActionLlm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskRollupStatus.
+const (
+	TaskRollupStatusBlocked    TaskRollupStatus = "blocked"
+	TaskRollupStatusDone       TaskRollupStatus = "done"
+	TaskRollupStatusFailed     TaskRollupStatus = "failed"
+	TaskRollupStatusInProgress TaskRollupStatus = "in_progress"
+	TaskRollupStatusInbox      TaskRollupStatus = "inbox"
+	TaskRollupStatusNext       TaskRollupStatus = "next"
+	TaskRollupStatusPlanning   TaskRollupStatus = "planning"
+)
+
+// Valid indicates whether the value is a known member of the TaskRollupStatus enum.
+func (e TaskRollupStatus) Valid() bool {
+	switch e {
+	case TaskRollupStatusBlocked:
+		return true
+	case TaskRollupStatusDone:
+		return true
+	case TaskRollupStatusFailed:
+		return true
+	case TaskRollupStatusInProgress:
+		return true
+	case TaskRollupStatusInbox:
+		return true
+	case TaskRollupStatusNext:
+		return true
+	case TaskRollupStatusPlanning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskStatus.
 const (
-	TaskStatusAssigned  TaskStatus = "assigned"
-	TaskStatusCompleted TaskStatus = "completed"
-	TaskStatusFailed    TaskStatus = "failed"
-	TaskStatusQueued    TaskStatus = "queued"
-	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusBlocked    TaskStatus = "blocked"
+	TaskStatusDone       TaskStatus = "done"
+	TaskStatusFailed     TaskStatus = "failed"
+	TaskStatusInProgress TaskStatus = "in_progress"
+	TaskStatusInbox      TaskStatus = "inbox"
+	TaskStatusNext       TaskStatus = "next"
+	TaskStatusPlanning   TaskStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the TaskStatus enum.
 func (e TaskStatus) Valid() bool {
 	switch e {
-	case TaskStatusAssigned:
+	case TaskStatusBlocked:
 		return true
-	case TaskStatusCompleted:
+	case TaskStatusDone:
 		return true
 	case TaskStatusFailed:
 		return true
-	case TaskStatusQueued:
+	case TaskStatusInProgress:
 		return true
-	case TaskStatusRunning:
+	case TaskStatusInbox:
+		return true
+	case TaskStatusNext:
+		return true
+	case TaskStatusPlanning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskSurface.
+const (
+	TaskSurfaceHeartbeat TaskSurface = "heartbeat"
+	TaskSurfaceUser      TaskSurface = "user"
+)
+
+// Valid indicates whether the value is a known member of the TaskSurface enum.
+func (e TaskSurface) Valid() bool {
+	switch e {
+	case TaskSurfaceHeartbeat:
+		return true
+	case TaskSurfaceUser:
 		return true
 	default:
 		return false
@@ -2991,34 +2889,55 @@ func (e TaskStatus) Valid() bool {
 
 // Defines values for TaskTriggerType.
 const (
-	TaskTriggerTypeEvent  TaskTriggerType = "event"
-	TaskTriggerTypeManual TaskTriggerType = "manual"
-	TaskTriggerTypeTime   TaskTriggerType = "time"
+	TaskTriggerTypeEvery     TaskTriggerType = "every"
+	TaskTriggerTypeManual    TaskTriggerType = "manual"
+	TaskTriggerTypeOnce      TaskTriggerType = "once"
+	TaskTriggerTypeRecurring TaskTriggerType = "recurring"
 )
 
 // Valid indicates whether the value is a known member of the TaskTriggerType enum.
 func (e TaskTriggerType) Valid() bool {
 	switch e {
-	case TaskTriggerTypeEvent:
+	case TaskTriggerTypeEvery:
 		return true
 	case TaskTriggerTypeManual:
 		return true
-	case TaskTriggerTypeTime:
+	case TaskTriggerTypeOnce:
+		return true
+	case TaskTriggerTypeRecurring:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for TaskAcceptedResponseStatus.
+// Defines values for TaskCreateRequestAction.
 const (
-	Accepted TaskAcceptedResponseStatus = "accepted"
+	TaskCreateRequestActionLlm TaskCreateRequestAction = "llm"
 )
 
-// Valid indicates whether the value is a known member of the TaskAcceptedResponseStatus enum.
-func (e TaskAcceptedResponseStatus) Valid() bool {
+// Valid indicates whether the value is a known member of the TaskCreateRequestAction enum.
+func (e TaskCreateRequestAction) Valid() bool {
 	switch e {
-	case Accepted:
+	case TaskCreateRequestActionLlm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestSurface.
+const (
+	TaskCreateRequestSurfaceHeartbeat TaskCreateRequestSurface = "heartbeat"
+	TaskCreateRequestSurfaceUser      TaskCreateRequestSurface = "user"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestSurface enum.
+func (e TaskCreateRequestSurface) Valid() bool {
+	switch e {
+	case TaskCreateRequestSurfaceHeartbeat:
+		return true
+	case TaskCreateRequestSurfaceUser:
 		return true
 	default:
 		return false
@@ -3027,19 +2946,22 @@ func (e TaskAcceptedResponseStatus) Valid() bool {
 
 // Defines values for TaskCreateRequestTriggerType.
 const (
-	TaskCreateRequestTriggerTypeEvent  TaskCreateRequestTriggerType = "event"
-	TaskCreateRequestTriggerTypeManual TaskCreateRequestTriggerType = "manual"
-	TaskCreateRequestTriggerTypeTime   TaskCreateRequestTriggerType = "time"
+	TaskCreateRequestTriggerTypeEvery     TaskCreateRequestTriggerType = "every"
+	TaskCreateRequestTriggerTypeManual    TaskCreateRequestTriggerType = "manual"
+	TaskCreateRequestTriggerTypeOnce      TaskCreateRequestTriggerType = "once"
+	TaskCreateRequestTriggerTypeRecurring TaskCreateRequestTriggerType = "recurring"
 )
 
 // Valid indicates whether the value is a known member of the TaskCreateRequestTriggerType enum.
 func (e TaskCreateRequestTriggerType) Valid() bool {
 	switch e {
-	case TaskCreateRequestTriggerTypeEvent:
+	case TaskCreateRequestTriggerTypeEvery:
 		return true
 	case TaskCreateRequestTriggerTypeManual:
 		return true
-	case TaskCreateRequestTriggerTypeTime:
+	case TaskCreateRequestTriggerTypeOnce:
+		return true
+	case TaskCreateRequestTriggerTypeRecurring:
 		return true
 	default:
 		return false
@@ -3048,25 +2970,73 @@ func (e TaskCreateRequestTriggerType) Valid() bool {
 
 // Defines values for TaskUpdateRequestStatus.
 const (
-	TaskUpdateRequestStatusAssigned  TaskUpdateRequestStatus = "assigned"
-	TaskUpdateRequestStatusCompleted TaskUpdateRequestStatus = "completed"
-	TaskUpdateRequestStatusFailed    TaskUpdateRequestStatus = "failed"
-	TaskUpdateRequestStatusQueued    TaskUpdateRequestStatus = "queued"
-	TaskUpdateRequestStatusRunning   TaskUpdateRequestStatus = "running"
+	TaskUpdateRequestStatusBlocked    TaskUpdateRequestStatus = "blocked"
+	TaskUpdateRequestStatusDone       TaskUpdateRequestStatus = "done"
+	TaskUpdateRequestStatusFailed     TaskUpdateRequestStatus = "failed"
+	TaskUpdateRequestStatusInProgress TaskUpdateRequestStatus = "in_progress"
+	TaskUpdateRequestStatusInbox      TaskUpdateRequestStatus = "inbox"
+	TaskUpdateRequestStatusNext       TaskUpdateRequestStatus = "next"
+	TaskUpdateRequestStatusPlanning   TaskUpdateRequestStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the TaskUpdateRequestStatus enum.
 func (e TaskUpdateRequestStatus) Valid() bool {
 	switch e {
-	case TaskUpdateRequestStatusAssigned:
+	case TaskUpdateRequestStatusBlocked:
 		return true
-	case TaskUpdateRequestStatusCompleted:
+	case TaskUpdateRequestStatusDone:
 		return true
 	case TaskUpdateRequestStatusFailed:
 		return true
-	case TaskUpdateRequestStatusQueued:
+	case TaskUpdateRequestStatusInProgress:
 		return true
-	case TaskUpdateRequestStatusRunning:
+	case TaskUpdateRequestStatusInbox:
+		return true
+	case TaskUpdateRequestStatusNext:
+		return true
+	case TaskUpdateRequestStatusPlanning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestSurface.
+const (
+	TaskUpdateRequestSurfaceHeartbeat TaskUpdateRequestSurface = "heartbeat"
+	TaskUpdateRequestSurfaceUser      TaskUpdateRequestSurface = "user"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestSurface enum.
+func (e TaskUpdateRequestSurface) Valid() bool {
+	switch e {
+	case TaskUpdateRequestSurfaceHeartbeat:
+		return true
+	case TaskUpdateRequestSurfaceUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestTriggerType.
+const (
+	Every     TaskUpdateRequestTriggerType = "every"
+	Manual    TaskUpdateRequestTriggerType = "manual"
+	Once      TaskUpdateRequestTriggerType = "once"
+	Recurring TaskUpdateRequestTriggerType = "recurring"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestTriggerType enum.
+func (e TaskUpdateRequestTriggerType) Valid() bool {
+	switch e {
+	case Every:
+		return true
+	case Manual:
+		return true
+	case Once:
+		return true
+	case Recurring:
 		return true
 	default:
 		return false
@@ -3132,28 +3102,28 @@ func (e ToolApprovalResponseStatus) Valid() bool {
 
 // Defines values for ToolCallStatus.
 const (
-	ToolCallStatusCancelled ToolCallStatus = "cancelled"
-	ToolCallStatusDenied    ToolCallStatus = "denied"
-	ToolCallStatusError     ToolCallStatus = "error"
-	ToolCallStatusPending   ToolCallStatus = "pending"
-	ToolCallStatusRunning   ToolCallStatus = "running"
-	ToolCallStatusSuccess   ToolCallStatus = "success"
+	Cancelled ToolCallStatus = "cancelled"
+	Denied    ToolCallStatus = "denied"
+	Error     ToolCallStatus = "error"
+	Pending   ToolCallStatus = "pending"
+	Running   ToolCallStatus = "running"
+	Success   ToolCallStatus = "success"
 )
 
 // Valid indicates whether the value is a known member of the ToolCallStatus enum.
 func (e ToolCallStatus) Valid() bool {
 	switch e {
-	case ToolCallStatusCancelled:
+	case Cancelled:
 		return true
-	case ToolCallStatusDenied:
+	case Denied:
 		return true
-	case ToolCallStatusError:
+	case Error:
 		return true
-	case ToolCallStatusPending:
+	case Pending:
 		return true
-	case ToolCallStatusRunning:
+	case Running:
 		return true
-	case ToolCallStatusSuccess:
+	case Success:
 		return true
 	default:
 		return false
@@ -3364,93 +3334,6 @@ func (e WorkspaceUpdateRequestStatus) Valid() bool {
 	}
 }
 
-// Defines values for ListBoardTasksParamsStatus.
-const (
-	ListBoardTasksParamsStatusActive  ListBoardTasksParamsStatus = "active"
-	ListBoardTasksParamsStatusDone    ListBoardTasksParamsStatus = "done"
-	ListBoardTasksParamsStatusFailed  ListBoardTasksParamsStatus = "failed"
-	ListBoardTasksParamsStatusInbox   ListBoardTasksParamsStatus = "inbox"
-	ListBoardTasksParamsStatusNext    ListBoardTasksParamsStatus = "next"
-	ListBoardTasksParamsStatusWaiting ListBoardTasksParamsStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the ListBoardTasksParamsStatus enum.
-func (e ListBoardTasksParamsStatus) Valid() bool {
-	switch e {
-	case ListBoardTasksParamsStatusActive:
-		return true
-	case ListBoardTasksParamsStatusDone:
-		return true
-	case ListBoardTasksParamsStatusFailed:
-		return true
-	case ListBoardTasksParamsStatusInbox:
-		return true
-	case ListBoardTasksParamsStatusNext:
-		return true
-	case ListBoardTasksParamsStatusWaiting:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for CreateBoardTaskJSONBodyStatus.
-const (
-	CreateBoardTaskJSONBodyStatusActive  CreateBoardTaskJSONBodyStatus = "active"
-	CreateBoardTaskJSONBodyStatusDone    CreateBoardTaskJSONBodyStatus = "done"
-	CreateBoardTaskJSONBodyStatusFailed  CreateBoardTaskJSONBodyStatus = "failed"
-	CreateBoardTaskJSONBodyStatusInbox   CreateBoardTaskJSONBodyStatus = "inbox"
-	CreateBoardTaskJSONBodyStatusNext    CreateBoardTaskJSONBodyStatus = "next"
-	CreateBoardTaskJSONBodyStatusWaiting CreateBoardTaskJSONBodyStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the CreateBoardTaskJSONBodyStatus enum.
-func (e CreateBoardTaskJSONBodyStatus) Valid() bool {
-	switch e {
-	case CreateBoardTaskJSONBodyStatusActive:
-		return true
-	case CreateBoardTaskJSONBodyStatusDone:
-		return true
-	case CreateBoardTaskJSONBodyStatusFailed:
-		return true
-	case CreateBoardTaskJSONBodyStatusInbox:
-		return true
-	case CreateBoardTaskJSONBodyStatusNext:
-		return true
-	case CreateBoardTaskJSONBodyStatusWaiting:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdateBoardTaskJSONBodyStatus.
-const (
-	Done    UpdateBoardTaskJSONBodyStatus = "done"
-	Failed  UpdateBoardTaskJSONBodyStatus = "failed"
-	Inbox   UpdateBoardTaskJSONBodyStatus = "inbox"
-	Next    UpdateBoardTaskJSONBodyStatus = "next"
-	Waiting UpdateBoardTaskJSONBodyStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the UpdateBoardTaskJSONBodyStatus enum.
-func (e UpdateBoardTaskJSONBodyStatus) Valid() bool {
-	switch e {
-	case Done:
-		return true
-	case Failed:
-		return true
-	case Inbox:
-		return true
-	case Next:
-		return true
-	case Waiting:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for DeleteCredential200JSONResponseBodyStatus.
 const (
 	Removed DeleteCredential200JSONResponseBodyStatus = "removed"
@@ -3534,25 +3417,49 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	ListTasksParamsStatusAssigned  ListTasksParamsStatus = "assigned"
-	ListTasksParamsStatusCompleted ListTasksParamsStatus = "completed"
-	ListTasksParamsStatusFailed    ListTasksParamsStatus = "failed"
-	ListTasksParamsStatusQueued    ListTasksParamsStatus = "queued"
-	ListTasksParamsStatusRunning   ListTasksParamsStatus = "running"
+	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
+	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
+	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
+	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
+	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
+	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
+	ListTasksParamsStatusPlanning   ListTasksParamsStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case ListTasksParamsStatusAssigned:
+	case ListTasksParamsStatusBlocked:
 		return true
-	case ListTasksParamsStatusCompleted:
+	case ListTasksParamsStatusDone:
 		return true
 	case ListTasksParamsStatusFailed:
 		return true
-	case ListTasksParamsStatusQueued:
+	case ListTasksParamsStatusInProgress:
 		return true
-	case ListTasksParamsStatusRunning:
+	case ListTasksParamsStatusInbox:
+		return true
+	case ListTasksParamsStatusNext:
+		return true
+	case ListTasksParamsStatusPlanning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListTasksParamsSurface.
+const (
+	ListTasksParamsSurfaceHeartbeat ListTasksParamsSurface = "heartbeat"
+	ListTasksParamsSurfaceUser      ListTasksParamsSurface = "user"
+)
+
+// Valid indicates whether the value is a known member of the ListTasksParamsSurface enum.
+func (e ListTasksParamsSurface) Valid() bool {
+	switch e {
+	case ListTasksParamsSurfaceHeartbeat:
+		return true
+	case ListTasksParamsSurfaceUser:
 		return true
 	default:
 		return false
@@ -4715,189 +4622,6 @@ type BackupEntry struct {
 // BearerToken Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 type BearerToken = string
 
-// BoardTask A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics.
-type BoardTask struct {
-	// AgentId Optional agent responsible for this task.
-	AgentId *string `json:"agent_id,omitempty"`
-
-	// BlockedBy Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
-	BlockedBy *[]string `json:"blocked_by,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-
-	// Description Optional task description.
-	Description *string `json:"description,omitempty"`
-
-	// Due Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
-	Due *time.Time `json:"due,omitempty"`
-
-	// Id UUID task identifier
-	Id string `json:"id"`
-
-	// MilestoneId Optional milestone this task belongs to.
-	MilestoneId *string `json:"milestone_id,omitempty"`
-
-	// Name Task name.
-	Name string `json:"name"`
-
-	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
-	Owner *string `json:"owner,omitempty"`
-
-	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
-	Priority *int `json:"priority,omitempty"`
-
-	// Prompt Optional agent prompt attached to the task.
-	Prompt *string `json:"prompt,omitempty"`
-
-	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
-	Recurrence *string `json:"recurrence,omitempty"`
-
-	// Result Optional task result or output.
-	Result *string `json:"result,omitempty"`
-
-	// SessionId Optional session linked to this task.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// Start Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-	Start *time.Time `json:"start,omitempty"`
-
-	// Status GTD board task status.
-	Status    BoardTaskStatus `json:"status"`
-	UpdatedAt time.Time       `json:"updated_at"`
-
-	// WorkspaceId Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
-	WorkspaceId *string `json:"workspace_id,omitempty"`
-}
-
-// BoardTaskStatus GTD board task status.
-type BoardTaskStatus string
-
-// BoardTaskCreateRequest defines model for BoardTaskCreateRequest.
-type BoardTaskCreateRequest struct {
-	AgentId *string `json:"agent_id,omitempty"`
-
-	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Max depth 50.
-	BlockedBy   *[]string `json:"blocked_by,omitempty"`
-	Description *string   `json:"description,omitempty"`
-
-	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
-	Due         *time.Time `json:"due,omitempty"`
-	MilestoneId *string    `json:"milestone_id,omitempty"`
-	Name        string     `json:"name"`
-	Priority    *int       `json:"priority,omitempty"`
-	Prompt      *string    `json:"prompt,omitempty"`
-
-	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
-	Recurrence *string `json:"recurrence,omitempty"`
-
-	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-	Start *time.Time `json:"start,omitempty"`
-
-	// Status GTD board task status.
-	Status      *BoardTaskCreateRequestStatus `json:"status,omitempty"`
-	WorkspaceId *string                       `json:"workspace_id,omitempty"`
-}
-
-// BoardTaskCreateRequestStatus GTD board task status.
-type BoardTaskCreateRequestStatus string
-
-// BoardTaskListItem A single item in the board task list response. Equivalent to BoardTask. Defined as a plain object (not allOf) so that oapi-codegen emits []BoardTaskListItem rather than an inline anonymous struct in BoardTaskListResponse.
-type BoardTaskListItem struct {
-	// AgentId Optional agent responsible for this task.
-	AgentId *string `json:"agent_id,omitempty"`
-
-	// BlockedBy Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
-	BlockedBy *[]string `json:"blocked_by,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-
-	// Description Optional task description.
-	Description *string `json:"description,omitempty"`
-
-	// Due Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
-	Due *time.Time `json:"due,omitempty"`
-
-	// Id UUID task identifier
-	Id string `json:"id"`
-
-	// MilestoneId Optional milestone this task belongs to.
-	MilestoneId *string `json:"milestone_id,omitempty"`
-
-	// Name Task name.
-	Name string `json:"name"`
-
-	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
-	Owner *string `json:"owner,omitempty"`
-
-	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
-	Priority *int `json:"priority,omitempty"`
-
-	// Prompt Optional agent prompt attached to the task.
-	Prompt *string `json:"prompt,omitempty"`
-
-	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
-	Recurrence *string `json:"recurrence,omitempty"`
-
-	// Result Optional task result or output.
-	Result *string `json:"result,omitempty"`
-
-	// SessionId Optional session linked to this task.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// Start Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-	Start *time.Time `json:"start,omitempty"`
-
-	// Status GTD board task status.
-	Status    BoardTaskListItemStatus `json:"status"`
-	UpdatedAt time.Time               `json:"updated_at"`
-
-	// WorkspaceId Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
-	WorkspaceId *string `json:"workspace_id,omitempty"`
-}
-
-// BoardTaskListItemStatus GTD board task status.
-type BoardTaskListItemStatus string
-
-// BoardTaskListResponse Paginated list response for GET /board/tasks
-type BoardTaskListResponse struct {
-	Items []BoardTaskListItem `json:"items"`
-
-	// Total Total number of tasks matching the filter (before pagination).
-	Total int `json:"total"`
-}
-
-// BoardTaskUpdateRequest defines model for BoardTaskUpdateRequest.
-type BoardTaskUpdateRequest struct {
-	AgentId *string `json:"agent_id,omitempty"`
-
-	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Replaces the current blocked_by list atomically. Max depth 50.
-	BlockedBy   *[]string `json:"blocked_by,omitempty"`
-	Description *string   `json:"description,omitempty"`
-
-	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
-	Due         *time.Time `json:"due,omitempty"`
-	MilestoneId *string    `json:"milestone_id,omitempty"`
-	Name        *string    `json:"name,omitempty"`
-	Priority    *int       `json:"priority,omitempty"`
-	Prompt      *string    `json:"prompt,omitempty"`
-
-	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
-	Recurrence *string `json:"recurrence,omitempty"`
-	Result     *string `json:"result,omitempty"`
-	SessionId  *string `json:"session_id,omitempty"`
-
-	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-	Start *time.Time `json:"start,omitempty"`
-
-	// Status GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
-	Status      *BoardTaskUpdateRequestStatus `json:"status,omitempty"`
-	WorkspaceId *string                       `json:"workspace_id,omitempty"`
-}
-
-// BoardTaskUpdateRequestStatus GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
-type BoardTaskUpdateRequestStatus string
-
-// BoardTaskUpdateStatus GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
-type BoardTaskUpdateStatus string
-
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
 type ChangePasswordRequest struct {
 	// CurrentPassword The user's current password for verification. Maximum 72 characters (bcrypt limit).
@@ -5302,9 +5026,6 @@ type FallbackModel struct {
 	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
 	Provider *string `json:"provider,omitempty"`
 }
-
-// GTDBoardTaskStatus GTD board task status.
-type GTDBoardTaskStatus string
 
 // GatewayRestartResponse Acknowledgement returned by POST /api/v1/gateway/restart. The gateway accepts the request, replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). The SPA uses this response to start polling /health (and the WS reconnect path) to detect the gateway going down and coming back up.
 type GatewayRestartResponse struct {
@@ -7144,130 +6865,314 @@ type StorageStats struct {
 	WorkspaceSizeBytes int64 `json:"workspace_size_bytes"`
 }
 
-// Task A task record as returned by GET /tasks, GET /tasks/{id}/subtasks, and POST /tasks. Maps to the task.Task struct on the Go side.
+// Task The unified Task entity (Sprint 2, Tier 2) — one record that replaces both the legacy workflow `Task` and the GTD `BoardTask` schemas outright. There is no back-compat: per remediation Detail #7 there is no migration, no compat shim, and no dual status/title vocabulary. Every task belongs to a workspace (`workspace_id` is required-scoped) and may be a top-level task (no `parent_task_id`) or a subtask (delegation / decomposition child). Maps to the `task.Task` Go struct (the new `pkg/task` store) on the backend.
+// Returned by GET /tasks, GET /tasks/{id}, GET /tasks/{id}/subtasks, POST /tasks, and PATCH /tasks/{id}.
 type Task struct {
-	// AgentId ID of the agent assigned to this task. Absent when unassigned.
+	// Action What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
+	Action TaskAction `json:"action"`
+
+	// AgentId ID of the agent assigned to this task. Optional — human-only tasks have none.
 	AgentId *string `json:"agent_id,omitempty"`
 
-	// AgentName Display name of the assigned agent. Absent when unassigned.
+	// AgentName Display name of the assigned agent. Read-time only (resolved from the agent registry; never authoritative storage).
 	AgentName *string `json:"agent_name,omitempty"`
 
-	// Artifacts Paths to output files or artifact references produced by the task.
+	// Artifacts Paths to output files / artifact references produced by the task.
 	Artifacts *[]string `json:"artifacts,omitempty"`
 
-	// BlockedBy List of task IDs that must reach "completed" status before this task is eligible for dispatch. The Orchestrator coordinator (task_executor.onTaskComplete) advances tasks whose blocked_by set is fully satisfied. Absent when empty.
+	// BlockedBy Ordered list of task IDs that must reach `done` before this task is eligible to advance (DAG ordering only — an AND-join, no conditional semantics in Tier 2). A write-time cycle validator (carried over from the legacy boardtask store) rejects self-edges, 2-node, and N-node cycles; orphan edges (target deleted) are dropped on load; max depth 50. Empty when the task has no dependencies.
 	BlockedBy *[]string `json:"blocked_by,omitempty"`
 
-	// CompletedAt RFC3339 timestamp when the task completed or failed. Absent while running.
+	// CompletedAt RFC 3339 timestamp when the task reached `done` or `failed`. Absent until then.
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
-	// CreatedAt RFC3339 timestamp when the task was created.
-	CreatedAt *time.Time `json:"created_at,omitempty"`
+	// CreatedAt RFC 3339 timestamp when the task was created.
+	CreatedAt time.Time `json:"created_at"`
 
-	// CreatedBy Username of the user who created the task.
-	CreatedBy *string `json:"created_by,omitempty"`
+	// CreatedBy Username (or agent ID) that created the task. Set server-side at creation; read-only.
+	CreatedBy string `json:"created_by"`
+
+	// Description Optional free-form task description (human-facing notes).
+	Description *string `json:"description,omitempty"`
+
+	// Due Optional deadline (RFC 3339 UTC) for task completion. Separate from `trigger` — `due` is a target date, `trigger` is what fires the run.
+	Due *time.Time `json:"due,omitempty"`
 
 	// Id Unique task identifier (UUID).
 	Id string `json:"id"`
 
-	// ParentTaskId ID of the parent task (for subtasks). Absent on top-level tasks.
+	// MilestoneId Optional milestone this task is grouped under.
+	MilestoneId *string `json:"milestone_id,omitempty"`
+
+	// Owner Username of the user who owns this task. Set server-side at creation; read-only.
+	Owner string `json:"owner"`
+
+	// ParentTaskId ID of the parent task. Present on subtasks (delegation / decomposition children); absent on top-level tasks. Board/List/Graph/Calendar render top-level tasks; subtasks nest under their parent.
 	ParentTaskId *string `json:"parent_task_id,omitempty"`
 
-	// Priority Task priority (higher = more urgent). Default is 0.
-	Priority int `json:"priority"`
-
-	// Prompt Full task description / prompt given to the agent.
-	Prompt string `json:"prompt"`
-
-	// Result Text result produced by the agent on completion. Absent while running.
-	Result *string `json:"result,omitempty"`
-
-	// SessionId Session ID created when the task was started.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// StartedAt RFC3339 timestamp when the task was started. Absent until started.
-	StartedAt *time.Time `json:"started_at,omitempty"`
-
-	// Status Current lifecycle status of the task.
-	Status TaskStatus `json:"status"`
-
-	// Title Human-readable task title.
-	Title string `json:"title"`
-
-	// TriggerType How the task was triggered.
-	TriggerType TaskTriggerType `json:"trigger_type"`
-}
-
-// TaskStatus Current lifecycle status of the task.
-type TaskStatus string
-
-// TaskTriggerType How the task was triggered.
-type TaskTriggerType string
-
-// TaskAcceptedResponse Response from POST /api/v1/tasks/{id}/start (HTTP 202 Accepted). Confirms that the task has been queued for execution.
-type TaskAcceptedResponse struct {
-	// Status Acceptance status. Always "accepted".
-	Status TaskAcceptedResponseStatus `json:"status"`
-
-	// TaskId The ID of the task that was accepted for execution.
-	TaskId string `json:"task_id"`
-}
-
-// TaskAcceptedResponseStatus Acceptance status. Always "accepted".
-type TaskAcceptedResponseStatus string
-
-// TaskCreateRequest Request body for POST /api/v1/tasks. Creates a new task. The fields name/description are backward-compat aliases for title/prompt.
-type TaskCreateRequest struct {
-	// AgentId Agent to assign the task to.
-	AgentId *string `json:"agent_id,omitempty"`
-
-	// BlockedBy Task IDs that must complete before this task is dispatched. Validated at creation time: each ID must exist and must not create a cycle.
-	BlockedBy *[]string `json:"blocked_by,omitempty"`
-
-	// Description Backward-compat alias for prompt.
-	Description *string `json:"description,omitempty"`
-
-	// Name Backward-compat alias for title.
-	Name *string `json:"name,omitempty"`
-
-	// ParentTaskId Parent task ID (for creating subtasks).
-	ParentTaskId *string `json:"parent_task_id,omitempty"`
-
-	// Priority Task priority (higher = more urgent). Defaults to 3.
+	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
 	Priority *int `json:"priority,omitempty"`
 
-	// Prompt Task description / prompt for the agent.
+	// Prompt Optional agent prompt for an `llm` action — the instruction handed to the assigned agent when the task runs.
 	Prompt *string `json:"prompt,omitempty"`
+
+	// Result Text result produced on completion. Absent while running.
+	Result *string `json:"result,omitempty"`
+
+	// Rollup Read-time only (Detail #6): derived list of live child sub-agent runs used to render board roll-up badges ("▸ N sub-agents running"). COMPUTED on read from the children whose `parent_task_id` equals this task's id — NEVER stored on the task record. Absent when the task has no live children.
+	Rollup *[]struct {
+		// AgentId ID of the live child sub-agent run.
+		AgentId string `json:"agent_id"`
+
+		// Label Short human label for the child run (board roll-up badge text).
+		Label string `json:"label"`
+
+		// Status Current status of the child run.
+		Status TaskRollupStatus `json:"status"`
+	} `json:"rollup,omitempty"`
+
+	// SessionId Session ID created/linked when the task runs.
+	SessionId *string `json:"session_id,omitempty"`
+
+	// SourceChannel Originating channel for a delegated task (Detail #6) — the channel a task-mode delegation should deliver its result back to.
+	SourceChannel *string `json:"source_channel,omitempty"`
+
+	// SourceChatId Originating chat/conversation ID for a delegated task (Detail #6) — paired with `source_channel` for result delivery.
+	SourceChatId *string `json:"source_chat_id,omitempty"`
+
+	// StartedAt RFC 3339 timestamp when the task started. Absent until started.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+
+	// Status Current lifecycle state (Detail #1, 7-state). `inbox` captured/untriaged · `next` triaged & ready · `planning` agent decomposing (light in Tier 2) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
+	Status TaskStatus `json:"status"`
+
+	// Surface Which UI surface owns this task (Detail #5). `user` (default) → shows on all four general views (Board/List/Graph/Calendar). A non-`user` surface (first: `heartbeat`) → hidden from ALL general views and rendered only by its owning feature's dedicated UI (heartbeat → the agent profile). A reusable pattern: future system-ish features set their own surface, get the task+trigger engine for free, and never clutter the board/calendar.
+	Surface *TaskSurface `json:"surface,omitempty"`
+
+	// Title Human-readable task title (the name field).
+	Title string `json:"title"`
+
+	// Todos Lightweight `{text, done}` checklist items on this task (Tier 1 of the three-tier model). A todo is NOT a task — it has no agent, no status, no trigger. Distinct from a subtask (a full child Task with `parent_task_id`).
+	Todos *[]struct {
+		// Done Whether the checklist item is complete.
+		Done bool `json:"done"`
+
+		// Text The checklist item text.
+		Text string `json:"text"`
+	} `json:"todos,omitempty"`
+
+	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+	// ## Tier 2 (now) `type` is one of:
+	//   - `manual`    — no automatic trigger. The task starts when a human drags its
+	//                   card into `in_progress`, or via Run / Create & Run. For an
+	//                   `llm` action that runs the assigned agent. `config` is empty.
+	//   - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
+	//                   Unix epoch-milliseconds instant (required).
+	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
+	//                   interval in milliseconds (required, min 1000). Each fire spawns
+	//                   a FRESH run (fresh session + run history + pause).
+	//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
+	//                   expression (required). Each fire spawns a FRESH run.
+	//
+	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+	Trigger *struct {
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		Config struct {
+			// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
+			AtMs *int64 `json:"at_ms,omitempty"`
+
+			// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+			CronExpr *string `json:"cron_expr,omitempty"`
+
+			// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
+			EveryMs *int64 `json:"every_ms,omitempty"`
+		} `json:"config"`
+
+		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+		Type TaskTriggerType `json:"type"`
+	} `json:"trigger,omitempty"`
+
+	// UpdatedAt RFC 3339 timestamp of the last update.
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// WorkspaceId Workspace this task belongs to. Required-scoped — every task lives in a workspace; reads and writes are workspace-scoped.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// TaskAction What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
+type TaskAction string
+
+// TaskRollupStatus Current status of the child run.
+type TaskRollupStatus string
+
+// TaskStatus Current lifecycle state (Detail #1, 7-state). `inbox` captured/untriaged · `next` triaged & ready · `planning` agent decomposing (light in Tier 2) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
+type TaskStatus string
+
+// TaskSurface Which UI surface owns this task (Detail #5). `user` (default) → shows on all four general views (Board/List/Graph/Calendar). A non-`user` surface (first: `heartbeat`) → hidden from ALL general views and rendered only by its owning feature's dedicated UI (heartbeat → the agent profile). A reusable pattern: future system-ish features set their own surface, get the task+trigger engine for free, and never clutter the board/calendar.
+type TaskSurface string
+
+// TaskTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+type TaskTriggerType string
+
+// TaskCreateRequest Request body for POST /tasks — the ONE unified create form (Detail #8) that replaces the two legacy create bodies (`TaskCreateRequest` and `BoardTaskCreateRequest`). No back-compat aliases.
+// Landing rule (Detail #8): every created task lands in `inbox`. Nothing auto-lands in `next`; only a fully-captured task can be manually triaged to `next` via PATCH. `status` is therefore NOT a create-time field — the server always seeds `inbox`.
+// Start semantics (Detail #8): a task with no trigger (`manual`) starts when dragged to `in_progress` / Run; a task with a time trigger fires itself. The "Create & Run now" UX (create + start immediately) is a client action layered on top of this create + a subsequent start, not a distinct request field.
+type TaskCreateRequest struct {
+	// Action Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
+	Action TaskCreateRequestAction `json:"action"`
+
+	// AgentId Optional agent to assign the task to.
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Task IDs this task depends on (depends-on / blocked_by). Each must exist and must not create a cycle (validated at creation).
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
+
+	// Description Optional free-form description.
+	Description *string `json:"description,omitempty"`
+
+	// Due Optional deadline (RFC 3339 UTC).
+	Due *time.Time `json:"due,omitempty"`
+
+	// MilestoneId Optional milestone to group the task under.
+	MilestoneId *string `json:"milestone_id,omitempty"`
+
+	// ParentTaskId Optional parent task ID — set when creating a subtask (delegation / decomposition child).
+	ParentTaskId *string `json:"parent_task_id,omitempty"`
+
+	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
+	Priority *int `json:"priority,omitempty"`
+
+	// Prompt Optional agent prompt for an `llm` action.
+	Prompt *string `json:"prompt,omitempty"`
+
+	// SourceChannel Originating channel for a delegated task (Detail
+	SourceChannel *string `json:"source_channel,omitempty"`
+
+	// SourceChatId Originating chat/conversation ID for a delegated task (Detail
+	SourceChatId *string `json:"source_chat_id,omitempty"`
+
+	// Surface UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features (e.g. heartbeat) set their own surface so the task is hidden from general views.
+	Surface *TaskCreateRequestSurface `json:"surface,omitempty"`
 
 	// Title Task title.
 	Title string `json:"title"`
 
-	// TriggerType How the task was triggered. Defaults to "manual".
-	TriggerType *TaskCreateRequestTriggerType `json:"trigger_type,omitempty"`
+	// Todos Optional initial checklist items.
+	Todos *[]struct {
+		// Done Whether the checklist item is complete.
+		Done bool `json:"done"`
+
+		// Text The checklist item text.
+		Text string `json:"text"`
+	} `json:"todos,omitempty"`
+
+	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+	// ## Tier 2 (now) `type` is one of:
+	//   - `manual`    — no automatic trigger. The task starts when a human drags its
+	//                   card into `in_progress`, or via Run / Create & Run. For an
+	//                   `llm` action that runs the assigned agent. `config` is empty.
+	//   - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
+	//                   Unix epoch-milliseconds instant (required).
+	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
+	//                   interval in milliseconds (required, min 1000). Each fire spawns
+	//                   a FRESH run (fresh session + run history + pause).
+	//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
+	//                   expression (required). Each fire spawns a FRESH run.
+	//
+	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+	Trigger *struct {
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		Config struct {
+			// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
+			AtMs *int64 `json:"at_ms,omitempty"`
+
+			// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+			CronExpr *string `json:"cron_expr,omitempty"`
+
+			// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
+			EveryMs *int64 `json:"every_ms,omitempty"`
+		} `json:"config"`
+
+		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+		Type TaskCreateRequestTriggerType `json:"type"`
+	} `json:"trigger,omitempty"`
+
+	// WorkspaceId Workspace this task belongs to. Required — every task is workspace-scoped.
+	WorkspaceId string `json:"workspace_id"`
 }
 
-// TaskCreateRequestTriggerType How the task was triggered. Defaults to "manual".
+// TaskCreateRequestAction Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
+type TaskCreateRequestAction string
+
+// TaskCreateRequestSurface UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features (e.g. heartbeat) set their own surface so the task is hidden from general views.
+type TaskCreateRequestSurface string
+
+// TaskCreateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskCreateRequestTriggerType string
 
-// TaskUpdateRequest Request body for PUT /api/v1/tasks/{id}. Updates fields on an existing task. All fields are optional — only provided fields are updated. The fields name/description are backward-compat aliases for title/result.
+// TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+// ## Tier 2 (now) `type` is one of:
+//   - `manual`    — no automatic trigger. The task starts when a human drags its
+//     card into `in_progress`, or via Run / Create & Run. For an
+//     `llm` action that runs the assigned agent. `config` is empty.
+//   - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
+//     Unix epoch-milliseconds instant (required).
+//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
+//     interval in milliseconds (required, min 1000). Each fire spawns
+//     a FRESH run (fresh session + run history + pause).
+//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
+//     expression (required). Each fire spawns a FRESH run.
+//
+// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+type TaskTrigger struct {
+	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+	Config struct {
+		// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
+		AtMs *int64 `json:"at_ms,omitempty"`
+
+		// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+		CronExpr *string `json:"cron_expr,omitempty"`
+
+		// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
+		EveryMs *int64 `json:"every_ms,omitempty"`
+	} `json:"config"`
+
+	// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+	Type TaskTriggerType `json:"type"`
+}
+
+// TaskUpdateRequest Request body for PATCH /tasks/{id} — the unified partial-update body that replaces the two legacy update bodies (`TaskUpdateRequest` and `BoardTaskUpdateRequest`). No back-compat aliases. All fields are optional; only provided fields are updated (PATCH semantics). At least one field is required.
+// `status` accepts the full 7-state vocabulary. Note: `blocked` is normally an AUTO side-state managed by the dependency engine (set when a `blocked_by` dep is unmet, cleared to `next` when deps complete); setting it directly is allowed but the engine may override on the next dependency evaluation. Advancing a partial task to `next` is rejected server-side (Detail #8 — only fully-captured tasks may be triaged to `next`).
 type TaskUpdateRequest struct {
-	// AgentId Agent to re-assign the task to.
+	// AgentId Re-assign the task to this agent.
 	AgentId *string `json:"agent_id,omitempty"`
 
-	// Artifacts List of artifact paths produced by the task.
+	// Artifacts Replacement list of artifact paths produced by the task.
 	Artifacts *[]string `json:"artifacts,omitempty"`
 
-	// CompletedAt When the task completed execution.
+	// BlockedBy Replacement dependency set (replaces the current `blocked_by` atomically). Write-time cycle validator rejects self-edges and cycles; max depth 50.
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
+
+	// CompletedAt When the task completed or failed.
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
-	// Description Backward-compat alias for result.
+	// Description New free-form description.
 	Description *string `json:"description,omitempty"`
 
-	// Name Backward-compat alias for title.
-	Name *string `json:"name,omitempty"`
+	// Due New deadline (RFC 3339 UTC).
+	Due *time.Time `json:"due,omitempty"`
 
-	// Priority New task priority.
+	// MilestoneId New milestone grouping.
+	MilestoneId *string `json:"milestone_id,omitempty"`
+
+	// Priority New task priority (1 highest .. 5 lowest).
 	Priority *int `json:"priority,omitempty"`
+
+	// Prompt New agent prompt.
+	Prompt *string `json:"prompt,omitempty"`
 
 	// Result Task result or output summary.
 	Result *string `json:"result,omitempty"`
@@ -7275,15 +7180,74 @@ type TaskUpdateRequest struct {
 	// StartedAt When the task started execution.
 	StartedAt *time.Time `json:"started_at,omitempty"`
 
-	// Status New task status.
+	// Status New task status (7-state lifecycle, Detail
 	Status *TaskUpdateRequestStatus `json:"status,omitempty"`
+
+	// Surface New UI surface ownership (Detail
+	Surface *TaskUpdateRequestSurface `json:"surface,omitempty"`
 
 	// Title New task title.
 	Title *string `json:"title,omitempty"`
+
+	// Todos Replacement checklist (replaces the current `todos` atomically).
+	Todos *[]struct {
+		// Done Whether the checklist item is complete.
+		Done bool `json:"done"`
+
+		// Text The checklist item text.
+		Text string `json:"text"`
+	} `json:"todos,omitempty"`
+
+	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+	// ## Tier 2 (now) `type` is one of:
+	//   - `manual`    — no automatic trigger. The task starts when a human drags its
+	//                   card into `in_progress`, or via Run / Create & Run. For an
+	//                   `llm` action that runs the assigned agent. `config` is empty.
+	//   - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
+	//                   Unix epoch-milliseconds instant (required).
+	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
+	//                   interval in milliseconds (required, min 1000). Each fire spawns
+	//                   a FRESH run (fresh session + run history + pause).
+	//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
+	//                   expression (required). Each fire spawns a FRESH run.
+	//
+	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+	Trigger *struct {
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		Config struct {
+			// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
+			AtMs *int64 `json:"at_ms,omitempty"`
+
+			// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+			CronExpr *string `json:"cron_expr,omitempty"`
+
+			// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
+			EveryMs *int64 `json:"every_ms,omitempty"`
+		} `json:"config"`
+
+		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+		Type TaskUpdateRequestTriggerType `json:"type"`
+	} `json:"trigger,omitempty"`
 }
 
-// TaskUpdateRequestStatus New task status.
+// TaskUpdateRequestStatus New task status (7-state lifecycle, Detail
 type TaskUpdateRequestStatus string
+
+// TaskUpdateRequestSurface New UI surface ownership (Detail
+type TaskUpdateRequestSurface string
+
+// TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+type TaskUpdateRequestTriggerType string
+
+// Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no status enum, no trigger, and no ID — it is a simple `{text, done}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need independent status/agent/trigger.
+type Todo struct {
+	// Done Whether the checklist item is complete.
+	Done bool `json:"done"`
+
+	// Text The checklist item text.
+	Text string `json:"text"`
+}
 
 // TokenUsageSummary Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files.
 type TokenUsageSummary struct {
@@ -7696,90 +7660,6 @@ type N503ServiceUnavailable = ErrorResponse
 // bearerAuthContextKey is the context key for BearerAuth security scheme
 type bearerAuthContextKey string
 
-// ListBoardTasksParams defines parameters for ListBoardTasks.
-type ListBoardTasksParams struct {
-	// WorkspaceId Filter by workspace ID.
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-
-	// Status Filter by GTD status.
-	Status *ListBoardTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
-
-	// AgentId Filter by agent ID.
-	AgentId *string `form:"agent_id,omitempty" json:"agent_id,omitempty"`
-
-	// MilestoneId Filter by milestone ID.
-	MilestoneId *string `form:"milestone_id,omitempty" json:"milestone_id,omitempty"`
-
-	// Limit Maximum items to return.
-	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
-
-	// Offset Pagination offset.
-	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
-}
-
-// ListBoardTasksParamsStatus defines parameters for ListBoardTasks.
-type ListBoardTasksParamsStatus string
-
-// CreateBoardTaskJSONBody defines parameters for CreateBoardTask.
-type CreateBoardTaskJSONBody struct {
-	AgentId *string `json:"agent_id,omitempty"`
-
-	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Max depth 50.
-	BlockedBy   *[]string `json:"blocked_by,omitempty"`
-	Description *string   `json:"description,omitempty"`
-
-	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
-	Due         *time.Time `json:"due,omitempty"`
-	MilestoneId *string    `json:"milestone_id,omitempty"`
-	Name        string     `json:"name"`
-	Priority    *int       `json:"priority,omitempty"`
-	Prompt      *string    `json:"prompt,omitempty"`
-
-	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
-	Recurrence *string `json:"recurrence,omitempty"`
-
-	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-	Start *time.Time `json:"start,omitempty"`
-
-	// Status GTD board task status.
-	Status      *CreateBoardTaskJSONBodyStatus `json:"status,omitempty"`
-	WorkspaceId *string                        `json:"workspace_id,omitempty"`
-}
-
-// CreateBoardTaskJSONBodyStatus defines parameters for CreateBoardTask.
-type CreateBoardTaskJSONBodyStatus string
-
-// UpdateBoardTaskJSONBody defines parameters for UpdateBoardTask.
-type UpdateBoardTaskJSONBody struct {
-	AgentId *string `json:"agent_id,omitempty"`
-
-	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Replaces the current blocked_by list atomically. Max depth 50.
-	BlockedBy   *[]string `json:"blocked_by,omitempty"`
-	Description *string   `json:"description,omitempty"`
-
-	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
-	Due         *time.Time `json:"due,omitempty"`
-	MilestoneId *string    `json:"milestone_id,omitempty"`
-	Name        *string    `json:"name,omitempty"`
-	Priority    *int       `json:"priority,omitempty"`
-	Prompt      *string    `json:"prompt,omitempty"`
-
-	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
-	Recurrence *string `json:"recurrence,omitempty"`
-	Result     *string `json:"result,omitempty"`
-	SessionId  *string `json:"session_id,omitempty"`
-
-	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-	Start *time.Time `json:"start,omitempty"`
-
-	// Status GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
-	Status      *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`
-	WorkspaceId *string                        `json:"workspace_id,omitempty"`
-}
-
-// UpdateBoardTaskJSONBodyStatus defines parameters for UpdateBoardTask.
-type UpdateBoardTaskJSONBodyStatus string
-
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
 type ConfigureChannelJSONBody map[string]interface{}
 
@@ -7845,12 +7725,42 @@ type GetTokenStatsParamsPeriod string
 
 // ListTasksParams defines parameters for ListTasks.
 type ListTasksParams struct {
-	// Status Filter tasks by status.
+	// WorkspaceId Filter by workspace ID. Tasks are workspace-scoped; when omitted the server resolves the active workspace.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+
+	// Status Filter tasks by status (7-state lifecycle).
 	Status *ListTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// AgentId Filter by assigned agent ID.
+	AgentId *string `form:"agent_id,omitempty" json:"agent_id,omitempty"`
+
+	// MilestoneId Filter by milestone ID.
+	MilestoneId *string `form:"milestone_id,omitempty" json:"milestone_id,omitempty"`
+
+	// Surface Filter by UI surface (Detail #5). Defaults to `user` when omitted — dedicated-UI tasks (e.g. heartbeat) are excluded from general listings.
+	Surface *ListTasksParamsSurface `form:"surface,omitempty" json:"surface,omitempty"`
+
+	// ParentTaskId When set, returns the subtasks of this parent (equivalent to GET /tasks/{id}/subtasks). When omitted, only top-level tasks are returned.
+	ParentTaskId *string `form:"parent_task_id,omitempty" json:"parent_task_id,omitempty"`
+
+	// Limit Maximum items to return.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Pagination offset.
+	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
 // ListTasksParamsStatus defines parameters for ListTasks.
 type ListTasksParamsStatus string
+
+// ListTasksParamsSurface defines parameters for ListTasks.
+type ListTasksParamsSurface string
+
+// SetTaskDependenciesJSONBody defines parameters for SetTaskDependencies.
+type SetTaskDependenciesJSONBody = []string
+
+// SetTaskTodosJSONBody defines parameters for SetTaskTodos.
+type SetTaskTodosJSONBody = []Todo
 
 // UploadFilesMultipartBody defines parameters for UploadFiles.
 type UploadFilesMultipartBody struct {
@@ -7905,12 +7815,6 @@ type ReAuthJSONRequestBody = ReAuthRequest
 
 // RegisterAdminJSONRequestBody defines body for RegisterAdmin for application/json ContentType.
 type RegisterAdminJSONRequestBody = RegisterAdminRequest
-
-// CreateBoardTaskJSONRequestBody defines body for CreateBoardTask for application/json ContentType.
-type CreateBoardTaskJSONRequestBody CreateBoardTaskJSONBody
-
-// UpdateBoardTaskJSONRequestBody defines body for UpdateBoardTask for application/json ContentType.
-type UpdateBoardTaskJSONRequestBody UpdateBoardTaskJSONBody
 
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
@@ -7995,6 +7899,12 @@ type CreateTaskJSONRequestBody = TaskCreateRequest
 
 // UpdateTaskJSONRequestBody defines body for UpdateTask for application/json ContentType.
 type UpdateTaskJSONRequestBody = TaskUpdateRequest
+
+// SetTaskDependenciesJSONRequestBody defines body for SetTaskDependencies for application/json ContentType.
+type SetTaskDependenciesJSONRequestBody = SetTaskDependenciesJSONBody
+
+// SetTaskTodosJSONRequestBody defines body for SetTaskTodos for application/json ContentType.
+type SetTaskTodosJSONRequestBody = SetTaskTodosJSONBody
 
 // PostToolApprovalJSONRequestBody defines body for PostToolApproval for application/json ContentType.
 type PostToolApprovalJSONRequestBody = ToolApprovalActionRequest

@@ -1,56 +1,112 @@
 title: TaskCreateRequest
 description: >
-  Request body for POST /api/v1/tasks. Creates a new task.
-  The fields name/description are backward-compat aliases for title/prompt.
+  Request body for POST /tasks — the ONE unified create form (Detail #8) that
+  replaces the two legacy create bodies (`TaskCreateRequest` and
+  `BoardTaskCreateRequest`). No back-compat aliases.
+
+  Landing rule (Detail #8): every created task lands in `inbox`. Nothing
+  auto-lands in `next`; only a fully-captured task can be manually triaged to
+  `next` via PATCH. `status` is therefore NOT a create-time field — the server
+  always seeds `inbox`.
+
+  Start semantics (Detail #8): a task with no trigger (`manual`) starts when
+  dragged to `in_progress` / Run; a task with a time trigger fires itself. The
+  "Create & Run now" UX (create + start immediately) is a client action layered on
+  top of this create + a subsequent start, not a distinct request field.
 type: object
 additionalProperties: false
 required:
   - title
+  - action
+  - workspace_id
 properties:
   title:
     type: string
+    minLength: 1
+    maxLength: 200
     description: Task title.
-    example: "Analyze logs"
+    example: "Analyze gateway logs"
   prompt:
     type: string
-    description: Task description / prompt for the agent.
-    example: "Summarize the last 7 days of gateway logs."
+    maxLength: 10000
+    description: Optional agent prompt for an `llm` action.
+    example: "Summarize the last 7 days of gateway logs and flag anomalies."
+  description:
+    type: string
+    maxLength: 2000
+    description: Optional free-form description.
+    example: "Look for anomalies in the last 7 days."
+  action:
+    type: string
+    enum:
+      - llm
+    description: >
+      Task action type. Tier 2 accepts `llm` only; the enum grows additively in
+      v0.3.
+    example: "llm"
   agent_id:
     type: string
-    description: Agent to assign the task to.
+    description: Optional agent to assign the task to.
     example: "jim"
   priority:
     type: integer
-    minimum: 0
-    maximum: 100
-    description: Task priority (higher = more urgent). Defaults to 3.
-    example: 5
-  parent_task_id:
-    type: string
-    description: Parent task ID (for creating subtasks).
-    example: "task-uuid-123"
-  trigger_type:
-    type: string
-    enum:
-      - manual
-      - time
-      - event
-    description: How the task was triggered. Defaults to "manual".
-    example: "manual"
-  name:
-    type: string
-    description: Backward-compat alias for title.
-    example: "Analyze logs"
-  description:
-    type: string
-    description: Backward-compat alias for prompt.
-    example: "Summarize the last 7 days."
+    minimum: 1
+    maximum: 5
+    default: 3
+    description: Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
+    example: 3
+  trigger:
+    $ref: ./TaskTrigger.yaml
   blocked_by:
     type: array
     items:
       type: string
     description: >
-      Task IDs that must complete before this task is dispatched.
-      Validated at creation time: each ID must exist and must not create a cycle.
+      Task IDs this task depends on (depends-on / blocked_by). Each must exist and
+      must not create a cycle (validated at creation).
     example:
       - "550e8400-e29b-41d4-a716-446655440001"
+  todos:
+    type: array
+    items:
+      $ref: ./Todo.yaml
+    description: Optional initial checklist items.
+  parent_task_id:
+    type: string
+    description: >
+      Optional parent task ID — set when creating a subtask (delegation /
+      decomposition child).
+    example: "parent-task-00000000-0000-0000-0000-000000000001"
+  workspace_id:
+    type: string
+    description: >
+      Workspace this task belongs to. Required — every task is workspace-scoped.
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  milestone_id:
+    type: string
+    description: Optional milestone to group the task under.
+    example: "m-1234"
+  due:
+    type: string
+    format: date-time
+    description: Optional deadline (RFC 3339 UTC).
+    example: "2026-07-31T17:00:00Z"
+  surface:
+    type: string
+    enum:
+      - user
+      - heartbeat
+    default: user
+    description: >
+      UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features
+      (e.g. heartbeat) set their own surface so the task is hidden from general
+      views.
+    example: "user"
+  source_channel:
+    type: string
+    description: Originating channel for a delegated task (Detail #6).
+    example: "telegram"
+  source_chat_id:
+    type: string
+    description: Originating chat/conversation ID for a delegated task (Detail #6).
+    example: "chat-12345"

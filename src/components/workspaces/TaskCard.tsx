@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils'
-import type { BoardTask } from '@/lib/api'
+import type { Task } from '@/lib/api'
 import type { Milestone } from '@/lib/api'
+import { CheckSquare } from '@phosphor-icons/react'
 
 // Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted
 export const PRIORITY_BADGE: Record<number, { label: string; className: string }> = {
@@ -12,7 +13,7 @@ export const PRIORITY_BADGE: Record<number, { label: string; className: string }
 }
 
 interface TaskCardProps {
-  task: BoardTask
+  task: Task
   milestones?: Milestone[]
   onClick: () => void
 }
@@ -21,6 +22,8 @@ export function TaskCard({ task, milestones = [], onClick }: TaskCardProps) {
   const priority = task.priority ?? 3
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
   const milestone = task.milestone_id ? milestones.find((m) => m.id === task.milestone_id) : null
+  const todos = task.todos ?? []
+  const doneTodos = todos.filter((t) => t.done).length
 
   return (
     <div
@@ -35,7 +38,7 @@ export function TaskCard({ task, milestones = [], onClick }: TaskCardProps) {
       }}
       className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 cursor-pointer transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]"
     >
-      {/* Top row: priority badge + name */}
+      {/* Top row: priority badge + title */}
       <div className="flex items-start gap-2">
         <span
           className={cn(
@@ -46,16 +49,24 @@ export function TaskCard({ task, milestones = [], onClick }: TaskCardProps) {
           {badge.label}
         </span>
         <p className="flex-1 text-sm font-medium text-[var(--color-secondary)] leading-snug line-clamp-2">
-          {task.name}
+          {task.title}
         </p>
       </div>
 
+      {/* Todos checklist progress */}
+      {todos.length > 0 && (
+        <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--color-muted)]">
+          <CheckSquare size={11} />
+          <span>{doneTodos}/{todos.length}</span>
+        </div>
+      )}
+
       {/* Bottom row: agent badge + milestone tag */}
-      {(task.agent_id || milestone) && (
+      {(task.agent_name || task.agent_id || milestone) && (
         <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-          {task.agent_id && (
+          {(task.agent_name || task.agent_id) && (
             <span className="rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]">
-              {task.agent_id}
+              {task.agent_name ?? task.agent_id}
             </span>
           )}
           {milestone && (

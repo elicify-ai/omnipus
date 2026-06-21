@@ -13,21 +13,24 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/dapicom-ai/omnipus/pkg/boardtask"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// gtdTask is the canonical on-disk GTD task type used by the sysagent tools.
-// Using boardtask.Task ensures field-preserving read-modify-write: all fields
-// survive a round-trip through readEntity/writeEntity, including prompt,
-// priority, milestone_id, session_id, result, and owner.
-type gtdTask = boardtask.Task
+// unifiedTask is the canonical on-disk task type used by the sysagent tools.
+// Using task.Task ensures field-preserving read-modify-write: all fields survive
+// a round-trip through readEntity/writeEntity.
+type unifiedTask = task.Task
 
 func tasksDir(home string) string { return filepath.Join(home, "tasks") }
 
-// gtdStatusSet is the set of valid GTD task statuses.
-// Used to exclude workflow/taskstore tasks from agent-visible task lists.
-var gtdStatusSet = boardtask.GTDStatuses
+// taskStoreFor returns a task.Store rooted at the home's tasks directory. It
+// shares the process-wide task.TaskFileLock so its DAG validation, auto-advance,
+// and cascade operations interleave correctly with the gateway REST handlers.
+func taskStoreFor(home string) *task.Store { return task.New(tasksDir(home)) }
+
+// isValidTaskStatus reports whether s is one of the 7 unified statuses.
+func isValidTaskStatus(s string) bool { return task.IsValidStatus(task.Status(s)) }
 
 // ---- system.task.create ----
 
@@ -37,7 +40,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "system.task.create" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), workspace_id (optional, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox), start (optional, RFC 3339 start date/time), due (optional, RFC 3339 due date/time), recurrence (optional, RRULE string e.g. 'FREQ=WEEKLY;BYDAY=MO'), blocked_by (optional, array of task IDs this task is blocked by)."
+	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, planning, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), blocked_by (optional, array of task IDs this task is blocked by)."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -46,15 +49,14 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"name":         map[string]any{"type": "string"},
 			"description":  map[string]any{"type": "string"},
+			"prompt":       map[string]any{"type": "string", "description": "Agent instruction for an llm task"},
 			"workspace_id": map[string]any{"type": "string"},
 			"agent_id":     map[string]any{"type": "string"},
 			"status":       map[string]any{"type": "string"},
-			"start":        map[string]any{"type": "string", "description": "RFC 3339 start date/time"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
-			"recurrence":   map[string]any{"type": "string", "description": "RRULE string (RFC 5545)"},
 			"blocked_by":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task IDs this task is blocked by"},
 		},
-		"required": []string{"name"},
+		"required": []string{"name", "workspace_id"},
 	}
 }
 
@@ -63,55 +65,48 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
-	status := boardtask.StatusInbox
-	if v, ok := args["status"].(string); ok && gtdStatusSet[v] {
-		status = boardtask.Status(v)
+	status := task.StatusInbox
+	if v, ok := args["status"].(string); ok && isValidTaskStatus(v) {
+		status = task.Status(v)
 	}
 	id := ulid.Make().String()
-	now := time.Now().UTC().Format(time.RFC3339)
-	tk := gtdTask{
-		ID:        id,
-		Name:      name,
-		Status:    status,
-		CreatedAt: now,
-		UpdatedAt: now,
+	tk := unifiedTask{
+		ID:     id,
+		Title:  name,
+		Action: task.ActionLLM,
+		Status: status,
 	}
 	if v, ok := args["description"].(string); ok {
 		tk.Description = v
 	}
-	// Owner is stamped from the session context (attribution only — not an access gate).
-	sessionOwner := tools.ToolSessionOwner(ctx)
-	if v, ok := args["workspace_id"].(string); ok && v != "" {
-		if err := validateID(v); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
-		}
-		ws, wsErr := readWorkspaceFromDisk(t.deps.Home, v)
-		if wsErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
-		}
-		tk.WorkspaceID = v
-
-		// Inherit the workspace's owner (attribution stamping).
-		if ws.Owner != "" {
-			tk.Owner = ws.Owner
-		}
+	if v, ok := args["prompt"].(string); ok {
+		tk.Prompt = v
 	}
-	// Fall back to session owner if workspace didn't set one.
+	sessionOwner := tools.ToolSessionOwner(ctx)
+	workspaceID, _ := args["workspace_id"].(string)
+	if workspaceID == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "workspace_id is required", "workspace_id"))
+	}
+	if err := validateID(workspaceID); err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
+	}
+	ws, wsErr := readWorkspaceFromDisk(t.deps.Home, workspaceID)
+	if wsErr != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
+	}
+	tk.WorkspaceID = workspaceID
+	if ws.Owner != "" {
+		tk.Owner = ws.Owner
+	}
 	if tk.Owner == "" && sessionOwner != "" {
 		tk.Owner = sessionOwner
 	}
+	tk.CreatedBy = sessionOwner
 	if v, ok := args["agent_id"].(string); ok {
 		tk.AgentID = v
 	}
-	// Spec-5 fields: start, due, recurrence, blocked_by.
-	if v, ok := args["start"].(string); ok && v != "" {
-		tk.Start = v
-	}
 	if v, ok := args["due"].(string); ok && v != "" {
 		tk.Due = v
-	}
-	if v, ok := args["recurrence"].(string); ok && v != "" {
-		tk.Recurrence = v
 	}
 	if rawDeps, ok := args["blocked_by"].([]any); ok && len(rawDeps) > 0 {
 		deps := make([]string, 0, len(rawDeps))
@@ -120,26 +115,16 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 				deps = append(deps, s)
 			}
 		}
-		if len(deps) > 0 {
-			loader := func(depID string) (boardtask.Task, error) {
-				var dep gtdTask
-				if err := readEntity(tasksDir(t.deps.Home), depID, &dep); err != nil {
-					return boardtask.Task{}, err
-				}
-				return dep, nil
-			}
-			if err := boardtask.ValidateBlockedBy(id, deps, loader); err != nil {
-				return tools.ErrorResult(errorJSON("INVALID_INPUT",
-					fmt.Sprintf("blocked_by: %v", err), "blocked_by"))
-			}
-			tk.BlockedBy = deps
-		}
+		tk.BlockedBy = deps
 	}
-	if err := writeEntity(tasksDir(t.deps.Home), id, tk); err != nil {
+
+	// Create via the store so DAG validation + atomic write + locking apply.
+	store := taskStoreFor(t.deps.Home)
+	if err := store.Create(&tk); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
-		"id": id, "name": name, "status": string(status),
+		"id": tk.ID, "name": name, "status": string(tk.Status),
 		"workspace_id": tk.WorkspaceID, "agent_id": tk.AgentID,
 	}))
 }
@@ -152,7 +137,7 @@ func NewTaskUpdateTool(d *Deps) *TaskUpdateTool  { return &TaskUpdateTool{deps: 
 func (t *TaskUpdateTool) Name() string           { return "system.task.update" }
 func (t *TaskUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskUpdateTool) Description() string {
-	return "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id. If linking to a workspace by name, call system.workspace.list first to get the workspace_id.\nParameters: id (required, from system.task.list), name, description, workspace_id (from system.workspace.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete), start (RFC 3339 start date/time), due (RFC 3339 due date/time), recurrence (RRULE string), blocked_by (array of task IDs). Only provided fields are updated."
+	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id.\nParameters: id (required, from system.task.list), name, description, prompt, workspace_id, agent_id, status (inbox/next/planning/in_progress/blocked/done/failed), due (RFC 3339), blocked_by (array of task IDs, replaces existing list). Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -162,12 +147,11 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 			"id":           map[string]any{"type": "string"},
 			"name":         map[string]any{"type": "string"},
 			"description":  map[string]any{"type": "string"},
+			"prompt":       map[string]any{"type": "string"},
 			"status":       map[string]any{"type": "string"},
 			"agent_id":     map[string]any{"type": "string"},
 			"workspace_id": map[string]any{"type": "string"},
-			"start":        map[string]any{"type": "string", "description": "RFC 3339 start date/time"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
-			"recurrence":   map[string]any{"type": "string", "description": "RRULE string (RFC 5545)"},
 			"blocked_by":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task IDs this task is blocked by (replaces existing list)"},
 		},
 		"required": []string{"id"},
@@ -180,70 +164,34 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
 
-	// Acquire the process-wide per-task striped lock before the read→mutate→write
-	// so that a concurrent gateway PUT on the same task cannot interleave and lose
-	// updates (#407). The gateway's handleBoardTaskPut and handleBoardTaskStart use
-	// the same boardtask.TaskFileLock singleton keyed by task ID.
-	// becameDone records that this update transitions the task to terminal "done";
-	// advanceDeps is armed only after a successful write. The deferred closure runs
-	// AFTER the per-task lock is released and un-gates any waiting dependents whose
-	// blocked_by deps are now all done (FR-6.5). Registered before the unlock defer
-	// so it executes last (LIFO).
-	becameDone := false
-	advanceDeps := false
-	defer func() {
-		if !advanceDeps {
-			return
-		}
-		if advanced, advErr := boardtask.AdvanceBlockedDependents(tasksDir(t.deps.Home), id); advErr != nil {
-			slog.Warn("system.task.update: advance dependents failed", "id", id, "error", advErr)
-		} else if len(advanced) > 0 {
-			slog.Info("system.task.update: completed task advanced dependents",
-				"completed_id", id, "advanced_ids", advanced)
-		}
-	}()
-
-	mu := boardtask.TaskFileLock.Get(id)
-	mu.Lock()
-	defer mu.Unlock()
-
-	// Field-preserving read: load the FULL on-disk struct so no fields are lost.
-	var tk gtdTask
-	if err := readEntity(tasksDir(t.deps.Home), id, &tk); err != nil {
+	store := taskStoreFor(t.deps.Home)
+	existing, err := store.Get(id)
+	if err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use system.task.list to see available tasks"))
 	}
-	if !gtdStatusSet[string(tk.Status)] {
-		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No GTD task %q", id),
-			"Use system.task.list to see available tasks"))
-	}
-	oldStatus := tk.Status
+
+	patch := task.Patch{}
 	updated := []string{}
 	if v, ok := args["name"].(string); ok && v != "" {
-		tk.Name = v
+		patch.Title = &v
 		updated = append(updated, "name")
 	}
 	if v, ok := args["description"].(string); ok {
-		tk.Description = v
+		patch.Description = &v
 		updated = append(updated, "description")
 	}
-	if v, ok := args["status"].(string); ok && gtdStatusSet[v] {
-		// Only /start may reach "active"; the tool path cannot bypass this.
-		if v == string(boardtask.StatusActive) {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"status 'active' can only be set via /start, not by the task.update tool", "status"))
-		}
-		tk.Status = boardtask.Status(v)
-		updated = append(updated, "status")
-		// FR-6.5: record when a board task newly reaches terminal "done"; the
-		// post-unlock dependent advance is armed only after a successful write.
-		if tk.Status == boardtask.StatusDone && oldStatus != boardtask.StatusDone {
-			becameDone = true
-		}
+	if v, ok := args["prompt"].(string); ok {
+		patch.Prompt = &v
+		updated = append(updated, "prompt")
 	}
-	// Only overwrite agent_id when the caller explicitly provides a non-empty value.
+	if v, ok := args["status"].(string); ok && isValidTaskStatus(v) {
+		st := task.Status(v)
+		patch.Status = &st
+		updated = append(updated, "status")
+	}
 	if v, ok := args["agent_id"].(string); ok && v != "" {
-		tk.AgentID = v
+		patch.AgentID = &v
 		updated = append(updated, "agent_id")
 	}
 	if v, ok := args["workspace_id"].(string); ok {
@@ -255,21 +203,22 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
 			}
 		}
-		tk.WorkspaceID = v
+		// workspace_id is not in task.Patch (workspace is required-scoped and not
+		// re-pointed via the generic patch); apply it directly under the lock.
+		mu := store.Lock(id)
+		mu.Lock()
+		existing.WorkspaceID = v
+		existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		writeErr := writeEntity(tasksDir(t.deps.Home), id, *existing)
+		mu.Unlock()
+		if writeErr != nil {
+			return tools.ErrorResult(errorJSON("SAVE_FAILED", writeErr.Error(), ""))
+		}
 		updated = append(updated, "workspace_id")
 	}
-	// Spec-5 fields: start, due, recurrence, blocked_by.
-	if v, ok := args["start"].(string); ok {
-		tk.Start = v
-		updated = append(updated, "start")
-	}
 	if v, ok := args["due"].(string); ok {
-		tk.Due = v
+		patch.Due = &v
 		updated = append(updated, "due")
-	}
-	if v, ok := args["recurrence"].(string); ok {
-		tk.Recurrence = v
-		updated = append(updated, "recurrence")
 	}
 	if rawDeps, ok := args["blocked_by"].([]any); ok {
 		deps := make([]string, 0, len(rawDeps))
@@ -278,36 +227,35 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 				deps = append(deps, s)
 			}
 		}
-		if len(deps) > 0 {
-			loader := func(depID string) (boardtask.Task, error) {
-				var dep gtdTask
-				if err := readEntity(tasksDir(t.deps.Home), depID, &dep); err != nil {
-					return boardtask.Task{}, err
-				}
-				return dep, nil
-			}
-			if err := boardtask.ValidateBlockedBy(id, deps, loader); err != nil {
-				return tools.ErrorResult(errorJSON("INVALID_INPUT",
-					fmt.Sprintf("blocked_by: %v", err), "blocked_by"))
-			}
-		}
-		if len(deps) == 0 {
-			tk.BlockedBy = nil
-		} else {
-			tk.BlockedBy = deps
-		}
+		patch.BlockedBy = &deps
 		updated = append(updated, "blocked_by")
 	}
-	tk.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := writeEntity(tasksDir(t.deps.Home), id, tk); err != nil {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+
+	// Apply the field patch via the store (DAG validation + atomic write).
+	result, err := store.Update(id, patch)
+	if err != nil {
+		if isTaskNotFound(err) {
+			return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
+				"Use system.task.list to see available tasks"))
+		}
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
 	}
-	// Write succeeded: arm the post-unlock dependent advance if this update
-	// completed the task (FR-6.5).
-	if becameDone {
-		advanceDeps = true
+
+	// FR-6.5: when the task newly reaches terminal "done", advance dependents.
+	if result.Status == task.StatusDone {
+		if advanced, advErr := store.AdvanceBlockedDependents(id); advErr != nil {
+			slog.Warn("system.task.update: advance dependents failed", "id", id, "error", advErr)
+		} else if len(advanced) > 0 {
+			slog.Info("system.task.update: completed task advanced dependents",
+				"completed_id", id, "advanced_ids", advanced)
+		}
 	}
 	return tools.NewToolResult(successJSON(map[string]any{"id": id, "updated_fields": updated}))
+}
+
+// isTaskNotFound reports whether err wraps task.ErrNotFound.
+func isTaskNotFound(err error) bool {
+	return err != nil && (err == task.ErrNotFound || fmt.Sprintf("%v", err) == task.ErrNotFound.Error())
 }
 
 // ---- system.task.delete ----
@@ -342,24 +290,17 @@ func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(errorJSON("CONFIRMATION_REQUIRED",
 			"confirm must be true to delete a task", ""))
 	}
-	var tk gtdTask
-	if err := readEntity(tasksDir(t.deps.Home), id, &tk); err != nil {
+	store := taskStoreFor(t.deps.Home)
+	if _, err := store.Get(id); err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use system.task.list to see available tasks"))
 	}
-	if !gtdStatusSet[string(tk.Status)] {
-		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No GTD task %q", id),
-			"Use system.task.list to see available tasks"))
-	}
-	if err := deleteEntity(tasksDir(t.deps.Home), id); err != nil {
+	unblocked, err := store.Delete(id)
+	if err != nil {
 		return tools.ErrorResult(errorJSON("DELETE_FAILED", err.Error(),
 			"Use system.task.list to see available tasks"))
 	}
-	// Spec-5 (FR-8.2): cascade-clean inbound blocked_by edges after delete.
-	if unblocked, cascadeErr := boardtask.CascadeDeleteEdges(tasksDir(t.deps.Home), id); cascadeErr != nil {
-		// Non-fatal: log and continue — orphaned edges will be cleaned by DropOrphanEdges.
-		slog.Warn("sysagent: task delete: cascade edge cleanup failed", "id", id, "error", cascadeErr)
-	} else if len(unblocked) > 0 {
+	if len(unblocked) > 0 {
 		slog.Info("sysagent: task delete: unblocked dependents", "deleted_id", id, "unblocked", unblocked)
 	}
 	return tools.NewToolResult(successJSON(map[string]any{"id": id, "deleted": true}))
@@ -388,29 +329,18 @@ func (t *TaskListTool) Parameters() map[string]any {
 }
 
 func (t *TaskListTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	all, err := listEntities[gtdTask](tasksDir(t.deps.Home))
-	if err != nil {
-		return tools.ErrorResult(errorJSON("LIST_FAILED", err.Error(), ""))
-	}
 	workspaceFilter, _ := args["workspace_id"].(string)
 	agentFilter, _ := args["agent_id"].(string)
 	statusFilter, _ := args["status"].(string)
 
-	var filtered []gtdTask
-	for _, tk := range all {
-		if !gtdStatusSet[string(tk.Status)] {
-			continue
-		}
-		if workspaceFilter != "" && tk.WorkspaceID != workspaceFilter {
-			continue
-		}
-		if agentFilter != "" && tk.AgentID != agentFilter {
-			continue
-		}
-		if statusFilter != "" && string(tk.Status) != statusFilter {
-			continue
-		}
-		filtered = append(filtered, tk)
+	store := taskStoreFor(t.deps.Home)
+	filtered, err := store.List(task.Filter{
+		WorkspaceID: workspaceFilter,
+		AgentID:     agentFilter,
+		Status:      task.Status(statusFilter),
+	})
+	if err != nil {
+		return tools.ErrorResult(errorJSON("LIST_FAILED", err.Error(), ""))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{"tasks": filtered}))
 }

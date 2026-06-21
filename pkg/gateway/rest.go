@@ -39,7 +39,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	whatsappnative "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -57,7 +56,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/security"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/skills"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
@@ -80,13 +79,13 @@ var errConflict = errors.New("optimistic concurrency conflict")
 type restAPI struct {
 	agentLoop     *agent.AgentLoop
 	allowedOrigin string
-	onboardingMgr *onboarding.Manager  // manages first-launch + doctor state
-	homePath      string               // ~/.omnipus — root of the data directory
-	configMu      sync.Mutex           // guards safeUpdateConfigJSON (read-modify-write cycle)
-	taskStore     *taskstore.TaskStore // task persistence
-	taskExecutor  *agent.TaskExecutor  // task execution engine
-	credStore     *credentials.Store   // shared unlocked credential store (injected at boot)
-	mediaStore    media.MediaStore     // shared media store for serving media files
+	onboardingMgr *onboarding.Manager // manages first-launch + doctor state
+	homePath      string              // ~/.omnipus — root of the data directory
+	configMu      sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	taskStore     *task.Store         // unified task persistence
+	taskExecutor  *agent.TaskExecutor // task execution engine
+	credStore     *credentials.Store  // shared unlocked credential store (injected at boot)
+	mediaStore    media.MediaStore    // shared media store for serving media files
 	// ssrfChecker enforces SEC-24 SSRF protection on outbound HTTP requests made
 	// by REST handlers (skills installer). Nil when SSRF protection is disabled
 	// in config (sandbox.ssrf.enabled = false). Shared with the agent loop's
@@ -171,12 +170,11 @@ type restAPI struct {
 	auditor *audit.Logger
 
 	// taskLock is the process-wide per-task-ID striped mutex shared by the REST
-	// board task handlers and the sysagent system.task.* tools. Both paths
-	// use boardtask.TaskFileLock (the package-level singleton), which is the
-	// same pointer stored here. Holding the lock for the full read→mutate→write
-	// cycle prevents a race between two concurrent /start calls, between a PUT
-	// and the completion callback, or between a PUT and a sysagent task.update.
-	taskLock *boardtask.StripedLock
+	// task handlers and the sysagent system.task.* tools. Both paths use
+	// task.TaskFileLock (the package-level singleton), which is the same pointer
+	// stored here. Holding the lock for the full read→mutate→write cycle prevents
+	// a race between two concurrent mutations of the same task.
+	taskLock *task.StripedLock
 
 	// selfWriteReg is the registry of config.json content hashes written by
 	// the app itself. safeUpdateConfigJSON registers each write here so the
@@ -3905,11 +3903,10 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// rather than 404-ing. Traces to: contracts/components/schemas/DevicesResponse.yaml.
 	cm.RegisterHTTPHandler("/api/v1/devices", a.adminWrap(a.HandleDevices))
 
-	// GTD board task endpoints (Wave 2b, Level 1 Project & Task Mgmt).
-	// Full CRUD — GET list/item, POST create, PUT update, DELETE remove.
-	// Traces to: contracts/components/schemas/BoardTask.yaml, BoardTaskListResponse.yaml.
-	cm.RegisterHTTPHandler("/api/v1/board/tasks", a.withAuth(withRateLimit(configLimiter, a.HandleBoardTasks)))
-	cm.RegisterHTTPHandler("/api/v1/board/tasks/", a.withAuth(withRateLimit(configLimiter, a.HandleBoardTasks)))
+	// The legacy GTD /board/tasks endpoints were folded into the unified
+	// /api/v1/tasks surface in Sprint 2 (one store, one wire schema). See
+	// HandleTasks above (registered earlier) for the unified CRUD + subtasks +
+	// todos + dependencies routes.
 
 	// Token usage stats endpoint (Wave 2b).
 	// Traces to: contracts/components/schemas/TokenUsageSummary.yaml.
@@ -4166,80 +4163,6 @@ func (a *restAPI) HandleDevices(w http.ResponseWriter, r *http.Request) {
 
 // --- Tasks ---
 
-// HandleTasks handles GET/POST /api/v1/tasks, GET/PUT /api/v1/tasks/{id},
-// GET /api/v1/tasks/{id}/subtasks, and POST /api/v1/tasks/{id}/start.
-func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimSuffix(r.URL.Path, "/")
-	rest := strings.TrimPrefix(path, "/api/v1/tasks")
-	rest = strings.TrimPrefix(rest, "/")
-
-	// /api/v1/tasks/{id}/subtasks
-	if strings.HasSuffix(rest, "/subtasks") {
-		taskID := strings.TrimSuffix(rest, "/subtasks")
-		if r.Method != http.MethodGet {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.listSubtasks(w, taskID)
-		return
-	}
-
-	// /api/v1/tasks/{id}/start
-	if strings.HasSuffix(rest, "/start") {
-		taskID := strings.TrimSuffix(rest, "/start")
-		if r.Method != http.MethodPost {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.startTask(w, r, taskID)
-		return
-	}
-
-	taskID := rest
-	switch r.Method {
-	case http.MethodGet:
-		if taskID == "" {
-			a.listTasks(w, r)
-		} else {
-			a.getTask(w, taskID)
-		}
-	case http.MethodPost:
-		if taskID != "" {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.createTask(w, r)
-	case http.MethodPut:
-		if taskID == "" {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.updateTask(w, r, taskID)
-	case http.MethodDelete:
-		if taskID == "" {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.deleteTask(w, taskID)
-	default:
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-func (a *restAPI) listTasks(w http.ResponseWriter, r *http.Request) {
-	filter := taskstore.TaskFilter{
-		Status:  r.URL.Query().Get("status"),
-		AgentID: r.URL.Query().Get("agent_id"),
-	}
-	tasks, err := a.taskStore.List(filter)
-	if err != nil {
-		slog.Error("rest: list tasks", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list tasks: %v", err))
-		return
-	}
-	jsonOK(w, tasks)
-}
-
 // validateEntityID rejects IDs that contain path separators, "..", or null bytes
 // to prevent path traversal attacks.
 func validateEntityID(id string) error {
@@ -4252,207 +4175,8 @@ func validateEntityID(id string) error {
 	return nil
 }
 
-func (a *restAPI) getTask(w http.ResponseWriter, id string) {
-	if err := validateEntityID(id); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid task ID")
-		return
-	}
-	t, err := a.taskStore.Get(id)
-	if err != nil {
-		if errors.Is(err, taskstore.ErrNotFound) {
-			jsonErr(w, http.StatusNotFound, fmt.Sprintf("task %q not found", id))
-			return
-		}
-		slog.Error("rest: get task", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read task: %v", err))
-		return
-	}
-	jsonOK(w, t)
-}
-
-func (a *restAPI) createTask(w http.ResponseWriter, r *http.Request) {
-	var req gen.TaskCreateRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "TaskCreateRequest", &req, validateEnabled) {
-		return
-	}
-	// Backward compat: accept name→title, description→prompt
-	title := req.Title
-	prompt := ""
-	if req.Prompt != nil {
-		prompt = *req.Prompt
-	}
-	if title == "" && req.Name != nil && *req.Name != "" {
-		title = *req.Name
-	}
-	if prompt == "" && req.Description != nil && *req.Description != "" {
-		prompt = *req.Description
-	}
-	if title == "" {
-		jsonErr(w, http.StatusUnprocessableEntity, "title is required")
-		return
-	}
-	agentID := ""
-	if req.AgentId != nil {
-		agentID = *req.AgentId
-	}
-	priority := 3
-	if req.Priority != nil && *req.Priority != 0 {
-		priority = *req.Priority
-	}
-	parentTaskID := ""
-	if req.ParentTaskId != nil {
-		parentTaskID = *req.ParentTaskId
-	}
-	triggerType := "manual"
-	if req.TriggerType != nil && *req.TriggerType != "" {
-		triggerType = string(*req.TriggerType)
-	}
-	var blockedBy []string
-	if req.BlockedBy != nil && len(*req.BlockedBy) > 0 {
-		blockedBy = *req.BlockedBy
-		// Validate that all referenced task IDs exist (empty string as selfID — not yet created).
-		if err := a.taskStore.ValidateBlockedBy("", blockedBy); err != nil {
-			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("blocked_by validation failed: %v", err))
-			return
-		}
-	}
-
-	t := &taskstore.TaskEntity{
-		Title:        title,
-		Prompt:       prompt,
-		AgentID:      agentID,
-		Priority:     priority,
-		ParentTaskID: parentTaskID,
-		BlockedBy:    blockedBy,
-		TriggerType:  triggerType,
-		CreatedBy:    "user",
-		Status:       "queued",
-	}
-	if err := a.taskStore.Create(t); err != nil {
-		slog.Error("rest: create task", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save task: %v", err))
-		return
-	}
-	jsonCreated(w, t)
-}
-
-func (a *restAPI) updateTask(w http.ResponseWriter, r *http.Request, id string) {
-	if err := validateEntityID(id); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid task ID")
-		return
-	}
-	var req gen.TaskUpdateRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "TaskUpdateRequest", &req, validateEnabled) {
-		return
-	}
-	// Backward compat mappings
-	if req.Title == nil && req.Name != nil {
-		req.Title = req.Name
-	}
-	if req.Result == nil && req.Description != nil {
-		req.Result = req.Description
-	}
-	var patchStatus *string
-	if req.Status != nil {
-		s := string(*req.Status)
-		patchStatus = &s
-	}
-	patch := taskstore.TaskPatch{
-		Status:      patchStatus,
-		Result:      req.Result,
-		Artifacts:   req.Artifacts,
-		Title:       req.Title,
-		AgentID:     req.AgentId,
-		Priority:    req.Priority,
-		StartedAt:   req.StartedAt,
-		CompletedAt: req.CompletedAt,
-	}
-	t, err := a.taskStore.Update(id, patch)
-	if err != nil {
-		if errors.Is(err, taskstore.ErrNotFound) {
-			jsonErr(w, http.StatusNotFound, fmt.Sprintf("task %q not found", id))
-			return
-		}
-		slog.Warn("rest: update task", "id", id, "error", err)
-		jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("could not update task: %v", err))
-		return
-	}
-	jsonOK(w, t)
-}
-
-func (a *restAPI) listSubtasks(w http.ResponseWriter, parentID string) {
-	if err := validateEntityID(parentID); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid task ID")
-		return
-	}
-	tasks, err := a.taskStore.List(taskstore.TaskFilter{ParentTaskID: parentID})
-	if err != nil {
-		slog.Error("rest: list subtasks", "parent_id", parentID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list subtasks: %v", err))
-		return
-	}
-	jsonOK(w, tasks)
-}
-
-func (a *restAPI) startTask(w http.ResponseWriter, r *http.Request, id string) {
-	if err := validateEntityID(id); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid task ID")
-		return
-	}
-	t, err := a.taskStore.Get(id)
-	if err != nil {
-		if errors.Is(err, taskstore.ErrNotFound) {
-			jsonErr(w, http.StatusNotFound, fmt.Sprintf("task %q not found", id))
-			return
-		}
-		slog.Error("rest: start task: get", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read task: %v", err))
-		return
-	}
-	if t.Status != "queued" {
-		jsonErr(
-			w,
-			http.StatusUnprocessableEntity,
-			fmt.Sprintf("task is %s, only queued tasks can be started", t.Status),
-		)
-		return
-	}
-	if a.taskExecutor == nil {
-		jsonErr(w, http.StatusServiceUnavailable, "task executor not available")
-		return
-	}
-	go func() {
-		if err := a.taskExecutor.ExecuteTask(context.Background(), id); err != nil {
-			slog.Error("rest: start task: execute", "id", id, "error", err)
-		}
-	}()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	if err := json.NewEncoder(w).Encode(gen.TaskAcceptedResponse{
-		TaskId: id,
-		Status: gen.Accepted,
-	}); err != nil {
-		slog.Warn("rest: start task: encode response failed", "error", err)
-	}
-}
-
-func (a *restAPI) deleteTask(w http.ResponseWriter, id string) {
-	if err := validateEntityID(id); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid task id")
-		return
-	}
-	if err := a.taskStore.Delete(id); err != nil {
-		if errors.Is(err, taskstore.ErrNotFound) {
-			jsonErr(w, http.StatusNotFound, "task not found")
-			return
-		}
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete task: %v", err))
-		return
-	}
-	jsonOK(w, map[string]string{"deleted": id})
-}
+// The unified /api/v1/tasks handlers (HandleTasks and friends) live in
+// rest_tasks.go.
 
 // --- Activity ---
 
@@ -4523,19 +4247,19 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Collect task_created events from tasks directory.
-	recentTasks, taskErr := a.taskStore.List(taskstore.TaskFilter{})
+	// Collect task_created / task_updated events from the unified task store.
+	recentTasks, taskErr := a.taskStore.List(task.Filter{})
 	if taskErr != nil {
 		slog.Warn("rest: activity: list tasks", "error", taskErr)
 	}
 	for _, t := range recentTasks {
-		if t.CreatedAt.After(cutoff) {
+		if createdAt, perr := time.Parse(time.RFC3339, t.CreatedAt); perr == nil && createdAt.After(cutoff) {
 			taskAgentID := t.AgentID
 			title := t.Title
 			ev := gen.ActivityEvent{
 				Id:        "task-c-" + t.ID,
 				Type:      "task_created",
-				Timestamp: t.CreatedAt,
+				Timestamp: createdAt,
 				Summary:   &title,
 			}
 			if taskAgentID != "" {
@@ -4543,19 +4267,21 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 			}
 			events = append(events, ev)
 		}
-		if t.CompletedAt != nil && t.CompletedAt.After(cutoff) {
-			taskAgentID := t.AgentID
-			title := t.Title
-			ev := gen.ActivityEvent{
-				Id:        "task-u-" + t.ID,
-				Type:      "task_updated",
-				Timestamp: *t.CompletedAt,
-				Summary:   &title,
+		if t.CompletedAt != "" {
+			if completedAt, perr := time.Parse(time.RFC3339, t.CompletedAt); perr == nil && completedAt.After(cutoff) {
+				taskAgentID := t.AgentID
+				title := t.Title
+				ev := gen.ActivityEvent{
+					Id:        "task-u-" + t.ID,
+					Type:      "task_updated",
+					Timestamp: completedAt,
+					Summary:   &title,
+				}
+				if taskAgentID != "" {
+					ev.AgentId = &taskAgentID
+				}
+				events = append(events, ev)
 			}
-			if taskAgentID != "" {
-				ev.AgentId = &taskAgentID
-			}
-			events = append(events, ev)
 		}
 	}
 

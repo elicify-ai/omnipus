@@ -40,7 +40,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/skills"
 	"github.com/dapicom-ai/omnipus/pkg/state"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 	"github.com/dapicom-ai/omnipus/pkg/tools/browser"
 	"github.com/dapicom-ai/omnipus/pkg/utils"
@@ -109,7 +109,7 @@ type AgentLoop struct {
 	reloadPending atomic.Bool // set by TriggerReload; cleared by ClearReloadPending (called from gateway executeReload)
 
 	// Task management
-	taskStore    *taskstore.TaskStore
+	taskStore    *task.Store
 	taskExecutor *TaskExecutor
 
 	// Security (SEC-15, SEC-17): audit logging and policy evaluation.
@@ -460,9 +460,10 @@ func NewAgentLoop(
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
 
-	// Initialize task store at ~/.omnipus/workflow-tasks/ (separate from GTD tasks/).
+	// Initialize the unified task store at ~/.omnipus/tasks/ (the single store —
+	// the legacy GTD tasks/ and workflow-tasks/ split was removed in Sprint 2).
 	homePath := filepath.Dir(cfg.WorkspacePath())
-	al.taskStore = taskstore.New(filepath.Join(homePath, "workflow-tasks"))
+	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
 
 	// Register workspace session linker: auto-links sessions to workspaces on task create/update.
@@ -1612,10 +1613,10 @@ func registerSharedTools(
 				currentAgentID, agentCfg, cfg.Agents.Defaults,
 				config.DelegationModeTask, registry,
 			))
-			taskCreate.SetOnCreate(func(entity *taskstore.TaskEntity) {
+			taskCreate.SetOnCreate(func(entity *task.Task) {
 				al.EmitTaskStatusChanged(TaskStatusChangedPayload{
 					TaskID:    entity.ID,
-					Status:    entity.Status,
+					Status:    string(entity.Status),
 					SessionID: "task:" + entity.ID,
 					AgentID:   entity.AgentID,
 				})
@@ -1628,6 +1629,8 @@ func registerSharedTools(
 			}
 			agent.Tools.Register(taskUpdate)
 
+			agent.Tools.Register(tools.NewTaskAddTodoTool(al.taskStore))
+			agent.Tools.Register(tools.NewTaskAddDependencyTool(al.taskStore))
 			agent.Tools.Register(tools.NewTaskDeleteTool(al.taskStore))
 			agent.Tools.Register(tools.NewAgentListTool(func() []tools.AgentInfo {
 				var infos []tools.AgentInfo
@@ -2749,8 +2752,8 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 	return fn(al.cfg)
 }
 
-// GetTaskStore returns the shared TaskStore (may be nil in tests).
-func GetTaskStore(al *AgentLoop) *taskstore.TaskStore {
+// GetTaskStore returns the shared unified task Store (may be nil in tests).
+func GetTaskStore(al *AgentLoop) *task.Store {
 	return al.taskStore
 }
 

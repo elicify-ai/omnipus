@@ -70,47 +70,52 @@ func TestToolSessionOwner_NoContext_ReturnsEmpty(t *testing.T) {
 
 // ── #406 + FR-1.9: cross-owner milestone FK — owner gate removed ──────────────
 
-// TestBoardTask_CrossOwnerMilestoneFK_Accepted asserts that a board task POST
+// TestTask_CrossOwnerMilestoneFK_Accepted asserts that a unified task POST
 // referencing another user's milestone is accepted (201) after the owner gate
 // removal (FR-1.9). Owner is attribution-only; milestone existence is the only check.
 //
 // BDD:
 //
-//	Given a milestone owned by "alice" (no workspace_id),
-//	When "bob" POSTs a task referencing alice's milestone_id (no workspace_id),
+//	Given a milestone owned by "alice" and a workspace,
+//	When "bob" POSTs a unified task referencing alice's milestone_id,
 //	Then 201 is returned — the milestone FK is valid (milestone exists).
 //
 // Guards against: regression that re-introduces an owner check on milestone FK.
-// Traces to: pkg/gateway/rest_board.go validateMilestoneFK — #406, FR-1.9
-func TestBoardTask_CrossOwnerMilestoneFK_Accepted(t *testing.T) {
+// Sprint 2: uses POST /api/v1/tasks (replaces /board/tasks); "title"+"action"+"workspace_id" required.
+// Traces to: pkg/gateway/rest_tasks.go validateMilestoneFK — #406, FR-1.9
+func TestTask_CrossOwnerMilestoneFK_Accepted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	// Write a milestone owned by "alice" directly (no workspace_id).
+	// Create a workspace bob's task can belong to.
+	wsID := createWorkspaceViaAPI(t, api, "BobWorkspace", "")
+
+	// Write a milestone owned by "alice" directly (workspace_id=wsID so the FK is reachable).
 	milestoneID := "01JXMILESTONE00000000ALICE"
 	milestonesDir := filepath.Join(api.homePath, "milestones")
 	require.NoError(t, os.MkdirAll(milestonesDir, 0o700))
 	milestoneJSON := fmt.Sprintf(
-		`{"id":%q,"workspace_id":"","name":"Alice Milestone","owner":"alice","created_at":%q,"updated_at":%q}`,
+		`{"id":%q,"workspace_id":%q,"name":"Alice Milestone","owner":"alice","created_at":%q,"updated_at":%q}`,
 		milestoneID,
+		wsID,
 		time.Now().UTC().Format(time.RFC3339),
 		time.Now().UTC().Format(time.RFC3339),
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(milestonesDir, milestoneID+".json"), []byte(milestoneJSON), 0o600))
 
-	// "bob" attempts to create a task referencing alice's milestone (no workspace_id).
+	// "bob" creates a task referencing alice's milestone.
 	// FR-1.9: the owner gate is gone; milestone existence is the only validation.
-	body := fmt.Sprintf(`{"name":"Bob Task","milestone_id":%q}`, milestoneID)
+	body := fmt.Sprintf(`{"title":"Bob Task","action":"llm","workspace_id":%q,"milestone_id":%q}`, wsID, milestoneID)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/board/tasks"
+	r.URL.Path = "/api/v1/tasks"
 	r = r.WithContext(contextWithUserRole(r.Context(), "bob", config.UserRoleUser))
 	api.agentLoop.GetConfig().Gateway.Users = []config.UserConfig{
 		{Username: "alice", Role: config.UserRoleUser},
 		{Username: "bob", Role: config.UserRoleUser},
 	}
 
-	api.HandleBoardTasks(w, r)
+	api.HandleTasks(w, r)
 
 	assert.Equal(t, http.StatusCreated, w.Code,
 		"cross-owner milestone_id reference must be accepted (201) after FR-1.9 gate removal; body=%s", w.Body.String())
@@ -291,38 +296,42 @@ func TestTaskCreateTool_Rule2_NoSession_OwnerEmpty(t *testing.T) {
 		"task owner must be empty (Rule-3) when no session owner and no workspace_id; got %q", diskTask.Owner)
 }
 
-// ── #406 + FR-1.9: multi-user board task access — owner attribution only ──────
+// ── #406 + FR-1.9: multi-user unified task access — owner attribution only ────
 
-// TestTenancy_MultiUser_CrossOwnerBoardTask_Returns200 asserts that in multi-user
-// mode, user B CAN GET/PUT/DELETE a board task owned by user A after FR-1.9
+// TestTenancy_MultiUser_CrossOwnerTask_Returns200 asserts that in multi-user
+// mode, user B CAN GET/PATCH a unified task owned by user A after FR-1.9
 // (owner is attribution-only; access gate removed).
 //
 // BDD:
 //
-//	Given a board task owned by "alice" and multi-user mode,
-//	When "bob" GETs, PUTs, or DELETEs the task,
-//	Then 200/204 is returned.
+//	Given a unified task owned by "alice" and multi-user mode,
+//	When "bob" GETs or PATCHes the task,
+//	Then 200 is returned.
 //
-// Guards against: residual owner gate being re-introduced on board task paths.
-// Traces to: pkg/gateway/rest_board.go HandleBoardTasks FR-1.9 — #406
-func TestTenancy_MultiUser_CrossOwnerBoardTask_Returns200(t *testing.T) {
+// Guards against: residual owner gate being re-introduced on task paths.
+// Sprint 2: uses /api/v1/tasks and PATCH (replaces /board/tasks and PUT).
+// Traces to: pkg/gateway/rest_tasks.go HandleTasks FR-1.9 — #406
+func TestTenancy_MultiUser_CrossOwnerTask_Returns200(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+
+	// Create a workspace for alice's task.
+	wsID := createWorkspaceViaAPI(t, api, "AliceWorkspace_CrossOwner", "")
 
 	// Create a task as alice (admin so POST succeeds without owner complications).
 	taskName := "AliceTask_" + t.Name()
-	taskBody := fmt.Sprintf(`{"name":%q,"status":"inbox"}`, taskName)
+	taskBody := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q,"status":"inbox"}`, taskName, wsID)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(taskBody))
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(taskBody))
 	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/board/tasks"
+	r.URL.Path = "/api/v1/tasks"
 	r = r.WithContext(contextWithUserRole(r.Context(), "alice", config.UserRoleAdmin))
-	api.HandleBoardTasks(w, r)
+	api.HandleTasks(w, r)
 	require.Equal(t, http.StatusCreated, w.Code)
-	var task gen.BoardTask
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &task))
+	var createdTask gen.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &createdTask))
 
 	// Write the task file with owner="alice" directly (the POST via dev-bypass doesn't stamp owner).
-	taskPath := filepath.Join(api.homePath, "tasks", task.Id+".json")
+	taskPath := filepath.Join(api.homePath, "tasks", createdTask.Id+".json")
 	data, err := os.ReadFile(taskPath)
 	require.NoError(t, err)
 	var raw map[string]any
@@ -341,24 +350,26 @@ func TestTenancy_MultiUser_CrossOwnerBoardTask_Returns200(t *testing.T) {
 	// bob GETs alice's task — FR-1.9: must succeed.
 	t.Run("bob_GET", func(t *testing.T) {
 		ww := httptest.NewRecorder()
-		rr := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+task.Id, nil)
-		rr.URL.Path = "/api/v1/board/tasks/" + task.Id
+		rr := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+createdTask.Id, nil)
+		rr.URL.Path = "/api/v1/tasks/" + createdTask.Id
 		rr = rr.WithContext(contextWithUserRole(rr.Context(), "bob", config.UserRoleUser))
-		api.HandleBoardTasks(ww, rr)
+		api.HandleTasks(ww, rr)
 		assert.Equal(t, http.StatusOK, ww.Code,
 			"bob's GET on alice's task must return 200 (FR-1.9); body=%s", ww.Body.String())
 	})
 
-	// bob PUTs alice's task — FR-1.9: must succeed.
-	t.Run("bob_PUT", func(t *testing.T) {
+	// bob PATCHes alice's task — FR-1.9: must succeed.
+	// Sprint 2: PATCH replaces PUT for task updates.
+	// Include description so the partial-task guard allows "next".
+	t.Run("bob_PATCH", func(t *testing.T) {
 		ww := httptest.NewRecorder()
-		rr := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
-			strings.NewReader(`{"status":"next"}`))
+		rr := httptest.NewRequest(http.MethodPatch, "/api/v1/tasks/"+createdTask.Id,
+			strings.NewReader(`{"status":"next","description":"bob's update"}`))
 		rr.Header.Set("Content-Type", "application/json")
-		rr.URL.Path = "/api/v1/board/tasks/" + task.Id
+		rr.URL.Path = "/api/v1/tasks/" + createdTask.Id
 		rr = rr.WithContext(contextWithUserRole(rr.Context(), "bob", config.UserRoleUser))
-		api.HandleBoardTasks(ww, rr)
+		api.HandleTasks(ww, rr)
 		assert.Equal(t, http.StatusOK, ww.Code,
-			"bob's PUT on alice's task must return 200 (FR-1.9); body=%s", ww.Body.String())
+			"bob's PATCH on alice's task must return 200 (FR-1.9); body=%s", ww.Body.String())
 	})
 }

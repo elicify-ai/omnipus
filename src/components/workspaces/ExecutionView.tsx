@@ -1,18 +1,22 @@
-import type { BoardTask, Milestone } from '@/lib/api'
+import type { Task, Milestone } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { TaskCard } from './TaskCard'
 
+// ExecutionView is legacy — it was used before the unified Task model replaced
+// the old BoardTask+GTDTask split. The Calendar view supersedes it in Sprint 2.
+// Retained for backward compatibility with any route still referencing it.
+
 const EXECUTION_COLUMNS = [
-  { status: 'next',   label: 'Queued',    headerClassName: 'text-blue-400' },
-  { status: 'active', label: 'Running',   headerClassName: 'text-yellow-400' },
-  { status: 'done',   label: 'Completed', headerClassName: 'text-green-400' },
-  { status: 'failed', label: 'Failed',    headerClassName: 'text-red-400' },
+  { status: 'next',        label: 'Queued',      headerClassName: 'text-blue-400' },
+  { status: 'in_progress', label: 'Running',     headerClassName: 'text-yellow-400' },
+  { status: 'done',        label: 'Completed',   headerClassName: 'text-green-400' },
+  { status: 'failed',      label: 'Failed',      headerClassName: 'text-red-400' },
 ] as const
 
 interface ExecutionViewProps {
-  tasks: BoardTask[]
+  tasks: Task[]
   milestones: Milestone[]
-  onTaskClick: (task: BoardTask) => void
+  onTaskClick: (task: Task) => void
 }
 
 export function ExecutionView({ tasks, milestones, onTaskClick }: ExecutionViewProps) {

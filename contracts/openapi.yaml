@@ -51,8 +51,11 @@ tags:
   description: Credentials, backup/restore, and storage management
 - name: Workspaces
   description: Workspace management — create, list, update, delete, and session linking.
-- name: Board Tasks
-  description: GTD board tasks — distinct from workflow tasks at /tasks.
+- name: Tasks
+  description: >
+    The unified workspace task surface (Sprint 2) — one entity covering capture,
+    triage, dependencies, todos, triggers, and delegation. Replaces the former
+    split between workflow /tasks and GTD /board/tasks.
 - name: Milestones
   description: Workspace milestones — group tasks under named milestones with optional due dates.
 - name: Stats
@@ -371,8 +374,6 @@ components:
           description: Uploaded file metadata entries.
           items:
             $ref: '#/components/schemas/UploadedFile'
-    TaskAcceptedResponse:
-      $ref: ./components/schemas/TaskAcceptedResponse.yaml
     AgentOwnerUpdateResponse:
       $ref: ./components/schemas/AgentOwnerUpdateResponse.yaml
     ActivityEventsResponse:
@@ -389,6 +390,10 @@ components:
       $ref: ./components/schemas/TaskCreateRequest.yaml
     TaskUpdateRequest:
       $ref: ./components/schemas/TaskUpdateRequest.yaml
+    Todo:
+      $ref: ./components/schemas/Todo.yaml
+    TaskTrigger:
+      $ref: ./components/schemas/TaskTrigger.yaml
     ProviderUpdateRequest:
       $ref: ./components/schemas/ProviderUpdateRequest.yaml
     AppStatePatchRequest:
@@ -449,33 +454,6 @@ components:
       $ref: ./components/schemas/WorkspaceCreateRequest.yaml
     WorkspaceUpdateRequest:
       $ref: ./components/schemas/WorkspaceUpdateRequest.yaml
-    GTDBoardTaskStatus:
-      $ref: ./components/schemas/GTDBoardTaskStatus.yaml
-    BoardTaskUpdateStatus:
-      $ref: ./components/schemas/BoardTaskUpdateStatus.yaml
-    BoardTask:
-      $ref: ./components/schemas/BoardTask.yaml
-    BoardTaskListItem:
-      $ref: ./components/schemas/BoardTaskListItem.yaml
-    BoardTaskListResponse:
-      type: object
-      description: Paginated list response for GET /board/tasks
-      required:
-        - items
-        - total
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/BoardTaskListItem'
-        total:
-          type: integer
-          description: Total number of tasks matching the filter (before pagination).
-          example: 42
-    BoardTaskCreateRequest:
-      $ref: ./components/schemas/BoardTaskCreateRequest.yaml
-    BoardTaskUpdateRequest:
-      $ref: ./components/schemas/BoardTaskUpdateRequest.yaml
     WorkspaceSessionLink:
       $ref: ./components/schemas/WorkspaceSessionLink.yaml
     Milestone:
@@ -3946,24 +3924,86 @@ paths:
     get:
       operationId: listTasks
       summary: List tasks
-      description: Returns all tasks, optionally filtered by status. Admin-only.
+      description: >
+        Returns tasks in a workspace, filterable by status, agent, milestone, and
+        surface. This is the unified task surface (Sprint 2) — it subsumes the
+        former GTD /board/tasks listing. By default only top-level tasks
+        (parent_task_id absent) and `surface: user` tasks are returned; use the
+        filters to widen. Workspace-scoped. Admin-only.
       tags:
       - Tasks
       security:
       - BearerAuth: []
       parameters:
+      - name: workspace_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: >
+          Filter by workspace ID. Tasks are workspace-scoped; when omitted the
+          server resolves the active workspace.
       - name: status
         in: query
         required: false
         schema:
           type: string
           enum:
-            - queued
-            - assigned
-            - running
-            - completed
+            - inbox
+            - next
+            - planning
+            - in_progress
+            - blocked
+            - done
             - failed
-        description: Filter tasks by status.
+        description: Filter tasks by status (7-state lifecycle).
+      - name: agent_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by assigned agent ID.
+      - name: milestone_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by milestone ID.
+      - name: surface
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - user
+            - heartbeat
+        description: >
+          Filter by UI surface (Detail #5). Defaults to `user` when omitted —
+          dedicated-UI tasks (e.g. heartbeat) are excluded from general listings.
+      - name: parent_task_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: >
+          When set, returns the subtasks of this parent (equivalent to
+          GET /tasks/{id}/subtasks). When omitted, only top-level tasks are
+          returned.
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 200
+          maximum: 1000
+        description: Maximum items to return.
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+        description: Pagination offset.
       responses:
         '200':
           description: Array of tasks.
@@ -3973,12 +4013,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
     post:
       operationId: createTask
       summary: Create a task
-      description: Creates a new task. Admin-only.
+      description: >
+        Creates a new task. Lands in `inbox` regardless of input (Detail #8 landing
+        rule). Workspace-scoped (workspace_id required in the body). Admin-only.
       tags:
       - Tasks
       security:
@@ -3990,7 +4034,7 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskCreateRequest'
       responses:
-        '200':
+        '201':
           description: Created task.
           content:
             application/json:
@@ -4001,10 +4045,39 @@ paths:
         '401':
           $ref: '#/components/responses/401Unauthorized'
   /tasks/{id}:
-    put:
+    get:
+      operationId: getTask
+      summary: Get a task by ID
+      description: Returns a single task by ID, including read-time rollup. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    patch:
       operationId: updateTask
       summary: Update a task
-      description: Updates task fields. Admin-only.
+      description: >
+        Partially updates task fields (PATCH semantics — only provided fields
+        change). Dragging a card to `in_progress` / Run is a status PATCH; there
+        is no separate /start endpoint. Admin-only.
       tags:
       - Tasks
       security:
@@ -4035,6 +4108,8 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
     delete:
       operationId: deleteTask
       summary: Delete a task
@@ -4061,7 +4136,7 @@ paths:
     get:
       operationId: listSubtasks
       summary: List subtasks
-      description: Returns all subtasks for a given parent task. Admin-only.
+      description: Returns all subtasks (children with this parent_task_id). Admin-only.
       tags:
       - Tasks
       security:
@@ -4086,11 +4161,13 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
-  /tasks/{id}/start:
-    post:
-      operationId: startTask
-      summary: Start a task
-      description: Assigns and starts a queued task. Admin-only.
+  /tasks/{id}/todos:
+    put:
+      operationId: setTaskTodos
+      summary: Replace a task's checklist
+      description: >
+        Replaces the task's `todos` array atomically (Tier-1 checklist; Detail #3
+        of the three-tier model). Returns the updated task. Admin-only.
       tags:
       - Tasks
       security:
@@ -4102,17 +4179,70 @@ paths:
         schema:
           type: string
         description: Task ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/Todo'
       responses:
-        '202':
-          description: Task accepted and queued for execution.
+        '200':
+          description: Updated task.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TaskAcceptedResponse'
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/dependencies:
+    put:
+      operationId: setTaskDependencies
+      summary: Replace a task's dependencies
+      description: >
+        Replaces the task's `blocked_by` set atomically. A write-time DAG cycle
+        validator rejects self-edges and cycles (max depth 50). Returns the
+        updated task. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: string
+              description: Task IDs this task is blocked by.
+      responses:
+        '200':
+          description: Updated task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
   /mcp-servers:
     get:
       operationId: listMcpServers
@@ -4915,205 +5045,6 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
-
-  /board/tasks:
-    get:
-      operationId: listBoardTasks
-      summary: List GTD board tasks
-      description: >
-        Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow
-        tasks at /tasks. Supports filtering by workspace_id and status.
-        Default limit 200, max 1000.
-      tags:
-      - Board Tasks
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: workspace_id
-        in: query
-        required: false
-        schema:
-          type: string
-        description: Filter by workspace ID.
-      - name: status
-        in: query
-        required: false
-        schema:
-          type: string
-          enum: [inbox, next, active, waiting, done, failed]
-        description: Filter by GTD status.
-      - name: agent_id
-        in: query
-        required: false
-        schema:
-          type: string
-        description: Filter by agent ID.
-      - name: milestone_id
-        in: query
-        required: false
-        schema:
-          type: string
-        description: Filter by milestone ID.
-      - name: limit
-        in: query
-        required: false
-        schema:
-          type: integer
-          default: 200
-          maximum: 1000
-        description: Maximum items to return.
-      - name: offset
-        in: query
-        required: false
-        schema:
-          type: integer
-          default: 0
-        description: Pagination offset.
-      responses:
-        '200':
-          description: Board task list with total count
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BoardTaskListResponse'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-    post:
-      operationId: createBoardTask
-      summary: Create a GTD board task
-      tags:
-      - Board Tasks
-      security:
-      - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: './components/schemas/BoardTaskCreateRequest.yaml'
-      responses:
-        '201':
-          description: Created board task
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BoardTask'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-
-  /board/tasks/{id}:
-    get:
-      operationId: getBoardTask
-      summary: Get a GTD board task by ID
-      tags:
-      - Board Tasks
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Board task
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BoardTask'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-    put:
-      operationId: updateBoardTask
-      summary: Update a GTD board task (partial update)
-      tags:
-      - Board Tasks
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: './components/schemas/BoardTaskUpdateRequest.yaml'
-      responses:
-        '200':
-          description: Updated board task (full object)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BoardTask'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-    delete:
-      operationId: deleteBoardTask
-      summary: Delete a GTD board task
-      tags:
-      - Board Tasks
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '204':
-          description: Deleted
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-
-  /board/tasks/{id}/start:
-    post:
-      operationId: startBoardTask
-      summary: Start a board task — create session, link it, set status active
-      tags:
-        - Board Tasks
-      security:
-        - BearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Task started; session_id and status=active set.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BoardTask'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-        '409':
-          $ref: '#/components/responses/409Conflict'
 
   /stats/tokens:
     get:

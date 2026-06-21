@@ -1,5 +1,0 @@
-type: string
-enum: [inbox, next, waiting, done, failed]
-description: >
-  GTD board task status values allowed on PUT update.
-  The "active" value is intentionally excluded — active can only be set via POST /start.

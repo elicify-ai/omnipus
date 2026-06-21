@@ -1,12 +1,12 @@
 /**
- * TaskDetailPanel.test.tsx — #6 false-confidence test fix.
+ * TaskDetailPanel.test.tsx
  *
  * Renders the REAL TaskDetailPanel component and asserts that "Open in Chat"
- * triggers navigation to /sessions/$sessionId (which calls attachToSession
- * and sends the attach_session WS frame via the route's useEffect).
+ * triggers navigation to /sessions/$sessionId.
  *
- * Traces to: sprint-258 review finding #6 — replace inline-lambda test with
- * real-component assertion.
+ * Sprint 2 migration: TaskDetailPanel now uses the unified Task type — the
+ * old two-mode (workflow/gtd) API is gone. BoardTask is gone. All tasks use
+ * the 7-state lifecycle: inbox/next/planning/in_progress/blocked/done/failed.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -31,10 +31,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchSubtasks: vi.fn().mockResolvedValue([]),
     fetchMilestones: vi.fn().mockResolvedValue([]),
+    fetchWorkspaces: vi.fn().mockResolvedValue([]),
     updateTask: vi.fn().mockResolvedValue({}),
-    updateBoardTask: vi.fn().mockResolvedValue({}),
-    startTask: vi.fn().mockResolvedValue({}),
+    deleteTask: vi.fn().mockResolvedValue(undefined),
     isApiError: vi.fn().mockReturnValue(false),
+    tasksQueryKeys: actual.tasksQueryKeys,
+    milestonesQueryKeys: actual.milestonesQueryKeys,
+    workspacesQueryKeys: actual.workspacesQueryKeys,
   }
 })
 
@@ -43,8 +46,6 @@ const mockAddToast = vi.fn()
 vi.mock('@/store/ui', () => ({
   useUiStore: (selector?: (s: { addToast: ReturnType<typeof vi.fn> }) => unknown) => {
     const store = { addToast: mockAddToast }
-    // Support both selector form (useUiStore(s => s.addToast)) and
-    // direct destructuring form (const { addToast } = useUiStore())
     return selector ? selector(store) : store
   },
 }))
@@ -60,32 +61,46 @@ function makeClient() {
 const SESSION_ID = 'sess-task-test-abc'
 const AGENT_ID = 'general-assistant'
 
-const taskWithSession: Task = {
+// Minimal required fields for the unified Task type
+function makeTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 'task-1',
+    title: 'Research task',
+    action: 'llm',
+    priority: 3,
+    status: 'next',
+    workspace_id: 'ws-test',
+    surface: 'user',
+    owner: 'alice',
+    created_by: 'alice',
+    created_at: '2026-06-20T10:00:00Z',
+    updated_at: '2026-06-20T10:00:00Z',
+    ...overrides,
+  }
+}
+
+const taskWithSession: Task = makeTask({
   id: 'task-1',
   title: 'Research task',
   prompt: 'Research the topic',
-  status: 'running',
-  priority: 3,
-  trigger_type: 'manual',
+  status: 'in_progress',
   agent_name: 'General Assistant',
   agent_id: AGENT_ID,
   session_id: SESSION_ID,
-}
+})
 
-const taskWithoutSession: Task = {
+const taskWithoutSession: Task = makeTask({
   id: 'task-2',
   title: 'Queued task',
   prompt: 'Do something',
-  status: 'queued',
-  priority: 3,
-  trigger_type: 'manual',
+  status: 'next',
   agent_name: 'General Assistant',
-}
+})
 
 function renderPanel(task: Task | null, onClose = vi.fn()) {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <TaskDetailPanel taskMode="workflow" task={task} onClose={onClose} />
+      <TaskDetailPanel task={task} onClose={onClose} />
     </QueryClientProvider>
   )
 }
@@ -96,17 +111,15 @@ beforeEach(() => {
   mockNavigate.mockReset()
 })
 
-describe('TaskDetailPanel — Open in Chat (#250 regression, #6 test fix)', () => {
+describe('TaskDetailPanel — Open in Chat (#250 regression)', () => {
   it('shows "Open in Chat" button only when task has a session_id', async () => {
     renderPanel(taskWithSession)
-    // Real component renders the sheet which contains the button
     const btn = await screen.findByRole('button', { name: /Open in Chat/i })
     expect(btn).toBeInTheDocument()
   })
 
   it('does NOT show "Open in Chat" when task has no session_id', async () => {
     renderPanel(taskWithoutSession)
-    // Wait for async renders
     await act(async () => {})
     const btn = screen.queryByRole('button', { name: /Open in Chat/i })
     expect(btn).toBeNull()
@@ -117,171 +130,143 @@ describe('TaskDetailPanel — Open in Chat (#250 regression, #6 test fix)', () =
     //   Given a task with a known session_id
     //   When the user clicks "Open in Chat"
     //   Then navigate() is called with { to: '/sessions/$sessionId', params: { sessionId } }
-    //   And NOT with { to: '/' }
-    //
-    // This asserts the #250 fix: the old code navigated to '/' which caused
-    // RootChatScreen to call startNewSession() (clearing activeSessionId) and
-    // raced with attachToSession — live streaming never worked.
     const onClose = vi.fn()
     renderPanel(taskWithSession, onClose)
 
     const btn = await screen.findByRole('button', { name: /Open in Chat/i })
     await act(async () => { fireEvent.click(btn) })
 
-    // Must navigate to the session route
     expect(mockNavigate).toHaveBeenCalledWith(
       expect.objectContaining({
         to: '/sessions/$sessionId',
         params: { sessionId: SESSION_ID },
       }),
     )
-    // Must NOT navigate to '/' (the broken old behavior)
-    const toRootCall = mockNavigate.mock.calls.find(
-      (args) => args[0]?.to === '/'
-    )
+    const toRootCall = mockNavigate.mock.calls.find((args) => args[0]?.to === '/')
     expect(toRootCall).toBeUndefined()
 
-    // Panel closes after navigation
     expect(onClose).toHaveBeenCalled()
   })
 })
 
 describe('TaskDetailPanel — task without session (closed panel)', () => {
-  it('renders null when task is null (sheet is closed)', () => {
+  it('renders null when task is null', () => {
     const { container } = renderPanel(null)
-    // SheetContent renders nothing visible when open=false
     expect(container).toBeTruthy()
   })
 })
 
-// ── GTD mode tests ─────────────────────────────────────────────────────────────
-// Traces to: project-task-management-level1-spec.md — TaskDetailPanel taskMode BDD scenarios
-//
-// The GTD panel (taskMode="gtd") accepts a BoardTask, not a Task.
-// FR-L2-024: subtasks section must NOT appear in GTD mode.
-// FR-L2-023: prompt field and priority selector must appear in GTD mode.
+// ── 7-state lifecycle tests ───────────────────────────────────────────────────
+// Verify the unified status vocabulary renders correctly.
 
-const boardTaskWithPrompt: import('@/lib/api').BoardTask = {
-  id: 'board-task-1',
-  name: 'Fix the build',
-  status: 'inbox',
-  priority: 2,
-  prompt: 'Run the tests and fix all failures.',
-  created_at: '2026-06-09T10:00:00Z',
-  updated_at: '2026-06-09T10:00:00Z',
-}
+describe('TaskDetailPanel — 7-state status rendering', () => {
+  it('renders Start Task button for inbox/next/planning tasks', async () => {
+    for (const status of ['inbox', 'next', 'planning'] as const) {
+      const task = makeTask({ status })
+      const { unmount } = renderPanel(task)
+      expect(await screen.findByRole('button', { name: /Start Task/i })).toBeInTheDocument()
+      unmount()
+    }
+  })
 
-const boardTaskMinimal: import('@/lib/api').BoardTask = {
-  id: 'board-task-2',
-  name: 'Deploy to staging',
-  status: 'next',
-  priority: 3,
-  created_at: '2026-06-09T11:00:00Z',
-  updated_at: '2026-06-09T11:00:00Z',
-}
+  it('shows in_progress as a read-only badge (not a dropdown)', async () => {
+    const task = makeTask({ status: 'in_progress' })
+    renderPanel(task)
+    expect(await screen.findByText(/In Progress/i)).toBeInTheDocument()
+    // Start Task button must NOT appear when task is in_progress
+    expect(screen.queryByRole('button', { name: /Start Task/i })).toBeNull()
+  })
 
-function renderGtdPanel(task: import('@/lib/api').BoardTask | null, onClose = vi.fn()) {
-  return render(
-    <QueryClientProvider client={makeClient()}>
-      <TaskDetailPanel taskMode="gtd" task={task} onClose={onClose} />
-    </QueryClientProvider>,
-  )
-}
-
-describe('TaskDetailPanel — taskMode gtd: does not render subtasks section', () => {
-  it('does not render any subtask-related text in GTD mode (FR-L2-024)', async () => {
-    // BDD: Given a GTD board task is rendered in taskMode="gtd",
-    // When the component renders,
-    // Then no "subtasks" or "sub-task" text appears in the DOM.
-    // Traces to: project-task-management-level1-spec.md — TaskDetailPanel gtd-no-subtasks scenario
-    renderGtdPanel(boardTaskWithPrompt)
-
-    // Wait for async effects to settle
-    await act(async () => {})
-
-    // The word "subtask" (singular or plural, case-insensitive) must NOT appear
-    expect(screen.queryByText(/sub-?task/i)).toBeNull()
-
-    // Also verify the sub-tasks heading (used in workflow mode) is absent
-    expect(screen.queryByText(/sub-tasks/i)).toBeNull()
+  it('renders Retry button for failed tasks', async () => {
+    const task = makeTask({ status: 'failed' })
+    renderPanel(task)
+    expect(await screen.findByRole('button', { name: /Retry/i })).toBeInTheDocument()
   })
 })
 
-describe('TaskDetailPanel — taskMode gtd: renders prompt field', () => {
-  it('renders the prompt content in GTD mode (FR-L2-023)', async () => {
-    // BDD: Given a GTD board task with a prompt value,
-    // When the component renders in taskMode="gtd",
-    // Then the prompt text is visible in the DOM.
-    // Traces to: project-task-management-level1-spec.md — TaskDetailPanel gtd-prompt-field scenario
-    renderGtdPanel(boardTaskWithPrompt)
+// ── Prompt field tests ────────────────────────────────────────────────────────
 
-    // The prompt field should be displayed
+const taskWithPrompt: Task = makeTask({
+  id: 'task-prompt-1',
+  title: 'Fix the build',
+  status: 'inbox',
+  priority: 2,
+  prompt: 'Run the tests and fix all failures.',
+})
+
+const taskNoPrompt: Task = makeTask({
+  id: 'task-no-prompt',
+  title: 'Deploy to staging',
+  status: 'next',
+  priority: 3,
+})
+
+describe('TaskDetailPanel — renders prompt field', () => {
+  it('renders the prompt content', async () => {
+    renderPanel(taskWithPrompt)
     expect(await screen.findByText(/run the tests and fix all failures/i)).toBeInTheDocument()
-
-    // The field label "Prompt / Instructions" should appear
     expect(screen.getByText(/prompt/i)).toBeInTheDocument()
   })
 
   it('shows "No prompt set." when task has no prompt', async () => {
-    // BDD: Given a GTD board task without a prompt,
-    // When the component renders in taskMode="gtd",
-    // Then "No prompt set." text is visible.
-    // Traces to: project-task-management-level1-spec.md — TaskDetailPanel gtd-empty-prompt
-    renderGtdPanel(boardTaskMinimal)
-
+    renderPanel(taskNoPrompt)
     expect(await screen.findByText(/no prompt set/i)).toBeInTheDocument()
   })
 })
 
-describe('TaskDetailPanel — taskMode gtd: renders priority selector', () => {
-  it('renders a priority selector in GTD mode (FR-L2-023)', async () => {
-    // BDD: Given a GTD board task,
-    // When the component renders in taskMode="gtd",
-    // Then a priority select control is visible.
-    // Traces to: project-task-management-level1-spec.md — TaskDetailPanel gtd-priority-selector scenario
-    renderGtdPanel(boardTaskWithPrompt)
+// ── Priority selector tests ───────────────────────────────────────────────────
 
-    // The "Priority" field label must be present
+describe('TaskDetailPanel — renders priority selector', () => {
+  it('renders a priority selector', async () => {
+    renderPanel(taskWithPrompt)
     expect(await screen.findByText(/^priority$/i)).toBeInTheDocument()
   })
 
   it('differentiation test: different task priorities show different initial values', async () => {
-    // Anti-hardcode: two tasks with different priorities must render different priority values.
-    // Traces to: project-task-management-level1-spec.md — TaskDetailPanel gtd priority differentiation
-    const p2Task = { ...boardTaskWithPrompt, priority: 2 }
-    const p4Task = { ...boardTaskMinimal, priority: 4 }
+    const p2Task = makeTask({ priority: 2 })
+    const p4Task = makeTask({ id: 'task-p4', priority: 4 })
 
-    const { unmount } = renderGtdPanel(p2Task)
-    // P2 task should show P2 priority label
+    const { unmount } = renderPanel(p2Task)
     expect(await screen.findByText(/P2/i)).toBeInTheDocument()
     unmount()
 
-    renderGtdPanel(p4Task)
-    // P4 task should show P4 priority label
+    renderPanel(p4Task)
     expect(await screen.findByText(/P4/i)).toBeInTheDocument()
   })
 })
 
-// Workers (type:'worker') are delegation-only labour — never a DIRECT task
-// runner. Assigning one as a task's agent_id routes it through processTaskDirect,
-// which is forbidden. Both the GTD and the workflow detail-panel assignee pickers
-// must exclude workers while still offering base agents.
-//
-// Helper: open the SmartSelect (Radix Select) inside the "Agent" Field and read
-// the listbox option labels. With 2 base agents + 1 worker + "Unassigned" the
-// SmartSelect stays under its searchable threshold, so it is a Radix Select whose
-// trigger has role="combobox" and whose items have role="option".
+// ── Todos checklist tests ─────────────────────────────────────────────────────
+
+describe('TaskDetailPanel — renders todos checklist', () => {
+  it('renders todo items when present', async () => {
+    const task = makeTask({
+      todos: [
+        { text: 'Step one', done: false },
+        { text: 'Step two', done: true },
+      ],
+    })
+    renderPanel(task)
+    expect(await screen.findByText(/step one/i)).toBeInTheDocument()
+    expect(screen.getByText(/step two/i)).toBeInTheDocument()
+  })
+
+  it('does not render todos section when todos array is empty', async () => {
+    const task = makeTask({ todos: [] })
+    renderPanel(task)
+    await act(async () => {})
+    expect(screen.queryByText(/todos/i)).toBeNull()
+  })
+})
+
+// ── Worker exclusion tests ────────────────────────────────────────────────────
+
 async function assertAgentPickerExcludesWorker(): Promise<void> {
-  // The "Agent" field label is a <p>; the picker trigger is its sibling combobox.
   const agentLabel = await screen.findByText('Agent')
   const fieldRoot = agentLabel.parentElement as HTMLElement
   const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
   expect(agentTrigger).toBeTruthy()
   fireEvent.click(agentTrigger)
 
-  // The listbox opens immediately with the "Unassigned" sentinel; the async
-  // agents query then populates the base-agent options. Retry until the loaded
-  // base agents (Mia, Jim) appear — and assert the worker is never among them.
   await waitFor(() => {
     const options = Array.from(document.querySelectorAll('[role="option"]')).map(
       (el) => el.textContent ?? '',
@@ -300,62 +285,38 @@ const agentsWithWorker = [
 
 describe('TaskDetailPanel — workers excluded from the assignee picker', () => {
   beforeEach(() => {
-    // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
     Element.prototype.scrollIntoView = vi.fn()
   })
 
-  it('GTD mode: does not offer a worker as an assignee; lists base agents', async () => {
+  it('does not offer a worker as an assignee; lists base agents', async () => {
     const { fetchAgents } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker as never)
 
-    renderGtdPanel(boardTaskWithPrompt)
-    await assertAgentPickerExcludesWorker()
-
-    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
-  })
-
-  it('workflow mode: does not offer a worker as an assignee; lists base agents', async () => {
-    const { fetchAgents } = await import('@/lib/api')
-    vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker as never)
-
-    renderPanel(taskWithSession)
+    renderPanel(taskWithPrompt)
     await assertAgentPickerExcludesWorker()
 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 })
 
-describe('TaskDetailPanel — taskMode workflow: renders as before', () => {
-  it('workflow mode renders Open in Chat button when session_id is present', async () => {
-    // BDD: Given taskMode="workflow" with a task that has a session_id,
-    // When the component renders,
-    // Then "Open in Chat" button is visible (existing behavior unchanged).
-    // Traces to: project-task-management-level1-spec.md — TaskDetailPanel workflow-unchanged scenario
-    renderPanel(taskWithSession)
+// ── Subtasks section ──────────────────────────────────────────────────────────
 
-    expect(await screen.findByRole('button', { name: /open in chat/i })).toBeInTheDocument()
-  })
-
-  it('workflow mode renders subtask section when subtasks exist', async () => {
-    // BDD: Given taskMode="workflow" and fetchSubtasks returns subtasks,
+describe('TaskDetailPanel — renders subtask section when subtasks exist', () => {
+  it('subtask items are shown when fetchSubtasks returns data', async () => {
+    // BDD: Given fetchSubtasks returns subtasks,
     // When the component renders,
     // Then subtask items are shown.
-    // Traces to: project-task-management-level1-spec.md — TaskDetailPanel workflow-subtasks-present
     const { fetchSubtasks } = await import('@/lib/api')
     vi.mocked(fetchSubtasks).mockResolvedValueOnce([
-      {
+      makeTask({
         id: 'sub-1',
         title: 'Subtask Alpha',
-        prompt: '',
-        status: 'queued',
-        priority: 3,
-        trigger_type: 'manual',
+        status: 'next',
         agent_name: 'Mia',
-      } as import('@/lib/api').Task,
+      }),
     ])
 
     renderPanel(taskWithSession)
-
     expect(await screen.findByText(/subtask alpha/i)).toBeInTheDocument()
   })
 })
