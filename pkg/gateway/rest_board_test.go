@@ -1522,7 +1522,12 @@ func TestEnsureDefaultWorkspace(t *testing.T) {
 	for _, p := range projects {
 		if p.IsDefault != nil && *p.IsDefault {
 			defaultCount++
-			assert.Equal(t, "My Workspace", p.Name, "default project display name must be 'Main' (renamed from 'Inbox')")
+			assert.Equal(
+				t,
+				"My Workspace",
+				p.Name,
+				"default project display name must be 'Main' (renamed from 'Inbox')",
+			)
 			assert.Equal(t, gen.WorkspaceStatusActive, p.Status, "default project must have status=active")
 		}
 	}

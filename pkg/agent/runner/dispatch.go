@@ -24,7 +24,10 @@ const (
 // ErrRemoteA2AReserved is returned when an executor with Kind="remote-a2a" is
 // dispatched. The kind is accepted in the schema for forward-compatibility but is
 // not resolvable in v0.1.0.
-var ErrRemoteA2AReserved = fmt.Errorf("executor kind %q is reserved and not available in v0.1.0", config.ExecutorKindRemoteA2A)
+var ErrRemoteA2AReserved = fmt.Errorf(
+	"executor kind %q is reserved and not available in v0.1.0",
+	config.ExecutorKindRemoteA2A,
+)
 
 // NewDriver constructs the ExternalAgentRunner driver for the given external CLI
 // name (the config.ExecutorConfig.CLI value: "claude-code", "codex", "opencode").

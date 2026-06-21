@@ -222,8 +222,15 @@ func drainExternalRun(
 						slog.Info("external-cli dispatch: run started",
 							"run_id", runID, "cli", ev.Start.CLI, "version", ev.Start.Version)
 					} else {
-						slog.Warn("external-cli dispatch: run started with unknown/unpinned CLI version — graceful degradation",
-							"run_id", runID, "cli", ev.Start.CLI, "version", ev.Start.Version)
+						slog.Warn(
+							"external-cli dispatch: run started with unknown/unpinned CLI version — graceful degradation",
+							"run_id",
+							runID,
+							"cli",
+							ev.Start.CLI,
+							"version",
+							ev.Start.Version,
+						)
 					}
 				} else {
 					slog.Info("external-cli dispatch: run started", "run_id", runID, "cli", cli)
@@ -259,7 +266,10 @@ func drainExternalRun(
 			case runner.EventKindError:
 				if ev.Err != nil {
 					msg := ev.Err.Message
-					childTS.appendIntermediateAssistantTranscript("[external-cli error] "+msg, transcriptModelFor(childTS.agent))
+					childTS.appendIntermediateAssistantTranscript(
+						"[external-cli error] "+msg,
+						transcriptModelFor(childTS.agent),
+					)
 					if ev.Err.Fatal {
 						runErr = fmt.Errorf("external-cli run failed: %s", msg)
 					}
@@ -305,7 +315,10 @@ done:
 		msg := fmt.Sprintf(
 			"External CLI run (%s) was DENIED and aborted (a permission request was rejected: %s). "+
 				"The delegated task did NOT complete.", cli, reason)
-		childTS.appendIntermediateAssistantTranscript("[external-cli denied] "+reason, transcriptModelFor(childTS.agent))
+		childTS.appendIntermediateAssistantTranscript(
+			"[external-cli denied] "+reason,
+			transcriptModelFor(childTS.agent),
+		)
 		return &tools.ToolResult{
 			Err:     denyErr,
 			ForLLM:  msg,

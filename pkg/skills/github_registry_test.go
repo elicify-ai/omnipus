@@ -114,7 +114,11 @@ func TestGitHubRegistry_DownloadAndInstall_WritesSkillDir(t *testing.T) {
 	// GitHub API returns a JSON array for directory listings.
 	mux.HandleFunc("/repos/owner/repo/contents", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"name":"SKILL.md","path":"SKILL.md","type":"file","download_url":"` + "http://" + r.Host + `/raw/SKILL.md` + `","url":"` + "http://" + r.Host + `/repos/owner/repo/contents/SKILL.md` + `"}]`))
+		_, _ = w.Write(
+			[]byte(
+				`[{"name":"SKILL.md","path":"SKILL.md","type":"file","download_url":"` + "http://" + r.Host + `/raw/SKILL.md` + `","url":"` + "http://" + r.Host + `/repos/owner/repo/contents/SKILL.md` + `"}]`,
+			),
+		)
 	})
 	// Serve the raw SKILL.md content.
 	mux.HandleFunc("/raw/SKILL.md", func(w http.ResponseWriter, _ *http.Request) {
@@ -273,7 +277,7 @@ func TestRegistrySearchAll_GitHubPartialError(t *testing.T) {
 // TestRegistrySearchAll_FanOutBothRegistriesContribute verifies the happy path
 // where two mock registries both contribute search results and they are merged +
 // sorted by score. This tests the generic fan-out; the GitHub-specific
-// not-supported behaviour is tested above.
+// not-supported behavior is tested above.
 func TestRegistrySearchAll_FanOutBothRegistriesContribute(t *testing.T) {
 	mgr := NewRegistryManager()
 	mgr.AddRegistry(&mockRegistry{

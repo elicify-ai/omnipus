@@ -13,7 +13,9 @@ import (
 // this as a PartialSearchError contribution (the GitHub registry has nothing
 // to contribute to catalog searches). DownloadAndInstall is the primary
 // operation for GitHub-hosted skills.
-var ErrGitHubSearchNotSupported = errors.New("github registry: search and metadata lookup not supported — use DownloadAndInstall with an owner/repo reference")
+var ErrGitHubSearchNotSupported = errors.New(
+	"github registry: search and metadata lookup not supported — use DownloadAndInstall with an owner/repo reference",
+)
 
 // GitHubRegistry implements SkillRegistry for GitHub-hosted skills.
 //
@@ -23,7 +25,7 @@ var ErrGitHubSearchNotSupported = errors.New("github registry: search and metada
 // GitHubRegistryConfig.Token via os.Getenv(TokenRef) after
 // credentials.InjectFromConfig runs.
 //
-// Fan-out behaviour: Search and GetSkillMeta return ErrGitHubSearchNotSupported.
+// Fan-out behavior: Search and GetSkillMeta return ErrGitHubSearchNotSupported.
 // RegistryManager.SearchAll treats this as a partial failure (PartialSearchError
 // semantics) — ClawHub or other searchable registries still contribute results.
 // DownloadAndInstall performs a full GitHub checkout into the workspace.
@@ -33,7 +35,7 @@ type GitHubRegistry struct {
 }
 
 // NewGitHubRegistry creates a GitHubRegistry from GitHubRegistryConfig.
-// Returns an error if the SkillInstaller cannot be initialised (e.g., bad
+// Returns an error if the SkillInstaller cannot be initialized (e.g., bad
 // proxy URL or empty workspace).
 func NewGitHubRegistry(cfg GitHubRegistryConfig) (*GitHubRegistry, error) {
 	if cfg.Workspace == "" {
@@ -148,7 +150,10 @@ func unscannedGitHubResult(slug string) *InstallResult {
 		Version:          slug,
 		IsMalwareBlocked: false,
 		IsSuspicious:     true,
-		Summary:          fmt.Sprintf("Installed from GitHub: %s (unmoderated source — content not scanned, review before trusting)", slug),
-		Verified:         false,
+		Summary: fmt.Sprintf(
+			"Installed from GitHub: %s (unmoderated source — content not scanned, review before trusting)",
+			slug,
+		),
+		Verified: false,
 	}
 }

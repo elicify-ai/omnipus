@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 )
 
 // TestInjectRunnerEgressProxy covers the env-injection helper directly.

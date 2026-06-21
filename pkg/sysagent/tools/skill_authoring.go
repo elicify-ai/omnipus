@@ -51,8 +51,11 @@ func (t *SkillCreateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":    map[string]any{"type": "string", "description": "Skill name (alphanumeric with hyphens)."},
-			"content": map[string]any{"type": "string", "description": "Full SKILL.md content including YAML frontmatter."},
+			"name": map[string]any{"type": "string", "description": "Skill name (alphanumeric with hyphens)."},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "Full SKILL.md content including YAML frontmatter.",
+			},
 		},
 		"required": []string{"name", "content"},
 	}
@@ -65,7 +68,9 @@ func (t *SkillCreateTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
 	if content == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "content is required", "provide the full SKILL.md including frontmatter"))
+		return tools.ErrorResult(
+			errorJSON("INVALID_INPUT", "content is required", "provide the full SKILL.md including frontmatter"),
+		)
 	}
 
 	if t.deps == nil || t.deps.SkillWriter == nil {
@@ -109,8 +114,11 @@ func (t *SkillEditTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":    map[string]any{"type": "string", "description": "Name of the existing skill to edit."},
-			"content": map[string]any{"type": "string", "description": "Full new SKILL.md content including YAML frontmatter."},
+			"name": map[string]any{"type": "string", "description": "Name of the existing skill to edit."},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "Full new SKILL.md content including YAML frontmatter.",
+			},
 		},
 		"required": []string{"name", "content"},
 	}
@@ -123,7 +131,9 @@ func (t *SkillEditTool) Execute(_ context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
 	if content == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "content is required", "provide the full new SKILL.md including frontmatter"))
+		return tools.ErrorResult(
+			errorJSON("INVALID_INPUT", "content is required", "provide the full new SKILL.md including frontmatter"),
+		)
 	}
 
 	if t.deps == nil || t.deps.SkillWriter == nil {
@@ -181,8 +191,11 @@ func skillAuthoringError(op, name string, err error) *tools.ToolResult {
 	case errors.Is(err, skills.ErrPathConfinement):
 		slog.Warn("sysagent: skill authoring rejected — path confinement",
 			"event", "skill_write_denied", "action", op, "name", name, "reason", "path_confinement")
-		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			"skill name escapes the skills directory", "use a plain skill name (alphanumeric with hyphens, no '/' or '..')"))
+		return tools.ErrorResult(errorJSON(
+			"INVALID_INPUT",
+			"skill name escapes the skills directory",
+			"use a plain skill name (alphanumeric with hyphens, no '/' or '..')",
+		))
 	case errors.Is(err, skills.ErrOversize):
 		slog.Warn("sysagent: skill authoring rejected — oversize",
 			"event", "skill_write_denied", "action", op, "name", name, "reason", "oversize")

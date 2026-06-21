@@ -183,7 +183,7 @@ func TestExternalDispatch_RoutesPermissionToConsent_DenyCancels(t *testing.T) {
 		t.Errorf("decision Allow = true, want false (deny)")
 	}
 	if !fr.IsCancelled() {
-		t.Error("driver was not cancelled after a deny decision")
+		t.Error("driver was not canceled after a deny decision")
 	}
 
 	// [MAJOR] The returned ToolResult MUST reflect the denial — not a success — so

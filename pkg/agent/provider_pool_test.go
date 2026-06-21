@@ -124,7 +124,9 @@ func TestApplyAgentModel_RebuildsProviderPool(t *testing.T) {
 	// implementation that lazily points all pinned providers at the primary
 	// would violate this.
 	if anthProv == orProv {
-		t.Error("post-switch pool returned the same LLMProvider for anthropic and openrouter — FR-007 requires distinct provider instances")
+		t.Error(
+			"post-switch pool returned the same LLMProvider for anthropic and openrouter — FR-007 requires distinct provider instances",
+		)
 	}
 }
 
@@ -199,7 +201,9 @@ func TestBuildProviderPool_SkipsProvidersWithMissingModelConfig(t *testing.T) {
 		t.Error("pool missing the valid 'openrouter' entry — the missing-provider skip should be non-fatal")
 	}
 	if _, ok := pool["nonexistent-provider"]; ok {
-		t.Error("pool contains a 'nonexistent-provider' entry — findModelConfigForProvider should have failed and the entry should have been skipped")
+		t.Error(
+			"pool contains a 'nonexistent-provider' entry — findModelConfigForProvider should have failed and the entry should have been skipped",
+		)
 	}
 }
 
@@ -285,7 +289,10 @@ func TestBuildProviderPool_FallsBackToPassthrough(t *testing.T) {
 	// The candidate's name ("zai") is the pool key — that's what
 	// GetProviderForCandidate looks up against.
 	if _, ok := pool["zai"]; !ok {
-		t.Errorf("pool missing key 'zai' — defensive fallback should preserve the candidate's name as the pool key; got keys: %v", poolKeys(pool))
+		t.Errorf(
+			"pool missing key 'zai' — defensive fallback should preserve the candidate's name as the pool key; got keys: %v",
+			poolKeys(pool),
+		)
 	}
 }
 

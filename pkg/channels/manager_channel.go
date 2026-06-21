@@ -100,7 +100,7 @@ func toChannelConfig(cfg *config.Config, list []string) (map[string]config.Chann
 }
 
 // toChannelConfigForMarshal is a compatibility shim used by tests that still
-// need the legacy JSON-marshal path. It serialises the config subset and returns
+// need the legacy JSON-marshal path. It serializes the config subset and returns
 // a flat map for inspection.
 func toChannelConfigForMarshal(cfg *config.Config, list []string) (map[string]any, error) {
 	subset, err := toChannelConfig(cfg, list)

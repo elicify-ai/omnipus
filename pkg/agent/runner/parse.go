@@ -58,7 +58,7 @@ func ParseCodexStreamJSON(data []byte, runID string) []RunEvent {
 	}
 	// M4: turn.completed no longer emits a terminal End (it fires once per turn).
 	// The single End is synthesized when the codex stream drains cleanly — mirror
-	// the live driver's behaviour so the offline parse path produces exactly one
+	// the live driver's behavior so the offline parse path produces exactly one
 	// End at true completion.
 	if !emittedFatal {
 		events = append(events, RunEvent{Kind: EventKindEnd, RunID: runID, Timestamp: time.Now().UTC()})

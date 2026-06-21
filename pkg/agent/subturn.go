@@ -740,7 +740,7 @@ func spawnSubTurn(
 		return result, err
 	}
 
-	// Native path (default, existing behaviour — unchanged).
+	// Native path (default, existing behavior — unchanged).
 	turnRes, turnErr := al.runTurn(childCtx, childTS)
 
 	// Release the concurrency semaphore immediately after runTurn completes,

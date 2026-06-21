@@ -101,7 +101,7 @@ func ParseRoomScope(s string) (RoomScope, error) {
 	return "", &InvalidRoomScopeError{s}
 }
 
-// InvalidRoomScopeError is returned when an unrecognised room scope string is supplied.
+// InvalidRoomScopeError is returned when an unrecognized room scope string is supplied.
 type InvalidRoomScopeError struct {
 	Got string
 }

@@ -88,7 +88,7 @@ func TestMemory_MinHash_DedupOnWrite(t *testing.T) {
 	defer ms.Close()
 
 	original := "We deploy using Kubernetes with Helm charts on AWS EKS. The cluster auto-scales " +
-		"from 3 to 30 nodes based on CPU utilisation metrics."
+		"from 3 to 30 nodes based on CPU utilization metrics."
 	nearDup := "We deploy using Kubernetes with Helm charts on AWS EKS. The cluster auto-scales " +
 		"from 3 to 30 nodes based on CPU utilization metrics and memory pressure."
 

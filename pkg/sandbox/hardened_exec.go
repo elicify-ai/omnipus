@@ -4,7 +4,7 @@
 // Cross-platform contract — what each platform's applyPlatformHardening /
 // applyPostStartHardening actually does:
 //
-//   - Linux: Setpgid (so the whole subtree can be signalled) + Pdeathsig=
+//   - Linux: Setpgid (so the whole subtree can be signaled) + Pdeathsig=
 //     SIGTERM (so an orphaned child dies if the gateway exits). Post-start,
 //     prlimit sets RLIMIT_NPROC unconditionally (fork-bomb cap) and RLIMIT_AS
 //     when Limits.MemoryLimitBytes is non-zero. NOTE: RLIMIT_CPU is
@@ -270,7 +270,7 @@ func ScrubGatewayEnv() []string {
 //	OPENAI_API_KEY       — Codex + opencode: the OpenAI model key.
 //	OPENAI_BASE_URL      — Codex + opencode: provider endpoint override.
 //	CODEX_HOME           — Codex: override for ~/.codex (holds auth.json).
-//	                       Default ~/.codex is reached via HOME; this honours a
+//	                       Default ~/.codex is reached via HOME; this honors a
 //	                       custom location. See providers.CodexHomeEnvVar.
 //
 // DO NOT add a key here unless an external-CLI runner provably needs it to

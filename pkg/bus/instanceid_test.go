@@ -49,7 +49,7 @@ func TestInstanceID_OutboundMessageSetGet(t *testing.T) {
 	}
 }
 
-// TestInstanceID_JSONRoundTrip verifies InstanceID survives JSON marshalling
+// TestInstanceID_JSONRoundTrip verifies InstanceID survives JSON marshaling
 // and unmarshalling on all four structs, and that the omitempty tag works
 // (empty InstanceID is omitted from JSON output).
 func TestInstanceID_JSONRoundTrip(t *testing.T) {

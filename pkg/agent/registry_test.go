@@ -207,7 +207,10 @@ func TestAgentRegistry_GetDefaultAgent_OverrideToWorkerSkipped(t *testing.T) {
 		t.Fatal("expected a default agent")
 	}
 	if agent.ID == "worker" || agent.IsWorker() {
-		t.Fatalf("GetDefaultAgent returned a worker (%q) via the Priority-2 override — workers are not chat targets", agent.ID)
+		t.Fatalf(
+			"GetDefaultAgent returned a worker (%q) via the Priority-2 override — workers are not chat targets",
+			agent.ID,
+		)
 	}
 }
 

@@ -405,7 +405,13 @@ func TestUpdateAgent_WorkerSourceRejected(t *testing.T) {
 func TestUpdateAgent_WorkerEmptyToAllowed(t *testing.T) {
 	api := buildDelegationTestAPI(t)
 	w := putAgent(t, api, "laborer", `{"delegation_policy":{"to":[]}}`)
-	assert.Equal(t, http.StatusOK, w.Code, "worker with empty to[] (deny-all) must be allowed; body: %s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusOK,
+		w.Code,
+		"worker with empty to[] (deny-all) must be allowed; body: %s",
+		w.Body.String(),
+	)
 }
 
 // TestUpdateAgent_GrandfatherDanglingTarget proves a pre-existing dangling to[]

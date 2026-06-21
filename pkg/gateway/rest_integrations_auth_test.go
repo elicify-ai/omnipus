@@ -135,7 +135,7 @@ func putIntegration(api *restAPI, user *config.UserConfig, id, body, reauthToken
 	return w
 }
 
-// TestIntegrationProviders_List verifies the GET catalogue surfaces both the
+// TestIntegrationProviders_List verifies the GET catalog surfaces both the
 // search and voice providers (FR-12.1).
 func TestIntegrationProviders_List(t *testing.T) {
 	api, user := newReAuthTestAPI(t)
@@ -165,7 +165,7 @@ func TestIntegrationProviders_List(t *testing.T) {
 	assert.Equal(t, false, ddg["requires_key"])
 }
 
-// TestIntegrationProviders_List_AllProviders verifies the expanded catalogue
+// TestIntegrationProviders_List_AllProviders verifies the expanded catalog
 // surfaces every implemented search (Brave/Tavily/Perplexity/DuckDuckGo/
 // SearXNG/GLM/Baidu) and voice (ElevenLabs/Groq/audio-model) provider
 // (FR-12.1). The keyed providers that have no key stored report configured=false.
@@ -192,7 +192,7 @@ func TestIntegrationProviders_List_AllProviders(t *testing.T) {
 		gotSearch[p["id"].(string)] = true
 	}
 	for id := range wantSearch {
-		assert.True(t, gotSearch[id], "search provider %q must be in the catalogue", id)
+		assert.True(t, gotSearch[id], "search provider %q must be in the catalog", id)
 	}
 
 	wantVoice := map[string]bool{
@@ -203,7 +203,7 @@ func TestIntegrationProviders_List_AllProviders(t *testing.T) {
 		gotVoice[p["id"].(string)] = true
 	}
 	for id := range wantVoice {
-		assert.True(t, gotVoice[id], "voice provider %q must be in the catalogue", id)
+		assert.True(t, gotVoice[id], "voice provider %q must be in the catalog", id)
 	}
 
 	// SearXNG is keyless but needs a base_url; with no base_url set it must
@@ -270,7 +270,7 @@ func TestIntegrationProviderUpdate_WithReAuth_Succeeds(t *testing.T) {
 	w := putIntegration(api, user, "duckduckgo", `{"kind":"search","active":true}`, token)
 	require.Equal(t, http.StatusOK, w.Code, "valid re-auth must allow the change; body=%s", w.Body.String())
 
-	// The returned catalogue must report duckduckgo as the active search provider.
+	// The returned catalog must report duckduckgo as the active search provider.
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "duckduckgo", resp["active_search"])

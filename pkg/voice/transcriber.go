@@ -29,7 +29,7 @@ func supportsAudioTranscription(model string) bool {
 // protocol-prefixed form, e.g. "openai/gpt-4o-audio-preview") is routed through
 // an OpenAI-compatible provider path capable of supplying the audio media payload
 // shape expected by NewAudioModelTranscriber. Exported so the Integrations
-// catalogue (pkg/gateway) can detect the active voice transcriber without
+// catalog (pkg/gateway) can detect the active voice transcriber without
 // duplicating the protocol list.
 func ModelSupportsAudioTranscription(model string) bool {
 	protocol, _ := providers.ExtractProtocol(model)

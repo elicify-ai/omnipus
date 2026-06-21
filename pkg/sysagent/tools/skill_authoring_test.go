@@ -88,7 +88,7 @@ func TestSkillEditTool_BuiltinOverride(t *testing.T) {
 	edit := systools.NewSkillEditTool(deps)
 	res := edit.Execute(context.Background(), map[string]any{
 		"name":    "plan",
-		"content": "---\nname: plan\ndescription: An overridden plan skill customised by the user for this test.\n---\n\n# plan\n\nOverride.\n",
+		"content": "---\nname: plan\ndescription: An overridden plan skill customized by the user for this test.\n---\n\n# plan\n\nOverride.\n",
 	})
 	m := parseSuccess(t, res.ForLLM)
 	if m["action"] != "override_created" {
@@ -189,7 +189,10 @@ type recordingApprover struct {
 	got     *agent.ToolApprovalRequest
 }
 
-func (r *recordingApprover) ApproveTool(_ context.Context, req *agent.ToolApprovalRequest) (agent.ApprovalDecision, error) {
+func (r *recordingApprover) ApproveTool(
+	_ context.Context,
+	req *agent.ToolApprovalRequest,
+) (agent.ApprovalDecision, error) {
 	r.got = req.Clone()
 	return agent.ApprovalDecision{Verdict: r.verdict, Reason: "test"}, nil
 }

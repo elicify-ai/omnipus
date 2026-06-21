@@ -78,16 +78,16 @@ const boltOpenTimeout = "5s"
 
 // RoomIndex holds an open bleve scorch index for a single room.
 //
-// It is safe for concurrent reads; writes are serialised by the internal mu.
+// It is safe for concurrent reads; writes are serialized by the internal mu.
 // A single *RoomIndex is SHARED process-wide across every caller that names the
 // same on-disk index path (see registry.go) — the underlying bbolt handle is
 // opened once and closed only when the last holder releases it. Sharing is safe
 // because scorch is internally goroutine-safe for concurrent reads + a single
-// serialised writer (mu).
+// serialized writer (mu).
 type RoomIndex struct {
 	idx         bleve.Index
 	memoriesDir string
-	mu          sync.Mutex // serialises Index() / Rebuild() calls
+	mu          sync.Mutex // serializes Index() / Rebuild() calls
 
 	// regKey is the registry key (absolute, cleaned index path) under which this
 	// handle is shared. Set by the registry on first acquire; used by Close() to
@@ -149,8 +149,8 @@ func OpenOrCreate(room memrooms.Room) (*RoomIndex, error) {
 // block before returning an error (defense-in-depth against a contended or
 // stale process-exclusive lock — see boltOpenTimeout). scorch parses it as a
 // time.Duration string.
-func scorchOpenConfig() map[string]interface{} {
-	return map[string]interface{}{"bolt_timeout": boltOpenTimeout}
+func scorchOpenConfig() map[string]any {
+	return map[string]any{"bolt_timeout": boltOpenTimeout}
 }
 
 // openOrCreateAt opens a scorch index at path if it exists, or creates one.
@@ -213,7 +213,7 @@ type memoryDoc struct {
 
 // Index adds or updates a memory in the bleve index.
 // Uses the memory ID as the bleve document ID (stable across updates).
-// Safe to call concurrently — serialised by the internal mu lock.
+// Safe to call concurrently — serialized by the internal mu lock.
 func (ri *RoomIndex) Index(mf memrooms.MemoryFile) error {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
@@ -236,7 +236,7 @@ func (ri *RoomIndex) indexLocked(mf memrooms.MemoryFile) error {
 }
 
 // Delete removes a memory from the bleve index by ID.
-// Safe to call concurrently — serialised by the internal mu lock.
+// Safe to call concurrently — serialized by the internal mu lock.
 func (ri *RoomIndex) Delete(id string) error {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
@@ -266,7 +266,7 @@ func (ri *RoomIndex) Search(query string, limit int) ([]SearchHit, error) {
 	} else {
 		// BM25 over the text fields explicitly (title, body, tags).
 		// We build a disjunction of per-field match queries so that the
-		// "en" analyzer mapping is honoured for each field.  A plain
+		// "en" analyzer mapping is honored for each field.  A plain
 		// bleve.NewMatchQuery targets the _all composite field whose
 		// analyzer does not match the field-level "en" mapping, producing
 		// zero hits even when terms are present.
@@ -295,7 +295,7 @@ func (ri *RoomIndex) Search(query string, limit int) ([]SearchHit, error) {
 
 // Rebuild wipes and recreates the bleve index from the room's .md files.
 // Call this after corruption or when the index is suspected stale.
-// Safe to call concurrently — serialised by the internal mu lock.
+// Safe to call concurrently — serialized by the internal mu lock.
 func (ri *RoomIndex) Rebuild() error {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()

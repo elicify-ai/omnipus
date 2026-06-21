@@ -62,7 +62,7 @@ func TestOmnipusHomeDir_RelativeOverrideIsResolvedAgainstCWD(t *testing.T) {
 		t.Errorf("OmnipusHomeDir() with relative env = %q, want absolute path", got)
 	}
 	// The absolute path should be the CWD joined with the relative override,
-	// cleaned of any double-separator or trailing-slash artefacts.
+	// cleaned of any double-separator or trailing-slash artifacts.
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Skipf("Getwd failed on this host; skipping: %v", err)

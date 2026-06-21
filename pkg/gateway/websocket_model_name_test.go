@@ -197,7 +197,12 @@ func TestHandleChatMessage_ModelNameWithAgentID_BothKeysSet(t *testing.T) {
 	case msg := <-msgBus.InboundChan():
 		require.NotNil(t, msg.Metadata)
 		assert.Equal(t, "mia", msg.Metadata["agent_id"], "agent_id must remain")
-		assert.Equal(t, "z-ai/glm-5-turbo", msg.Metadata["model_name"], "model_name must be added without clobbering agent_id")
+		assert.Equal(
+			t,
+			"z-ai/glm-5-turbo",
+			msg.Metadata["model_name"],
+			"model_name must be added without clobbering agent_id",
+		)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bus.InboundMessage")
 	}

@@ -84,7 +84,9 @@ func TestExternalEventParser_ToolCallAliasToToolCall(t *testing.T) {
 }
 
 func TestExternalEventParser_ToolResultToToolResult(t *testing.T) {
-	raw := []byte(`{"type":"tool_result","tool_result":{"id":"tr-1","name":"bash","output":{"status":"ok"},"is_error":false}}`)
+	raw := []byte(
+		`{"type":"tool_result","tool_result":{"id":"tr-1","name":"bash","output":{"status":"ok"},"is_error":false}}`,
+	)
 	ev, err := ParseExternalEvent(raw)
 	if err != nil {
 		t.Fatalf("ParseExternalEvent error: %v", err)
@@ -111,7 +113,9 @@ func TestExternalEventParser_ToolResultToToolResult(t *testing.T) {
 }
 
 func TestExternalEventParser_PermissionRequestToPause(t *testing.T) {
-	raw := []byte(`{"type":"permission_request","permission_request":{"id":"pr-1","tool_name":"bash","description":"run ls","input":{"cmd":"ls"}}}`)
+	raw := []byte(
+		`{"type":"permission_request","permission_request":{"id":"pr-1","tool_name":"bash","description":"run ls","input":{"cmd":"ls"}}}`,
+	)
 	ev, err := ParseExternalEvent(raw)
 	if err != nil {
 		t.Fatalf("ParseExternalEvent error: %v", err)

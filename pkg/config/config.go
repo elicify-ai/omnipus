@@ -339,7 +339,7 @@ type PerformanceConfig struct {
 //  2. The configured value (p.MaxParallelAgents), if non-zero.
 //  3. An auto-detect heuristic: min(NumCPU-2, RAM_GB/1.5), floor 2, ceiling 16.
 //
-// An explicit MaxParallelAgents=1 is honoured — only the auto-detect path
+// An explicit MaxParallelAgents=1 is honored — only the auto-detect path
 // enforces a floor of 2 (to prevent accidental single-flight on capable hardware).
 func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
 	// Env-var override has highest priority.
@@ -357,7 +357,7 @@ func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
 
 // clampParallelExplicit clamps an explicitly configured value to [1, 16].
 // The floor is 1 so that a user who deliberately sets max_parallel_agents=1
-// gets single-flight behaviour. Use autoDetectMaxParallel for the auto path
+// gets single-flight behavior. Use autoDetectMaxParallel for the auto path
 // (which floors at 2 to avoid accidental single-flight on capable hardware).
 func clampParallelExplicit(v int) int {
 	const minPar, maxPar = 1, 16
@@ -788,7 +788,7 @@ type AgentConfig struct {
 	// UpdatedAt is the timestamp of the last successful PUT /agents/{id} update.
 	// It is returned in list and detail responses and used for optimistic concurrency.
 	// Pointer so omitempty works; nil = never updated. A non-pointer time.Time
-	// is a struct type and always serialises (writing "0001-01-01T00:00:00Z"
+	// is a struct type and always serializes (writing "0001-01-01T00:00:00Z"
 	// for agents that were never PUT-updated), defeating omitempty.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
@@ -808,7 +808,7 @@ const (
 	AgentTypeSystem AgentType = "system"
 	AgentTypeCore   AgentType = "core"
 	AgentTypeCustom AgentType = "custom"
-	// AgentTypeWorker is a sub-agent worker: a depth-limited, ephemeral labour
+	// AgentTypeWorker is a sub-agent worker: a depth-limited, ephemeral labor
 	// tier invoked ONLY via delegation. A worker is NOT a chat target (it never
 	// receives inbound channel messages and is never resolved as the default
 	// agent), has no heartbeat, and cannot be marked as the routing default.
@@ -904,7 +904,7 @@ func (a AgentConfig) ResolveType(isCoreAgent func(string) bool) AgentType {
 // Worker is an EXPLICIT classification — it is only ever set via the Type field
 // (workers are not inferred from an ID list), so the check does not need the
 // isCoreAgent resolver and is safe to call without it. A worker is a
-// delegation-only labour tier: never a chat target, never the routing default,
+// delegation-only labor tier: never a chat target, never the routing default,
 // no heartbeat. See AgentTypeWorker.
 func (a AgentConfig) IsWorker() bool {
 	return a.Type == AgentTypeWorker
@@ -1018,12 +1018,18 @@ func (dp *DelegationPolicy) WarnIfInertFieldsSet(agentID string) {
 		return
 	}
 	if len(dp.AcceptFrom) > 0 {
-		slog.Warn("delegation policy: accept_from is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
-			"agent_id", agentID)
+		slog.Warn(
+			"delegation policy: accept_from is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
+			"agent_id",
+			agentID,
+		)
 	}
 	if dp.Budget != nil {
-		slog.Warn("delegation policy: budget is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
-			"agent_id", agentID)
+		slog.Warn(
+			"delegation policy: budget is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
+			"agent_id",
+			agentID,
+		)
 	}
 }
 
@@ -1157,7 +1163,7 @@ func ResolveDelegationDepth(dp *DelegationPolicy) int {
 }
 
 // ExecutorKind enumerates the runtime used to execute a sub-agent task.
-// "native" runs the task inside the existing Omnipus agent loop (default, existing behaviour).
+// "native" runs the task inside the existing Omnipus agent loop (default, existing behavior).
 //
 //   - "external-cli" is ACTIVE in v0.1.0: it drives an external CLI tool (Claude
 //     Code, Codex, opencode) over JSON streaming. Each run is git-worktree-isolated
@@ -1183,7 +1189,7 @@ const (
 )
 
 // ExecutorConfig specifies how a sub-agent's tasks are executed.
-// When nil (the default), behaviour is identical to Kind="native".
+// When nil (the default), behavior is identical to Kind="native".
 //
 // Kind="native" and Kind="external-cli" are both functional in v0.1.0;
 // Kind="remote-a2a" is RESERVED and rejected at dispatch (see ExecutorKind and
@@ -1307,7 +1313,7 @@ type AgentDefaults struct {
 	// default. When set, it takes precedence over CanDelegateTo.
 	// Nil means "unset — fall back to CanDelegateTo for backward compatibility".
 	DelegationPolicy *DelegationPolicy `json:"delegation_policy,omitempty"`
-	DefaultAgentID   string            `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
+	DefaultAgentID   string            `json:"default_agent_id,omitempty"  env:"OMNIPUS_DEFAULT_AGENT_ID"`
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
 	// When false, CloseSession is a no-op and no background LLM calls are made.
@@ -2739,10 +2745,10 @@ type ExecConfig struct {
 }
 
 type SkillsToolsConfig struct {
-	ToolConfig            `                       yaml:"-"                 envPrefix:"OMNIPUS_TOOLS_SKILLS_"`
-	Marketplaces          []MarketplaceConfig `yaml:"-"                                                   json:"marketplaces,omitempty"`
-	MaxConcurrentSearches int                 `yaml:"-"                                                   json:"max_concurrent_searches" env:"OMNIPUS_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
-	SearchCache           SearchCacheConfig   `yaml:"-"                                                   json:"search_cache"`
+	ToolConfig            `                    yaml:"-" envPrefix:"OMNIPUS_TOOLS_SKILLS_"`
+	Marketplaces          []MarketplaceConfig `yaml:"-"                                   json:"marketplaces,omitempty"`
+	MaxConcurrentSearches int                 `yaml:"-"                                   json:"max_concurrent_searches" env:"OMNIPUS_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
+	SearchCache           SearchCacheConfig   `yaml:"-"                                   json:"search_cache"`
 }
 
 // MarketplaceConfig is the persisted shape of one skill-marketplace entry

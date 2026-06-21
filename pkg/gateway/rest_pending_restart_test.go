@@ -41,7 +41,7 @@ func withUserCtx(r *http.Request) *http.Request {
 // (LoadConfig + ValidateAndApplyPreviewDefaults + ApplyWarmupTimeoutDefault),
 // returning the resulting *config.Config to use as appliedConfig. This mirrors
 // production: appliedConfig is the boot config WITH computed defaults applied,
-// not the raw on-disk bytes. Centralising it here guarantees the test's applied
+// not the raw on-disk bytes. Centralizing it here guarantees the test's applied
 // side is normalised identically to the handler's persisted side, so a
 // clean-install (applied == persisted) yields an empty diff even for keys that
 // only get a value via boot-time defaults (session.dm_scope, gateway.preview_*).
@@ -351,7 +351,7 @@ func TestHandlePendingRestart_EmptyAfterApply(t *testing.T) {
 
 // TestHandlePendingRestart_SetThenRevertClearsDiff verifies the diff-based
 // semantics: if a key was changed to Y and then changed back to X (the applied
-// value) before restart, the diff returns []. Modelled by leaving the on-disk
+// value) before restart, the diff returns []. Modeled by leaving the on-disk
 // config identical to boot (net-zero edit).
 func TestHandlePendingRestart_SetThenRevertClearsDiff(t *testing.T) {
 	// Applied had mode="off"; persisted was changed to "enforce" then reverted to

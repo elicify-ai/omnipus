@@ -1778,7 +1778,10 @@ func buildDelegationDenyChecker(
 				logger.WarnCF("agent", "delegation denied: target not in trust set", map[string]any{
 					"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
 				})
-				return fmt.Sprintf("agent %q is not in this agent's delegation trust set ('to' allowlist)", targetAgentID)
+				return fmt.Sprintf(
+					"agent %q is not in this agent's delegation trust set ('to' allowlist)",
+					targetAgentID,
+				)
 			}
 		}
 
@@ -1838,7 +1841,10 @@ func buildSubagentDelegationDenyChecker(
 			logger.WarnCF("agent", "delegation denied: mode not permitted", map[string]any{
 				"mode": string(config.DelegationModeAwait),
 			})
-			return fmt.Sprintf("delegation mode %q is not permitted by this agent's delegation policy", string(config.DelegationModeAwait))
+			return fmt.Sprintf(
+				"delegation mode %q is not permitted by this agent's delegation policy",
+				string(config.DelegationModeAwait),
+			)
 		}
 
 		// 3. Depth.
@@ -3780,7 +3786,7 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 	// explicit agent_id (e.g. channel inputs that don't track agent state).
 	if explicitID := inboundMetadata(msg, "agent_id"); explicitID != "" {
 		if agent, ok := registry.GetAgent(explicitID); ok {
-			// A worker is a delegation-only labour tier — never a chat target.
+			// A worker is a delegation-only labor tier — never a chat target.
 			// An inbound message that explicitly addresses a worker (e.g. a stale
 			// SPA dropdown value or a crafted channel payload) must NOT let the
 			// worker answer as a live persona. Degrade to the normal routing
@@ -3788,11 +3794,15 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 			// handoff pin here — falling through preserves an existing chat-target
 			// override if one is set.
 			if agent.IsWorker() {
-				logger.WarnCF("agent", "Explicit agent_id references a worker (not a chat target); ignoring and falling back to default route", map[string]any{
-					"agent_id":   explicitID,
-					"session_id": msg.SessionID,
-					"reason":     "worker is invoked via delegation, not as a chat target",
-				})
+				logger.WarnCF(
+					"agent",
+					"Explicit agent_id references a worker (not a chat target); ignoring and falling back to default route",
+					map[string]any{
+						"agent_id":   explicitID,
+						"session_id": msg.SessionID,
+						"reason":     "worker is invoked via delegation, not as a chat target",
+					},
+				)
 				// Fall through to the handoff-override / ResolveRoute cascade below.
 			} else {
 				// Clear stale handoff override only when the explicit target differs from
@@ -3834,11 +3844,15 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 					// to the normal ResolveRoute cascade so a chat-target default
 					// answers instead of the worker.
 					if agent.IsWorker() {
-						logger.WarnCF("agent", "Session handoff pin references a worker (not a chat target); clearing stale pin and falling back to default route", map[string]any{
-							"session_id": msg.SessionID,
-							"agent_id":   agentID,
-							"reason":     "worker is invoked via delegation, not as a chat target",
-						})
+						logger.WarnCF(
+							"agent",
+							"Session handoff pin references a worker (not a chat target); clearing stale pin and falling back to default route",
+							map[string]any{
+								"session_id": msg.SessionID,
+								"agent_id":   agentID,
+								"reason":     "worker is invoked via delegation, not as a chat target",
+							},
+						)
 						al.sessionActiveAgent.Delete(scopeKey)
 					} else {
 						logger.InfoCF("agent", "Session handoff override active", map[string]any{
@@ -4266,7 +4280,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// loaded model, run handleModelSwitch BEFORE the first LLM call so the next
 	// request sees the compressed, annotated history. handleModelSwitch is a
 	// no-op when no switch is requested.
-	if requested := strings.TrimSpace(inboundMetadata(bus.InboundMessage{Metadata: ts.opts.Metadata}, "model_name")); requested != "" {
+	if requested := strings.TrimSpace(
+		inboundMetadata(bus.InboundMessage{Metadata: ts.opts.Metadata}, "model_name"),
+	); requested != "" {
 		// Skip when the requested model is the same as the agent's currently
 		// loaded one — this is the no-op case in spec §11 Dataset 3 row 1.
 		if requested != ts.agent.Model {
@@ -6648,7 +6664,7 @@ func (al *AgentLoop) summarizeDroppedTurns(
 // invoked when an incoming bus message carries a model_name metadata that
 // differs from the agent's current Model.
 //
-// Behaviour:
+// Behavior:
 //  1. Resolve the new model's ContextWindow. In this worktree we read it
 //     from the agent's stored defaults when available; otherwise we fall
 //     back to the agent's current ContextWindow (no shrink detected → noop).
@@ -6699,7 +6715,7 @@ func (al *AgentLoop) handleModelSwitch(
 	// the configured default from cfg.Agents.Defaults.ContextWindow. On any
 	// miss (cfg nil, model unknown, defaults unset) fall back to the agent's
 	// existing ContextWindow — preserving the historical "treat unknown as
-	// fit" behaviour so the next LLM call's forceCompression still trips on
+	// fit" behavior so the next LLM call's forceCompression still trips on
 	// overflow. Force a 128k floor for sub-zero agent defaults so decision
 	// logic still has a sane bound.
 	newContextWindow := agent.ContextWindow
@@ -6770,7 +6786,7 @@ func (al *AgentLoop) handleModelSwitch(
 			// Per FR-011: the spec-correct fallback when the LLM summarization
 			// call fails is to invoke forceCompression — that path is the
 			// canonical "I could not summarize, so I'll drop more aggressively
-			// and surface a note" behaviour and is what `forceCompression`
+			// and surface a note" behavior and is what `forceCompression`
 			// already records in the session summary. We then build a brief
 			// meta-note that mentions the switch but does not attempt an
 			// additional LLM call. Persist via the same path so the next
@@ -6779,7 +6795,12 @@ func (al *AgentLoop) handleModelSwitch(
 				logger.DebugCF("agent", "handleModelSwitch: forceCompression returned false (history too small)",
 					map[string]any{"session_key": sessionKey})
 			}
-			summary = fmt.Sprintf("(summary unavailable: %s) — moved from %s to %s", summaryErr.Error(), oldModel, newModel)
+			summary = fmt.Sprintf(
+				"(summary unavailable: %s) — moved from %s to %s",
+				summaryErr.Error(),
+				oldModel,
+				newModel,
+			)
 		}
 
 		// 3. Strategy B for FR-012: route the switch summary into the dynamic
@@ -6874,7 +6895,7 @@ func splitForSwitchCompress(history []providers.Message) (dropped, kept []provid
 // conversation turn — we are free to drop it if it overflows the window on
 // its own. The minimum result is an empty history (BuildMessages handles
 // empty history gracefully; the next-turn context-window check via
-// forceCompression is the last line of defence).
+// forceCompression is the last line of defense).
 func fitWithinBudget(history []providers.Message, newContextWindow int) []providers.Message {
 	if len(history) == 0 {
 		return history
@@ -6884,7 +6905,7 @@ func fitWithinBudget(history []providers.Message, newContextWindow int) []provid
 		// still overflows, drop it too — Strategy B has no synthetic anchor
 		// to preserve, so an oversized last message is better dropped than
 		// left as guaranteed overflow. forceCompression at the next LLM call
-		// is the final defence.
+		// is the final defense.
 		if len(history) == 1 {
 			history = nil
 			break
