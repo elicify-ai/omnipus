@@ -93,23 +93,25 @@ func TestRegression_CompletionCallback_SetsResult(t *testing.T) {
 		"result must equal the agent output string — empty result is the #404 bug")
 
 	// Differentiation: a failed run sets status=failed and a different result.
-	// Re-use same task: put it back to in_progress first.
-	inProg := task.StatusInProgress
-	_, err2 := api.taskStore.Update(tsk.Id, task.Patch{Status: &inProg})
-	require.NoError(t, err2, "restore to in_progress must succeed")
+	// Create a SEPARATE fresh task for this branch — the done task above is
+	// terminal and cannot be restored to in_progress (done is frozen by design).
+	tsk2 := createTaskViaAPI(t, api, "FailedResultTask", wsID)
+	wInProg2 := patchTask(t, api, tsk2.Id, `{"status":"in_progress","prompt":"Run failing suite"}`)
+	require.Equal(t, http.StatusOK, wInProg2.Code,
+		"PATCH status=in_progress on second task must return 200; body=%s", wInProg2.Body.String())
 
 	const failMsg = "execution failed: timeout"
 	failedStatus := task.StatusFailed
 	failResultStr := failMsg
-	_, err3 := api.taskStore.Update(tsk.Id, task.Patch{
+	_, err3 := api.taskStore.Update(tsk2.Id, task.Patch{
 		Status: &failedStatus,
 		Result: &failResultStr,
 	})
 	require.NoError(t, err3, "taskStore.Update with status=failed+result must succeed")
 
 	wGet2 := httptest.NewRecorder()
-	rGet2 := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+tsk.Id, nil)
-	rGet2.URL.Path = "/api/v1/tasks/" + tsk.Id
+	rGet2 := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+tsk2.Id, nil)
+	rGet2.URL.Path = "/api/v1/tasks/" + tsk2.Id
 	api.HandleTasks(wGet2, rGet2)
 	require.Equal(t, http.StatusOK, wGet2.Code, "GET after failure must return 200; body=%s", wGet2.Body.String())
 	var got2 gen.Task

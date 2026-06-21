@@ -208,13 +208,13 @@ func TestTenancy_SingleUser_SharedWorkspace_Accessible(t *testing.T) {
 // ── #406: system.task.create Rule-2 — session owner stamp ────────────────────
 
 // TestTaskCreateTool_Rule2_SessionOwner asserts that when system.task.create is
-// called with a session owner in context (no workspace_id), the created task's owner
-// is set to the session owner.
+// called with a session owner in context, the created task's owner is set to the
+// session owner (Rule-2: workspace has no owner, so session owner fills it).
 //
 // BDD:
 //
-//	Given ToolSessionOwner(ctx) == "alice" and no workspace_id,
-//	When system.task.create is executed,
+//	Given ToolSessionOwner(ctx) == "alice" and a workspace with no owner,
+//	When system.task.create is executed with the workspace_id,
 //	Then the written task's owner == "alice".
 //
 // Guards against: Rule-2 session owner stamp being skipped or overwritten.
@@ -223,13 +223,27 @@ func TestTaskCreateTool_Rule2_SessionOwner(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
+	// Seed a default workspace with no owner so Rule-2 (session owner stamp) fires.
+	// The workspace must exist on disk at <home>/workspaces/<id>.json for the tool's
+	// validateID + readWorkspaceFromDisk checks to pass.
+	wsID := "01JXRULE2SESSIONOWNER00001"
+	wsDir := filepath.Join(home, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	now := time.Now().UTC().Format(time.RFC3339)
+	wsJSON := fmt.Sprintf(
+		`{"id":%q,"name":"Rule2 Workspace","status":"active","pinned":false,"pin_order":0,"is_default":true,"created_at":%q,"updated_at":%q}`,
+		wsID, now, now,
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), []byte(wsJSON), 0o600))
+
 	tool := systools.NewTaskCreateTool(&systools.Deps{Home: home})
 
 	// Inject session owner "alice" via context (Rule-2).
 	ctx := tools.WithSessionOwner(context.Background(), "alice")
 
 	result := tool.Execute(ctx, map[string]any{
-		"name": "Alice's personal task",
+		"name":         "Alice's personal task",
+		"workspace_id": wsID,
 	})
 
 	require.NotNil(t, result, "Execute must return a non-nil ToolResult")
@@ -250,18 +264,19 @@ func TestTaskCreateTool_Rule2_SessionOwner(t *testing.T) {
 
 	var diskTask struct {
 		Owner string `json:"owner"`
-		Name  string `json:"name"`
+		Title string `json:"title"`
 	}
 	require.NoError(t, json.Unmarshal(data, &diskTask))
 
 	assert.Equal(t, "alice", diskTask.Owner,
 		"task owner must equal the session owner (Rule-2); got %q", diskTask.Owner)
-	assert.Equal(t, "Alice's personal task", diskTask.Name,
-		"task name must match the input")
+	assert.Equal(t, "Alice's personal task", diskTask.Title,
+		"task title must match the input name")
 }
 
 // TestTaskCreateTool_Rule2_NoSession_OwnerEmpty asserts that when there is no
-// session owner in context and no workspace_id, the task owner is "" (Rule-3).
+// session owner in context and the workspace has no owner, the task owner is ""
+// (Rule-3: no owner source → empty attribution).
 //
 // Guards against: Rule-2 fabricating an owner when none was provided.
 // Traces to: pkg/sysagent/tools/task.go TaskCreateTool.Execute Rule-3 — #406
@@ -269,11 +284,24 @@ func TestTaskCreateTool_Rule2_NoSession_OwnerEmpty(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
+	// Seed a workspace with no owner so neither the workspace nor the session
+	// provides an owner — Rule-3 path: task.owner remains "".
+	wsID := "01JXRULE3NOSESSIONOWNER001"
+	wsDir := filepath.Join(home, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	now := time.Now().UTC().Format(time.RFC3339)
+	wsJSON := fmt.Sprintf(
+		`{"id":%q,"name":"Rule3 Workspace","status":"active","pinned":false,"pin_order":0,"is_default":true,"created_at":%q,"updated_at":%q}`,
+		wsID, now, now,
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), []byte(wsJSON), 0o600))
+
 	tool := systools.NewTaskCreateTool(&systools.Deps{Home: home})
 
 	// No session owner injected (plain context).
 	result := tool.Execute(context.Background(), map[string]any{
-		"name": "Unowned task",
+		"name":         "Unowned task",
+		"workspace_id": wsID,
 	})
 
 	require.NotNil(t, result)

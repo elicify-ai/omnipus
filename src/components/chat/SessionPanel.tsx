@@ -24,7 +24,16 @@ import { Badge } from '@/components/ui/badge'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
-import { fetchAgents, fetchSessions, renameSession, deleteSession, isApiError } from '@/lib/api'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import {
+  fetchAgents,
+  fetchSessions,
+  fetchWorkspaceSessions,
+  renameSession,
+  deleteSession,
+  isApiError,
+  workspacesQueryKeys,
+} from '@/lib/api'
 import type { Agent, Session } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -363,6 +372,24 @@ export function SessionPanel() {
     enabled: sessionPanelOpen,
   })
 
+  // Scope the panel to the active workspace's conversations (IA reframe): the
+  // history opened from a workspace chat shows only that project's sessions,
+  // resolved via the workspace→session links. When no workspace is active the
+  // panel shows every session (global / deep-link case).
+  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
+  const { data: workspaceLinks } = useQuery({
+    queryKey: workspacesQueryKeys.sessions(activeWorkspaceId ?? ''),
+    queryFn: () => fetchWorkspaceSessions(activeWorkspaceId!),
+    enabled: sessionPanelOpen && !!activeWorkspaceId,
+    staleTime: 30_000,
+  })
+  // A session may be tagged with >1 workspace (cross-project edge case), so we
+  // include any session whose id appears in this workspace's link set.
+  const workspaceSessionIds = useMemo(
+    () => (workspaceLinks ? new Set(workspaceLinks.map((l) => l.session_id)) : null),
+    [workspaceLinks],
+  )
+
   const handleSelectSession = (session: Session) => {
     // Always trigger the WS attach_session flow so the replay pipeline
     // emits tool_call_start / tool_call_result / subagent_start / subagent_end
@@ -394,8 +421,12 @@ export function SessionPanel() {
     }
   }
 
-  // Sort sessions by updated_at descending (most recent first)
-  const sortedSessions = [...sessions].sort(
+  // Scope to the active workspace's sessions first (when a workspace is active
+  // and its links have loaded), then sort by updated_at descending.
+  const scopedSessions = workspaceSessionIds
+    ? sessions.filter((s) => workspaceSessionIds.has(s.id))
+    : sessions
+  const sortedSessions = [...scopedSessions].sort(
     (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
   )
 
@@ -500,7 +531,11 @@ export function SessionPanel() {
 
           {filteredSessions.length === 0 ? (
             <div className="px-4 py-6 text-xs text-[var(--color-muted)] text-center">
-              {searchLower ? 'No results.' : 'No sessions yet. Start a conversation to begin.'}
+              {searchLower
+                ? 'No results.'
+                : workspaceSessionIds
+                  ? 'No conversations in this workspace yet. Start a chat to begin.'
+                  : 'No sessions yet. Start a conversation to begin.'}
             </div>
           ) : showGroups ? (
             // Multi-channel view: collapsible group headers + sessions within each group

@@ -379,6 +379,72 @@ func resolveModelCandidatesFromList(
 	return out
 }
 
+// resolveAgentCandidatesWithPrimaryProvider is the O3 two-field entry point used
+// at agent construction. When the agent has an EXPLICIT primary provider
+// (AgentConfig.Model.Provider), the primary candidate is pinned to that provider
+// directly — never inferred from the slug or the default provider — exactly like
+// a fallback entry with a pinned Provider. The remaining fallback chain is
+// resolved by the existing provider-aware resolver and appended (de-duplicated
+// against the pinned primary).
+//
+// When primaryProvider is empty the behavior is identical to the pre-O3 path
+// (resolveModelCandidatesFromList for the modern chain, resolveModelCandidates
+// for the legacy []string chain), so unmigrated agents are unaffected.
+//
+// This lives here (not in loop.go) per the O3 task split: loop.go's
+// ApplyAgentModel resolves the provider from the already-resolved ModelConfig on
+// a live switch; this construction-time helper honors the persisted explicit
+// provider.
+func resolveAgentCandidatesWithPrimaryProvider(
+	cfg *config.Config,
+	defaultProvider string,
+	primary string,
+	primaryProvider string,
+	fallbackModels []config.FallbackModel,
+	fallbacks []string,
+) []providers.FallbackCandidate {
+	pinned := strings.TrimSpace(primaryProvider)
+	if pinned == "" {
+		// No explicit provider — preserve the exact pre-O3 selection.
+		if len(fallbackModels) > 0 {
+			return resolveModelCandidatesFromList(cfg, defaultProvider, primary, fallbackModels)
+		}
+		return resolveModelCandidates(cfg, defaultProvider, primary, fallbacks)
+	}
+
+	// Explicit provider: pin the primary candidate to it. ParseModelRef strips any
+	// redundant "<provider>/" prefix already present on the slug and routes via
+	// the pinned provider.
+	seen := make(map[string]bool)
+	var out []providers.FallbackCandidate
+	if ref := providers.ParseModelRef(strings.TrimSpace(primary), pinned); ref != nil {
+		key := providers.ModelKey(ref.Provider, ref.Model)
+		seen[key] = true
+		out = append(out, providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model})
+	}
+
+	// Append the fallback chain (provider-aware when available), skipping any
+	// candidate that duplicates the pinned primary. The first element returned by
+	// the fallback resolver is the primary re-resolved through the default path —
+	// drop it so the pinned primary above wins.
+	var rest []providers.FallbackCandidate
+	if len(fallbackModels) > 0 {
+		rest = resolveModelCandidatesFromList(cfg, defaultProvider, primary, fallbackModels)
+	} else {
+		rest = resolveModelCandidates(cfg, defaultProvider, primary, fallbacks)
+	}
+	for _, c := range rest {
+		key := providers.ModelKey(c.Provider, c.Model)
+		if seen[key] {
+			// Already covered (the pinned primary, or an earlier fallback).
+			continue
+		}
+		seen[key] = true
+		out = append(out, c)
+	}
+	return out
+}
+
 func resolvedCandidateModel(candidates []providers.FallbackCandidate, fallback string) string {
 	if len(candidates) > 0 && strings.TrimSpace(candidates[0].Model) != "" {
 		return candidates[0].Model

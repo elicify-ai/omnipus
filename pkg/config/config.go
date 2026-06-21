@@ -492,6 +492,13 @@ type AgentsConfig struct {
 type AgentModelConfig struct {
 	Primary   string   `json:"primary,omitempty"`
 	Fallbacks []string `json:"fallbacks,omitempty"`
+	// Provider is the explicit routing key for the primary model (O3 two-field
+	// model), mirroring FallbackModel.Provider. When set, model resolution uses it
+	// directly and never infers a provider from the slug. Empty means "resolve via
+	// the default/passthrough provider" (legacy single-slug behavior). The
+	// config-load migration (migrateAgentPrimaryProvider) splits a combined slug
+	// such as "openrouter/google/gemini-2.5-flash" into Primary + Provider.
+	Provider string `json:"provider,omitempty"`
 }
 
 func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
@@ -499,11 +506,13 @@ func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &s); err == nil {
 		m.Primary = s
 		m.Fallbacks = nil
+		m.Provider = ""
 		return nil
 	}
 	type raw struct {
 		Primary   string   `json:"primary"`
 		Fallbacks []string `json:"fallbacks"`
+		Provider  string   `json:"provider"`
 	}
 	var r raw
 	if err := json.Unmarshal(data, &r); err != nil {
@@ -511,18 +520,23 @@ func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
 	}
 	m.Primary = r.Primary
 	m.Fallbacks = r.Fallbacks
+	m.Provider = r.Provider
 	return nil
 }
 
 func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
-	if len(m.Fallbacks) == 0 && m.Primary != "" {
+	// Emit the bare-string form only when there is nothing but a primary slug —
+	// no fallbacks and no explicit provider. Once Provider is set the object form
+	// is required so the routing key round-trips (O3).
+	if len(m.Fallbacks) == 0 && m.Provider == "" && m.Primary != "" {
 		return json.Marshal(m.Primary)
 	}
 	type raw struct {
 		Primary   string   `json:"primary,omitempty"`
 		Fallbacks []string `json:"fallbacks,omitempty"`
+		Provider  string   `json:"provider,omitempty"`
 	}
-	return json.Marshal(raw{Primary: m.Primary, Fallbacks: m.Fallbacks})
+	return json.Marshal(raw{Primary: m.Primary, Fallbacks: m.Fallbacks, Provider: m.Provider})
 }
 
 // FallbackModel is one entry in an agent's fallback chain. It carries its
@@ -754,6 +768,16 @@ type AgentConfig struct {
 	// Distinct from the global VoiceConfig engine settings.
 	// Schema-pinned; not active until v0.2.0 TTS delivery.
 	Voice string `json:"voice,omitempty"`
+	// HeartbeatEnabled controls whether this agent runs its HEARTBEAT.md on a
+	// recurring schedule (O6 — "heartbeat IS a schedule"). Main agents only;
+	// subagents (Type=worker) have no heartbeat and the handler rejects setting
+	// it. A nil pointer means "unset" (inherit the migrated global default at most
+	// once, then per-agent thereafter). Use HeartbeatIsEnabled() to read the
+	// effective value.
+	HeartbeatEnabled *bool `json:"heartbeat_enabled,omitempty"`
+	// HeartbeatInterval is this agent's heartbeat period in minutes (min 5). Zero
+	// means "unset" → fall back to the migrated/global default. Main agents only.
+	HeartbeatInterval int `json:"heartbeat_interval,omitempty"`
 	// Enabled controls whether the agent is active. A nil pointer means
 	// "treat as active" for backward compatibility with configs that predate
 	// this field. Agents with Enabled=false are inactive; Enabled=true are
@@ -799,6 +823,28 @@ type AgentConfig struct {
 // Agents with Enabled=false are inactive; Enabled=true are explicitly active.
 func (a AgentConfig) IsActive() bool {
 	return a.Enabled == nil || *a.Enabled
+}
+
+// HeartbeatIsEnabled returns whether this agent's heartbeat schedule should run
+// (O6). A nil pointer means "unset" → treated as disabled (heartbeat is opt-in
+// per agent). A worker never has a heartbeat regardless of the stored flag — the
+// caller is expected to skip workers; this method only reports the stored intent.
+func (a AgentConfig) HeartbeatIsEnabled() bool {
+	return a.HeartbeatEnabled != nil && *a.HeartbeatEnabled
+}
+
+// HeartbeatIntervalMinutes returns the effective heartbeat interval in minutes,
+// applying the 5-minute floor. globalDefault supplies the migrated/global value
+// used when the agent has not set its own interval (0).
+func (a AgentConfig) HeartbeatIntervalMinutes(globalDefault int) int {
+	interval := a.HeartbeatInterval
+	if interval <= 0 {
+		interval = globalDefault
+	}
+	if interval < 5 {
+		interval = 5
+	}
+	return interval
 }
 
 // AgentType classifies an agent for scope-based tool visibility filtering.
@@ -3121,6 +3167,17 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	}
 
 	migrateProviderFields(cfg)
+	// O6 heartbeat-is-per-agent: migrate the legacy GLOBAL heartbeat (enabled +
+	// interval) onto the default Main agent so an operator who had the global
+	// heartbeat on keeps a heartbeat after the move to per-agent persistence.
+	// Idempotent and conservative (only the default agent, only when it has no
+	// per-agent heartbeat yet).
+	migrateGlobalHeartbeatToAgent(cfg)
+	// O3 two-field model: split an existing combined primary slug
+	// ("openrouter/google/gemini-2.5-flash") into {primary, provider} so routing
+	// uses the explicit provider. Idempotent; runs after migrateProviderFields so
+	// the provider protocol set is consistent across model_list and agents.
+	migrateAgentPrimaryProvider(cfg)
 	// Post-refactor: tools.<name>.enabled is deprecated. If the loaded config
 	// carries explicit false values, translate them idempotently into
 	// security.tool_policies deny entries so operator intent is enforced
@@ -3161,29 +3218,111 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	return cfg, nil
 }
 
+// knownProviderProtocols is the set of leading slug segments treated as an
+// explicit provider/routing protocol when splitting a combined "provider/model"
+// slug. Shared by migrateProviderFields (model_list) and
+// migrateAgentPrimaryProvider (per-agent primary model, O3).
+var knownProviderProtocols = map[string]bool{
+	"openai": true, "openrouter": true, "anthropic": true, "anthropic-messages": true,
+	"google": true, "gemini": true, "groq": true, "deepseek": true, "mistral": true,
+	"minimax": true, "moonshot": true, "zhipu": true, "nvidia": true, "qwen": true,
+	"qwen-intl": true, "qwen-international": true, "dashscope-intl": true,
+	"qwen-us": true, "dashscope-us": true,
+	"ollama": true, "cerebras": true, "azure": true, "azure-openai": true,
+	"litellm": true, "vllm": true, "bedrock": true,
+	"coding-plan": true, "alibaba-coding": true, "qwen-coding": true, "mimo": true,
+	"novita": true, "vivgrid": true, "volcengine": true, "modelscope": true,
+	"longcat": true, "avian": true, "shengsuanyun": true,
+}
+
 // migrateProviderFields splits old-format Model fields (e.g. "openrouter/anthropic/claude-opus-4")
 // into separate Provider and Model fields for backward compatibility.
 func migrateProviderFields(cfg *Config) {
-	knownProtocols := map[string]bool{
-		"openai": true, "openrouter": true, "anthropic": true, "anthropic-messages": true,
-		"google": true, "gemini": true, "groq": true, "deepseek": true, "mistral": true,
-		"minimax": true, "moonshot": true, "zhipu": true, "nvidia": true, "qwen": true,
-		"qwen-intl": true, "qwen-international": true, "dashscope-intl": true,
-		"qwen-us": true, "dashscope-us": true,
-		"ollama": true, "cerebras": true, "azure": true, "azure-openai": true,
-		"litellm": true, "vllm": true, "bedrock": true,
-		"coding-plan": true, "alibaba-coding": true, "qwen-coding": true, "mimo": true,
-		"novita": true, "vivgrid": true, "volcengine": true, "modelscope": true,
-		"longcat": true, "avian": true, "shengsuanyun": true,
-	}
 	for _, p := range cfg.Providers {
 		if p.Provider != "" {
 			continue
 		}
 		protocol, modelID, found := strings.Cut(p.Model, "/")
-		if found && knownProtocols[protocol] {
+		if found && knownProviderProtocols[protocol] {
 			p.Provider = protocol
 			p.Model = modelID
+		}
+	}
+}
+
+// migrateGlobalHeartbeatToAgent migrates the legacy GLOBAL heartbeat config
+// (cfg.Heartbeat.Enabled / .Interval) onto a per-agent heartbeat (O6). The old
+// model ran a single workspace-wide heartbeat; the new model is per-agent for
+// Main agents. To preserve behavior without surprising the operator, the global
+// value is applied to the DEFAULT agent only, and only when that agent is a Main
+// agent (not a worker/subagent) and has not already set its own heartbeat.
+//
+// Conservative + idempotent:
+//   - no-op when the global heartbeat is disabled AND its interval is unset (the
+//     common fresh-install case — nothing to migrate);
+//   - skips a default agent that is a worker (subagents never have a heartbeat);
+//   - skips when the default agent already carries a per-agent heartbeat
+//     (HeartbeatEnabled != nil), so a re-load never clobbers a user's per-agent
+//     choice.
+//
+// The global fields are intentionally LEFT in place (read-only legacy mirror) so
+// older code paths and configs round-trip; the agent loop reads the per-agent
+// fields going forward.
+func migrateGlobalHeartbeatToAgent(cfg *Config) {
+	if !cfg.Heartbeat.Enabled && cfg.Heartbeat.Interval == 0 {
+		return
+	}
+	// Find the default agent (the one with Default=true); fall back to none.
+	idx := -1
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].Default {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	a := &cfg.Agents.List[idx]
+	if a.Type == AgentTypeWorker {
+		return // subagents never have a heartbeat
+	}
+	if a.HeartbeatEnabled != nil {
+		return // already migrated / operator-set — do not clobber
+	}
+	enabled := cfg.Heartbeat.Enabled
+	a.HeartbeatEnabled = &enabled
+	if a.HeartbeatInterval == 0 && cfg.Heartbeat.Interval > 0 {
+		a.HeartbeatInterval = cfg.Heartbeat.Interval
+	}
+}
+
+// migrateAgentPrimaryProvider implements the O3 two-field model migration for the
+// PRIMARY agent model. It splits an existing combined primary slug — e.g.
+// "openrouter/google/gemini-2.5-flash" — into Primary="google/gemini-2.5-flash"
+// plus Provider="openrouter", so resolution can key off the explicit provider
+// (never inferred). It is idempotent and conservative:
+//
+//   - skips agents whose Model is nil or whose Primary is empty;
+//   - skips when Provider is already set (already migrated, or operator-supplied);
+//   - only splits when the FIRST slug segment is a known provider protocol AND
+//     there is a remaining model path after it (so a bare "gpt-4o" or a
+//     vendor-prefixed "google/gemini-2.5-flash" — where "google" is a model
+//     vendor, not a configured provider protocol — is left untouched unless the
+//     leading segment is genuinely a provider protocol).
+//
+// Mirrors migrateProviderFields (model_list) using the same protocol set so the
+// two stay consistent.
+func migrateAgentPrimaryProvider(cfg *Config) {
+	for i := range cfg.Agents.List {
+		mc := cfg.Agents.List[i].Model
+		if mc == nil || mc.Primary == "" || mc.Provider != "" {
+			continue
+		}
+		protocol, rest, found := strings.Cut(mc.Primary, "/")
+		if found && rest != "" && knownProviderProtocols[protocol] {
+			mc.Provider = protocol
+			mc.Primary = rest
 		}
 	}
 }

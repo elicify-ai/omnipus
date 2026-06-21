@@ -10,7 +10,7 @@ package systools_test
 // 2: the new store accepts any of the 7 valid statuses without a transition
 // machine. Invalid status values (not in the 7-state vocab) are silently ignored
 // by the update tool — the tool still returns success, but the status is left
-// unchanged. This file verifies that behaviour.
+// unchanged. This file verifies that behavior.
 //
 // Deleted: TestSysagentTaskUpdate_A4_StatusActiveRejected — the A4 guard that
 // rejected status="active" was removed when the 7-state vocabulary replaced the
@@ -119,20 +119,27 @@ func TestSysagentTaskUpdate_ValidStatusApplied(t *testing.T) {
 		"on-disk status must be 'next' after a successful update")
 }
 
-// TestSysagentTaskUpdate_AllSevenStatusesApplied verifies that every canonical
-// 7-state status can be set via system.task.update (differentiation test: each
-// produces a different on-disk status, proving no hardcoding).
+// TestSysagentTaskUpdate_AllSettableStatusesApplied verifies that every directly
+// settable status in the 7-state vocabulary can be set via system.task.update
+// (differentiation test: each produces a different on-disk status, proving no
+// hardcoding).
 //
-// Traces to: Sprint-2 unified task store — 7-state vocabulary is fully writable.
-func TestSysagentTaskUpdate_AllSevenStatusesApplied(t *testing.T) {
+// `blocked` is deliberately EXCLUDED here: it is a derived side-state that the
+// store enters/leaves only through the dependency-recompute hatch, and a direct
+// wire write to `blocked` is rejected with ErrBlockedNotSettable. That guard is
+// covered separately by TestSysagentTaskUpdate_BlockedNotSettable below.
+//
+// Traces to: Sprint-2 unified task store — the six directly-settable statuses are
+// writable; `blocked` is derived (pkg/task/store.go ErrBlockedNotSettable).
+func TestSysagentTaskUpdate_AllSettableStatusesApplied(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
+	// All seven canonical statuses EXCEPT the derived `blocked` side-state.
 	statuses := []task.Status{
 		task.StatusInbox,
 		task.StatusNext,
 		task.StatusPlanning,
 		task.StatusInProgress,
-		task.StatusBlocked,
 		task.StatusDone,
 		task.StatusFailed,
 	}
@@ -140,6 +147,10 @@ func TestSysagentTaskUpdate_AllSevenStatusesApplied(t *testing.T) {
 	for _, st := range statuses {
 		id := "01JXSTATUSGUARD_" + string(st)[:4] + "00001"
 		// Seed at a different starting status so the update produces a real change.
+		// `inbox` is the universal seed; when the target IS inbox, seed `next` so
+		// the write still changes the on-disk value. Every from→to pair used here
+		// is a legal transition (only `done` is frozen and only `blocked` is gated,
+		// neither of which we transition OUT of in this table).
 		var seedStatus task.Status
 		if st == task.StatusInbox {
 			seedStatus = task.StatusNext
@@ -159,6 +170,39 @@ func TestSysagentTaskUpdate_AllSevenStatusesApplied(t *testing.T) {
 		assert.Equal(t, st, diskTaskStatus(t, home, id),
 			"on-disk status must be %q after update", st)
 	}
+}
+
+// TestSysagentTaskUpdate_BlockedNotSettable verifies that `blocked` — a derived
+// side-state — CANNOT be set directly through system.task.update. The store
+// enters `blocked` only via the dependency engine (unmet blocked_by) and clears
+// it to `next` when every blocker reaches done; a direct wire write is rejected
+// with ErrBlockedNotSettable and the on-disk status is left unchanged.
+//
+// BDD:
+//
+//	Given a task in status=inbox,
+//	When system.task.update is called with {"id":..., "status":"blocked"},
+//	Then the result has IsError=true (the derived-side-state guard fires),
+//	And the task's on-disk status is still "inbox" (the write did not apply).
+//
+// Traces to: Sprint-2 unified task store — `blocked` is derived, never settable
+// directly (pkg/task/store.go ErrBlockedNotSettable).
+func TestSysagentTaskUpdate_BlockedNotSettable(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+
+	const taskID = "01JXSTATUSGUARD_BLOCK0001"
+	seedTask(t, home, taskID, "Task for blocked", task.StatusInbox, nil)
+
+	tool := systools.NewTaskUpdateTool(deps)
+	result := tool.Execute(context.Background(), map[string]any{
+		"id":     taskID,
+		"status": string(task.StatusBlocked),
+	})
+
+	assert.True(t, result.IsError,
+		"system.task.update with status='blocked' must be rejected (derived side-state); got: %s", result.ForLLM)
+	assert.Equal(t, task.StatusInbox, diskTaskStatus(t, home, taskID),
+		"on-disk status must remain 'inbox' — the rejected blocked write must not apply")
 }
 
 // TestSysagentTaskUpdate_Differentiation verifies that two different valid

@@ -191,12 +191,16 @@ describe('Settings screen — empty state', () => {
 
 // test_chat_empty_state (integration)
 // Traces to: wave0-brand-design-spec.md Scenario: Chat empty state shows mascot (US-4 AC4, FR-010)
-describe('Chat (index) screen — empty state', () => {
+//
+// IA reframe (Sprint 4): the chat empty state is no longer at "/" (which now
+// redirects into the default workspace's Chat tab). It is rendered by
+// ChatScreen — the workspace's front view. We exercise ChatScreen directly.
+describe('Chat screen — empty state', () => {
   let ChatScreen: () => JSX.Element
 
   beforeAll(async () => {
-    const mod = await import('@/routes/_app/index')
-    ChatScreen = mod.Route.options.component as () => JSX.Element
+    const mod = await import('@/components/chat/ChatScreen')
+    ChatScreen = mod.ChatScreen as unknown as () => JSX.Element
   }, 60_000)
 
   it('renders "Welcome to Omnipus" heading', () => {

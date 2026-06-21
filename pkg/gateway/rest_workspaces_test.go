@@ -610,7 +610,7 @@ func TestSeed_ConcurrentBoot_NoDoubleSeed(t *testing.T) {
 	for range goroutines {
 		go func() {
 			defer wg.Done()
-			_ = ensureDefaultWorkspace(api.homePath, "seeduser")
+			_ = ensureDefaultWorkspace(api.homePath, "seeduser", nil)
 		}()
 	}
 	wg.Wait()
@@ -646,7 +646,7 @@ func TestHandleWorkspaces_DefaultAutoCreated(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	const seedOwner = "alice"
-	require.NoError(t, ensureDefaultWorkspace(api.homePath, seedOwner),
+	require.NoError(t, ensureDefaultWorkspace(api.homePath, seedOwner, nil),
 		"ensureDefaultWorkspace must not error on fresh home")
 
 	w := httptest.NewRecorder()
@@ -684,7 +684,7 @@ func TestHandleWorkspaces_InboxNotDeletable(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// Create the Inbox project directly via ensureDefaultWorkspace.
-	require.NoError(t, ensureDefaultWorkspace(api.homePath, ""))
+	require.NoError(t, ensureDefaultWorkspace(api.homePath, "", nil))
 
 	// Find the Inbox project ID by listing projects.
 	w := httptest.NewRecorder()

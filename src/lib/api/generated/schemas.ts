@@ -89,6 +89,7 @@ type Agent = {
   color?: string | undefined;
   icon?: string | undefined;
   model?: string | undefined;
+  provider?: string | undefined;
   description?: string | undefined;
   status: "active" | "idle" | "draft" | "error";
   soul: string;
@@ -182,6 +183,7 @@ type AgentCreateRequest = {
   type?: ("Main" | "Subagent" | "subagent_3p") | undefined;
   description?: string | undefined;
   model?: string | undefined;
+  provider?: string | undefined;
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
@@ -239,6 +241,7 @@ type AgentUpdateRequest = Partial<{
   name: string;
   description: string;
   model: string;
+  provider: string;
   soul: string;
   heartbeat: string;
   instructions: string;
@@ -616,6 +619,20 @@ type Notification = {
   schedule_id?: string | undefined;
   session_id?: string | undefined;
   agent_id?: string | undefined;
+};
+type WorkspaceDelegation = {
+  workspace_id: string;
+  edges: Array<WorkspaceDelegationEdge>;
+  team?: Array<string> | undefined;
+};
+type WorkspaceDelegationEdge = {
+  from_agent: string;
+  to_agent: string;
+  modes?: Array<"await" | "background" | "task"> | undefined;
+  depth?: number | undefined;
+};
+type WorkspaceDelegationUpdateRequest = {
+  edges: Array<WorkspaceDelegationEdge>;
 };
 type MilestoneListResponse = {
   milestones: Array<Milestone>;
@@ -1021,6 +1038,7 @@ export const Agent: z.ZodType<Agent> = z
       .optional(),
     icon: z.string().max(50).optional(),
     model: z.string().max(256).optional(),
+    provider: z.string().max(64).optional(),
     description: z.string().optional(),
     status: z.enum(["active", "idle", "draft", "error"]),
     soul: z.string(),
@@ -1084,6 +1102,7 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   type: z.enum(["Main", "Subagent", "subagent_3p"]).optional().default("Main"),
   description: z.string().optional(),
   model: z.string().optional(),
+  provider: z.string().max(64).optional(),
   color: z
     .string()
     .regex(/^#[0-9A-Fa-f]{6}$/)
@@ -1133,6 +1152,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     name: z.string().min(1),
     description: z.string(),
     model: z.string(),
+    provider: z.string().max(64),
     soul: z.string().min(1),
     heartbeat: z.string(),
     instructions: z.string(),
@@ -2003,6 +2023,20 @@ export const WorkspaceSessionLink = z
     created_at: z.string().datetime({ offset: true }),
   })
   .passthrough();
+export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
+  z.object({
+    from_agent: z.string().min(1),
+    to_agent: z.string().min(1),
+    modes: z.array(z.enum(["await", "background", "task"])).optional(),
+    depth: z.number().int().gte(0).optional(),
+  });
+export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
+  workspace_id: z.string(),
+  edges: z.array(WorkspaceDelegationEdge),
+  team: z.array(z.string()).optional(),
+});
+export const WorkspaceDelegationUpdateRequest: z.ZodType<WorkspaceDelegationUpdateRequest> =
+  z.object({ edges: z.array(WorkspaceDelegationEdge) });
 export const Milestone: z.ZodType<Milestone> = z
   .object({
     id: z.string(),
@@ -6189,6 +6223,77 @@ Returns HTTP 201 on success.
       },
     ],
     response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/delegation",
+    alias: "getWorkspaceDelegation",
+    description: `Returns the per-workspace delegation graph (M5): the directed delegation edges plus the computed team node set. Returns 200 with an empty edges array when the workspace exists but has no delegation configured. Returns 404 when the workspace does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: WorkspaceDelegation,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/workspaces/:id/delegation",
+    alias: "updateWorkspaceDelegation",
+    description: `Replaces the workspace&#x27;s delegation edge set wholesale (full replace). Validates that every from_agent / to_agent resolves to a known agent, rejects self-edges, and rejects depths above the global subturn ceiling. Returns the updated graph.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: WorkspaceDelegationUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: WorkspaceDelegation,
     errors: [
       {
         status: 400,

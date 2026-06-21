@@ -622,8 +622,8 @@ func TestUpdateAgent_Worker_RejectsHeartbeat(t *testing.T) {
 
 // TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy proves the worker-PUT-400
 // loosening: a subagent_3p PUT carrying a delegation_policy is no longer rejected
-// at the forbidden-field gate (a non-empty to[] would still be bounded by the
-// worker-leaf check, but a modes/depth-only policy is accepted).
+// at the forbidden-field gate (a non-empty to[] is bounded by the depth cap,
+// and a modes/depth-only policy is accepted).
 func TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := createSubagent3p(t, api)
@@ -666,9 +666,9 @@ func TestCreateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 
 // TestUpdateAgent_Subagent3p_ForbiddenFields rejects the CLI-owned fields on PUT.
 // worker-PUT-400: delegation_policy is NO LONGER in this set — it is a valid
-// worker field on PUT (a non-empty to[] is independently bounded by the
-// worker-leaf check in buildDelegationPolicy). The remaining 6 stay forbidden
-// because the external CLI manages its own isolation/tools/skills (O13).
+// worker field on PUT (a non-empty to[] is independently bounded by the depth
+// cap in buildDelegationPolicy). The remaining 6 stay forbidden because the
+// external CLI manages its own isolation/tools/skills (O13).
 func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := createSubagent3p(t, api)

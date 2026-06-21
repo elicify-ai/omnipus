@@ -1,10 +1,8 @@
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
+import { DefaultWorkspaceRedirect } from '@/components/workspaces/DefaultWorkspaceRedirect'
 
-// The Command Center screen has been superseded by the Tasks screen.
-// Redirect all visitors to /tasks so existing bookmarks and links keep working.
+// The Command Center has been folded into the workspace Board tab. Redirect old
+// bookmarks/links to the default workspace's Board.
 export const Route = createFileRoute('/_app/command-center')({
-  beforeLoad: () => {
-    throw redirect({ to: '/tasks', replace: true })
-  },
-  component: () => null,
+  component: () => <DefaultWorkspaceRedirect tab="board" />,
 })

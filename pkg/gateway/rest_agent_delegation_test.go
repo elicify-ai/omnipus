@@ -390,14 +390,44 @@ func TestUpdateAgent_NeedsReloadRebuildsLiveDelegationCheckers(t *testing.T) {
 	require.False(t, liveAllows("ava"), "after edit to:[ray], running checker must now DENY ava (revoked, no restart)")
 }
 
-// TestUpdateAgent_WorkerSourceRejected proves the worker-leaf invariant is
-// backend-enforced: a PUT with a non-empty to[] on a worker agent → 400.
-func TestUpdateAgent_WorkerSourceRejected(t *testing.T) {
+// TestUpdateAgent_WorkerOnwardDelegationAllowed proves the bounded-delegation
+// unlock (S3 BE, M5 item 2): a worker/Subagent may now carry a non-empty to[]
+// and delegate onward. The previous hard worker-leaf rejection is gone; depth is
+// the safety boundary. A worker delegating to a valid in-roster target within the
+// depth ceiling → 200, and the policy round-trips on GET.
+func TestUpdateAgent_WorkerOnwardDelegationAllowed(t *testing.T) {
 	api := buildDelegationTestAPI(t)
-	body := `{"delegation_policy":{"to":[{"kind":"local","id":"ava"}]}}`
+	body := `{"delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["task"],"depth":2}}`
 	w := putAgent(t, api, "laborer", body)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "worker out-edge must be rejected; body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "leaf")
+	require.Equal(
+		t,
+		http.StatusOK,
+		w.Code,
+		"worker onward delegation within depth must be allowed; body: %s",
+		w.Body.String(),
+	)
+
+	// Round-trip: GET must echo the stored onward-delegation policy.
+	gw := httptest.NewRecorder()
+	gr := httptest.NewRequest(http.MethodGet, "/api/v1/agents/laborer", nil)
+	api.HandleAgents(gw, gr)
+	require.Equal(t, http.StatusOK, gw.Code, "get body: %s", gw.Body.String())
+	got := decodeAgentResp(t, gw.Body.Bytes())
+	require.NotNil(t, got.DelegationPolicy, "stored delegation_policy must be echoed on GET")
+	require.NotNil(t, got.DelegationPolicy.To)
+	require.Len(t, *got.DelegationPolicy.To, 1)
+	assert.Equal(t, "ava", (*got.DelegationPolicy.To)[0].Id)
+}
+
+// TestUpdateAgent_WorkerDepthExceededRejected proves depth remains the safety cap
+// for onward delegation: a worker with a non-empty to[] whose depth exceeds the
+// global subturn ceiling (3) → 400, even though the to[] itself is now allowed.
+func TestUpdateAgent_WorkerDepthExceededRejected(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	body := `{"delegation_policy":{"to":[{"kind":"local","id":"ava"}],"depth":99}}`
+	w := putAgent(t, api, "laborer", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "depth above ceiling must be rejected; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "depth")
 }
 
 // TestUpdateAgent_WorkerEmptyToAllowed proves a worker may carry an explicit
@@ -405,7 +435,13 @@ func TestUpdateAgent_WorkerSourceRejected(t *testing.T) {
 func TestUpdateAgent_WorkerEmptyToAllowed(t *testing.T) {
 	api := buildDelegationTestAPI(t)
 	w := putAgent(t, api, "laborer", `{"delegation_policy":{"to":[]}}`)
-	assert.Equal(t, http.StatusOK, w.Code, "worker with empty to[] (deny-all) must be allowed; body: %s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusOK,
+		w.Code,
+		"worker with empty to[] (deny-all) must be allowed; body: %s",
+		w.Body.String(),
+	)
 }
 
 // TestUpdateAgent_GrandfatherDanglingTarget proves a pre-existing dangling to[]

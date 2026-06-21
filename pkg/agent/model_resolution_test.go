@@ -392,8 +392,18 @@ func TestResolveModelCandidatesFromList_PassthroughProviderHonored(t *testing.T)
 func TestResolveModelCandidatesForAgent_PicksFallbackModelsWhenSet(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
-			{ModelName: "gpt-5", Model: "openai/gpt-5", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
-			{ModelName: "haiku", Model: "anthropic/claude-haiku-4-5", Provider: "anthropic", APIBase: "https://api.anthropic.com/v1"},
+			{
+				ModelName: "gpt-5",
+				Model:     "openai/gpt-5",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
+			{
+				ModelName: "haiku",
+				Model:     "anthropic/claude-haiku-4-5",
+				Provider:  "anthropic",
+				APIBase:   "https://api.anthropic.com/v1",
+			},
 		},
 	}
 
@@ -548,5 +558,76 @@ func TestResolveModelCandidatesFromList_SeededAgentStyle(t *testing.T) {
 	}
 	if cands[0].Model != "z-ai/glm-5.2" {
 		t.Errorf("cands[0].Model = %q, want %q", cands[0].Model, "z-ai/glm-5.2")
+	}
+}
+
+// TestResolveAgentCandidatesWithPrimaryProvider_PinsPrimary proves the O3
+// two-field model: an explicit primary provider pins the primary candidate to
+// that provider directly, never inferring one from the slug or the default
+// provider. The fallback chain is appended, de-duplicated against the pinned
+// primary.
+func TestResolveAgentCandidatesWithPrimaryProvider_PinsPrimary(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "passthru",
+				Model:     "openrouter/x",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKeyRef: "OR_KEY",
+			},
+		},
+	}
+
+	// Explicit provider "anthropic" pins the primary regardless of the
+	// configured passthrough — the primary routes via anthropic.
+	candidates := resolveAgentCandidatesWithPrimaryProvider(
+		cfg, "openrouter", "claude-sonnet-4.6", "anthropic", nil, nil)
+
+	if len(candidates) == 0 {
+		t.Fatalf("expected at least the pinned primary candidate")
+	}
+	if candidates[0].Provider != "anthropic" {
+		t.Errorf("candidates[0].Provider = %q, want %q (explicit primary provider must be honored, never inferred)",
+			candidates[0].Provider, "anthropic")
+	}
+	if candidates[0].Model != "claude-sonnet-4.6" {
+		t.Errorf("candidates[0].Model = %q, want %q (verbatim under pinned provider)",
+			candidates[0].Model, "claude-sonnet-4.6")
+	}
+}
+
+// TestResolveAgentCandidatesWithPrimaryProvider_EmptyProviderPreservesLegacy
+// proves that with no explicit provider the selection is identical to the
+// pre-O3 resolver (resolveModelCandidatesFromList for the modern chain).
+func TestResolveAgentCandidatesWithPrimaryProvider_EmptyProviderPreservesLegacy(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "gpt-5",
+				Model:     "openai/gpt-5",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKeyRef: "OR_KEY",
+			},
+		},
+	}
+	fb := []config.FallbackModel{{Model: "claude-haiku", Provider: "anthropic"}}
+
+	withEmpty := resolveAgentCandidatesWithPrimaryProvider(cfg, "openrouter", "gpt-5", "", fb, nil)
+	legacy := resolveModelCandidatesFromList(cfg, "openrouter", "gpt-5", fb)
+
+	if len(withEmpty) != len(legacy) {
+		t.Fatalf("empty-provider path differs in length: got %d, legacy %d", len(withEmpty), len(legacy))
+	}
+	for i := range legacy {
+		if withEmpty[i] != legacy[i] {
+			t.Errorf(
+				"candidate[%d] = %+v, legacy %+v — empty provider must preserve pre-O3 behavior",
+				i,
+				withEmpty[i],
+				legacy[i],
+			)
+		}
 	}
 }

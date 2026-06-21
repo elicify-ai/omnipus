@@ -2,8 +2,6 @@ import { useEffect, useCallback, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  ChatCircle,
-  ChartBar,
   Robot,
   PlugsConnected,
   PuzzlePiece,
@@ -19,7 +17,6 @@ import {
   MagnifyingGlass,
   WarningCircle,
   ArrowClockwise,
-  ClipboardText,
 } from '@phosphor-icons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
@@ -30,10 +27,10 @@ import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlide
 import { cn } from '@/lib/utils'
 import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 
-const NAV_ITEMS = [
-  { to: '/', label: 'Chat', Icon: ChatCircle },
-  { to: '/tasks', label: 'Tasks', Icon: ClipboardText },
-  { to: '/automations', label: 'Automations', Icon: ChartBar },
+// Global libraries — reusable assets that live outside any single workspace.
+// (Per-workspace work — chat, tasks, calendar, team — lives inside the
+// workspace tabs, not the sidebar.)
+const LIBRARY_ITEMS = [
   { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
@@ -169,46 +166,11 @@ export function Sidebar() {
         </span>
       </div>
 
-      {/* Primary nav + Workspaces section */}
+      {/* Workspaces (primary) + Global libraries */}
       <div className="flex-1 overflow-y-auto py-3">
-        {NAV_ITEMS.map(({ to, label, Icon }) => {
-          const isActive = location.pathname === to
-          const badge = null
-          return (
-            <Link
-              key={to}
-              to={to}
-              aria-label={badge !== null ? `${label} (${badge} pending)` : label}
-              aria-current={isActive ? 'page' : undefined}
-              onClick={() => {
-                // US-5: overlay mode — close on nav item click
-                if (!effectivelyPinned) close()
-              }}
-              className={cn(
-                'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors',
-                isActive
-                  ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
-                  : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
-              )}
-            >
-              <Icon
-                size={18}
-                weight={isActive ? 'fill' : 'regular'}
-                className={isActive ? 'text-[var(--color-accent)]' : ''}
-              />
-              <span className="flex-1">{label}</span>
-              {badge !== null && (
-                <span className="flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-[var(--color-error)] text-white text-[10px] font-bold px-1" aria-hidden="true">
-                  {badge > 99 ? '99+' : badge}
-                </span>
-              )}
-            </Link>
-          )
-        })}
-
         {/* Workspaces section */}
         <div
-          className="mt-3 mb-1"
+          className="mb-1"
           role="group"
           aria-label="Workspaces"
           tabIndex={-1}
@@ -319,7 +281,7 @@ export function Sidebar() {
                 type="button"
                 onClick={() => {
                   setActiveWorkspaceId(project.id)
-                  navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: project.id } })
+                  navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
                   if (!effectivelyPinned) close()
                 }}
                 className={cn(
@@ -394,7 +356,7 @@ export function Sidebar() {
                 type="button"
                 onClick={() => {
                   setActiveWorkspaceId(project.id)
-                  navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: project.id } })
+                  navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
                   if (!effectivelyPinned) close()
                 }}
                 className="flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
@@ -407,6 +369,42 @@ export function Sidebar() {
                   </span>
                 )}
               </button>
+            )
+          })}
+        </div>
+
+        {/* Global libraries section */}
+        <div className="mt-4" role="group" aria-label="Global libraries">
+          <div className="px-4 py-1">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
+              Library
+            </span>
+          </div>
+          {LIBRARY_ITEMS.map(({ to, label, Icon }) => {
+            const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`)
+            return (
+              <Link
+                key={to}
+                to={to}
+                aria-label={label}
+                aria-current={isActive ? 'page' : undefined}
+                onClick={() => {
+                  if (!effectivelyPinned) close()
+                }}
+                className={cn(
+                  'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors',
+                  isActive
+                    ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
+                    : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+                )}
+              >
+                <Icon
+                  size={18}
+                  weight={isActive ? 'fill' : 'regular'}
+                  className={isActive ? 'text-[var(--color-accent)]' : ''}
+                />
+                <span className="flex-1">{label}</span>
+              </Link>
             )
           })}
         </div>

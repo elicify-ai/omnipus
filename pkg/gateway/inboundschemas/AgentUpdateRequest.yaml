@@ -29,8 +29,18 @@ properties:
     example: "Updated description"
   model:
     type: string
-    description: New model name. Allowed on all agents.
-    example: "gpt-4o"
+    description: New model slug. Allowed on all agents. With the O3 two-field model,
+      pair with `provider` for explicit routing.
+    example: "google/gemini-2.5-flash"
+  provider:
+    type: string
+    maxLength: 64
+    description: >
+      New explicit routing key for the primary model (O3 two-field model). When
+      set, resolution uses it directly and never infers a provider. Allowed on all
+      agents. Send an empty string to clear it (fall back to default-provider
+      resolution).
+    example: "openrouter"
   soul:
     type: string
     minLength: 1

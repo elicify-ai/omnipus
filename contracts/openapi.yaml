@@ -456,6 +456,12 @@ components:
       $ref: ./components/schemas/WorkspaceUpdateRequest.yaml
     WorkspaceSessionLink:
       $ref: ./components/schemas/WorkspaceSessionLink.yaml
+    WorkspaceDelegationEdge:
+      $ref: ./components/schemas/WorkspaceDelegationEdge.yaml
+    WorkspaceDelegation:
+      $ref: ./components/schemas/WorkspaceDelegation.yaml
+    WorkspaceDelegationUpdateRequest:
+      $ref: ./components/schemas/WorkspaceDelegationUpdateRequest.yaml
     Milestone:
       $ref: ./components/schemas/Milestone.yaml
     MilestoneCreateRequest:
@@ -4880,6 +4886,78 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/WorkspaceSessionLink'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/delegation:
+    get:
+      operationId: getWorkspaceDelegation
+      summary: Get a workspace's delegation graph
+      description: >
+        Returns the per-workspace delegation graph (M5): the directed delegation
+        edges plus the computed team node set. Returns 200 with an empty edges
+        array when the workspace exists but has no delegation configured.
+        Returns 404 when the workspace does not exist.
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      responses:
+        '200':
+          description: The workspace delegation graph
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDelegation'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updateWorkspaceDelegation
+      summary: Replace a workspace's delegation graph
+      description: >
+        Replaces the workspace's delegation edge set wholesale (full replace).
+        Validates that every from_agent / to_agent resolves to a known agent,
+        rejects self-edges, and rejects depths above the global subturn ceiling.
+        Returns the updated graph.
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceDelegationUpdateRequest'
+      responses:
+        '200':
+          description: The updated workspace delegation graph
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDelegation'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':

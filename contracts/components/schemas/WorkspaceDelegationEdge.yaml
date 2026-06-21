@@ -1,0 +1,52 @@
+type: object
+description: >
+  A single directed delegation edge in a workspace's delegation graph. The graph
+  is the per-workspace source of truth for who-delegates-to-whom (M5): each edge
+  authorizes from_agent to delegate work to to_agent, in the listed modes, bounded
+  by depth. Membership in the workspace team is the union of all agents referenced
+  by any edge plus the workspace's core_team roster.
+required:
+  - from_agent
+  - to_agent
+properties:
+  from_agent:
+    type: string
+    minLength: 1
+    description: >
+      Agent ID of the delegating agent (the source node). Must be a member of the
+      workspace team (present in core_team or referenced by another edge).
+    example: "jim"
+  to_agent:
+    type: string
+    minLength: 1
+    description: >
+      Agent ID of the delegate (the target node). Must be a member of the
+      workspace team. Self-edges (from_agent == to_agent) are rejected.
+    example: "planner"
+  modes:
+    type: array
+    description: >
+      Allowed delegation modes for this edge. An empty/absent list means all modes
+      are allowed. Mirrors DelegationPolicy.modes semantics.
+      "await" = synchronous subagent (blocks caller until result).
+      "background" = async spawn (caller continues; result posted when done).
+      "task" = task_create delegation (persistent task for another agent).
+    items:
+      type: string
+      enum:
+        - await
+        - background
+        - task
+    uniqueItems: true
+    example:
+      - await
+      - task
+  depth:
+    type: integer
+    minimum: 0
+    description: >
+      Maximum delegation chain depth for this edge (number of hops). 0 = no
+      onward delegation past this hop. Bounded by the global subturn depth
+      ceiling. Absent means the workspace/global default applies.
+    example: 3
+additionalProperties: false

@@ -2132,7 +2132,14 @@ func (al *AgentLoop) Close() {
 	al.recapMu.Lock()
 	al.closing = true
 	al.recapMu.Unlock()
-	al.recapWG.Wait()
+	// Bound the drain so a wedged recap goroutine (e.g. a mock or real LLM that
+	// never returns) can NEVER hang teardown forever. Close() MUST be bounded:
+	// an unbounded recapWG.Wait() here caused gateway tests whose t.Cleanup runs
+	// al.Close() to block indefinitely, stalling every t.Parallel() peer and
+	// tripping the 10-min package timeout. After the budget we proceed with
+	// teardown regardless and log a warning; the worst case is a recap summary
+	// that didn't finish writing, which is strictly better than a frozen process.
+	al.waitRecapDrain(30 * time.Second)
 
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
@@ -2158,6 +2165,15 @@ func (al *AgentLoop) Close() {
 				})
 		}
 	}
+
+	// Close each agent's MemoryStore so the per-room bleve/scorch background
+	// goroutines (introducerLoop / mergerLoop) actually exit. AgentInstance.Close
+	// only tears down the session store, not the ContextBuilder's MemoryStore, so
+	// without this walk those scorch goroutines leak for the life of the process —
+	// in tests they stay alive 9–10 min and show up in the goroutine dump. Done
+	// BEFORE registry.Close() clears the agent map. Idempotent: MemoryStore.Close
+	// is safe to call more than once.
+	al.closeAgentMemoryStores()
 
 	al.GetRegistry().Close()
 	if al.hooks != nil {
@@ -2216,6 +2232,48 @@ func (al *AgentLoop) Close() {
 		if err := al.auditLogger.Close(); err != nil {
 			logger.ErrorCF("agent", "Failed to close audit logger",
 				map[string]any{"error": err.Error()})
+		}
+	}
+}
+
+// waitRecapDrain blocks until all in-flight recap goroutines tracked by recapWG
+// have completed, OR until budget elapses — whichever comes first. It never blocks
+// indefinitely: a recap that is wedged (a mock/real LLM that never returns) would
+// otherwise hang Close() forever. On timeout it logs a warning and returns so the
+// rest of teardown can proceed; the only cost is a recap summary that may not have
+// finished writing.
+func (al *AgentLoop) waitRecapDrain(budget time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		al.recapWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// All recaps drained cleanly.
+	case <-time.After(budget):
+		logger.WarnCF("agent", "Close: recap drain budget exceeded; proceeding with teardown",
+			map[string]any{"budget": budget.String()})
+	}
+}
+
+// closeAgentMemoryStores walks the registry and closes every agent's MemoryStore
+// so the per-room bleve/scorch background goroutines (introducerLoop, mergerLoop)
+// exit. AgentInstance.Close() only tears down the session store; the MemoryStore
+// held by the ContextBuilder is otherwise never closed, leaking those goroutines.
+// MemoryStore.Close is idempotent and safe to call here even if already closed.
+func (al *AgentLoop) closeAgentMemoryStores() {
+	reg := al.GetRegistry()
+	if reg == nil {
+		return
+	}
+	for _, id := range reg.ListAgentIDs() {
+		inst, ok := reg.GetAgent(id)
+		if !ok || inst == nil || inst.ContextBuilder == nil {
+			continue
+		}
+		if ms := inst.ContextBuilder.Memory(); ms != nil {
+			ms.Close()
 		}
 	}
 }

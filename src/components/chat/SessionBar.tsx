@@ -12,7 +12,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
-import { fetchAgents, isWorker } from '@/lib/api'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
 
 function formatCost(cost: number): string {
   if (cost === 0) return '$0.00'
@@ -44,13 +45,29 @@ export function SessionBar() {
     queryFn: fetchAgents,
   })
 
+  // The active workspace scopes the chat agent picker to that workspace's team
+  // (core_team). When no workspace is active (e.g. a bare /sessions deep-link)
+  // we fall back to the full roster.
+  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
+  const { data: workspaces = [] } = useQuery({
+    queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    staleTime: 30_000,
+    enabled: !!activeWorkspaceId,
+  })
+  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
+  // core_team is the workspace's roster. Empty/absent → no scoping (full roster),
+  // so a freshly-created workspace with no team yet still lets the user chat.
+  const teamIds = activeWorkspace?.core_team
+
   // Only show agents that are ready to chat (active or idle — not draft) and
   // exclude workers: a worker (type === 'worker') is a delegation-only labour
   // agent, never a chat target, so it must never appear in the switcher nor be
-  // auto-selected as the active chat persona below.
-  const chatAgents = agents.filter(
-    (a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a),
-  )
+  // auto-selected as the active chat persona below. When a workspace team is
+  // configured, additionally scope to that team.
+  const chatAgents = agents
+    .filter((a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a))
+    .filter((a) => !teamIds || teamIds.length === 0 || teamIds.includes(a.id))
 
   // Auto-select the first ready agent if none is active yet.
   // Done in useEffect (not during render) to avoid calling setState mid-render,

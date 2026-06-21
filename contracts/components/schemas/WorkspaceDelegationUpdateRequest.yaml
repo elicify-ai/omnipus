@@ -1,0 +1,18 @@
+type: object
+description: >
+  Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's
+  delegation edge set wholesale (full replace, not a merge) so the Team-tab graph
+  editor can persist the exact graph the operator drew. Every from_agent / to_agent
+  must resolve to a known agent; self-edges and depths above the global subturn
+  ceiling are rejected.
+required:
+  - edges
+properties:
+  edges:
+    type: array
+    description: >
+      The complete set of delegation edges for this workspace. An empty array
+      clears all delegation. Deduplicated by (from_agent, to_agent) at write time.
+    items:
+      $ref: './WorkspaceDelegationEdge.yaml'
+additionalProperties: false

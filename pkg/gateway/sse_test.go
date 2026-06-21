@@ -149,7 +149,28 @@ func TestSSEHandlerPOSTInvalidJSON(t *testing.T) {
 func TestSSEHandlerAuthMissingToken(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "sse-test-secret")
 	msgBus := bus.NewMessageBus()
-	h := newSSEHandler(msgBus, nil, "", testConfig)
+
+	// CRITICAL: this test MUST use a config with DevModeBypass=false. With the
+	// shared testConfig() (DevModeBypass=true), checkBearerAuth's dev-bypass
+	// short-circuit (auth.go:64 — "no Bearer header AND bypass" → authenticated
+	// as admin) fires BEFORE the OMNIPUS_BEARER_TOKEN check, so the request is
+	// authenticated despite the missing header. The handler then proceeds past
+	// the auth gate into the streaming select (sse.go:210) and BLOCKS FOREVER —
+	// no context cancel, no bus producer — which is exactly what wedged the
+	// serial test phase and tripped the 10-min pkg/gateway package timeout.
+	// With bypass off, the auth gate correctly returns 401 and the handler
+	// returns immediately, so we test the real auth-required path and never
+	// reach the stream.
+	noBypassCfg := func() *config.Config {
+		return &config.Config{
+			Gateway: config.GatewayConfig{
+				Users:         nil,
+				Token:         "",
+				DevModeBypass: false,
+			},
+		}
+	}
+	h := newSSEHandler(msgBus, nil, "", noBypassCfg)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(`{"message":"hello"}`))
