@@ -682,6 +682,121 @@ setting (`max_parallel_agents` [2,16], clamped). Voice field (reserved) + 3 runn
   manages its own isolation, tools, skills), and **ADDS the CLI executor config** (`cli · cli_path ·
   env_overrides · cli_args`); model = the CLI's (free-text). No heartbeat/voice.
 
+### M7 — IA shell + onboarding — ASSESSED 2026-06-21
+**Built:** Onboarding (`src/routes/onboarding.tsx`, UAT-confirmed). **Password STEP-UP auth is already
+implemented** — `requireReAuth` + `/api/v1/auth/reauth` (Spec-6 FR-12.2: short-lived single-use consent
+tokens, rate-limited), already enforced on performance / tool-policies / sandbox-config / Integrations.
+**→ god-mode (O14) and other sensitive settings reuse this EXISTING gate; no new mechanism.** De-risk.
+**OPEN:**
+1. **The IA reframe — the major M7 build.** Current routes are top-level (chat/tasks/automations/agents/
+   connectors/skills/workspaces/settings) → restructure to: **chat + tasks → workspace TABS** · **Automations
+   REMOVED** · **Calendar surfaced** · **Team tab** · **sidebar reorganized** (Workspaces primary nav + global
+   libraries). Significant SPA restructure (chat-as-workspace-view).
+2. **Workspace switcher → turn binding** (M4 Gap 2) — switcher is a UI filter today; bind the active workspace
+   into the agent's turn → populates the session `workspace_id` tag.
+3. **Single-user cleanup:** a `Users []UserConfig` **RBAC scaffold** remains (`config.go:2503`). Roadmap =
+   single-user, no RBAC; "no admin/user roles" decision → make it **inert** (`owner` = attribution only).
+4. **Minor:** onboarding model-key step uses O3 `{model,provider}`; UX-11 (Complete-Setup gate clarity).
+
+### M8 — ExternalAgentRunner — ASSESSED 2026-06-21
+**Built (matches roadmap — bidirectional · consent-routed · resumable):** `RunOptions.RunID` → **resume**
+(`claude --resume`); **consent-routed** via `ConsentHandler` (deny-by-default, post-hoc — `runner/dispatch.go`);
+**stream-json** drivers (`codex exec --json`, etc.); **worktree isolation** (`RunOptions.WorkDir`); **3 drivers**
+claude-code/codex/opencode.
+**OPEN = exactly UAT MAJ-5 (cli config ignored):** drivers **hardcode** binary names (`codexBinName="codex"`
+`driver_codex.go:39`, `opencodeBinName` `:39`, claude likewise) and exec them (`:116`); `RunOptions` has **no
+`CLIPath`/`CLIArgs`**, and the agent's `env_overrides` isn't wired into `RunOptions.Env`. **Fix (contained):**
+add `CLIPath`+`CLIArgs` to `RunOptions`, wire `EnvOverrides → RunOptions.Env` in `external_dispatch.go`, and
+have drivers use `CLIPath` (fallback to hardcoded) + append `CLIArgs`. Then the wizard's cli fields take effect.
+
+### M9 — Plugins — ASSESSED 2026-06-21: essentially COMPLETE for 0.1.0
+Concept 0.1.0 scope = SHAPES only (registry single→list + bundle manifest + wire skill tools); installer +
+Marketplaces UI deferred to v0.2. **All the 0.1.0 shapes are already built** (the concept doc predates them —
+it listed stubs now wired):
+- **IMPORTANT distinction (don't conflate):** **SKILL marketplaces ≠ PLUGIN bundles.**
+  - **SKILL marketplaces** = a list of registries you search/install *skills* from (ClawHub, GitHub). **`config.go:2748`
+    literally: "one skill-marketplace entry (FR-10.1)."** `SkillRegistry`/`RegistryManager`/`ClawHubRegistry`.
+  - **PLUGIN bundles** = a *package* of skills+agents+MCP+channels+providers (`omnipus-plugin.json`/`BundleManifest`),
+    distributed via a git repo; the installer fans components out. A GitHub repo can host *either* a bare skill
+    or a bundle — the installer detects `omnipus-plugin.json` to decide (`installer.go:164-169`).
+- **Skill-marketplace LIST — done:** `config.go:2743` `Marketplaces []MarketplaceConfig` (clawhub|github|future
+  omnipus) — the single→list refactor (for SKILLS, not plugins).
+- **Plugin bundle manifest — done:** `pkg/skills/manifest.go` `omnipus-plugin.json` → `BundleManifest` +
+  `Validate()` (ADR-019 FR-10); installer detects it.
+- **No dedicated PLUGIN marketplace in 0.1.0** — the **Omnipus Marketplace** (serves plugins/bundles) is v0.2,
+  with the installer fan-out + Marketplaces UI.
+- **4 skill tools WIRED (not stubs):** `skill.go` `Execute → deps.SkillInstaller`.
+- **Skill authoring (create/edit) + embedded default skills** — done (M1). **ExternalAgentRunner shape** — done (M8).
+- **Engine:** `RegistryManager`/`SearchAll`/`ClawHubRegistry`/`GitHubRegistry`/`InstallFromGitHub` (SSRF+hash).
+- **Deferred to v0.2 (correct):** bundle-installer component fan-out, Marketplaces UI, Omnipus Market live.
+- **Only minor to confirm:** default marketplace seed (ClawHub default + GitHub first-class on fresh boot).
+**M9 = essentially done for 0.1.0.**
+**ACTUAL PLUGINS in 0.1.0 = ZERO (clarified 2026-06-21).** 0.1.0 ships the manifest SHAPE only; the plugin
+installer + plugin marketplace (Omnipus Market) + Marketplaces UI are all v0.2 → no plugin is installable in
+0.1.0. What ships are **compiled-in seeded defaults, not plugins:** 4 base agents + Worker + Planner/Explorer/
+Researcher specialists · 4 embedded skills · 3 runner drivers. **SKILLS are installable** in 0.1.0 (ClawHub/
+GitHub skill marketplaces + wired tools); **plugins/bundles/agent-packs are v0.2.** **Implication (resolves the
+base-vs-pack open item): the specialist subagents are SEEDED/compiled-in for 0.1.0** (no installer to deliver a
+pack) — they'd become a marketplace pack only once the v0.2 installer exists.
+**ACTION — TEST COVERAGE (2026-06-21):** the plugin mechanics ARE shipping in 0.1.0 (bundle manifest +
+`Validate()`, installer manifest detection, skill-marketplace registry list, the wired install/remove/search/
+list + create/edit skill tools, RegistryManager/SearchAll, InstallFromGitHub SSRF+hash). Since this is
+**foundation the v0.2 installer + Marketplaces UI build directly on, it needs PROPER test coverage** — audit
+current coverage and fill gaps (manifest validation, single→list registry, install/fan-out detection, SSRF/
+hash guards, partial-failure search). The shape won't be re-cut in v0.2, so its reliability matters now.
+
+### M10 — Tools / Integrations — ASSESSED 2026-06-21: essentially done for 0.1.0
+0.1.0 scope = Integrations provider-picker + mic in chat (voice-in); TTS/image → v0.2; realtime → v1.0.
+**Built:** **Integrations provider-picker** (`src/components/settings/IntegrationsSection.tsx`: web-search 7
+providers + Voice input; edits via the M7 re-auth/step-up gate `useReAuthGate.tsx`). **Mic in chat**
+(`chat/MessageInput.tsx`, Spec-6 FR-12.1: Microphone button, MicState idle/recording/transcribing,
+MediaRecorder/getUserMedia). **Voice transcriber** (Groq, `pkg/voice/groq_transcriber.go`, `config.go:2276`).
+Per-tool pluggable providers (search multi-provider, voice-in).
+**Deferred (correct):** TTS per-agent voices + image-gen → v0.2; realtime voice + local sidecars → v1.0.
+(Agent form already has the reserved, disabled Voice field.)
+**Minor confirm:** is voice-in truly multi-provider today or just Groq (roadmap said multi). Low-stakes.
+**M10 = essentially done for 0.1.0.**
+
+### M11 — Email — ASSESSED 2026-06-21: substantially built for 0.1.0
+0.1.0 scope = basic IMAP/SMTP, one mailbox (your address + app-password), pure-Go, "a thread = a session,"
+run by the Assistant in My Workspace.
+**Built:** `pkg/channels/email/` (email.go/init.go/test) — real IMAP client (`UnilateralDataHandler`);
+**pure-Go IMAP/SMTP** via `emersion/go-imap/v2` + `go-message` + `go-sasl` (no CGo); one-mailbox config
+(IMAP/SMTP host+port, username, `PasswordRef`); message-id capture (threading basis).
+**Minor/open:** "thread = session" completeness (message-id captured; `In-Reply-To`/`References` → session
+looks partial — finish); M3 "present but basic" refinements (IMAP polling vs IDLE, SMTP auth); `workspace_id`
+tag (M3/M4 fold-in); "Assistant operates it in My Workspace" = the user-identity binding (M3).
+**M11 = substantially built; minor finishing.**
+
+**EMAIL MODEL — LOCKED (2026-06-21): email is a TOOL, not a conversational channel.**
+- **NOT a channel.** Email is **tools** (`read_inbox · search_email · read_message · send_email · reply`)
+  over a configured mailbox account. Pull, not push — the agent works its inbox **on heartbeat**; mail it
+  can't fully handle becomes **Board tasks**. Drops the "thread = session" framing. **Move email out of
+  `pkg/channels/` → model as a tool** over the existing pure-Go IMAP/SMTP transport.
+- **Ownership: per-AGENT, placed in a workspace (keyed by (agent, workspace), 1:1).** A mailbox **belongs to
+  an agent** (its email identity + IMAP/SMTP creds, like a connection) and **lives in ONE workspace** (where
+  it surfaces). An agent has **one** mailbox — NOT one per workspace (not a grid).
+- **Three UI places:** (1) **configure** the account in **Connectors**; (2) **use** via the agent's email
+  **tools**; (3) **see** it in a **workspace "Email" tab** — incoming mail + the agent's replies/actions, with
+  un-handled mail → Board tasks. Email tab shows the mailbox of the agent whose email lives in that workspace.
+- **0.1.0:** one mailbox (cap-1) = the **Assistant's address (your email), in My Workspace** → My Workspace →
+  Email tab. **v0.3:** per-agent mailboxes (cap lifts), each assigned to a workspace.
+- **Workspace tabs become:** Chat · Board · List · Graph · Calendar · **Email** · Team · Settings (Email tab
+  shows only when the workspace hosts an email-enabled agent).
+
+### === MODULE SWEEP COMPLETE (M1–M12) — 2026-06-21 ===
+Headline: **most of 0.1.0's foundation is already built.** The 0.1.0 work is consolidation + the
+workspace-as-project reframe + targeted additions, NOT greenfield.
+- **Largely/essentially DONE:** M3 Connections (the breaking migration), M9 Plugins (shapes), M10 Tools/
+  Integrations, M7 onboarding + step-up auth, M8 runner interface, M1 Memory engine (~90%), M11 Email.
+- **Built scaffolding, our-decisions work remains:** M2 Tasks (unify 3 systems), M4 Workspace key (bind to
+  turn + connection tag), M5 Delegation (per-workspace move + unlock bounded), M6 Roster (seed specialists +
+  apply model/heartbeat/form/delegation decisions).
+- **Decided, code pass pending:** M12 god-mode/sandbox (reuses existing requireReAuth step-up).
+**Cross-cutting build threads (recurring across modules):** the workspace-as-project IA reframe (M2/M4/M7) ·
+`{model,provider}` (M6/M10) · password step-up (already built, M7) · `workspace_id` additive on tasks/
+workflows/triggers/sessions(tag)/connections.
+
 ## Part 4 — Next steps (after decisions lock)
 **No Albert ADR** (operator decision 2026-06-20) — **this decision log is the spec of record.**
 1. **O1 — release routing** (last open decision; slots everything into phases).
