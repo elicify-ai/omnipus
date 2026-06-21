@@ -2,7 +2,9 @@ package runner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,6 +43,10 @@ func TestParseCLIArgs(t *testing.T) {
 		{"escaped space", `--path a\ b`, []string{"--path", "a b"}},
 		{"collapses whitespace", "  --a    --b  ", []string{"--a", "--b"}},
 		{"equals form kept as one token", "--model=gpt", []string{"--model=gpt"}},
+		// Robustness (review test gap): a malformed args string must not drop the
+		// partial token silently — flush() emits what was accumulated.
+		{"unterminated double quote keeps partial token", `--x "unclosed`, []string{"--x", "unclosed"}},
+		{"trailing backslash keeps token", `--x a\`, []string{"--x", "a"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,6 +123,77 @@ func TestMergeEnvOverrides(t *testing.T) {
 			t.Errorf("non-protected SAFE_VAR must be applied; got %q", m["SAFE_VAR"])
 		}
 	})
+
+	t.Run("empty key is skipped", func(t *testing.T) {
+		// A whitespace-only / empty override key must be skipped, not emitted as a
+		// bare "=value" entry that would corrupt the child env.
+		got := mergeEnvOverrides(base, map[string]string{
+			"":    "should-be-dropped",
+			"   ": "also-dropped",
+			"OK":  "kept",
+		}, "run")
+		for _, kv := range got {
+			if strings.HasPrefix(kv, "=") || strings.HasPrefix(kv, " ") {
+				t.Errorf("empty/blank override key produced a malformed entry: %q", kv)
+			}
+		}
+		m := envToMap(got)
+		if m["OK"] != "kept" {
+			t.Errorf("non-empty key must be applied; OK = %q", m["OK"])
+		}
+		// No spurious growth beyond base + the single valid "OK" key.
+		if len(got) != len(base)+1 {
+			t.Errorf("expected base+1 entries, got %d (%v)", len(got), got)
+		}
+	})
+}
+
+// captureSlogWarnings installs a slog handler that records WARN+ messages for
+// the duration of fn, restoring the previous default logger afterwards. It
+// returns the captured log text.
+func captureSlogWarnings(fn func()) string {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+	fn()
+	return buf.String()
+}
+
+// TestParseCLIArgs_ShellMetacharWarnFires asserts a WARN is actually emitted
+// when cli_args carry genuine shell-control characters (review test gap). The
+// narrowed shellInjectionChars set must NOT fire on ordinary `--flag=val`.
+func TestParseCLIArgs_ShellMetacharWarnFires(t *testing.T) {
+	out := captureSlogWarnings(func() {
+		parseCLIArgs("--flag $(whoami)", "run-meta")
+	})
+	if !strings.Contains(out, "shell-metacharacters") {
+		t.Errorf("expected a shell-metacharacter WARN for cli_args containing $(...), got: %q", out)
+	}
+
+	// A benign value with `=` (and glob-ish chars that are NOT shell-control) must
+	// NOT trigger the warning after the narrowing fix.
+	benign := captureSlogWarnings(func() {
+		parseCLIArgs("--model=gpt-4 --path a/b*.txt", "run-benign")
+	})
+	if strings.Contains(benign, "shell-metacharacters") {
+		t.Errorf("benign cli_args must NOT warn after narrowing shellInjectionChars; got: %q", benign)
+	}
+}
+
+// TestMergeEnvOverrides_WarnPerProtectedKey asserts one WARN is emitted per
+// offending protected key (the corrected doc contract), not silently skipped.
+func TestMergeEnvOverrides_WarnPerProtectedKey(t *testing.T) {
+	out := captureSlogWarnings(func() {
+		mergeEnvOverrides([]string{"PATH=/usr/bin"}, map[string]string{
+			"OMNIPUS_MASTER_KEY": "leak",
+			"OMNIPUS_AGENT_NAME": "spoof",
+		}, "run-prot")
+	})
+	got := strings.Count(out, "reserved Omnipus-internal variable")
+	if got != 2 {
+		t.Errorf("expected one WARN per offending protected key (2), got %d; log: %q", got, out)
+	}
 }
 
 // TestExternalCLI_SpawnsWithExecutorConfig is the MAJ-5 end-to-end proof: a stub

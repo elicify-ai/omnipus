@@ -7,9 +7,11 @@
 package gateway
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/dapicom-ai/omnipus/pkg/agent"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -28,8 +30,11 @@ import (
 // PUT accepts the same format, validates all policy values, and persists to
 // config.json under sandbox.tool_policies and sandbox.default_tool_policy via
 // safeUpdateConfigJSON (preserves credential refs). Changes are audit-logged
-// per SEC-15. The new policy is reflected immediately after the config reload
-// triggered by safeUpdateConfigJSON.
+// per SEC-15. After the write, putToolPolicies calls TriggerReload to enforce
+// the new policy on already-running agents by rebuilding every agent instance
+// with the new global policy — SwapConfig alone does not (see the O7 hot-path
+// note in putToolPolicies). A reload failure is logged loudly and never masks
+// the successful persist (the policy still applies after the next restart).
 //
 // Valid policy values: "allow", "ask", "deny".
 func (a *restAPI) HandleToolPolicies(w http.ResponseWriter, r *http.Request) {
@@ -158,13 +163,42 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// O7 hot-path (BLOCKER): persisting + SwapConfig alone does NOT rebuild the
+	// already-constructed agent instances. Each instance carries a boot-time
+	// toolPolicy snapshot (agentToolsCfgToPolicy → ToolPolicyCfg.GlobalPolicies)
+	// that exec-time resolution (resolveSingleToolPolicy → FilterToolsByPolicy ←
+	// LoadToolPolicy) reads. Without a rebuild a global "deny" set here would be
+	// persisted + shown enforced by GET, while running agents keep executing the
+	// "denied" tool until a restart — a fail-open authorization bypass on a
+	// tightening edit. safeUpdateConfigJSON additionally registers the written
+	// hash with selfWriteReg to suppress the file-watcher reload, so an explicit
+	// TriggerReload is required. TriggerReload → executeReload →
+	// ReloadProviderAndConfig → NewAgentRegistry rebuilds every instance with the
+	// new GlobalPolicies, mirroring the delegation_policy path in updateAgent.
+	//
+	// Reload-failure semantics mirror updateAgent's delegation_policy path: the
+	// config IS persisted, so we never 500 (that would wrongly signal the write
+	// failed). ErrReloadNotConfigured is the no-reload-loop case (tests / minimal
+	// embeddings) and is benign. A genuine reload error is logged at Error — it
+	// means running agents may keep the previous global policy until the next
+	// restart, which an operator must see in the logs.
+	if err := a.agentLoop.TriggerReload(); err != nil {
+		if errors.Is(err, agent.ErrReloadNotConfigured) {
+			slog.Debug("rest: tool policies persisted; live reload not configured on this loop",
+				"error", err)
+		} else {
+			slog.Error("rest: reload after tool policies update failed; running agents may keep the previous global policy until restart",
+				"error", err)
+		}
+	}
+
 	slog.Info("rest: global tool policies updated",
 		"default_policy", defaultPolicy,
 		"policy_count", len(body.Policies),
 	)
 
-	// Return the persisted state. Changes take effect immediately because
-	// safeUpdateConfigJSON hot-reloads the in-memory config after the write.
+	// Return the persisted state. Changes take effect immediately because the
+	// TriggerReload above rebuilt every running agent with the new global policy.
 	// body.Policies is already map[string]GlobalToolPoliciesPolicies — pass directly.
 	respPolicies := make(map[string]gen.GlobalToolPoliciesPolicies)
 	for k, v := range body.Policies {

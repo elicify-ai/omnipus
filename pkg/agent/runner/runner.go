@@ -191,8 +191,9 @@ type RunOptions struct {
 	CLIArgs []string
 	// EnvOverrides are additional environment variables merged into Env for the
 	// spawned process (MAJ-5 / ExecutorConfig.env_overrides). Omnipus-internal
-	// keys (OMNIPUS_*) are never overridable — the driver's env builder drops
-	// any such key.
+	// keys (OMNIPUS_*) are never overridable — the driver's env builder rejects
+	// override attempts on OMNIPUS_* keys (the base values are preserved) and
+	// logs one WARN per offending key.
 	EnvOverrides map[string]string
 }
 

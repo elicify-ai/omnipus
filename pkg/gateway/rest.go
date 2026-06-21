@@ -977,7 +977,10 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 		return
 	}
 
-	res := runner.TestConnection(r.Context(), cli)
+	// Validate the agent's CONFIGURED binary (executor.cli_path), not just the
+	// default $PATH binary — otherwise a custom cli_path that does not exist
+	// would false-green. Empty cli_path falls back to the default name.
+	res := runner.TestConnectionWithPath(r.Context(), cli, executor.CLIPath)
 	resp := gen.RunnerTestResponse{
 		Ok:      res.OK,
 		Reason:  gen.RunnerTestResponseReason(res.Reason),

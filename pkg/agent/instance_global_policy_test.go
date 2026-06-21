@@ -83,6 +83,21 @@ func TestAgentToolsCfgToPolicy_GlobalMerge(t *testing.T) {
 			agentCfg:      mkAgentCfg(config.ToolPolicyAsk),
 			wantEffective: "ask",
 		},
+		{
+			// agent-deny is stricter than global-ask → deny wins.
+			name:          "global-ask with agent-deny resolves to deny",
+			globalCfg:     mkGlobalCfg("ask", ""),
+			agentCfg:      mkAgentCfg(config.ToolPolicyDeny),
+			wantEffective: "deny",
+		},
+		{
+			// global-deny is stricter than agent-ask → deny wins (agent cannot
+			// loosen a global deny back to ask).
+			name:          "global-deny with agent-ask resolves to deny",
+			globalCfg:     mkGlobalCfg("deny", ""),
+			agentCfg:      mkAgentCfg(config.ToolPolicyAsk),
+			wantEffective: "deny",
+		},
 	}
 
 	for _, tc := range tests {

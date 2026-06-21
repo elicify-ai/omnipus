@@ -52,11 +52,25 @@ func (a *restAPI) HandleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 	restartID := fmt.Sprintf("restart-%d", time.Now().UnixNano())
 
 	// Resolve the restart action. Tests inject a stub via a.restarter; production
-	// falls back to the real re-exec. Resolve it BEFORE writing the response so a
-	// nil/!nil decision is made on the request goroutine, then run it async.
+	// falls back to the real re-exec.
 	restart := a.restarter
 	if restart == nil {
-		restart = gracefulSelfRestart
+		// Resolve and validate the executable path BEFORE writing the 202. The
+		// documented run mode is a bare `./omnipus gateway &` with NO supervisor,
+		// so an executable-resolution failure after the ack would be a permanent
+		// down with the client already told "restarting" — a post-ack silent
+		// death. Surfacing it here returns a 500 (restart not attempted) instead.
+		// Only the actual syscall.Exec (which cannot return on success) runs after
+		// the ack.
+		exe, err := os.Executable()
+		if err != nil {
+			slog.Error("gateway: self-restart could not resolve executable path; restart not attempted",
+				"restart_id", restartID, "error", err)
+			jsonErr(w, http.StatusInternalServerError,
+				"could not resolve executable path; gateway not restarted")
+			return
+		}
+		restart = func() { reExecProcess(exe) }
 	}
 
 	msg := "Gateway is restarting; reconnecting shortly."
@@ -88,28 +102,27 @@ func (a *restAPI) HandleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// gracefulSelfRestart re-execs the current process image, preserving the
-// original argv and environment (the supervisor-friendly path is the same
-// binary with the same flags). syscall.Exec replaces the process image
+// reExecProcess re-execs the current process image at the pre-resolved exe path,
+// preserving the original argv and environment (the supervisor-friendly path is
+// the same binary with the same flags). syscall.Exec replaces the process image
 // in-place, so open listeners are closed by the kernel and the new image binds
 // them fresh on boot — there is no orphaned half-shutdown process.
 //
-// On failure (e.g. the executable path can no longer be resolved) it logs and
-// exits non-zero so a supervisor restarts it cleanly rather than leaving a
-// wedged process.
-func gracefulSelfRestart() {
-	exe, err := os.Executable()
-	if err != nil {
-		slog.Error("gateway: self-restart could not resolve executable path; exiting for supervisor",
-			"error", err)
-		os.Exit(1)
-	}
+// The executable path is resolved and validated by the handler BEFORE the 202
+// ack (see HandleGatewayRestart), so this function only runs once a valid path
+// is in hand. syscall.Exec returns only on failure; in that case we log the
+// cause clearly and exit non-zero so a supervisor (if any) restarts us. With no
+// supervisor this is still strictly better than a pre-ack failure: the client
+// was already told the gateway is restarting.
+func reExecProcess(exe string) {
 	argv := os.Args
 	env := os.Environ()
 	slog.Warn("gateway: re-execing process", "executable", exe, "argv", argv)
 	if err := syscall.Exec(exe, argv, env); err != nil {
-		// Exec only returns on failure. Exit non-zero so a supervisor restarts us.
-		slog.Error("gateway: syscall.Exec failed; exiting for supervisor", "error", err)
+		// Exec only returns on failure. Surface the cause clearly; exit non-zero
+		// so a supervisor restarts us.
+		slog.Error("gateway: syscall.Exec failed; exiting for supervisor",
+			"executable", exe, "error", err)
 		os.Exit(1)
 	}
 }

@@ -105,6 +105,35 @@ func resolveFromMap(toolName string, policies map[string]string, wildcards []wil
 	return ""
 }
 
+// resolveEffectivePolicyWith is the single source of truth for the global×agent
+// merge (deny > ask > allow, with default-fill on each side). Both
+// ResolveEffectivePolicy and FilterToolsByPolicy resolve through this so the
+// security-critical merge rule lives in exactly one place — duplicating it
+// invites silent drift. The wildcard indexes are pre-built once per call site
+// and threaded in to avoid re-parsing the policy maps for every tool.
+func resolveEffectivePolicyWith(
+	cfg *ToolPolicyCfg,
+	toolName string,
+	agentWildcards, globalWildcards []wildcardEntry,
+	defaultAgentPolicy, defaultGlobalPolicy string,
+) string {
+	g := resolveFromMap(toolName, cfg.GlobalPolicies, globalWildcards)
+	if g == "" {
+		g = defaultGlobalPolicy
+	}
+	a := resolveFromMap(toolName, cfg.Policies, agentWildcards)
+	if a == "" {
+		a = defaultAgentPolicy
+	}
+	if g == "deny" || a == "deny" {
+		return "deny"
+	}
+	if g == "ask" || a == "ask" {
+		return "ask"
+	}
+	return "allow"
+}
+
 // ResolveEffectivePolicy returns the combined global+agent effective policy
 // ("allow", "ask", or "deny") for a single tool name. It applies the same
 // resolution order as FilterToolsByPolicy without iterating all tools.
@@ -124,22 +153,10 @@ func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 	}
 	agentWildcards := buildWildcardIndex(cfg.Policies)
 	globalWildcards := buildWildcardIndex(cfg.GlobalPolicies)
-
-	g := resolveFromMap(toolName, cfg.GlobalPolicies, globalWildcards)
-	if g == "" {
-		g = defaultGlobalPolicy
-	}
-	a := resolveFromMap(toolName, cfg.Policies, agentWildcards)
-	if a == "" {
-		a = defaultAgentPolicy
-	}
-	if g == "deny" || a == "deny" {
-		return "deny"
-	}
-	if g == "ask" || a == "ask" {
-		return "ask"
-	}
-	return "allow"
+	return resolveEffectivePolicyWith(
+		cfg, toolName, agentWildcards, globalWildcards,
+		defaultAgentPolicy, defaultGlobalPolicy,
+	)
 }
 
 // ToolPolicyCfg is the per-agent tool policy configuration.
@@ -195,32 +212,14 @@ func FilterToolsByPolicy(allTools []Tool, agentType string, cfg *ToolPolicyCfg) 
 	agentWildcards := buildWildcardIndex(cfg.Policies)
 	globalWildcards := buildWildcardIndex(cfg.GlobalPolicies)
 
-	resolveGlobal := func(toolName string) string {
-		p := resolveFromMap(toolName, cfg.GlobalPolicies, globalWildcards)
-		if p != "" {
-			return p
-		}
-		return defaultGlobalPolicy
-	}
-
-	resolveAgent := func(toolName string) string {
-		p := resolveFromMap(toolName, cfg.Policies, agentWildcards)
-		if p != "" {
-			return p
-		}
-		return defaultAgentPolicy
-	}
-
+	// Single shared resolver — same merge rule as ResolveEffectivePolicy
+	// (deny > ask > allow with default-fill). Defined once here so the
+	// security-critical precedence logic is not duplicated.
 	resolveEffective := func(toolName string) string {
-		g := resolveGlobal(toolName)
-		a := resolveAgent(toolName)
-		if g == "deny" || a == "deny" {
-			return "deny"
-		}
-		if g == "ask" || a == "ask" {
-			return "ask"
-		}
-		return "allow"
+		return resolveEffectivePolicyWith(
+			cfg, toolName, agentWildcards, globalWildcards,
+			defaultAgentPolicy, defaultGlobalPolicy,
+		)
 	}
 
 	out := make([]Tool, 0, len(allTools))

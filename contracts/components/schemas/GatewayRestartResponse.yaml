@@ -21,12 +21,14 @@ properties:
     example: restarting
   restart_id:
     type: string
+    minLength: 1
     description: >
       Opaque identifier for this restart attempt. The SPA may echo it in logs to
       correlate the down→up transition; it is not required to poll.
     example: restart-1718900000000000000
   drain_seconds:
     type: integer
+    minimum: 0
     description: >
       Approximate number of seconds the gateway will wait for in-flight work to
       drain before re-execing. The SPA can use this as a lower bound before it
