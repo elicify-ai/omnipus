@@ -521,11 +521,20 @@ A **todo is NOT a subtask** — it is deliberately simpler.
   Planner subagent a trust-set+depth policy, and let the UI/backend *allow* a subagent to carry a delegation
   policy (verify any reject-policy-on-worker check). The depth/trust/mode enforcement engine is already done.
 
-### M5 — Delegation — PARTIALLY ASSESSED 2026-06-21
-- `delegation_policy` = `to · accept_from · modes · depth · budget` (contract complete; **to + modes + depth
-  enforced**; accept_from/budget reserved). Depth enforcement verified (see above). Trust-graph UI exists with
-  the depth field. Gaps for our decisions: allow subagent→subagent delegation in the UI/backend (bounded-
-  delegation decision), surface subagent outgoing edges in the trust-graph.
+### M5 — Delegation — ASSESSED 2026-06-21 (complete)
+**Built:** `delegation_policy` = `to · accept_from · modes · depth · budget` (contract complete). **`to` +
+`modes` + `depth` ENFORCED** (depth verified). The previously-**ungated paths are now gated**
+(`loop.go:1570-1573`, FR-6.3 gates the sync-subagent tool). **`accept_from` + `budget` are INERT by design**
+in 0.1.0 (`config.go:983-1021`, startup WARN) — reserved, NOT a gap. Trust-graph UI exists.
+**MISSING = what our decisions require (3 items):**
+1. **Per-workspace delegation** (biggest, structural): `delegation_policy` is **per-agent today**
+   (`config.go:752` on `AgentConfig`) → move it **onto the workspace** (team + edges, keyed by `core_team`).
+2. **Unlock bounded subagent delegation:** remove the **hard leaf rejection** at
+   `pkg/gateway/rest_agent_delegation.go:233` (rejects any `to` on a worker) **+ the FE worker-out-edge block**,
+   so a specialist subagent (Planner) can carry a trust-set + `depth ≥ 1`. Runtime enforcement already works
+   once the policy is *allowed*.
+3. **Trust-graph → per-workspace** (the workspace Team tab + the Agents-area "Workspace Teams" view,
+   editable from both).
 
 ### M4 — Workspace scoping key — ASSESSED 2026-06-21: ~8/9 built
 **Built:** Workspace entity + file store (`~/.omnipus/workspaces/{id}.json`, full CRUD + system tools) ·
@@ -626,6 +635,52 @@ tasks, memory, team).
   skills, settings) stay in the sidebar. **App default front door = My Workspace → Chat → Mia.**
 - Touches M2 (task views) + M7 (IA shell) + routing. Significant SPA IA change (chat top-level route →
   workspace tab; sidebar restructure) — but the clean end-state.
+
+### M3 — Connections — ASSESSED 2026-06-21: the "one breaking migration" is SUBSTANTIALLY DONE
+The roadmap's single biggest-risk item is **already built + tested** — big 0.1.0 de-risk.
+**Built:** config is a **list/map** `Channels map[string]ChannelInstanceConfig` (`config.go:122`); the old
+per-type singletons are **deleted** (compiler-error migration complete) · **identity (agent|user)**
+`ChannelIdentity{Kind,ID}` validated + routed (`config.go:1436-1467`) · credentials as `*_ref` (type-keyed
+fields, instance-keyed storage) · contracts `ChannelEntry`(+`instance_id`+`identity`)/`ChannelIdentity`/
+`ChannelConfigureRequest` · **cap-1** `maxInstancesPerType=1` + `ValidateChannelsCap1` (lifts in v0.3 by one
+constant) · activation = loop over instance map + factory registry (`manager.go:602-663`, not an if-ladder) ·
+**"Connectors" UI** already renamed + instance-shaped (`src/routes/_app/connectors.tsx`).
+**Only gap + decision (CORRECTED 2026-06-21 after re-reading `channels.html` — the model is IDENTITY-centric,
+not project-tag-centric; the earlier "tag every connection with a project" framing was an over-extrapolation):**
+- The concept: a Connection = `{id, identity, agent_binding, secret_ref}` + **"which workspace it lives in."**
+  **Identity = agent | user**; routing is by **agent binding** (`ResolveRoute`, peer→guild→team→account→default),
+  NOT by a project tag. The natural rule: **user-identity connections live in My Workspace** (the Assistant
+  operates them — your Gmail/Telegram); **agent-identity connections are owned by an agent** (Ray's @RayBot).
+- **The `workspace_id` field is still the right additive add** (= the M4 key / "which workspace it lives in"),
+  but **identity-driven**: user connections default to My Workspace; agent connections carry their operating
+  workspace. Add to `ChannelInstanceConfig` + `ChannelEntry`/`ChannelConfigureRequest`. Connections stay
+  **globally managed** (Connectors screen).
+- **OPEN QUESTION:** for an agent-identity connection (Ray on multiple teams), which workspace do its incoming
+  conversations belong to — **(a)** a workspace configured on the connection (the project it serves), or
+  **(b)** default to a home workspace (My Workspace) unless set? [operator to decide]
+*(Email channel: present but basic — see M11.)*
+
+### M6 — Agents / roster — ASSESSED 2026-06-21
+**Built:** 4 base agents Mia·Jim·Ava·Ray (`core`) + **Worker** tier (`Subagent` wire); **Max retired**
+(`coreagent/core.go`, `IDMax` absent). Agent kind + executor two-tier (`config.go:808-817,1159`:
+core/worker + Main/Subagent/subagent_3p; ExecutorKind native/external-cli/remote-a2a). **Max-parallel-agents**
+setting (`max_parallel_agents` [2,16], clamped). Voice field (reserved) + 3 runner drivers present.
+**OPEN:**
+1. **Seed the 3 specialist subagents — Planner / Explorer / Researcher (they DON'T exist; grep found none).**
+   Ship by default as Subagents with bounded-delegation policies (Planner → Explorer/Researcher).
+2. **Apply the already-locked agent-touching decisions (build here):** O3 model→`{model,provider}` ·
+   O6 per-agent heartbeat · O12·1 form unification + inherit (model/fallback/tools/skills/sandbox) ·
+   M4/M5 per-workspace teams + bounded delegation (remove worker-leaf rejection) · Agents area = library +
+   "Workspace Teams" view.
+3. **Minor — CONFIRMED:** max-parallel (and other sensitive) settings are admin-only → switch to **password
+   step-up** (no admin/user roles anymore).
+
+**Agent form differences across types — CONFIRMED 2026-06-21 (refines O12·1):**
+- **Main ≈ Subagent** — same form, MINUS **heartbeat + voice** (Main-only), PLUS the **inherit toggles**
+  (model/fallback/tools/skills/sandbox) and a **required description** (for routing).
+- **subagent_3p (external CLI) is the most distinct** — **HIDES tools / skills / sandbox** (the external CLI
+  manages its own isolation, tools, skills), and **ADDS the CLI executor config** (`cli · cli_path ·
+  env_overrides · cli_args`); model = the CLI's (free-text). No heartbeat/voice.
 
 ## Part 4 — Next steps (after decisions lock)
 **No Albert ADR** (operator decision 2026-06-20) — **this decision log is the spec of record.**
