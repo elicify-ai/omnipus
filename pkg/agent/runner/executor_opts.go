@@ -53,11 +53,17 @@ func resolveCLIBinary(cliPath, defaultBin string) string {
 	return defaultBin
 }
 
-// shellInjectionChars are characters that have special meaning to a shell. The
+// shellInjectionChars are genuine shell-control characters (command separators,
+// pipes, redirects, subshells, command/variable substitution, escapes). The
 // drivers exec the CLI directly (no shell), so these are passed literally and
 // are harmless — but their presence in cli_args usually signals the operator
 // expected shell semantics, so we WARN (never reject) per the schema.
-const shellInjectionChars = "|&;<>()$`\\\"'\n\t*?[]#~="
+//
+// Deliberately EXCLUDES glob/expansion chars that legitimately appear in
+// ordinary literal arguments (e.g. `=` in `--flag=val`, and `* ? [ ] # ~` in
+// paths/patterns), which would otherwise fire false-positive warnings on benign
+// values.
+const shellInjectionChars = "|&;<>()$`\\\"'\n"
 
 // ParseCLIArgs is the exported entry point for the dispatch site
 // (pkg/agent/external_dispatch.go) to tokenise an ExecutorConfig.cli_args string
@@ -150,10 +156,10 @@ func tokenizeArgs(s string) []string {
 
 // mergeEnvOverrides returns a copy of baseEnv (the already-scrubbed child env)
 // with the supplied env_overrides applied. Protected Omnipus-internal keys are
-// silently skipped (logged once) so a misconfigured override cannot leak the
-// master key or spoof OMNIPUS_AGENT_* identity vars. A non-protected key present
-// in both baseEnv and overrides is REPLACED by the override value; a new key is
-// appended.
+// skipped with a WARN (one per offending key) so a misconfigured override cannot
+// leak the master key or spoof OMNIPUS_AGENT_* identity vars. A non-protected
+// key present in both baseEnv and overrides is REPLACED by the override value; a
+// new key is appended.
 //
 // baseEnv nil/empty is preserved (the child-env "inherit nothing" contract is
 // not broken — overrides only ADD to whatever base was supplied).

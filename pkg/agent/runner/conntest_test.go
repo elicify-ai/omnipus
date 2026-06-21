@@ -135,6 +135,51 @@ func TestTestConnection_Opencode_AuthViaFile(t *testing.T) {
 	}
 }
 
+// TestTestConnectionWithPath_CustomPathMissing closes the false-green gap: when
+// a custom cli_path is configured but does not exist, the test must FAIL with
+// missing-binary even though the DEFAULT binary IS on PATH. Before the fix, Test
+// validated only the default $PATH binary, so a broken custom path passed.
+func TestTestConnectionWithPath_CustomPathMissing(t *testing.T) {
+	dir := t.TempDir()
+	// The DEFAULT "claude" binary IS present and authed on PATH …
+	writeFakeBin(t, dir, "claude", "claude v2.0.1")
+	isolatePATH(t, dir)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+
+	// … but the agent is configured with a custom cli_path that does NOT exist.
+	missing := filepath.Join(dir, "nonexistent-claude")
+	res := TestConnectionWithPath(context.Background(), "claude-code", missing)
+	if res.OK {
+		t.Fatalf("custom cli_path that does not exist must FAIL the test (false-green guard); got OK: %q", res.Message)
+	}
+	if res.Reason != ReasonMissingBinary {
+		t.Fatalf("want missing-binary reason for bad cli_path, got %q (%q)", res.Reason, res.Message)
+	}
+}
+
+// TestTestConnectionWithPath_CustomPathHonored verifies a valid custom cli_path
+// is the binary actually validated (its version is reported).
+func TestTestConnectionWithPath_CustomPathHonored(t *testing.T) {
+	dir := t.TempDir()
+	isolatePATH(t, dir) // no default "claude" on PATH at all
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+
+	// Custom binary at an explicit absolute path with a distinctive version.
+	custom := filepath.Join(dir, "my-claude")
+	script := "#!/bin/sh\necho 'claude 9.9.9 (custom)'\n"
+	if err := os.WriteFile(custom, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	res := TestConnectionWithPath(context.Background(), "claude-code", custom)
+	if !res.OK {
+		t.Fatalf("valid custom cli_path should be OK, got: %q", res.Message)
+	}
+	if res.CLIVersion != "9.9.9" {
+		t.Fatalf("custom cli_path binary version must be reported; CLIVersion = %q, want 9.9.9", res.CLIVersion)
+	}
+}
+
 func TestSupportedCLIs(t *testing.T) {
 	got := SupportedCLIs()
 	want := map[string]bool{"claude-code": true, "codex": true, "opencode": true}

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
 import { transcribeAudio, isApiError, fetchSkills } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -43,11 +44,20 @@ export function MessageInput() {
     enabled: isConnected,
   })
 
-  // Build the full suggestion list: active skills + a small set of built-in commands.
+  // Build the full suggestion list: active skills + built-in commands that
+  // perform real client-side actions.
+  //
+  // /recall and /remember are intentionally excluded: they are server-side
+  // memory tool triggers that the agent handles as plain text in the message
+  // body (the LLM routes them to the remember/recall tools). Advertising them
+  // here as slash-commands would mislead users into thinking the SPA executes
+  // them — in practice they are just natural-language cues. Skills that wrap
+  // memory operations (e.g. "skill remember") will appear if installed.
+  //
+  // /clear is the only built-in that dispatches a real client-side action:
+  // startNewSession() clears the active session ID and shows an empty composer.
   const allSuggestions = useMemo<SlashSuggestion[]>(() => {
     const builtIn: SlashSuggestion[] = [
-      { trigger: 'recall', label: 'Recall', description: 'Search your memory for relevant context' },
-      { trigger: 'remember', label: 'Remember', description: 'Store something in long-term memory' },
       { trigger: 'clear', label: 'Clear session', description: 'Start a new session in this chat' },
     ]
     const skillSuggestions: SlashSuggestion[] = skills
@@ -59,6 +69,8 @@ export function MessageInput() {
       }))
     return [...builtIn, ...skillSuggestions]
   }, [skills])
+
+  const startNewSession = useSessionStore((s) => s.startNewSession)
 
   // Slash-command autocomplete state.
   const [slashQuery, setSlashQuery] = useState<string | null>(null)
@@ -72,15 +84,42 @@ export function MessageInput() {
     )
   }, [slashQuery, allSuggestions])
 
+  // MAJOR 3: clamp slashIndex to the current list length whenever the filtered
+  // list shrinks (e.g. user typed /recall, pressed ArrowDown, then backspaced
+  // to /re — the list may shrink and the old index would dereference undefined).
+  useEffect(() => {
+    if (slashSuggestions.length === 0) {
+      setSlashIndex(0)
+    } else {
+      setSlashIndex((i) => Math.min(i, slashSuggestions.length - 1))
+    }
+  }, [slashSuggestions])
+
   const applySlashSuggestion = useCallback(
-    (suggestion: SlashSuggestion) => {
+    (suggestion: SlashSuggestion | undefined) => {
+      // Guard: undefined when the index is out of range (shrinking list race).
+      if (!suggestion) return
+
+      if (suggestion.trigger === 'clear') {
+        // /clear dispatches the real new-session action — clears the active
+        // session ID so the composer resets to an empty state (same as
+        // navigating to "/" or clicking "New Chat").
+        setValue('')
+        setSlashQuery(null)
+        setSlashIndex(0)
+        startNewSession()
+        return
+      }
+
+      // All other commands (skills and future built-ins) are inserted into the
+      // composer as text so the agent receives them as part of the message body.
       setValue(`/${suggestion.trigger} `)
       setSlashQuery(null)
       setSlashIndex(0)
       // Focus after selecting
       setTimeout(() => textareaRef.current?.focus(), 0)
     },
-    [],
+    [startNewSession],
   )
 
   // Composer mic state + MediaRecorder plumbing.

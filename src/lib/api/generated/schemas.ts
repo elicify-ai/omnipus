@@ -1532,8 +1532,8 @@ export const PendingRestartEntry = z
 export const GatewayRestartResponse = z
   .object({
     status: z.literal("restarting"),
-    restart_id: z.string(),
-    drain_seconds: z.number().int(),
+    restart_id: z.string().min(1),
+    drain_seconds: z.number().int().gte(0),
     message: z.string().optional(),
   })
   .passthrough();

@@ -96,10 +96,12 @@ type AgentInstance struct {
 
 	// toolPolicy holds the per-agent tool policy snapshot used by
 	// FilterToolsByPolicy at LLM-call assembly time (FR-003, FR-020, FR-041).
-	// Populated at construction from config.AgentConfig.Tools.
-	// Config PUT swaps the pointer via StoreToolPolicy; the turn assembly Load()s
-	// it on each call to ensure stale policies are never seen mid-turn.
-	// The zero value (nil pointer) defaults to allow-all.
+	// Populated at construction from config.AgentConfig.Tools and the global
+	// sandbox policies (agentToolsCfgToPolicy). A global tool-policy PUT rebuilds
+	// this instance via TriggerReload → NewAgentRegistry (not an in-place swap),
+	// so the fresh snapshot carries the new GlobalPolicies. The turn assembly
+	// Load()s the pointer on each tool call so a stale policy is never seen
+	// mid-turn. The zero value (nil pointer) defaults to allow-all.
 	toolPolicy atomic.Pointer[tools.ToolPolicyCfg]
 
 	// Router is non-nil when model routing is configured and the light model
@@ -383,9 +385,15 @@ func (a *AgentInstance) LoadToolPolicy() *tools.ToolPolicyCfg {
 }
 
 // StoreToolPolicy atomically replaces the agent's tool policy (FR-020).
-// Called by ReloadProviderAndConfig on config PUT to propagate the new policy
-// without rebuilding the agent registry. Passing nil resets to allow-all.
-// Safe for concurrent access with ongoing turn assembly.
+// Passing nil resets to allow-all. Safe for concurrent access with ongoing
+// turn assembly (atomic pointer swap).
+//
+// Note: production does NOT hot-swap policy via this setter — a global
+// tool-policy PUT goes through TriggerReload → NewAgentRegistry, which rebuilds
+// each instance with a fresh snapshot from agentToolsCfgToPolicy (see
+// rest_tool_policies.go::putToolPolicies). This setter exists for that atomic
+// guarantee and is exercised by the turn-recheck / reload-race tests, which use
+// it to simulate a mid-turn policy swap.
 func (a *AgentInstance) StoreToolPolicy(p *tools.ToolPolicyCfg) {
 	a.toolPolicy.Store(p)
 }

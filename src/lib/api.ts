@@ -124,6 +124,8 @@ import {
   VersionResponse as VersionResponseSchema,
   // Voice provider capability detection (used by fetchVoiceProvider):
   VoiceProvider as VoiceProviderSchema,
+  // O4 gateway self-restart (contract-first #8):
+  GatewayRestartResponse as GatewayRestartResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -331,6 +333,8 @@ import type {
   VersionResponse,
   // Voice provider capability detection (used by voice-provider-detect):
   VoiceProvider,
+  // O4 gateway self-restart (contract-first #8):
+  GatewayRestartResponse,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -432,6 +436,8 @@ export type {
   // Spec-4 — sub-agent executor + external-CLI runner test:
   ExecutorConfig,
   RunnerTestResponse,
+  // O4 gateway self-restart:
+  GatewayRestartResponse,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -2125,6 +2131,18 @@ export type DMScope = 'main' | 'per-peer' | 'per-channel-peer' | 'per-account-ch
 
 export function fetchPendingRestart(): Promise<PendingRestartEntry[]> {
   return request<PendingRestartEntry[]>('/config/pending-restart', undefined, z.array(PendingRestartEntrySchema) as ZodType<PendingRestartEntry[]>)
+}
+
+// GatewayRestartResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/GatewayRestartResponse.yaml.
+//
+// POST /api/v1/gateway/restart triggers a graceful self-restart. The server replies
+// with 202 Accepted (status:"restarting") immediately, before re-execing. Admin-only;
+// secured by RequireAdmin + RequireNotBypass (returns 503 when dev_mode_bypass is active).
+export function gatewayRestart(): Promise<GatewayRestartResponse> {
+  return request<GatewayRestartResponse>('/gateway/restart', {
+    method: 'POST',
+  }, GatewayRestartResponseSchema)
 }
 
 // Audit log toggle — distinct from GET /audit-log (which returns AuditEntry[]).

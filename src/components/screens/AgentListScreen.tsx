@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CaretDown, Plus, Robot, ShareNetwork, WarningCircle } from '@phosphor-icons/react'
 import { AgentCard } from '@/components/agents/AgentCard'
 import { WorkerCard } from '@/components/agents/WorkerCard'
@@ -53,14 +53,28 @@ export function AgentListScreen() {
   const workerAgents = agents.filter(isWorker)
   const builtInAgents = agents.filter((a) => a.type === 'core' && a.locked)
 
-  // Built-in roster disclosure state — O2 adaptive expand:
-  // expanded when there are no custom Main agents (fresh install — core agents
-  // visible immediately); collapsed once the user has custom Main agents (their
-  // own agents stay prominent).
-  const hasCustomMainAgents = mainAgents.length > 0
-  const [builtInOpen, setBuiltInOpen] = useState<string | undefined>(
-    hasCustomMainAgents ? undefined : 'built-in',
-  )
+  // Built-in roster disclosure state — O2 adaptive expand.
+  //
+  // Rule: expanded when there are no custom Main agents (fresh install — core
+  // agents visible immediately); collapsed once the user has at least one
+  // custom Main agent (their own agents stay prominent).
+  //
+  // The initial useState seeded from hasCustomMainAgents is wrong at first
+  // render because agents=[] while the query loads — it always initialises
+  // EXPANDED and never re-syncs. Instead we start collapsed (undefined) and
+  // derive the correct default once loading is complete, but only fire the
+  // effect ONCE (via a ref gate) so we do not stomp subsequent manual toggles.
+  const [builtInOpen, setBuiltInOpen] = useState<string | undefined>(undefined)
+  const initialOpenApplied = useRef(false)
+  useEffect(() => {
+    // Only run once after the first successful load.
+    if (isLoading || initialOpenApplied.current) return
+    initialOpenApplied.current = true
+    const hasCustom = agents.some((a) => !isWorker(a) && !(a.type === 'core' && a.locked))
+    // Expand for fresh installs (no custom Main agents); collapse when the
+    // user already has their own agents.
+    setBuiltInOpen(hasCustom ? undefined : 'built-in')
+  }, [isLoading, agents])
 
   // Host-CLI detection — W4 of agent-form-requirements. We probe
   // `GET /api/v1/system/cli-detect` on mount and fall back to optimistic

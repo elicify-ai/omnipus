@@ -2,18 +2,16 @@
  * GatewayRestartModal — O4 restart UX.
  *
  * Shown when the user saves a restart-gated setting. Offers two actions:
- *   [Restart now]  — calls the self-restart endpoint (Track A wires the
- *                    generated client here at integration; see RESTART_NOW
- *                    below), then polls the gateway back up and clears itself.
+ *   [Restart now]  — calls POST /api/v1/gateway/restart (authed, admin-only),
+ *                    receives 202 Accepted, then polls /health until the gateway
+ *                    responds, clears itself, and shows a success toast.
  *   [Later]        — defers; the pending-restart state persists in the banner.
  *
  * Down→up reattach: on restart, the WS connection drops. The existing
  * OmnipusRuntimeProvider reconnect loop re-establishes the connection. We
- * poll /api/v1/status here to detect the gateway coming back up, then show a
- * success toast and clear the modal.
- *
- * The actual API call is isolated to `triggerGatewayRestart` below so the
- * integration point is a single clearly-marked function.
+ * poll /health here to detect the gateway coming back up, then show a
+ * success toast and clear the modal. /health is the canonical liveness probe
+ * (no auth required) per the CLAUDE.md gateway docs.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -29,39 +27,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
 import { usePendingRestart } from '@/store/restart'
-import { isApiError } from '@/lib/api'
+import { isApiError, gatewayRestart } from '@/lib/api'
 
-// ─── Integration seam: self-restart endpoint ──────────────────────────────────
-//
-// Track A adds POST /api/v1/gateway/restart. At integration the lead wires the
-// generated client call here and removes the stub.
-//
-// RESTART_NOW is the single call site — a clearly-marked async function that
-// fires the HTTP request and resolves when the server has acknowledged the
-// restart intent (it will close the connection shortly after).
-
-async function triggerGatewayRestart(): Promise<void> {
-  // INTEGRATION_SEAM: replace this stub with the generated client call, e.g.:
-  //   await gatewayRestartApi()
-  // The generated function lives in src/lib/api/generated/ once Track A
-  // regenerates the contracts. The backend responds with 200 + a minimal JSON
-  // body before beginning its graceful drain.
-  const res = await fetch('/api/v1/gateway/restart', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      // The generated client injects the auth header automatically; a raw
-      // fetch here would need the bearer token. At integration, swap the fetch
-      // for the generated client so auth is handled consistently.
-    },
-  })
-  if (!res.ok) {
-    throw new Error(`Restart failed: ${res.status}`)
-  }
-}
-
-// Poll /api/v1/status until the gateway responds, then resolve. Times out
-// after timeoutMs (default 60 s). Polls every intervalMs (default 1 s).
+// Poll /health until the gateway responds, then resolve. Times out after
+// timeoutMs (default 60 s). Polls every intervalMs (default 1 s).
+// /health is the public liveness endpoint — no auth required. Using
+// /api/v1/status would return 401 in authed deployments, so it cannot serve
+// as a liveness probe from the SPA.
 async function pollUntilOnline(
   timeoutMs = 60_000,
   intervalMs = 1_000,
@@ -69,7 +41,7 @@ async function pollUntilOnline(
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
-      const res = await fetch('/api/v1/status')
+      const res = await fetch('/health')
       if (res.ok) return
     } catch {
       // Gateway not yet up — continue polling.
@@ -112,7 +84,10 @@ export function GatewayRestartModal({ open, onClose }: GatewayRestartModalProps)
     setPhase('restarting')
     setErrorMsg(undefined)
     try {
-      await triggerGatewayRestart()
+      // gatewayRestart() uses the authed request() helper (injects the bearer
+      // token + CSRF header automatically). The backend responds with 202
+      // Accepted; any 2xx is treated as success.
+      await gatewayRestart()
     } catch (err) {
       if (abortRef.current) return
       setPhase('error')
@@ -126,7 +101,7 @@ export function GatewayRestartModal({ open, onClose }: GatewayRestartModalProps)
       return
     }
 
-    // Gateway is restarting — poll until it comes back up.
+    // Gateway is restarting — poll /health until it comes back up.
     setPhase('waiting')
     try {
       await pollUntilOnline()

@@ -127,12 +127,23 @@ func SupportedCLIs() []string {
 // TestConnection runs the binary-present → handshake → authed health check for
 // the named CLI and returns a ConnectionTestResult. It NEVER runs real agent
 // work. cli must be one of SupportedCLIs(); an unknown name fails with
-// ReasonUnknownCLI.
+// ReasonUnknownCLI. It validates the CLI's DEFAULT $PATH binary — to validate a
+// configured ExecutorConfig.cli_path instead, use TestConnectionWithPath.
 //
 // This is the standalone implementation the per-CLI ExternalAgentRunner.Test
 // methods (U2 drivers) delegate to, so the health-check logic lives in one
 // place and the missing-binary vs unauthed distinction is uniform.
 func TestConnection(ctx context.Context, cli string) ConnectionTestResult {
+	return TestConnectionWithPath(ctx, cli, "")
+}
+
+// TestConnectionWithPath is TestConnection with an explicit cliPath override
+// (ExecutorConfig.cli_path). When cliPath is non-empty it is the binary that is
+// validated — an absolute path is checked on disk, a bare name is resolved via
+// $PATH — so a configured custom path that does not exist correctly fails the
+// test (missing-binary) instead of silently passing on the default $PATH binary.
+// When cliPath is empty the CLI's default binary name is used (legacy behaviour).
+func TestConnectionWithPath(ctx context.Context, cli, cliPath string) ConnectionTestResult {
 	spec, ok := supportedCLIs[cli]
 	if !ok {
 		return ConnectionTestResult{
@@ -145,15 +156,22 @@ func TestConnection(ctx context.Context, cli string) ConnectionTestResult {
 		}
 	}
 
-	// 1. Binary present on PATH?
-	binPath, err := exec.LookPath(spec.binary)
+	// Resolve which binary to validate: the configured cli_path wins, else the
+	// CLI's default name. resolveCLIBinary trims and applies the same precedence
+	// the drivers use to build the actual exec target, so Test validates exactly
+	// what a real run would exec.
+	target := resolveCLIBinary(cliPath, spec.binary)
+
+	// 1. Binary present? An absolute/relative path is honoured as-is by LookPath
+	//    (it stats the path directly); a bare name is resolved via $PATH.
+	binPath, err := exec.LookPath(target)
 	if err != nil {
 		return ConnectionTestResult{
 			OK:     false,
 			Reason: ReasonMissingBinary,
 			Message: fmt.Sprintf(
-				"[%s] %q CLI not found on PATH: install %s and ensure it is on PATH",
-				ReasonMissingBinary, cli, spec.binary,
+				"[%s] %q CLI not found at %q: install %s / fix cli_path and ensure it is executable on PATH",
+				ReasonMissingBinary, cli, target, spec.binary,
 			),
 		}
 	}
