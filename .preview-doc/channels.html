@@ -15,7 +15,7 @@
   <div class="crumb"><a href="index.html">Overview</a> / Channels &amp; Connections</div>
   <div class="eyebrow">The outside world</div>
   <h1>Channels &amp; Connections</h1>
-  <p class="lede">A <b style="color:#fff">Channel</b> is how an agent reaches the world — Telegram, Slack, Email, Webhook, Calendar, API. Today each is a <b style="color:#fff">system-wide singleton</b>. The redesign makes each a list of <b style="color:#fff">Connections</b> with an identity (an agent's own account, or yours) — the one structural change that per-agent bots, the Email channel and the Personal Assistant all depend on.</p>
+  <p class="lede">A <b style="color:#fff">Channel</b> is how an agent reaches the world — Telegram, Slack, Webhook, Calendar, API. Today each is a <b style="color:#fff">system-wide singleton</b>. The redesign makes each a list of <b style="color:#fff">Connections</b> with an identity (an agent's own account, or yours) — the one structural change that per-agent bots and the Personal Assistant all depend on. <b style="color:#fff">Email</b> is not a conversational channel — it is a <b style="color:#fff">tool</b> (a per-agent mailbox account in Connectors, worked on heartbeat, unhandled mail → Board tasks).</p>
 </div></div>
 
 <!-- VOCABULARY -->
@@ -23,12 +23,13 @@
   <div class="eyebrow">Precise words, no overlap</div>
   <h2>Channel · Connection · Identity · Binding</h2>
   <div style="margin-top:6px">
-    <div class="defcard"><div class="defword">Channel</div><div><p style="margin:0">A <b>type</b> of two-way link: Telegram, Slack, <span class="gold">Email</span>, Webhook, Calendar, API. Email is a channel, peer to Telegram.</p></div></div>
-    <div class="defcard"><div class="defword">Connection</div><div><p style="margin:0">A <b>configured instance</b> (a specific bot, mailbox, webhook) with its own credentials. <b>Every channel is multi-instance</b> — email isn't special, it just ships first.</p></div></div>
-    <div class="defcard"><div class="defword">Identity</div><div><p style="margin:0">Whose account a Connection is: an <b class="green">agent</b> (a worker's own <span class="mono">ray@</span>) or <b class="purple">you</b> (your real Gmail, run on your behalf). Your-identity ones live in <b>My Workspace</b>, where the Assistant operates them.</p></div></div>
-    <div class="defcard"><div class="defword">Binding</div><div><p style="margin:0">Which agent <b>handles</b> a Connection (or a single conversation within it) — resolved by <span class="mono">ResolveRoute</span> from the bindings list.</p></div></div>
+    <div class="defcard"><div class="defword">Channel</div><div><p style="margin:0">A <b>type</b> of two-way conversational link: Telegram, Slack, Webhook, Calendar, API. <b>Email is not a channel</b> — it is a tool over a mailbox account (see below).</p></div></div>
+    <div class="defcard"><div class="defword">Connection</div><div><p style="margin:0">A <b>configured instance</b> (a specific bot, webhook) with its own credentials. <b>Every channel is multi-instance</b> — v0.1.0 ships with a cap of one per type; the cap lifts in v0.3.</p></div></div>
+    <div class="defcard"><div class="defword">Identity</div><div><p style="margin:0">Whose account a Connection is: an <b class="green">agent</b> (a worker's own <span class="mono">@RayBot</span>) or <b class="purple">you</b> (your account, run on your behalf). Your-identity Connections live in <b>My Workspace</b>, where the Assistant operates them. Agent-identity Connections carry their operating workspace. The model is <b>identity-centric</b>: routing is by agent binding (<span class="mono">ResolveRoute</span>), not by project tag.</p></div></div>
+    <div class="defcard"><div class="defword">Binding</div><div><p style="margin:0">Which agent <b>handles</b> a Connection (or a single conversation within it) — resolved by <span class="mono">ResolveRoute</span> from the bindings list (peer → guild → team → account → default).</p></div></div>
+    <div class="defcard"><div class="defword">Email Mailbox</div><div><p style="margin:0"><b>NOT a Connection / channel.</b> Email is a per-agent <b>mailbox account</b> (IMAP/SMTP creds + identity) configured in Connectors. The agent reads/sends mail via <b>email tools</b> (<span class="mono">read_inbox · search_email · read_message · send_email · reply</span>) <b>on heartbeat</b> (pull, not push). Unhandled mail becomes <b>Board tasks</b>. Keyed by (agent, workspace) 1:1 — one mailbox per agent, living in one workspace.</p></div></div>
   </div>
-  <div class="callout">Same family, three words: <b>Channel</b> = the type · <b>Connection</b> = a configured instance · <b>"Connectors"</b> = the screen that lists them.</div>
+  <div class="callout">Same family, three words: <b>Channel</b> = the type · <b>Connection</b> = a configured instance · <b>"Connectors"</b> = the screen that lists them (also where a mailbox account is configured, but that is not a Connection — it is an email tool account).</div>
 </div></section>
 
 <!-- AS-IS -->
@@ -45,8 +46,7 @@
     </ul></div>
     <div class="card" style="border-color:rgba(248,113,113,.3)"><h3>What it blocks</h3><ul class="clean">
       <li>Per-agent bots — Ray can't have his own <span class="mono">@RayBot</span></li>
-      <li>The <b>Email</b> channel — a user mailbox + an agent address are both "instances"</li>
-      <li>The <b>Personal Assistant</b> — needs your own connected Gmail/Calendar</li>
+      <li>The <b>Personal Assistant</b> — needs your own connected account (Telegram, Calendar…)</li>
       <li>Multiple Slack workspaces / multiple Telegram bots at once</li>
     </ul></div>
   </div>
@@ -62,18 +62,19 @@
     <defs><marker id="c" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5f6675"/></marker></defs>
     <text x="245" y="24" text-anchor="middle" fill="#34d399" font-family="JetBrains Mono" font-size="11.5" letter-spacing="2">AGENT identity · a worker's own account</text>
     <rect x="175" y="36" width="140" height="38" rx="9" fill="#101014" stroke="#34d399"/><text x="245" y="60" text-anchor="middle" fill="#34d399" font-size="13">🤖 Ray</text>
-    <g font-size="10.5" text-anchor="middle" fill="#cdd3de"><rect x="110" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="150" y="119">@RayBot</text><rect x="200" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="240" y="119">ray@…</text><rect x="290" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="330" y="119">webhook</text></g>
+    <g font-size="10.5" text-anchor="middle" fill="#cdd3de"><rect x="110" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="150" y="119">@RayBot</text><rect x="200" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="240" y="119">Slack bot</text><rect x="290" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="330" y="119">webhook</text></g>
     <g stroke="#5f6675" marker-end="url(#c)"><line x1="220" y1="74" x2="160" y2="98"/><line x1="245" y1="74" x2="240" y2="98"/><line x1="270" y1="74" x2="325" y2="98"/></g>
     <text x="245" y="158" text-anchor="middle" fill="#8b8b97" font-size="11">the agent owns the connection</text>
     <line x1="490" y1="30" x2="490" y2="170" stroke="#222229"/>
     <text x="735" y="24" text-anchor="middle" fill="#a78bfa" font-family="JetBrains Mono" font-size="11.5" letter-spacing="2">YOUR identity · run on your behalf</text>
     <rect x="665" y="36" width="140" height="38" rx="9" fill="#101014" stroke="#a78bfa"/><text x="735" y="60" text-anchor="middle" fill="#a78bfa" font-size="13">👤 You</text>
-    <g font-size="10.5" text-anchor="middle" fill="#cdd3de"><rect x="600" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="640" y="119">Gmail</text><rect x="690" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="730" y="119">Calendar</text><rect x="780" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="820" y="119">Tasks</text></g>
+    <g font-size="10.5" text-anchor="middle" fill="#cdd3de"><rect x="600" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="640" y="119">Telegram</text><rect x="690" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="730" y="119">Calendar</text><rect x="780" y="100" width="80" height="30" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="820" y="119">API key</text></g>
     <g stroke="#5f6675" marker-end="url(#c)"><line x1="710" y1="74" x2="650" y2="98"/><line x1="735" y1="74" x2="730" y2="98"/><line x1="760" y1="74" x2="815" y2="98"/></g>
     <text x="735" y="158" text-anchor="middle" fill="#a78bfa" font-size="11">your Assistant operates them (in My Workspace)</text>
   </svg>
   <div class="figcap">Same Connection plumbing — only the identity (and which workspace it lives in) differs. See <a href="agents.html">Personal Assistant</a>.</div>
   </div>
+  <div class="callout b"><b>Identity-centric, not project-tag-centric (M3, confirmed 2026-06-21).</b> A Connection's "workspace" is driven by <b>identity</b>: user-identity connections default to <b>My Workspace</b> (the Assistant operates them); agent-identity connections carry their <b>operating workspace</b>. Routing is always by <b>agent binding</b> (<span class="mono">ResolveRoute</span>, peer→guild→team→account→default) — the workspace field (<span class="mono">workspace_id</span> on <span class="mono">ChannelInstanceConfig</span>) scopes <em>where</em> the connection lives, not where to route messages. Connections are globally managed (Connectors screen) and the workspace field is additive alongside the identity migration.</div>
 </div></section>
 
 <!-- CHANNEL TYPES -->
@@ -82,17 +83,40 @@
   <h2>What plugs in</h2>
   <div class="grid g2">
     <div class="card"><h3>💬 Chat <span class="tag t-have">exists · ~13</span></h3><p class="note">Telegram, Discord, Slack, Matrix, IRC, Google Chat, WhatsApp (native QR), … In-process Go, compile-time factories. Today one shared instance each → becomes multi-instance + agent-bindable.</p></div>
-    <div class="card" style="border-color:var(--gold-dim)"><h3>✉️ Email <span class="rel r1">ships v0.1.0</span></h3><p class="note">A <b>basic IMAP/SMTP mailbox lands in v0.1.0</b> — <b>your address + an app-password</b> (pure-Go, no CGo), run by the Assistant in My Workspace. Provider OAuth (Gmail one-click, Google → MS Graph) is <b>later</b>. A thread = a session.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>✉️ Email — <em>tool, not a channel</em> <span class="rel r1">tool ships v0.1.0 · inbox UI v0.2</span></h3><p class="note"><b>Email is not a conversational channel.</b> It is a per-agent <b>mailbox account</b> (IMAP/SMTP creds + identity) configured in <b>Connectors</b> — pure-Go, no CGo (<span class="mono">emersion/go-imap/v2</span>). The agent reads and sends mail via <b>email tools</b> (<span class="mono">read_inbox · search_email · read_message · send_email · reply</span>), working its inbox <b>on heartbeat</b> (pull, not push). Mail the agent can't fully handle becomes <b>Board tasks</b> — making its work visible on the board. <b>0.1.0:</b> email tool + account config + IMAP/SMTP transport; no inbox UI. <b>v0.2:</b> workspace <b>Email tab</b> (inbox UI — incoming mail + agent replies/actions). <b>v0.3:</b> per-agent mailboxes (cap lifts); provider OAuth (Gmail, MS Graph). One mailbox per agent, keyed (agent, workspace) — lives in one workspace, NOT one per workspace.</p></div>
     <div class="card"><h3>🔌 Webhook <span class="tag t-part">seam exists</span></h3><p class="note"><b>Inbound</b>: a generic webhook connection (Zapier/n8n/Make → Omnipus). <b>Outbound</b>: a webhook-out <a href="time.html#automations">action</a> — signed POST on an event, with retry + log. Untrusted inbound → HMAC + sender allowlist.</p></div>
     <div class="card"><h3>🗓️ Calendar · 🔑 API <span class="tag t-part">seams exist</span></h3><p class="note"><b>Calendar</b>: a source connection (iCal → provider OAuth → CalDAV; see <a href="time.html">Calendar</a>). <b>API</b>: scoped API keys for external automation (least-privilege vs today's full-user tokens).</p></div>
   </div>
+</div></section>
+
+<!-- EMAIL AS TOOL -->
+<section><div class="wrap">
+  <div class="eyebrow">Email — a tool, not a channel · LOCKED 2026-06-21</div>
+  <h2>✉️ Email: mailbox account + tools</h2>
+  <p class="sub">Email is <b>not a conversational channel</b> — it does not belong in the Channels framework. Instead, an agent gets a <b>mailbox account</b> (IMAP/SMTP creds + identity), configured in Connectors, and reads/sends mail through <b>email tools</b>. This preserves the pure-Go transport while fitting naturally into the agent's heartbeat loop.</p>
+  <div class="grid g2">
+    <div class="card"><h3>How it works</h3><ul class="clean">
+      <li><b>Mailbox account</b> (IMAP/SMTP) configured in <b>Connectors</b> — your address + an app-password, pure-Go (<span class="mono">emersion/go-imap/v2 · go-message · go-sasl</span>), no CGo</li>
+      <li>Agent reads/sends via <b>email tools</b>: <span class="mono">read_inbox · search_email · read_message · send_email · reply</span></li>
+      <li><b>Pull, not push</b> — the agent works its inbox <b>on heartbeat</b> (not an inbound stream)</li>
+      <li>Mail the agent can't fully handle → <b>Board tasks</b> (makes email work visible on the board without a dedicated inbox UI)</li>
+      <li><b>Ownership: (agent, workspace) — 1:1.</b> A mailbox belongs to one agent and lives in one workspace. An agent has <b>one</b> mailbox, not one per workspace.</li>
+    </ul></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>Phased delivery</h3><ul class="clean">
+      <li><span class="rel r1">0.1.0</span> email <b>tool</b> + account config in Connectors + IMAP/SMTP transport. One mailbox = the Assistant's address (your email), in My Workspace. <b>No dedicated inbox UI.</b></li>
+      <li><span class="rel r3">v0.2</span> workspace <b>Email tab</b> — inbox UI (incoming mail + agent replies/actions). Shows only when the workspace hosts an email-enabled agent.</li>
+      <li><span class="rel r4">v0.3</span> per-agent mailboxes (cap lifts); provider OAuth (Gmail one-click, Google → MS Graph).</li>
+      <li><span class="rel r5">v1.0</span> delegated OAuth (full Gmail/Cal integration).</li>
+    </ul></div>
+  </div>
+  <div class="callout">Dropped: "a thread = a session." An email is not a conversation — it is input to the agent's inbox, processed on heartbeat. The old framing implied an email channel session model that doesn't match the tool/mailbox design.</div>
 </div></section>
 
 <!-- THE ROCK -->
 <section><div class="wrap">
   <div class="eyebrow">The redesign · the one big rock</div>
   <h2>Singleton → multi-instance Connections</h2>
-  <p class="sub">This is the highest-blast-radius change in the whole plan — per-agent bots, Email and the Assistant all gate on it. The thesis: <b>land the instance shape early (capped at one), lift the cap later.</b></p>
+  <p class="sub">This is the highest-blast-radius change in the whole plan — per-agent bots and the Personal Assistant gate on it. The thesis: <b>land the instance shape early (capped at one), lift the cap later.</b></p>
   <div class="grid g2">
     <div class="card"><h3>What changes</h3><ul class="clean">
       <li><b>Config</b> (<span class="mono">config.go:774</span>): one field per type → a <b>list of instances</b> <span class="mono">{id, identity, agent_binding, secret_ref}</span> — a breaking config-shape migration</li>
@@ -102,9 +126,9 @@
       <li><b>Credentials</b> (<span class="mono">channelCredKey</span>): cred key per instance</li>
     </ul></div>
     <div class="card" style="border-color:var(--gold-dim)"><h3>Sequencing — shape first</h3><ul class="clean">
-      <li><span class="rel r1">v0.1.0</span> land the <b>instance shape</b> (a list capped at one per type) + the OpenAPI change + the <b>Connectors</b> UI (instance list, "add connection") + a <b>basic IMAP/SMTP email connection</b> (your address + app-password)</li>
-      <li><span class="rel r3">v0.3.0</span> <b>lift the cap</b> → real multi-instance · <b>provider OAuth</b> for email (Gmail one-click, Google → MS Graph) · the generic <b>webhook</b> channel · per-agent bots · more channels</li>
-      <li><span class="rel r4">v0.4.0</span> <b>user-identity</b> connections (your Gmail/Calendar) deepened + the Assistant's full account vault</li>
+      <li><span class="rel r1">v0.1.0</span> land the <b>instance shape</b> (a list capped at one per type) + the OpenAPI change + the <b>Connectors</b> UI (instance list, "add connection"); <b>email</b> ships as a mailbox account in Connectors (tool, not a Connection — see Email section)</li>
+      <li><span class="rel r3">v0.3.0</span> <b>lift the cap</b> → real multi-instance · per-agent mailboxes (email cap lifts) · <b>provider OAuth</b> for email (Gmail one-click, Google → MS Graph) · the generic <b>webhook</b> channel · per-agent bots · more channels</li>
+      <li><span class="rel r4">v0.4.0</span> <b>user-identity</b> connections (your Telegram/Calendar) deepened + the Assistant's full account vault</li>
       <li><span class="rel r5">v1.0.0</span> chat multi-instance retrofit · two-way calendar</li>
     </ul></div>
   </div>

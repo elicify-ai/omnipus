@@ -11,13 +11,13 @@
   <div class="crumb"><a href="index.html">Overview</a> / Calendar &amp; Automations</div>
   <div class="eyebrow">Time &amp; rules</div>
   <h1>Calendar &amp; Automations</h1>
-  <p class="lede">The <b style="color:#fff">Calendar</b> makes "when" intuitive for everyone. <b style="color:#fff">Automations</b> (Trigger → Action) are the engine that already exists — surfaced. Both are scoped to the current <b style="color:#fff">workspace</b> (set by the sidebar switcher).</p>
+  <p class="lede">The <b style="color:#fff">Calendar</b> is a workspace tab (alongside Chat · Board · List · Graph · Team · Settings) showing the workspace's scheduled and recurring tasks. It was previously an orphan route — it is now a first-class view in the workspace task UI. <b style="color:#fff">Tasks are the unified model</b>: Board/List/Graph/Calendar are four views over one task store. Time triggers (once / every / recurring / manual) fire in v0.1.0 via the existing cron scheduler engine. The separate <b style="color:#fff">Automations</b> screen is removed — scheduling is now scheduled tasks with triggers, surfaced on the Calendar view.</p>
 </div></div>
 
 <!-- CALENDAR -->
 <section id="calendar"><div class="wrap">
   <div class="eyebrow">The friendly view</div>
-  <h2>Calendar — native + import, per workspace</h2>
+  <h2>Calendar — workspace task tab + import</h2>
   <div class="fig">
   <svg viewBox="0 0 980 220" width="100%" role="img" font-family="Inter,sans-serif">
     <g font-size="12">
@@ -40,18 +40,18 @@
   <div class="figcap">All (default) + 4 category filters · the sidebar workspace switcher · imported &amp; delegated calendars overlay read-only.</div>
   </div>
   <div class="grid g3">
-    <div class="card"><h3>① iCal subscribe <span class="tag t-have">universal</span></h3><p class="note">Paste a <span class="mono">.ics</span> URL → read-only overlay, server-refreshed. Zero credentials. Pure-Go: <span class="mono">golang-ical</span> + <span class="mono">rrule-go</span>.</p></div>
+    <div class="card"><h3>① iCal subscribe <span class="tag t-new">v0.2</span></h3><p class="note">Paste a <span class="mono">.ics</span> URL → read-only overlay, server-refreshed. Zero credentials. Pure-Go: <span class="mono">golang-ical</span> + <span class="mono">rrule-go</span>. Deferred to v0.2.</p></div>
     <div class="card"><h3>② Provider OAuth <span class="tag t-part">two-way</span></h3><p class="note">Google (then MS Graph): <b>free/busy</b> for agents + write-back. <span class="mono">syncToken</span> + <span class="mono">watch</span> webhooks (7-day renewal).</p></div>
     <div class="card"><h3>③ CalDAV <span class="tag t-new">self-host</span></h3><p class="note">Nextcloud / Fastmail / iCloud. Lower priority — vendor quirks, poll-based.</p></div>
   </div>
-  <div class="callout">Tasks gain <span class="mono">start_date</span> + <span class="mono">due_at</span> + <span class="mono">recurrence</span> (the model has <b>zero</b> date fields today). A recurring task = a task + a repeating trigger. Expand RRULE against the <b>IANA tz database</b> — DST is the #1 calendar bug.</div>
+  <div class="callout">The unified task model carries a <span class="mono">trigger</span> field (<span class="mono">{kind: once|every|cron}</span>) and a <span class="mono">due</span> deadline. A recurring task = a task with an <span class="mono">every</span> or <span class="mono">cron</span> trigger — each fire spawns a fresh run. The Calendar is the view for these scheduled/recurring tasks; Board is for one-shot work. The <b>existing cron scheduler engine</b> already fires these triggers today. Expand RRULE against the <b>IANA tz database</b> — DST is the #1 calendar bug. iCal subscribe deferred to v0.2; provider OAuth (CalDAV/Google) to v1.0.</div>
 </div></section>
 
 <!-- AUTOMATIONS -->
 <section id="automations"><div class="wrap">
-  <div class="eyebrow">The engine, surfaced</div>
-  <h2>Automations — Trigger → Action</h2>
-  <p class="sub">Omnipus already funnels almost every trigger through one path (a message → an agent turn) over a real <span class="mono">EventBus</span>. We surface it as readable rules.</p>
+  <div class="eyebrow">Decision: Automations screen removed</div>
+  <h2>Scheduling dissolves into Tasks</h2>
+  <p class="sub">The separate Automations screen is <b>removed</b>. Scheduling is now <b>tasks with triggers</b> — a task carries a <span class="mono">trigger</span> field (once / every / recurring / manual) and the cron scheduler engine fires it. The Calendar view is the home for scheduled/recurring tasks. Heartbeat = a recurring-trigger task per Main agent (<span class="mono">surface: heartbeat</span>, hidden from the board, shown in the agent profile). The Trigger → Action concepts below describe the underlying engine that powers tasks and heartbeats — not a separate Automations UI.</p>
   <div class="grid g2" style="margin-top:6px">
     <div class="card"><h3>Triggers — "when…"</h3><ul class="clean">
       <li>⏰ <b>Time</b> — every Mon 9am · cron · interval <span class="tag t-have">engine exists</span></li>
@@ -66,8 +66,8 @@
       <li>📤 Send via a connection · 📡 webhook-out · 🔔 notify</li>
     </ul></div>
   </div>
-  <div class="callout b">The lowest-friction first event: <span class="mono">task_status_changed</span> is <b style="color:var(--blue)">already defined in the contract with no producer</b> — a ready slot. <span class="mono">schedule_failed</span> is already a live event. Heartbeat / "dreaming" = automations flagged <span class="mono">system:true</span>, shown in the Calendar's System filter.</div>
-  <p class="note" style="margin-top:8px">Automations are <b>authored by the Assistant (Mia) from chat</b> (<i>"want me to do this every morning?"</i>) and <b>run by the platform</b> — there is no separate automation agent (no Forge / Max persona).</p>
+  <div class="callout b">The lowest-friction first event: <span class="mono">task_status_changed</span> is <b style="color:var(--blue)">already defined in the contract with no producer</b> — a ready slot. <span class="mono">schedule_failed</span> is already a live event. Heartbeat = a <span class="mono">surface: heartbeat</span> recurring task per Main agent — hidden from board/calendar general views, shown only in the agent profile. <b>v0.1.0 time triggers only</b> (once/every/cron/manual); event triggers (on_task, webhook, on_condition) are v0.3.</div>
+  <p class="note" style="margin-top:8px">Scheduled tasks and heartbeats are <b>created by the user or by agents (Mia) from chat</b> (<i>"want me to do this every morning?"</i>) and <b>run by the platform's cron scheduler engine</b> — there is no separate automation agent (no Forge / Max persona). The Automations sidebar entry is removed; the Task Board + Calendar is the home.</p>
 </div></section>
 
 <!-- INTEGRATION -->

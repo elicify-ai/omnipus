@@ -9,6 +9,41 @@ decisions feed an `/albert` ADR; feature-grade ones feed `/plan-spec`.
 
 ---
 
+## Part 0 — 0.1.0 SCOPE AT A GLANCE (IN vs DEFERRED)
+**The dividing line:** 0.1.0 = every structural *shape* + the workspace-as-project IA + time-based behaviour
+that already works (triggers fire, blocked_by, recall). Deferred = the *engines* on top.
+
+### ✅ IN 0.1.0
+- **Foundation shapes:** workspace scoping key everywhere (tasks/memory/calendar/sessions-tag/connections) ·
+  unified task model (one store, 7-state lifecycle, fields incl. action/trigger/todos/blocked_by/workspace_id) ·
+  connections multi-instance config (cap-1, identity agent|user) · delegation policy (to/modes/depth) · agent
+  kind+executor · `{model,provider}` · plugin bundle manifest + skill-marketplace registry list ·
+  ExternalAgentRunner bidirectional/consent/resumable.
+- **Workspace-as-project IA:** chat = workspace view · sidebar = Workspaces + global libraries · workspace
+  tabs Chat/Board/List/Graph/Calendar/Team/Settings (Email tab → v0.2) · switcher→turn binding · Automations
+  removed · Team tab = delegation graph · Agents area = library + Workspace Teams.
+- **Features:** tasks (Board/List/Graph/Calendar, time triggers FIRE via cron, blocked_by, todos+subtasks,
+  delegation roll-ups, agency/backlog) · memory (two-room, logs, remember/recall/retrospective, **bleve recall**,
+  recap) · skills (4 embedded + authoring + marketplaces) · heartbeat per-agent backlog loop · per-workspace
+  delegation + bounded subagent delegation · roster (4 base + Worker + **Planner/Explorer/Researcher** seeded) ·
+  **email TOOL** (read/send) + account in Connectors + IMAP/SMTP (un-handled mail → Board tasks; **no inbox UI
+  yet**) · Integrations picker + **chat mic** · god-mode (switch + step-up) · onboarding + single-user · the UAT
+  correctness/UX fixes + plugin-mechanics test coverage + cli_path/args/env wiring.
+
+### ⏳ DEFERRED
+- **v0.2:** memory *behaviour* (ranking · graph/MOCs · 5 loops · **Dreamcatcher**) · **the email inbox UI
+  (workspace Email tab)** · per-agent voices (TTS) + image-gen · observable sub-agent session history · plugin
+  installer fan-out + Marketplaces UI + Omnipus Market · iCal subscribe.
+- **v0.3:** **lift the connections cap** (multiple Telegram bots · per-agent bots · per-agent mailboxes) ·
+  multi-mailbox · generic webhook channel · the **workflow ENGINE** (conditional/branching edges · GH-Actions
+  DSL + `create_workflow` planning tool · event triggers on_task/on_agent-idle/webhook/on_condition · AND/OR ·
+  non-llm action types) · per-workspace agent overrides.
+- **v0.4:** Assistant PA capabilities · connected-accounts vault · delegated OAuth (Gmail/Cal).
+- **v1.0:** A2A server/client · ACP driver · realtime voice · two-way calendar/CalDAV · email provider OAuth ·
+  full orchestration.
+
+---
+
 ## Part 1 — Decisions LOCKED
 
 ### D1 — Scope: fix all "wrong" and "missing" UI, including v0.3-flagged structural surfaces
@@ -776,13 +811,17 @@ tag (M3/M4 fold-in); "Assistant operates it in My Workspace" = the user-identity
 - **Ownership: per-AGENT, placed in a workspace (keyed by (agent, workspace), 1:1).** A mailbox **belongs to
   an agent** (its email identity + IMAP/SMTP creds, like a connection) and **lives in ONE workspace** (where
   it surfaces). An agent has **one** mailbox — NOT one per workspace (not a grid).
-- **Three UI places:** (1) **configure** the account in **Connectors**; (2) **use** via the agent's email
-  **tools**; (3) **see** it in a **workspace "Email" tab** — incoming mail + the agent's replies/actions, with
-  un-handled mail → Board tasks. Email tab shows the mailbox of the agent whose email lives in that workspace.
-- **0.1.0:** one mailbox (cap-1) = the **Assistant's address (your email), in My Workspace** → My Workspace →
-  Email tab. **v0.3:** per-agent mailboxes (cap lifts), each assigned to a workspace.
-- **Workspace tabs become:** Chat · Board · List · Graph · Calendar · **Email** · Team · Settings (Email tab
-  shows only when the workspace hosts an email-enabled agent).
+- **Split by phase:**
+  - **0.1.0 (the capability):** email **tool** (read/send) + **account config in Connectors** + the pure-Go
+    IMAP/SMTP transport. The agent can read/send and **un-handled mail → Board tasks** (so its work IS
+    visible, via the Board). One mailbox (cap-1) = the **Assistant's address (your email), in My Workspace.**
+    **NO dedicated inbox UI yet.**
+  - **0.2.0 (the UI — a big piece on its own):** the **workspace "Email" tab** — the inbox view showing
+    incoming mail + the agent's replies/actions (email-client-like surface). It shows the mailbox of the agent
+    whose email lives in that workspace.
+  - **v0.3:** per-agent mailboxes (cap lifts), each assigned to a workspace.
+- **Workspace tabs:** Chat · Board · List · Graph · Calendar · Team · Settings in 0.1.0; **Email** tab adds in
+  **v0.2.0** (shows only when the workspace hosts an email-enabled agent).
 
 ### === MODULE SWEEP COMPLETE (M1–M12) — 2026-06-21 ===
 Headline: **most of 0.1.0's foundation is already built.** The 0.1.0 work is consolidation + the

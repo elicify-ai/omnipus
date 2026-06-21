@@ -11,20 +11,20 @@
   <div class="crumb"><a href="index.html">Overview</a> / Agents</div>
   <div class="eyebrow">The roster · grounded</div>
   <h1>Agents — your roster</h1>
-  <p class="lede"><b style="color:#fff">Four base agents</b> ship in the box — <b style="color:#fff">Mia</b> (your Assistant ⭐), <b style="color:#fff">Jim</b> (the Orchestrator), <b style="color:#fff">Ray</b> (Scout) and <b style="color:#fff">Ava</b> (the Builder). Below them, a <b style="color:#fff">sub-agent layer</b> of workers. Beyond the box, <b style="color:#fff">marketplace packs</b> add specialists. <span style="color:var(--muted)">(Max is retired from base — automation is now a platform surface, available as an optional pack.)</span></p>
+  <p class="lede"><b style="color:#fff">Four base agents</b> ship in the box — <b style="color:#fff">Mia</b> (your Assistant ⭐), <b style="color:#fff">Jim</b> (the Orchestrator), <b style="color:#fff">Ray</b> (Scout) and <b style="color:#fff">Ava</b> (the Builder). Below them: a <b style="color:#fff">Worker tier</b> + <b style="color:#fff">three seeded specialist subagents</b> (<b style="color:#fff">Planner · Explorer · Researcher</b>), compiled-in by default. Beyond the box, <b style="color:#fff">marketplace packs</b> add further specialists once the v0.2 installer lands. <span style="color:var(--muted)">(Max is retired from base — automation is now a platform surface, available as an optional pack.)</span></p>
 </div></div>
 
 <section><div class="wrap">
   <div class="eyebrow">The base roster · four agents in the box</div>
-  <h2>Four <span class="gold">base agents</span> ship by default — the rest is a sub-agent layer + packs</h2>
-  <p class="sub">There's one user: you. The roster (see <a href="blueprint.html">blueprint</a> / <a href="delegation.html">delegation</a>) is <b>base agents</b> vs a <b>sub-agent layer</b> of workers. Four base agents ship in the box — chat targets, with their own connection, heartbeat and durable memory. <b>Max is retired from base</b>: automation is now a platform surface (<a href="ui-changes.html">Automations</a>), available as an optional pack. Specialists and the Maker/creative set arrive via <b>marketplace agent packs</b>.</p>
+  <h2>Four <span class="gold">base agents</span> ship by default — plus a Worker tier and three seeded specialists</h2>
+  <p class="sub">There's one user: you. The roster (see <a href="blueprint.html">blueprint</a> / <a href="delegation.html">delegation</a>) is <b>base agents (Main)</b> vs a <b>sub-agent layer</b>. Four base agents ship in the box as chat targets with their own heartbeat and durable memory. The sub-agent layer has two parts: a general-purpose <b>Worker</b> tier + three <b>specialist subagents</b> (Planner · Explorer · Researcher) that ship compiled-in in 0.1.0. <b>Max is retired from base</b>: automation is now a platform surface; optionally available as a marketplace pack. Further specialists and the Maker/creative set arrive via <b>marketplace agent packs</b> once the v0.2 installer is live.</p>
   <div class="grid g2">
     <div class="card" style="border-color:var(--gold-dim)"><h3>⭐ Mia · the Assistant</h3><p class="note"><b>Default.</b> Your memory-rich personal front door — bound to My Workspace, runs your tasks · email · calendar, knows you across workspaces. <span class="mono">owner = you</span>.</p></div>
     <div class="card"><h3>🧭 Jim · the Orchestrator</h3><p class="note">Planner / PM. Supervises work across the <span class="mono">tasks</span> · <span class="mono">blocked_by</span> DAG and the delegation graph — Max-parallel fan-out, worktrees.</p></div>
     <div class="card"><h3>🔭 Ray · Scout</h3><p class="note">Research &amp; summarize. Fans out reads, distils findings; the canonical delegation target for "go find out".</p></div>
     <div class="card"><h3>🛠️ Ava · the Builder</h3><p class="note">Agent &amp; skill authoring (unchanged). Shapes new custom agents and skills from templates.</p></div>
   </div>
-  <div class="callout">Beyond the base four: <b>sub-agent workers</b> (the tier below) do the labour, and <b>marketplace agent packs</b> — Maker/creative · ops · smart-home · domain specialists — extend the roster on demand. The split is <b>base agents vs sub-agent workers</b>; there is no fixed "5 cores".</div>
+  <div class="callout">Beyond the base four: the sub-agent layer — the <b>Worker tier</b> (general-purpose execution) and the <b>Planner · Explorer · Researcher specialist subagents</b> (compiled-in defaults) — do the labour. Further specialists and the Maker/creative set arrive via <b>marketplace agent packs</b> (v0.2+). The split is <b>base Main agents vs sub-agent workers/specialists</b>; there is no fixed "5 cores".</div>
 </div></section>
 
 <section><div class="wrap">
@@ -51,24 +51,33 @@
 </div></section>
 
 <section><div class="wrap">
-  <div class="eyebrow">The sub-agent layer · executors</div>
-  <h2>Below the base agents: <span class="gold">sub-agent workers</span></h2>
-  <p class="sub">Workers do the labour. They're <b>not chat targets</b> (the test-run button is the exception) — they're spawned by delegation and carry an <span class="mono">executor</span>.</p>
+  <div class="eyebrow">The sub-agent layer · workers + specialists</div>
+  <h2>Below the base agents: <span class="gold">Worker tier + three seeded specialists</span></h2>
+  <p class="sub">Sub-agents do the labour. They're <b>not chat targets</b> (the test-run button is the exception) — they're spawned by delegation. Two kinds: the general-purpose <b>Worker</b> (<span class="mono">Subagent</span> wire type) and the three compiled-in <b>specialist subagents</b>.</p>
   <div class="grid g2">
-    <div class="card"><h3>⚙️ Worker characteristics</h3><ul class="clean">
-      <li>The seeded general-purpose worker + your custom workers</li>
-      <li><b>No heartbeat · no own connection · ephemeral memory · depth-limited · leaner model · not chat targets</b> (test-run button excepted)</li>
-      <li>Ephemeral, task-driven; no user-facing persona</li>
-      <li><b>Soul is optional</b> (may be left empty). At invocation the worker's effective prompt = <span class="mono">soul.md</span> (if any) <b>+ the task prompt submitted</b> by the caller — composed the <b>same way for every executor</b> (native · external-cli · future remote-a2a).</li>
+    <div class="card"><h3>⚙️ Subagent characteristics (all sub-agents)</h3><ul class="clean">
+      <li><b>No heartbeat · no own connection · not chat targets</b> (test-run button excepted)</li>
+      <li>Runs only via delegation — <b>immediate</b> (await/background) when invoked; no autonomous backlog</li>
       <li>Narrow recall: the current workspace's shared room (+ its own private room)</li>
+      <li><b>Bounded delegation allowed:</b> a specialist subagent may carry a <span class="mono">depth ≥ 1</span> trust-set policy, letting it delegate further. The general-purpose Worker defaults to depth 0 (leaf).</li>
+      <li><b>Soul is optional</b>. Effective prompt = <span class="mono">soul.md</span> (if any) + the task prompt from the caller.</li>
     </ul></div>
-    <div class="card"><h3>🔌 executor</h3><ul class="clean">
-      <li><span class="mono">native</span> — runs in-process on the agent loop</li>
-      <li><span class="mono">external-cli</span> — Claude Code · opencode · Codex driven as a child process</li>
+    <div class="card"><h3>🔌 Executor kind</h3><ul class="clean">
+      <li><span class="mono">native</span> — runs in-process on the Omnipus agent loop (<span class="mono">Subagent</span> wire type)</li>
+      <li><span class="mono">external-cli</span> — Claude Code · opencode · Codex as a child process (<span class="mono">subagent_3p</span> wire type); the CLI manages its own tools/skills/sandbox</li>
       <li><span class="mono">future: remote-a2a</span> — a remote agent over agent-to-agent</li>
     </ul></div>
   </div>
-  <div class="callout" style="margin-top:14px"><b style="color:var(--gold)">Deferred to v0.2.0 — observable sub-agent sessions.</b> A delegated worker run should be a first-class, inspectable entry in the <b>session history</b>, with delegation lineage (<span class="mono">parent_id · depth · owner</span>) so the call-tree renders — including external-CLI child runs as their own session rather than text merged into the caller's transcript. In <b>v0.1.0</b> a worker run is folded into its caller's session (only <span class="mono">task_create</span> yields a discrete session); first-class sub-agent session visibility + lineage lands in <b>v0.2.0</b>.</div>
+
+  <div class="eyebrow" style="margin-top:32px">Three seeded specialists · compiled-in by default</div>
+  <div class="grid g3" style="margin-top:12px">
+    <div class="card"><h3>🗂️ Planner</h3><p class="note">Deep decomposition. Produces the task DAG / workflow plan. <b>Delegates to Explorer + Researcher</b> (depth ≥ 1, trust-set policy) to gather context before planning. Invoked by Jim (Orchestrator).</p></div>
+    <div class="card"><h3>🔎 Explorer</h3><p class="note">Internal-context exploration — files, memory. Depth-0 leaf. Delegated-to by Planner for local information gathering.</p></div>
+    <div class="card"><h3>🌐 Researcher</h3><p class="note">External-source research. Depth-0 leaf. Delegated-to by Planner for web/external research. <b>Ray (Scout)</b> is the chat-facing research colleague; Researcher is the subagent Ray delegates to — no duplication.</p></div>
+  </div>
+  <div class="callout" style="margin-top:14px">Specialists ship <b>compiled-in for 0.1.0</b> (no installer available yet). They become a <b>marketplace pack</b> once the v0.2 plugin installer exists, and the preinstalled copies graduate to that pack distribution. <b>My Workspace is pre-seeded</b> with the default team (4 base + Worker + Planner/Explorer/Researcher) plus default delegation edges.</div>
+
+  <div class="callout" style="margin-top:10px"><b style="color:var(--gold)">Deferred to v0.2.0 — observable sub-agent sessions.</b> A delegated sub-agent run should be a first-class, inspectable entry in the <b>session history</b>, with delegation lineage (<span class="mono">parent_id · depth · owner</span>) so the call-tree renders — including external-CLI child runs as their own session rather than text merged into the caller's transcript. In <b>v0.1.0</b> a sub-agent run is folded into its caller's session (only <span class="mono">task_create</span> yields a discrete session); first-class sub-agent session visibility + lineage lands in <b>v0.2.0</b>.</div>
 </div></section>
 
 <section><div class="wrap">
@@ -95,6 +104,92 @@
     <rect x="640" y="172" width="190" height="32" rx="9" fill="url(#sp)" opacity=".14" stroke="#a78bfa"/><text x="735" y="193" text-anchor="middle" fill="#a78bfa" font-size="11.5">🤖 your Assistant operates them</text>
   </svg>
   <div class="figcap">Same Connection plumbing — only the identity (and the workspace) differ.</div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Agents area · library + Workspace Teams</div>
+  <h2>Agent personas are <span class="gold">global</span> — the Agents area is a reusable library</h2>
+  <p class="sub">Agents are defined once and reused everywhere. The <b>Agents area</b> (sidebar global library) has two views:</p>
+  <div class="grid g2">
+    <div class="card"><h3>📚 Agents (library)</h3><ul class="clean">
+      <li>All agent definitions — core + custom Main + Worker + specialists</li>
+      <li>Filter: <b>[All | by workspace]</b> to see which agents are members of a given workspace team</li>
+      <li>The two sidebar sections: <b>BUILT-IN ROSTER</b> (Mia · Jim · Ray · Ava — adaptive expand: visible when no custom Main agents exist; collapses once you have custom ones) and <b>MAIN AGENTS</b> (custom). Empty state: <em>"No custom Main agents yet. Create one, or use a built-in below."</em></li>
+    </ul></div>
+    <div class="card"><h3>🏢 Workspace Teams</h3><ul class="clean">
+      <li>An index of every per-workspace team</li>
+      <li>Click a team → that workspace's <b>delegation graph</b> (same data as the workspace Team tab — one source of truth)</li>
+      <li>Add/remove agents from a team; drag to connect delegation edges</li>
+    </ul></div>
+  </div>
+  <div class="callout"><b>Editing an agent is global.</b> The existing <span class="mono">AgentProfile</span> slide-over is reused everywhere you see an agent (library · Workspace Teams · workspace Team tab). Edits apply to the <b>one global definition</b> and take effect everywhere the agent is used. A cue reminds you: <em>"Editing Mia — applies everywhere she's used."</em> <b>Per-workspace agent overrides are out for 0.1.0</b> (revisit later if needed).<br><br>Only <b>participation is per-workspace</b> — team membership, delegation edges, memory room, session tags. The persona (soul, model, tools, skills) is global.</div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Agent form · unified create/edit</div>
+  <h2>Main ≈ Subagent — <span class="gold">one unified form</span> with per-type differences</h2>
+  <p class="sub">The create/edit form is the same structure for Main and Subagent — not separate wizards. <span class="mono">subagent_3p</span> (external CLI) is the most distinct.</p>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>Main (core + custom)</h3><ul class="clean">
+      <li>Full form: name · description (required) · soul · model+provider · fallback models · tools · skills · sandbox profile</li>
+      <li><b>Heartbeat</b> — on/off · interval · HEARTBEAT.md (Main-only; implemented as a recurring-trigger task with <span class="mono">surface: heartbeat</span>; shown in agent profile, hidden from board/calendar)</li>
+      <li><b>Voice</b> field — reserved, disabled in v0.1.0 (TTS → v0.2)</li>
+      <li>No inherit toggles — Main sets everything explicitly</li>
+    </ul></div>
+    <div class="card"><h3>Subagent (native)</h3><ul class="clean">
+      <li>Same form as Main, <b>MINUS heartbeat + voice</b></li>
+      <li>PLUS <b>inherit toggles</b> on: <b>model · fallback models · tools · skills · sandbox</b> — each facet is either <em>"Inherit from caller"</em> (default) or set explicitly</li>
+      <li>Inherit vs explicit is set at <b>creation time</b> (by a user or by Ava); at runtime "inherit" resolves from the calling agent</li>
+      <li><b>description is required</b> (for routing/disambiguation)</li>
+      <li><b>Bounded delegation:</b> specialists carry a <span class="mono">depth ≥ 1</span> + trust-set policy; Workers default to depth 0</li>
+    </ul></div>
+    <div class="card"><h3>subagent_3p (external CLI)</h3><ul class="clean">
+      <li>HIDES: <b>tools · skills · sandbox</b> — the external CLI manages its own isolation</li>
+      <li>ADDS: <b>CLI executor config</b> — <span class="mono">cli</span> (claude-code · codex · opencode) · <span class="mono">cli_path</span> · <span class="mono">env_overrides</span> · <span class="mono">cli_args</span></li>
+      <li>model = the CLI's own (free-text; no provider picker)</li>
+      <li>No heartbeat · no voice</li>
+      <li>description required</li>
+    </ul></div>
+  </div>
+  <div class="callout">The inherit facets for Subagents are: <b>model · fallback models · tools · skills · sandbox.</b> <em>Inherit</em> is the safe default — a subagent can't run less-confined than its caller unless explicitly configured. <span class="mono">subagent_3p</span> hides the sandbox entirely; the CLI process provides its own isolation.</div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Model · two fields</div>
+  <h2><span class="gold">{model, provider}</span> — explicit, consistent, unambiguous</h2>
+  <p class="sub">The primary model is a <b>two-field pair</b> (<span class="mono">model</span> + <span class="mono">provider</span>) consistent with fallback models — no more single combined slug that can't resolve against the catalog.</p>
+  <div class="grid g2">
+    <div class="card"><h3>Why two fields</h3><ul class="clean">
+      <li>Single slug (<span class="mono">openrouter/google/gemini-2.5-flash</span>) can't match the catalog entry (<span class="mono">google/gemini-2.5-flash</span>) → false "UNRESOLVED" warning</li>
+      <li>Explicit provider = unambiguous resolution at routing time; validation is simple</li>
+      <li>Consistent with <span class="mono">fallback_models</span> which already use <span class="mono">{model, provider}</span> — one shape everywhere</li>
+    </ul></div>
+    <div class="card"><h3>Model selector</h3><ul class="clean">
+      <li>Provider-headed sections even with a single provider</li>
+      <li>Models sorted within each group; groups in stable order</li>
+      <li>Warning only when the model genuinely isn't in the chosen provider's catalog — softer wording; no "calls will fail" copy</li>
+    </ul></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Heartbeat · the autonomous work loop</div>
+  <h2>Per-agent heartbeat — <span class="gold">Main agents only</span></h2>
+  <p class="sub">A heartbeat is a <b>recurring-trigger task</b> in the unified task model, with <span class="mono">surface: heartbeat</span> — it uses the same trigger engine as all other scheduled work and is hidden from the board/calendar. <b>Subagents have no heartbeat</b> (they run only on delegation).</p>
+  <div class="grid g2">
+    <div class="card"><h3>🔁 How it works</h3><ul class="clean">
+      <li>Each Main agent (core + custom) has its own on/off + interval + <span class="mono">HEARTBEAT.md</span></li>
+      <li>On fire: the agent runs its HEARTBEAT.md as its task prompt — <em>checks its backlog, decides what to pull</em></li>
+      <li>A <b>task delegated to a Main agent lands in that agent's backlog (inbox)</b> — it does NOT auto-start. The agent picks it up when heartbeat fires, per instructions in its HEARTBEAT.md</li>
+      <li>The seeded default HEARTBEAT.md for Main agents includes the backlog-check guidance</li>
+    </ul></div>
+    <div class="card"><h3>📋 Agent profile</h3><ul class="clean">
+      <li>Heartbeat on/off + interval shown in the agent profile (Main agents only)</li>
+      <li>The heartbeat task (<span class="mono">surface: heartbeat</span>) is shown in the agent profile — it renders as a compact schedule item, not a board card</li>
+      <li><b>Subagents:</b> heartbeat controls are hidden entirely from their form</li>
+      <li><b>Heartbeat = the agent's autonomous work loop</b> (pairs with the <span class="mono">on_agent_idle</span> trigger in v0.3)</li>
+    </ul></div>
   </div>
 </div></section>
 
