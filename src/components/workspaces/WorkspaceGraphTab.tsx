@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Info } from '@phosphor-icons/react'
 import { GraphView } from './graph/GraphView'
 import { TaskDetailSlideOver } from './TaskDetailSlideOver'
 import { fetchTasks, fetchAgents, tasksQueryKeys } from '@/lib/api'
@@ -27,6 +28,7 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
     data: tasks = [],
     isLoading: tasksLoading,
     isError: tasksError,
+    refetch: refetchTasks,
   } = useQuery({
     queryKey: tasksQueryKeys.list({ workspace_id: workspaceId, surface: 'user' }),
     queryFn: () => fetchTasks({ workspace_id: workspaceId, surface: 'user' }),
@@ -35,7 +37,7 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
     enabled: !!workspaceId,
   })
 
-  const { data: agents = [] } = useQuery({
+  const { data: agents = [], isError: agentsError } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     staleTime: 60_000,
@@ -50,20 +52,37 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
 
   if (tasksError && tasks.length === 0) {
     return (
-      <div className="absolute inset-0 flex items-center justify-center p-8 text-sm text-[var(--color-muted)]">
-        Failed to load the task graph. Check your connection and try again.
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-8 text-center">
+        <p className="text-sm text-[var(--color-muted)]">
+          Failed to load the task graph. Check your connection and try again.
+        </p>
+        <button
+          type="button"
+          onClick={() => void refetchTasks()}
+          className="text-xs text-[var(--color-accent)] underline underline-offset-2"
+        >
+          Retry
+        </button>
       </div>
     )
   }
 
   return (
-    <div className="absolute inset-0 overflow-hidden">
-      <GraphView
-        tasks={tasks}
-        agents={agents}
-        selectedTaskId={selectedTaskId}
-        onTaskClick={(task) => setSelectedTaskId(task.id)}
-      />
+    <div className="absolute inset-0 flex flex-col overflow-hidden">
+      {agentsError && (
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)]">
+          <Info size={12} weight="fill" className="shrink-0" />
+          Agent details failed to load — task avatars may be missing.
+        </div>
+      )}
+      <div className="relative flex-1 min-h-0">
+        <GraphView
+          tasks={tasks}
+          agents={agents}
+          selectedTaskId={selectedTaskId}
+          onTaskClick={(task) => setSelectedTaskId(task.id)}
+        />
+      </div>
 
       <TaskDetailSlideOver task={selectedTask} onClose={() => setSelectedTaskId(null)} />
     </div>

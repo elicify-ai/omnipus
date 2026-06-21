@@ -9,7 +9,7 @@ export const MODE_CHIP_CLASS: Record<DelegationMode, string> = {
   await:
     'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[var(--color-accent)]',
   background:
-    'border-[var(--color-info,#3B82F6)]/40 bg-[var(--color-info,#3B82F6)]/10 text-[var(--color-info,#9DBEFF)]',
+    'border-[var(--color-info)]/40 bg-[var(--color-info)]/10 text-[var(--color-info)]',
   task:
     'border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]',
 }
@@ -132,7 +132,7 @@ export function EdgeModeEditor({
           size="sm"
           variant="ghost"
           data-testid={`team-edge-delete-${model.from}-${model.to}`}
-          className="ml-auto h-6 gap-1 px-1.5 text-[10px] text-[var(--color-error,#ef4444)] hover:bg-[var(--color-error,#ef4444)]/10"
+          className="ml-auto h-6 gap-1 px-1.5 text-[10px] text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
           onClick={() => onDelete(model.from, model.to)}
         >
           <Trash size={11} weight="bold" /> delete

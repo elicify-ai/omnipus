@@ -522,6 +522,84 @@ func TestTaskCreateTool_NoWorkspaceError(t *testing.T) {
 	}
 }
 
+// TestTaskCreateTool_DelegationDepthStamped proves a task_create issued from a
+// root (depth-0) context stamps the child task generation 1, and that a create
+// issued from within a task run carries generation parent+1.
+func TestTaskCreateTool_DelegationDepthStamped(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+	tool.SetMaxDelegationDepth(10)
+
+	// Root context (no delegation depth) → child stamped generation 1.
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "ws")
+	res := tool.Execute(ctx, map[string]any{"title": "t1", "prompt": "p", "agent_id": "b"})
+	if res.IsError {
+		t.Fatalf("root create failed: %s", res.ForLLM)
+	}
+	rootTasks, _ := store.List(task.Filter{WorkspaceID: "ws"})
+	if len(rootTasks) != 1 || rootTasks[0].DelegationDepth != 1 {
+		t.Fatalf("expected one task at generation 1, got %+v", rootTasks)
+	}
+
+	// Context at generation 4 → child stamped generation 5.
+	ctx5 := WithDelegationDepth(ctx, 4)
+	res = tool.Execute(ctx5, map[string]any{"title": "t2", "prompt": "p", "agent_id": "b"})
+	if res.IsError {
+		t.Fatalf("nested create failed: %s", res.ForLLM)
+	}
+	all, _ := store.List(task.Filter{WorkspaceID: "ws"})
+	var found bool
+	for _, tk := range all {
+		if tk.Title == "t2" {
+			found = true
+			if tk.DelegationDepth != 5 {
+				t.Errorf("expected nested task generation 5, got %d", tk.DelegationDepth)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("nested task t2 not found")
+	}
+}
+
+// TestTaskCreateTool_DelegationDepthBound proves a task→task chain is rejected
+// once it would exceed maxTaskDepth — closing the A→B→A unbounded-recursion gap.
+func TestTaskCreateTool_DelegationDepthBound(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+	tool.SetMaxDelegationDepth(10)
+
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "ws")
+
+	// At generation 9, a create yields generation 10 == ceiling → allowed.
+	ctxAt9 := WithDelegationDepth(ctx, 9)
+	if res := tool.Execute(ctxAt9, map[string]any{"title": "ok", "prompt": "p", "agent_id": "b"}); res.IsError {
+		t.Fatalf("create at the ceiling boundary must be allowed, got: %s", res.ForLLM)
+	}
+
+	// At generation 10, a create would yield generation 11 > ceiling → rejected.
+	ctxAt10 := WithDelegationDepth(ctx, 10)
+	res := tool.Execute(ctxAt10, map[string]any{"title": "blocked", "prompt": "p", "agent_id": "b"})
+	if !res.IsError {
+		t.Fatal("expected task_create past the depth ceiling to be rejected")
+	}
+	if !strings.Contains(res.ForLLM, "maximum task delegation depth") {
+		t.Errorf("unexpected error message: %s", res.ForLLM)
+	}
+
+	// The rejected task must NOT have been persisted.
+	all, _ := store.List(task.Filter{WorkspaceID: "ws"})
+	for _, tk := range all {
+		if tk.Title == "blocked" {
+			t.Fatal("a rejected over-depth task must not be persisted")
+		}
+	}
+}
+
 // TestTaskDelete_NotFound proves a clear error on unknown task ID.
 func TestTaskDelete_NotFound(t *testing.T) {
 	t.Parallel()

@@ -12,21 +12,11 @@
 
 import { motion } from 'framer-motion'
 import { getIconComponent } from '@/lib/agentIcons'
+import { STATUS_COLORS } from '@/lib/statusColors'
 import type { Agent, Task } from '@/lib/api'
 
 /** A single item from Task['rollup'] */
 export type RollupItem = NonNullable<Task['rollup']>[number]
-
-/** Status colour map — mirrors the Sovereign Deep 7-state palette */
-const STATUS_COLORS: Record<RollupItem['status'], string> = {
-  inbox:       '#9ca3af',
-  next:        '#3B82F6',
-  planning:    '#A855F7',
-  in_progress: '#EAB308',
-  blocked:     '#F97316',
-  done:        '#10b981',
-  failed:      '#ef4444',
-}
 
 interface RollupBadgeProps {
   rollup: RollupItem[]
@@ -84,7 +74,7 @@ export function RollupBadge({ rollup, agents }: RollupBadgeProps) {
       {/* Chevron indicator + count */}
       <span
         className="text-[10px] font-semibold leading-none"
-        style={{ color: isAnyLive ? '#EAB308' : '#9ca3af' }}
+        style={{ color: isAnyLive ? STATUS_COLORS.in_progress : STATUS_COLORS.inbox }}
       >
         &#9658; {countLabel} sub-agent{countLabel !== 1 ? 's' : ''} {isAnyLive ? 'running' : 'delegated'}
       </span>

@@ -35,11 +35,10 @@ describe('useAutoSave', () => {
   })
 
   it('flushes on pagehide when flushUrl is set and save fails (pending changes)', async () => {
-    // The flushBeacon path fires when hasPendingChanges() is true. In the hook,
-    // previousJsonRef is updated by the data-change effect, so after the effect
-    // runs there are no "pending" changes from the hook's perspective. However,
-    // the listeners are still registered and the hook doesn't crash. We verify
-    // the hook works correctly with flushUrl set and data changes.
+    // hasPendingChanges() now compares against the LAST SUCCESSFULLY SAVED json
+    // (not the last-seen one), so a still-unsaved change keeps the beacon armed.
+    // Here saveFn resolves, so once it lands there's nothing pending — the hook
+    // stays functional and doesn't crash on pagehide.
     const saveFn = vi.fn().mockResolvedValue(undefined)
     let data = { name: 'initial' }
 
@@ -122,6 +121,64 @@ describe('useAutoSave', () => {
 
     expect(saveFn).toHaveBeenCalledTimes(1)
     expect(result.current.status).toBe('saved')
+  })
+
+  it('keeps changes pending after a FAILED save and flushes them on unmount', async () => {
+    // Regression (M2): previousJsonRef was advanced before the save ran, so a
+    // thrown PUT left hasPendingChanges()=false → the unmount flush + page-hide
+    // beacon were suppressed and the edit silently vanished. Now the saved
+    // marker only advances on SUCCESS, so a failed save stays pending and the
+    // unmount flush retries it.
+    const saveFn = vi.fn().mockRejectedValue(new Error('PUT 500'))
+    let data = { v: 1 }
+
+    const { result, rerender, unmount } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100 }),
+      { initialProps: { d: data } },
+    )
+
+    // Change data → debounced save fires → it rejects.
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(result.current.status).toBe('error')
+    expect(saveFn).toHaveBeenCalledTimes(1)
+
+    // Unmount → the flush effect must retry because the change is still pending.
+    unmount()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(saveFn).toHaveBeenCalledTimes(2)
+    expect(saveFn).toHaveBeenLastCalledWith({ v: 2 })
+  })
+
+  it('does NOT re-flush on unmount after a successful save (no pending changes)', async () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    let data = { v: 1 }
+
+    const { rerender, unmount } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100 }),
+      { initialProps: { d: data } },
+    )
+
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+
+    // Saved successfully → unmount must NOT flush again (nothing pending).
+    unmount()
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(saveFn).toHaveBeenCalledTimes(1)
   })
 
   it('sets error status when save fails', async () => {

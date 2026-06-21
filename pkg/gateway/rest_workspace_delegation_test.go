@@ -201,6 +201,53 @@ func TestWorkspaceDelegation_ClearEdges(t *testing.T) {
 	assert.Empty(t, d.Edges)
 }
 
+// TestWorkspaceDelegation_PutOffTeamAgent_400 proves an edge endpoint that
+// exists in the config roster but is NOT a member of the workspace team
+// (core_team ∪ existing-edge endpoints) is rejected — an edge write must not
+// silently expand the team. "mia" is in the roster (added below) but absent from
+// this workspace's core_team.
+func TestWorkspaceDelegation_PutOffTeamAgent_400(t *testing.T) {
+	api, id := buildWorkspaceDelegationTestAPI(t)
+
+	// Add "mia" to the live config roster but NOT to the workspace core_team.
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: "mia", Name: "Mia", Type: config.AgentTypeCore})
+
+	w := putDelegation(t, api, id, `{"edges":[{"from_agent":"jim","to_agent":"mia"}]}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "not a member of the workspace team")
+	assert.Contains(t, w.Body.String(), "mia")
+}
+
+// TestWorkspaceDelegation_PutCycle_400 proves a multi-hop delegation cycle
+// (jim→ava→jim) is rejected at write time.
+func TestWorkspaceDelegation_PutCycle_400(t *testing.T) {
+	api, id := buildWorkspaceDelegationTestAPI(t)
+	body := `{"edges":[{"from_agent":"jim","to_agent":"ava"},{"from_agent":"ava","to_agent":"jim"}]}`
+	w := putDelegation(t, api, id, body)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "cycle")
+}
+
+// TestWorkspaceDelegation_PutThreeHopCycle_400 proves a longer cycle
+// (jim→ava→ray→jim) is also rejected.
+func TestWorkspaceDelegation_PutThreeHopCycle_400(t *testing.T) {
+	api, id := buildWorkspaceDelegationTestAPI(t)
+	body := `{"edges":[{"from_agent":"jim","to_agent":"ava"},{"from_agent":"ava","to_agent":"ray"},{"from_agent":"ray","to_agent":"jim"}]}`
+	w := putDelegation(t, api, id, body)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "cycle")
+}
+
+// TestWorkspaceDelegation_PutDAGNoCycle_OK proves a non-cyclic diamond
+// (jim→ava, jim→ray, ava→planner, ray→planner) is accepted.
+func TestWorkspaceDelegation_PutDAGNoCycle_OK(t *testing.T) {
+	api, id := buildWorkspaceDelegationTestAPI(t)
+	body := `{"edges":[{"from_agent":"jim","to_agent":"ava"},{"from_agent":"jim","to_agent":"ray"},{"from_agent":"ava","to_agent":"planner"},{"from_agent":"ray","to_agent":"planner"}]}`
+	w := putDelegation(t, api, id, body)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+}
+
 // TestDefaultWorkspaceSeeder_TeamAndEdges proves ensureDefaultWorkspace seeds the
 // team + edges from a config carrying seeded per-agent delegation policies.
 func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
@@ -248,4 +295,73 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	assert.True(t, pairs["jim->planner"])
 	assert.True(t, pairs["planner->explorer"])
 	assert.True(t, pairs["planner->researcher"])
+}
+
+// TestSeedEdgesForTeam_PartialRosterDropsOffTeamEdge proves a custom core_team
+// that omits "explorer" does NOT inherit the planner→explorer seed edge: an edge
+// whose endpoint is not on the team is dropped, so a custom workspace never gains
+// a dangling edge to an agent it left out (M6).
+func TestSeedEdgesForTeam_PartialRosterDropsOffTeamEdge(t *testing.T) {
+	t.Parallel()
+	allEdges := []storedDelegationEdge{
+		{FromAgent: "jim", ToAgent: "planner"},
+		{FromAgent: "planner", ToAgent: "explorer"},
+		{FromAgent: "planner", ToAgent: "researcher"},
+	}
+	// Custom team WITHOUT explorer.
+	team := []string{"jim", "planner", "researcher"}
+
+	got := seedEdgesForTeam(allEdges, team)
+
+	pairs := make(map[string]bool, len(got))
+	for _, e := range got {
+		pairs[e.FromAgent+"->"+e.ToAgent] = true
+	}
+	assert.True(t, pairs["jim->planner"], "both endpoints on team → kept")
+	assert.True(t, pairs["planner->researcher"], "both endpoints on team → kept")
+	assert.False(t, pairs["planner->explorer"],
+		"explorer is off-team → its edge must be dropped, not dangling")
+	assert.Len(t, got, 2)
+}
+
+// TestWorkspaceDelegation_Depth0AndEmptyModes_RoundTrip proves that an explicit
+// depth:0 ("no onward delegation past this hop") and an explicit empty modes
+// array survive the PUT→GET round-trip without being lost or coerced. These are
+// the boundary wire values most prone to omitempty/codegen drift.
+func TestWorkspaceDelegation_Depth0AndEmptyModes_RoundTrip(t *testing.T) {
+	api, id := buildWorkspaceDelegationTestAPI(t)
+
+	// Edge 1: depth:0 explicit. Edge 2: modes:[] explicit empty.
+	body := `{"edges":[` +
+		`{"from_agent":"jim","to_agent":"ava","depth":0},` +
+		`{"from_agent":"planner","to_agent":"ray","modes":[]}` +
+		`]}`
+	w := putDelegation(t, api, id, body)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	got := decodeDelegation(t, getDelegation(t, api, id).Body.Bytes())
+	require.Len(t, got.Edges, 2)
+
+	byFrom := make(map[string]gen.WorkspaceDelegationEdge, 2)
+	for _, e := range got.Edges {
+		byFrom[e.FromAgent] = e
+	}
+
+	jimAva, ok := byFrom["jim"]
+	require.True(t, ok, "jim→ava edge must round-trip")
+	require.NotNil(t, jimAva.Depth, "explicit depth:0 must NOT be dropped on the wire")
+	assert.Equal(t, 0, *jimAva.Depth, "depth:0 must survive (no onward delegation)")
+
+	// Persisted form must also carry depth:0.
+	stored, err := readWorkspaceFile(api.homePath, id)
+	require.NoError(t, err)
+	var foundDepth0 bool
+	for _, e := range stored.Delegation {
+		if e.FromAgent == "jim" && e.ToAgent == "ava" {
+			require.NotNil(t, e.Depth, "stored depth:0 must persist")
+			assert.Equal(t, 0, *e.Depth)
+			foundDepth0 = true
+		}
+	}
+	assert.True(t, foundDepth0, "jim→ava with depth:0 must be persisted")
 }

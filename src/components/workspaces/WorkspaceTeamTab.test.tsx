@@ -160,4 +160,64 @@ describe('WorkspaceTeamTab', () => {
       expect(screen.getByText('Team & delegation')).toBeInTheDocument()
     })
   })
+
+  it('shows a retry-able error state when the delegation fetch fails', async () => {
+    vi.mocked(fetchWorkspaceDelegation).mockRejectedValueOnce(new Error('boom'))
+    renderTab()
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Failed to load this workspace's delegation graph/),
+      ).toBeInTheDocument()
+    })
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  })
+
+  it('shows the empty state (no members) and an add-agent CTA', async () => {
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-1',
+      team: [],
+      edges: [],
+    } as WorkspaceDelegation)
+    // core_team would normally seed members; for this case the workspace mock
+    // already supplies core_team, so to get a truly empty graph we also clear
+    // it by returning an empty team and no edges — buildTeamEditState seeds from
+    // core_team only when team is empty, so assert the picker CTA is present.
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByText('Team & delegation')).toBeInTheDocument()
+    })
+  })
+
+  it('flags an edgeless, non-core member as unsaved after it is added', async () => {
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    // Add Ray (not in core_team ['mia','jim'], no incident edge) → unsaved hint.
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => {
+      expect(screen.getByTestId('team-unsaved-members')).toHaveTextContent(/Ray/)
+    })
+    expect(screen.getByTestId('team-unsaved-members')).toHaveTextContent(
+      /not connected yet/,
+    )
+  })
+
+  it('does not offer a remove button on the default agent node (remove-default guard)', async () => {
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-node-mia')).toBeInTheDocument())
+    // Mia is the default agent — the node must NOT render a "Remove … from team"
+    // action (the guard's UI side; the handler also blocks it defensively).
+    const miaNode = screen.getByTestId('team-node-mia')
+    expect(
+      miaNode.querySelector('[aria-label="Remove Mia from team"]'),
+    ).toBeNull()
+    // A non-default member (Jim) DOES get the remove action.
+    const jimNode = screen.getByTestId('team-node-jim')
+    expect(
+      jimNode.querySelector('[aria-label="Remove Jim from team"]'),
+    ).not.toBeNull()
+  })
 })

@@ -51,7 +51,9 @@
 }
 
 .sovereign-flow .react-flow__minimap-mask {
-  fill: rgba(10, 10, 11, 0.6);
+  /* Deep Space Black (--color-surface-0 #0a0a0b) at 60% so the unviewed area
+     dims without fully hiding it. color-mix keeps the hue token-driven. */
+  fill: color-mix(in srgb, var(--color-surface-0) 60%, transparent);
 }
 
 /* ── Attribution link ──────────────────────────────────────────────────────── */
@@ -76,8 +78,10 @@
   stroke: var(--color-accent);
 }
 
-/* The custom node wraps its own surface — strip React Flow's default node box. */
-.sovereign-flow .react-flow__node-task {
+/* The custom nodes (Graph `task`, Team `agent`) wrap their own surface — strip
+   React Flow's default node box for both. */
+.sovereign-flow .react-flow__node-task,
+.sovereign-flow .react-flow__node-agent {
   background: transparent;
   border: none;
   padding: 0;
@@ -86,7 +90,8 @@
 }
 
 /* Hide the default selection outline; the node draws its own gold ring. */
-.sovereign-flow .react-flow__node-task.selected {
+.sovereign-flow .react-flow__node-task.selected,
+.sovereign-flow .react-flow__node-agent.selected {
   outline: none;
   box-shadow: none;
 }

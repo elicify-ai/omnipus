@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus } from '@phosphor-icons/react'
+import { Info, Plus } from '@phosphor-icons/react'
 import { MilestoneFilterPills, MILESTONE_FILTER_UNSCHEDULED } from './MilestoneFilterPills'
 import { BoardView } from './BoardView'
 import { ListView } from './ListView'
@@ -54,7 +54,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
     enabled: !!workspaceId,
   })
 
-  const { data: agents = [] } = useQuery({
+  const { data: agents = [], isError: agentsError } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     staleTime: 60_000,
@@ -96,6 +96,13 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
           New task
         </button>
       </div>
+
+      {agentsError && (
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)] flex-shrink-0">
+          <Info size={12} weight="fill" className="shrink-0" />
+          Agent details failed to load — task avatars may be missing.
+        </div>
+      )}
 
       {/* Content */}
       {tasksLoading ? (

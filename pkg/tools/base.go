@@ -111,6 +111,7 @@ var (
 	ctxKeySessionOwner        = &toolCtxKey{"sessionOwner"}
 	ctxKeyWorkspaceID         = &toolCtxKey{"workspaceID"}
 	ctxKeyCitationTracker     = &toolCtxKey{"citationTracker"}
+	ctxKeyDelegationDepth     = &toolCtxKey{"delegationDepth"}
 )
 
 // ProcessTrackerFunc records a child PID spawned by a tool so a caller (e.g. the
@@ -221,6 +222,25 @@ func WithWorkspaceID(ctx context.Context, workspaceID string) context.Context {
 // Workspace; the memory store falls back to the private room only.
 func ToolWorkspaceID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyWorkspaceID).(string)
+	return v
+}
+
+// WithDelegationDepth returns a child context carrying the delegation-chain
+// depth of the turn currently executing. The agent loop seeds this when it
+// runs a task (from the task's stored DelegationDepth) so task_create can stamp
+// a child task's generation as parent+1 and reject a create that would exceed
+// the task-depth bound. A root chat/agent turn leaves it 0.
+func WithDelegationDepth(ctx context.Context, depth int) context.Context {
+	if depth < 0 {
+		depth = 0
+	}
+	return context.WithValue(ctx, ctxKeyDelegationDepth, depth)
+}
+
+// ToolDelegationDepth extracts the delegation-chain depth from ctx, or 0 if
+// unset (a root chat/agent turn, or any non-task invocation).
+func ToolDelegationDepth(ctx context.Context) int {
+	v, _ := ctx.Value(ctxKeyDelegationDepth).(int)
 	return v
 }
 

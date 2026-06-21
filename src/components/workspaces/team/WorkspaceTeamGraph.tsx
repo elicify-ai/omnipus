@@ -19,9 +19,9 @@ import {
   type NodeChange,
   type EdgeProps,
   type IsValidConnection,
-  type OnConnectStart,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import '../reactflow-theme.css'
 import { Star, Lightning, Trash, Warning, PencilSimple, X } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { cn } from '@/lib/utils'
@@ -71,10 +71,11 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
     pointerEvents: connection.inProgress ? ('all' as const) : ('none' as const),
   }
 
-  // Worker (leaf) and ghost (deleted) nodes are TARGET-ONLY: they may receive a
-  // delegation edge but never START one. Only a real, non-worker node is a
-  // connection source — and only it gets a source dot.
-  const canBeSource = !model.isWorker && !model.isGhost
+  // Delegation is BOUNDED, not tier-gated (Sprint-3 backend): ANY real team
+  // member may be a delegation SOURCE — including a worker (the backend seeds
+  // Planner→Researcher, both workers). Only a GHOST (deleted, no backing agent)
+  // can't start a connection. Depth is bounded per-edge in the edge editor.
+  const canBeSource = !model.isGhost
 
   if (model.isGhost) {
     return (
@@ -164,11 +165,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-primary)]',
         isTarget && 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/70',
       )}
-      title={
-        model.isWorker
-          ? 'Workers are delegation leaves — they receive work but never delegate onward. Click to edit the global agent.'
-          : `Click to edit ${model.name} (applies everywhere). Drag the yellow dot onto another agent to delegate. Drag the body to reposition.`
-      }
+      title={`Click to edit ${model.name} (applies everywhere). Drag the gold dot onto another agent to delegate. Drag the body to reposition.`}
     >
       {/* Full-node TARGET handle: drop ANYWHERE on this shape to connect TO it. */}
       <Handle
@@ -214,7 +211,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             data-node-action="remove"
             aria-label={`Remove ${model.name} from team`}
             title="Remove from this workspace's team"
-            className="nodrag rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-error,#ef4444)]/15 hover:text-[var(--color-error,#ef4444)]"
+            className="nodrag rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
             onClick={(e) => {
               e.stopPropagation()
               data.onRemoveMember?.(id)
@@ -257,10 +254,10 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             </span>
             {model.isWorker && (
               <span
-                className="inline-flex items-center gap-0.5 rounded border border-[var(--color-info,#3B82F6)]/40 bg-[var(--color-info,#3B82F6)]/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-[var(--color-info,#9DBEFF)]"
-                title="Worker — a delegation leaf (receives work, never delegates onward)"
+                className="inline-flex items-center gap-0.5 rounded border border-[var(--color-info)]/40 bg-[var(--color-info)]/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-[var(--color-info)]"
+                title="Worker — a delegation-only agent. It may both receive work and delegate onward (depth is bounded per edge)."
               >
-                <Lightning size={9} weight="fill" /> leaf
+                <Lightning size={9} weight="fill" /> worker
               </span>
             )}
           </div>
@@ -361,7 +358,6 @@ export interface WorkspaceTeamGraphProps {
 const REJECTION_MESSAGE: Record<string, string> = {
   'self-edge': 'An agent cannot delegate to itself.',
   duplicate: 'That delegation edge already exists.',
-  'worker-source': "Workers are delegation leaves — they don't delegate onward.",
   'not-member': 'Both agents must be on the team first.',
 }
 
@@ -471,28 +467,19 @@ function WorkspaceTeamGraphInner({
     [editState, workerIds, onConnect, onRejectConnection],
   )
 
-  const handleConnectStart = useCallback<OnConnectStart>(
-    (_, params) => {
-      if (params.nodeId && workerIds.has(params.nodeId)) {
-        onRejectConnection(REJECTION_MESSAGE['worker-source'])
-      }
-    },
-    [workerIds, onRejectConnection],
-  )
-
   return (
     <div
       data-testid="team-graph-canvas"
-      className="h-full w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0,#0a0a0b)]"
+      className="h-full w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)]"
     >
       <ReactFlow
+        className="sovereign-flow"
         nodes={flowNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onConnect={handleConnect}
-        onConnectStart={handleConnectStart}
         isValidConnection={isValidConnection}
         onPaneClick={() => setSelectedEdgeId(null)}
         nodesDraggable

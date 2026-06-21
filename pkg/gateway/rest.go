@@ -1677,7 +1677,8 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		// rejected. A Subagent/worker created with a non-empty to[] is now allowed
 		// (bounded by depth, not the worker tier). No existing stored policy on
 		// create → grandfathering is a no-op.
-		dp, errMsg := buildDelegationPolicy(dpIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg), ac.ID)
+		dp, errMsg := buildDelegationPolicy(dpIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg),
+			ac.ID, peerDelegationGraph(cfg, ac.ID))
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
@@ -2329,7 +2330,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			foundAgent.DelegationPolicy, // existing stored policy (may be nil)
 			rosterIDSet(cfg),
 			delegationDepthCeiling(cfg),
-			foundAgent.ID, // selfID: reject A→A self-delegation
+			foundAgent.ID,                           // selfID: reject A→A self-delegation
+			peerDelegationGraph(cfg, foundAgent.ID), // reject multi-hop cycle (A→B→A)
 		)
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)

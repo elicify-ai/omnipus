@@ -86,12 +86,22 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 // PUT /api/v1/workspaces/{id}/delegation
 //
 // Validation (all reject with 400):
-//   - every from_agent / to_agent must resolve to a known agent in the config roster
+//   - every from_agent / to_agent must be a member of the workspace team
+//     (core_team ∪ existing-edge endpoints) — an edge write may NOT silently
+//     expand the team with an off-team agent
 //   - self-edges (from_agent == to_agent) are rejected
+//   - the resulting graph must be acyclic (no A→B→A delegation cycle)
 //   - modes ⊆ {await, background, task}
 //   - depth must be >= 0 and <= the global subturn depth ceiling
 //
 // Edges are deduplicated by (from_agent, to_agent); the last writer wins.
+//
+// This graph is the editable VIEW of the per-agent-policy enforcement cap. It is
+// the per-workspace source of truth the Team tab surfaces — but RUNTIME
+// enforcement is performed by each agent's config.DelegationPolicy (trust set +
+// modes + depth), not by this graph directly (see buildDelegationDenyChecker in
+// pkg/agent/loop.go). Editing this graph does not, by itself, change runtime
+// enforcement.
 func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
@@ -110,10 +120,13 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 	}
 
 	cfg := a.agentLoop.GetConfig()
-	roster := rosterIDSet(cfg)
+	// Validate edge endpoints against the workspace TEAM (core_team ∪ existing-edge
+	// endpoints), not the whole config roster — an edge write must not silently
+	// add an off-team agent to the workspace team. team ⊆ roster by construction.
+	team := workspaceTeamSet(ws)
 	ceiling := delegationDepthCeiling(cfg)
 
-	edges, errMsg := buildWorkspaceDelegationEdges(req.Edges, roster, ceiling)
+	edges, errMsg := buildWorkspaceDelegationEdges(req.Edges, team, ceiling)
 	if errMsg != "" {
 		jsonErr(w, http.StatusBadRequest, errMsg)
 		return
@@ -228,18 +241,57 @@ func seedEdgesForTeam(edges []storedDelegationEdge, team []string) []storedDeleg
 	return out
 }
 
+// workspaceTeamSet computes the workspace team membership set against which a
+// delegation edge's endpoints are validated: the union of the workspace
+// core_team and the endpoints of the workspace's EXISTING (already-stored)
+// delegation edges. This matches the WorkspaceDelegationEdge schema contract
+// ("from_agent / to_agent must be a member of the workspace team — present in
+// core_team or referenced by another edge"). A PUT may rewire edges among team
+// members but may NOT silently introduce a brand-new agent that is neither in
+// core_team nor already an endpoint — that would expand the team as a side
+// effect of an edge write, which the schema forbids.
+func workspaceTeamSet(ws storedWorkspace) map[string]bool {
+	team := make(map[string]bool, len(ws.CoreTeam)+2*len(ws.Delegation))
+	for _, id := range ws.CoreTeam {
+		if id = strings.TrimSpace(id); id != "" {
+			team[id] = true
+		}
+	}
+	for _, e := range ws.Delegation {
+		if f := strings.TrimSpace(e.FromAgent); f != "" {
+			team[f] = true
+		}
+		if t := strings.TrimSpace(e.ToAgent); t != "" {
+			team[t] = true
+		}
+	}
+	return team
+}
+
 // buildWorkspaceDelegationEdges validates and normalises the incoming edge list
 // into the stored form. Returns (edges, "") on success or (nil, errMsg) on the
 // first validation failure (the caller returns 400 with errMsg).
+//
+// Endpoints are validated against `team` (the workspace team set — core_team ∪
+// existing-edge endpoints, see workspaceTeamSet), NOT the whole config roster:
+// an edge endpoint must already be a member of the workspace team, so an edge
+// write cannot silently expand the team with an off-team agent. The roster check
+// is subsumed because team ⊆ roster by construction.
+//
+// A DFS cycle check rejects any multi-hop delegation cycle (A→B→A): although the
+// runtime depth cap bounds an actual delegation chain, a cyclic config graph is a
+// footgun, so it is rejected at write time with a clear 400.
 func buildWorkspaceDelegationEdges(
 	in []gen.WorkspaceDelegationEdge,
-	roster map[string]bool,
+	team map[string]bool,
 	depthCeiling int,
 ) ([]storedDelegationEdge, string) {
 	out := make([]storedDelegationEdge, 0, len(in))
 	// index maps (from,to) → position in out, so a later duplicate overwrites the
 	// earlier edge (last-writer-wins) rather than appending a second copy.
 	index := make(map[string]int, len(in))
+	// adjacency for cycle detection (built from the deduplicated edge set).
+	adj := make(map[string][]string, len(in))
 
 	for _, e := range in {
 		from := strings.TrimSpace(e.FromAgent)
@@ -250,11 +302,11 @@ func buildWorkspaceDelegationEdges(
 		if from == to {
 			return nil, "delegation edge cannot be a self-edge (from_agent == to_agent: " + from + ")"
 		}
-		if !roster[from] {
-			return nil, "delegation edge from_agent " + from + " does not exist"
+		if !team[from] {
+			return nil, "delegation edge from_agent " + from + " is not a member of the workspace team"
 		}
-		if !roster[to] {
-			return nil, "delegation edge to_agent " + to + " does not exist"
+		if !team[to] {
+			return nil, "delegation edge to_agent " + to + " is not a member of the workspace team"
 		}
 
 		var modes []string
@@ -297,5 +349,54 @@ func buildWorkspaceDelegationEdges(
 		index[key] = len(out)
 		out = append(out, edge)
 	}
+
+	// Rebuild adjacency from the deduplicated edge set, then reject cycles.
+	for _, e := range out {
+		adj[e.FromAgent] = append(adj[e.FromAgent], e.ToAgent)
+	}
+	if cycleNode := detectDelegationCycle(adj); cycleNode != "" {
+		return nil, "delegation graph contains a cycle (a delegation chain that loops back, e.g. through " +
+			cycleNode + "); cycles are not allowed"
+	}
+
 	return out, ""
+}
+
+// detectDelegationCycle runs a DFS over the directed adjacency map and returns a
+// node that participates in a cycle, or "" when the graph is acyclic. Uses the
+// classic white/grey/black coloring: a back-edge to a grey (on-stack) node is a
+// cycle.
+func detectDelegationCycle(adj map[string][]string) string {
+	const (
+		white = 0 // unvisited
+		grey  = 1 // on the current DFS stack
+		black = 2 // fully explored
+	)
+	color := make(map[string]int, len(adj))
+
+	var visit func(node string) string
+	visit = func(node string) string {
+		color[node] = grey
+		for _, next := range adj[node] {
+			switch color[next] {
+			case grey:
+				return next // back-edge → cycle
+			case white:
+				if hit := visit(next); hit != "" {
+					return hit
+				}
+			}
+		}
+		color[node] = black
+		return ""
+	}
+
+	for node := range adj {
+		if color[node] == white {
+			if hit := visit(node); hit != "" {
+				return hit
+			}
+		}
+	}
+	return ""
 }

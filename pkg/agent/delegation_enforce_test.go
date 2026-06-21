@@ -230,3 +230,29 @@ func TestCurrentDelegationDepth_DefaultsToZeroWithoutTurnState(t *testing.T) {
 		t.Fatalf("expected depth 4 from turnState, got %d", d)
 	}
 }
+
+// TestProcessOptions_SeedsTaskRunDepth proves that a task run started at a
+// non-zero generation seeds the root turnState depth so currentDelegationDepth
+// (and hence the per-agent await/background depth gate) is non-zero INSIDE the
+// task run. Without this seeding every task run starts at depth 0 and the gate
+// never trips, allowing an unbounded task→await→task chain. It mirrors the
+// seeding runAgentLoop performs from opts.InitialDelegationDepth.
+func TestProcessOptions_SeedsTaskRunDepth(t *testing.T) {
+	agent := &AgentInstance{ID: "mia"}
+	opts := processOptions{SessionKey: "k", InitialDelegationDepth: 3}
+	ts := newTurnState(agent, opts, turnEventScope{turnID: "tid"})
+	// Replicate the runAgentLoop seeding step.
+	if opts.InitialDelegationDepth > 0 {
+		ts.depth = opts.InitialDelegationDepth
+	}
+	ctx := withTurnState(context.Background(), ts)
+	if d := currentDelegationDepth(ctx); d != 3 {
+		t.Fatalf("expected seeded delegation depth 3 inside task run, got %d", d)
+	}
+
+	// A root (depth-0) run must NOT seed a non-zero depth.
+	rootTS := newTurnState(agent, processOptions{SessionKey: "k"}, turnEventScope{turnID: "tid2"})
+	if d := currentDelegationDepth(withTurnState(context.Background(), rootTS)); d != 0 {
+		t.Fatalf("expected root run depth 0, got %d", d)
+	}
+}

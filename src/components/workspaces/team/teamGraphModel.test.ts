@@ -8,6 +8,8 @@ import {
   buildTeamGraphModel,
   canToggleModeOff,
   editsEqual,
+  isMemberPersisted,
+  unsavedMembers,
   normalizeDepth,
   normalizeModes,
   removeEdge,
@@ -167,9 +169,18 @@ describe('validateConnection', () => {
   it('rejects self-edges', () => {
     expect(validateConnection('mia', 'mia', state, WORKER_IDS)).toBe('self-edge')
   })
-  it('rejects a worker as source', () => {
+  it('ALLOWS a worker as a delegation source (bounded delegation, not tier-gated)', () => {
+    // The backend unlocked onward delegation for any agent and bounds depth
+    // per-edge — so a worker (Subagent) CAN be a source. This is the exact
+    // edge the backend seeds (Planner → Explorer/Researcher).
     const s = { ...state, members: [...state.members, 'explorer'] }
-    expect(validateConnection('planner', 'jim', s, WORKER_IDS)).toBe('worker-source')
+    expect(validateConnection('planner', 'explorer', s, WORKER_IDS)).toBeNull()
+  })
+  it('allows the seeded Planner→worker delegation edge to be drawn', () => {
+    // Planner and Explorer are both workers; the user must be able to recreate
+    // the seeded onward edge between them.
+    const s = { ...state, members: [...state.members, 'explorer'] }
+    expect(validateConnection('planner', 'explorer', s, WORKER_IDS)).toBeNull()
   })
   it('rejects duplicate edges', () => {
     expect(validateConnection('mia', 'jim', state, WORKER_IDS)).toBe('duplicate')
@@ -179,6 +190,37 @@ describe('validateConnection', () => {
   })
   it('allows a valid new edge', () => {
     expect(validateConnection('jim', 'planner', state, WORKER_IDS)).toBeNull()
+  })
+})
+
+// ── membership persistence (edges-only PUT, backend derives team) ────────────
+
+describe('isMemberPersisted / unsavedMembers', () => {
+  const core = new Set(['mia'])
+
+  it('treats a core_team member as persisted even with no edge', () => {
+    const s: TeamEditState = { members: ['mia'], edges: [] }
+    expect(isMemberPersisted(s, 'mia', core)).toBe(true)
+    expect(unsavedMembers(s, core)).toEqual([])
+  })
+
+  it('treats a member with an incident edge as persisted (as source or target)', () => {
+    const s: TeamEditState = {
+      members: ['mia', 'jim', 'planner'],
+      edges: [{ from: 'jim', to: 'planner', modes: ['await'] }],
+    }
+    expect(isMemberPersisted(s, 'jim', core)).toBe(true)
+    expect(isMemberPersisted(s, 'planner', core)).toBe(true)
+    expect(unsavedMembers(s, core)).toEqual([])
+  })
+
+  it('flags an edgeless, non-core member as unsaved (it would vanish on refetch)', () => {
+    const s: TeamEditState = {
+      members: ['mia', 'jim', 'explorer'],
+      edges: [{ from: 'mia', to: 'jim', modes: ['await'] }],
+    }
+    expect(isMemberPersisted(s, 'explorer', core)).toBe(false)
+    expect(unsavedMembers(s, core)).toEqual(['explorer'])
   })
 })
 

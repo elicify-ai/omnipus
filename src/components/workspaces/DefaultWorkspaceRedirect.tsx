@@ -50,6 +50,15 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
     )
   }
 
+  // Loaded, but there are no workspaces to redirect into — don't spin forever.
+  if (!isLoading && (workspaces?.length ?? 0) === 0) {
+    return (
+      <div className="flex items-center justify-center h-full min-h-[200px] p-8 text-center text-sm text-[var(--color-muted)]">
+        No workspaces yet. Create one to get started.
+      </div>
+    )
+  }
+
   return (
     <div className="flex items-center justify-center h-full min-h-[200px]">
       <div className="w-6 h-6 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin" />

@@ -356,13 +356,17 @@ func HasSystemAllowsInConstructorSeed(agentID string) bool {
 // a base agent so orchestration + worker fan-out work out of the box (fixes the
 // historically empty Trust-Graph gap). The matrix:
 //
-//	Jim (Orchestrator) → [ava, ray, worker]   modes: [task, background, await]
-//	Mia, Ray, Ava      → [worker]              modes: [task, background]
+//	Jim (Orchestrator) → [ava, ray, worker]      modes: [task, background, await]
+//	Mia, Ray, Ava      → [worker]                 modes: [task, background]
+//	Planner            → [explorer, researcher]   modes: [await, task]  depth: 2
 //
 // Every base agent can therefore offload labour to the general-purpose worker;
-// Jim can additionally drive the specialists. Everything not listed stays
-// deny-by-default. Returns nil for an agent with no seeded delegation (incl. the
-// worker itself — a worker is a leaf, it does not delegate onward by default).
+// Jim can additionally fan out to two base agents (Ava, Ray) plus the worker.
+// The specialists are NOT in any base agent's to[] — only the Planner drives the
+// Explorer/Researcher specialists (see the IDPlanner case below). Everything not
+// listed stays deny-by-default. Returns nil for an agent with no seeded
+// delegation (incl. Explorer/Researcher and the generic worker — leaves that do
+// not delegate onward by default).
 func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 	ref := func(agentID CoreAgentID) config.AgentRef {
 		return config.AgentRef{Kind: config.AgentRefKindLocal, ID: string(agentID)}
