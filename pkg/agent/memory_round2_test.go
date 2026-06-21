@@ -119,7 +119,7 @@ func TestMemory_ConcurrentSearchAndClose(t *testing.T) {
 	// Seed a few memories so the bleve index is populated and Search does real work.
 	for _, body := range []string{
 		"Prometheus scrapes metrics from node exporters.",
-		"Grafana dashboards visualise prometheus time series.",
+		"Grafana dashboards visualize prometheus time series.",
 		"Alertmanager routes prometheus alerts to oncall.",
 	} {
 		if err := ms.AppendLongTerm(body, "reference"); err != nil {

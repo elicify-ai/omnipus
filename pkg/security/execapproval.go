@@ -235,7 +235,7 @@ func (m *ExecApprovalManager) CheckApproval(command string) ApprovalResult {
 // granted consent was silently lost.
 //
 // Persisting the bare binary token (e.g. "git") and matching it against the
-// command's first token honours the consent for both "git" and "git status"
+// command's first token honors the consent for both "git" and "git status"
 // without the over-broad "git*" form (which would also match "github").
 // Patterns that DO contain a wildcard keep their existing glob semantics, so
 // hand-written or legacy "git *" / "npm run *" entries still work — and, for

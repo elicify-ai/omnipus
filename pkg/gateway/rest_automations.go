@@ -26,7 +26,7 @@ import (
 // NOTE (future-use): the SPA's AutomationsScreen currently computes trigger/action
 // summaries client-side via triggerSummary (SchedulesList). This server-side
 // projection is retained as a future replacement for the client-side logic
-// (centralising cron humanisation + agent-name resolution). It is read-only,
+// (centralizing cron humanisation + agent-name resolution). It is read-only,
 // exercised by tests, and does not affect the persisted schedule contract.
 // Writes still go through /api/v1/schedules.
 //
@@ -105,7 +105,7 @@ func (a *restAPI) buildAutomationItem(job cron.CronJob) automationItem {
 	return item
 }
 
-// triggerDisplay humanises a cron.CronSchedule into a display string.
+// triggerDisplay humanizes a cron.CronSchedule into a display string.
 func triggerDisplay(s cron.CronSchedule) string {
 	switch s.Kind {
 	case "at":
@@ -125,7 +125,7 @@ func triggerDisplay(s cron.CronSchedule) string {
 	}
 }
 
-// actionDisplay humanises what a fired schedule does. deliver=true sends the
+// actionDisplay humanizes what a fired schedule does. deliver=true sends the
 // message straight to a channel; deliver=false runs the owning agent.
 func (a *restAPI) actionDisplay(job cron.CronJob, agentName string) string {
 	if job.Payload.Deliver {
@@ -146,7 +146,7 @@ func nextRunDisplay(atMS *int64) string {
 	return formatTime(*atMS)
 }
 
-// formatTime renders a unix-ms instant as a localised absolute string.
+// formatTime renders a unix-ms instant as a localized absolute string.
 func formatTime(ms int64) string {
 	t := time.UnixMilli(ms)
 	return t.Format("Mon, 02 Jan 2006 15:04 MST")

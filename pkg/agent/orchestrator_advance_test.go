@@ -126,7 +126,10 @@ func TestOrchestratorAdvance_StillBlockedWhenDepNotComplete(t *testing.T) {
 	if _, err := store.Update(depB.ID, taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}); err != nil {
 		t.Fatalf("update depB→running: %v", err)
 	}
-	if _, err := store.Update(depB.ID, taskstore.TaskPatch{Status: ptrStr("completed"), CompletedAt: &now}); err != nil {
+	if _, err := store.Update(
+		depB.ID,
+		taskstore.TaskPatch{Status: ptrStr("completed"), CompletedAt: &now},
+	); err != nil {
 		t.Fatalf("update depB→completed: %v", err)
 	}
 	ready = te.readyBlockedCandidates(depB.ID)

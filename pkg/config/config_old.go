@@ -803,72 +803,191 @@ func (c *configV0) MigrateWithStore(store CredentialStore) (*Config, error) {
 		}
 	}
 
-	if err := migrateSecret("TELEGRAM_TOKEN", c.Channels.Telegram.Token,
-		setChannelRef("telegram", "token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.TokenRef = ref })); err != nil {
+	if err := migrateSecret(
+		"TELEGRAM_TOKEN",
+		c.Channels.Telegram.Token,
+		setChannelRef(
+			"telegram",
+			"token_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.TokenRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("DISCORD_TOKEN", c.Channels.Discord.Token,
-		setChannelRef("discord", "token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.TokenRef = ref })); err != nil {
+	if err := migrateSecret(
+		"DISCORD_TOKEN",
+		c.Channels.Discord.Token,
+		setChannelRef(
+			"discord",
+			"token_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.TokenRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("WECOM_SECRET", c.Channels.WeCom.Secret,
-		setChannelRef("wecom", "secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.SecretRef = ref })); err != nil {
+	if err := migrateSecret(
+		"WECOM_SECRET",
+		c.Channels.WeCom.Secret,
+		setChannelRef(
+			"wecom",
+			"secret_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.SecretRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("SLACK_BOT_TOKEN", c.Channels.Slack.BotToken,
-		setChannelRef("slack", "bot_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.BotTokenRef = ref })); err != nil {
+	if err := migrateSecret(
+		"SLACK_BOT_TOKEN",
+		c.Channels.Slack.BotToken,
+		setChannelRef(
+			"slack",
+			"bot_token_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.BotTokenRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("SLACK_APP_TOKEN", c.Channels.Slack.AppToken,
-		setChannelRef("slack", "app_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.AppTokenRef = ref })); err != nil {
+	if err := migrateSecret(
+		"SLACK_APP_TOKEN",
+		c.Channels.Slack.AppToken,
+		setChannelRef(
+			"slack",
+			"app_token_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.AppTokenRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("FEISHU_APP_SECRET", c.Channels.Feishu.AppSecret,
-		setChannelRef("feishu", "app_secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.AppSecretRef = ref })); err != nil {
+	if err := migrateSecret(
+		"FEISHU_APP_SECRET",
+		c.Channels.Feishu.AppSecret,
+		setChannelRef(
+			"feishu",
+			"app_secret_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.AppSecretRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("FEISHU_ENCRYPT_KEY", c.Channels.Feishu.EncryptKey,
-		setChannelRef("feishu", "encrypt_key_ref", func(inst *ChannelInstanceConfig, ref string) { inst.EncryptKeyRef = ref })); err != nil {
+	if err := migrateSecret(
+		"FEISHU_ENCRYPT_KEY",
+		c.Channels.Feishu.EncryptKey,
+		setChannelRef(
+			"feishu",
+			"encrypt_key_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.EncryptKeyRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("FEISHU_VERIFICATION_TOKEN", c.Channels.Feishu.VerificationToken,
-		setChannelRef("feishu", "verification_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.VerificationTokenRef = ref })); err != nil {
+	if err := migrateSecret(
+		"FEISHU_VERIFICATION_TOKEN",
+		c.Channels.Feishu.VerificationToken,
+		setChannelRef(
+			"feishu",
+			"verification_token_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.VerificationTokenRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("QQ_APP_SECRET", c.Channels.QQ.AppSecret,
-		setChannelRef("qq", "app_secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.AppSecretRef = ref })); err != nil {
+	if err := migrateSecret(
+		"QQ_APP_SECRET",
+		c.Channels.QQ.AppSecret,
+		setChannelRef(
+			"qq",
+			"app_secret_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.AppSecretRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("DINGTALK_CLIENT_SECRET", c.Channels.DingTalk.ClientSecret,
-		setChannelRef("dingtalk", "client_secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.ClientSecretRef = ref })); err != nil {
+	if err := migrateSecret(
+		"DINGTALK_CLIENT_SECRET",
+		c.Channels.DingTalk.ClientSecret,
+		setChannelRef(
+			"dingtalk",
+			"client_secret_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.ClientSecretRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("MATRIX_ACCESS_TOKEN", c.Channels.Matrix.AccessToken,
-		setChannelRef("matrix", "access_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.AccessTokenRef = ref })); err != nil {
+	if err := migrateSecret(
+		"MATRIX_ACCESS_TOKEN",
+		c.Channels.Matrix.AccessToken,
+		setChannelRef(
+			"matrix",
+			"access_token_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.AccessTokenRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("LINE_CHANNEL_SECRET", c.Channels.LINE.ChannelSecret,
-		setChannelRef("line", "channel_secret_ref", func(inst *ChannelInstanceConfig, ref string) { inst.ChannelSecretRef = ref })); err != nil {
+	if err := migrateSecret(
+		"LINE_CHANNEL_SECRET",
+		c.Channels.LINE.ChannelSecret,
+		setChannelRef(
+			"line",
+			"channel_secret_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.ChannelSecretRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("LINE_CHANNEL_ACCESS_TOKEN", c.Channels.LINE.ChannelAccessToken,
-		setChannelRef("line", "channel_access_token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.ChannelAccessTokenRef = ref })); err != nil {
+	if err := migrateSecret(
+		"LINE_CHANNEL_ACCESS_TOKEN",
+		c.Channels.LINE.ChannelAccessToken,
+		setChannelRef(
+			"line",
+			"channel_access_token_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.ChannelAccessTokenRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("WEIXIN_TOKEN", c.Channels.Weixin.Token,
-		setChannelRef("weixin", "token_ref", func(inst *ChannelInstanceConfig, ref string) { inst.TokenRef = ref })); err != nil {
+	if err := migrateSecret(
+		"WEIXIN_TOKEN",
+		c.Channels.Weixin.Token,
+		setChannelRef(
+			"weixin",
+			"token_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.TokenRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("IRC_PASSWORD", c.Channels.IRC.Password,
-		setChannelRef("irc", "password_ref", func(inst *ChannelInstanceConfig, ref string) { inst.PasswordRef = ref })); err != nil {
+	if err := migrateSecret(
+		"IRC_PASSWORD",
+		c.Channels.IRC.Password,
+		setChannelRef(
+			"irc",
+			"password_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.PasswordRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("IRC_NICKSERV_PASSWORD", c.Channels.IRC.NickServPassword,
-		setChannelRef("irc", "nickserv_password_ref", func(inst *ChannelInstanceConfig, ref string) { inst.NickServPasswordRef = ref })); err != nil {
+	if err := migrateSecret(
+		"IRC_NICKSERV_PASSWORD",
+		c.Channels.IRC.NickServPassword,
+		setChannelRef(
+			"irc",
+			"nickserv_password_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.NickServPasswordRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
-	if err := migrateSecret("IRC_SASL_PASSWORD", c.Channels.IRC.SASLPassword,
-		setChannelRef("irc", "sasl_password_ref", func(inst *ChannelInstanceConfig, ref string) { inst.SASLPasswordRef = ref })); err != nil {
+	if err := migrateSecret(
+		"IRC_SASL_PASSWORD",
+		c.Channels.IRC.SASLPassword,
+		setChannelRef(
+			"irc",
+			"sasl_password_ref",
+			func(inst *ChannelInstanceConfig, ref string) { inst.SASLPasswordRef = ref },
+		),
+	); err != nil {
 		return nil, err
 	}
 
@@ -1125,7 +1244,7 @@ type skillsGithubConfigV0 struct {
 // that clawhub is present in the list); a GitHub entry is seeded only when a
 // token/proxy was configured. Plaintext v0 secrets (AuthToken, Token) are
 // intentionally NOT carried over — they are dropped, matching the pre-refactor
-// v0 migration behaviour (MigrateWithStore does not migrate these; operators
+// v0 migration behavior (MigrateWithStore does not migrate these; operators
 // re-onboard them via the credential vault).
 func (v *skillsToolsConfigV0) ToSkillsToolsConfig() SkillsToolsConfig {
 	marketplaces := make([]MarketplaceConfig, 0, 2)

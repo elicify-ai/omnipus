@@ -953,7 +953,10 @@ func TestCreateAgent_WithSkills(t *testing.T) {
 	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
 	for _, id := range []string{"web-research", "code-review"} {
 		require.NoError(t, os.MkdirAll(skillsRoot+"/"+id, 0o755))
-		require.NoError(t, os.WriteFile(skillsRoot+"/"+id+"/SKILL.md", []byte("---\nname: "+id+"\ndescription: d\n---\n"), 0o600))
+		require.NoError(
+			t,
+			os.WriteFile(skillsRoot+"/"+id+"/SKILL.md", []byte("---\nname: "+id+"\ndescription: d\n---\n"), 0o600),
+		)
 	}
 
 	tmpDir := t.TempDir()

@@ -441,7 +441,11 @@ func IsKnownModel(slug string, models []*config.ModelConfig) bool {
 		if strings.ToLower(strings.TrimSpace(mc.Model)) == needle {
 			return true
 		}
-		if _, modelID := providers.ExtractProtocol(strings.TrimSpace(mc.Model)); strings.ToLower(strings.TrimSpace(modelID)) == needle {
+		if _, modelID := providers.ExtractProtocol(
+			strings.TrimSpace(mc.Model),
+		); strings.ToLower(
+			strings.TrimSpace(modelID),
+		) == needle {
 			return true
 		}
 		if strings.ToLower(strings.TrimSpace(mc.ModelName)) == needle {

@@ -168,7 +168,12 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 // runTask executes the agent prompt and updates the task on completion.
 // release is the DispatchSemaphore release function — it MUST be called exactly
 // once when the task goroutine exits (via the deferred call below).
-func (te *TaskExecutor) runTask(ctx context.Context, task *taskstore.TaskEntity, cancel context.CancelFunc, release func()) {
+func (te *TaskExecutor) runTask(
+	ctx context.Context,
+	task *taskstore.TaskEntity,
+	cancel context.CancelFunc,
+	release func(),
+) {
 	defer release()
 	defer cancel()
 	defer func() {

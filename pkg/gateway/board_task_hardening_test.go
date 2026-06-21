@@ -225,7 +225,7 @@ func TestBoardTaskStart_ConcurrentRace(t *testing.T) {
 // reproduced the onComplete guard logic inline (an inline-closure replay that
 // asserts against its own copy of the production check, not the real handler).
 // TestRegression_CompletionCallback_SetsResult_RealPath below drives the REAL
-// /start → ExecuteBoardTask → onComplete path and covers the same behaviour.
+// /start → ExecuteBoardTask → onComplete path and covers the same behavior.
 
 // ── C2: real agent-path completion ───────────────────────────────────────────
 

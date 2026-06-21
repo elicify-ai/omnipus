@@ -114,7 +114,8 @@ func executorConfigUpdate(existing *config.ExecutorConfig, req *struct {
 	HasCLIPath bool
 	HasEnvOver bool
 	HasCLIArgs bool
-}) (*config.ExecutorConfig, string) {
+},
+) (*config.ExecutorConfig, string) {
 	// Lock check: if the persisted agent has an executor.cli and the request
 	// carries a different cli value, reject 400.
 	if existing != nil && existing.CLI != "" {

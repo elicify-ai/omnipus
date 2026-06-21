@@ -112,8 +112,13 @@ func TestSchedulesAPI_Update400WorkerOwner_NonAdminNonOwner(t *testing.T) {
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"non-admin owner-reassigning to a worker must get 400 (worker guard before owner re-authz), got: %s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"non-admin owner-reassigning to a worker must get 400 (worker guard before owner re-authz), got: %s",
+		w.Body.String(),
+	)
 	assert.Contains(t, w.Body.String(), "worker")
 
 	// Stored owner must still be "mia" — the failed PUT must not have

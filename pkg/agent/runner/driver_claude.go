@@ -325,7 +325,10 @@ func (d *ClaudeDriver) parseAssistantEvent(
 		return RunEvent{
 			Kind:  EventKindError,
 			RunID: runID,
-			Err:   &ErrorEvent{Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns), Fatal: true},
+			Err: &ErrorEvent{
+				Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns),
+				Fatal:   true,
+			},
 		}, true
 	}
 
@@ -460,7 +463,7 @@ func (d *ClaudeDriver) Decide(decision PermissionDecision) {
 		d.mu.Lock()
 		runID := d.runID
 		d.mu.Unlock()
-		slog.Info("runner/claude: permission denied — cancelling run",
+		slog.Info("runner/claude: permission denied — canceling run",
 			"run_id", runID, "request_id", decision.RequestID, "reason", decision.Reason)
 		d.Cancel()
 	}

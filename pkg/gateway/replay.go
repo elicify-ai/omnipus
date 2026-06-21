@@ -700,7 +700,7 @@ func resolveErrorKind(content string) string {
 // buildReplayErrorFrame constructs a generated.ReplayErrorFrame from a
 // TranscriptEntry that the loop identified as a system-error entry
 // (Type=system + Status="error"). Phase 1B (FR-014) — replaces the previous
-// behaviour of emitting a ReplayMessageFrame with an empty Role, which the
+// behavior of emitting a ReplayMessageFrame with an empty Role, which the
 // SPA would render as a regular assistant bubble.
 func buildReplayErrorFrame(sessionID string, entry session.TranscriptEntry) generated.ReplayErrorFrame {
 	frame := generated.ReplayErrorFrame{

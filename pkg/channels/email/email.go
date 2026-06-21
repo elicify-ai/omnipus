@@ -149,7 +149,7 @@ func (c *EmailChannel) Start(ctx context.Context) error {
 	return nil
 }
 
-// run drives the IMAP receive loop until ctx is cancelled or a permanent error
+// run drives the IMAP receive loop until ctx is canceled or a permanent error
 // occurs. It owns the IMAP client lifecycle: on exit it clears the running flag
 // and closes c.done so Stop can wait for a clean teardown.
 func (c *EmailChannel) run(ctx context.Context) {
@@ -209,7 +209,7 @@ func (c *EmailChannel) run(ctx context.Context) {
 }
 
 // runLoop dials the IMAP server, logs in, selects INBOX, and spins in an
-// IDLE/poll loop until ctx is cancelled or an error breaks the connection.
+// IDLE/poll loop until ctx is canceled or an error breaks the connection.
 func (c *EmailChannel) runLoop(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", c.cfg.IMAPHost, c.cfg.IMAPPort)
 

@@ -101,7 +101,7 @@ func TestSkillEdit_BuiltinOverride(t *testing.T) {
 	// an override and the builtin is untouchable through it.
 	w := NewSkillWriter(globalRoot)
 
-	override := "---\nname: briefing\ndescription: An overridden briefing skill that the user has customised locally.\n---\n\n# briefing\n\nOverridden.\n"
+	override := "---\nname: briefing\ndescription: An overridden briefing skill that the user has customized locally.\n---\n\n# briefing\n\nOverridden.\n"
 	path, createdOverride, err := w.EditSkill("briefing", override, true /* allowCreateOverride: builtin exists */)
 	if err != nil {
 		t.Fatalf("EditSkill (override): %v", err)
@@ -195,8 +195,10 @@ func TestSkillWrite_Confinement_TraversalAndOversize_Rejected(t *testing.T) {
 	// differ from the slug (the directory/skill id) — e.g. slug "daily-briefing" with
 	// display name "Daily Briefing". Path identity is the slug, so a differing display
 	// name is NOT a confinement risk and must be ACCEPTED.
-	if _, err := w.CreateSkill("display-name-skill",
-		"---\nname: A Friendly Display Name\ndescription: a description long enough to be valid for this test.\n---\n\n# x\n"); err != nil {
+	if _, err := w.CreateSkill(
+		"display-name-skill",
+		"---\nname: A Friendly Display Name\ndescription: a description long enough to be valid for this test.\n---\n\n# x\n",
+	); err != nil {
 		t.Errorf("a display name differing from the slug must be accepted, got: %v", err)
 	}
 }

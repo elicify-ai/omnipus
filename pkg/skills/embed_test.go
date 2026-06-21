@@ -69,7 +69,7 @@ func TestSeedDefaults_Idempotent(t *testing.T) {
 	if err := os.MkdirAll(planDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	userContent := "---\nname: plan\ndescription: My customised plan skill that must survive seeding.\n---\n# Plan\nUser edited.\n"
+	userContent := "---\nname: plan\ndescription: My customized plan skill that must survive seeding.\n---\n# Plan\nUser edited.\n"
 	if err := os.WriteFile(filepath.Join(planDir, "SKILL.md"), []byte(userContent), 0o644); err != nil {
 		t.Fatal(err)
 	}

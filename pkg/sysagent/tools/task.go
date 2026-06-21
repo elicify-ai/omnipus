@@ -52,7 +52,11 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 			"start":        map[string]any{"type": "string", "description": "RFC 3339 start date/time"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
 			"recurrence":   map[string]any{"type": "string", "description": "RRULE string (RFC 5545)"},
-			"blocked_by":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task IDs this task is blocked by"},
+			"blocked_by": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Task IDs this task is blocked by",
+			},
 		},
 		"required": []string{"name"},
 	}
@@ -168,7 +172,11 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 			"start":        map[string]any{"type": "string", "description": "RFC 3339 start date/time"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
 			"recurrence":   map[string]any{"type": "string", "description": "RRULE string (RFC 5545)"},
-			"blocked_by":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task IDs this task is blocked by (replaces existing list)"},
+			"blocked_by": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Task IDs this task is blocked by (replaces existing list)",
+			},
 		},
 		"required": []string{"id"},
 	}

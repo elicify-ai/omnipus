@@ -58,15 +58,24 @@ func TestConfigureChannel_RejectsInvalidIdentity(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure", strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
 		api.configureChannel(w, r, "telegram")
-		assert.Equal(t, http.StatusUnprocessableEntity, w.Code, "invalid identity %q must be 422, body=%s", body, w.Body.String())
+		assert.Equal(
+			t,
+			http.StatusUnprocessableEntity,
+			w.Code,
+			"invalid identity %q must be 422, body=%s",
+			body,
+			w.Body.String(),
+		)
 	}
 }
 
 // TestConfigureChannel_NullIdentityClears confirms an explicit null identity is a
 // clear (not a validation error).
 func TestConfigureChannel_NullIdentityClears(t *testing.T) {
-	api := newChannelTestAPI(t,
-		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"type":"telegram","enabled":false,"identity":{"kind":"agent","id":"x"}}}}`)
+	api := newChannelTestAPI(
+		t,
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"type":"telegram","enabled":false,"identity":{"kind":"agent","id":"x"}}}}`,
+	)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure",
@@ -79,8 +88,10 @@ func TestConfigureChannel_NullIdentityClears(t *testing.T) {
 // TestHandleChannels_SurfacesInstanceIDAndIdentity covers FR-2.5: GET
 // /api/v1/channels surfaces instance_id and identity for configured instances.
 func TestHandleChannels_SurfacesInstanceIDAndIdentity(t *testing.T) {
-	api := newChannelTestAPI(t,
-		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"type":"telegram","enabled":true,"identity":{"kind":"agent","id":"concierge"}}}}`)
+	api := newChannelTestAPI(
+		t,
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"type":"telegram","enabled":true,"identity":{"kind":"agent","id":"concierge"}}}}`,
+	)
 	// HandleChannels reads the in-memory loop config; load the on-disk channels
 	// (with the configured instance + identity) into it.
 	require.NoError(t, api.refreshConfigAndRewireServices(api.configPath()))
@@ -122,8 +133,10 @@ func TestHandleChannels_SurfacesInstanceIDAndIdentity(t *testing.T) {
 // config write surfaces the load-time cap-1 violation as a clean 422
 // "one-per-type" rather than an opaque 500.
 func TestSetChannelEnabled_Cap1Duplicate422(t *testing.T) {
-	api := newChannelTestAPI(t,
-		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"type":"telegram","enabled":true},"telegram-2":{"type":"telegram","enabled":true}}}`)
+	api := newChannelTestAPI(
+		t,
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"type":"telegram","enabled":true},"telegram-2":{"type":"telegram","enabled":true}}}`,
+	)
 
 	w := httptest.NewRecorder()
 	api.setChannelEnabled(w, "discord", true)

@@ -261,7 +261,17 @@ func TestMemory_FileFormat_FullFrontmatter(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	content := string(raw)
-	requiredFields := []string{"id:", "title:", "type:", "tags:", "confidence:", "status:", "supersedes:", "author:", "born_in:"}
+	requiredFields := []string{
+		"id:",
+		"title:",
+		"type:",
+		"tags:",
+		"confidence:",
+		"status:",
+		"supersedes:",
+		"author:",
+		"born_in:",
+	}
 	for _, field := range requiredFields {
 		if !strings.Contains(content, field) {
 			t.Errorf("frontmatter field %q missing from serialized file:\n%s", field, content)

@@ -34,7 +34,7 @@ func TestSeededDelegation_JimToAvaTaskAllowed(t *testing.T) {
 }
 
 // TestSeededDelegation_BaseToWorkerAllowed verifies every base agent can offload
-// labour to the general-purpose worker in task mode out of the box.
+// labor to the general-purpose worker in task mode out of the box.
 func TestSeededDelegation_BaseToWorkerAllowed(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)

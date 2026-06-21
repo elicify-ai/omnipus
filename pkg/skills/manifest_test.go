@@ -166,7 +166,11 @@ func TestParseBundleManifest_MalformedJSON(t *testing.T) {
 	}{
 		{"not-json", `not json at all`, "parse bundle manifest"},
 		{"truncated", `{"name": "x-pack", "version":`, "parse bundle manifest"},
-		{"unknown-field", `{"name": "x-pack", "version": "1.0.0", "skills": "./s/", "bogus": true}`, "parse bundle manifest"},
+		{
+			"unknown-field",
+			`{"name": "x-pack", "version": "1.0.0", "skills": "./s/", "bogus": true}`,
+			"parse bundle manifest",
+		},
 		{"trailing-data", `{"name": "x-pack", "version": "1.0.0", "skills": "./s/"}{}`, "trailing data"},
 	}
 	for _, tc := range cases {
@@ -214,7 +218,14 @@ func TestInstallFromGitHub_RejectsBadBundleManifest(t *testing.T) {
 	// Directly exercise the gate the installer wires in: a downloaded bundle
 	// directory with a malformed omnipus-plugin.json must be rejected.
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, BundleManifestFilename), []byte(`{"name": "broken", "version": "nope"}`), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(dir, BundleManifestFilename),
+			[]byte(`{"name": "broken", "version": "nope"}`),
+			0o600,
+		),
+	)
 	_, err := LoadBundleManifest(dir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a valid semantic version")

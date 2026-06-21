@@ -34,7 +34,9 @@ import (
 //
 // The multiline `(?s)` flag lets `.` match newlines so we capture the entire
 // inline struct definition, including its body.
-var fallbackModelsInline = regexp.MustCompile(`(?s)(FallbackModels)\s+\*\[\]struct\s*\{[^}]*?\}\s*(` + "`json:\"fallback_models[^\"]*\"`" + `)`)
+var fallbackModelsInline = regexp.MustCompile(
+	`(?s)(FallbackModels)\s+\*\[\]struct\s*\{[^}]*?\}\s*(` + "`json:\"fallback_models[^\"]*\"`" + `)`,
+)
 
 // rewriter maps a (fieldName → replacement) pair to the Go fragment that
 // should appear in its place. The replacement is a complete `Field *[]Type`

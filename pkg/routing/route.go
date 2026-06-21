@@ -271,8 +271,15 @@ func (r *RouteResolver) pickAgentID(agentID string, matchedBy string) string {
 			// fallback below: log a WARN and return the default.
 			if !a.IsChatTarget() {
 				defaultID := NormalizeAgentID(r.resolveDefaultAgentID())
-				logger.WarnCF("routing", "Binding/identity references a worker agent (not a chat target); falling back to default",
-					map[string]any{"requested_agent_id": normalized, "default_agent_id": defaultID, "matched_by": matchedBy})
+				logger.WarnCF(
+					"routing",
+					"Binding/identity references a worker agent (not a chat target); falling back to default",
+					map[string]any{
+						"requested_agent_id": normalized,
+						"default_agent_id":   defaultID,
+						"matched_by":         matchedBy,
+					},
+				)
 				return defaultID
 			}
 			return normalized

@@ -22,7 +22,9 @@ const BundleManifestFilename = "omnipus-plugin.json"
 // optional pre-release / build suffix). The manifest version field MUST be a
 // semver (ADR-019 NFR-7: the version field's full schema is pinned now so the
 // later installer adds no format change).
-var semverPattern = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$`)
+var semverPattern = regexp.MustCompile(
+	`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$`,
+)
 
 // BundleManifest is the component-level-hybrid bundle manifest
 // (ADR-019 FR-10.2, NFR-7; `.preview-doc/plugins.html` Part 2).
@@ -45,7 +47,7 @@ var semverPattern = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*
 // out to the subsystem that already owns it.
 //
 // NFR-7 — every field below ships INERT in v0.1.0 (the installer is deferred)
-// but has its complete schema/type PINNED NOW, so enabling the install behaviour
+// but has its complete schema/type PINNED NOW, so enabling the install behavior
 // later adds no format change.
 type BundleManifest struct {
 	// Name is the bundle's unique identifier (required). Same lexical rules as a
@@ -155,7 +157,12 @@ func (m *BundleManifest) Validate() error {
 	// kind: at least one component must be declared, otherwise the bundle has
 	// no recognizable kind (skill-pack / agent-pack / plugin-pack).
 	if m.Kind() == BundleKindUnknown {
-		errs = errors.Join(errs, errors.New("manifest declares no components: a bundle must carry at least one of skills, mcpServers, agents, channels, or providers"))
+		errs = errors.Join(
+			errs,
+			errors.New(
+				"manifest declares no components: a bundle must carry at least one of skills, mcpServers, agents, channels, or providers",
+			),
+		)
 	}
 
 	return errs

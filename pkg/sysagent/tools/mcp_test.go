@@ -108,7 +108,11 @@ func TestMCPAdd_TransportValidation(t *testing.T) {
 	}{
 		{"stdio missing command", map[string]any{"name": "s1", "transport": "stdio"}, true},
 		{"http missing url", map[string]any{"name": "s2", "transport": "http"}, true},
-		{"http public url rejected", map[string]any{"name": "s3", "transport": "http", "url": "http://evil.example.com"}, true},
+		{
+			"http public url rejected",
+			map[string]any{"name": "s3", "transport": "http", "url": "http://evil.example.com"},
+			true,
+		},
 		{"http loopback ok", map[string]any{"name": "s4", "transport": "http", "url": "http://localhost:8080"}, false},
 		{"https ok", map[string]any{"name": "s5", "transport": "sse", "url": "https://mcp.example.com"}, false},
 		{"bad transport", map[string]any{"name": "s6", "transport": "websocket", "url": "https://x"}, true},
@@ -145,11 +149,27 @@ func TestHonestStubTools_ReturnNotImplemented(t *testing.T) {
 	cost := systools.NewCostQueryTool(deps)
 
 	tools := []honest{
-		{"channel.enable", func() string { return chEnable.Execute(ctx, map[string]any{"id": "telegram"}).ForLLM }, chEnable.Description()},
-		{"channel.disable", func() string { return chDisable.Execute(ctx, map[string]any{"id": "telegram"}).ForLLM }, chDisable.Description()},
-		{"channel.test", func() string { return chTest.Execute(ctx, map[string]any{"id": "telegram"}).ForLLM }, chTest.Description()},
+		{
+			"channel.enable",
+			func() string { return chEnable.Execute(ctx, map[string]any{"id": "telegram"}).ForLLM },
+			chEnable.Description(),
+		},
+		{
+			"channel.disable",
+			func() string { return chDisable.Execute(ctx, map[string]any{"id": "telegram"}).ForLLM },
+			chDisable.Description(),
+		},
+		{
+			"channel.test",
+			func() string { return chTest.Execute(ctx, map[string]any{"id": "telegram"}).ForLLM },
+			chTest.Description(),
+		},
 		{"backup.create", func() string { return backup.Execute(ctx, map[string]any{}).ForLLM }, backup.Description()},
-		{"cost.query", func() string { return cost.Execute(ctx, map[string]any{"period": "today"}).ForLLM }, cost.Description()},
+		{
+			"cost.query",
+			func() string { return cost.Execute(ctx, map[string]any{"period": "today"}).ForLLM },
+			cost.Description(),
+		},
 	}
 
 	for _, tl := range tools {

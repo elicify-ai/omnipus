@@ -98,7 +98,6 @@ func TestClaimForRun_ConcurrentCallers_OnlyOneWins(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(N)
 	for i := 0; i < N; i++ {
-		i := i
 		go func() {
 			defer wg.Done()
 			now := time.Now().UTC()
@@ -187,7 +186,6 @@ func TestClaimParentFollowUp_ConcurrentCallers_OnlyOneWins(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(N)
 	for i := 0; i < N; i++ {
-		i := i
 		go func() {
 			defer wg.Done()
 			won, err := s.ClaimParentFollowUp(id)

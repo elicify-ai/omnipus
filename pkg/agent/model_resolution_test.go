@@ -392,8 +392,18 @@ func TestResolveModelCandidatesFromList_PassthroughProviderHonored(t *testing.T)
 func TestResolveModelCandidatesForAgent_PicksFallbackModelsWhenSet(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
-			{ModelName: "gpt-5", Model: "openai/gpt-5", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
-			{ModelName: "haiku", Model: "anthropic/claude-haiku-4-5", Provider: "anthropic", APIBase: "https://api.anthropic.com/v1"},
+			{
+				ModelName: "gpt-5",
+				Model:     "openai/gpt-5",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
+			{
+				ModelName: "haiku",
+				Model:     "anthropic/claude-haiku-4-5",
+				Provider:  "anthropic",
+				APIBase:   "https://api.anthropic.com/v1",
+			},
 		},
 	}
 

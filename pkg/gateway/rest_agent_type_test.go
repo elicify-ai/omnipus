@@ -3,7 +3,7 @@
 // REST create-by-type tests for the AgentCreateRequest.type enum
 // (custom | worker). Proves:
 //   1. Omitted type / type="custom" → persisted as "custom" (regression guard
-//      for the pre-existing behaviour).
+//      for the pre-existing behavior).
 //   2. type="worker" → persisted as "worker", is a delegation leaf (no
 //      default, not a chat target), and is unlocked so the operator can
 //      edit it. Response echoes "worker".
@@ -71,7 +71,7 @@ func findTypeTestAgentInConfig(t *testing.T, m map[string]any, name string) map[
 }
 
 // TestCreateAgent_TypeOmitted_DefaultsToCustom is the regression guard:
-// omitting the `type` field must preserve the pre-existing behaviour (the
+// omitting the `type` field must preserve the pre-existing behavior (the
 // new field is purely additive). The on-disk type is "custom".
 func TestCreateAgent_TypeOmitted_DefaultsToCustom(t *testing.T) {
 	api := buildExecutorTestAPI(t)
@@ -122,8 +122,13 @@ func TestCreateAgent_TypeWorker_PersistsAndEchoes(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"My Worker","type":"Subagent","description":"create-worker regression","executor":{"kind":"native"},"soul":"my-worker-soul"}`))
+	r := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/agents",
+		strings.NewReader(
+			`{"name":"My Worker","type":"Subagent","description":"create-worker regression","executor":{"kind":"native"},"soul":"my-worker-soul"}`,
+		),
+	)
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -152,8 +157,13 @@ func TestCreateAgent_TypeWorker_AllowsNonNativeExecutor(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"Worker External","type":"Subagent","description":"external-cli worker","executor":{"kind":"external-cli","cli":"codex"},"soul":"external-cli-soul"}`))
+	r := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/agents",
+		strings.NewReader(
+			`{"name":"Worker External","type":"Subagent","description":"external-cli worker","executor":{"kind":"external-cli","cli":"codex"},"soul":"external-cli-soul"}`,
+		),
+	)
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -185,8 +195,13 @@ func TestCreateAgent_NonWorker_CoercesExternalExecutorWithWarning(t *testing.T) 
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"Bad Custom","type":"Main","executor":{"kind":"external-cli","cli":"codex"},"soul":"soul-text"}`))
+	r := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/agents",
+		strings.NewReader(
+			`{"name":"Bad Custom","type":"Main","executor":{"kind":"external-cli","cli":"codex"},"soul":"soul-text"}`,
+		),
+	)
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -286,8 +301,13 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 
 	// Create a worker.
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"Sticky Worker","type":"Subagent","description":"sticky worker regression","executor":{"kind":"native"},"soul":"sticky-worker-soul"}`))
+	r := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/agents",
+		strings.NewReader(
+			`{"name":"Sticky Worker","type":"Subagent","description":"sticky worker regression","executor":{"kind":"native"},"soul":"sticky-worker-soul"}`,
+		),
+	)
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusCreated, w.Code, "create body: %s", w.Body.String())

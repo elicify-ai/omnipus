@@ -194,7 +194,7 @@ func existingLocalRefSet(existing *config.DelegationPolicy) map[string]bool {
 // delegate onward. The FE blocks worker out-edges, but spawn/subagent/task tools
 // are registered for EVERY agent, so a direct PUT with a non-empty to[] on a
 // worker would let it delegate and break the leaf invariant. This validator
-// rejects a non-empty to[] on a worker (backend enforcement, defence in depth).
+// rejects a non-empty to[] on a worker (backend enforcement, defense in depth).
 //
 // Validation (all reject with a non-empty errMsg → caller returns 400):
 //   - a worker target may not declare a non-empty to[] (worker-leaf invariant).
@@ -436,7 +436,7 @@ func setAgentDelegationPolicyResponse(ag *gen.Agent, dp *config.DelegationPolicy
 		out.AcceptFrom = &af
 	}
 	if dp.Budget != nil {
-		budget := struct { // not-wire-format: mirrors the generated gen.Agent.DelegationPolicy.Budget inline shape; only populates that generated field, never marshalled on its own
+		budget := struct { // not-wire-format: mirrors the generated gen.Agent.DelegationPolicy.Budget inline shape; only populates that generated field, never marshaled on its own
 			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
 			MaxTokens  *int     `json:"max_tokens,omitempty"`
 		}{}

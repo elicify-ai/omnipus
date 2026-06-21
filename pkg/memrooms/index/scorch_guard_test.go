@@ -104,7 +104,9 @@ func TestBleve_NoLeveldbImportsInSource(t *testing.T) {
 	// here would warrant investigation.
 	allowed := map[string]struct{}{"": {}, "boltdb": {}}
 	if _, ok := allowed[bleve.Config.DefaultKVStore]; !ok {
-		t.Fatalf("bleve DefaultKVStore is %q — expected empty or pure-Go 'boltdb'; a CGo backend would violate the pure-Go constraint",
-			bleve.Config.DefaultKVStore)
+		t.Fatalf(
+			"bleve DefaultKVStore is %q — expected empty or pure-Go 'boltdb'; a CGo backend would violate the pure-Go constraint",
+			bleve.Config.DefaultKVStore,
+		)
 	}
 }

@@ -34,7 +34,7 @@ import (
 func OmnipusHomeDir() string {
 	if override := os.Getenv(EnvHome); override != "" {
 		// Resolve relative paths against the process CWD. The previous
-		// "trusted verbatim" behaviour landed runtime files (cost.json,
+		// "trusted verbatim" behavior landed runtime files (cost.json,
 		// state.json) inside the source tree when the gateway was started
 		// from the repo root with `OMNIPUS_HOME=pkg/gateway` (or any
 		// relative override). Normalising to an absolute path keeps the
@@ -49,8 +49,11 @@ func OmnipusHomeDir() string {
 					map[string]any{"original": override, "resolved": abs})
 				return filepath.Clean(abs)
 			}
-			logger.WarnCF("config", "OMNIPUS_HOME is relative and could not be resolved to an absolute path; using verbatim",
-				map[string]any{"original": override, "error": absErr.Error()})
+			logger.WarnCF(
+				"config",
+				"OMNIPUS_HOME is relative and could not be resolved to an absolute path; using verbatim",
+				map[string]any{"original": override, "error": absErr.Error()},
+			)
 			return filepath.Clean(override)
 		}
 		return filepath.Clean(override)

@@ -214,7 +214,7 @@ func NewRegistryManager() *RegistryManager {
 //
 // The Marketplaces list is iterated in order. Each enabled entry is
 // instantiated by Type: "clawhub" → ClawHubRegistry, "github" → GitHubRegistry.
-// If a GitHub entry fails to initialise (e.g., bad workspace path or proxy
+// If a GitHub entry fails to initialize (e.g., bad workspace path or proxy
 // URL), it is logged at Warn level and skipped — the manager still starts with
 // the remaining entries. Unknown types are logged and skipped.
 func NewRegistryManagerFromConfig(cfg RegistryConfig) *RegistryManager {
@@ -237,7 +237,7 @@ func NewRegistryManagerFromConfig(cfg RegistryConfig) *RegistryManager {
 			ghCfg := gitHubConfigFromMarketplace(m)
 			reg, err := NewGitHubRegistry(ghCfg)
 			if err != nil {
-				slog.Warn("skills: failed to initialise GitHub marketplace — skipping",
+				slog.Warn("skills: failed to initialize GitHub marketplace — skipping",
 					"name", ghCfg.Name,
 					"error", err,
 				)

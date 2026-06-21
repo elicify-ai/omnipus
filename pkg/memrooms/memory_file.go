@@ -60,7 +60,10 @@ func ParseMemoryType(s string) (MemoryType, error) {
 		MemoryTypePerson, MemoryTypeProject, MemoryTypeMOC, MemoryTypeNote:
 		return MemoryType(s), nil
 	}
-	return "", fmt.Errorf("invalid memory type %q; expected one of: decision, fact, reference, lesson, person, project, moc, note", s)
+	return "", fmt.Errorf(
+		"invalid memory type %q; expected one of: decision, fact, reference, lesson, person, project, moc, note",
+		s,
+	)
 }
 
 // MemoryStatus is the closed 3-member enum for memory lifecycle status (FR-7.2).

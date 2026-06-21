@@ -337,7 +337,10 @@ func (d *CodexDriver) parseLine(
 			return RunEvent{
 				Kind:  EventKindError,
 				RunID: runID,
-				Err:   &ErrorEvent{Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns), Fatal: true},
+				Err: &ErrorEvent{
+					Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns),
+					Fatal:   true,
+				},
 			}, true
 		}
 		return RunEvent{}, false
@@ -400,14 +403,14 @@ func codexCommandToolName(command string) string {
 // Decide routes a permission decision (FR-5.1).
 // Codex in streaming mode does not have a bidirectional stdin channel for
 // permission responses; a deny cancels the run, an allow is a no-op (the
-// run continues unless cancelled). Best-effort post-hoc cancellation — see
+// run continues unless canceled). Best-effort post-hoc cancellation — see
 // the consent.go package doc. The run ID is read under d.mu for the log only.
 func (d *CodexDriver) Decide(decision PermissionDecision) {
 	if !decision.Allow {
 		d.mu.Lock()
 		runID := d.runID
 		d.mu.Unlock()
-		slog.Info("runner/codex: permission denied — cancelling run",
+		slog.Info("runner/codex: permission denied — canceling run",
 			"run_id", runID, "request_id", decision.RequestID, "reason", decision.Reason)
 		d.Cancel()
 	}

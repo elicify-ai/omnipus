@@ -101,7 +101,11 @@ func TestChannelConfig_AllRefsRoundTrip(t *testing.T) {
 		{
 			name: "feishu/encrypt_key_ref",
 			setup: func(c *Config) {
-				setInst(c, "feishu", func(inst *ChannelInstanceConfig) { inst.EncryptKeyRef = "FEISHU_ENCRYPT_KEY_TEST" })
+				setInst(
+					c,
+					"feishu",
+					func(inst *ChannelInstanceConfig) { inst.EncryptKeyRef = "FEISHU_ENCRYPT_KEY_TEST" },
+				)
 			},
 			verify: func(t *testing.T, c *Config) {
 				if c.Channels["feishu"].EncryptKeyRef != "FEISHU_ENCRYPT_KEY_TEST" {
@@ -134,7 +138,11 @@ func TestChannelConfig_AllRefsRoundTrip(t *testing.T) {
 		{
 			name: "dingtalk/client_secret_ref",
 			setup: func(c *Config) {
-				setInst(c, "dingtalk", func(inst *ChannelInstanceConfig) { inst.ClientSecretRef = "DINGTALK_SECRET_TEST" })
+				setInst(
+					c,
+					"dingtalk",
+					func(inst *ChannelInstanceConfig) { inst.ClientSecretRef = "DINGTALK_SECRET_TEST" },
+				)
 			},
 			verify: func(t *testing.T, c *Config) {
 				if c.Channels["dingtalk"].ClientSecretRef != "DINGTALK_SECRET_TEST" {
@@ -173,7 +181,11 @@ func TestChannelConfig_AllRefsRoundTrip(t *testing.T) {
 		{
 			name: "line/channel_access_token_ref",
 			setup: func(c *Config) {
-				setInst(c, "line", func(inst *ChannelInstanceConfig) { inst.ChannelAccessTokenRef = "LINE_ACCESS_TOKEN_TEST" })
+				setInst(
+					c,
+					"line",
+					func(inst *ChannelInstanceConfig) { inst.ChannelAccessTokenRef = "LINE_ACCESS_TOKEN_TEST" },
+				)
 			},
 			verify: func(t *testing.T, c *Config) {
 				if c.Channels["line"].ChannelAccessTokenRef != "LINE_ACCESS_TOKEN_TEST" {

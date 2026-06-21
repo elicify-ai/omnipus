@@ -58,7 +58,7 @@ func isGTDTask(status boardtask.Status) bool {
 //
 // This validates the agent_id supplied via the REST board API (POST/PUT board task,
 // /start) — the DIRECT human-assigned runner that processTaskDirect executes. A
-// worker is a delegation-only labour tier and must never be human-assigned here.
+// worker is a delegation-only labor tier and must never be human-assigned here.
 // This REST path is SEPARATE from the delegation path: Jim→worker task delegation
 // goes through the task_create tool (pkg/tools/task.go → taskstore.Create), which
 // never calls this function, so this guard does not break delegation.
@@ -80,7 +80,10 @@ func (a *restAPI) validateBoardTaskAgentID(agentID string) error {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
 	if reg.IsWorker(agentID) {
-		return fmt.Errorf("agent %q is a worker and cannot be directly assigned a task — workers are invoked via delegation", agentID)
+		return fmt.Errorf(
+			"agent %q is a worker and cannot be directly assigned a task — workers are invoked via delegation",
+			agentID,
+		)
 	}
 	return nil
 }
@@ -814,8 +817,17 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		// re-validate the FK. If it no longer holds, clear it rather than 400 —
 		// the move is the operator's primary intent and the stale FK is collateral.
 		if err := validateMilestoneFK(a.homePath, existing.MilestoneID, existing.WorkspaceID); err != nil {
-			slog.Info("rest: board task: clearing milestone after workspace change broke FK",
-				"id", id, "milestone_id", existing.MilestoneID, "workspace_id", existing.WorkspaceID, "reason", err.Error())
+			slog.Info(
+				"rest: board task: clearing milestone after workspace change broke FK",
+				"id",
+				id,
+				"milestone_id",
+				existing.MilestoneID,
+				"workspace_id",
+				existing.WorkspaceID,
+				"reason",
+				err.Error(),
+			)
 			existing.MilestoneID = ""
 		}
 	}

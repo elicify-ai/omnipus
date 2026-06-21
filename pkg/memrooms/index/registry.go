@@ -20,7 +20,7 @@
 // registry refcounts holders so the underlying bbolt handle is opened on first
 // acquire and physically closed only when the LAST holder releases it. bleve's
 // scorch engine is internally goroutine-safe for concurrent reads + a single
-// serialised writer (RoomIndex.mu serialises writes), so sharing one handle
+// serialized writer (RoomIndex.mu serializes writes), so sharing one handle
 // across MemoryStores and goroutines is safe.
 //
 // License: MIT

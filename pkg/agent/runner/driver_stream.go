@@ -103,7 +103,7 @@ func buildChildEnv(callerEnv []string) []string {
 // streamParser is a callback-based NDJSON parser.
 // It reads lines from r, calls parseLine for each non-empty line,
 // and sends the resulting RunEvents to out. It exits when ctx is
-// cancelled or r returns EOF.
+// canceled or r returns EOF.
 //
 // parseLine must be non-nil. It receives the raw JSON bytes for a single
 // NDJSON line and returns (event, ok). When ok=false the event is skipped.
@@ -201,7 +201,11 @@ func detectCLIVersion(ctx context.Context, binary string) (string, error) {
 // returns ("", false) and logs a warning — the caller proceeds with graceful
 // degradation rather than aborting the run. logTag is a short driver label
 // (e.g. "runner/claude") used in log lines.
-func detectAndPinVersion(ctx context.Context, binary, logTag string, knownPrefixes []string) (version string, known bool) {
+func detectAndPinVersion(
+	ctx context.Context,
+	binary, logTag string,
+	knownPrefixes []string,
+) (version string, known bool) {
 	ver, err := detectCLIVersion(ctx, binary)
 	if err != nil {
 		slog.Warn(logTag+": version check failed — proceeding with unknown version",

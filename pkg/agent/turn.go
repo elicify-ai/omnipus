@@ -819,12 +819,15 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
 	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
 		transcriptSuppressedErrors.Add(1)
-		logger.WarnCF("agent", "appendErrorTranscript: suppressed (no transcript store wired) — error event will NOT appear in replay",
+		logger.WarnCF(
+			"agent",
+			"appendErrorTranscript: suppressed (no transcript store wired) — error event will NOT appear in replay",
 			map[string]any{
 				"event_kind":  kind,
 				"stage":       stage,
 				"message_len": len(message),
-			})
+			},
+		)
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
