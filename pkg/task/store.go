@@ -40,7 +40,11 @@ var ErrIllegalTransition = fmt.Errorf("%w: illegal status transition", ErrValida
 // directly. `blocked` is a derived side-state: the store sets it when a
 // dependency is unmet and clears it to `next` when every blocker reaches done.
 // It wraps ErrValidation so the REST seam maps it to HTTP 400.
-var ErrBlockedNotSettable = fmt.Errorf("%w: status %q is a derived side-state and cannot be set directly", ErrValidation, StatusBlocked)
+var ErrBlockedNotSettable = fmt.Errorf(
+	"%w: status %q is a derived side-state and cannot be set directly",
+	ErrValidation,
+	StatusBlocked,
+)
 
 // verr wraps a formatted message as a user-facing validation error (ErrValidation).
 func verr(format string, args ...any) error {
@@ -49,7 +53,7 @@ func verr(format string, args ...any) error {
 
 // Store manages per-entity JSON task files under a single directory
 // (~/.omnipus/tasks/). It is the unified task store. All read-modify-write
-// paths are serialised by the process-wide TaskFileLock keyed by task ID, plus
+// paths are serialized by the process-wide TaskFileLock keyed by task ID, plus
 // an advisory flock on the file itself.
 type Store struct {
 	dir  string
@@ -348,7 +352,11 @@ func validateCronExpr(expr string) error {
 		return verr("trigger config.cron_expr %q could not be evaluated: %v", expr, err)
 	}
 	if second.Sub(first) < minTriggerIntervalSeconds*time.Second {
-		return verr("trigger config.cron_expr %q fires more often than once per %ds (self-DoS guard)", expr, minTriggerIntervalSeconds)
+		return verr(
+			"trigger config.cron_expr %q fires more often than once per %ds (self-DoS guard)",
+			expr,
+			minTriggerIntervalSeconds,
+		)
 	}
 	return nil
 }
@@ -454,7 +462,12 @@ func validateTransition(from, to Status, internal bool) error {
 	}
 	// Leaving `blocked` is only legal via the internal recompute hatch.
 	if from == StatusBlocked && !internal {
-		return fmt.Errorf("%w: %q → %q is not permitted (blocked clears automatically when dependencies complete)", ErrIllegalTransition, from, to)
+		return fmt.Errorf(
+			"%w: %q → %q is not permitted (blocked clears automatically when dependencies complete)",
+			ErrIllegalTransition,
+			from,
+			to,
+		)
 	}
 	return nil
 }
@@ -663,10 +676,10 @@ func (s *Store) AppendTodo(id string, td Todo) (*Task, error) {
 // the per-task lock. Returns the updated task and whether the edge was newly
 // added.
 func (s *Store) AddDependency(id, blockerID string) (updated *Task, added bool, err error) {
-	if err := validateID(id); err != nil {
-		return nil, false, err
+	if idErr := validateID(id); idErr != nil {
+		return nil, false, idErr
 	}
-	if err := validateID(blockerID); err != nil {
+	if idErr := validateID(blockerID); idErr != nil {
 		return nil, false, verr("blocked_by contains invalid ID %q", blockerID)
 	}
 	mu := s.lock.Get(id)

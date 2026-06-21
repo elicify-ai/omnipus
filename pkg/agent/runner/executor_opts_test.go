@@ -52,7 +52,14 @@ func TestParseCLIArgs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := parseCLIArgs(tc.raw, "test")
 			if len(got) != len(tc.want) {
-				t.Fatalf("parseCLIArgs(%q) = %v (len %d), want %v (len %d)", tc.raw, got, len(got), tc.want, len(tc.want))
+				t.Fatalf(
+					"parseCLIArgs(%q) = %v (len %d), want %v (len %d)",
+					tc.raw,
+					got,
+					len(got),
+					tc.want,
+					len(tc.want),
+				)
 			}
 			for i := range got {
 				if got[i] != tc.want[i] {

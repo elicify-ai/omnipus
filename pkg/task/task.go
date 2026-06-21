@@ -11,10 +11,10 @@
 // status vocabulary, one create/update path. The store carries over from
 // pkg/boardtask: the blocked_by DAG cycle validator (self-edge / 2-node /
 // N-node cycle rejection, max depth 50, orphan-edge drop on boot via
-// DropOrphanEdges) and the auto-advance behaviour (blocked → next when every
+// DropOrphanEdges) and the auto-advance behavior (blocked → next when every
 // dependency reaches done).
 //
-// Concurrency: per-entity read-modify-write paths are serialised by the
+// Concurrency: per-entity read-modify-write paths are serialized by the
 // process-wide 64-shard StripedLock (lock.go) keyed by task ID, with an
 // advisory flock on the file itself for cross-process safety on Linux/macOS.
 package task
@@ -117,7 +117,7 @@ type TriggerConfig struct {
 	CronExpr *string `json:"cron_expr,omitempty"`
 }
 
-// Trigger is when (and how) a task fires (remediation Detail #3). Modelled as
+// Trigger is when (and how) a task fires (remediation Detail #3). Modeled as
 // an extensible {type, config} shape so the v0.3 multi-trigger future grows
 // additively, but Tier-2-restricted to time-only kinds.
 type Trigger struct {

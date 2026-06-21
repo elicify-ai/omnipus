@@ -165,7 +165,12 @@ func seedBlockedTask(t *testing.T, api *restAPI, id, title, workspaceID string, 
 	}
 	data := fmt.Sprintf(
 		`{"id":%q,"title":%q,"action":"llm","status":"blocked","workspace_id":%q,"blocked_by":[%s],"created_at":%q,"updated_at":%q}`,
-		id, title, workspaceID, deps, now, now,
+		id,
+		title,
+		workspaceID,
+		deps,
+		now,
+		now,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, id+".json"), []byte(data), 0o600))
 }
@@ -178,7 +183,9 @@ func writeUnifiedTaskFile(t *testing.T, homePath, taskID, workspaceID, status st
 	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
 	data := fmt.Sprintf(
 		`{"id":%q,"title":"Task","action":"llm","status":%q,"workspace_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		taskID, status, workspaceID,
+		taskID,
+		status,
+		workspaceID,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, taskID+".json"), []byte(data), 0o600))
 }
@@ -685,11 +692,15 @@ func TestHandleTasks_FilterByAgentID(t *testing.T) {
 	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
 	alphaData := fmt.Sprintf(
 		`{"id":%q,"title":"Alpha Task","action":"llm","agent_id":%q,"status":"inbox","workspace_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		alphaTaskID, alphaAgentID, wsID,
+		alphaTaskID,
+		alphaAgentID,
+		wsID,
 	)
 	betaData := fmt.Sprintf(
 		`{"id":%q,"title":"Beta Task","action":"llm","agent_id":%q,"status":"inbox","workspace_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		betaTaskID, betaAgentID, wsID,
+		betaTaskID,
+		betaAgentID,
+		wsID,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, alphaTaskID+".json"), []byte(alphaData), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, betaTaskID+".json"), []byte(betaData), 0o600))

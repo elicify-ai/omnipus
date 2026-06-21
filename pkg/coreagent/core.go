@@ -360,7 +360,7 @@ func HasSystemAllowsInConstructorSeed(agentID string) bool {
 //	Mia, Ray, Ava      → [worker]                 modes: [task, background]
 //	Planner            → [explorer, researcher]   modes: [await, task]  depth: 2
 //
-// Every base agent can therefore offload labour to the general-purpose worker;
+// Every base agent can therefore offload labor to the general-purpose worker;
 // Jim can additionally fan out to two base agents (Ava, Ray) plus the worker.
 // The specialists are NOT in any base agent's to[] — only the Planner drives the
 // Explorer/Researcher specialists (see the IDPlanner case below). Everything not
@@ -472,7 +472,7 @@ func SeedConfig(cfg *config.Config) bool {
 
 		// Idempotent skill-allowlist migration (FR-9.4). Apply the seeded
 		// allowlist only when the existing entry declares none — an operator who
-		// has customised the agent's skills keeps their choice. Upgrades from a
+		// has customized the agent's skills keeps their choice. Upgrades from a
 		// release that predated allowlists therefore gain the default matrix.
 		if len(a.Skills) == 0 {
 			if seedSkills := coreAgentSkills(ca.ID); len(seedSkills) > 0 {
@@ -514,7 +514,7 @@ func SeedConfig(cfg *config.Config) bool {
 
 		// Idempotent delegation-policy migration: seed the base-agent trust graph
 		// only when the existing entry declares none (DelegationPolicy nil). An
-		// operator who customised delegation keeps their choice. Upgrades from a
+		// operator who customized delegation keeps their choice. Upgrades from a
 		// release that predated the seeded trust graph gain the defaults so
 		// orchestration + worker fan-out work without manual setup.
 		if a.DelegationPolicy == nil {

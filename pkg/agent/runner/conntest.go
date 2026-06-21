@@ -142,7 +142,7 @@ func TestConnection(ctx context.Context, cli string) ConnectionTestResult {
 // validated — an absolute path is checked on disk, a bare name is resolved via
 // $PATH — so a configured custom path that does not exist correctly fails the
 // test (missing-binary) instead of silently passing on the default $PATH binary.
-// When cliPath is empty the CLI's default binary name is used (legacy behaviour).
+// When cliPath is empty the CLI's default binary name is used (legacy behavior).
 func TestConnectionWithPath(ctx context.Context, cli, cliPath string) ConnectionTestResult {
 	spec, ok := supportedCLIs[cli]
 	if !ok {
@@ -162,7 +162,7 @@ func TestConnectionWithPath(ctx context.Context, cli, cliPath string) Connection
 	// what a real run would exec.
 	target := resolveCLIBinary(cliPath, spec.binary)
 
-	// 1. Binary present? An absolute/relative path is honoured as-is by LookPath
+	// 1. Binary present? An absolute/relative path is honored as-is by LookPath
 	//    (it stats the path directly); a bare name is resolved via $PATH.
 	binPath, err := exec.LookPath(target)
 	if err != nil {

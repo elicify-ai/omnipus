@@ -187,8 +187,11 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("rest: tool policies persisted; live reload not configured on this loop",
 				"error", err)
 		} else {
-			slog.Error("rest: reload after tool policies update failed; running agents may keep the previous global policy until restart",
-				"error", err)
+			slog.Error(
+				"rest: reload after tool policies update failed; running agents may keep the previous global policy until restart",
+				"error",
+				err,
+			)
 		}
 	}
 

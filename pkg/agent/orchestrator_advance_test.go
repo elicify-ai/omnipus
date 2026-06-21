@@ -18,10 +18,6 @@ import (
 // ptrStatus returns a pointer to a task.Status value, for use with task.Patch.
 func ptrStatus(s task.Status) *task.Status { return &s }
 
-// ptrTime returns a pointer to a time.Time value formatted as RFC 3339 string,
-// for use with task.Patch StartedAt / CompletedAt fields (which are *string).
-func ptrTimeStr(t time.Time) *string { s := t.UTC().Format(time.RFC3339); return &s }
-
 // newTestTaskExecutor builds a minimal TaskExecutor backed by a real task.Store
 // in a temp directory. agentLoop is nil (tests must not call methods that need it).
 func newTestTaskExecutor(t *testing.T) (*TaskExecutor, *task.Store) {
@@ -249,7 +245,10 @@ func createChild(t *testing.T, store *task.Store, parentID, status string) *task
 	case "completed", "done":
 		// Transition: next → in_progress → done (no state machine, but use two
 		// steps to stamp both StartedAt and CompletedAt realistically).
-		if _, err := store.Update(e.ID, task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now}); err != nil {
+		if _, err := store.Update(
+			e.ID,
+			task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now},
+		); err != nil {
 			t.Fatalf("child→in_progress: %v", err)
 		}
 		got, err := store.Update(e.ID, task.Patch{Status: ptrStatus(task.StatusDone), CompletedAt: &now})
@@ -295,7 +294,10 @@ func TestParentFollowUp_ConcurrentSiblings_ExactlyOne(t *testing.T) {
 		t.Fatalf("create parent: %v", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := store.Update(parent.ID, task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now}); err != nil {
+	if _, err := store.Update(
+		parent.ID,
+		task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now},
+	); err != nil {
 		t.Fatalf("parent→in_progress: %v", err)
 	}
 
@@ -360,7 +362,10 @@ func TestParentFollowUp_NotAllSiblingsDone(t *testing.T) {
 		t.Fatalf("create parent: %v", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := store.Update(parent.ID, task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now}); err != nil {
+	if _, err := store.Update(
+		parent.ID,
+		task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now},
+	); err != nil {
 		t.Fatalf("parent→in_progress: %v", err)
 	}
 

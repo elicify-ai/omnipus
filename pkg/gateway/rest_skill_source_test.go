@@ -71,7 +71,7 @@ func newTestRestAPIWithSkillsDirs(t *testing.T, builtinDir string) *restAPI {
 	// <tmpDir>/skills instead of the developer's real ~/.omnipus/skills. Without
 	// this, getGlobalConfigDir() falls back to ~/.omnipus and any skills seeded
 	// there in a prior session leak into the GET /skills listing, inflating the
-	// expected count (hermeticity bug, not behaviour). EnvBuiltinSkills only
+	// expected count (hermeticity bug, not behavior). EnvBuiltinSkills only
 	// overrides the *builtin* root; the *global* root is keyed off OMNIPUS_HOME.
 	t.Setenv("OMNIPUS_HOME", tmpDir)
 	cfg := &config.Config{

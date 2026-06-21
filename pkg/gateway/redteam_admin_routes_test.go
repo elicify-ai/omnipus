@@ -24,6 +24,7 @@
 // Today: passes — every admin route in `allAdminRoutes` is currently wired
 // with `RequireNotBypass`. Acts as a regression guard against future
 // route additions that drop the gate.
+
 package gateway
 
 import (

@@ -1098,7 +1098,7 @@ func FixtureTodo_ZeroValue() Todo {
 
 // FixtureTodo_Edge — a completed checklist item with unicode text.
 func FixtureTodo_Edge() Todo {
-	return Todo{Text: "完了-done-✓", Done: true}
+	return Todo{Text: "完了-done-✓", Done: true} //nolint:gosmopolitan // intentional non-ASCII test fixture
 }
 
 // ── McpServer ─────────────────────────────────────────────────────────────────

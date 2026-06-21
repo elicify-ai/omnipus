@@ -19,7 +19,7 @@ import (
 
 // unifiedTask is the canonical on-disk task type used by the sysagent tools.
 // Using task.Task ensures field-preserving read-modify-write: all fields survive
-// a round-trip through readEntity/writeEntity.
+// a round-trip through writeEntity.
 type unifiedTask = task.Task
 
 func tasksDir(home string) string { return filepath.Join(home, "tasks") }
@@ -54,7 +54,11 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 			"agent_id":     map[string]any{"type": "string"},
 			"status":       map[string]any{"type": "string"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
-			"blocked_by":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task IDs this task is blocked by"},
+			"blocked_by": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Task IDs this task is blocked by",
+			},
 		},
 		"required": []string{"name", "workspace_id"},
 	}
@@ -152,7 +156,11 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 			"agent_id":     map[string]any{"type": "string"},
 			"workspace_id": map[string]any{"type": "string"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
-			"blocked_by":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task IDs this task is blocked by (replaces existing list)"},
+			"blocked_by": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Task IDs this task is blocked by (replaces existing list)",
+			},
 		},
 		"required": []string{"id"},
 	}
@@ -196,7 +204,7 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	}
 	if v, ok := args["workspace_id"].(string); ok {
 		if v != "" {
-			if err := validateID(v); err != nil {
+			if werr := validateID(v); werr != nil {
 				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
 			}
 			if _, wsErr := readWorkspaceFromDisk(t.deps.Home, v); wsErr != nil {

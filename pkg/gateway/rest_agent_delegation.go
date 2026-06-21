@@ -68,6 +68,8 @@ type delegationPolicyInput struct {
 
 // delegationInputFromCreateRequest normalises the create-request inline policy
 // struct into delegationPolicyInput. Returns nil when req carries no policy.
+//
+//nolint:dupl // parallel to delegationInputFromUpdateRequest — distinct oapi-codegen inline types (Create vs Update), intentionally not merged.
 func delegationInputFromCreateRequest(req *gen.AgentCreateRequest) *delegationPolicyInput {
 	if req == nil || req.DelegationPolicy == nil {
 		return nil
@@ -110,6 +112,8 @@ func delegationInputFromCreateRequest(req *gen.AgentCreateRequest) *delegationPo
 
 // delegationInputFromUpdateRequest normalises the update-request inline policy
 // struct into delegationPolicyInput. Returns nil when req carries no policy.
+//
+//nolint:dupl // parallel to delegationInputFromCreateRequest — distinct oapi-codegen inline types (Create vs Update), intentionally not merged.
 func delegationInputFromUpdateRequest(req *gen.AgentUpdateRequest) *delegationPolicyInput {
 	if req == nil || req.DelegationPolicy == nil {
 		return nil
@@ -496,7 +500,7 @@ func setAgentDelegationPolicyResponse(ag *gen.Agent, dp *config.DelegationPolicy
 		out.AcceptFrom = &af
 	}
 	if dp.Budget != nil {
-		budget := struct { // not-wire-format: mirrors the generated gen.Agent.DelegationPolicy.Budget inline shape; only populates that generated field, never marshalled on its own
+		budget := struct { // not-wire-format: mirrors the generated gen.Agent.DelegationPolicy.Budget inline shape; only populates that generated field, never marshaled on its own
 			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
 			MaxTokens  *int     `json:"max_tokens,omitempty"`
 		}{}

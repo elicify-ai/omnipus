@@ -227,25 +227,6 @@ func validateID(id string) error {
 	return nil
 }
 
-// readEntity reads a per-entity JSON file from dir/<id>.json.
-func readEntity(dir, id string, v any) error {
-	if err := validateID(id); err != nil {
-		return fmt.Errorf("read entity: %w", err)
-	}
-	path := entityPath(dir, id)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("NOT_FOUND: %s", id)
-		}
-		return fmt.Errorf("read entity %s: %w", id, err)
-	}
-	if err := json.Unmarshal(data, v); err != nil {
-		return fmt.Errorf("parse entity %s: %w", id, err)
-	}
-	return nil
-}
-
 // writeEntity atomically writes a per-entity JSON file to dir/<id>.json.
 // Uses an advisory flock as defense-in-depth for multi-process scenarios.
 func writeEntity(dir, id string, v any) error {

@@ -15,6 +15,7 @@
 // The actual re-exec is behind the restAPI.restarter indirection so the handler
 // is unit-testable without killing the test process. Production uses
 // gracefulSelfRestart (syscall.Exec, preserving argv + env).
+
 package gateway
 
 import (

@@ -116,9 +116,6 @@ func makeTask(t *testing.T, store *task.Store, agentID string, tr *task.Trigger)
 // int64P returns a pointer to v.
 func int64P(v int64) *int64 { return &v }
 
-// strP returns a pointer to v.
-func strP(v string) *string { return &v }
-
 // -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
