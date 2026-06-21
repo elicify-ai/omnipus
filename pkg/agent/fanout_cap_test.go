@@ -18,7 +18,7 @@ import (
 func TestSubTurnFanOutCap_FollowsConfig(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "") // keep env override inert
 
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	// Sanity: with no explicit SubTurn.MaxConcurrent, getSubTurnConfig must fall
@@ -49,7 +49,7 @@ func TestSubTurnFanOutCap_FollowsConfig(t *testing.T) {
 func TestSubTurnFanOutCap_ExplicitSubTurnOverride(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
 
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	al.cfg.Performance.MaxParallelAgents = 16
@@ -66,7 +66,7 @@ func TestSubTurnFanOutCap_ExplicitSubTurnOverride(t *testing.T) {
 func TestSubTurnFanOutCap_ChildSemaphoreCapacity(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
 
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	const want = 4

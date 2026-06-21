@@ -154,7 +154,7 @@ func TestSearchSkillsBadLimit400(t *testing.T) {
 // 502 (not a 500), with a clear message.
 func TestSearchSkillsRegistryError502(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
-	api.skillRegistry = &fakeSkillRegistry{searchErr: assertErr("registry down")}
+	api.skillRegistry = &fakeSkillRegistry{searchErr: assertError("registry down")}
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills/search?q=web", nil)
 	w := httptest.NewRecorder()
@@ -228,7 +228,7 @@ func TestInstallSkillSuccess(t *testing.T) {
 	assert.True(t, skill.Verified)
 }
 
-// assertErr is a tiny error helper to avoid importing errors in every test.
-type assertErr string
+// assertError is a tiny error helper to avoid importing errors in every test.
+type assertError string
 
-func (e assertErr) Error() string { return string(e) }
+func (e assertError) Error() string { return string(e) }

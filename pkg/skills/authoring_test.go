@@ -32,8 +32,8 @@ func TestSkillCreate_Versioned(t *testing.T) {
 	}
 
 	// Creating the same skill again must be rejected.
-	if _, err := w.CreateSkill("my-skill", validFor("my-skill")); !errors.Is(err, ErrAlreadyExists) {
-		t.Fatalf("expected ErrAlreadyExists on duplicate create, got %v", err)
+	if _, dupErr := w.CreateSkill("my-skill", validFor("my-skill")); !errors.Is(dupErr, ErrAlreadyExists) {
+		t.Fatalf("expected ErrAlreadyExists on duplicate create, got %v", dupErr)
 	}
 
 	// Versions are empty until the first edit.
@@ -47,8 +47,8 @@ func TestSkillCreate_Versioned(t *testing.T) {
 
 	// Edit snapshots the prior version.
 	edited := "---\nname: my-skill\ndescription: An edited description that is also long enough to be valid here.\n---\n\n# my-skill\n\nEdited body.\n"
-	if _, _, err := w.EditSkill("my-skill", edited, false); err != nil {
-		t.Fatalf("EditSkill: %v", err)
+	if _, _, editErr := w.EditSkill("my-skill", edited, false); editErr != nil {
+		t.Fatalf("EditSkill: %v", editErr)
 	}
 
 	vers, err = w.ListVersions("my-skill")

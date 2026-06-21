@@ -68,6 +68,8 @@ type delegationPolicyInput struct {
 
 // delegationInputFromCreateRequest normalises the create-request inline policy
 // struct into delegationPolicyInput. Returns nil when req carries no policy.
+//
+//nolint:dupl // mirrors delegationInputFromUpdateRequest but over the distinct oapi-codegen inline type gen.AgentCreateRequest.DelegationPolicy; the two request shapes are separate named types so a shared helper cannot be expressed without obscuring per-request types
 func delegationInputFromCreateRequest(req *gen.AgentCreateRequest) *delegationPolicyInput {
 	if req == nil || req.DelegationPolicy == nil {
 		return nil
@@ -110,6 +112,8 @@ func delegationInputFromCreateRequest(req *gen.AgentCreateRequest) *delegationPo
 
 // delegationInputFromUpdateRequest normalises the update-request inline policy
 // struct into delegationPolicyInput. Returns nil when req carries no policy.
+//
+//nolint:dupl // mirrors delegationInputFromCreateRequest but over the distinct oapi-codegen inline type gen.AgentUpdateRequest.DelegationPolicy; the two request shapes are separate named types so a shared helper cannot be expressed without obscuring per-request types
 func delegationInputFromUpdateRequest(req *gen.AgentUpdateRequest) *delegationPolicyInput {
 	if req == nil || req.DelegationPolicy == nil {
 		return nil

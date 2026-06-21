@@ -298,8 +298,8 @@ func TestDepCheckLogic_BlockedHeadDoesNotStarveReadyTask(t *testing.T) {
 		task := &tasks[i]
 		allSatisfied := true
 		for _, depID := range task.BlockedBy {
-			dep, err := s.Get(depID)
-			if err != nil || dep.Status != "completed" {
+			dep, getErr := s.Get(depID)
+			if getErr != nil || dep.Status != "completed" {
 				allSatisfied = false
 				break
 			}
@@ -317,10 +317,10 @@ func TestDepCheckLogic_BlockedHeadDoesNotStarveReadyTask(t *testing.T) {
 
 	// Confirm that after dep-X completes, task A becomes the dispatchable head.
 	completedAt := time.Now().UTC()
-	if _, err := s.Update(depID, TaskPatch{Status: ptrStr("running"), StartedAt: &completedAt}); err != nil {
+	if _, err = s.Update(depID, TaskPatch{Status: ptrStr("running"), StartedAt: &completedAt}); err != nil {
 		t.Fatalf("update dep to running: %v", err)
 	}
-	if _, err := s.Update(depID, TaskPatch{Status: ptrStr("completed"), CompletedAt: &completedAt}); err != nil {
+	if _, err = s.Update(depID, TaskPatch{Status: ptrStr("completed"), CompletedAt: &completedAt}); err != nil {
 		t.Fatalf("update dep to completed: %v", err)
 	}
 

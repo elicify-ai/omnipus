@@ -6,6 +6,7 @@
 //
 // Tests MUST use recorded fixtures (no real CLI invocations) per CLAUDE.md
 // CI-authority rule.
+
 package runner
 
 import (

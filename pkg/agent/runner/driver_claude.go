@@ -24,6 +24,7 @@
 // mode; instead the driver detects tool_use events for non-whitelisted tools and
 // emits PermissionRequestEvents so the caller can decide. After a decision the
 // driver resumes or cancels accordingly.
+
 package runner
 
 import (
@@ -85,6 +86,8 @@ func NewClaudeDriver(consent ConsentHandler) *ClaudeDriver {
 // Run starts `claude -p --output-format stream-json` with the given options.
 // It returns a channel of RunEvents that is closed when the process exits.
 // FR-5.2: does NOT pass --dangerously-skip-permissions.
+//
+//nolint:dupl // driver-specific process lifecycle; the parallel exit/stderr handling shares shape with OpencodeDriver.Run but differs in per-CLI log prefixes and error-message text — a shared helper would obscure those per-CLI differences and risk behavior changes
 func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

@@ -95,7 +95,7 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Mirror the boot-time gateway normalization that produced appliedConfig.
-	if err := persistedCfg.Gateway.ValidateAndApplyPreviewDefaults(); err != nil {
+	if err = persistedCfg.Gateway.ValidateAndApplyPreviewDefaults(); err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to normalize persisted config")
 		return
 	}

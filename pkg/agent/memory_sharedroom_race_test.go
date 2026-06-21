@@ -9,6 +9,7 @@
 // while rooms()/resolveWriteRoom()/SearchEntriesInScope()/SharedRoom() read it
 // concurrently, allowing one workspace's shared room to leak into another's
 // reads. These tests drive that exact interleaving under `go test -race`.
+
 package agent
 
 import (
@@ -34,7 +35,6 @@ func TestSharedRoom_ConcurrentSetAndRead(t *testing.T) {
 
 	// Writers: continuously swap the workspace ID (including clearing it).
 	for w := 0; w < goroutines; w++ {
-
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -82,7 +82,6 @@ func TestWorkspaceMemory_ConcurrentSearchAndSet(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for w := 0; w < goroutines; w++ {
-
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

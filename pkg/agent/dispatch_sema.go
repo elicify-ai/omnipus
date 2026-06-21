@@ -25,12 +25,12 @@ type DispatchSemaphore struct {
 }
 
 // newDispatchSemaphore returns a semaphore with the given capacity (>= 1).
-func newDispatchSemaphore(cap int) *DispatchSemaphore {
-	if cap < 1 {
-		cap = 1
+func newDispatchSemaphore(capacity int) *DispatchSemaphore {
+	if capacity < 1 {
+		capacity = 1
 	}
 	ds := &DispatchSemaphore{
-		cap: cap,
+		cap: capacity,
 		ch:  make(chan struct{}, 1),
 	}
 	return ds
