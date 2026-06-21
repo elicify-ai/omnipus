@@ -92,8 +92,12 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 		return nil, fmt.Errorf("claude driver: Run called while a run is already active")
 	}
 
+	// Resolve the CLI binary: opts.CLIPath (ExecutorConfig.cli_path) wins; else
+	// the default name resolved via $PATH (MAJ-5).
+	binary := resolveCLIBinary(opts.CLIPath, claudeBinName)
+
 	// Detect and pin CLI version (FR-5.6 / N3).
-	ver, verKnown := detectAndPinVersion(ctx, claudeBinName, "runner/claude", knownClaudeVersionPrefixes)
+	ver, verKnown := detectAndPinVersion(ctx, binary, "runner/claude", knownClaudeVersionPrefixes)
 
 	runID := opts.RunID
 	if runID == "" {
@@ -107,11 +111,11 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 		runCtx, cancelFn = context.WithTimeout(runCtx, time.Duration(opts.TimeoutSeconds)*time.Second)
 	}
 
-	cmd := exec.CommandContext(runCtx, claudeBinName, args...)
+	cmd := exec.CommandContext(runCtx, binary, args...)
 	if opts.WorkDir != "" {
 		cmd.Dir = opts.WorkDir
 	}
-	cmd.Env = d.buildEnv(opts.Env)
+	cmd.Env = d.buildEnv(opts)
 
 	if opts.Input != "" {
 		cmd.Stdin = strings.NewReader(opts.Input)
@@ -249,6 +253,9 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 	if opts.MaxTurns > 0 {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", opts.MaxTurns))
 	}
+	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5) before
+	// the trailing "-" so the stdin sentinel stays last.
+	args = append(args, opts.CLIArgs...)
 	args = append(args, "-") // read prompt from stdin
 	return args
 }
@@ -256,9 +263,11 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 // buildEnv builds the environment for the child process. See buildChildEnv:
 // a non-nil opts.Env is the COMPLETE, already-scrubbed allowlist (the gateway
 // secrets, incl. OMNIPUS_MASTER_KEY, are NOT inherited); nil falls back to
-// os.Environ() for direct/test callers.
-func (d *ClaudeDriver) buildEnv(callerEnv []string) []string {
-	return buildChildEnv(callerEnv)
+// os.Environ() for direct/test callers. opts.EnvOverrides (ExecutorConfig
+// .env_overrides, MAJ-5) are then merged in — protected OMNIPUS_* keys are
+// dropped so the master key / agent-identity vars cannot be overridden.
+func (d *ClaudeDriver) buildEnv(opts RunOptions) []string {
+	return mergeEnvOverrides(buildChildEnv(opts.Env), opts.EnvOverrides, opts.RunID)
 }
 
 // parseLine maps a single NDJSON line from `claude --output-format stream-json`

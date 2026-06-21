@@ -186,6 +186,8 @@ components:
       $ref: ./components/schemas/PromptGuardResponse.yaml
     PendingRestartEntry:
       $ref: ./components/schemas/PendingRestartEntry.yaml
+    GatewayRestartResponse:
+      $ref: ./components/schemas/GatewayRestartResponse.yaml
     AboutResponse:
       $ref: ./components/schemas/AboutResponse.yaml
     HealthResponse:
@@ -2893,6 +2895,47 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '405':
           description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /gateway/restart:
+    post:
+      operationId: restartGateway
+      summary: Gracefully restart the gateway process (admin only)
+      description: >
+        Triggers a graceful self-restart: the gateway replies immediately, then
+        drains in-flight work and re-execs the process (or exits cleanly for a
+        supervisor). Used to apply restart-gated settings from the UI without a
+        manual process bounce. The response gives the SPA a status + drain
+        estimate so it can poll /health (and reconnect the WS) to detect the
+        gateway going down and coming back up. High blast radius — admin-only,
+        secured by RequireAdmin + RequireNotBypass; dev_mode_bypass returns 503.
+      tags:
+      - Config
+      security:
+      - BearerAuth: []
+      responses:
+        '202':
+          description: Restart accepted and scheduled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayRestartResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          description: Restart unavailable (dev_mode_bypass active).
           content:
             application/json:
               schema:

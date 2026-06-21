@@ -1,0 +1,38 @@
+title: GatewayRestartResponse
+description: >
+  Acknowledgement returned by POST /api/v1/gateway/restart. The gateway accepts
+  the request, replies immediately, then drains in-flight work and re-execs the
+  process (or exits cleanly for a supervisor). The SPA uses this response to
+  start polling /health (and the WS reconnect path) to detect the gateway going
+  down and coming back up.
+type: object
+required:
+  - status
+  - restart_id
+  - drain_seconds
+properties:
+  status:
+    type: string
+    enum:
+      - restarting
+    description: >
+      Always "restarting" — the request was accepted and a graceful restart has
+      been scheduled. The HTTP response is sent BEFORE the process re-execs.
+    example: restarting
+  restart_id:
+    type: string
+    description: >
+      Opaque identifier for this restart attempt. The SPA may echo it in logs to
+      correlate the down→up transition; it is not required to poll.
+    example: restart-1718900000000000000
+  drain_seconds:
+    type: integer
+    description: >
+      Approximate number of seconds the gateway will wait for in-flight work to
+      drain before re-execing. The SPA can use this as a lower bound before it
+      starts polling /health for the gateway to come back.
+    example: 2
+  message:
+    type: string
+    description: Human-readable description of the scheduled restart.
+    example: "Gateway is restarting; reconnecting shortly."

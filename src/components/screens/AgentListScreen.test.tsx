@@ -42,6 +42,13 @@ vi.mock('@/components/agents/CreateAgentModal', () => ({
   CreateAgentModal: () => null,
 }))
 
+// MIN-9: AgentListScreen defers cli-detect until auth token is present.
+// Stub the auth store to return a token so the useEffect fires in tests.
+vi.mock('@/store/auth', () => ({
+  useAuthStore: (selector: (s: { token: string | null; role: string | null; username: string | null }) => unknown) =>
+    selector({ token: 'test-token', role: 'admin', username: 'admin' }),
+}))
+
 import { fetchAgents } from '@/lib/api'
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -87,7 +94,7 @@ beforeEach(() => {
 })
 
 describe('AgentListScreen — base/worker partition', () => {
-  it('renders a base agent under "Base agents" and a worker under "Sub-agent workers"', async () => {
+  it('renders a base agent under "Main agents" and a worker under "Sub-agent workers"', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([
       makeAgent({ id: 'mia', name: 'Mia', type: 'core' }),
       makeAgent({
@@ -99,7 +106,7 @@ describe('AgentListScreen — base/worker partition', () => {
     ])
     renderScreen()
 
-    const baseHeading = await screen.findByRole('heading', { name: /^base agents$/i })
+    const baseHeading = await screen.findByRole('heading', { name: /^main agents$/i })
     const workerHeading = await screen.findByRole('heading', { name: /^sub-agent workers$/i })
     expect(baseHeading).toBeInTheDocument()
     expect(workerHeading).toBeInTheDocument()
@@ -119,7 +126,7 @@ describe('AgentListScreen — base/worker partition', () => {
   it('omits the workers section entirely when there are no workers', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
-    await screen.findByRole('heading', { name: /^base agents$/i })
+    await screen.findByRole('heading', { name: /^main agents$/i })
     // Both section headers are now always rendered so the "New…" affordance
     // is reachable on a fresh install. The worker section is still in the
     // DOM (header + empty-state), not omitted.

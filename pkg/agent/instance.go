@@ -363,9 +363,15 @@ func NewAgentInstance(
 	// pointer; calling it here (vs. direct field assignment) keeps the
 	// publish path identical to the model-switch path in ApplyAgentModel.
 	inst.StoreProviderPool(providerPool)
-	if agentCfg != nil && agentCfg.Tools != nil {
-		inst.toolPolicy.Store(agentToolsCfgToPolicy(agentCfg.Tools))
+	// O7: thread the global sandbox tool policies into the runtime policy
+	// snapshot so FilterToolsByPolicy enforces global × agent merge at call
+	// time. Build the policy even when the agent has no per-agent tools
+	// config, because a global deny must still apply to that agent.
+	var agentToolsCfg *config.AgentToolsCfg
+	if agentCfg != nil {
+		agentToolsCfg = agentCfg.Tools
 	}
+	inst.toolPolicy.Store(agentToolsCfgToPolicy(cfg, agentToolsCfg))
 	return inst
 }
 
@@ -596,22 +602,42 @@ func findModelConfigForProvider(cfg *config.Config, providerName string) (*confi
 // agentToolsCfgToPolicy converts config.AgentToolsCfg to tools.ToolPolicyCfg for
 // use at LLM-call assembly time (FR-003, FR-041). Reads from cfg.Builtin which
 // holds the per-tool DefaultPolicy and Policies map.
-func agentToolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
-	if cfg == nil {
-		return &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+//
+// O7 (WS-G): the global sandbox tool policies (sandbox.tool_policies +
+// sandbox.default_tool_policy) MUST be threaded in alongside the per-agent
+// policy so that runtime FilterToolsByPolicy enforces most-restrictive-wins
+// (deny > ask > allow). Without GlobalPolicies populated, an admin's global
+// deny showed enforced in the REST view but did NOT block the tool at call
+// time. The full config is required to source those globals; a nil config
+// degrades to per-agent-only (test/legacy construction paths).
+func agentToolsCfgToPolicy(globalCfg *config.Config, cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
+	out := &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	if cfg != nil {
+		dp := string(cfg.Builtin.DefaultPolicy)
+		if dp == "" {
+			dp = "allow"
+		}
+		policies := make(map[string]string, len(cfg.Builtin.Policies))
+		for k, v := range cfg.Builtin.Policies {
+			policies[k] = string(v)
+		}
+		out.DefaultPolicy = dp
+		out.Policies = policies
 	}
-	dp := string(cfg.Builtin.DefaultPolicy)
-	if dp == "" {
-		dp = "allow"
+	// Thread global sandbox tool policies so the runtime filter enforces
+	// global × agent most-restrictive-wins (O7). FilterToolsByPolicy applies
+	// GlobalPolicies before agent policies; a global deny always blocks.
+	if globalCfg != nil {
+		if len(globalCfg.Sandbox.ToolPolicies) > 0 {
+			gp := make(map[string]string, len(globalCfg.Sandbox.ToolPolicies))
+			for k, v := range globalCfg.Sandbox.ToolPolicies {
+				gp[k] = v
+			}
+			out.GlobalPolicies = gp
+		}
+		out.GlobalDefaultPolicy = globalCfg.Sandbox.DefaultToolPolicy
 	}
-	policies := make(map[string]string, len(cfg.Builtin.Policies))
-	for k, v := range cfg.Builtin.Policies {
-		policies[k] = string(v)
-	}
-	return &tools.ToolPolicyCfg{
-		DefaultPolicy: dp,
-		Policies:      policies,
-	}
+	return out
 }
 
 // SetAgentType updates the resolved agent type. Called by the registry to upgrade

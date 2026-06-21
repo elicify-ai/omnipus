@@ -1529,6 +1529,14 @@ export const PendingRestartEntry = z
     applied_value: z.unknown(),
   })
   .passthrough();
+export const GatewayRestartResponse = z
+  .object({
+    status: z.literal("restarting"),
+    restart_id: z.string(),
+    drain_seconds: z.number().int(),
+    message: z.string().optional(),
+  })
+  .passthrough();
 export const CredentialSetRequest = z.object({
   key: z.string(),
   value: z.string(),
@@ -3413,6 +3421,42 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/gateway/restart",
+    alias: "restartGateway",
+    description: `Triggers a graceful self-restart: the gateway replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). Used to apply restart-gated settings from the UI without a manual process bounce. The response gives the SPA a status + drain estimate so it can poll /health (and reconnect the WS) to detect the gateway going down and coming back up. High blast radius — admin-only, secured by RequireAdmin + RequireNotBypass; dev_mode_bypass returns 503.
+`,
+    requestFormat: "json",
+    response: GatewayRestartResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Restart unavailable (dev_mode_bypass active).`,
         schema: ErrorResponse,
       },
     ],
