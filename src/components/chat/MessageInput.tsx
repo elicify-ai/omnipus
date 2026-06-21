@@ -1,9 +1,10 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { PaperPlaneRight, Stop, SpinnerGap, Microphone, CircleNotch } from '@phosphor-icons/react'
+import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
-import { transcribeAudio, isApiError } from '@/lib/api'
+import { transcribeAudio, isApiError, fetchSkills } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 // B3: label union for the stop button state machine.
@@ -19,12 +20,68 @@ type StopLabel = 'stop' | 'stopping' | 'force-stopping' | 'cancelled'
 // 'transcribing'— audio sent to the transcriber, awaiting text.
 type MicState = 'idle' | 'recording' | 'transcribing'
 
+// SlashSuggestion — a single entry in the slash-command autocomplete list.
+interface SlashSuggestion {
+  trigger: string     // the full command without the leading slash, e.g. "skill web-research"
+  label: string       // display label, e.g. "Web Research"
+  description?: string
+}
+
 export function MessageInput() {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { sendMessage, cancelStream, isStreaming, cancelStage } = useChatStore()
   const { isConnected } = useConnectionStore()
   const { addToast } = useUiStore()
+
+  // O11 slash-command autocomplete: fetch skills for the suggestion list.
+  // staleTime 60s — skills don't change often mid-session.
+  const { data: skills = [] } = useQuery({
+    queryKey: ['skills'],
+    queryFn: fetchSkills,
+    staleTime: 60_000,
+    enabled: isConnected,
+  })
+
+  // Build the full suggestion list: active skills + a small set of built-in commands.
+  const allSuggestions = useMemo<SlashSuggestion[]>(() => {
+    const builtIn: SlashSuggestion[] = [
+      { trigger: 'recall', label: 'Recall', description: 'Search your memory for relevant context' },
+      { trigger: 'remember', label: 'Remember', description: 'Store something in long-term memory' },
+      { trigger: 'clear', label: 'Clear session', description: 'Start a new session in this chat' },
+    ]
+    const skillSuggestions: SlashSuggestion[] = skills
+      .filter((s) => s.status === 'active')
+      .map((s) => ({
+        trigger: `skill ${s.id}`,
+        label: s.name,
+        description: s.description,
+      }))
+    return [...builtIn, ...skillSuggestions]
+  }, [skills])
+
+  // Slash-command autocomplete state.
+  const [slashQuery, setSlashQuery] = useState<string | null>(null)
+  const [slashIndex, setSlashIndex] = useState(0)
+
+  const slashSuggestions = useMemo<SlashSuggestion[]>(() => {
+    if (slashQuery === null) return []
+    const q = slashQuery.toLowerCase()
+    return allSuggestions.filter(
+      (s) => s.trigger.toLowerCase().includes(q) || s.label.toLowerCase().includes(q),
+    )
+  }, [slashQuery, allSuggestions])
+
+  const applySlashSuggestion = useCallback(
+    (suggestion: SlashSuggestion) => {
+      setValue(`/${suggestion.trigger} `)
+      setSlashQuery(null)
+      setSlashIndex(0)
+      // Focus after selecting
+      setTimeout(() => textareaRef.current?.focus(), 0)
+    },
+    [],
+  )
 
   // Composer mic state + MediaRecorder plumbing.
   const [micState, setMicState] = useState<MicState>('idle')
@@ -199,6 +256,29 @@ export function MessageInput() {
   }, [cancelStream])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // O11 slash-command navigation: Arrow keys / Enter / Escape when the menu is open.
+    if (slashQuery !== null && slashSuggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashIndex((i) => Math.min(i + 1, slashSuggestions.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashIndex((i) => Math.max(i - 1, 0))
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        applySlashSuggestion(slashSuggestions[slashIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        setSlashQuery(null)
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -210,11 +290,29 @@ export function MessageInput() {
   }
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setValue(e.target.value)
+    const newValue = e.target.value
+    setValue(newValue)
     // Auto-resize
     const el = e.target
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+
+    // O11 slash-command detection: activate autocomplete when the composer
+    // starts with "/" and the caret is still within the command portion.
+    // A trailing space after the "/" word means the user has finished typing
+    // the command — close the menu.
+    if (newValue.startsWith('/')) {
+      const query = newValue.slice(1)
+      // Hide if query contains a space (command completed or text body started)
+      if (query.includes(' ')) {
+        setSlashQuery(null)
+      } else {
+        setSlashQuery(query)
+        setSlashIndex(0)
+      }
+    } else {
+      setSlashQuery(null)
+    }
   }
 
   // FR-21: textarea re-enables when the goroutine is neutered (detached stage).
@@ -232,7 +330,44 @@ export function MessageInput() {
   const showStopSpinner = stopLabel === 'force-stopping'
 
   return (
-    <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-3">
+    <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-3 relative">
+      {/* O11 slash-command autocomplete popover — renders above the composer */}
+      {slashQuery !== null && slashSuggestions.length > 0 && (
+        <div
+          role="listbox"
+          aria-label="Slash command suggestions"
+          className="absolute bottom-full left-4 right-4 mb-1 z-20 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] shadow-lg overflow-hidden max-h-52 overflow-y-auto"
+        >
+          {slashSuggestions.map((suggestion, idx) => (
+            <button
+              key={suggestion.trigger}
+              type="button"
+              role="option"
+              aria-selected={idx === slashIndex}
+              onClick={() => applySlashSuggestion(suggestion)}
+              className={cn(
+                'flex w-full items-start gap-2 px-3 py-2 text-left text-xs transition-colors',
+                idx === slashIndex
+                  ? 'bg-[var(--color-surface-2)] text-[var(--color-secondary)]'
+                  : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+              )}
+            >
+              <span
+                className="shrink-0 text-[var(--color-accent)] font-mono font-semibold"
+                aria-hidden="true"
+              >
+                /{suggestion.trigger}
+              </span>
+              <span className="min-w-0">
+                <span className="block font-medium truncate">{suggestion.label}</span>
+                {suggestion.description && (
+                  <span className="block text-[var(--color-muted)] truncate">{suggestion.description}</span>
+                )}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       {disconnected && (
         <div className="mb-2 text-xs text-[var(--color-error)] flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)] inline-block" />

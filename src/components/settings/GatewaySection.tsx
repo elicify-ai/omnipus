@@ -13,7 +13,7 @@
  * Hot-reload is always on (FR-106); the toggle is removed.
  */
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, ArrowsClockwise, CheckCircle, CaretDown, CaretRight, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
@@ -26,6 +26,8 @@ import { useUiStore } from '@/store/ui'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
+import { usePendingRestart, PENDING_RESTART_QUERY_KEY } from '@/store/restart'
+import { GatewayRestartModal } from './GatewayRestartModal'
 
 // ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
 
@@ -80,6 +82,9 @@ export function GatewaySection() {
   const queryClient = useQueryClient()
   const [copied, setCopied] = useState(false)
   const [remoteAccessOpen, setRemoteAccessOpen] = useState(false)
+  // O4: restart modal state — shown when a restart-gated setting is saved.
+  const [restartModalOpen, setRestartModalOpen] = useState(false)
+  const { entries: pendingEntries } = usePendingRestart()
 
   const { data: config, isLoading, isError: isConfigError, refetch: refetchConfig } = useQuery({
     queryKey: ['config'],
@@ -113,6 +118,11 @@ export function GatewaySection() {
     log_level: logLevel,
   }), [bindAddress, port, logLevel])
 
+  // O4: track which gateway fields are restart-gated so we can show the modal
+  // after saving. port and bind_address require a restart; log_level does not.
+  const prevPortRef = useRef(port)
+  const prevBindRef = useRef(bindAddress)
+
   const { status: saveStatus, error: saveError } = useAutoSave(
     gatewayFormData,
     async () => {
@@ -120,6 +130,9 @@ export function GatewaySection() {
       // FR-106: hot_reload is intentionally not sent — always-on backend-side.
       // We cast to satisfy the Partial<Config> signature; frontendToRawConfig
       // guards each field with `!== undefined` so absent fields are skipped.
+      const portChanged = port !== prevPortRef.current
+      const bindChanged = bindAddress !== prevBindRef.current
+
       await updateConfig({
         gateway: {
           bind_address: bindAddress,
@@ -128,10 +141,22 @@ export function GatewaySection() {
         } as unknown as Config['gateway'],
       })
       isDirtyRef.current = false
+      prevPortRef.current = port
+      prevBindRef.current = bindAddress
       queryClient.invalidateQueries({ queryKey: ['config'] })
+      // O4: if a restart-gated field changed, refresh pending list and show modal.
+      if (portChanged || bindChanged) {
+        await queryClient.invalidateQueries({ queryKey: [...PENDING_RESTART_QUERY_KEY] })
+        setRestartModalOpen(true)
+      }
     },
     { disabled: !config },
   )
+
+  // O4: always-available "Restart gateway" handler.
+  const handleManualRestart = useCallback(() => {
+    setRestartModalOpen(true)
+  }, [])
 
   const { mutate: doRotate, isPending: isRotating } = useMutation({
     mutationFn: rotateGatewayToken,
@@ -282,18 +307,89 @@ export function GatewaySection() {
         </div>
       </div>
 
-      {/* Status */}
-      <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
-        {isOnline ? (
-          <Badge variant="success" className="gap-1 text-[10px]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]" /> Online
-          </Badge>
-        ) : (
-          <Badge variant="error" className="gap-1 text-[10px]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)]" /> Offline
-          </Badge>
-        )}
-        <span>Listening on {bindAddress}:{port}</span>
+      {/* O4 honest status — show the *running* value (applied_value from pending
+          entries) vs the *saved* value separately when a restart is pending. */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
+          {isOnline ? (
+            <Badge variant="success" className="gap-1 text-[10px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]" /> Online
+            </Badge>
+          ) : (
+            <Badge variant="error" className="gap-1 text-[10px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)]" /> Offline
+            </Badge>
+          )}
+          {(() => {
+            // Find pending entries for gateway.port and gateway.bind_address.
+            const portEntry = pendingEntries.find((e) => e.key === 'gateway.port')
+            const bindEntry = pendingEntries.find((e) => e.key === 'gateway.bind_address')
+            const runningPort = portEntry ? String(portEntry.applied_value) : port
+            const runningBind = bindEntry ? String(bindEntry.applied_value) : bindAddress
+            const savedPort = portEntry ? String(portEntry.persisted_value) : port
+            const savedBind = bindEntry ? String(portEntry?.persisted_value ?? bindAddress) : bindAddress
+            const hasPending = Boolean(portEntry || bindEntry)
+            if (hasPending) {
+              return (
+                <span>
+                  Running on{' '}
+                  <span className="font-mono">{runningBind}:{runningPort}</span>
+                  {' '}—{' '}
+                  <span className="text-amber-300">
+                    saved <span className="font-mono">{savedBind}:{savedPort}</span>, restart to apply
+                  </span>
+                </span>
+              )
+            }
+            return <span>Listening on <span className="font-mono">{bindAddress}:{port}</span></span>
+          })()}
+        </div>
+
+        {/* O4: persistent "Restart gateway" maintenance control — always available
+            so operators can trigger a graceful restart at any time. Also shows a
+            notice + changed keys when a restart is pending. */}
+        <div
+          className={`rounded-lg border px-4 py-3 space-y-2 ${
+            pendingEntries.length > 0
+              ? 'border-amber-500/40 bg-amber-500/10'
+              : 'border-[var(--color-border)] bg-[var(--color-surface-1)]'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              {pendingEntries.length > 0 ? (
+                <>
+                  <p className="text-sm font-semibold text-amber-300">
+                    {pendingEntries.length} change{pendingEntries.length !== 1 ? 's' : ''} pending — restart to apply
+                  </p>
+                  <div className="mt-1 space-y-0.5">
+                    {pendingEntries.map((e) => (
+                      <p key={e.key} className="text-[11px] font-mono text-amber-300/70">
+                        {e.key}: {String(e.applied_value)} → {String(e.persisted_value)}
+                      </p>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-[var(--color-secondary)]">Restart gateway</p>
+              )}
+              <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                {pendingEntries.length > 0
+                  ? 'A graceful restart will drain in-flight requests before applying saved settings.'
+                  : 'Trigger a graceful restart for maintenance or to apply saved settings.'}
+              </p>
+            </div>
+            <Button
+              variant={pendingEntries.length > 0 ? 'default' : 'outline'}
+              size="sm"
+              onClick={handleManualRestart}
+              className="shrink-0"
+            >
+              <ArrowsClockwise size={13} className="mr-1.5" />
+              Restart
+            </Button>
+          </div>
+        </div>
       </div>
 
       <Separator />
@@ -345,6 +441,13 @@ export function GatewaySection() {
           </div>
         )}
       </section>
+
+      {/* O4: restart modal — shows when a restart-gated setting is saved or
+          when the operator clicks the persistent "Restart" button. */}
+      <GatewayRestartModal
+        open={restartModalOpen}
+        onClose={() => setRestartModalOpen(false)}
+      />
     </div>
   )
 }

@@ -42,6 +42,12 @@ func buildExecutorTestAPI(t *testing.T) *restAPI {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
+	// Isolate OMNIPUS_HOME so per-agent workspaces (<home>/agents/<id>) and any
+	// disk-config reads resolve under tmpDir instead of the developer's real
+	// ~/.omnipus. Without this, config.OmnipusHomeDir() falls back to ~/.omnipus,
+	// and a machine with a configured provider + credentials makes model-apply
+	// succeed where the test expects it to fail (hermeticity bug, not behaviour).
+	t.Setenv("OMNIPUS_HOME", tmpDir)
 	cfgPath := filepath.Join(tmpDir, "config.json")
 	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"test-agent","name":"Test Agent","type":"custom"}]}}`
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
@@ -556,6 +562,81 @@ func createSubagent3p(t *testing.T, api *restAPI) string {
 	return created.Id
 }
 
+// createNativeSubagent creates a native Subagent (delegation-only worker on the
+// Omnipus engine) and returns its ID.
+func createNativeSubagent(t *testing.T, api *restAPI) string {
+	t.Helper()
+	body := `{"name":"NativeWorker","type":"Subagent","description":"native worker","soul":"s"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusCreated, w.Code, "create native subagent body: %s", w.Body.String())
+	created := decodeAgentResp(t, w.Body.Bytes())
+	require.Equal(t, gen.AgentTypeSubagent, created.Type)
+	return created.Id
+}
+
+// TestUpdateAgent_Worker_AcceptsValidPatch is the worker-PUT-400 regression: a
+// PUT carrying only fields that ARE valid for a worker (model, timeout_seconds,
+// max_tool_iterations, color, icon, description) must succeed (200), not 400.
+// Covers both a native Subagent and a subagent_3p.
+func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
+	validPatch := `{"model":"test-model","timeout_seconds":120,"max_tool_iterations":8,"color":"#d4af37","icon":"robot","description":"updated worker"}`
+
+	t.Run("native Subagent", func(t *testing.T) {
+		api := buildExecutorTestAPI(t)
+		id := createNativeSubagent(t, api)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(validPatch))
+		r.Header.Set("Content-Type", "application/json")
+		api.HandleAgents(w, r)
+		assert.Equal(t, http.StatusOK, w.Code, "valid worker patch must be accepted; body: %s", w.Body.String())
+	})
+
+	t.Run("subagent_3p", func(t *testing.T) {
+		api := buildExecutorTestAPI(t)
+		id := createSubagent3p(t, api)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(validPatch))
+		r.Header.Set("Content-Type", "application/json")
+		api.HandleAgents(w, r)
+		assert.Equal(t, http.StatusOK, w.Code, "valid subagent_3p patch must be accepted; body: %s", w.Body.String())
+	})
+}
+
+// TestUpdateAgent_Worker_RejectsHeartbeat keeps the genuinely-N/A guard: a worker
+// PUT that ENABLES heartbeat is still rejected 400 (workers run only via
+// delegation; they have no heartbeat schedule).
+func TestUpdateAgent_Worker_RejectsHeartbeat(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	id := createNativeSubagent(t, api)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id,
+		strings.NewReader(`{"heartbeat_enabled":true,"heartbeat_interval":300}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "enabling heartbeat on a worker must 400; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "heartbeat")
+}
+
+// TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy proves the worker-PUT-400
+// loosening: a subagent_3p PUT carrying a delegation_policy is no longer rejected
+// at the forbidden-field gate (a non-empty to[] would still be bounded by the
+// worker-leaf check, but a modes/depth-only policy is accepted).
+func TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	id := createSubagent3p(t, api)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id,
+		strings.NewReader(`{"delegation_policy":{"modes":["await"],"depth":1}}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	// Must NOT be the forbidden-field rejection for delegation_policy.
+	assert.NotContains(t, w.Body.String(), "subagent_3p agents do not support delegation_policy",
+		"delegation_policy must no longer be a forbidden field on a subagent_3p PUT; body: %s", w.Body.String())
+}
+
 // TestCreateAgent_Subagent3p_ForbiddenFields rejects the 7 CLI-owned fields at create time.
 func TestCreateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	cases := []struct {
@@ -583,7 +664,11 @@ func TestCreateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	}
 }
 
-// TestUpdateAgent_Subagent3p_ForbiddenFields rejects the 7 CLI-owned fields on PUT.
+// TestUpdateAgent_Subagent3p_ForbiddenFields rejects the CLI-owned fields on PUT.
+// worker-PUT-400: delegation_policy is NO LONGER in this set — it is a valid
+// worker field on PUT (a non-empty to[] is independently bounded by the
+// worker-leaf check in buildDelegationPolicy). The remaining 6 stay forbidden
+// because the external CLI manages its own isolation/tools/skills (O13).
 func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := createSubagent3p(t, api)
@@ -598,7 +683,6 @@ func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 		{"model_params", `{"model_params":{"temperature":0.5}}`},
 		{"sandbox_profile", `{"sandbox_profile":"workspace"}`},
 		{"shell_policy", `{"shell_policy":{"enable_deny_patterns":true}}`},
-		{"delegation_policy", `{"delegation_policy":{"to":[{"kind":"local","id":"*"}]}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

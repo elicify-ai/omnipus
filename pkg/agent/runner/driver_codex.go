@@ -98,8 +98,12 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 		return nil, fmt.Errorf("codex driver: Run called while a run is already active")
 	}
 
+	// Resolve the CLI binary: opts.CLIPath (ExecutorConfig.cli_path) wins; else
+	// the default name resolved via $PATH (MAJ-5).
+	binary := resolveCLIBinary(opts.CLIPath, codexBinName)
+
 	// Detect and pin CLI version (FR-5.6 / N3).
-	ver, verKnown := detectAndPinVersion(ctx, codexBinName, "runner/codex", knownCodexVersionPrefixes)
+	ver, verKnown := detectAndPinVersion(ctx, binary, "runner/codex", knownCodexVersionPrefixes)
 
 	runID := opts.RunID
 	if runID == "" {
@@ -113,11 +117,11 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 		runCtx, cancelFn = context.WithTimeout(runCtx, time.Duration(opts.TimeoutSeconds)*time.Second)
 	}
 
-	cmd := exec.CommandContext(runCtx, codexBinName, args...)
+	cmd := exec.CommandContext(runCtx, binary, args...)
 	if opts.WorkDir != "" {
 		cmd.Dir = opts.WorkDir
 	}
-	cmd.Env = d.buildEnv(opts.Env)
+	cmd.Env = d.buildEnv(opts)
 
 	prompt := opts.Input
 	if prompt == "" {
@@ -249,6 +253,9 @@ func (d *CodexDriver) buildArgs(opts RunOptions) []string {
 	if opts.WorkDir != "" {
 		args = append(args, "-C", opts.WorkDir)
 	}
+	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5) before
+	// the trailing "-" so the stdin sentinel stays last.
+	args = append(args, opts.CLIArgs...)
 	args = append(args, "-") // read prompt from stdin
 	return args
 }
@@ -256,9 +263,11 @@ func (d *CodexDriver) buildArgs(opts RunOptions) []string {
 // buildEnv builds the environment for the child process. See buildChildEnv:
 // a non-nil opts.Env is the COMPLETE, already-scrubbed allowlist (the gateway
 // secrets, incl. OMNIPUS_MASTER_KEY, are NOT inherited); nil falls back to
-// os.Environ() for direct/test callers.
-func (d *CodexDriver) buildEnv(callerEnv []string) []string {
-	return buildChildEnv(callerEnv)
+// os.Environ() for direct/test callers. opts.EnvOverrides (ExecutorConfig
+// .env_overrides, MAJ-5) are merged in afterwards; protected OMNIPUS_* keys are
+// dropped.
+func (d *CodexDriver) buildEnv(opts RunOptions) []string {
+	return mergeEnvOverrides(buildChildEnv(opts.Env), opts.EnvOverrides, opts.RunID)
 }
 
 // parseLine maps a single NDJSON line from `codex exec --json` to a RunEvent.

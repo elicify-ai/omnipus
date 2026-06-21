@@ -146,16 +146,19 @@ describe('ModelSelector — search by model name', () => {
 // Flat list when 1 provider configured (providerGroups with 1 group)
 // =====================================================================
 
+// O3: provider-headed sections are now shown even with a single provider so
+// the provider name is always visible as a stable label. The old test checked
+// the opposite; it is updated to match the new spec behaviour.
 describe('ModelSelector — flat list with 1 provider', () => {
-  it('does NOT render a provider group heading for a single provider', () => {
+  it('renders a provider group heading even for a single provider (O3)', () => {
     renderSelector(
       ONE_PROVIDER_GROUPS[0].models,
       '',
       vi.fn(),
       ONE_PROVIDER_GROUPS,
     )
-    // The provider name should not appear as a heading when there's only 1 provider
-    expect(screen.queryByText('Anthropic')).not.toBeInTheDocument()
+    // O3: provider name IS shown as a heading even with only 1 provider.
+    expect(screen.getByText('Anthropic')).toBeInTheDocument()
     // Models are still rendered
     expect(screen.getByText('claude-3-haiku')).toBeInTheDocument()
     expect(screen.getByText('claude-3-sonnet')).toBeInTheDocument()
@@ -266,7 +269,8 @@ describe('ModelSelector — unresolved indicator (W6-C4 / G12)', () => {
       />,
     )
     // text-input mode renders a <p> beneath the input rather than the chip.
-    expect(screen.getByText(/not in any connected provider/i)).toBeInTheDocument()
+    // O3: copy changed to softer wording — no longer says "calls will fail".
+    expect(screen.getByText(/not found in any connected provider/i)).toBeInTheDocument()
     const input = screen.getByRole('textbox')
     expect(input.getAttribute('aria-invalid')).toBe('true')
     // Also picks up the test id prefix for parity with the combobox path.

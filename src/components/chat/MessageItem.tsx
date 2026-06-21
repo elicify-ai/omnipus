@@ -4,6 +4,7 @@ import { User, Robot } from '@phosphor-icons/react'
 import { useQuery } from '@tanstack/react-query'
 import { ToolCallBadge } from './ToolCallBadge'
 import { ModelFooter } from './ModelFooter'
+import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { ChatMessage } from '@/store/chat'
 import { useChatStore } from '@/store/chat'
 import { fetchAgents } from '@/lib/api'
@@ -33,16 +34,15 @@ export function MessageItem({ message }: MessageItemProps) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
 
-  // Look up agent name for assistant messages that carry an agentId.
+  // Look up agent for assistant messages that carry an agentId.
   // Uses the cached ['agents'] query (prefetched by AppShell) — no extra network request.
   const { data: agents = [] } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     staleTime: 30_000,
   })
-  const agentName = message.agentId
-    ? (agents.find((a) => a.id === message.agentId)?.name ?? message.agentId)
-    : null
+  const agent = message.agentId ? agents.find((a) => a.id === message.agentId) : null
+  const agentName = agent?.name ?? (message.agentId ? message.agentId : null)
 
   if (isSystem) {
     return (
@@ -62,16 +62,27 @@ export function MessageItem({ message }: MessageItemProps) {
       data-message-id={message.id}
       className={cn('group flex gap-3 px-4 py-3', isUser && 'flex-row-reverse')}
     >
-      {/* Avatar */}
+      {/* Avatar — O11 icon attribution: for assistant messages, use the
+          agent's own icon + color when known, rather than a generic Robot.
+          This fixes the "icon misattribution" finding where every assistant
+          message showed the same Robot regardless of which agent spoke. */}
       <div
-        className={cn(
-          'shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs',
+        className={cn('shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs')}
+        style={
           isUser
-            ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)]'
-            : 'bg-[var(--color-surface-3)] text-[var(--color-secondary)]'
-        )}
+            ? { backgroundColor: 'color-mix(in srgb, var(--color-accent) 20%, transparent)', color: 'var(--color-accent)' }
+            : agent?.color
+            ? { backgroundColor: agent.color, color: 'var(--color-secondary)' }
+            : { backgroundColor: 'var(--color-surface-3)', color: 'var(--color-secondary)' }
+        }
       >
-        {isUser ? <User size={14} weight="bold" /> : <Robot size={14} weight="bold" />}
+        {isUser ? (
+          <User size={14} weight="bold" />
+        ) : agent?.icon ? (
+          <IconRenderer icon={agent.icon} size={13} />
+        ) : (
+          <Robot size={14} weight="bold" />
+        )}
       </div>
 
       {/* Content */}

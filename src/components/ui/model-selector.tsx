@@ -83,7 +83,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             role="status"
           >
             <WarningCircle size={11} weight="fill" aria-hidden="true" />
-            Model not in any connected provider — calls will fail until you add a provider that supports this model.
+            Model not found in any connected provider — add a matching provider to use this model.
           </p>
         )}
       </div>
@@ -116,10 +116,17 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
 
   const exactMatch = allModels.some((m) => m.toLowerCase() === queryLower)
 
-  // Determine whether to render grouped or flat
-  // Grouped: providerGroups supplied AND ≥2 groups with models
-  const groupsWithModels = providerGroups ? providerGroups.filter((g) => g.models.length > 0) : []
-  const useGrouped = groupsWithModels.length >= 2
+  // O3: provider-headed sections even with one provider — always group when
+  // providerGroups is provided with at least one non-empty group. This lets
+  // the provider name act as a stable visual heading. Previously grouped only
+  // when ≥2 providers, which hid the heading for single-provider installs.
+  const groupsWithModels = providerGroups
+    ? providerGroups
+        .filter((g) => g.models.length > 0)
+        // O3: sort models within each group alphabetically for consistent discovery.
+        .map((g) => ({ ...g, models: [...g.models].sort((a, b) => a.localeCompare(b)) }))
+    : []
+  const useGrouped = groupsWithModels.length >= 1
 
   const handleSelect = (model: string) => {
     onChange(model)

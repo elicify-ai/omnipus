@@ -48,6 +48,7 @@ type adminRoute struct {
 // as two entries; we exercise the state-changing method for multi-method paths).
 var allAdminRoutes = []adminRoute{
 	{http.MethodGet, "/api/v1/config/pending-restart", ""},
+	{http.MethodPost, "/api/v1/gateway/restart", ""},
 	{http.MethodGet, "/api/v1/security/audit-log", ""},
 	{http.MethodPut, "/api/v1/security/audit-log", `{"enabled":true}`},
 	{http.MethodGet, "/api/v1/security/skill-trust", ""},

@@ -8,7 +8,9 @@ import { AboutSection } from '@/components/settings/AboutSection'
 import { useAuthStore } from '@/store/auth'
 import { DevicesSection } from '@/components/settings/DevicesSection'
 import { PerformanceSection } from '@/components/settings/PerformanceSection'
-import { RestartBanner } from '@/components/settings/RestartBanner'
+// O4: the passive RestartBanner at the top of Settings is replaced by the
+// modal-on-save flow (GatewaySection) + persistent Restart control in Gateway tab.
+// Operators find the restart action under Settings → Gateway.
 
 export function SettingsScreen() {
   const role = useAuthStore((s) => s.role)
@@ -25,8 +27,6 @@ export function SettingsScreen() {
             Personal preferences live under Profile.
           </p>
         </div>
-
-        <RestartBanner />
 
         <Tabs defaultValue="providers">
           {/* Sticky tab bar — stays visible while scrolling tab content */}

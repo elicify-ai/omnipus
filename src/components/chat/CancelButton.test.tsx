@@ -1,10 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MessageInput } from './MessageInput'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+
+// MessageInput uses useQuery (for skills autocomplete). Suppress the network request.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return { ...actual, fetchSkills: vi.fn().mockResolvedValue([]) }
+})
+
+function renderInput() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <MessageInput />
+    </QueryClientProvider>,
+  )
+}
 
 // test_cancel_button_states (test #36) — MessageInput send/stop button states
 // test_cancel_idle_noop (test #39) — Escape when idle is no-op
@@ -36,7 +52,7 @@ describe('MessageInput — stop button during streaming (test #36)', () => {
       useChatStore.setState({ isStreaming: true })
       useConnectionStore.setState({ isConnected: true })
     })
-    render(<MessageInput />)
+    renderInput()
     // aria-label is "Stop" (the label from stopButtonLabel('stop'))
     expect(screen.getByRole('button', { name: /^stop$/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /send message/i })).toBeNull()
@@ -58,7 +74,7 @@ describe('MessageInput — stop button during streaming (test #36)', () => {
       })
       useSessionStore.setState({ activeSessionId: 'sess_1' })
     })
-    render(<MessageInput />)
+    renderInput()
     fireEvent.click(screen.getByRole('button', { name: /^stop$/i }))
     // cancelStream sends cancel frame (or is no-op if we set isStreaming false)
     // It calls connection.send with cancel frame
@@ -73,7 +89,7 @@ describe('MessageInput — send button when idle (test #36)', () => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({ isConnected: true })
     })
-    render(<MessageInput />)
+    renderInput()
     expect(screen.getByRole('button', { name: /send message/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /stop generation/i })).toBeNull()
   })
@@ -84,7 +100,7 @@ describe('MessageInput — send button when idle (test #36)', () => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({ isConnected: true })
     })
-    render(<MessageInput />)
+    renderInput()
     const sendBtn = screen.getByRole('button', { name: /send message/i })
     expect(sendBtn).toBeDisabled()
   })
@@ -95,7 +111,7 @@ describe('MessageInput — send button when idle (test #36)', () => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({ isConnected: false })
     })
-    render(<MessageInput />)
+    renderInput()
     const sendBtn = screen.getByRole('button', { name: /send message/i })
     expect(sendBtn).toBeDisabled()
   })
@@ -117,7 +133,7 @@ describe('MessageInput — Escape key no-op when idle (test #39)', () => {
         } as any,
       })
     })
-    render(<MessageInput />)
+    renderInput()
     const textarea = screen.getByRole('textbox')
     fireEvent.keyDown(textarea, { key: 'Escape' })
     // connection.send must NOT be called (no cancel frame sent)
@@ -134,7 +150,7 @@ describe('MessageInput — stop button label morphing (B3)', () => {
       useChatStore.setState({ isStreaming: true, cancelStage: 'graceful' })
       useConnectionStore.setState({ isConnected: true })
     })
-    render(<MessageInput />)
+    renderInput()
     // FR-21: aria-label is the current label state; in graceful stage it is "Stopping..."
     expect(screen.getByRole('button', { name: /stopping\.\.\./i })).toBeInTheDocument()
     expect(screen.getByText('Stopping...')).toBeInTheDocument()
@@ -146,7 +162,7 @@ describe('MessageInput — stop button label morphing (B3)', () => {
       useChatStore.setState({ isStreaming: true, cancelStage: 'hard' })
       useConnectionStore.setState({ isConnected: true })
     })
-    render(<MessageInput />)
+    renderInput()
     expect(screen.getByText('Force-stopping...')).toBeInTheDocument()
   })
 
@@ -156,7 +172,7 @@ describe('MessageInput — stop button label morphing (B3)', () => {
       useChatStore.setState({ isStreaming: true, cancelStage: 'detached' })
       useConnectionStore.setState({ isConnected: true })
     })
-    render(<MessageInput />)
+    renderInput()
     expect(screen.getByText('Cancelled')).toBeInTheDocument()
   })
 
@@ -210,7 +226,7 @@ describe('MessageInput — stop button label morphing (B3)', () => {
         connection: null,
       })
     })
-    render(<MessageInput />)
+    renderInput()
     // Before click: no label text shown (just icon); aria-label is "Stop" (FR-21 idle state)
     expect(screen.queryByText('Stopping...')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /^stop$/i }))

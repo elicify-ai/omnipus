@@ -151,6 +151,15 @@ func runExternalCLISubTurn(
 	// the git-worktree FS boundary.
 	childEnv = injectRunnerEgressProxy(childEnv, al.runnerEgressProxyAddr())
 
+	// MAJ-5: consume the agent's ExecutorConfig (cli_path / cli_args /
+	// env_overrides) when spawning the external CLI. cli_path overrides the
+	// driver's default binary (else $PATH); cli_args is tokenised into argv
+	// (execve, no shell — warn-not-reject on shell-metacharacters); env_overrides
+	// merge into the scrubbed child env (OMNIPUS_* keys are dropped by the driver
+	// env builder, so the master key / agent-identity vars stay protected).
+	execCfg := agent.Subagents.Executor
+	cliArgs := runner.ParseCLIArgs(execCfg.CLIArgs, runID)
+
 	evCh, err := driver.Run(runCtx, runner.RunOptions{
 		RunID:          runID,
 		WorkDir:        ws.Dir,
@@ -158,6 +167,9 @@ func runExternalCLISubTurn(
 		Env:            childEnv,
 		TimeoutSeconds: timeoutSecs,
 		MaxTurns:       maxTurns,
+		CLIPath:        execCfg.CLIPath,
+		CLIArgs:        cliArgs,
+		EnvOverrides:   execCfg.EnvOverrides,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)

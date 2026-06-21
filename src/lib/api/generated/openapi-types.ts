@@ -1164,6 +1164,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/gateway/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Gracefully restart the gateway process (admin only)
+         * @description Triggers a graceful self-restart: the gateway replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). Used to apply restart-gated settings from the UI without a manual process bounce. The response gives the SPA a status + drain estimate so it can poll /health (and reconnect the WS) to detect the gateway going down and coming back up. High blast radius — admin-only, secured by RequireAdmin + RequireNotBypass; dev_mode_bypass returns 503.
+         */
+        post: operations["restartGateway"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspace/{agent_id}/{path}": {
         parameters: {
             query?: never;
@@ -4196,6 +4216,33 @@ export interface components {
              * @example permissive
              */
             applied_value: unknown;
+        };
+        /**
+         * GatewayRestartResponse
+         * @description Acknowledgement returned by POST /api/v1/gateway/restart. The gateway accepts the request, replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). The SPA uses this response to start polling /health (and the WS reconnect path) to detect the gateway going down and coming back up.
+         */
+        GatewayRestartResponse: {
+            /**
+             * @description Always "restarting" — the request was accepted and a graceful restart has been scheduled. The HTTP response is sent BEFORE the process re-execs.
+             * @example restarting
+             * @enum {string}
+             */
+            status: "restarting";
+            /**
+             * @description Opaque identifier for this restart attempt. The SPA may echo it in logs to correlate the down→up transition; it is not required to poll.
+             * @example restart-1718900000000000000
+             */
+            restart_id: string;
+            /**
+             * @description Approximate number of seconds the gateway will wait for in-flight work to drain before re-execing. The SPA can use this as a lower bound before it starts polling /health for the gateway to come back.
+             * @example 2
+             */
+            drain_seconds: number;
+            /**
+             * @description Human-readable description of the scheduled restart.
+             * @example Gateway is restarting; reconnecting shortly.
+             */
+            message?: string;
         };
         /**
          * AboutResponse
@@ -9329,6 +9376,47 @@ export interface operations {
             };
         };
     };
+    restartGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restart accepted and scheduled. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayRestartResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Restart unavailable (dev_mode_bypass active). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getWorkspaceFile: {
         parameters: {
             query?: never;
@@ -11585,6 +11673,7 @@ export type ExecProxyStatus = components["schemas"]["ExecProxyStatus"];
 export type SkillTrustResponse = components["schemas"]["SkillTrustResponse"];
 export type PromptGuardResponse = components["schemas"]["PromptGuardResponse"];
 export type PendingRestartEntry = components["schemas"]["PendingRestartEntry"];
+export type GatewayRestartResponse = components["schemas"]["GatewayRestartResponse"];
 export type AboutResponse = components["schemas"]["AboutResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type GatewayStatus = components["schemas"]["GatewayStatus"];

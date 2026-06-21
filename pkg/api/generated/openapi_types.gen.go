@@ -1492,6 +1492,21 @@ func (e GTDBoardTaskStatus) Valid() bool {
 	}
 }
 
+// Defines values for GatewayRestartResponseStatus.
+const (
+	Restarting GatewayRestartResponseStatus = "restarting"
+)
+
+// Valid indicates whether the value is a known member of the GatewayRestartResponseStatus enum.
+func (e GatewayRestartResponseStatus) Valid() bool {
+	switch e {
+	case Restarting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GlobalToolPoliciesDefaultPolicy.
 const (
 	GlobalToolPoliciesDefaultPolicyAllow GlobalToolPoliciesDefaultPolicy = "allow"
@@ -5290,6 +5305,24 @@ type FallbackModel struct {
 
 // GTDBoardTaskStatus GTD board task status.
 type GTDBoardTaskStatus string
+
+// GatewayRestartResponse Acknowledgement returned by POST /api/v1/gateway/restart. The gateway accepts the request, replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). The SPA uses this response to start polling /health (and the WS reconnect path) to detect the gateway going down and coming back up.
+type GatewayRestartResponse struct {
+	// DrainSeconds Approximate number of seconds the gateway will wait for in-flight work to drain before re-execing. The SPA can use this as a lower bound before it starts polling /health for the gateway to come back.
+	DrainSeconds int `json:"drain_seconds"`
+
+	// Message Human-readable description of the scheduled restart.
+	Message *string `json:"message,omitempty"`
+
+	// RestartId Opaque identifier for this restart attempt. The SPA may echo it in logs to correlate the down→up transition; it is not required to poll.
+	RestartId string `json:"restart_id"`
+
+	// Status Always "restarting" — the request was accepted and a graceful restart has been scheduled. The HTTP response is sent BEFORE the process re-execs.
+	Status GatewayRestartResponseStatus `json:"status"`
+}
+
+// GatewayRestartResponseStatus Always "restarting" — the request was accepted and a graceful restart has been scheduled. The HTTP response is sent BEFORE the process re-execs.
+type GatewayRestartResponseStatus string
 
 // GatewayStatus Gateway runtime status as returned by GET /status (polled by the frontend StatusBar every 15 seconds). Summarises the number of configured agents and channels plus a daily cost accumulator.
 type GatewayStatus struct {

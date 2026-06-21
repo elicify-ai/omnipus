@@ -63,7 +63,11 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 	}
 
 	// Detect and pin CLI version (FR-5.6 / N3).
-	ver, verKnown := detectAndPinVersion(ctx, opencodeBinName, "runner/opencode", knownOpencodeVersionPrefixes)
+	// Resolve the CLI binary: opts.CLIPath (ExecutorConfig.cli_path) wins; else
+	// the default name resolved via $PATH (MAJ-5).
+	binary := resolveCLIBinary(opts.CLIPath, opencodeBinName)
+
+	ver, verKnown := detectAndPinVersion(ctx, binary, "runner/opencode", knownOpencodeVersionPrefixes)
 
 	runID := opts.RunID
 	if runID == "" {
@@ -77,11 +81,11 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 		runCtx, cancelFn = context.WithTimeout(runCtx, time.Duration(opts.TimeoutSeconds)*time.Second)
 	}
 
-	cmd := exec.CommandContext(runCtx, opencodeBinName, args...)
+	cmd := exec.CommandContext(runCtx, binary, args...)
 	if opts.WorkDir != "" {
 		cmd.Dir = opts.WorkDir
 	}
-	cmd.Env = d.buildEnv(opts.Env)
+	cmd.Env = d.buildEnv(opts)
 	// M3: the prompt is delivered exactly once, via the `--prompt` CLI argument
 	// (see buildArgs). It MUST NOT also be written to stdin — feeding it on both
 	// channels makes opencode process the prompt twice. stdin is always an empty
@@ -211,15 +215,19 @@ func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
 		// both channels caused opencode to process the prompt twice.
 		args = append(args, "--prompt", opts.Input)
 	}
+	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5).
+	args = append(args, opts.CLIArgs...)
 	return args
 }
 
 // buildEnv builds the environment for the child process. See buildChildEnv:
 // a non-nil opts.Env is the COMPLETE, already-scrubbed allowlist (the gateway
 // secrets, incl. OMNIPUS_MASTER_KEY, are NOT inherited); nil falls back to
-// os.Environ() for direct/test callers.
-func (d *OpencodeDriver) buildEnv(callerEnv []string) []string {
-	return buildChildEnv(callerEnv)
+// os.Environ() for direct/test callers. opts.EnvOverrides (ExecutorConfig
+// .env_overrides, MAJ-5) are merged in afterwards; protected OMNIPUS_* keys are
+// dropped.
+func (d *OpencodeDriver) buildEnv(opts RunOptions) []string {
+	return mergeEnvOverrides(buildChildEnv(opts.Env), opts.EnvOverrides, opts.RunID)
 }
 
 // parseLine maps a single NDJSON line from `opencode run --format json` to a RunEvent.

@@ -12,6 +12,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, updateAgent, isApiError, isWorker } from '@/lib/api'
 import type { Agent } from '@/lib/api'
+import { useAuthStore } from '@/store/auth'
 
 interface HostClis {
   hasClaude: boolean
@@ -35,6 +36,8 @@ const CLI_ORDER: readonly WizardCli[] = ['claude-code', 'codex', 'opencode'] as 
 
 export function AgentListScreen() {
   const { openCreateAgentModal, addToast } = useUiStore()
+  // MIN-9: defer authed fetches (including cli-detect) until the auth token is present.
+  const authToken = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
 
   const { data: agents = [], isLoading, isError, refetch } = useQuery({
@@ -50,9 +53,14 @@ export function AgentListScreen() {
   const workerAgents = agents.filter(isWorker)
   const builtInAgents = agents.filter((a) => a.type === 'core' && a.locked)
 
-  // Built-in roster disclosure state — default collapsed so the custom agents
-  // stay prominent.
-  const [builtInOpen, setBuiltInOpen] = useState<string | undefined>(undefined)
+  // Built-in roster disclosure state — O2 adaptive expand:
+  // expanded when there are no custom Main agents (fresh install — core agents
+  // visible immediately); collapsed once the user has custom Main agents (their
+  // own agents stay prominent).
+  const hasCustomMainAgents = mainAgents.length > 0
+  const [builtInOpen, setBuiltInOpen] = useState<string | undefined>(
+    hasCustomMainAgents ? undefined : 'built-in',
+  )
 
   // Host-CLI detection — W4 of agent-form-requirements. We probe
   // `GET /api/v1/system/cli-detect` on mount and fall back to optimistic
@@ -66,6 +74,8 @@ export function AgentListScreen() {
   useEffect(() => {
     // SSR-safe: only run in browser.
     if (typeof window === 'undefined') return
+    // MIN-9: do not fire authed requests before the auth token is present.
+    if (!authToken) return
     let cancelled = false
     fetch('/api/v1/system/cli-detect')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('not ok'))))
@@ -79,7 +89,7 @@ export function AgentListScreen() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [authToken])
 
   const { mutate: doSetDefault } = useMutation({
     mutationFn: (agent: Agent) =>
@@ -186,15 +196,15 @@ export function AgentListScreen() {
         </div>
       ) : (
         <div className="space-y-8">
-          {/* Base agents — chat colleagues (type !== 'worker'). Header + New
-              button are always rendered so the affordance is reachable on a
-              fresh install (when no agents exist yet). Empty section renders
-              a brief empty-state message + the same New button. */}
+          {/* Main agents — custom chat colleagues (type !== 'worker' and not core/locked).
+              Header + New button are always rendered so the affordance is reachable on a
+              fresh install. Empty section renders the O2 copy directing users to the
+              built-in roster below. */}
           <section data-testid="base-agents-section">
             <div className="flex items-start justify-between gap-3 mb-3">
               <div>
                 <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
-                  Base agents
+                  Main agents
                 </h2>
                 <p className="text-xs text-[var(--color-muted)] mt-0.5">
                   Chat colleagues — message them, set a default, and delegate work.
@@ -216,10 +226,7 @@ export function AgentListScreen() {
                 data-testid="base-agents-empty"
               >
                 <p className="text-sm text-[var(--color-muted)]">
-                  No base agents yet.
-                </p>
-                <p className="text-sm text-[var(--color-muted)]/80 mt-1">
-                  Create your first chat colleague to get started.
+                  No custom Main agents yet. Create one, or use a built-in below.
                 </p>
               </div>
             ) : (
@@ -357,8 +364,9 @@ export function AgentListScreen() {
           </section>
 
           {/* Built-in roster — locked core agents (Mia / Jim / Ava / Ray).
-              Collapsed by default per spec §5.1/§13.2 so the operator's own
-              agents stay in the visual hierarchy. */}
+              O2 adaptive expand: expanded when there are no custom Main agents
+              (so a fresh user always sees the roster), collapsed once the user
+              has at least one custom Main agent (their own agents stay prominent). */}
           {builtInAgents.length > 0 && (
             <section data-testid="built-in-agents-section">
               <Accordion

@@ -193,6 +193,13 @@ type restAPI struct {
 	// this field still function.
 	reauthOnce sync.Once
 	reauth     *reauthStore
+
+	// restarter performs the graceful self-restart triggered by
+	// POST /api/v1/gateway/restart (O4-backend). It is an indirection so the
+	// handler can be unit-tested without re-execing the test process — tests
+	// inject a stub. Nil means "use the production re-exec path"
+	// (gracefulSelfRestart), resolved lazily in HandleGatewayRestart.
+	restarter func()
 }
 
 // reauthStoreOrInit returns the lazily-initialized re-auth token store, creating
@@ -1962,6 +1969,14 @@ func firstForbiddenSubagent3pField(req any) (string, bool) {
 			return "delegation_policy", true
 		}
 	case *gen.AgentUpdateRequest:
+		// worker-PUT-400 fix: only the genuinely CLI-owned fields are rejected on
+		// a subagent_3p PUT. Fields that ARE valid for a worker — model,
+		// timeout_seconds, max_tool_iterations, color, icon, description, and
+		// delegation_policy — must be accepted (a delegation_policy with a
+		// non-empty to[] is still independently bounded by buildDelegationPolicy's
+		// worker-leaf check). The external CLI manages its own isolation, tools,
+		// and skills, so tools_cfg / sandbox_profile / shell_policy /
+		// fallback_models / model_params / skills stay forbidden (O13).
 		if r.ToolsCfg != nil {
 			return "tools_cfg", true
 		}
@@ -1979,9 +1994,6 @@ func firstForbiddenSubagent3pField(req any) (string, bool) {
 		}
 		if r.ShellPolicy != nil {
 			return "shell_policy", true
-		}
-		if r.DelegationPolicy != nil {
-			return "delegation_policy", true
 		}
 	}
 	return "", false
@@ -3779,6 +3791,9 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// Chain: withAuth → RequireAdmin → RequireNotBypass → handler.
 	// CSRF is enforced by the global WrapHTTPHandler layer (no per-handler wiring needed).
 	cm.RegisterHTTPHandler("/api/v1/config/pending-restart", a.adminWrap(a.HandlePendingRestart))
+	// O4-backend: UI-triggerable graceful self-restart. High blast radius —
+	// admin-only + RequireNotBypass (dev_mode_bypass → 503) via adminWrap.
+	cm.RegisterHTTPHandler("/api/v1/gateway/restart", a.adminWrap(a.HandleGatewayRestart))
 	cm.RegisterHTTPHandler("/api/v1/security/audit-log", a.adminWrap(a.HandleSandboxAuditLog))
 	cm.RegisterHTTPHandler("/api/v1/security/skill-trust", a.adminWrap(a.HandleSkillTrust))
 	cm.RegisterHTTPHandler("/api/v1/security/prompt-guard", a.adminWrap(a.HandlePromptGuard))

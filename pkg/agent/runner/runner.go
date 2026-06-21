@@ -180,6 +180,20 @@ type RunOptions struct {
 	// MaxTurns is the maximum number of agentic turns the external agent may
 	// take. Zero means the driver's built-in default applies.
 	MaxTurns int
+
+	// CLIPath is the filesystem path to the CLI binary to exec (MAJ-5 /
+	// ExecutorConfig.cli_path). When empty, the driver's default binary name is
+	// used and resolved via $PATH. An absolute path pins a specific install.
+	CLIPath string
+	// CLIArgs are pre-parsed extra arguments appended to the driver's own argv
+	// (MAJ-5 / ExecutorConfig.cli_args). These are passed to execve literally —
+	// the dispatch site tokenises the free-form cli_args string (no shell).
+	CLIArgs []string
+	// EnvOverrides are additional environment variables merged into Env for the
+	// spawned process (MAJ-5 / ExecutorConfig.env_overrides). Omnipus-internal
+	// keys (OMNIPUS_*) are never overridable — the driver's env builder drops
+	// any such key.
+	EnvOverrides map[string]string
 }
 
 // ConnectionTestResult holds the outcome of an ExternalAgentRunner.Test call.

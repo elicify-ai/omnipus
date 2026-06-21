@@ -8,19 +8,36 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const addToast = vi.fn()
 vi.mock('@/store/ui', () => ({ useUiStore: vi.fn(() => ({ addToast })) }))
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, transcribeAudio: vi.fn(), isApiError: actual.isApiError }
+  return {
+    ...actual,
+    transcribeAudio: vi.fn(),
+    isApiError: actual.isApiError,
+    // MessageInput uses useQuery(fetchSkills) for slash-command autocomplete; return
+    // an empty list so tests don't make real network requests.
+    fetchSkills: vi.fn().mockResolvedValue([]),
+  }
 })
 
 import * as api from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
 import { useChatStore } from '@/store/chat'
 import { MessageInput } from './MessageInput'
+
+function renderInput() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <MessageInput />
+    </QueryClientProvider>,
+  )
+}
 
 // A controllable fake MediaRecorder. start() is synchronous; stop() invokes the
 // onstop handler so the component's transcription path runs.
@@ -66,7 +83,7 @@ afterEach(() => {
 describe('MessageInput composer mic', () => {
   it('records, transcribes, and appends the text to the input', async () => {
     vi.mocked(api.transcribeAudio).mockResolvedValue({ text: 'hello world' } as never)
-    render(<MessageInput />)
+    renderInput()
 
     const mic = screen.getByTestId('mic-btn')
 
@@ -92,7 +109,7 @@ describe('MessageInput composer mic', () => {
   it('surfaces a toast when transcription returns 503 (no transcriber)', async () => {
     const { ApiError } = api
     vi.mocked(api.transcribeAudio).mockRejectedValue(new ApiError(503, 'no transcriber'))
-    render(<MessageInput />)
+    renderInput()
     const mic = screen.getByTestId('mic-btn')
 
     await act(async () => fireEvent.click(mic))
@@ -115,7 +132,7 @@ describe('MessageInput composer mic', () => {
         ),
       },
     })
-    render(<MessageInput />)
+    renderInput()
     await act(async () => fireEvent.click(screen.getByTestId('mic-btn')))
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith(
