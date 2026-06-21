@@ -9,7 +9,21 @@ import { isKnownModelSlugInList } from '@/lib/agents/model-validation'
 
 export interface ModelGroup {
   providerName: string
+  /** O3: explicit provider routing key (e.g. the provider's `id` field). Used to
+   *  emit a `{model, provider}` pair via `onPairChange`. Optional — callers that
+   *  do not set this get an empty string for the provider in `onPairChange`. */
+  providerId?: string
   models: string[]
+}
+
+/** O3 two-field model: the value emitted by `onPairChange` when the user picks
+ *  a model from a known provider group. */
+export interface ModelPair {
+  model: string
+  /** Explicit provider routing key — matches the provider's `id` field on the
+   *  backend. Empty string when the provider could not be resolved (e.g. the
+   *  group has no `providerId` or the model was entered via free-text). */
+  provider: string
 }
 
 interface ModelSelectorProps {
@@ -37,6 +51,13 @@ interface ModelSelectorProps {
    */
   onUnknownModel?: (model: string) => void
   /**
+   * O3 two-field: called alongside `onChange` when the user picks a model from
+   * a known provider group. Emits `{ model, provider }` where `provider` is the
+   * group's `providerId` (or empty string when not set). NOT called for free-text
+   * "Use <slug>" picks because those have no resolvable provider.
+   */
+  onPairChange?: (pair: ModelPair) => void
+  /**
    * W6-C4 / G12: when `true`, the trigger button shows an inline "unresolved"
    * chip next to the current value if the value is NOT in the supplied
    * `models` / `providerGroups` list (case-insensitive, also matches the
@@ -47,7 +68,7 @@ interface ModelSelectorProps {
   showUnresolvedIndicator?: boolean
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, showUnresolvedIndicator = true }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true }: ModelSelectorProps) {
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
   // Unique id for the sr-only description the popover's aria-describedby
@@ -128,8 +149,17 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     : []
   const useGrouped = groupsWithModels.length >= 1
 
+  // O3: resolve the provider routing key for a given model slug by searching
+  // the providerGroups array. Returns the group's `providerId` or empty string.
+  const resolveProviderId = (modelSlug: string): string => {
+    if (!providerGroups) return ''
+    const group = providerGroups.find((g) => g.models.includes(modelSlug))
+    return group?.providerId ?? ''
+  }
+
   const handleSelect = (model: string) => {
     onChange(model)
+    onPairChange?.({ model, provider: resolveProviderId(model) })
     setOpen(false)
     setQuery('')
   }

@@ -92,6 +92,8 @@ function payloadToCreateRequest(
   }
   if (payload.description.trim()) req.description = payload.description.trim()
   if (payload.instructions.trim()) req.instructions = payload.instructions.trim()
+  // O3 two-field: forward provider only when non-empty.
+  if (payload.provider && payload.provider.trim() !== '') req.provider = payload.provider.trim()
   if (payload.heartbeat !== undefined) req.heartbeat = payload.heartbeat
   if (payload.heartbeat_enabled !== undefined) req.heartbeat_enabled = payload.heartbeat_enabled
   if (payload.heartbeat_interval !== undefined) req.heartbeat_interval = payload.heartbeat_interval

@@ -1,7 +1,16 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
-import { CaretDown, Plus, Robot, ShareNetwork, WarningCircle } from '@phosphor-icons/react'
+import {
+  CaretDown,
+  FunnelSimple,
+  GitFork,
+  Plus,
+  Robot,
+  ShareNetwork,
+  Users,
+  WarningCircle,
+} from '@phosphor-icons/react'
 import { AgentCard } from '@/components/agents/AgentCard'
 import { WorkerCard } from '@/components/agents/WorkerCard'
 import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
@@ -9,9 +18,10 @@ import type { WizardCli } from '@/components/agents/wizard/types'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, updateAgent, isApiError, isWorker } from '@/lib/api'
-import type { Agent } from '@/lib/api'
+import { fetchAgents, fetchWorkspaces, updateAgent, isApiError, isWorker } from '@/lib/api'
+import type { Agent, Workspace } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 
 interface HostClis {
@@ -34,61 +44,477 @@ const CLI_LABELS: Record<WizardCli, string> = {
 
 const CLI_ORDER: readonly WizardCli[] = ['claude-code', 'codex', 'opencode'] as const
 
+// ── Workspace Teams view ──────────────────────────────────────────────────────
+
+interface WorkspaceTeamsViewProps {
+  workspaces: Workspace[]
+}
+
+function WorkspaceTeamsView({ workspaces }: WorkspaceTeamsViewProps) {
+  if (workspaces.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+        <GitFork size={48} weight="thin" className="text-[var(--color-border)]" />
+        <div>
+          <p className="text-[var(--color-secondary)] font-medium text-sm">No workspaces yet</p>
+          <p className="text-[var(--color-muted)] text-sm mt-1">
+            Create a workspace to configure team delegation graphs.
+          </p>
+        </div>
+        <Link
+          to="/workspaces"
+          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)]"
+        >
+          <GitFork size={14} weight="bold" /> Go to Workspaces
+        </Link>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-[var(--color-muted)] mb-4">
+        Each workspace has a team delegation graph. Click a workspace to configure its team.
+      </p>
+      {workspaces.map((ws) => (
+        <Link
+          key={ws.id}
+          to="/workspaces/$workspaceId/team"
+          params={{ workspaceId: ws.id }}
+          data-testid={`workspace-team-row-${ws.id}`}
+          className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-3 transition-colors hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)]"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
+              style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)' }}
+            >
+              <Users size={16} style={{ color: 'var(--color-accent)' }} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-[var(--color-secondary)] truncate">
+                {ws.name}
+              </p>
+              {ws.description && (
+                <p className="text-xs text-[var(--color-muted)] truncate mt-0.5">
+                  {ws.description}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            {(ws.core_team ?? []).length > 0 && (
+              <span className="text-xs text-[var(--color-muted)]">
+                {ws.core_team!.length} agent{ws.core_team!.length !== 1 ? 's' : ''}
+              </span>
+            )}
+            <GitFork size={14} className="text-[var(--color-muted)]" />
+          </div>
+        </Link>
+      ))}
+    </div>
+  )
+}
+
+// ── Agents Library view ───────────────────────────────────────────────────────
+
+interface AgentsLibraryViewProps {
+  agents: Agent[]
+  workspaces: Workspace[]
+  onSetDefault: (agent: Agent) => void
+  openCreateAgentModal: (type: 'Main' | 'Subagent' | 'subagent_3p', cli?: WizardCli) => void
+  hostClis: HostClis
+  cliDetectFailed: boolean
+  externalMenuOpen: boolean
+  setExternalMenuOpen: (open: boolean) => void
+  builtInOpen: string | undefined
+  setBuiltInOpen: (v: string | undefined) => void
+}
+
+function AgentsLibraryView({
+  agents,
+  workspaces,
+  onSetDefault,
+  openCreateAgentModal,
+  hostClis,
+  cliDetectFailed,
+  externalMenuOpen,
+  setExternalMenuOpen,
+  builtInOpen,
+  setBuiltInOpen,
+}: AgentsLibraryViewProps) {
+  const [workspaceFilter, setWorkspaceFilter] = useState<string>('all')
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false)
+
+  // Resolve the workspace object for the current filter (for label display).
+  const activeWorkspace = workspaces.find((ws) => ws.id === workspaceFilter)
+
+  // Filter agents by workspace membership when a filter is active.
+  const filteredAgents =
+    workspaceFilter === 'all'
+      ? agents
+      : agents.filter((agent) => {
+          const ws = workspaces.find((w) => w.id === workspaceFilter)
+          return ws?.core_team?.includes(agent.id) ?? false
+        })
+
+  const mainAgents = filteredAgents.filter((a) => !isWorker(a) && !(a.type === 'core' && a.locked))
+  const workerAgents = filteredAgents.filter(isWorker)
+  const builtInAgents = filteredAgents.filter((a) => a.type === 'core' && a.locked)
+
+  const cliAvailable: Record<WizardCli, boolean> = {
+    'claude-code': hostClis.hasClaude,
+    codex: hostClis.hasCodex,
+    opencode: hostClis.hasOpencode,
+  }
+  const cliTooltip: Record<WizardCli, string> = {
+    'claude-code': 'Claude Code is not installed on this host',
+    codex: 'Codex is not installed on this host',
+    opencode: 'OpenCode is not installed on this host',
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Filter bar */}
+      {workspaces.length > 0 && (
+        <div className="flex items-center gap-2">
+          <Popover open={filterMenuOpen} onOpenChange={setFilterMenuOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                data-testid="workspace-filter-trigger"
+                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
+                style={{
+                  borderColor:
+                    workspaceFilter !== 'all'
+                      ? 'var(--color-accent)'
+                      : 'var(--color-border)',
+                  backgroundColor: 'var(--color-surface-1)',
+                  color:
+                    workspaceFilter !== 'all'
+                      ? 'var(--color-accent)'
+                      : 'var(--color-muted)',
+                }}
+              >
+                <FunnelSimple size={12} weight={workspaceFilter !== 'all' ? 'fill' : 'regular'} />
+                {workspaceFilter === 'all'
+                  ? 'Filter by workspace'
+                  : (activeWorkspace?.name ?? workspaceFilter)}
+                <CaretDown size={10} />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" sideOffset={4} className="w-56 p-1">
+              <div role="menu" aria-label="Filter agents by workspace">
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="workspace-filter-all"
+                  onClick={() => {
+                    setWorkspaceFilter('all')
+                    setFilterMenuOpen(false)
+                  }}
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-surface-2)] focus:outline-none"
+                  style={{
+                    color:
+                      workspaceFilter === 'all'
+                        ? 'var(--color-accent)'
+                        : 'var(--color-secondary)',
+                    fontWeight: workspaceFilter === 'all' ? 600 : 400,
+                  }}
+                >
+                  All agents
+                </button>
+                {workspaces.map((ws) => (
+                  <button
+                    key={ws.id}
+                    type="button"
+                    role="menuitem"
+                    data-testid={`workspace-filter-${ws.id}`}
+                    onClick={() => {
+                      setWorkspaceFilter(ws.id)
+                      setFilterMenuOpen(false)
+                    }}
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-surface-2)] focus:outline-none"
+                    style={{
+                      color:
+                        workspaceFilter === ws.id
+                          ? 'var(--color-accent)'
+                          : 'var(--color-secondary)',
+                      fontWeight: workspaceFilter === ws.id ? 600 : 400,
+                    }}
+                  >
+                    <Users size={12} />
+                    {ws.name}
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+          {workspaceFilter !== 'all' && (
+            <button
+              type="button"
+              data-testid="workspace-filter-clear"
+              onClick={() => setWorkspaceFilter('all')}
+              className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors"
+              style={{ color: 'var(--color-muted)' }}
+            >
+              Clear filter
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Roster sections */}
+      {agents.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+          <Robot size={48} weight="thin" className="text-[var(--color-border)]" />
+          <div>
+            <p className="text-[var(--color-secondary)] font-medium text-sm">No agents yet</p>
+            <p className="text-[var(--color-muted)] text-sm mt-1">
+              Create your first agent to get started.
+            </p>
+          </div>
+          <Button onClick={() => openCreateAgentModal('Main')} className="gap-2">
+            <Plus size={14} weight="bold" /> New agent
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-8">
+          {/* Main agents */}
+          <section data-testid="base-agents-section">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                  Main agents
+                </h2>
+                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                  Chat colleagues — message them, set a default, and delegate work.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => openCreateAgentModal('Main')}
+                className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                data-testid="add-main-button"
+              >
+                <Plus size={12} weight="bold" /> + New Main
+              </Button>
+            </div>
+            {mainAgents.length === 0 ? (
+              <div
+                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
+                data-testid="base-agents-empty"
+              >
+                <p className="text-sm text-[var(--color-muted)]">
+                  {workspaceFilter !== 'all'
+                    ? 'No Main agents on this workspace team.'
+                    : 'No custom Main agents yet. Create one, or use a built-in below.'}
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+                {mainAgents.map((agent) => (
+                  <AgentCard
+                    key={agent.id}
+                    agent={agent}
+                    onSetDefault={() => onSetDefault(agent)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Sub-agent workers */}
+          <section data-testid="worker-agents-section">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                  Sub-agent workers
+                </h2>
+                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                  Delegation-only labour agents — invoked by other agents, not chat targets.
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => openCreateAgentModal('Subagent')}
+                  className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                  data-testid="add-subagent-button"
+                >
+                  <Plus size={12} weight="bold" /> + New Subagent
+                </Button>
+                {/* W4 of agent-form-requirements: third +Add with CLI sub-options. */}
+                <Popover open={externalMenuOpen} onOpenChange={setExternalMenuOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="gap-1.5 ml-0 sm:ml-2 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                      data-testid="add-external-trigger"
+                      aria-haspopup="menu"
+                      aria-expanded={externalMenuOpen}
+                    >
+                      <Plus size={12} weight="bold" /> + Add Subagent (External)
+                      <CaretDown size={10} weight="bold" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="end"
+                    sideOffset={6}
+                    className="w-56 p-1"
+                    data-testid="add-external-menu"
+                  >
+                    <div role="menu" aria-label="Choose a third-party CLI">
+                      {CLI_ORDER.map((cli) => {
+                        const available = cliAvailable[cli]
+                        return (
+                          <button
+                            key={cli}
+                            type="button"
+                            role="menuitem"
+                            disabled={!available}
+                            title={available ? undefined : cliTooltip[cli]}
+                            onClick={() => {
+                              openCreateAgentModal('subagent_3p', cli)
+                              setExternalMenuOpen(false)
+                            }}
+                            data-testid={`add-external-${cli}`}
+                            className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                          >
+                            <span className="font-mono">{CLI_LABELS[cli]}</span>
+                            {!available && (
+                              <span className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+                                not installed
+                              </span>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </div>
+
+            {cliDetectFailed && (
+              <div
+                className="flex items-start gap-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 mb-3"
+                data-testid="cli-detect-warning"
+              >
+                <WarningCircle size={16} weight="bold" className="mt-0.5 shrink-0 text-amber-400" />
+                <p className="text-xs text-amber-100">
+                  Could not detect installed external CLIs. External subagent availability is assumed by default.
+                </p>
+              </div>
+            )}
+
+            {workerAgents.length === 0 ? (
+              <div
+                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
+                data-testid="worker-agents-empty"
+              >
+                <p className="text-sm text-[var(--color-muted)]">
+                  {workspaceFilter !== 'all'
+                    ? 'No sub-agent workers on this workspace team.'
+                    : 'No sub-agent workers yet.'}
+                </p>
+                {workspaceFilter === 'all' && (
+                  <p className="text-sm text-[var(--color-muted)]/80 mt-1">
+                    Create a worker to delegate labour to a third-party runtime.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+                {workerAgents.map((agent) => (
+                  <WorkerCard key={agent.id} agent={agent} />
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Built-in roster */}
+          {builtInAgents.length > 0 && (
+            <section data-testid="built-in-agents-section">
+              <Accordion
+                type="single"
+                collapsible
+                value={builtInOpen}
+                onValueChange={setBuiltInOpen}
+              >
+                <AccordionItem value="built-in">
+                  <AccordionTrigger data-testid="built-in-agents-trigger">
+                    <div className="text-left">
+                      <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                        Built-in roster
+                      </h2>
+                      <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                        Core agents — Mia, Jim, Ava, Ray and any other locked system roster.
+                      </p>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-2">
+                      {builtInAgents.map((agent) => (
+                        <AgentCard
+                          key={agent.id}
+                          agent={agent}
+                          onSetDefault={() => onSetDefault(agent)}
+                        />
+                      ))}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </section>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+
 export function AgentListScreen() {
   const { openCreateAgentModal, addToast } = useUiStore()
   // MIN-9: defer authed fetches (including cli-detect) until the auth token is present.
   const authToken = useAuthStore((s) => s.token)
   const queryClient = useQueryClient()
 
-  const { data: agents = [], isLoading, isError, refetch } = useQuery({
+  const { data: agents = [], isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
   })
 
-  // Three-tier roster (W4 of agent-form-requirements §5.1/§13.2): user-defined
-  // Main agents on top, user-defined workers (Subagent + subagent_3p) below,
-  // built-in roster (locked core agents Mia/Jim/Ava/Ray, type=core) at the
-  // bottom in a collapsible disclosure.
-  const mainAgents = agents.filter((a) => !isWorker(a) && !(a.type === 'core' && a.locked))
-  const workerAgents = agents.filter(isWorker)
-  const builtInAgents = agents.filter((a) => a.type === 'core' && a.locked)
+  const { data: workspaces = [] } = useQuery({
+    queryKey: ['workspaces'],
+    queryFn: () => fetchWorkspaces(),
+  })
+
+  // Three-tier roster (W4 of agent-form-requirements §5.1/§13.2).
+  const isLoading = agentsLoading
+  const isError = agentsError
 
   // Built-in roster disclosure state — O2 adaptive expand.
-  //
-  // Rule: expanded when there are no custom Main agents (fresh install — core
-  // agents visible immediately); collapsed once the user has at least one
-  // custom Main agent (their own agents stay prominent).
-  //
-  // The initial useState seeded from hasCustomMainAgents is wrong at first
-  // render because agents=[] while the query loads — it always initialises
-  // EXPANDED and never re-syncs. Instead we start collapsed (undefined) and
-  // derive the correct default once loading is complete, but only fire the
-  // effect ONCE (via a ref gate) so we do not stomp subsequent manual toggles.
   const [builtInOpen, setBuiltInOpen] = useState<string | undefined>(undefined)
   const initialOpenApplied = useRef(false)
   useEffect(() => {
-    // Only run once after the first successful load.
     if (isLoading || initialOpenApplied.current) return
     initialOpenApplied.current = true
     const hasCustom = agents.some((a) => !isWorker(a) && !(a.type === 'core' && a.locked))
-    // Expand for fresh installs (no custom Main agents); collapse when the
-    // user already has their own agents.
     setBuiltInOpen(hasCustom ? undefined : 'built-in')
   }, [isLoading, agents])
 
-  // Host-CLI detection — W4 of agent-form-requirements. We probe
-  // `GET /api/v1/system/cli-detect` on mount and fall back to optimistic
-  // defaults (all CLIs available) when the endpoint is missing or returns a
-  // network error, so the disclosure still works in degraded modes (offline,
-  // pre-onboarding, etc.). The roster's "Add Subagent (External)" picker
-  // disables each CLI whose binary the gateway reports missing.
+  // Host-CLI detection — W4 of agent-form-requirements.
   const [hostClis, setHostClis] = useState<HostClis>(OPTIMISTIC_HOST_CLIS)
   const [externalMenuOpen, setExternalMenuOpen] = useState(false)
   const [cliDetectFailed, setCliDetectFailed] = useState(false)
   useEffect(() => {
-    // SSR-safe: only run in browser.
     if (typeof window === 'undefined') return
-    // MIN-9: do not fire authed requests before the auth token is present.
     if (!authToken) return
     let cancelled = false
     fetch('/api/v1/system/cli-detect')
@@ -97,7 +523,6 @@ export function AgentListScreen() {
         if (!cancelled) setHostClis(d)
       })
       .catch(() => {
-        // Keep OPTIMISTIC_HOST_CLIS — endpoint missing or network error.
         if (!cancelled) setCliDetectFailed(true)
       })
     return () => {
@@ -128,20 +553,6 @@ export function AgentListScreen() {
     },
   })
 
-  // Per-CLI affordance config — drives both the disabled state and the
-  // tooltip when a CLI is not installed on the host. Kept in one place so
-  // the disclosure and the (future) inline fallback render the same state.
-  const cliAvailable: Record<WizardCli, boolean> = {
-    'claude-code': hostClis.hasClaude,
-    codex: hostClis.hasCodex,
-    opencode: hostClis.hasOpencode,
-  }
-  const cliTooltip: Record<WizardCli, string> = {
-    'claude-code': 'Claude Code is not installed on this host',
-    codex: 'Codex is not installed on this host',
-    opencode: 'OpenCode is not installed on this host',
-  }
-
   if (isLoading) {
     return (
       <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
@@ -165,7 +576,7 @@ export function AgentListScreen() {
         <div className="max-w-4xl mx-auto px-4 py-6">
           <div className="flex flex-col items-center justify-center py-16 gap-3">
             <p className="text-[var(--color-muted)] text-sm">Could not load agents.</p>
-            <Button variant="outline" size="sm" onClick={() => refetch()}>
+            <Button variant="outline" size="sm" onClick={() => refetchAgents()}>
               Retry
             </Button>
           </div>
@@ -179,247 +590,57 @@ export function AgentListScreen() {
       <div className="max-w-4xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Agents</h1>
-          <p className="text-sm text-[var(--color-muted)] mt-0.5">
-            Browse, configure, and create your AI agents.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            to="/agents/trust"
-            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)]"
-          >
-            <ShareNetwork size={14} weight="bold" /> Delegation Graph
-          </Link>
-        </div>
-      </div>
-
-      {agents.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
-          <Robot size={48} weight="thin" className="text-[var(--color-border)]" />
           <div>
-            <p className="text-[var(--color-secondary)] font-medium text-sm">No agents yet</p>
-            <p className="text-[var(--color-muted)] text-sm mt-1">
-              Create your first agent to get started.
+            <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Agents</h1>
+            <p className="text-sm text-[var(--color-muted)] mt-0.5">
+              Browse, configure, and create your AI agents.
             </p>
           </div>
-          <Button onClick={() => openCreateAgentModal('Main')} className="gap-2">
-            <Plus size={14} weight="bold" /> New agent
-          </Button>
-        </div>
-      ) : (
-        <div className="space-y-8">
-          {/* Main agents — custom chat colleagues (type !== 'worker' and not core/locked).
-              Header + New button are always rendered so the affordance is reachable on a
-              fresh install. Empty section renders the O2 copy directing users to the
-              built-in roster below. */}
-          <section data-testid="base-agents-section">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div>
-                <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
-                  Main agents
-                </h2>
-                <p className="text-xs text-[var(--color-muted)] mt-0.5">
-                  Chat colleagues — message them, set a default, and delegate work.
-                </p>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => openCreateAgentModal('Main')}
-                className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-                data-testid="add-main-button"
-              >
-                <Plus size={12} weight="bold" /> + New Main
-              </Button>
-            </div>
-            {mainAgents.length === 0 ? (
-              <div
-                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
-                data-testid="base-agents-empty"
-              >
-                <p className="text-sm text-[var(--color-muted)]">
-                  No custom Main agents yet. Create one, or use a built-in below.
-                </p>
-              </div>
-            ) : (
-              // Grid progression: 1 col → 2 col (sm) → 3 col (lg). No xl/2xl
-              // jump to 4 cols (avoids the "4th card sits alone at 1440 px"
-              // regression on lg-only viewports). With 4 cards at lg the
-              // layout is 3 + 1; the sm 2-col stage lets 2 + 2 sit
-              // together on md. (W6-B2, I4+M3.)
-              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-                {mainAgents.map((agent) => (
-                  <AgentCard
-                    key={agent.id}
-                    agent={agent}
-                    onSetDefault={() => doSetDefault(agent)}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Sub-agent workers — delegation-only labour (type === 'worker').
-              Same treatment: header + New button always rendered. Empty
-              section renders a brief empty-state message + the same button. */}
-          <section data-testid="worker-agents-section">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div>
-                <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
-                  Sub-agent workers
-                </h2>
-                <p className="text-xs text-[var(--color-muted)] mt-0.5">
-                  Delegation-only labour agents — invoked by other agents, not chat targets.
-                </p>
-              </div>
-              <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => openCreateAgentModal('Subagent')}
-                className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-                data-testid="add-subagent-button"
-              >
-                <Plus size={12} weight="bold" /> + New Subagent
-              </Button>
-              {/* W4 of agent-form-requirements: third +Add with CLI sub-options
-                  (Subagent External). Single trigger opens a Radix Popover
-                  listing the 3 supported CLIs (claude-code / codex / opencode).
-                  Each sub-option passes its CLI choice through to the store
-                  via `openCreateAgentModal('subagent_3p', cli)` so the wizard
-                  pre-fills Step 1 + Step 3. CLIs not detected on host render
-                  disabled with an explanatory tooltip. W4 spec §5.1, §13.2. */}
-              <Popover open={externalMenuOpen} onOpenChange={setExternalMenuOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="gap-1.5 ml-0 sm:ml-2 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-                    data-testid="add-external-trigger"
-                    aria-haspopup="menu"
-                    aria-expanded={externalMenuOpen}
-                  >
-                    <Plus size={12} weight="bold" /> + Add Subagent (External)
-                    <CaretDown size={10} weight="bold" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="end"
-                  sideOffset={6}
-                  className="w-56 p-1"
-                  data-testid="add-external-menu"
-                >
-                  <div role="menu" aria-label="Choose a third-party CLI">
-                    {CLI_ORDER.map((cli) => {
-                      const available = cliAvailable[cli]
-                      return (
-                        <button
-                          key={cli}
-                          type="button"
-                          role="menuitem"
-                          disabled={!available}
-                          title={available ? undefined : cliTooltip[cli]}
-                          onClick={() => {
-                            openCreateAgentModal('subagent_3p', cli)
-                            setExternalMenuOpen(false)
-                          }}
-                          data-testid={`add-external-${cli}`}
-                          className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-                        >
-                          <span className="font-mono">{CLI_LABELS[cli]}</span>
-                          {!available && (
-                            <span className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
-                              not installed
-                            </span>
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-          </div>
-
-          {cliDetectFailed && (
-            <div
-              className="flex items-start gap-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 mb-3"
-              data-testid="cli-detect-warning"
+          <div className="flex items-center gap-2">
+            <Link
+              to="/agents/trust"
+              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)]"
             >
-              <WarningCircle size={16} weight="bold" className="mt-0.5 shrink-0 text-amber-400" />
-              <p className="text-xs text-amber-100">
-                Could not detect installed external CLIs. External subagent availability is assumed by default.
-              </p>
-            </div>
-          )}
-
-          {workerAgents.length === 0 ? (
-              <div
-                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
-                data-testid="worker-agents-empty"
-              >
-                <p className="text-sm text-[var(--color-muted)]">
-                  No sub-agent workers yet.
-                </p>
-                <p className="text-sm text-[var(--color-muted)]/80 mt-1">
-                  Create a worker to delegate labour to a third-party runtime.
-                </p>
-              </div>
-            ) : (
-              // Same 1→2→3 progression as the base grid (W6-B2, I4+M3).
-              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-                {workerAgents.map((agent) => (
-                  <WorkerCard key={agent.id} agent={agent} />
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Built-in roster — locked core agents (Mia / Jim / Ava / Ray).
-              O2 adaptive expand: expanded when there are no custom Main agents
-              (so a fresh user always sees the roster), collapsed once the user
-              has at least one custom Main agent (their own agents stay prominent). */}
-          {builtInAgents.length > 0 && (
-            <section data-testid="built-in-agents-section">
-              <Accordion
-                type="single"
-                collapsible
-                value={builtInOpen}
-                onValueChange={setBuiltInOpen}
-              >
-                <AccordionItem value="built-in">
-                  <AccordionTrigger data-testid="built-in-agents-trigger">
-                    <div className="text-left">
-                      <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
-                        Built-in roster
-                      </h2>
-                      <p className="text-xs text-[var(--color-muted)] mt-0.5">
-                        Core agents — Mia, Jim, Ava, Ray and any other locked system roster.
-                      </p>
-                    </div>
-                  </AccordionTrigger>
-                  <AccordionContent>
-                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-2">
-                      {builtInAgents.map((agent) => (
-                        <AgentCard
-                          key={agent.id}
-                          agent={agent}
-                          onSetDefault={() => doSetDefault(agent)}
-                        />
-                      ))}
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              </Accordion>
-            </section>
-          )}
+              <ShareNetwork size={14} weight="bold" /> Delegation Graph
+            </Link>
+          </div>
         </div>
-      )}
 
-      <CreateAgentModal />
+        {/* Two-tab view: Library | Workspace Teams */}
+        <Tabs defaultValue="library">
+          <TabsList className="mb-6" data-testid="agents-tabs">
+            <TabsTrigger value="library" data-testid="agents-tab-library">
+              <Robot size={14} className="mr-1.5" />
+              Agents
+            </TabsTrigger>
+            <TabsTrigger value="teams" data-testid="agents-tab-teams">
+              <Users size={14} className="mr-1.5" />
+              Workspace Teams
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="library">
+            <AgentsLibraryView
+              agents={agents}
+              workspaces={workspaces}
+              onSetDefault={doSetDefault}
+              openCreateAgentModal={openCreateAgentModal}
+              hostClis={hostClis}
+              cliDetectFailed={cliDetectFailed}
+              externalMenuOpen={externalMenuOpen}
+              setExternalMenuOpen={setExternalMenuOpen}
+              builtInOpen={builtInOpen}
+              setBuiltInOpen={setBuiltInOpen}
+            />
+          </TabsContent>
+
+          <TabsContent value="teams">
+            <WorkspaceTeamsView workspaces={workspaces} />
+          </TabsContent>
+        </Tabs>
+
+        <CreateAgentModal />
+      </div>
     </div>
-  </div>
   )
 }

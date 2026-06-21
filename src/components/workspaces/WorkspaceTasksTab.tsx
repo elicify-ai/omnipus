@@ -15,6 +15,7 @@ import {
   milestonesQueryKeys,
 } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import type { BoardAltitude } from '@/store/workspacesStore'
 
 interface WorkspaceTasksTabProps {
   workspaceId: string
@@ -29,7 +30,7 @@ interface WorkspaceTasksTabProps {
  * by BoardView/ListView (F2 may extend them with delegation roll-ups etc.).
  */
 export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps) {
-  const { activeMilestoneId, setActiveMilestoneId } = useWorkspacesStore()
+  const { activeMilestoneId, setActiveMilestoneId, boardAltitude, setBoardAltitude } = useWorkspacesStore()
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
   const [createMilestoneOpen, setCreateMilestoneOpen] = useState(false)
@@ -107,7 +108,10 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
         <BoardView
           tasks={tasks}
           milestones={milestones}
+          agents={agents}
           activeMilestoneId={activeMilestoneId}
+          altitude={boardAltitude}
+          onAltitudeChange={(next: BoardAltitude) => setBoardAltitude(next)}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
           onNewTask={() => setCreateTaskOpen(true)}
         />

@@ -1,0 +1,92 @@
+/*
+ * Sovereign Deep theming for React Flow (@xyflow/react).
+ *
+ * The base stylesheet (`@xyflow/react/dist/style.css`) ships a light theme.
+ * These overrides re-skin the canvas chrome — controls, minimap, attribution,
+ * handles, selection — to the dark palette. Scoped under `.sovereign-flow`
+ * (set on the ReactFlow wrapper) so nothing leaks to the rest of the app.
+ */
+
+.sovereign-flow {
+  background-color: var(--color-surface-0);
+  /* Drive React Flow's CSS custom properties to the dark palette. */
+  --xy-edge-stroke-default: var(--color-border);
+  --xy-edge-stroke-selected-default: var(--color-accent);
+  --xy-connectionline-stroke-default: var(--color-accent);
+  --xy-attribution-background-color-default: transparent;
+}
+
+/* ── Controls (zoom in/out, fit, lock) ─────────────────────────────────────── */
+.sovereign-flow .react-flow__controls {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--color-border);
+}
+
+.sovereign-flow .react-flow__controls-button {
+  background-color: var(--color-surface-2);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-secondary);
+  width: 28px;
+  height: 28px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.sovereign-flow .react-flow__controls-button:hover {
+  background-color: var(--color-surface-3);
+  color: var(--color-accent);
+}
+
+.sovereign-flow .react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+/* ── MiniMap ────────────────────────────────────────────────────────────────── */
+.sovereign-flow .react-flow__minimap {
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.sovereign-flow .react-flow__minimap-mask {
+  fill: rgba(10, 10, 11, 0.6);
+}
+
+/* ── Attribution link ──────────────────────────────────────────────────────── */
+.sovereign-flow .react-flow__attribution {
+  background: transparent;
+}
+
+.sovereign-flow .react-flow__attribution a {
+  color: var(--color-muted);
+  opacity: 0.5;
+  font-size: 9px;
+}
+
+/* ── Handles ───────────────────────────────────────────────────────────────── */
+.sovereign-flow .react-flow__handle {
+  border: none;
+}
+
+/* ── Edge selection / interaction ──────────────────────────────────────────── */
+.sovereign-flow .react-flow__edge.selected .react-flow__edge-path,
+.sovereign-flow .react-flow__edge:focus .react-flow__edge-path {
+  stroke: var(--color-accent);
+}
+
+/* The custom node wraps its own surface — strip React Flow's default node box. */
+.sovereign-flow .react-flow__node-task {
+  background: transparent;
+  border: none;
+  padding: 0;
+  width: auto;
+  font-family: var(--font-body, 'Inter', sans-serif);
+}
+
+/* Hide the default selection outline; the node draws its own gold ring. */
+.sovereign-flow .react-flow__node-task.selected {
+  outline: none;
+  box-shadow: none;
+}

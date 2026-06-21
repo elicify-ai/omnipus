@@ -1,33 +1,91 @@
-import { Graph } from '@phosphor-icons/react'
-import { WorkspaceTabEmptyState } from './WorkspaceTabEmptyState'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { GraphView } from './graph/GraphView'
+import { TaskDetailSlideOver } from './TaskDetailSlideOver'
+import { fetchTasks, fetchAgents, tasksQueryKeys } from '@/lib/api'
 
 // ── F2 COMPONENT BOUNDARY ────────────────────────────────────────────────────
-// This is the Graph (Task DAG) tab. The F2 wave replaces the body of this
-// component with the real DAG view: tasks as nodes, `blocked_by` as dependency
-// edges, left→right by order, live per-node status colour, pan/zoom.
-//
-// Contract for the F2 agent:
-//   - Keep the export name `WorkspaceGraphTab` and the props shape below.
-//   - The resolved workspace is available via `useActiveWorkspace()` from
-//     WorkspaceTabContainer; tasks via `fetchTasks({ workspace_id })`.
-//   - The route file (workspaces.$workspaceId.graph.tsx) is already wired.
+// The Graph (Task DAG) tab. Tasks as nodes, `blocked_by` as dependency edges,
+// laid out left→right with live per-node status colour, pan/zoom, minimap.
+// Export name + the WorkspaceTasksTab data-fetching pattern are preserved.
+// The DAG canvas itself lives in ./graph/GraphView (presentational, testable).
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface WorkspaceGraphTabProps {
   workspaceId: string
 }
 
-export function WorkspaceGraphTab(_props: WorkspaceGraphTabProps) {
+/**
+ * The Graph tab body: fetches the workspace's user-surface tasks + the agents
+ * cache (for avatar colour/icon), renders the DAG canvas, and opens the shared
+ * task detail slide-over on node click — mirroring the Board's onTaskClick.
+ */
+export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+
+  const {
+    data: tasks = [],
+    isLoading: tasksLoading,
+    isError: tasksError,
+  } = useQuery({
+    queryKey: tasksQueryKeys.list({ workspace_id: workspaceId, surface: 'user' }),
+    queryFn: () => fetchTasks({ workspace_id: workspaceId, surface: 'user' }),
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+    enabled: !!workspaceId,
+  })
+
+  const { data: agents = [] } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 60_000,
+  })
+
+  const selectedTask =
+    selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
+
+  if (tasksLoading) {
+    return <GraphSkeleton />
+  }
+
+  if (tasksError && tasks.length === 0) {
+    return (
+      <div className="absolute inset-0 flex items-center justify-center p-8 text-sm text-[var(--color-muted)]">
+        Failed to load the task graph. Check your connection and try again.
+      </div>
+    )
+  }
+
   return (
-    <WorkspaceTabEmptyState
-      Icon={Graph}
-      title="Task dependency graph"
-      description="The marquee new view: every task as a node, blocked-by relationships as edges, laid out left to right with live status colour. Pan, zoom, and trace the critical path at a glance."
-      bullets={[
-        'Auto-layout DAG with clear edge routing',
-        'Node = title + status chip + agent avatar',
-        'Live status colour per node, pan / zoom',
-      ]}
-    />
+    <div className="absolute inset-0 overflow-hidden">
+      <GraphView
+        tasks={tasks}
+        agents={agents}
+        selectedTaskId={selectedTaskId}
+        onTaskClick={(task) => setSelectedTaskId(task.id)}
+      />
+
+      <TaskDetailSlideOver task={selectedTask} onClose={() => setSelectedTaskId(null)} />
+    </div>
+  )
+}
+
+/** Dark shimmer placeholder while the first task fetch resolves. */
+function GraphSkeleton() {
+  return (
+    <div className="absolute inset-0 bg-[var(--color-surface-0)] p-8">
+      <div className="flex h-full items-center gap-12">
+        {[0, 1, 2].map((rank) => (
+          <div key={rank} className="flex flex-1 flex-col gap-6">
+            {[0, 1].map((row) => (
+              <div
+                key={row}
+                className="h-24 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }

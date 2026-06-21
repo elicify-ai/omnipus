@@ -45,6 +45,9 @@ export interface WizardSubmitPayload {
   color: string
   icon: string
   model: string
+  /** O3 two-field: explicit provider routing key paired with model.
+   *  Empty string / absent = resolve via default provider. */
+  provider?: string
   soul: string
   instructions: string
   heartbeat?: string
@@ -150,6 +153,7 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     color: defaultColorHex,
     icon: 'Robot',
     model: '',
+    provider: '',
     soul: '',
     instructions: '',
     heartbeat_enabled: false,

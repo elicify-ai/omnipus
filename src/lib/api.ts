@@ -106,6 +106,8 @@ import {
   // Level-1 workspaces + unified tasks + token stats (contract-first #8):
   Workspace as WorkspaceSchema,
   WorkspaceSessionLink as WorkspaceSessionLinkSchema,
+  // M5 per-workspace delegation graph (contract-first #8):
+  WorkspaceDelegation as WorkspaceDelegationSchema,
   Task as TaskSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
   // Milestones (contract-first #8):
@@ -296,6 +298,10 @@ import type {
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
   WorkspaceSessionLink,
+  // M5 per-workspace delegation graph (contract-first #8):
+  WorkspaceDelegation,
+  WorkspaceDelegationEdge,
+  WorkspaceDelegationUpdateRequest,
   TokenUsageSummary,
   // Unified task types (Sprint 2) — imported once here (Task was already imported above):
   TaskCreateRequest,
@@ -416,6 +422,10 @@ export type {
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
   WorkspaceSessionLink,
+  // M5 per-workspace delegation graph:
+  WorkspaceDelegation,
+  WorkspaceDelegationEdge,
+  WorkspaceDelegationUpdateRequest,
   TokenUsageSummary,
   // Unified task types (Sprint 2) — Task already exported above, add new ones:
   TaskCreateRequest,
@@ -2488,6 +2498,7 @@ export const workspacesQueryKeys = {
   list: (params?: { status?: string }) => ['workspaces', params] as const,
   detail: (id: string) => ['workspaces', id] as const,
   sessions: (id: string) => ['workspaces', id, 'sessions'] as const,
+  delegation: (id: string) => ['workspaces', id, 'delegation'] as const,
 }
 
 export function fetchWorkspaces(params?: { status?: string }): Promise<Workspace[]> {
@@ -2513,6 +2524,35 @@ export function updateWorkspace(id: string, body: WorkspaceUpdateRequest): Promi
 
 export function deleteWorkspace(id: string): Promise<void> {
   return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ── Per-workspace delegation graph (M5) ─────────────────────────────────────────
+//
+// The delegation graph is the workspace's source of truth for who-delegates-to-
+// whom. The Team tab edits it as a node-and-edge graph and persists the WHOLE
+// edge set on each change (full replace, not merge — see WorkspaceDelegation
+// UpdateRequest). `team[]` on the read response is computed server-side (union of
+// core_team + every agent named by an edge) so the editor can render isolated
+// member nodes that have no edges yet.
+
+export function fetchWorkspaceDelegation(id: string): Promise<WorkspaceDelegation> {
+  return request<WorkspaceDelegation>(
+    `/workspaces/${encodeURIComponent(id)}/delegation`,
+    undefined,
+    WorkspaceDelegationSchema as ZodType<WorkspaceDelegation>,
+  )
+}
+
+export function updateWorkspaceDelegation(
+  id: string,
+  edges: WorkspaceDelegationEdge[],
+): Promise<WorkspaceDelegation> {
+  const body: WorkspaceDelegationUpdateRequest = { edges }
+  return request<WorkspaceDelegation>(
+    `/workspaces/${encodeURIComponent(id)}/delegation`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    WorkspaceDelegationSchema as ZodType<WorkspaceDelegation>,
+  )
 }
 
 export function fetchWorkspaceSessions(id: string): Promise<WorkspaceSessionLink[]> {

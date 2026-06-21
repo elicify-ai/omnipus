@@ -45,6 +45,8 @@ export function Step1Identity({
   // the ModelSelector consumes elsewhere.
   const providerGroups: ModelGroup[] = connectedProviders.map((p) => ({
     providerName: p.name ?? p.id ?? 'Unknown',
+    // O3 two-field: pass the provider routing key so onPairChange can emit it.
+    providerId: p.id,
     models: p.models ?? [],
   }))
 
@@ -145,6 +147,7 @@ export function Step1Identity({
             providerGroups={providerGroups}
             value={payload.model}
             onChange={(m) => setField('model', m)}
+            onPairChange={({ provider: p }) => setField('provider', p)}
             placeholder="Pick a connected model"
             triggerTestId="wizard-model"
             showUnresolvedIndicator
