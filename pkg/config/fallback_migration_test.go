@@ -62,7 +62,12 @@ func TestFallbackModels_LegacyString_NormalizedToObject(t *testing.T) {
 func TestFallbackModels_NewObjectUnchanged_SurvivesNormalize(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "glm-5.2", Model: "z-ai/glm-5.2", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
+			{
+				ModelName: "glm-5.2",
+				Model:     "z-ai/glm-5.2",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
 		},
 	}
 
@@ -98,7 +103,12 @@ func TestFallbackModels_NewObjectUnchanged_SurvivesNormalize(t *testing.T) {
 func TestFallbackModels_BothFormsOrdered_NormalizedInPlace(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "glm-5.2", Model: "z-ai/glm-5.2", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
+			{
+				ModelName: "glm-5.2",
+				Model:     "z-ai/glm-5.2",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
 		},
 	}
 
@@ -172,7 +182,12 @@ func TestFallbackModels_MarshalWritesObjectForm(t *testing.T) {
 func TestNormalizeFallbacks_EmptyAndPassThrough(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "glm-5.2", Model: "z-ai/glm-5.2", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
+			{
+				ModelName: "glm-5.2",
+				Model:     "z-ai/glm-5.2",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
 		},
 	}
 	// Pre-normalized form passes through unchanged.
@@ -222,7 +237,12 @@ func TestFallbackModels_UnmarshalAbsentField(t *testing.T) {
 func TestFallbackModels_UnmarshalExactMatchProvider(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "claude-sonnet-4.6", Model: "anthropic/claude-sonnet-4.6", Provider: "anthropic", APIBase: "https://api.anthropic.com"},
+			{
+				ModelName: "claude-sonnet-4.6",
+				Model:     "anthropic/claude-sonnet-4.6",
+				Provider:  "anthropic",
+				APIBase:   "https://api.anthropic.com",
+			},
 		},
 	}
 	jsonData := `{"id":"ava","fallback_models":["claude-sonnet-4.6"]}`

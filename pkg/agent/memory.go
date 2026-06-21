@@ -265,8 +265,11 @@ func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.Roo
 	// sources so externally written memories become searchable.
 	if ri != nil {
 		if err := ri.Rebuild(); err != nil {
-			logger.WarnCF("agent.memory", "syncRoomToDisk: bleve rebuild failed; recall may miss new files until next open",
-				map[string]any{"room_root": room.Root, "error": err.Error()})
+			logger.WarnCF(
+				"agent.memory",
+				"syncRoomToDisk: bleve rebuild failed; recall may miss new files until next open",
+				map[string]any{"room_root": room.Root, "error": err.Error()},
+			)
 		}
 	}
 
@@ -409,8 +412,16 @@ func (ms *MemoryStore) checkAndRegisterSigLocked(room memrooms.Room, id, title, 
 			}
 			mhPath := filepath.Join(room.Root, ".index", minhash.MinHashJSONLFile)
 			if appendErr := minhash.AppendNearDupRecord(mhPath, rec); appendErr != nil {
-				logger.WarnCF("agent.memory", "checkAndRegisterSig: failed to append minhash record",
-					map[string]any{"room_root": room.Root, "new_id": id, "existing_id": existingID, "error": appendErr.Error()})
+				logger.WarnCF(
+					"agent.memory",
+					"checkAndRegisterSig: failed to append minhash record",
+					map[string]any{
+						"room_root":   room.Root,
+						"new_id":      id,
+						"existing_id": existingID,
+						"error":       appendErr.Error(),
+					},
+				)
 			}
 			logger.WarnCF("agent.memory", "near-duplicate memory detected (non-destructive link written)",
 				map[string]any{"new_id": id, "existing_id": existingID, "jaccard": j})
@@ -567,7 +578,7 @@ func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope mem
 
 	// MinHash dedup check (FR-7.5 / M-5): non-destructive — links written to
 	// minhash.jsonl even if near-dup detected; the .md file is already written.
-	// Acquire indexMu to serialise sig cache + bleve index updates AND to guard
+	// Acquire indexMu to serialize sig cache + bleve index updates AND to guard
 	// the bleve index against a concurrent Close(): if we released indexMu before
 	// ri.Index(), Close() could close ri underneath us (use-after-close). Holding
 	// the lock across the index call keeps ri valid for its whole lifetime here.
@@ -608,7 +619,11 @@ func (ms *MemoryStore) SearchEntries(query string, limit int) ([]LongTermEntry, 
 // SearchEntriesInScope searches the specified room scope for query using bleve BM25 (FR-7.4).
 // Falls back to substring scan when the bleve index is unavailable.
 // On each successful recall, appends a CounterRecord (op=access) to counters.jsonl (FR-7.5).
-func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memrooms.RoomScope) ([]LongTermEntry, error) {
+func (ms *MemoryStore) SearchEntriesInScope(
+	query string,
+	limit int,
+	scope memrooms.RoomScope,
+) ([]LongTermEntry, error) {
 	if limit <= 0 {
 		limit = 20
 	}

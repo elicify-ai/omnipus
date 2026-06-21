@@ -17,7 +17,7 @@ import (
 // ──────────────────────────────────────────────────────────────────────────────
 
 // TestExecutorField_DefaultIsNative verifies that a nil ExecutorConfig defaults to
-// the native executor (existing behaviour unchanged — no regression).
+// the native executor (existing behavior unchanged — no regression).
 func TestExecutorField_DefaultIsNative(t *testing.T) {
 	var ec *config.ExecutorConfig
 	if ec.EffectiveKind() != config.ExecutorKindNative {
@@ -572,7 +572,7 @@ func TestRunner_TimeoutTerminates(t *testing.T) {
 	}
 
 	// Do NOT inject an end event — let the context cancel the run.
-	// Wait for ctx to be cancelled.
+	// Wait for ctx to be canceled.
 	<-runCtx.Done()
 
 	// Cancel the runner (as a real driver would do on ctx cancel).
@@ -591,12 +591,12 @@ func TestRunner_TimeoutTerminates(t *testing.T) {
 	}
 
 	if !fr.IsCancelled() {
-		t.Error("FakeRunner should be cancelled after context timeout")
+		t.Error("FakeRunner should be canceled after context timeout")
 	}
 }
 
 // TestConsentDispatcher_ContextCancel verifies that ConsentDispatcher exits
-// cleanly when its context is cancelled.
+// cleanly when its context is canceled.
 func TestConsentDispatcher_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	fr := runner.NewFakeRunner()

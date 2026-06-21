@@ -45,6 +45,7 @@
 //
 // The RunID and optional session metadata are carried in the Meta.SessionID field
 // so the SPA can scope the approval frame to the right session.
+
 package runner
 
 import (
@@ -65,10 +66,10 @@ import (
 // DenyByDefault (FR-5.1 / deny-by-default gate).
 type ConsentHandler interface {
 	// RequestConsent routes a PermissionRequestEvent to the approval layer and
-	// blocks until a decision is received or the context is cancelled.
+	// blocks until a decision is received or the context is canceled.
 	// Returns (allow, reason).
 	//
-	// The context carries the run lifetime; if cancelled, return (false, "context cancelled").
+	// The context carries the run lifetime; if canceled, return (false, "context canceled").
 	RequestConsent(ctx context.Context, req ConsentRequest) (allow bool, reason string)
 }
 
@@ -172,7 +173,7 @@ func auditedDenyByDefault(requestID, toolName, runID, reason string) PermissionD
 
 // ConsentDispatcher is a helper that dispatches permission request events from
 // a runner's event channel to the consent layer and sends decisions back.
-// It runs in its own goroutine and exits when ctx is cancelled or the event
+// It runs in its own goroutine and exits when ctx is canceled or the event
 // channel is closed.
 //
 // Usage:
@@ -209,7 +210,7 @@ func ConsentDispatcher(
 	}
 }
 
-// forwardEvent sends ev to out, dropping it if ctx is cancelled.
+// forwardEvent sends ev to out, dropping it if ctx is canceled.
 func forwardEvent(ctx context.Context, ev RunEvent, out chan<- RunEvent) {
 	select {
 	case out <- ev:

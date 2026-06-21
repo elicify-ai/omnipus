@@ -137,7 +137,10 @@ func TestProviderPool_NoRace(t *testing.T) {
 	wg.Wait()
 
 	if readErrors != 0 {
-		t.Errorf("GetProviderForCandidate returned nil %d times during concurrent store — pool atomicity is broken", readErrors)
+		t.Errorf(
+			"GetProviderForCandidate returned nil %d times during concurrent store — pool atomicity is broken",
+			readErrors,
+		)
 	}
 }
 
@@ -169,8 +172,11 @@ func TestProviderPool_StoreDefensiveCopy(t *testing.T) {
 		Model:    "copy-test",
 	})
 	if got != original {
-		t.Errorf("GetProviderForCandidate(openai) = %p, want %p (caller's post-store mutation leaked into the published pool)",
-			got, original)
+		t.Errorf(
+			"GetProviderForCandidate(openai) = %p, want %p (caller's post-store mutation leaked into the published pool)",
+			got,
+			original,
+		)
 	}
 
 	// "anthropic" must NOT be present — the post-store add of "anthropic"

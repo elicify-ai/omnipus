@@ -139,7 +139,10 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	// worker is rejected with no fallback so worker autonomy can never fire.
 	if cfg := r.getConfig(); cfg != nil {
 		if oc := findAgentConfig(cfg, owner); oc != nil && oc.IsWorker() {
-			err := fmt.Errorf("owner unavailable: agent %q is a worker (workers have no heartbeat and run only via delegation)", owner)
+			err := fmt.Errorf(
+				"owner unavailable: agent %q is a worker (workers have no heartbeat and run only via delegation)",
+				owner,
+			)
 			r.onFailure(job, "", err)
 			return "", err
 		}
@@ -1033,7 +1036,11 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 		// BEFORE the owner re-authz so a non-admin who targets a worker gets
 		// the actionable 400 (the owner-validity problem) rather than a 403
 		// (a permissions problem).
-		if newOwner := findAgentConfig(a.agentLoop.GetConfig(), *req.OwnerAgentId); newOwner != nil && newOwner.IsWorker() {
+		if newOwner := findAgentConfig(
+			a.agentLoop.GetConfig(),
+			*req.OwnerAgentId,
+		); newOwner != nil &&
+			newOwner.IsWorker() {
 			jsonErr(w, http.StatusBadRequest,
 				"a worker cannot own a schedule (workers are not chat targets and run only via delegation)")
 			return

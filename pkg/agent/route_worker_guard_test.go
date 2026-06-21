@@ -59,7 +59,10 @@ func TestResolveMessageRoute_ExplicitWorkerAgentIDDegradesToDefault(t *testing.T
 		t.Fatalf("resolveMessageRoute: %v", err)
 	}
 	if route.AgentID == "hans" || (agent != nil && agent.ID == "hans") {
-		t.Fatalf("explicit agent_id=worker resolved to the worker (route=%q) — workers are not chat targets", route.AgentID)
+		t.Fatalf(
+			"explicit agent_id=worker resolved to the worker (route=%q) — workers are not chat targets",
+			route.AgentID,
+		)
 	}
 	if route.AgentID != "mia" {
 		t.Errorf("AgentID = %q, want %q (worker degrades to base default)", route.AgentID, "mia")

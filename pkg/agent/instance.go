@@ -534,13 +534,23 @@ func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandid
 		if mc := findPassthroughForModel(cfg, c.Model); mc != nil {
 			p, _, err := providers.CreateProviderFromConfig(mc)
 			if err != nil {
-				logger.WarnCF("agent", "buildProviderPool: passthrough fallback CreateProviderFromConfig failed; pool entry skipped",
-					map[string]any{"provider": name, "model": c.Model, "error": err.Error()})
+				logger.WarnCF(
+					"agent",
+					"buildProviderPool: passthrough fallback CreateProviderFromConfig failed; pool entry skipped",
+					map[string]any{"provider": name, "model": c.Model, "error": err.Error()},
+				)
 				continue
 			}
 			pool[name] = p
-			logger.InfoCF("agent", "buildProviderPool: candidate provider not configured; routed through passthrough entry with matching model",
-				map[string]any{"candidate_provider": name, "candidate_model": c.Model, "passthrough_provider": mc.Provider})
+			logger.InfoCF(
+				"agent",
+				"buildProviderPool: candidate provider not configured; routed through passthrough entry with matching model",
+				map[string]any{
+					"candidate_provider":   name,
+					"candidate_model":      c.Model,
+					"passthrough_provider": mc.Provider,
+				},
+			)
 		}
 	}
 
@@ -655,7 +665,7 @@ func (a *AgentInstance) SetAgentType(agentType string) {
 }
 
 // IsWorker reports whether this instance is a sub-agent worker (the delegation-only
-// labour tier). A worker is never a chat target and must never be resolved as the
+// labor tier). A worker is never a chat target and must never be resolved as the
 // routing default. Single predicate so worker checks don't hand-roll the type-string
 // comparison (config.AgentTypeWorker) at each call site.
 func (a *AgentInstance) IsWorker() bool {

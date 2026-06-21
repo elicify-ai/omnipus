@@ -5,6 +5,7 @@
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
+
 package index_test
 
 import (
@@ -64,7 +65,13 @@ func TestBleveBM25_NoEmbeddings(t *testing.T) {
 	room := makeTestRoom(t)
 
 	// Write two memories; one contains "prometheus" and one does not.
-	m1 := writeTestMemory(t, room, "mem-001", "Prometheus monitoring", "We use prometheus for metrics and alerting in production.")
+	m1 := writeTestMemory(
+		t,
+		room,
+		"mem-001",
+		"Prometheus monitoring",
+		"We use prometheus for metrics and alerting in production.",
+	)
 	_ = writeTestMemory(t, room, "mem-002", "Deployment notes", "The service deploys to Kubernetes via Helm charts.")
 
 	ri, err := memindex.OpenOrCreate(room)
@@ -126,7 +133,7 @@ func TestBleveIndex_RebuildFromMd(t *testing.T) {
 
 	// Wipe the bleve index directory to simulate corruption/deletion.
 	idxDir := filepath.Join(room.Root, memindex.IndexSubdir)
-	if err := os.RemoveAll(idxDir); err != nil {
+	if err = os.RemoveAll(idxDir); err != nil {
 		t.Fatalf("RemoveAll bleve index: %v", err)
 	}
 
@@ -192,7 +199,7 @@ func TestBleveIndex_BM25RankingOrder(t *testing.T) {
 }
 
 // TestBleveIndex_EmptyQueryReturnsAll verifies that an empty query returns
-// all indexed documents (match-all behaviour).
+// all indexed documents (match-all behavior).
 func TestBleveIndex_EmptyQueryReturnsAll(t *testing.T) {
 	room := makeTestRoom(t)
 
@@ -207,7 +214,7 @@ func TestBleveIndex_EmptyQueryReturnsAll(t *testing.T) {
 	defer ri.Close()
 
 	// Rebuild to pick up all 3 memories.
-	if err := ri.Rebuild(); err != nil {
+	if err = ri.Rebuild(); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 
@@ -230,7 +237,13 @@ func TestBleveIndex_EmptyQueryReturnsAll(t *testing.T) {
 // FAILS FAST (rather than hanging the whole suite) if the deadlock regresses.
 func TestBleveIndex_SharedHandleNoDeadlock(t *testing.T) {
 	room := makeTestRoom(t)
-	writeTestMemory(t, room, "mem-shared-001", "Shared handle", "The workspace room is shared across agents and must not deadlock.")
+	writeTestMemory(
+		t,
+		room,
+		"mem-shared-001",
+		"Shared handle",
+		"The workspace room is shared across agents and must not deadlock.",
+	)
 
 	done := make(chan error, 1)
 	go func() {
@@ -257,7 +270,7 @@ func TestBleveIndex_SharedHandleNoDeadlock(t *testing.T) {
 		}
 
 		// Both holders build + search concurrently; scorch is goroutine-safe for
-		// concurrent reads + a single serialised writer (RoomIndex.mu).
+		// concurrent reads + a single serialized writer (RoomIndex.mu).
 		var wg sync.WaitGroup
 		errs := make(chan error, 2)
 		for _, ri := range []*memindex.RoomIndex{ri1, ri2} {
@@ -296,4 +309,6 @@ func TestBleveIndex_SharedHandleNoDeadlock(t *testing.T) {
 
 // errDifferentHandles signals the registry returned distinct handles for the
 // same path (the registry must return one shared *RoomIndex per path).
-var errDifferentHandles = errors.New("two OpenOrCreate calls on the same path returned different *RoomIndex handles (not shared)")
+var errDifferentHandles = errors.New(
+	"two OpenOrCreate calls on the same path returned different *RoomIndex handles (not shared)",
+)

@@ -92,7 +92,10 @@ func TestConfig_HasNoTypedChannelFields(t *testing.T) {
 
 	for _, ch := range channelTypeNames {
 		if _, found := names[ch]; found {
-			t.Errorf("Config must not have a typed channel field %q — channels are map-keyed via Config.Channels (SC-4)", ch)
+			t.Errorf(
+				"Config must not have a typed channel field %q — channels are map-keyed via Config.Channels (SC-4)",
+				ch,
+			)
 		}
 	}
 }
@@ -111,7 +114,11 @@ func TestConfig_HasNoPerChannelTypedConfigFieldType(t *testing.T) {
 	for i := 0; i < cfgType.NumField(); i++ {
 		f := cfgType.Field(i)
 		if name, bad := forbidden[f.Type]; bad {
-			t.Errorf("Config field %q has per-channel typed-config type %s — channels must be map-keyed (SC-4)", f.Name, name)
+			t.Errorf(
+				"Config field %q has per-channel typed-config type %s — channels must be map-keyed (SC-4)",
+				f.Name,
+				name,
+			)
 		}
 	}
 }
@@ -127,7 +134,10 @@ func TestConfig_HasNoChannelsConfigV0Field(t *testing.T) {
 	for i := 0; i < cfgType.NumField(); i++ {
 		f := cfgType.Field(i)
 		if f.Type == v0Type {
-			t.Errorf("Config field %q is of type channelsConfigV0 — the v0 typed channels struct must not be re-introduced on Config (SC-4)", f.Name)
+			t.Errorf(
+				"Config field %q is of type channelsConfigV0 — the v0 typed channels struct must not be re-introduced on Config (SC-4)",
+				f.Name,
+			)
 		}
 	}
 }

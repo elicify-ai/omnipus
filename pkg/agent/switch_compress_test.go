@@ -61,7 +61,7 @@ func (r *recordingSummaryProvider) GetDefaultModel() string {
 // The ModelName is the public identifier (matches the input passed to
 // handleModelSwitch), and the Model field is the provider-prefixed form
 // ("openai/<name>") so the known-protocol factory can build a stub
-// provider. Protocol = "openai" is a recognised protocol prefix (see
+// provider. Protocol = "openai" is a recognized protocol prefix (see
 // pkg/providers/factory_provider.go::knownProtocols).
 func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg *config.Config, cleanup func()) {
 	t.Helper()
@@ -208,7 +208,7 @@ func TestSummarizeDroppedTurns_Success_StoresSummary(t *testing.T) {
 
 	// Use a context window whose half is larger than the agent's existing
 	// MaxTokens so the budget ends up clamped to MaxTokens — this is the
-	// production behaviour and we assert against it directly.
+	// production behavior and we assert against it directly.
 	const contextWindow = 16000
 	expectedBudget := contextWindow / 2
 	if agent.MaxTokens > 0 && agent.MaxTokens < expectedBudget {
@@ -604,8 +604,10 @@ func (f *failingProvider) GetDefaultModel() string {
 }
 
 // Compile-time check that failingProvider satisfies the LLMProvider interface.
-var _ providers.LLMProvider = (*failingProvider)(nil)
-var _ providers.LLMProvider = (*recordingSummaryProvider)(nil)
+var (
+	_ providers.LLMProvider = (*failingProvider)(nil)
+	_ providers.LLMProvider = (*recordingSummaryProvider)(nil)
+)
 
 // Reference unused import session to avoid compile error if the file is later trimmed.
 var _ session.UnifiedSessionType = session.SessionTypeChat

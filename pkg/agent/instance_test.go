@@ -170,8 +170,12 @@ func TestNewAgentInstance_FallbackModelsPerEntryProvider(t *testing.T) {
 		t.Fatalf("len(agent.Candidates) = %d, want 2", len(agent.Candidates))
 	}
 	if agent.Candidates[1].Provider != "anthropic" {
-		t.Fatalf("candidate[1].Provider = %q, want %q (FR-007: fallback must carry its own provider, not the agent's default %q)",
-			agent.Candidates[1].Provider, "anthropic", cfg.Agents.Defaults.Provider)
+		t.Fatalf(
+			"candidate[1].Provider = %q, want %q (FR-007: fallback must carry its own provider, not the agent's default %q)",
+			agent.Candidates[1].Provider,
+			"anthropic",
+			cfg.Agents.Defaults.Provider,
+		)
 	}
 	// Because the fallback has a pinned Provider, the resolver is bypassed:
 	// the Model is taken verbatim from the entry. The operator wrote the
@@ -228,9 +232,24 @@ func TestNewAgentInstance_FallbackModelsPrefersExplicitOverLegacy(t *testing.T) 
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "gpt-5", Model: "openai/gpt-5", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
-			{ModelName: "haiku-anthropic", Model: "anthropic/claude-haiku-4-5", Provider: "anthropic", APIBase: "https://api.anthropic.com/v1"},
-			{ModelName: "haiku-openrouter", Model: "openrouter/anthropic/claude-haiku-4-5", Provider: "openrouter", APIBase: "https://openrouter.ai/api/v1"},
+			{
+				ModelName: "gpt-5",
+				Model:     "openai/gpt-5",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
+			{
+				ModelName: "haiku-anthropic",
+				Model:     "anthropic/claude-haiku-4-5",
+				Provider:  "anthropic",
+				APIBase:   "https://api.anthropic.com/v1",
+			},
+			{
+				ModelName: "haiku-openrouter",
+				Model:     "openrouter/anthropic/claude-haiku-4-5",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
 		},
 	}
 
@@ -316,7 +335,9 @@ func TestAgentInstance_GetProviderForCandidate_PoolHonorsPinnedProvider(t *testi
 // path used by tests and edge-case callers doesn't panic.
 func TestAgentInstance_GetProviderForCandidate_NilAgent(t *testing.T) {
 	var agent *AgentInstance
-	if got := agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: "anthropic", Model: "x"}); got != nil {
+	if got := agent.GetProviderForCandidate(
+		providers.FallbackCandidate{Provider: "anthropic", Model: "x"},
+	); got != nil {
 		t.Errorf("nil agent returned %p, want nil", got)
 	}
 }

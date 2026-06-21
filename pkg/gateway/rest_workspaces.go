@@ -35,7 +35,7 @@ import (
 // does not exist on disk. Callers use errors.Is(err, errWorkspaceNotFound).
 var errWorkspaceNotFound = errors.New("workspace not found")
 
-// defaultWorkspaceSeedMu serialises concurrent calls to ensureDefaultWorkspace
+// defaultWorkspaceSeedMu serializes concurrent calls to ensureDefaultWorkspace
 // (e.g. from two racing gateway boots) so exactly one default workspace is created.
 var defaultWorkspaceSeedMu sync.Mutex
 
@@ -324,7 +324,7 @@ func (a *restAPI) loadWorkspace(w http.ResponseWriter, id string) (storedWorkspa
 // default team (4 base agents + Planner/Explorer/Researcher specialists) and the
 // default delegation edges derived from the seeded per-agent trust graph (M5/M6).
 // Idempotent: if a workspace with is_default=true already exists, this is a no-op.
-// Thread-safe: serialised by defaultWorkspaceSeedMu to prevent TOCTOU double-seed
+// Thread-safe: serialized by defaultWorkspaceSeedMu to prevent TOCTOU double-seed
 // when two gateway boots race (e.g. rapid restart or dual-process test).
 // On failure, logs an error but returns nil (non-fatal — gateway continues).
 func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) error {

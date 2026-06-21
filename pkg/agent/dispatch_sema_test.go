@@ -136,9 +136,9 @@ func TestDispatchSema_ConcurrentAcquireRelease(t *testing.T) {
 }
 
 func TestDispatchSema_BoundedConcurrency(t *testing.T) {
-	// Verify that at most cap goroutines hold the semaphore simultaneously.
-	const cap = 3
-	ds := newDispatchSemaphore(cap)
+	// Verify that at most capLimit goroutines hold the semaphore simultaneously.
+	const capLimit = 3
+	ds := newDispatchSemaphore(capLimit)
 
 	var mu sync.Mutex
 	maxSeen := 0
@@ -155,8 +155,8 @@ func TestDispatchSema_BoundedConcurrency(t *testing.T) {
 			if current > maxSeen {
 				maxSeen = current
 			}
-			if current > cap {
-				t.Errorf("concurrency %d exceeded cap %d", current, cap)
+			if current > capLimit {
+				t.Errorf("concurrency %d exceeded cap %d", current, capLimit)
 			}
 			mu.Unlock()
 			// Yield briefly to increase chance of overlap.
@@ -174,7 +174,7 @@ func TestDispatchSema_BoundedConcurrency(t *testing.T) {
 	if maxSeen < 1 {
 		t.Fatal("expected at least 1 concurrent holder")
 	}
-	if maxSeen > cap {
-		t.Fatalf("max concurrent holders %d exceeded cap %d", maxSeen, cap)
+	if maxSeen > capLimit {
+		t.Fatalf("max concurrent holders %d exceeded cap %d", maxSeen, capLimit)
 	}
 }

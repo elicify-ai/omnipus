@@ -39,7 +39,7 @@ import (
 // graceful degradation per the "graceful degradation" hard constraint.
 //
 // Process lifecycle (Wait/SIGTERM/SIGKILL on Close) mirrors
-// mcp.CommandTransport.pipeRWC.Close so behaviour is identical to the upstream
+// mcp.CommandTransport.pipeRWC.Close so behavior is identical to the upstream
 // SDK transport. The Connection returned by Connect is the SDK's own ioConn
 // (built via mcp.IOTransport) wrapped in a sandboxedStdioConn that adds the
 // process reaping — we cannot construct an ioConn directly because newIOConn is
@@ -80,7 +80,7 @@ func (t *sandboxedCommandTransport) Connect(ctx context.Context) (mcp.Connection
 	// ADR-019: route the spawn through StartLocked so the forked child
 	// inherits the gateway's Landlock domain. On non-Linux / fallback
 	// sandbox this is a thin wrapper around cmd.Start().
-	if err := sandbox.StartLocked(t.cmd); err != nil {
+	if err = sandbox.StartLocked(t.cmd); err != nil {
 		return nil, fmt.Errorf("mcp stdio: sandboxed start: %w", err)
 	}
 

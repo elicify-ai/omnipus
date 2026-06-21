@@ -17,7 +17,7 @@ import "strings"
 //
 // This helper is the single source of truth for passthrough detection;
 // byte-identical copies previously lived in pkg/config/config.go and
-// pkg/agent/model_resolution.go, both deleted in favour of this one (the
+// pkg/agent/model_resolution.go, both deleted in favor of this one (the
 // pkg/config copy in Wave 2, the pkg/agent copy in Wave 4 cleanup).
 //
 // Note: pkg/config cannot import this package (providers → config is the

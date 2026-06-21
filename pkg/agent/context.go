@@ -102,11 +102,11 @@ func (cb *ContextBuilder) WithAgentInfo(id, name string) *ContextBuilder {
 // skill-resolution time (FR-9.4, default-DENY). When allowlist is non-nil, only
 // the named skills can be resolved or invoked by this agent; any other skill —
 // even one present on disk — is denied. When allowlist is nil, no allowlist is
-// enforced (unrestricted), preserving the behaviour of agents that declare no
+// enforced (unrestricted), preserving the behavior of agents that declare no
 // allowlist. Names are matched case-insensitively.
 //
 // Passing a non-nil but empty slice installs a deny-all allowlist (the agent
-// can resolve no skills), which is the correct default-DENY behaviour for an
+// can resolve no skills), which is the correct default-DENY behavior for an
 // agent that explicitly opts into allowlisting with an empty set.
 func (cb *ContextBuilder) WithSkillAllowlist(allowlist []string) *ContextBuilder {
 	if allowlist == nil {

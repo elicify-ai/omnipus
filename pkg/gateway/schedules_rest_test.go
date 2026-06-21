@@ -146,6 +146,8 @@ func TestSchedulesAPI_Create400WorkerOwner(t *testing.T) {
 // TestSchedulesAPI_Update400WorkerOwner verifies the update-time guard that
 // rejects reassigning a schedule's owner to a worker. Same fire-before-persist
 // property as the create guard.
+//
+//nolint:dupl // parallel test scaffolding intentionally mirrors TestSchedulesAPI_Update400WorkerOwner_NonAdminNonOwner (same worker-owner update guard, different authz angle)
 func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 

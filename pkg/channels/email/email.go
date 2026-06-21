@@ -149,7 +149,7 @@ func (c *EmailChannel) Start(ctx context.Context) error {
 	return nil
 }
 
-// run drives the IMAP receive loop until ctx is cancelled or a permanent error
+// run drives the IMAP receive loop until ctx is canceled or a permanent error
 // occurs. It owns the IMAP client lifecycle: on exit it clears the running flag
 // and closes c.done so Stop can wait for a clean teardown.
 func (c *EmailChannel) run(ctx context.Context) {
@@ -209,7 +209,7 @@ func (c *EmailChannel) run(ctx context.Context) {
 }
 
 // runLoop dials the IMAP server, logs in, selects INBOX, and spins in an
-// IDLE/poll loop until ctx is cancelled or an error breaks the connection.
+// IDLE/poll loop until ctx is canceled or an error breaks the connection.
 func (c *EmailChannel) runLoop(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", c.cfg.IMAPHost, c.cfg.IMAPPort)
 
@@ -527,16 +527,16 @@ func sendSMTPWithSTARTTLS(addr string, auth smtp.Auth, from, to, body string, tl
 	}
 	defer c.Close()
 
-	if err := c.StartTLS(tlsCfg); err != nil {
+	if err = c.StartTLS(tlsCfg); err != nil {
 		return fmt.Errorf("STARTTLS: %w", err)
 	}
-	if err := c.Auth(auth); err != nil {
+	if err = c.Auth(auth); err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
-	if err := c.Mail(from); err != nil {
+	if err = c.Mail(from); err != nil {
 		return fmt.Errorf("MAIL FROM: %w", err)
 	}
-	if err := c.Rcpt(to); err != nil {
+	if err = c.Rcpt(to); err != nil {
 		return fmt.Errorf("RCPT TO: %w", err)
 	}
 	w, err := c.Data()
@@ -562,13 +562,13 @@ func sendSMTPS(addr, from, to, body, username, password string, tlsCfg *tls.Conf
 	defer c.Close()
 
 	auth := smtp.PlainAuth("", username, password, tlsCfg.ServerName)
-	if err := c.Auth(auth); err != nil {
+	if err = c.Auth(auth); err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
-	if err := c.Mail(from); err != nil {
+	if err = c.Mail(from); err != nil {
 		return fmt.Errorf("MAIL FROM: %w", err)
 	}
-	if err := c.Rcpt(to); err != nil {
+	if err = c.Rcpt(to); err != nil {
 		return fmt.Errorf("RCPT TO: %w", err)
 	}
 	w, err := c.Data()

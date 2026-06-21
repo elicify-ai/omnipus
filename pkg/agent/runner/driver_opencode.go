@@ -14,6 +14,7 @@
 //	{"type":"error","message":"...","code":"..."}
 //
 // The driver gracefully skips any unknown event types (FR-5.6).
+
 package runner
 
 import (
@@ -55,6 +56,8 @@ func NewOpencodeDriver(consent ConsentHandler) *OpencodeDriver {
 }
 
 // Run starts `opencode run --format json` with the given options.
+//
+//nolint:dupl // driver-specific process lifecycle; the parallel exit/stderr handling shares shape with ClaudeDriver.Run but differs in per-CLI log prefixes and error-message text — a shared helper would obscure those per-CLI differences and risk behavior changes
 func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -264,7 +267,10 @@ func (d *OpencodeDriver) parseLine(
 			return RunEvent{
 				Kind:  EventKindError,
 				RunID: runID,
-				Err:   &ErrorEvent{Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns), Fatal: true},
+				Err: &ErrorEvent{
+					Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns),
+					Fatal:   true,
+				},
 			}, true
 		}
 		return RunEvent{}, false
@@ -350,7 +356,7 @@ func (d *OpencodeDriver) Decide(decision PermissionDecision) {
 		d.mu.Lock()
 		runID := d.runID
 		d.mu.Unlock()
-		slog.Info("runner/opencode: permission denied — cancelling run",
+		slog.Info("runner/opencode: permission denied — canceling run",
 			"run_id", runID, "request_id", decision.RequestID, "reason", decision.Reason)
 		d.Cancel()
 	}

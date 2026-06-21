@@ -97,67 +97,6 @@ func executorConfigFromRequest(kind, cli string) (*config.ExecutorConfig, string
 	}
 }
 
-// executorConfigUpdate reconciles a request executor with the agent's persisted
-// executor, applying the cli-lock rule (agent-form spec §4.16 / W3 F-10):
-//   - cli is LOCKED after create. Any attempt to mutate it on PUT returns 400
-//     with "executor.cli is locked after create; create a new agent to switch CLIs."
-//   - cli_path IS mutable on PUT (allows binary upgrades without re-creating).
-//   - env_overrides and cli_args are fully mutable.
-//
-// Returns (updated *config.ExecutorConfig, ""), or (nil, errMsg) on lock violation.
-func executorConfigUpdate(existing *config.ExecutorConfig, req *struct {
-	Kind       string
-	CLI        string
-	CLIPath    string
-	EnvOver    map[string]string
-	CLIArgs    string
-	HasCLIPath bool
-	HasEnvOver bool
-	HasCLIArgs bool
-}) (*config.ExecutorConfig, string) {
-	// Lock check: if the persisted agent has an executor.cli and the request
-	// carries a different cli value, reject 400.
-	if existing != nil && existing.CLI != "" {
-		if req.CLI != "" && req.CLI != existing.CLI {
-			return nil, "executor.cli is locked after create; create a new agent to switch CLIs."
-		}
-	}
-
-	// Start from the persisted executor (may be nil for a previously-native agent).
-	var out *config.ExecutorConfig
-	if existing != nil {
-		cp := *existing
-		out = &cp
-	} else {
-		out = &config.ExecutorConfig{}
-	}
-
-	// Apply kind/cli if the request sent them.
-	if req.Kind != "" {
-		out.Kind = config.ExecutorKind(req.Kind)
-	}
-	if req.CLI != "" {
-		out.CLI = req.CLI
-	}
-	if req.HasCLIPath {
-		out.CLIPath = req.CLIPath
-	}
-	if req.HasEnvOver {
-		out.EnvOverrides = req.EnvOver
-	}
-	if req.HasCLIArgs {
-		out.CLIArgs = req.CLIArgs
-	}
-
-	// Native with no executor surface → nil (callers persist nothing).
-	if out.Kind == "" || out.Kind == config.ExecutorKindNative {
-		if out.CLI == "" && out.CLIPath == "" && len(out.EnvOverrides) == 0 && out.CLIArgs == "" {
-			return nil, ""
-		}
-	}
-	return out, ""
-}
-
 // executorConfigToMap serializes a *config.ExecutorConfig into the JSON-map shape
 // written under agents.list[*].subagents.executor by the safeUpdateConfigJSON
 // writers. cli is omitted when empty (matches the `omitempty` on the Go struct).

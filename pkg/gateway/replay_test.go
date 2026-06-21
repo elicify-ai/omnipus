@@ -648,14 +648,14 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 	// the call) would be a NEW goroutine not in the snapshot and would still fail the test.
 	// goleak also retries with backoff (~20 attempts), absorbing goroutines that are exiting.
 	//
-	// The explicit IgnoreTopFunction entries are kept as defence-in-depth for the known
+	// The explicit IgnoreTopFunction entries are kept as defense-in-depth for the known
 	// persistent workers, in case one is spawned *after* the snapshot by a concurrent test.
 	defer goleak.VerifyNone(t,
 		goleak.IgnoreCurrent(),
 		goleak.IgnoreTopFunction("github.com/dapicom-ai/omnipus/pkg/tools.NewSessionManager.func1"),
 		goleak.IgnoreTopFunction("github.com/dapicom-ai/omnipus/pkg/agent.(*HookManager).dispatchEvents"),
 		// bleve analysis workers are started at package-init time by the memory/bleve
-		// subsystem initialised via newTestWSHandler in other tests in this package.
+		// subsystem initialized via newTestWSHandler in other tests in this package.
 		// They are persistent infrastructure goroutines — not started by streamReplay.
 		goleak.IgnoreTopFunction("github.com/blevesearch/bleve_index_api.AnalysisWorker"),
 	)

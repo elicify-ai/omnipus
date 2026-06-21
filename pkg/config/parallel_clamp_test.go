@@ -28,7 +28,7 @@ func TestClampParallel_AutoFloorsAtTwo(t *testing.T) {
 }
 
 // TestClampParallelExplicit_HonoursOne verifies that an EXPLICIT user value of 1
-// is honoured (single-flight) — only the floor of 1, not 2 (GAP 3).
+// is honored (single-flight) — only the floor of 1, not 2 (GAP 3).
 func TestClampParallelExplicit_HonoursOne(t *testing.T) {
 	cases := []struct {
 		in, want int

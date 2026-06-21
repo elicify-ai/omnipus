@@ -13,6 +13,7 @@
 //
 // String-based room scope ("private" | "shared" | "both") is used at the interface
 // boundary to prevent a pkg/tools → pkg/memrooms import that would create a cycle.
+
 package agent
 
 import (

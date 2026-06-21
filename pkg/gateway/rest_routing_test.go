@@ -478,7 +478,11 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 
 	// Worker target → 400.
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing", strings.NewReader(`{"default_agent_id": "worker"}`))
+	r := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/channels/telegram/routing",
+		strings.NewReader(`{"default_agent_id": "worker"}`),
+	)
 	api.HandleChannels(w, r)
 	require.Equal(t, http.StatusBadRequest, w.Code,
 		"a worker target for channel routing must be rejected with 400")
@@ -492,7 +496,11 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 
 	// Control: base agent target → 200.
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing", strings.NewReader(`{"default_agent_id": "mia"}`))
+	r2 := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/channels/telegram/routing",
+		strings.NewReader(`{"default_agent_id": "mia"}`),
+	)
 	api.HandleChannels(w2, r2)
 	require.Equal(t, http.StatusOK, w2.Code, "a base agent target must succeed (control)")
 	var resp gen.ChannelRouting

@@ -109,29 +109,6 @@ func cloneWithWorkspace(src *config.ModelConfig, workspace string) *config.Model
 	return &clone
 }
 
-// resolveModel is the thin boolean wrapper around ResolveModelCfg used by
-// callers that only need the canonical wire form (not the matched Provider).
-// It returns the canonical protocol-prefixed model name when found, or
-// ("", false) on miss.
-//
-// For legacy entries that do NOT set the Provider field (model_name == model
-// == bare slug), apply the historical ensureProtocol heuristic: bare slugs
-// (no "/") get an implicit "openai/" prefix so downstream consumers that
-// rely on ParseModelRef's slash-based provider inference see a non-empty
-// provider. When the Provider field IS set (the modern, contract-first
-// shape), return mc.Model verbatim — the spec (Dataset 1 row 6) requires
-// the canonical name without an implicit prefix in that case.
-func resolveModel(cfg *config.Config, modelName string) (string, bool) {
-	r, ok := resolveModelRef(cfg, modelName)
-	if !ok {
-		return "", false
-	}
-	if strings.TrimSpace(r.Provider) == "" {
-		r.Model = ensureProtocol(r.Model)
-	}
-	return r.Model, true
-}
-
 // resolveModelRef returns the matched ModelConfig's canonical Model form
 // AND its Provider. The Provider field of the returned ref is the matched
 // entry's Provider (e.g. "openrouter"), not the slash-prefix from mc.Model
@@ -145,21 +122,6 @@ func resolveModelRef(cfg *config.Config, modelName string) (providers.ResolvedRe
 		return providers.ResolvedRef{}, false
 	}
 	return providers.ResolvedRef{Model: mc.Model, Provider: mc.Provider}, true
-}
-
-// ensureProtocol is the historical helper that gave bare slugs an implicit
-// "openai/" prefix. Preserved for backward compatibility with legacy
-// provider entries that don't set the Provider field. New entries should
-// set Provider explicitly so this heuristic is not needed.
-func ensureProtocol(model string) string {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return ""
-	}
-	if strings.Contains(model, "/") {
-		return model
-	}
-	return "openai/" + model
 }
 
 // buildModelListResolver is the SINGLE source of truth for "what is the
@@ -507,7 +469,11 @@ func IsKnownModel(slug string, models []*config.ModelConfig) bool {
 		if strings.ToLower(strings.TrimSpace(mc.Model)) == needle {
 			return true
 		}
-		if _, modelID := providers.ExtractProtocol(strings.TrimSpace(mc.Model)); strings.ToLower(strings.TrimSpace(modelID)) == needle {
+		if _, modelID := providers.ExtractProtocol(
+			strings.TrimSpace(mc.Model),
+		); strings.ToLower(
+			strings.TrimSpace(modelID),
+		) == needle {
 			return true
 		}
 		if strings.ToLower(strings.TrimSpace(mc.ModelName)) == needle {

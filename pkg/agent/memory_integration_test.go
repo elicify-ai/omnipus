@@ -6,6 +6,7 @@
 //
 // GREENFIELD: tests work against the new per-memory .md file format.
 // Old MEMORY.md tests removed per FR-7.6 / operator D2 greenfield decision.
+
 package agent
 
 import (
@@ -71,7 +72,17 @@ func TestRememberTool_RealAdapter_PersistsViaMemoryStore(t *testing.T) {
 	}
 
 	// All required frontmatter keys must be present (NFR-7 — full schema always).
-	requiredKeys := []string{"id:", "title:", "type:", "tags:", "confidence:", "status:", "supersedes:", "author:", "born_in:"}
+	requiredKeys := []string{
+		"id:",
+		"title:",
+		"type:",
+		"tags:",
+		"confidence:",
+		"status:",
+		"supersedes:",
+		"author:",
+		"born_in:",
+	}
 	for _, k := range requiredKeys {
 		if !strings.Contains(text, k) {
 			t.Errorf("memory file missing frontmatter key %q; got:\n%s", k, text)

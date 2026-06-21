@@ -53,7 +53,7 @@ func TestAutomations_CronTrigger_HumanizedAndActionShown(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Len(t, resp.Automations, 1)
 	item := resp.Automations[0]
-	assert.Equal(t, "Monday at 09:00", item.TriggerDisplay, "weekly cron must be humanised")
+	assert.Equal(t, "Monday at 09:00", item.TriggerDisplay, "weekly cron must be humanized")
 	assert.Equal(t, "Run agent: mia", item.ActionDisplay, "deliver=false runs the agent")
 	assert.Equal(t, "mia", item.AgentName)
 }

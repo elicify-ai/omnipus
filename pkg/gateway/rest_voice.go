@@ -33,8 +33,10 @@ var openAITTSVoices = []string{
 
 const elevenLabsVoicesEndpoint = "https://api.elevenlabs.io/v1/voices"
 
-const voiceProviderOpenAI = "openai-tts"
-const voiceProviderElevenLabs = "elevenlabs"
+const (
+	voiceProviderOpenAI     = "openai-tts"
+	voiceProviderElevenLabs = "elevenlabs"
+)
 
 // HandleVoiceProvider handles GET /api/v1/voice/provider. Returns the active
 // voice provider's identity and (optionally) its voices enum.

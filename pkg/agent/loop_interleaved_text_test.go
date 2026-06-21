@@ -12,6 +12,7 @@
 // This test drives the non-streaming (ProcessScheduled) path because it does
 // not require a websocket.  The streaming path shares the same fix point in
 // loop.go so the invariant holds for both paths.
+
 package agent
 
 import (
