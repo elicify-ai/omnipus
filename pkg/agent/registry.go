@@ -199,7 +199,7 @@ func (r *AgentRegistry) GetAgentName(agentID string) (string, bool) {
 }
 
 // IsWorker reports whether the agent identified by agentID is a sub-agent worker
-// (the delegation-only labour tier). Returns false when the agent does not exist,
+// (the delegation-only labor tier). Returns false when the agent does not exist,
 // so callers that have already validated existence get a definitive worker/not-worker
 // answer. Satisfies the tools.AgentRegistryReader interface used by HandoffTool to
 // reject worker handoff targets without an import cycle.

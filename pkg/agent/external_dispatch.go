@@ -20,6 +20,7 @@
 //     events (output/tool-call/diff/error) are written to the sub-agent session
 //     transcript so the SPA renders the run inline.
 //  5. Teardown — remove the worktree/temp dir, including on crash paths.
+
 package agent
 
 import (
@@ -127,9 +128,7 @@ func runExternalCLISubTurn(
 	// output to the agent's configured model. The external CLI runs its
 	// own LLM, but we record what model the agent would have used in the
 	// non-CLI path — consistent with how chat turns are attributed.
-	if agent != nil {
-		childTS.setLastProducedModel(strings.TrimSpace(agent.Model))
-	}
+	childTS.setLastProducedModel(strings.TrimSpace(agent.Model))
 
 	// SECURITY (Spec-4 FR-5.3 / SEC-23): the spawned external CLI must NOT inherit
 	// the full gateway environment — that would leak OMNIPUS_MASTER_KEY (and every
@@ -234,8 +233,15 @@ func drainExternalRun(
 						slog.Info("external-cli dispatch: run started",
 							"run_id", runID, "cli", ev.Start.CLI, "version", ev.Start.Version)
 					} else {
-						slog.Warn("external-cli dispatch: run started with unknown/unpinned CLI version — graceful degradation",
-							"run_id", runID, "cli", ev.Start.CLI, "version", ev.Start.Version)
+						slog.Warn(
+							"external-cli dispatch: run started with unknown/unpinned CLI version — graceful degradation",
+							"run_id",
+							runID,
+							"cli",
+							ev.Start.CLI,
+							"version",
+							ev.Start.Version,
+						)
 					}
 				} else {
 					slog.Info("external-cli dispatch: run started", "run_id", runID, "cli", cli)
@@ -271,7 +277,10 @@ func drainExternalRun(
 			case runner.EventKindError:
 				if ev.Err != nil {
 					msg := ev.Err.Message
-					childTS.appendIntermediateAssistantTranscript("[external-cli error] "+msg, transcriptModelFor(childTS.agent))
+					childTS.appendIntermediateAssistantTranscript(
+						"[external-cli error] "+msg,
+						transcriptModelFor(childTS.agent),
+					)
 					if ev.Err.Fatal {
 						runErr = fmt.Errorf("external-cli run failed: %s", msg)
 					}
@@ -317,7 +326,10 @@ done:
 		msg := fmt.Sprintf(
 			"External CLI run (%s) was DENIED and aborted (a permission request was rejected: %s). "+
 				"The delegated task did NOT complete.", cli, reason)
-		childTS.appendIntermediateAssistantTranscript("[external-cli denied] "+reason, transcriptModelFor(childTS.agent))
+		childTS.appendIntermediateAssistantTranscript(
+			"[external-cli denied] "+reason,
+			transcriptModelFor(childTS.agent),
+		)
 		return &tools.ToolResult{
 			Err:     denyErr,
 			ForLLM:  msg,

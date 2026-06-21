@@ -217,7 +217,7 @@ func (a *restAPI) requireReAuth(w http.ResponseWriter, r *http.Request, username
 // are sensitive and require a valid re-auth token (requireReAuth).
 // ---------------------------------------------------------------------------
 
-// integrationDef is the static catalogue of a configurable integration provider:
+// integrationDef is the static catalog of a configurable integration provider:
 // its id, kind, display name, whether it needs a key, and the credential-ref env
 // var name used when a key is stored.
 type integrationDef struct {
@@ -243,12 +243,18 @@ var integrationCatalogue = []integrationDef{
 	{id: "glm", kind: "search", displayName: "GLM Search", requiresKey: true, credRef: "GLM_API_KEY"},
 	{id: "baidu", kind: "search", displayName: "Baidu Search", requiresKey: true, credRef: "BAIDU_API_KEY"},
 	// Voice transcribers (pkg/voice Transcriber implementations).
-	{id: "elevenlabs", kind: "voice", displayName: "ElevenLabs Scribe", requiresKey: true, credRef: "ELEVENLABS_API_KEY"},
+	{
+		id:          "elevenlabs",
+		kind:        "voice",
+		displayName: "ElevenLabs Scribe",
+		requiresKey: true,
+		credRef:     "ELEVENLABS_API_KEY",
+	},
 	{id: "groq", kind: "voice", displayName: "Groq Whisper", requiresKey: true, credRef: "GROQ_API_KEY"},
 	{id: "audio-model", kind: "voice", displayName: "Audio Model (provider)", requiresKey: false, credRef: ""},
 }
 
-// integrationDefByID returns the catalogue entry for id, or false.
+// integrationDefByID returns the catalog entry for id, or false.
 func integrationDefByID(id string) (integrationDef, bool) {
 	for _, d := range integrationCatalogue {
 		if d.id == id {
@@ -271,7 +277,7 @@ func (a *restAPI) HandleIntegrationProviders(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-// buildIntegrationResponse computes the live provider catalogue from the active
+// buildIntegrationResponse computes the live provider catalog from the active
 // config: configured (a key is present), active (the selected provider for its
 // kind), and the active_search / active_voice selectors.
 func (a *restAPI) buildIntegrationResponse(cfg *config.Config) gen.IntegrationProvidersResponse {

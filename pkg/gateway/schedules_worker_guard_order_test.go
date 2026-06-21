@@ -76,6 +76,8 @@ func TestSchedulesAPI_Create400WorkerOwner_NonAdminNonOwner(t *testing.T) {
 // schedule itself first (alice owns mia → permitted to mutate), so the
 // only thing in play at the owner-change step is the worker-vs-authz
 // ordering.
+//
+//nolint:dupl // parallel test scaffolding intentionally mirrors TestSchedulesAPI_Update400WorkerOwner (same worker-owner update guard, different authz angle)
 func TestSchedulesAPI_Update400WorkerOwner_NonAdminNonOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 
@@ -112,8 +114,13 @@ func TestSchedulesAPI_Update400WorkerOwner_NonAdminNonOwner(t *testing.T) {
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"non-admin owner-reassigning to a worker must get 400 (worker guard before owner re-authz), got: %s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"non-admin owner-reassigning to a worker must get 400 (worker guard before owner re-authz), got: %s",
+		w.Body.String(),
+	)
 	assert.Contains(t, w.Body.String(), "worker")
 
 	// Stored owner must still be "mia" — the failed PUT must not have

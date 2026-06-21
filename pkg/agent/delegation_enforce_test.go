@@ -214,7 +214,7 @@ func TestDelegationDenyChecker_FlipsWhenPolicyRebuilt(t *testing.T) {
 		t.Fatal("new policy: expected ava denied after edit (revoked target), got allow")
 	}
 
-	// Defence in depth: the OLD checker (the pre-reload closure) still enforces
+	// Defense in depth: the OLD checker (the pre-reload closure) still enforces
 	// the OLD allowlist — proving the rebuild, not in-place mutation, is what
 	// applies the new policy. This is exactly why a delegation edit MUST reload.
 	if reason := oldChecker(ctxAtDepth(0), "ray"); reason == "" {

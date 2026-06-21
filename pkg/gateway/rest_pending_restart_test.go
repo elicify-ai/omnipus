@@ -41,7 +41,7 @@ func withUserCtx(r *http.Request) *http.Request {
 // (LoadConfig + ValidateAndApplyPreviewDefaults + ApplyWarmupTimeoutDefault),
 // returning the resulting *config.Config to use as appliedConfig. This mirrors
 // production: appliedConfig is the boot config WITH computed defaults applied,
-// not the raw on-disk bytes. Centralising it here guarantees the test's applied
+// not the raw on-disk bytes. Centralizing it here guarantees the test's applied
 // side is normalised identically to the handler's persisted side, so a
 // clean-install (applied == persisted) yields an empty diff even for keys that
 // only get a value via boot-time defaults (session.dm_scope, gateway.preview_*).
@@ -169,6 +169,8 @@ func TestHandlePendingRestart_CleanInstallNoPhantomDiff(t *testing.T) {
 // TestHandlePendingRestart_GenuineChangeStillShows verifies that a real
 // post-boot edit to a restart-gated key (gateway.port 5000 → 8080 written to
 // disk) STILL surfaces in the diff after the clean-install normalization fix.
+//
+//nolint:dupl // parallel test scaffolding intentionally mirrors TestHandlePendingRestart_HostChangeStillShows (port vs host, same restart-gated diff assertion)
 func TestHandlePendingRestart_GenuineChangeStillShows(t *testing.T) {
 	applied := map[string]any{
 		"version": float64(config.CurrentVersion),
@@ -208,6 +210,8 @@ func TestHandlePendingRestart_GenuineChangeStillShows(t *testing.T) {
 // edit to gateway.host (the bind address; "Bind address" in the UI) surfaces in
 // the diff — gateway.host is restart-gated like gateway.port because changing it
 // re-binds the listener, which can only happen safely on restart.
+//
+//nolint:dupl // parallel test scaffolding intentionally mirrors TestHandlePendingRestart_GenuineChangeStillShows (host vs port, same restart-gated diff assertion)
 func TestHandlePendingRestart_HostChangeStillShows(t *testing.T) {
 	applied := map[string]any{
 		"version": float64(config.CurrentVersion),
@@ -351,7 +355,7 @@ func TestHandlePendingRestart_EmptyAfterApply(t *testing.T) {
 
 // TestHandlePendingRestart_SetThenRevertClearsDiff verifies the diff-based
 // semantics: if a key was changed to Y and then changed back to X (the applied
-// value) before restart, the diff returns []. Modelled by leaving the on-disk
+// value) before restart, the diff returns []. Modeled by leaving the on-disk
 // config identical to boot (net-zero edit).
 func TestHandlePendingRestart_SetThenRevertClearsDiff(t *testing.T) {
 	// Applied had mode="off"; persisted was changed to "enforce" then reverted to

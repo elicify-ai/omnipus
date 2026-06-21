@@ -236,7 +236,7 @@ type ExternalAgentRunner interface {
 	// Run starts the external agent with the given options and returns a read-only
 	// channel of RunEvents. The channel is closed when the run ends (either
 	// EventKindEnd or EventKindError has been sent). The context governs the run's
-	// lifetime; cancelling it is equivalent to calling Cancel.
+	// lifetime; canceling it is equivalent to calling Cancel.
 	//
 	// An EventKindPermissionRequest event MUST be answered via Decide before the
 	// run can continue; the driver blocks the run until a decision arrives or a
@@ -258,7 +258,7 @@ type ExternalAgentRunner interface {
 	Input(text string) error
 
 	// Resume starts (or re-attaches to) an existing run by its stable RunID.
-	// If no prior session with that ID exists, the behaviour is driver-defined
+	// If no prior session with that ID exists, the behavior is driver-defined
 	// (most drivers start a fresh run).
 	Resume(ctx context.Context, runID string) (<-chan RunEvent, error)
 

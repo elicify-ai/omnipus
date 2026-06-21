@@ -48,7 +48,7 @@ var dueDatePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 // read-modify-write paths, keyed by milestone ID. It mirrors task.TaskFileLock
 // (same StripedLock type): the milestone PUT handler must acquire the per-ID lock
 // across the WHOLE read→mutate→write so two concurrent PUTs on the same milestone
-// cannot lose an update. The advisory flock inside writeMilestoneFile only serialises
+// cannot lose an update. The advisory flock inside writeMilestoneFile only serializes
 // the write itself, not the preceding read, so it is insufficient on its own.
 //
 //nolint:gochecknoglobals
@@ -184,7 +184,7 @@ func milestoneProgress(total, done int) float64 {
 // for each candidate is performed under the process-wide task.TaskFileLock striped
 // mutex (with a re-read inside the lock), so a concurrent PUT/start/advance on the same
 // task cannot be clobbered. Taking only the advisory flock (as before) was insufficient:
-// it serialised writers against each other but the in-process board-task handlers RMW
+// it serialized writers against each other but the in-process board-task handlers RMW
 // under TaskFileLock, not WithFlock, so the two paths could interleave and lose updates.
 func clearMilestoneOnTasks(home, milestoneID string) {
 	tasksDir := filepath.Join(home, "tasks")

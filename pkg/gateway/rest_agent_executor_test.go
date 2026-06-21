@@ -98,7 +98,7 @@ func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code, "create body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
 	// kind=native collapses to nil in the persisted response (omitted field
-	// is the round-trip-preserving behaviour), so the test asserts "either
+	// is the round-trip-preserving behavior), so the test asserts "either
 	// nil or kind=native" — the on-disk assertion below is the load-bearing
 	// one.
 	if created.Executor != nil {
@@ -234,9 +234,18 @@ func TestCreateAgent_InvalidExecutor_400(t *testing.T) {
 		name string
 		body string
 	}{
-		{"subagent_3p external-cli with no cli", `{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli_path":"/usr/local/bin/codex"},"soul":"s"}`},
-		{"subagent_3p external-cli with no cli_path", `{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli":"codex"},"soul":"s"}`},
-		{"subagent_3p external-cli with empty cli_path", `{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli":"codex","cli_path":"  "},"soul":"s"}`},
+		{
+			"subagent_3p external-cli with no cli",
+			`{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli_path":"/usr/local/bin/codex"},"soul":"s"}`,
+		},
+		{
+			"subagent_3p external-cli with no cli_path",
+			`{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli":"codex"},"soul":"s"}`,
+		},
+		{
+			"subagent_3p external-cli with empty cli_path",
+			`{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli":"codex","cli_path":"  "},"soul":"s"}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -643,13 +652,34 @@ func TestCreateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 		name string
 		body string
 	}{
-		{"tools_cfg", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}}}`},
-		{"skills", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"skills":["summarize"]}`},
-		{"fallback_models", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"fallback_models":[{"model":"m","provider":"p"}]}`},
-		{"model_params", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"model_params":{"temperature":0.5}}`},
-		{"sandbox_profile", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"sandbox_profile":"workspace"}`},
-		{"shell_policy", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"shell_policy":{"enable_deny_patterns":true}}`},
-		{"delegation_policy", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"delegation_policy":{"to":[{"kind":"local","id":"*"}]}}`},
+		{
+			"tools_cfg",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}}}`,
+		},
+		{
+			"skills",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"skills":["summarize"]}`,
+		},
+		{
+			"fallback_models",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"fallback_models":[{"model":"m","provider":"p"}]}`,
+		},
+		{
+			"model_params",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"model_params":{"temperature":0.5}}`,
+		},
+		{
+			"sandbox_profile",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"sandbox_profile":"workspace"}`,
+		},
+		{
+			"shell_policy",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"shell_policy":{"enable_deny_patterns":true}}`,
+		},
+		{
+			"delegation_policy",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"delegation_policy":{"to":[{"kind":"local","id":"*"}]}}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -905,9 +935,18 @@ func TestCreateAgent_Subagent3p_CliPathRequired(t *testing.T) {
 		name string
 		body string
 	}{
-		{"missing cli_path", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code"}}`},
-		{"empty cli_path", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":""}}`},
-		{"whitespace cli_path", `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":"   "}}`},
+		{
+			"missing cli_path",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code"}}`,
+		},
+		{
+			"empty cli_path",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":""}}`,
+		},
+		{
+			"whitespace cli_path",
+			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":"   "}}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

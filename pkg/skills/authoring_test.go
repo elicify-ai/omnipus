@@ -32,8 +32,8 @@ func TestSkillCreate_Versioned(t *testing.T) {
 	}
 
 	// Creating the same skill again must be rejected.
-	if _, err := w.CreateSkill("my-skill", validFor("my-skill")); !errors.Is(err, ErrAlreadyExists) {
-		t.Fatalf("expected ErrAlreadyExists on duplicate create, got %v", err)
+	if _, dupErr := w.CreateSkill("my-skill", validFor("my-skill")); !errors.Is(dupErr, ErrAlreadyExists) {
+		t.Fatalf("expected ErrAlreadyExists on duplicate create, got %v", dupErr)
 	}
 
 	// Versions are empty until the first edit.
@@ -47,8 +47,8 @@ func TestSkillCreate_Versioned(t *testing.T) {
 
 	// Edit snapshots the prior version.
 	edited := "---\nname: my-skill\ndescription: An edited description that is also long enough to be valid here.\n---\n\n# my-skill\n\nEdited body.\n"
-	if _, _, err := w.EditSkill("my-skill", edited, false); err != nil {
-		t.Fatalf("EditSkill: %v", err)
+	if _, _, editErr := w.EditSkill("my-skill", edited, false); editErr != nil {
+		t.Fatalf("EditSkill: %v", editErr)
 	}
 
 	vers, err = w.ListVersions("my-skill")
@@ -101,7 +101,7 @@ func TestSkillEdit_BuiltinOverride(t *testing.T) {
 	// an override and the builtin is untouchable through it.
 	w := NewSkillWriter(globalRoot)
 
-	override := "---\nname: briefing\ndescription: An overridden briefing skill that the user has customised locally.\n---\n\n# briefing\n\nOverridden.\n"
+	override := "---\nname: briefing\ndescription: An overridden briefing skill that the user has customized locally.\n---\n\n# briefing\n\nOverridden.\n"
 	path, createdOverride, err := w.EditSkill("briefing", override, true /* allowCreateOverride: builtin exists */)
 	if err != nil {
 		t.Fatalf("EditSkill (override): %v", err)
@@ -195,8 +195,10 @@ func TestSkillWrite_Confinement_TraversalAndOversize_Rejected(t *testing.T) {
 	// differ from the slug (the directory/skill id) — e.g. slug "daily-briefing" with
 	// display name "Daily Briefing". Path identity is the slug, so a differing display
 	// name is NOT a confinement risk and must be ACCEPTED.
-	if _, err := w.CreateSkill("display-name-skill",
-		"---\nname: A Friendly Display Name\ndescription: a description long enough to be valid for this test.\n---\n\n# x\n"); err != nil {
+	if _, err := w.CreateSkill(
+		"display-name-skill",
+		"---\nname: A Friendly Display Name\ndescription: a description long enough to be valid for this test.\n---\n\n# x\n",
+	); err != nil {
 		t.Errorf("a display name differing from the slug must be accepted, got: %v", err)
 	}
 }

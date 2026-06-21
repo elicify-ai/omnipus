@@ -352,7 +352,7 @@ func (t *SubagentTool) SetSpawner(spawner SubTurnSpawner) {
 // SetDelegateChecker sets the delegation gate for the sync subagent tool.
 // The checker returns true if the calling agent is permitted to spawn any
 // synchronous subagent (the tool has no explicit target agent).
-// When nil, the tool is ungated (legacy behaviour — not recommended).
+// When nil, the tool is ungated (legacy behavior — not recommended).
 func (t *SubagentTool) SetDelegateChecker(check func() bool) {
 	t.delegateChecker = check
 }

@@ -939,7 +939,7 @@ func (h *WSHandler) handleChatMessage(
 		}
 	} else if isWorkerAgentID(h.agentLoop.GetConfig(), targetAgentID) {
 		// An explicit agent_id that resolves to a worker is illegitimate: a worker
-		// is a delegation-only labour tier, never a chat target. Refuse to mint a
+		// is a delegation-only labor tier, never a chat target. Refuse to mint a
 		// live chat session for it. Mirror the error-frame pattern used for an
 		// unknown/invalid session below.
 		slog.Warn("ws: rejecting chat frame addressed to a worker agent",

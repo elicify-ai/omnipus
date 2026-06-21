@@ -12,6 +12,7 @@
 // memory ID or title. One cited event per recalled memory per turn (deduped) —
 // "citation frequency" is measured per-turn, not per-mention, so a chatty agent
 // cannot inflate a memory's rank by repeating the same ID.
+
 package agent
 
 import (

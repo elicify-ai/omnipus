@@ -654,7 +654,7 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 	// closed) the index, then the ContextBuilder's store blocked forever in
 	// bolt.Open waiting for that lock — a hang under any scheduling (it failed
 	// the same way on baseline). Production never opens two stores per
-	// workspace, so the second store was an unrealistic test artefact. Using
+	// workspace, so the second store was an unrealistic test artifact. Using
 	// the builder's own store keeps the memory path fully exercised
 	// (GetMemoryContext → SearchEntries → bleve) with no second lock holder.
 	if err := cb.Memory().AppendLongTerm("user prefers Go", "reference"); err != nil {

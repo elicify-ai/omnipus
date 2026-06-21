@@ -118,7 +118,10 @@ func TestHandoffTool_RejectsWorkerTarget(t *testing.T) {
 	}
 	// The session must NOT have been switched — no transcript entry appended.
 	if len(store.appendedEvents) != 0 {
-		t.Errorf("expected no session switch on rejected worker handoff, got %d appended events", len(store.appendedEvents))
+		t.Errorf(
+			"expected no session switch on rejected worker handoff, got %d appended events",
+			len(store.appendedEvents),
+		)
 	}
 }
 

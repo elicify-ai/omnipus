@@ -26,7 +26,7 @@ type AgentRegistryReader interface {
 	GetAgentName(agentID string) (string, bool)
 
 	// IsWorker reports whether the agent identified by agentID is a sub-agent
-	// worker (the delegation-only labour tier). HandoffTool uses it to reject a
+	// worker (the delegation-only labor tier). HandoffTool uses it to reject a
 	// handoff to a worker — workers are invoked via delegation, not handoff, so a
 	// worker must never become a session pin / live chat target. Returns false
 	// for an unknown agent.
@@ -145,12 +145,17 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult(fmt.Sprintf("agent %q not found — check the agent ID", agentID))
 	}
 
-	// Step 2: Reject a worker target. A worker is a delegation-only labour tier —
+	// Step 2: Reject a worker target. A worker is a delegation-only labor tier —
 	// it is invoked via task_create / sub-agent delegation, never as a live chat
 	// persona. Handing off would pin the session to the worker (making it a chat
 	// target), so refuse before any switch occurs.
 	if reg.IsWorker(agentID) {
-		return ErrorResult(fmt.Sprintf("cannot hand off to %q — it is a worker; workers are invoked via delegation, not handoff", agentName))
+		return ErrorResult(
+			fmt.Sprintf(
+				"cannot hand off to %q — it is a worker; workers are invoked via delegation, not handoff",
+				agentName,
+			),
+		)
 	}
 
 	// Step 3: Get session ID from context.

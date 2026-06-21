@@ -18,7 +18,7 @@ import (
 func TestSubTurnFanOutCap_FollowsConfig(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "") // keep env override inert
 
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	// Sanity: with no explicit SubTurn.MaxConcurrent, getSubTurnConfig must fall
@@ -30,11 +30,15 @@ func TestSubTurnFanOutCap_FollowsConfig(t *testing.T) {
 		rtCfg := al.getSubTurnConfig()
 		eff := al.cfg.Performance.EffectiveMaxParallelAgents()
 		if rtCfg.maxConcurrent != eff {
-			t.Fatalf("MaxParallelAgents=%d: getSubTurnConfig().maxConcurrent = %d, want EffectiveMaxParallelAgents()=%d",
-				want, rtCfg.maxConcurrent, eff)
+			t.Fatalf(
+				"MaxParallelAgents=%d: getSubTurnConfig().maxConcurrent = %d, want EffectiveMaxParallelAgents()=%d",
+				want,
+				rtCfg.maxConcurrent,
+				eff,
+			)
 		}
 		if rtCfg.maxConcurrent != want {
-			t.Fatalf("MaxParallelAgents=%d: resolved cap = %d, want %d (explicit values honoured incl. single-flight 1)",
+			t.Fatalf("MaxParallelAgents=%d: resolved cap = %d, want %d (explicit values honored incl. single-flight 1)",
 				want, rtCfg.maxConcurrent, want)
 		}
 	}
@@ -45,7 +49,7 @@ func TestSubTurnFanOutCap_FollowsConfig(t *testing.T) {
 func TestSubTurnFanOutCap_ExplicitSubTurnOverride(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
 
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	al.cfg.Performance.MaxParallelAgents = 16
@@ -62,7 +66,7 @@ func TestSubTurnFanOutCap_ExplicitSubTurnOverride(t *testing.T) {
 func TestSubTurnFanOutCap_ChildSemaphoreCapacity(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
 
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	const want = 4

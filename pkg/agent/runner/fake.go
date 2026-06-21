@@ -21,7 +21,7 @@ type FakeRunner struct {
 	mu         sync.Mutex
 	eventCh    chan RunEvent
 	decisions  []PermissionDecision
-	cancelled  bool
+	canceled   bool
 	inputsSent []string
 	testResult ConnectionTestResult
 	runOpts    []RunOptions
@@ -61,13 +61,13 @@ func (f *FakeRunner) Decide(decision PermissionDecision) {
 	}
 }
 
-// Cancel marks the runner as cancelled and closes the event channel.
+// Cancel marks the runner as canceled and closes the event channel.
 // Safe to call multiple times.
 func (f *FakeRunner) Cancel() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !f.cancelled {
-		f.cancelled = true
+	if !f.canceled {
+		f.canceled = true
 		close(f.eventCh)
 	}
 }
@@ -142,7 +142,7 @@ func (f *FakeRunner) RecordedRunOpts() []RunOptions {
 func (f *FakeRunner) IsCancelled() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cancelled
+	return f.canceled
 }
 
 // compile-time interface assertion

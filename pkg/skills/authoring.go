@@ -203,7 +203,10 @@ func (w *SkillWriter) CreateSkill(name, content string) (string, error) {
 // The write is path-confined and validated before anything is persisted. The
 // returned bool reports whether the write created a new override (true) versus
 // edited an already-local skill (false).
-func (w *SkillWriter) EditSkill(name, content string, allowCreateOverride bool) (path string, createdOverride bool, err error) {
+func (w *SkillWriter) EditSkill(
+	name, content string,
+	allowCreateOverride bool,
+) (path string, createdOverride bool, err error) {
 	skillDir, derr := w.resolveSkillDir(name)
 	if derr != nil {
 		return "", false, derr

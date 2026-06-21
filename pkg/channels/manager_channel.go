@@ -4,7 +4,6 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
@@ -97,23 +96,4 @@ func toChannelConfig(cfg *config.Config, list []string) (map[string]config.Chann
 		result[instanceID] = inst
 	}
 	return result, nil
-}
-
-// toChannelConfigForMarshal is a compatibility shim used by tests that still
-// need the legacy JSON-marshal path. It serialises the config subset and returns
-// a flat map for inspection.
-func toChannelConfigForMarshal(cfg *config.Config, list []string) (map[string]any, error) {
-	subset, err := toChannelConfig(cfg, list)
-	if err != nil {
-		return nil, err
-	}
-	raw, err := json.Marshal(subset)
-	if err != nil {
-		return nil, fmt.Errorf("toChannelConfigForMarshal: marshal: %w", err)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fmt.Errorf("toChannelConfigForMarshal: unmarshal: %w", err)
-	}
-	return m, nil
 }

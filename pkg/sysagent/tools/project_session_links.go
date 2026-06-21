@@ -96,7 +96,7 @@ func appendLink(home, workspaceID, sessionID string) error {
 // Exported for use by the REST gateway layer without duplicating mutex or I/O.
 // Dedup key: (workspace_id, session_id) pair — keeps earliest entry (first seen).
 // Returns nil when the file is absent or empty (not an error condition).
-// Greenfield format: only "workspace_id" lines are recognised. Legacy lines that
+// Greenfield format: only "workspace_id" lines are recognized. Legacy lines that
 // lack workspace_id (e.g. an old "project_id" field) fail decodeLink and are dropped —
 // there is no migration.
 func ReadLinks(home, workspaceID string) []ProjectSessionLink {

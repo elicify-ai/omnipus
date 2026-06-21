@@ -5,6 +5,7 @@
 
 // memory_smoke_test.go — smoke tests for the room-based MemoryStore (Spec-5).
 // GREENFIELD: tests verify the new per-memory .md file format and room topology.
+
 package agent
 
 import (

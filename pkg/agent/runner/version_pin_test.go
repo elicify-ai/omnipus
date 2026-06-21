@@ -26,7 +26,7 @@ func TestDetectAndPinVersion_KnownVersion(t *testing.T) {
 // TestDetectAndPinVersion_UnknownVersion creates a fake CLI whose version does
 // not match any known prefix, verifying detectAndPinVersion returns the version
 // with known=false (graceful degradation — the run proceeds but the driver
-// cannot assert version-specific behaviour).
+// cannot assert version-specific behavior).
 func TestDetectAndPinVersion_UnknownVersion(t *testing.T) {
 	dir := t.TempDir()
 	isolatePATH(t, dir)

@@ -229,7 +229,12 @@ func TestRunAgentLoop_RoundTrip_AfterReopen_PreservesModelAndErrorStatus(t *test
 			break
 		}
 	}
-	require.NotNil(t, postAssistant, "transcript must still contain the warm-up assistant entry after reopen; got %+v", post)
+	require.NotNil(
+		t,
+		postAssistant,
+		"transcript must still contain the warm-up assistant entry after reopen; got %+v",
+		post,
+	)
 	require.Equal(t, preAssistant.Model, postAssistant.Model,
 		"per-turn Model field must be preserved across close+reopen; pre=%q post=%q",
 		preAssistant.Model, postAssistant.Model)

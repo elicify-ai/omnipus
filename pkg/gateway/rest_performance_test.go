@@ -36,7 +36,10 @@ func TestGetPerformance_ZeroConfig_SchemaValid(t *testing.T) {
 	}
 	// Contract: PerformanceSettings.max_parallel_agents has minimum 2.
 	if resp.MaxParallelAgents == nil || *resp.MaxParallelAgents < 2 {
-		t.Fatalf("max_parallel_agents must be >= 2 (contract minimum) even when unconfigured; got %v", resp.MaxParallelAgents)
+		t.Fatalf(
+			"max_parallel_agents must be >= 2 (contract minimum) even when unconfigured; got %v",
+			resp.MaxParallelAgents,
+		)
 	}
 	if resp.EffectiveMaxParallelAgents == nil || *resp.EffectiveMaxParallelAgents < 2 {
 		t.Fatalf("effective_max_parallel_agents must be >= 2; got %v", resp.EffectiveMaxParallelAgents)

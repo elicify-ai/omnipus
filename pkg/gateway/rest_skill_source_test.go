@@ -244,5 +244,11 @@ func TestDeleteNonBuiltinSkillNotRejectedByGuard(t *testing.T) {
 	api.HandleSkills(w, r)
 
 	// The guard must not produce a 403. The installer governs the final outcome.
-	assert.NotEqual(t, http.StatusForbidden, w.Code, "non-builtin must not hit the 403 guard; body: %s", w.Body.String())
+	assert.NotEqual(
+		t,
+		http.StatusForbidden,
+		w.Code,
+		"non-builtin must not hit the 403 guard; body: %s",
+		w.Body.String(),
+	)
 }

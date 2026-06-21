@@ -317,7 +317,7 @@ func TestSend_WhenNotRunning(t *testing.T) {
 //	When Start(ctx) is called,
 //	Then it returns nil promptly (it does NOT block on the receive loop),
 //	And the channel reports running with the loop executing in the background,
-//	And Stop returns promptly after cancelling the loop.
+//	And Stop returns promptly after canceling the loop.
 func TestStart_ReturnsPromptly_RunLoopRunsInBackground(t *testing.T) {
 	cfg := config.EmailConfig{
 		// 127.0.0.1:1 is not a listening IMAPS server, so DialTLS fails fast and
@@ -881,7 +881,7 @@ func TestEmail_RunLoop_AuthFailurePermanentStop(t *testing.T) {
 //	When Start is called,
 //	Then the run loop does not exit within a short window (it is in backoff),
 //	And the channel reports running,
-//	And cancelling the context exits the loop cleanly (done closes).
+//	And canceling the context exits the loop cleanly (done closes).
 func TestEmail_RunLoop_TransientRetriesWithBackoff(t *testing.T) {
 	cfg := config.EmailConfig{
 		IMAPHost:    "imap.example.com",
@@ -908,7 +908,9 @@ func TestEmail_RunLoop_TransientRetriesWithBackoff(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	select {
 	case <-ch.done:
-		t.Fatal("run loop exited within 500ms on a transient error — transient-retry contract broken (should be in backoff)")
+		t.Fatal(
+			"run loop exited within 500ms on a transient error — transient-retry contract broken (should be in backoff)",
+		)
 	default:
 		// expected: loop is still running in backoff
 	}

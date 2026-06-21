@@ -2,6 +2,7 @@
 // (FR-7.5 / NFR-1). Verifies that when a recalled memory's ID or title appears
 // in the agent's response text, a CounterOpCited record is appended to the
 // memory's room counters.jsonl.
+
 package agent
 
 import (

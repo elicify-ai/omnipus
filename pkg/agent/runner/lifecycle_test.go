@@ -13,19 +13,19 @@ import (
 // TestClaudeDriver_DecideDeny_Cancels verifies the CRITICAL fix: a DENY decision
 // must cancel the run (kill the process). Before the fix, ClaudeDriver.Decide
 // consulted a never-populated `decided` map and was a complete no-op, so a deny
-// never cancelled anything. We install a sentinel cancel func and assert Decide
+// never canceled anything. We install a sentinel cancel func and assert Decide
 // with Allow=false invokes it.
 func TestClaudeDriver_DecideDeny_Cancels(t *testing.T) {
 	d := NewClaudeDriver(nil)
 
-	var cancelled bool
+	var canceled bool
 	var mu sync.Mutex
 	d.mu.Lock()
 	d.runID = "run-deny"
 	d.eventCh = make(chan RunEvent, 1) // mark a run as active
 	d.cancel = func() {
 		mu.Lock()
-		cancelled = true
+		canceled = true
 		mu.Unlock()
 	}
 	d.mu.Unlock()
@@ -33,7 +33,7 @@ func TestClaudeDriver_DecideDeny_Cancels(t *testing.T) {
 	d.Decide(PermissionDecision{RequestID: "req-1", Allow: false, Reason: "policy deny"})
 
 	mu.Lock()
-	got := cancelled
+	got := canceled
 	mu.Unlock()
 	if !got {
 		t.Fatal("Decide(Allow=false) did not cancel the run; deny must cancel (CRITICAL fix)")
@@ -45,12 +45,12 @@ func TestClaudeDriver_DecideDeny_Cancels(t *testing.T) {
 func TestClaudeDriver_DecideAllow_DoesNotCancel(t *testing.T) {
 	d := NewClaudeDriver(nil)
 
-	var cancelled bool
+	var canceled bool
 	var mu sync.Mutex
 	d.mu.Lock()
 	d.cancel = func() {
 		mu.Lock()
-		cancelled = true
+		canceled = true
 		mu.Unlock()
 	}
 	d.mu.Unlock()
@@ -58,10 +58,10 @@ func TestClaudeDriver_DecideAllow_DoesNotCancel(t *testing.T) {
 	d.Decide(PermissionDecision{RequestID: "req-1", Allow: true})
 
 	mu.Lock()
-	got := cancelled
+	got := canceled
 	mu.Unlock()
 	if got {
-		t.Fatal("Decide(Allow=true) cancelled the run; an allow must be a no-op")
+		t.Fatal("Decide(Allow=true) canceled the run; an allow must be a no-op")
 	}
 }
 
@@ -69,34 +69,34 @@ func TestClaudeDriver_DecideAllow_DoesNotCancel(t *testing.T) {
 // confirm the deny→Cancel contract holds across the other two drivers too.
 func TestCodexDriver_DecideDeny_Cancels(t *testing.T) {
 	d := NewCodexDriver(nil)
-	var cancelled bool
+	var canceled bool
 	var mu sync.Mutex
 	d.mu.Lock()
 	d.runID = "run-deny"
-	d.cancel = func() { mu.Lock(); cancelled = true; mu.Unlock() }
+	d.cancel = func() { mu.Lock(); canceled = true; mu.Unlock() }
 	d.mu.Unlock()
 
 	d.Decide(PermissionDecision{RequestID: "req-1", Allow: false})
 	mu.Lock()
 	defer mu.Unlock()
-	if !cancelled {
+	if !canceled {
 		t.Fatal("codex Decide(deny) did not cancel")
 	}
 }
 
 func TestOpencodeDriver_DecideDeny_Cancels(t *testing.T) {
 	d := NewOpencodeDriver(nil)
-	var cancelled bool
+	var canceled bool
 	var mu sync.Mutex
 	d.mu.Lock()
 	d.runID = "run-deny"
-	d.cancel = func() { mu.Lock(); cancelled = true; mu.Unlock() }
+	d.cancel = func() { mu.Lock(); canceled = true; mu.Unlock() }
 	d.mu.Unlock()
 
 	d.Decide(PermissionDecision{RequestID: "req-1", Allow: false})
 	mu.Lock()
 	defer mu.Unlock()
-	if !cancelled {
+	if !canceled {
 		t.Fatal("opencode Decide(deny) did not cancel")
 	}
 }
@@ -159,6 +159,8 @@ exit 0
 
 // TestCodexDriver_EventChReset_AllowsResume mirrors the claude lifecycle test for
 // the codex driver.
+//
+//nolint:dupl // parallel test scaffolding intentionally mirrors TestOpencodeDriver_EventChReset_AllowsResume (same lifecycle, different driver/stub)
 func TestCodexDriver_EventChReset_AllowsResume(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stub uses a POSIX shell script")
@@ -197,6 +199,8 @@ exit 0
 
 // TestOpencodeDriver_EventChReset_AllowsResume mirrors the lifecycle test for the
 // opencode driver.
+//
+//nolint:dupl // parallel test scaffolding intentionally mirrors TestCodexDriver_EventChReset_AllowsResume (same lifecycle, different driver/stub)
 func TestOpencodeDriver_EventChReset_AllowsResume(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stub uses a POSIX shell script")

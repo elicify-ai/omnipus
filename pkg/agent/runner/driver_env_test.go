@@ -185,7 +185,11 @@ func TestBuildChildEnv_NilFallsBackToOsEnviron(t *testing.T) {
 		t.Fatal("buildChildEnv(non-nil) must NOT fall back to os.Environ(); the master key leaked")
 	}
 	if len(got) != len(scrubbed) {
-		t.Fatalf("buildChildEnv(non-nil) must return exactly the caller env; got %d entries, want %d", len(got), len(scrubbed))
+		t.Fatalf(
+			"buildChildEnv(non-nil) must return exactly the caller env; got %d entries, want %d",
+			len(got),
+			len(scrubbed),
+		)
 	}
 
 	// A non-nil but EMPTY caller env yields an empty child env ("inherit nothing"),
@@ -227,7 +231,11 @@ func TestOpencodeDriver_PromptDeliveredExactlyOnce(t *testing.T) {
 		t.Fatalf("expected exactly one --prompt flag, got %d; args=%v", flagCount, args)
 	}
 	if occurrences != 1 {
-		t.Fatalf("prompt value appears %d times in args (must be exactly once — no double-prompt); args=%v", occurrences, args)
+		t.Fatalf(
+			"prompt value appears %d times in args (must be exactly once — no double-prompt); args=%v",
+			occurrences,
+			args,
+		)
 	}
 
 	// An empty input must add neither the flag nor a stray value.
