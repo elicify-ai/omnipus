@@ -75,7 +75,11 @@ func TestDecodeAndValidate_ValidBody(t *testing.T) {
 	var dst struct {
 		Name string `json:"name"`
 	}
-	body := `{"name":"My Agent"}`
+	// AgentCreateRequest requires BOTH name and soul (soul was added to the
+	// required list in the 3-type wire-schema change). A schema-valid body must
+	// therefore carry soul too; dst only captures name, which is the field the
+	// assertion below checks.
+	body := `{"name":"My Agent","soul":"You are a focused assistant."}`
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
