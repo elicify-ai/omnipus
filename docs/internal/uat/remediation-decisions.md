@@ -527,6 +527,64 @@ A **todo is NOT a subtask** — it is deliberately simpler.
   the depth field. Gaps for our decisions: allow subagent→subagent delegation in the UI/backend (bounded-
   delegation decision), surface subagent outgoing edges in the trust-graph.
 
+### M4 — Workspace scoping key — ASSESSED 2026-06-21: ~8/9 built
+**Built:** Workspace entity + file store (`~/.omnipus/workspaces/{id}.json`, full CRUD + system tools) ·
+**pre-seeded "My Workspace"** at boot (`rest_workspaces.go:320` `ensureDefaultWorkspace`, `is_default`,
+delete-protected) · key on **tasks** (`boardtask.go:56` workspace_id + counts + cascade) · key on **memory**
+(`pkg/agent/memory.go:452-477` `SetWorkspaceID` → `workspaces/{id}/.omnipus/` shared room) · key on
+**calendar** (per-workspace route) · **REST API** (list/status-filter/CRUD/default-protection) · **sidebar
+switcher** (`Sidebar.tsx`).
+**Gaps + decisions:**
+- **G1 (connections carry NO workspace key) — biggest gap.** `ChannelInstanceConfig` has no `workspace_id`
+  (channels predate workspaces). **DECISION: fold `workspace_id` into the M3 Connections migration** — that
+  migration already reshapes the channel config (one-per-type → list, new credential keys), so add the key
+  *then*, once, in 0.1.0. Don't touch the channel config twice.
+- **G2 (agent-bound context PARTIAL).** `workspace_id` flows into the **memory** path (`ts.opts.WorkspaceID`
+  → `WithWorkspaceID`), but the sidebar switcher only sets a UI filter (`activeWorkspaceId` store) — NOT
+  confirmed it **binds to the chat/session turn**. **DECISION: close the binding in 0.1.0** — the active
+  workspace must flow from the switcher into the agent's turn options (the roadmap's "context is agent-bound,
+  set by the switcher"), not just filter a list.
+- Note: our unified task model adds `workspace_id` to **workflows + triggers** too (Detail #8) — extends the
+  key consistently. Calendar workspace-filtering: confirm during the M2 task-UI build (minor).
+
+### Workspace = a project; the workspace detail screen — LOCKED (2026-06-21)
+A workspace is a **project** (NOT an instance): everything to deliver it lives inside — its tasks, its team,
+its memory, its settings. Persona stays global (the Agents library); **team + delegation + memory + task
+backlog are per-workspace.**
+
+**Workspace detail screen — six views:**
+- **Board** — task kanban (7-state lifecycle).
+- **List** — tasks, flat/filterable.
+- **Graph** — the **TASK DAG** (tasks as nodes, `blocked_by` as dependency edges). *(confirmed needed "to not
+  be incomplete")*
+- **Calendar** — scheduled/recurring tasks by date.
+- **Team** — **IS the per-workspace DELEGATION GRAPH, not a separate list.** Nodes = the agents on this
+  project; **[+ Add agent] / remove = add/remove a node = team membership**; **edges = delegation** (drag to
+  connect; click edge → modes/depth). Managing the team and managing delegation are the **same action**.
+- **Settings** — workspace properties (name, description, repository, owner, archive, …).
+
+**Two distinct graphs in a workspace** (same visual idea, different contents): the **Task DAG** (work +
+dependencies, in the Graph view) and the **Team graph** (agents + delegation, in the Team view).
+
+**Agents stay global** (the Agents library / Agents screen). The **Agents area** has two views:
+- **Agents (library)** — all agent definitions; **filter [All | by workspace]** to see membership.
+- **Workspace Teams** — an index of every per-workspace team; click a team → that workspace's **delegation
+  graph** (the same graph as the workspace Team tab — one source of truth).
+
+**Delegation graph = per-workspace, one source of truth (owned by the workspace), surfaced in both the Agents
+area (Workspace Teams) and the workspace Team tab — always workspace-scoped, never global.** My Workspace is
+pre-seeded with the default team (4 base + Planner/Explorer/Researcher) + default edges; new workspaces seed
+default edges from each agent's role on add.
+
+**Editing an agent** is available from everywhere you see one (library · Workspace Teams · workspace Team tab)
+and **reuses the EXISTING `AgentProfile` slide-over panel** — no new component. Because agents are global,
+edits apply to the **one global definition → everywhere the agent is used** (add a cue: *"Editing Mia —
+applies everywhere she's used"*). **Per-workspace agent overrides = OUT for 0.1.0** (default = global edit;
+revisit only if wanted).
+
+**Code delta from today:** delegation moves from a per-agent global `delegation_policy` → per-workspace
+(stored with the workspace, keyed by `core_team`). M2 Graph view + M5 per-workspace delegation cover the build.
+
 ## Part 4 — Next steps (after decisions lock)
 **No Albert ADR** (operator decision 2026-06-20) — **this decision log is the spec of record.**
 1. **O1 — release routing** (last open decision; slots everything into phases).
