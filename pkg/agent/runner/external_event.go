@@ -32,6 +32,7 @@
 // drivers run in non-interactive streaming mode, so a DENY cancels the whole
 // run via driver.Cancel(). A future bidirectional stdin control channel could
 // allow mid-call allow/deny responses without killing the process.
+
 package runner
 
 import (

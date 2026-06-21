@@ -5,6 +5,7 @@
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
+
 package index_test
 
 import (
@@ -132,7 +133,7 @@ func TestBleveIndex_RebuildFromMd(t *testing.T) {
 
 	// Wipe the bleve index directory to simulate corruption/deletion.
 	idxDir := filepath.Join(room.Root, memindex.IndexSubdir)
-	if err := os.RemoveAll(idxDir); err != nil {
+	if err = os.RemoveAll(idxDir); err != nil {
 		t.Fatalf("RemoveAll bleve index: %v", err)
 	}
 
@@ -213,7 +214,7 @@ func TestBleveIndex_EmptyQueryReturnsAll(t *testing.T) {
 	defer ri.Close()
 
 	// Rebuild to pick up all 3 memories.
-	if err := ri.Rebuild(); err != nil {
+	if err = ri.Rebuild(); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 

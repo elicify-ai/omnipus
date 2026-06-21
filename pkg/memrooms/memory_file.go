@@ -25,6 +25,7 @@
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
+
 package memrooms
 
 import (
@@ -130,7 +131,7 @@ func ReadMemoryFile(memoriesDir, id string) (MemoryFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return MemoryFile{}, ErrMemoryNotFound(id)
+			return MemoryFile{}, MemoryNotFoundError(id)
 		}
 		return MemoryFile{}, fmt.Errorf("memrooms: read memory file %s: %w", id, err)
 	}
@@ -236,14 +237,14 @@ func memoryMatchesQuery(mf MemoryFile, lowerQuery string) bool {
 	return false
 }
 
-// ErrMemoryNotFound is returned when a memory file does not exist.
-type ErrMemoryNotFound string
+// MemoryNotFoundError is returned when a memory file does not exist.
+type MemoryNotFoundError string
 
-func (e ErrMemoryNotFound) Error() string { return "memory not found: " + string(e) }
+func (e MemoryNotFoundError) Error() string { return "memory not found: " + string(e) }
 
-// Is satisfies errors.Is for ErrMemoryNotFound comparisons.
-func (e ErrMemoryNotFound) Is(target error) bool {
-	_, ok := target.(ErrMemoryNotFound)
+// Is satisfies errors.Is for MemoryNotFoundError comparisons.
+func (e MemoryNotFoundError) Is(target error) bool {
+	_, ok := target.(MemoryNotFoundError)
 	return ok
 }
 

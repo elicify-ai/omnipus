@@ -457,7 +457,7 @@ func (ts *turnState) markLastStreamerProducedModel(model string) {
 	ts.mu.RLock()
 	s := ts.lastStreamer
 	ts.mu.RUnlock()
-	if pm, ok := s.(interface{ SetProducedModel(string) }); ok && s != nil {
+	if pm, ok := s.(interface{ SetProducedModel(model string) }); ok && s != nil {
 		pm.SetProducedModel(model)
 	}
 }

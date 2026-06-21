@@ -168,7 +168,7 @@ func forwardDepth(ids []string, loadTask TaskLoader, depth int, seen map[string]
 	if depth > maxBlockedByDepth {
 		return depth
 	}
-	max := depth
+	maxN := depth
 	for _, id := range ids {
 		if seen[id] {
 			continue
@@ -178,11 +178,11 @@ func forwardDepth(ids []string, loadTask TaskLoader, depth int, seen map[string]
 		if err != nil {
 			continue
 		}
-		if d := forwardDepth(task.BlockedBy, loadTask, depth+1, seen); d > max {
-			max = d
+		if d := forwardDepth(task.BlockedBy, loadTask, depth+1, seen); d > maxN {
+			maxN = d
 		}
 	}
-	return max
+	return maxN
 }
 
 // DropOrphanEdges scans every GTD task file in tasksDir and removes any
@@ -235,7 +235,7 @@ func DropOrphanEdges(tasksDir string) (int, error) {
 			continue
 		}
 		var t Task
-		if err := json.Unmarshal(data, &t); err != nil {
+		if err = json.Unmarshal(data, &t); err != nil {
 			slog.Warn("boardtask: DropOrphanEdges: skipping corrupt file", "file", name, "error", err)
 			continue
 		}

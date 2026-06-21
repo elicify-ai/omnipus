@@ -76,6 +76,8 @@ func TestSchedulesAPI_Create400WorkerOwner_NonAdminNonOwner(t *testing.T) {
 // schedule itself first (alice owns mia → permitted to mutate), so the
 // only thing in play at the owner-change step is the worker-vs-authz
 // ordering.
+//
+//nolint:dupl // parallel test scaffolding intentionally mirrors TestSchedulesAPI_Update400WorkerOwner (same worker-owner update guard, different authz angle)
 func TestSchedulesAPI_Update400WorkerOwner_NonAdminNonOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 

@@ -12,6 +12,7 @@
 //   - Malformed JSON lines are recorded as non-fatal ErrorEvents (FR-5.2 edge case).
 //   - Version detect: each driver checks the CLI version before streaming and logs
 //     a warning on unknown versions (FR-5.6).
+
 package runner
 
 import (

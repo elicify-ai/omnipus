@@ -1767,7 +1767,7 @@ func buildDelegationDenyChecker(
 	return func(ctx context.Context, targetAgentID string) string {
 		// 1. Trust set (only when an explicit target is named).
 		if targetAgentID != "" {
-			allowed := false
+			var allowed bool
 			if toList != nil {
 				allowed = config.IsDelegationAllowed(toList, targetAgentID)
 			} else {

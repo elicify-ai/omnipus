@@ -45,10 +45,10 @@ type TaskExecutor struct {
 // The dispatchSema capacity is set to cfg.Performance.EffectiveMaxParallelAgents()
 // so the fan-out cap is live from boot.
 func newTaskExecutor(al *AgentLoop, store *taskstore.TaskStore) *TaskExecutor {
-	cap := defaultMaxConcurrentTasksPerAgent
+	capacity := defaultMaxConcurrentTasksPerAgent
 	if al.cfg != nil {
 		if eff := al.cfg.Performance.EffectiveMaxParallelAgents(); eff > 0 {
-			cap = eff
+			capacity = eff
 		}
 	}
 	return &TaskExecutor{
@@ -56,7 +56,7 @@ func newTaskExecutor(al *AgentLoop, store *taskstore.TaskStore) *TaskExecutor {
 		store:         store,
 		running:       make(map[string]context.CancelFunc),
 		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
-		dispatchSema:  newDispatchSemaphore(cap),
+		dispatchSema:  newDispatchSemaphore(capacity),
 	}
 }
 

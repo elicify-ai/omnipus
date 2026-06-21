@@ -527,16 +527,16 @@ func sendSMTPWithSTARTTLS(addr string, auth smtp.Auth, from, to, body string, tl
 	}
 	defer c.Close()
 
-	if err := c.StartTLS(tlsCfg); err != nil {
+	if err = c.StartTLS(tlsCfg); err != nil {
 		return fmt.Errorf("STARTTLS: %w", err)
 	}
-	if err := c.Auth(auth); err != nil {
+	if err = c.Auth(auth); err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
-	if err := c.Mail(from); err != nil {
+	if err = c.Mail(from); err != nil {
 		return fmt.Errorf("MAIL FROM: %w", err)
 	}
-	if err := c.Rcpt(to); err != nil {
+	if err = c.Rcpt(to); err != nil {
 		return fmt.Errorf("RCPT TO: %w", err)
 	}
 	w, err := c.Data()
@@ -562,13 +562,13 @@ func sendSMTPS(addr, from, to, body, username, password string, tlsCfg *tls.Conf
 	defer c.Close()
 
 	auth := smtp.PlainAuth("", username, password, tlsCfg.ServerName)
-	if err := c.Auth(auth); err != nil {
+	if err = c.Auth(auth); err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
-	if err := c.Mail(from); err != nil {
+	if err = c.Mail(from); err != nil {
 		return fmt.Errorf("MAIL FROM: %w", err)
 	}
-	if err := c.Rcpt(to); err != nil {
+	if err = c.Rcpt(to); err != nil {
 		return fmt.Errorf("RCPT TO: %w", err)
 	}
 	w, err := c.Data()

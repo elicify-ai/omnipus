@@ -1,5 +1,6 @@
 // egress_runner_test.go — tests for the external-runner egress proxy
 // (NewRunnerEgressProxy) and its SSRF internal-CIDR blocking (Spec-4 FR-5.3).
+
 package sandbox
 
 import (

@@ -13,6 +13,7 @@
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
+
 package index_test
 
 import (

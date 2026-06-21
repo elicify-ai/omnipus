@@ -20,6 +20,7 @@
 //     events (output/tool-call/diff/error) are written to the sub-agent session
 //     transcript so the SPA renders the run inline.
 //  5. Teardown — remove the worktree/temp dir, including on crash paths.
+
 package agent
 
 import (
@@ -127,9 +128,7 @@ func runExternalCLISubTurn(
 	// output to the agent's configured model. The external CLI runs its
 	// own LLM, but we record what model the agent would have used in the
 	// non-CLI path — consistent with how chat turns are attributed.
-	if agent != nil {
-		childTS.setLastProducedModel(strings.TrimSpace(agent.Model))
-	}
+	childTS.setLastProducedModel(strings.TrimSpace(agent.Model))
 
 	// SECURITY (Spec-4 FR-5.3 / SEC-23): the spawned external CLI must NOT inherit
 	// the full gateway environment — that would leak OMNIPUS_MASTER_KEY (and every

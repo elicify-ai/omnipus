@@ -9,7 +9,7 @@ import (
 // structs so channels can carry their instance key directly instead of
 // smuggling it through InboundMessage.Metadata).
 func TestInstanceID_PeerSetGet(t *testing.T) {
-	p := Peer{Kind: PeerDirect, ID: "123", InstanceID: "telegram:bot1"}
+	p := Peer{InstanceID: "telegram:bot1"}
 	if p.InstanceID != "telegram:bot1" {
 		t.Fatalf("expected InstanceID telegram:bot1, got %q", p.InstanceID)
 	}
@@ -17,7 +17,7 @@ func TestInstanceID_PeerSetGet(t *testing.T) {
 
 // TestInstanceID_SenderInfoSetGet verifies the InstanceID field on SenderInfo.
 func TestInstanceID_SenderInfoSetGet(t *testing.T) {
-	s := SenderInfo{Platform: "discord", InstanceID: "discord:main"}
+	s := SenderInfo{InstanceID: "discord:main"}
 	if s.InstanceID != "discord:main" {
 		t.Fatalf("expected InstanceID discord:main, got %q", s.InstanceID)
 	}
@@ -27,8 +27,6 @@ func TestInstanceID_SenderInfoSetGet(t *testing.T) {
 // InboundMessage is settable and readable.
 func TestInstanceID_InboundMessageSetGet(t *testing.T) {
 	msg := InboundMessage{
-		Channel:    "slack",
-		ChatID:     "C123",
 		InstanceID: "slack:workspace-a",
 	}
 	if msg.InstanceID != "slack:workspace-a" {
@@ -40,8 +38,6 @@ func TestInstanceID_InboundMessageSetGet(t *testing.T) {
 // OutboundMessage is settable and readable.
 func TestInstanceID_OutboundMessageSetGet(t *testing.T) {
 	msg := OutboundMessage{
-		Channel:    "irc",
-		ChatID:     "#dev",
 		InstanceID: "irc:libera",
 	}
 	if msg.InstanceID != "irc:libera" {

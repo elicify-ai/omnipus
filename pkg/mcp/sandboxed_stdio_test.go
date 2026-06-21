@@ -127,14 +127,14 @@ func TestSandboxedCommandTransport_CatEcho(t *testing.T) {
 	}
 	// StartLocked spawns the child on a Landlock-restricted OS thread on
 	// Linux; thin wrapper around cmd.Start() elsewhere.
-	if err := sandbox.StartLocked(cmd); err != nil {
+	if err = sandbox.StartLocked(cmd); err != nil {
 		t.Fatalf("StartLocked: %v", err)
 	}
 	defer func() { _ = cmd.Wait() }()
 
 	want := []byte("hello-adr-019\n")
-	if _, err := stdin.Write(want); err != nil {
-		t.Fatalf("stdin write: %v", err)
+	if _, werr := stdin.Write(want); werr != nil {
+		t.Fatalf("stdin write: %v", werr)
 	}
 	_ = stdin.Close()
 

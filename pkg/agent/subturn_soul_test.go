@@ -8,6 +8,7 @@
 //     native and external-cli sub-turns are uniform.
 //   - An empty worker soul is valid and yields an empty system role (the
 //     worker's soul is OPTIONAL by design).
+
 package agent
 
 import (
@@ -20,7 +21,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
 // TestResolveDelegateSoul_WorkerWithEmptySoulReturnsEmpty proves the seed
@@ -28,7 +28,7 @@ import (
 // honors that — a worker with an empty soul is a worker with no persona text
 // (no panic at init, no fallback to a generic "You are a subagent" string).
 func TestResolveDelegateSoul_WorkerWithEmptySoulReturnsEmpty(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	got := resolveDelegateSoul(al, string(coreagent.IDWorker))
@@ -43,7 +43,7 @@ func TestResolveDelegateSoul_WorkerWithEmptySoulReturnsEmpty(t *testing.T) {
 // (they are LOCKED, the SOUL.md on disk is the agent's identity anchor only
 // for non-base agents).
 func TestResolveDelegateSoul_BaseAgentUsesCompiledPrompt(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	got := resolveDelegateSoul(al, "jim")
@@ -60,7 +60,7 @@ func TestResolveDelegateSoul_BaseAgentUsesCompiledPrompt(t *testing.T) {
 // path's input is the TASK ALONE when the delegate's soul is empty. No
 // persona, no wrapper, no "## System" header.
 func TestComposeDelegateInput_WorkerEmptySoulReturnsTaskOnly(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	got := composeDelegateInput(al, "summarize this file", "", string(coreagent.IDWorker))
@@ -73,7 +73,7 @@ func TestComposeDelegateInput_WorkerEmptySoulReturnsTaskOnly(t *testing.T) {
 // composes (soul, task) when the delegate has a soul, mirroring the native
 // path's (system, user) split.
 func TestComposeDelegateInput_BaseAgentPrependsSoul(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	got := composeDelegateInput(al, "summarize this file", "", "jim")
@@ -93,7 +93,7 @@ func TestComposeDelegateInput_BaseAgentPrependsSoul(t *testing.T) {
 // overrides the resolved delegate soul. The dispatch site is a single
 // composition point and the caller wins.
 func TestComposeDelegateInput_ExplicitActualSystemTakesPrecedence(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	explicit := "EXPLICIT_SYSTEM"
@@ -108,16 +108,11 @@ func TestComposeDelegateInput_ExplicitActualSystemTakesPrecedence(t *testing.T) 
 // the child turn's processOptions carry (SystemPromptOverride=worker.soul,
 // UserMessage=task). The legacy generic wrapper is GONE.
 func TestSpawnSubTurn_NativeWithWorkerTargetComposesSoulAndTask(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-soul",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
-		agent:          al.registry.GetDefaultAgent(),
+		agent: al.registry.GetDefaultAgent(),
 	}
 	if parent.agent == nil {
 		t.Fatal("test setup: no default agent")
@@ -220,7 +215,7 @@ func TestSpawnSubTurn_ExternalCLI_WorkerEmptySoulDeliversTaskOnly(t *testing.T) 
 // present. A custom agent with SOUL.md on disk gets its persona injected
 // as the system role; without SOUL.md the soul is empty.
 func TestResolveDelegateSoul_OnDiskSoulMdForCustomAgent(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	tmp := t.TempDir()
@@ -244,7 +239,7 @@ func TestResolveDelegateSoul_OnDiskSoulMdForCustomAgent(t *testing.T) {
 // caller (spawnSubTurn) treats an empty soul as "no persona" and the
 // composition proceeds with task-only input.
 func TestResolveDelegateSoul_UnknownAgentReturnsEmpty(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	got := resolveDelegateSoul(al, "nope-not-an-agent")

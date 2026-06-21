@@ -136,8 +136,6 @@ func TestLoadConfig_AcceptsSingleInstancePerType(t *testing.T) {
 // (FR-2.5 / US-5) survives a JSON round-trip through the instance config.
 func TestChannelInstanceConfig_IdentityRoundTrips(t *testing.T) {
 	inst := ChannelInstanceConfig{
-		Type:     "telegram",
-		Enabled:  true,
 		Identity: &ChannelIdentity{Kind: "agent", ID: "concierge"},
 	}
 	if inst.Identity == nil || inst.Identity.Kind != "agent" || inst.Identity.ID != "concierge" {

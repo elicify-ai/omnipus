@@ -2,6 +2,7 @@
 // into the dispatch path (Spec-4 FR-5.3). Verifies HTTP_PROXY/HTTPS_PROXY are
 // injected into the child env when the egress proxy is available, pre-existing
 // proxy vars are stripped, and graceful degradation when the proxy is absent.
+
 package agent
 
 import (

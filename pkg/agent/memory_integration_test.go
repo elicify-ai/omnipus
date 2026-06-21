@@ -6,6 +6,7 @@
 //
 // GREENFIELD: tests work against the new per-memory .md file format.
 // Old MEMORY.md tests removed per FR-7.6 / operator D2 greenfield decision.
+
 package agent
 
 import (

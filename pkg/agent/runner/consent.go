@@ -45,6 +45,7 @@
 //
 // The RunID and optional session metadata are carried in the Meta.SessionID field
 // so the SPA can scope the approval frame to the right session.
+
 package runner
 
 import (

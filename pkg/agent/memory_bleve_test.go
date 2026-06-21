@@ -7,6 +7,7 @@
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
+
 package agent
 
 import (
@@ -114,7 +115,7 @@ func TestMemory_MinHash_DedupOnWrite(t *testing.T) {
 	// We can't assert the file exists without knowing the exact Jaccard, but we can
 	// verify that if it does exist, it is valid JSONL.
 	mhPath := filepath.Join(ms.PrivateRoom().Root, ".index", "minhash.jsonl")
-	if _, err := os.Stat(mhPath); os.IsNotExist(err) {
+	if _, serr := os.Stat(mhPath); os.IsNotExist(serr) {
 		t.Log("minhash.jsonl not created — texts may not be similar enough at 128 perms (acceptable)")
 		return
 	}

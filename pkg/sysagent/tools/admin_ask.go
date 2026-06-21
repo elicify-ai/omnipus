@@ -86,6 +86,7 @@ func (*SkillListTool) RequiresAdminAsk() bool    { return true }
 
 // Skill authoring writes mutate the skills tree — they always require admin
 // approval when policy is "ask" (consent gate, FR-9.2).
+
 func (*SkillCreateTool) RequiresAdminAsk() bool { return true }
 func (*SkillEditTool) RequiresAdminAsk() bool   { return true }
 
