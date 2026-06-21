@@ -1,22 +1,10 @@
-import { lazy, Suspense } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { RouteFallback } from '@/components/shared/RouteFallback'
+import { DefaultWorkspaceRedirect } from '@/components/workspaces/DefaultWorkspaceRedirect'
 
-// Code-split: the Automations screen (trigger→action rules + token usage) is
-// only needed when this route is visited. The screen body lives in
-// @/components/screens/AutomationsScreen.
-const AutomationsScreen = lazy(() =>
-  import('@/components/screens/AutomationsScreen').then((m) => ({ default: m.AutomationsScreen })),
-)
-
-function AutomationsRoute() {
-  return (
-    <Suspense fallback={<RouteFallback />}>
-      <AutomationsScreen />
-    </Suspense>
-  )
-}
-
+// Automations is removed from the product (IA reframe): scheduled/recurring
+// work now lives in the workspace Calendar tab and per-agent heartbeats.
+// The route is retained only as a redirect so old links don't 404 — it lands
+// on the default workspace's Calendar.
 export const Route = createFileRoute('/_app/automations')({
-  component: AutomationsRoute,
+  component: () => <DefaultWorkspaceRedirect tab="calendar" />,
 })

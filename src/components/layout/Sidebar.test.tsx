@@ -99,19 +99,25 @@ beforeEach(() => {
 // test_sidebar_overlay_rendering
 // Traces to: wave0-brand-design-spec.md Scenario: Sidebar opens as overlay (US-5 AC2, FR-011)
 describe('Sidebar — overlay rendering when open', () => {
-  it('renders navigation items when sidebar is open', () => {
+  it('renders the Workspaces section + Global libraries when sidebar is open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // Sidebar renders 6 primary nav items (Chat, Tasks, Automations, Agents, Connectors,
-    // Skills & Tools) plus Settings at the bottom. This test asserts a subset of
-    // those labels (Tasks is omitted here, not removed from the sidebar).
-    expect(screen.getByText('Chat')).toBeTruthy()
-    expect(screen.getByText('Automations')).toBeTruthy()
+    // IA reframe (Sprint 4): the sidebar is organized around Workspaces (primary)
+    // + a Global libraries section (Agents, Connectors, Skills & Tools). The old
+    // top-level Chat / Tasks / Automations / Command Center entries are REMOVED.
+    expect(screen.getByRole('group', { name: 'Workspaces' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Global libraries' })).toBeTruthy()
+
     expect(screen.getByText('Agents')).toBeTruthy()
     expect(screen.getByText('Connectors')).toBeTruthy()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
     expect(screen.getByText('Settings')).toBeTruthy()
+
+    // Removed entries must NOT be present.
+    expect(screen.queryByText('Chat')).toBeNull()
+    expect(screen.queryByText('Automations')).toBeNull()
+    expect(screen.queryByText('Command Center')).toBeNull()
   })
 
   it('shows "Omnipus" brand name in sidebar', () => {
@@ -124,9 +130,9 @@ describe('Sidebar — overlay rendering when open', () => {
     // Sidebar closed + unpinned: overlay motion aside should not render
     act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
-    // Nav labels should not be in the DOM when closed.
-    expect(screen.queryByText('Chat')).toBeNull()
+    // Library labels should not be in the DOM when closed.
     expect(screen.queryByText('Agents')).toBeNull()
+    expect(screen.queryByText('Connectors')).toBeNull()
   })
 })
 

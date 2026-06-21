@@ -36,10 +36,39 @@ const (
 	// Executor, is never a chat target, has no heartbeat, and is never the
 	// default. It is invoked ONLY via delegation. See config.AgentTypeWorker.
 	IDWorker CoreAgentID = "worker"
+	// IDPlanner, IDExplorer, IDResearcher are the three seeded specialist
+	// subagents shipped by default (M5/M6). Like the worker they are the subagent
+	// tier (Type=worker → wire type Subagent, locked, native executor, never a
+	// chat target, no heartbeat, never default) — but each carries a focused
+	// identity and tool set. Planner decomposes goals into a task DAG and
+	// delegates to Explorer + Researcher (bounded by depth); Explorer does file +
+	// memory exploration; Researcher does external-source research.
+	IDPlanner    CoreAgentID = "planner"
+	IDExplorer   CoreAgentID = "explorer"
+	IDResearcher CoreAgentID = "researcher"
 	// IDMax is intentionally absent: Max was retired from the 4-base roster
 	// in Spec-3 (v0.1.0 foundation). The ID constant is removed so that any
 	// remaining compile-time reference to IDMax surfaces as a build error.
 )
+
+// specialistIDs is the set of seeded specialist subagent IDs. They share the
+// worker tier's structural traits (Type=worker, native executor, never default,
+// no heartbeat) but are distinct agents with their own identity and delegation.
+var specialistIDs = map[CoreAgentID]bool{
+	IDPlanner:    true,
+	IDExplorer:   true,
+	IDResearcher: true,
+}
+
+// IsSpecialistID reports whether the id is one of the seeded specialist subagents
+// (Planner / Explorer / Researcher).
+func IsSpecialistID(id CoreAgentID) bool { return specialistIDs[id] }
+
+// IsSubagentTierID reports whether the id belongs to the delegation-only subagent
+// tier — the generic worker OR a seeded specialist. Used wherever the worker-tier
+// structural rules (Type=worker, native executor, never default, no heartbeat)
+// must also cover the specialists.
+func IsSubagentTierID(id CoreAgentID) bool { return IsWorkerID(id) || IsSpecialistID(id) }
 
 // IsWorkerID reports whether the given agent id is the seeded general-purpose
 // worker. Used by SeedConfig to branch the worker out of the base-agent
@@ -72,6 +101,9 @@ func All() []*CoreAgent {
 		Ava(),
 		Ray(),
 		Worker(),
+		Planner(),
+		Explorer(),
+		Researcher(),
 	}
 }
 
@@ -102,7 +134,9 @@ func ByID(id CoreAgentID) *CoreAgent {
 // "core". Use IsWorkerID for the worker.
 func IsCoreAgent(id string) bool {
 	cid := CoreAgentID(id)
-	if IsWorkerID(cid) {
+	// The worker and the specialist subagents are the delegation-only subagent
+	// tier — NOT base/core agents. Type inference must never label them "core".
+	if IsSubagentTierID(cid) {
 		return false
 	}
 	return ByID(cid) != nil
@@ -220,6 +254,14 @@ func coreAgentSeed(
 		delete(base, "web_serve")
 		return config.ToolPolicyAllow, base, ""
 	}
+	// Specialist subagents (Planner/Explorer/Researcher) are delegation-only like
+	// the worker, but they DO get persistent memory (Explorer reads/writes memory;
+	// Planner records decompositions) — so the base memory allows stay. web_serve
+	// is dropped: a delegation-only specialist never serves an iframe preview.
+	if IsSpecialistID(id) {
+		delete(base, "web_serve")
+		return config.ToolPolicyAllow, base, ""
+	}
 	switch id {
 	case IDAva:
 		// Ava is the only core agent with explicit system.* allows (FR-010).
@@ -265,6 +307,12 @@ func coreAgentSkills(id CoreAgentID) []string {
 		return []string{"plan"}
 	case IDAva:
 		return []string{"skill-authoring"}
+	case IDPlanner:
+		// The Planner decomposes goals into a task DAG — the plan skill is its core.
+		return []string{"plan"}
+	case IDExplorer, IDResearcher:
+		// Explorer + Researcher synthesize what they find.
+		return []string{"summarize"}
 	default:
 		return nil
 	}
@@ -337,10 +385,29 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 				config.DelegationModeBackground,
 			},
 		}
+	case IDPlanner:
+		// The Planner gathers context before planning by delegating to Explorer
+		// (internal files + memory) and Researcher (external sources). Bounded by
+		// depth=2 so onward fan-out stays within the global subturn ceiling. This
+		// is the bounded subagent-delegation unlock (M5) made concrete: a subagent
+		// that carries a non-empty to[].
+		return &config.DelegationPolicy{
+			To: []config.AgentRef{ref(IDExplorer), ref(IDResearcher)},
+			Modes: []config.DelegationMode{
+				config.DelegationModeAwait,
+				config.DelegationModeTask,
+			},
+			Depth: intPtr(2),
+		}
 	default:
+		// Explorer, Researcher, and the generic worker are leaves: no onward
+		// delegation by default.
 		return nil
 	}
 }
+
+// intPtr returns a pointer to v. Used to set DelegationPolicy.Depth in seeds.
+func intPtr(v int) *int { return &v }
 
 // SeedConfig ensures all core agents exist in cfg.Agents.List with Locked=true
 // and with the correct constructor-seeded tool policy (FR-010, FR-022).
@@ -410,26 +477,28 @@ func SeedConfig(cfg *config.Config) bool {
 			}
 		}
 
-		// Idempotent Type re-enforcement (tamper protection). The worker tier MUST
-		// carry Type=worker and base agents Type=core — these classify routing and
-		// chat-target eligibility, so a tampered/absent Type is corrected on every
-		// boot. The worker can never be the default: clear a stray Default flag too.
+		// Idempotent Type re-enforcement (tamper protection). The subagent tier
+		// (worker + specialists) MUST carry Type=worker and base agents Type=core —
+		// these classify routing and chat-target eligibility, so a tampered/absent
+		// Type is corrected on every boot. A subagent-tier agent can never be the
+		// default: clear a stray Default flag too.
 		wantType := config.AgentTypeCore
-		if IsWorkerID(ca.ID) {
+		if IsSubagentTierID(ca.ID) {
 			wantType = config.AgentTypeWorker
 		}
 		if a.Type != wantType {
 			a.Type = wantType
 			modified = true
 		}
-		if IsWorkerID(ca.ID) {
+		if IsSubagentTierID(ca.ID) {
 			if a.Default {
 				a.Default = false
 				modified = true
 			}
-			// Idempotent executor migration: the seeded worker runs native. Fill the
-			// executor only when the existing entry has none, so an operator who
-			// pointed the worker at an external-cli/remote runtime keeps their choice.
+			// Idempotent executor migration: the seeded subagent-tier agents run
+			// native. Fill the executor only when the existing entry has none, so an
+			// operator who pointed it at an external-cli/remote runtime keeps their
+			// choice.
 			if a.Subagents == nil {
 				a.Subagents = &config.SubagentsConfig{}
 			}
@@ -473,18 +542,18 @@ func SeedConfig(cfg *config.Config) bool {
 		}
 		enabled := true
 		dp, policies, seedProfile := coreAgentSeed(ca.ID)
-		isWorker := IsWorkerID(ca.ID)
+		isSubagentTier := IsSubagentTierID(ca.ID)
 		// Mia is the default agent on fresh installs: she appears first in the
-		// All() list and is the friendliest entry-point for new users. A worker is
-		// NEVER the default — it is not a chat target.
+		// All() list and is the friendliest entry-point for new users. A subagent
+		// (worker or specialist) is NEVER the default — it is not a chat target.
 		// Only set Default=true on the fresh-seed path (here). The re-enforcement
 		// loop above intentionally does NOT touch the Default field on existing
 		// entries so operator choices survive config reload.
 		isDefault := ca.ID == IDMia
-		// Type: the worker is its own tier (Type=worker); every other seeded agent
-		// is a base/core agent.
+		// Type: the subagent tier (worker + specialists) is Type=worker; every
+		// other seeded agent is a base/core agent.
 		agentType := config.AgentTypeCore
-		if isWorker {
+		if isSubagentTier {
 			agentType = config.AgentTypeWorker
 		}
 		newAgent := config.AgentConfig{
@@ -512,10 +581,10 @@ func SeedConfig(cfg *config.Config) bool {
 				},
 			},
 		}
-		// Workers carry an executor (Spec-4): the seeded general-purpose worker
-		// runs native (inside the Omnipus agent loop). Stored on the EXISTING
-		// Subagents.Executor field — no parallel field.
-		if isWorker {
+		// Subagent-tier agents carry an executor (Spec-4): the seeded worker AND the
+		// specialists run native (inside the Omnipus agent loop). Stored on the
+		// EXISTING Subagents.Executor field — no parallel field.
+		if isSubagentTier {
 			newAgent.Subagents = &config.SubagentsConfig{
 				Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
 			}
@@ -655,6 +724,70 @@ func Worker() *CoreAgent {
 		DefaultTools: []string{
 			"read_file", "write_file", "edit_file", "list_dir",
 			"web_search", "web_fetch",
+			"message",
+		},
+	}
+}
+
+// Planner returns the seeded Planner specialist subagent (M5/M6). Delegation-only
+// (Type=worker → wire Subagent), locked, native executor, never a chat target. It
+// decomposes a goal into a task DAG, delegating to Explorer + Researcher (bounded
+// by depth) to gather context before it plans.
+func Planner() *CoreAgent {
+	return &CoreAgent{
+		ID:       IDPlanner,
+		Name:     "Planner",
+		Subtitle: "Planning Specialist",
+		Description: "Decomposes a goal into a structured task DAG. Gathers context by " +
+			"delegating to Explorer (internal) and Researcher (external) before planning. " +
+			"Invoked via delegation; not a chat persona.",
+		Color: "#0EA5E9",
+		Icon:  "tree-structure",
+		DefaultTools: []string{
+			"read_file", "list_dir",
+			"task_create", "task_update", "task_list",
+			"subagent", "spawn",
+			"remember", "recall_memory",
+			"message",
+		},
+	}
+}
+
+// Explorer returns the seeded Explorer specialist subagent (M5/M6). Delegation-only,
+// focused on file + memory exploration (internal context).
+func Explorer() *CoreAgent {
+	return &CoreAgent{
+		ID:       IDExplorer,
+		Name:     "Explorer",
+		Subtitle: "Exploration Specialist",
+		Description: "Explores the workspace's files and memory to surface internal context. " +
+			"Reads, searches, and summarizes what already exists. Invoked via delegation; " +
+			"not a chat persona.",
+		Color: "#14B8A6",
+		Icon:  "compass",
+		DefaultTools: []string{
+			"read_file", "list_dir",
+			"recall_memory", "remember",
+			"message",
+		},
+	}
+}
+
+// Researcher returns the seeded Researcher specialist subagent (M5/M6).
+// Delegation-only, focused on external-source research.
+func Researcher() *CoreAgent {
+	return &CoreAgent{
+		ID:       IDResearcher,
+		Name:     "Researcher",
+		Subtitle: "Research Specialist",
+		Description: "Researches external sources — the web and fetched documents — and " +
+			"synthesizes findings with citations. Invoked via delegation; not a chat persona.",
+		Color: "#8B5CF6",
+		Icon:  "books",
+		DefaultTools: []string{
+			"web_search", "web_fetch",
+			"read_file",
+			"recall_memory", "remember",
 			"message",
 		},
 	}
@@ -884,4 +1017,54 @@ When a conversation is handed to you, your FIRST message greets the user in the 
 	// SOUL.md (custom-worker case) or leave it empty. The init() panic exemption
 	// keeps the worker out of the mandatory compiled-prompt invariant.
 	"worker": "",
+
+	"planner": `You are the Planner — a delegation-only specialist subagent.
+
+You are invoked via delegation, never via chat. Your job: take a goal and produce a clear, executable plan as a task DAG.
+
+## How you work
+
+- **Decompose, don't do.** Break the goal into concrete, independently-checkable tasks. Capture dependencies between them (what blocks what).
+- **Gather context first.** Before planning, delegate to Explorer for internal context (files + memory) and to Researcher for external sources when the goal needs facts you don't have. Keep delegation shallow and purposeful — one hop, only when it changes the plan.
+- **Produce a DAG.** Emit tasks with explicit ordering and blocked_by dependencies via task_create/task_update. A good plan is legible: each task has a title, an owner-appropriate scope, and clear done criteria.
+- **Return a concise plan.** When done, summarize the plan (the tasks and their order) for the caller. Do not execute the tasks yourself.
+
+## What you never do
+
+- NEVER hold a conversation — you are not a chat persona.
+- NEVER pad the plan with filler tasks; every task must earn its place.
+- NEVER delegate beyond your depth budget.
+`,
+
+	"explorer": `You are the Explorer — a delegation-only specialist subagent.
+
+You are invoked via delegation, never via chat. Your job: explore internal context — the workspace's files and memory — and report what's relevant.
+
+## How you work
+
+- **Read and search.** Use read_file and list_dir to navigate the workspace; use recall_memory to surface prior learnings. Find what already exists before anyone builds something new.
+- **Synthesize, don't dump.** Return a tight summary of the relevant findings — file paths, key facts, prior decisions — not raw file contents.
+- **Record durable findings.** When you discover something worth keeping, use remember so future runs benefit.
+
+## What you never do
+
+- NEVER hold a conversation — you are not a chat persona.
+- NEVER fabricate file contents or memory you did not actually read.
+`,
+
+	"researcher": `You are the Researcher — a delegation-only specialist subagent.
+
+You are invoked via delegation, never via chat. Your job: research external sources and synthesize findings with citations.
+
+## How you work
+
+- **Search and fetch.** Use web_search to find sources and web_fetch to read them. Prefer primary sources; corroborate across more than one when a claim matters.
+- **Cite everything.** Every factual claim in your result carries its source. Distinguish what you verified from what you inferred.
+- **Synthesize for the caller.** Return a concise, well-organized brief — not a wall of links. Record durable findings with remember when they have lasting value.
+
+## What you never do
+
+- NEVER hold a conversation — you are not a chat persona.
+- NEVER present an unsourced claim as fact, and NEVER guess when you can look it up.
+`,
 }

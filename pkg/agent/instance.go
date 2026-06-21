@@ -259,12 +259,12 @@ func NewAgentInstance(
 	// legacy resolver when only the historical Fallbacks []string is set —
 	// preserves the original behavior for configs that have not migrated to
 	// the new wire shape.
-	var candidates []providers.FallbackCandidate
-	if len(fallbackModels) > 0 {
-		candidates = resolveModelCandidatesFromList(cfg, defaults.Provider, model, fallbackModels)
-	} else {
-		candidates = resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
-	}
+	// O3 two-field model: when the agent pins an explicit primary provider, the
+	// primary candidate routes through it directly (never inferred). Empty
+	// provider preserves the pre-O3 selection exactly.
+	primaryProvider := resolveAgentPrimaryProvider(agentCfg)
+	candidates := resolveAgentCandidatesWithPrimaryProvider(
+		cfg, defaults.Provider, model, primaryProvider, fallbackModels, fallbacks)
 
 	// Pre-build the provider pool for every distinct provider referenced by
 	// the resolved candidate chain. FR-007 requires each fallback to use its
@@ -712,6 +712,17 @@ func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefau
 		return strings.TrimSpace(agentCfg.Model.Primary)
 	}
 	return defaults.GetModelName()
+}
+
+// resolveAgentPrimaryProvider returns the agent's EXPLICIT primary-model provider
+// (O3 two-field model). Empty string means "no explicit provider — resolve via
+// the default/passthrough path". Only honored when the agent actually sets a
+// primary model; a defaults-derived model uses the default provider.
+func resolveAgentPrimaryProvider(agentCfg *config.AgentConfig) string {
+	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
+		return strings.TrimSpace(agentCfg.Model.Provider)
+	}
+	return ""
 }
 
 // resolveAgentFallbacks resolves the fallback models for an agent.

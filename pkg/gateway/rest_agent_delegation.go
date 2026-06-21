@@ -189,15 +189,12 @@ func existingLocalRefSet(existing *config.DelegationPolicy) map[string]bool {
 // create, when the id is already chosen, pass it so a self-ref is rejected; pass
 // "" only when no id is available.
 //
-// selfIsWorker reports whether the target agent is a worker (config.IsWorker()).
-// A worker is a delegation-only leaf: it is invoked via delegation but must never
-// delegate onward. The FE blocks worker out-edges, but spawn/subagent/task tools
-// are registered for EVERY agent, so a direct PUT with a non-empty to[] on a
-// worker would let it delegate and break the leaf invariant. This validator
-// rejects a non-empty to[] on a worker (backend enforcement, defence in depth).
+// As of the S3 BE bounded-delegation unlock (M5 item 2) a worker/Subagent MAY
+// delegate onward: the hard worker-leaf rejection has been removed and depth is
+// the safety boundary. The agent tier no longer gates the to[] list — depth (and
+// the global subturn ceiling) bound a Subagent's onward fan-out instead.
 //
 // Validation (all reject with a non-empty errMsg → caller returns 400):
-//   - a worker target may not declare a non-empty to[] (worker-leaf invariant).
 //   - a local to[] ref equal to selfID is rejected (no self-delegation A→A).
 //   - duplicate to[] refs are collapsed (first occurrence wins).
 //   - every NEWLY-ADDED to[] ref with kind=="local" must resolve to an existing
@@ -220,19 +217,19 @@ func buildDelegationPolicy(
 	rosterIDs map[string]bool,
 	depthCeiling int,
 	selfID string,
-	selfIsWorker bool,
 ) (*config.DelegationPolicy, string) {
 	out := &config.DelegationPolicy{}
 
 	// to[]: validate refs, map into canonical AgentRef. A non-nil-but-empty To
 	// is authoritative ("deny all delegation") and is preserved as an empty slice.
+	//
+	// Bounded subagent delegation (S3 BE, M5 item 2): a Subagent/worker MAY now
+	// carry a non-empty to[] and delegate onward. The previous hard worker-leaf
+	// rejection is removed — depth is the safety boundary, not the agent tier.
+	// A worker's onward delegation is bounded by the depth cap below (and the
+	// global subturn ceiling), so a specialist like the Planner can fan out to
+	// Explorer/Researcher within depth while runaway chains are still rejected.
 	if in.To != nil {
-		// Worker-leaf invariant: a worker may carry an explicitly-empty to[]
-		// ("deny all") but never a non-empty one. Rejected before mapping so the
-		// 400 fires regardless of which targets were named.
-		if selfIsWorker && len(*in.To) > 0 {
-			return nil, "a worker agent is a delegation leaf and cannot delegate onward (its 'to' list must be empty)"
-		}
 		selfRef := strings.TrimSpace(selfID)
 		grandfathered := existingLocalRefSet(existing)
 		seen := make(map[string]bool, len(*in.To))

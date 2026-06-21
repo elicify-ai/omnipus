@@ -41,6 +41,23 @@ var fallbackModelsInline = regexp.MustCompile(`(?s)(FallbackModels)\s+\*\[\]stru
 // declaration followed by the same json tag.
 const fallbackModelRewrite = `FallbackModels *[]FallbackModel `
 
+// delegationEdgesInline matches the inline anonymous struct that oapi-codegen
+// emits for the `edges: [{ $ref: WorkspaceDelegationEdge }]` arrays on
+// WorkspaceDelegation and WorkspaceDelegationUpdateRequest (both schemas declare
+// `additionalProperties: false` on the edge item, which triggers the inline copy
+// instead of a `[]WorkspaceDelegationEdge` reference). The edges field is
+// required (non-pointer slice), so the match is `Edges []struct{...}`. The body
+// itself contains a nested enum field with a per-parent name
+// (WorkspaceDelegationEdgesModes / WorkspaceDelegationUpdateRequestEdgesModes),
+// so the `(?s)...\{...nested...\}` body match must span the inner struct's own
+// brace. We anchor on the trailing `json:"edges"` tag to bound the replacement.
+//
+// Group 1: field name ("Edges")
+// Group 2: json tag with backticks ("`json:\"edges\"`")
+var delegationEdgesInline = regexp.MustCompile(`(?s)(Edges)\s+\[\]struct\s*\{.*?\}\s*(` + "`json:\"edges\"`" + `)`)
+
+const delegationEdgesRewrite = `Edges []WorkspaceDelegationEdge `
+
 func run(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -49,6 +66,7 @@ func run(path string) error {
 
 	original := string(data)
 	updated := fallbackModelsInline.ReplaceAllString(original, fallbackModelRewrite+"$2")
+	updated = delegationEdgesInline.ReplaceAllString(updated, delegationEdgesRewrite+"$2")
 
 	if updated == original {
 		return nil

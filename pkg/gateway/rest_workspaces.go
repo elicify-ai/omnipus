@@ -52,9 +52,25 @@ type storedWorkspace struct { // not-wire-format: internal disk-cache struct, ma
 	IsDefault   bool     `json:"is_default,omitempty"` // true only for the auto-created default workspace
 	// Owner is the username of the user who created this workspace. Set at creation;
 	// never updated. Attribution only — not an access gate (FR-1.9).
-	Owner     string `json:"owner,omitempty"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	Owner string `json:"owner,omitempty"`
+	// Delegation is the per-workspace delegation graph (M5): the directed edges
+	// that authorize who-delegates-to-whom on this workspace. This is the editable
+	// source of truth surfaced in the workspace Team tab. nil/empty means no
+	// delegation configured. The per-agent delegation_policy remains the
+	// enforcement cap; this graph is what the UI edits.
+	Delegation []storedDelegationEdge `json:"delegation,omitempty"`
+	CreatedAt  string                 `json:"created_at"`
+	UpdatedAt  string                 `json:"updated_at"`
+}
+
+// storedDelegationEdge mirrors the on-disk format of a single delegation edge,
+// matching gen.WorkspaceDelegationEdge. Modes use the canonical delegation-mode
+// strings (await|background|task).
+type storedDelegationEdge struct { // not-wire-format: internal disk-cache struct, mapped to gen.WorkspaceDelegationEdge before sending over the wire
+	FromAgent string   `json:"from_agent"`
+	ToAgent   string   `json:"to_agent"`
+	Modes     []string `json:"modes,omitempty"`
+	Depth     *int     `json:"depth,omitempty"`
 }
 
 // caller holds the identity of the authenticated request caller.
@@ -304,12 +320,14 @@ func (a *restAPI) loadWorkspace(w http.ResponseWriter, id string) (storedWorkspa
 }
 
 // ensureDefaultWorkspace checks if the default workspace exists; if not, creates it.
-// Seeds one workspace named "My Workspace" (FR-1.6, US-6).
+// Seeds one workspace named "My Workspace" (FR-1.6, US-6) pre-populated with the
+// default team (4 base agents + Planner/Explorer/Researcher specialists) and the
+// default delegation edges derived from the seeded per-agent trust graph (M5/M6).
 // Idempotent: if a workspace with is_default=true already exists, this is a no-op.
 // Thread-safe: serialised by defaultWorkspaceSeedMu to prevent TOCTOU double-seed
 // when two gateway boots race (e.g. rapid restart or dual-process test).
 // On failure, logs an error but returns nil (non-fatal — gateway continues).
-func ensureDefaultWorkspace(home, ownerUsername string) error {
+func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) error {
 	defaultWorkspaceSeedMu.Lock()
 	defer defaultWorkspaceSeedMu.Unlock()
 
@@ -322,7 +340,8 @@ func ensureDefaultWorkspace(home, ownerUsername string) error {
 			return nil // already exists
 		}
 	}
-	// No default workspace found — create "My Workspace".
+	// No default workspace found — create "My Workspace" with the default team +
+	// delegation edges so delegation works out of the box (M5/M6).
 	now := time.Now().UTC().Format(time.RFC3339)
 	ws := storedWorkspace{
 		ID:        ulid.Make().String(),
@@ -332,13 +351,21 @@ func ensureDefaultWorkspace(home, ownerUsername string) error {
 		PinOrder:  0,
 		IsDefault: true,
 		Owner:     ownerUsername,
+		CoreTeam:  defaultWorkspaceTeam(cfg),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	// Seed delegation edges restricted to the default team so the graph's nodes
+	// and edges stay consistent (no edge to an off-team agent like the generic
+	// worker). The Planner→Explorer/Researcher specialist edges survive because
+	// all three are on the default team.
+	ws.Delegation = seedEdgesForTeam(defaultWorkspaceDelegationEdges(cfg), ws.CoreTeam)
 	if err := writeWorkspaceFile(home, ws); err != nil {
 		return fmt.Errorf("ensureDefaultWorkspace: write: %w", err)
 	}
-	slog.Info("rest: default workspace auto-created", "id", ws.ID, "owner", ownerUsername)
+	slog.Info("rest: default workspace auto-created",
+		"id", ws.ID, "owner", ownerUsername,
+		"team_size", len(ws.CoreTeam), "edge_count", len(ws.Delegation))
 	return nil
 }
 
@@ -361,6 +388,20 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleWorkspaceSessions(w, r, id)
+		return
+	}
+
+	// /api/v1/workspaces/{id}/delegation — the per-workspace delegation graph (M5).
+	if strings.HasSuffix(rest, "/delegation") {
+		id := strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/delegation")
+		switch r.Method {
+		case http.MethodGet:
+			a.handleWorkspaceDelegationGet(w, r, id)
+		case http.MethodPut:
+			a.handleWorkspaceDelegationPut(w, r, id)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 		return
 	}
 
@@ -511,9 +552,18 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	if req.Repository != nil {
 		ws.Repository = *req.Repository
 	}
+	cfg := a.agentLoop.GetConfig()
 	if req.CoreTeam != nil {
 		ws.CoreTeam = deduplicateStrings(*req.CoreTeam)
+	} else {
+		// No explicit team: seed the default roster (4 base + specialists) so a
+		// fresh workspace works out of the box (M6), mirroring My Workspace.
+		ws.CoreTeam = defaultWorkspaceTeam(cfg)
 	}
+	// Seed default delegation edges from each team agent's seeded role (M5),
+	// restricted to edges whose endpoints are both on this workspace's team so a
+	// custom core_team never gains edges to agents it did not include.
+	ws.Delegation = seedEdgesForTeam(defaultWorkspaceDelegationEdges(cfg), ws.CoreTeam)
 
 	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
 		slog.Error("rest: create workspace", "error", err)

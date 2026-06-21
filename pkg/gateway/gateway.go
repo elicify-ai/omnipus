@@ -1175,20 +1175,53 @@ func setupAndStartServices(
 	}
 	fmt.Println("✓ Cron service started")
 
-	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
-		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
-		cfg.Heartbeat.Enabled,
-	)
-	runningServices.HeartbeatService.SetBus(msgBus)
-	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
-	if te := agent.GetTaskExecutor(agentLoop); te != nil {
-		runningServices.HeartbeatService.SetTaskChecker(te)
+	// O6 — "heartbeat IS a schedule." Reconcile per-agent heartbeats into the
+	// cron engine: every Main agent with an enabled per-agent heartbeat gets a
+	// recurring schedule that runs its HEARTBEAT.md. Best-effort: a reconcile
+	// failure is logged but does not abort boot.
+	perAgentHeartbeatActive := false
+	for i := range cfg.Agents.List {
+		if !cfg.Agents.List[i].IsWorker() && cfg.Agents.List[i].HeartbeatIsEnabled() {
+			perAgentHeartbeatActive = true
+			break
+		}
 	}
-	if err = runningServices.HeartbeatService.Start(); err != nil {
-		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
+	if hbErr := ReconcileHeartbeatSchedules(
+		runningServices.CronService,
+		cfg,
+		func(agentID string) string {
+			ws, wsErr := agentWorkspacePath(cfg, agentID, "", homePath)
+			if wsErr != nil {
+				return ""
+			}
+			return ws
+		},
+	); hbErr != nil {
+		slog.Warn("gateway: heartbeat schedule reconcile failed", "error", hbErr)
 	}
-	fmt.Println("✓ Heartbeat service started")
+
+	// Legacy global heartbeat service: the per-agent schedule path (above) is the
+	// O6 source of truth. To avoid double-firing, only start the legacy
+	// workspace-wide heartbeat when NO per-agent heartbeat is configured (e.g. a
+	// config that predates the migration AND has no default-agent heartbeat).
+	if !perAgentHeartbeatActive {
+		runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
+			cfg.WorkspacePath(),
+			cfg.Heartbeat.Interval,
+			cfg.Heartbeat.Enabled,
+		)
+		runningServices.HeartbeatService.SetBus(msgBus)
+		runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
+		if te := agent.GetTaskExecutor(agentLoop); te != nil {
+			runningServices.HeartbeatService.SetTaskChecker(te)
+		}
+		if err = runningServices.HeartbeatService.Start(); err != nil {
+			return nil, fmt.Errorf("error starting heartbeat service: %w", err)
+		}
+		fmt.Println("✓ Heartbeat service started")
+	} else {
+		fmt.Println("✓ Heartbeat running as per-agent schedules (legacy global service skipped)")
+	}
 
 	// Task time-trigger executor: fires once/every/recurring task triggers via a
 	// dedicated CronService instance (reusing the pkg/cron engine, NOT a second
@@ -1558,7 +1591,7 @@ func setupAndStartServices(
 	if len(cfg.Gateway.Users) > 0 {
 		ownerUsername = cfg.Gateway.Users[0].Username
 	}
-	if wsErr := ensureDefaultWorkspace(homePath, ownerUsername); wsErr != nil {
+	if wsErr := ensureDefaultWorkspace(homePath, ownerUsername, cfg); wsErr != nil {
 		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
 	}
 

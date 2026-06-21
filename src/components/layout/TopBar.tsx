@@ -32,11 +32,13 @@ export function TopBar() {
   const username = useAuthStore((s) => s.username)
   const clearAuth = useAuthStore((s) => s.clearAuth)
 
-  // Show SessionBar on the root chat route and on named session routes.
+  // Show SessionBar on the root chat route, named session routes, and the
+  // workspace Chat tab (the workspace's front view).
   const isChatScreen =
     location.pathname === '/' ||
     location.pathname === '' ||
-    location.pathname.startsWith('/sessions/')
+    location.pathname.startsWith('/sessions/') ||
+    /^\/workspaces\/[^/]+\/chat$/.test(location.pathname)
 
   function handleLogout() {
     clearAuth()

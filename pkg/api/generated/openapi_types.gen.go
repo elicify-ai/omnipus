@@ -3316,6 +3316,69 @@ func (e WorkspaceStatus) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceDelegationEdgesModes.
+const (
+	WorkspaceDelegationEdgesModesAwait      WorkspaceDelegationEdgesModes = "await"
+	WorkspaceDelegationEdgesModesBackground WorkspaceDelegationEdgesModes = "background"
+	WorkspaceDelegationEdgesModesTask       WorkspaceDelegationEdgesModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceDelegationEdgesModes enum.
+func (e WorkspaceDelegationEdgesModes) Valid() bool {
+	switch e {
+	case WorkspaceDelegationEdgesModesAwait:
+		return true
+	case WorkspaceDelegationEdgesModesBackground:
+		return true
+	case WorkspaceDelegationEdgesModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceDelegationEdgeModes.
+const (
+	WorkspaceDelegationEdgeModesAwait      WorkspaceDelegationEdgeModes = "await"
+	WorkspaceDelegationEdgeModesBackground WorkspaceDelegationEdgeModes = "background"
+	WorkspaceDelegationEdgeModesTask       WorkspaceDelegationEdgeModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceDelegationEdgeModes enum.
+func (e WorkspaceDelegationEdgeModes) Valid() bool {
+	switch e {
+	case WorkspaceDelegationEdgeModesAwait:
+		return true
+	case WorkspaceDelegationEdgeModesBackground:
+		return true
+	case WorkspaceDelegationEdgeModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceDelegationUpdateRequestEdgesModes.
+const (
+	WorkspaceDelegationUpdateRequestEdgesModesAwait      WorkspaceDelegationUpdateRequestEdgesModes = "await"
+	WorkspaceDelegationUpdateRequestEdgesModesBackground WorkspaceDelegationUpdateRequestEdgesModes = "background"
+	WorkspaceDelegationUpdateRequestEdgesModesTask       WorkspaceDelegationUpdateRequestEdgesModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceDelegationUpdateRequestEdgesModes enum.
+func (e WorkspaceDelegationUpdateRequestEdgesModes) Valid() bool {
+	switch e {
+	case WorkspaceDelegationUpdateRequestEdgesModesAwait:
+		return true
+	case WorkspaceDelegationUpdateRequestEdgesModesBackground:
+		return true
+	case WorkspaceDelegationUpdateRequestEdgesModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceUpdateRequestStatus.
 const (
 	WorkspaceUpdateRequestStatusActive   WorkspaceUpdateRequestStatus = "active"
@@ -3682,7 +3745,7 @@ type Agent struct {
 	// MaxToolIterations Maximum number of tool calls allowed per turn. Inherited from agents.defaults.max_tool_iterations when not overridden.
 	MaxToolIterations int `json:"max_tool_iterations"`
 
-	// Model Model name string used for LLM calls (resolved from defaults when not explicitly set on the agent). May be "provider/model" format for OpenRouter.
+	// Model Model slug used for LLM calls (resolved from defaults when not explicitly set on the agent). With the O3 two-field model, this is the bare model slug (e.g. "google/gemini-2.5-flash"); routing is keyed by the explicit `provider` field. A legacy combined slug ("openrouter/google/gemini-2.5-flash") is split into {model, provider} by the config-load migration. Never inferred at call time once `provider` is set.
 	Model *string `json:"model,omitempty"`
 
 	// ModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
@@ -3699,6 +3762,9 @@ type Agent struct {
 
 	// Name Human-readable display name.
 	Name string `json:"name"`
+
+	// Provider Explicit routing key for the agent's primary model (O3 two-field model), mirroring fallback_models[].provider. Distinct from any "provider/" prefix embedded in `model`. When set, model resolution uses this provider directly and never infers one. Empty/absent for agents that predate the migration or whose model resolves via the default provider.
+	Provider *string `json:"provider,omitempty"`
 
 	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
 	RateLimits *struct {
@@ -3920,7 +3986,7 @@ type AgentCreateRequest struct {
 	// MaxToolIterations Maximum number of tool calls allowed per turn.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
-	// Model Model name for LLM calls. When omitted, the global agents.defaults.model_name is used.
+	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
 	Model *string `json:"model,omitempty"`
 
 	// ModelParams LLM sampling parameters applied to this agent's requests.
@@ -3937,6 +4003,9 @@ type AgentCreateRequest struct {
 
 	// Name Display name for the new agent.
 	Name string `json:"name"`
+
+	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
+	Provider *string `json:"provider,omitempty"`
 
 	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
 	RateLimits *struct {
@@ -4377,7 +4446,7 @@ type AgentUpdateRequest struct {
 	// MaxToolIterations New maximum tool calls per turn. Allowed on all agents.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
-	// Model New model name. Allowed on all agents.
+	// Model New model slug. Allowed on all agents. With the O3 two-field model, pair with `provider` for explicit routing.
 	Model *string `json:"model,omitempty"`
 
 	// ModelParams LLM sampling parameters applied to this agent's requests. Rejected 400 on subagent_3p agents (CLI may not support these flags).
@@ -4394,6 +4463,9 @@ type AgentUpdateRequest struct {
 
 	// Name New display name. Rejected on locked agents.
 	Name *string `json:"name,omitempty"`
+
+	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).
+	Provider *string `json:"provider,omitempty"`
 
 	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
 	RateLimits *struct {
@@ -7618,6 +7690,48 @@ type WorkspaceCreateRequest struct {
 	Repository *string `json:"repository,omitempty"`
 }
 
+// WorkspaceDelegation The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. The per-agent delegation_policy remains as an enforcement cap, but this graph is what the UI edits.
+type WorkspaceDelegation struct {
+	// Edges The directed delegation edges. May be empty (no delegation configured). Deduplicated by (from_agent, to_agent) at write time — last writer wins.
+	Edges []WorkspaceDelegationEdge `json:"edges"`
+
+	// Team The workspace team roster (node set) — the union of the workspace core_team and every agent referenced by an edge. Computed at read time; informational, so the UI can render isolated nodes that have no edges yet.
+	Team *[]string `json:"team,omitempty"`
+
+	// WorkspaceId ID of the workspace this delegation graph belongs to.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// WorkspaceDelegationEdgesModes defines model for WorkspaceDelegation.Edges.Modes.
+type WorkspaceDelegationEdgesModes string
+
+// WorkspaceDelegationEdge A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster.
+type WorkspaceDelegationEdge struct {
+	// Depth Maximum delegation chain depth for this edge (number of hops). 0 = no onward delegation past this hop. Bounded by the global subturn depth ceiling. Absent means the workspace/global default applies.
+	Depth *int `json:"depth,omitempty"`
+
+	// FromAgent Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
+	FromAgent string `json:"from_agent"`
+
+	// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. Mirrors DelegationPolicy.modes semantics. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (persistent task for another agent).
+	Modes *[]WorkspaceDelegationEdgeModes `json:"modes,omitempty"`
+
+	// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+	ToAgent string `json:"to_agent"`
+}
+
+// WorkspaceDelegationEdgeModes defines model for WorkspaceDelegationEdge.Modes.
+type WorkspaceDelegationEdgeModes string
+
+// WorkspaceDelegationUpdateRequest Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to a known agent; self-edges and depths above the global subturn ceiling are rejected.
+type WorkspaceDelegationUpdateRequest struct {
+	// Edges The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time.
+	Edges []WorkspaceDelegationEdge `json:"edges"`
+}
+
+// WorkspaceDelegationUpdateRequestEdgesModes defines model for WorkspaceDelegationUpdateRequest.Edges.Modes.
+type WorkspaceDelegationUpdateRequestEdgesModes string
+
 // WorkspaceSessionLink A session that has been auto-linked to a workspace via tool use.
 type WorkspaceSessionLink struct {
 	// CreatedAt RFC3339 UTC timestamp when the link was first created.
@@ -7951,6 +8065,9 @@ type CreateWorkspaceJSONRequestBody = WorkspaceCreateRequest
 
 // UpdateWorkspaceJSONRequestBody defines body for UpdateWorkspace for application/json ContentType.
 type UpdateWorkspaceJSONRequestBody = WorkspaceUpdateRequest
+
+// UpdateWorkspaceDelegationJSONRequestBody defines body for UpdateWorkspaceDelegation for application/json ContentType.
+type UpdateWorkspaceDelegationJSONRequestBody = WorkspaceDelegationUpdateRequest
 
 // CreateWorkspaceMilestoneJSONRequestBody defines body for CreateWorkspaceMilestone for application/json ContentType.
 type CreateWorkspaceMilestoneJSONRequestBody = MilestoneCreateRequest

@@ -2,13 +2,13 @@ import { createFileRoute } from '@tanstack/react-router'
 import { lazy, Suspense } from 'react'
 import { RouteFallback } from '@/components/shared/RouteFallback'
 
-// Code-split: CalendarScreen is a dedicated surface (board tasks + milestones
-// by date). Lazy-loaded so it does not inflate the main bundle.
+// Calendar tab — scheduled/recurring tasks by fire time. Renders the existing
+// CalendarScreen under the workspace tab. Code-split (it's a heavy surface).
 const CalendarScreen = lazy(() =>
   import('@/components/screens/CalendarScreen').then((m) => ({ default: m.CalendarScreen })),
 )
 
-function CalendarRoute() {
+function WorkspaceCalendarRoute() {
   const { workspaceId } = Route.useParams()
   return (
     <Suspense fallback={<RouteFallback />}>
@@ -18,5 +18,5 @@ function CalendarRoute() {
 }
 
 export const Route = createFileRoute('/_app/workspaces/$workspaceId/calendar')({
-  component: CalendarRoute,
+  component: WorkspaceCalendarRoute,
 })

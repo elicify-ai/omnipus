@@ -226,12 +226,14 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
     expect(unpinBtn.getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('Chat nav link has aria-label="Chat"', () => {
+  it('Agents library link has aria-label="Agents"', () => {
+    // IA reframe (Sprint 4): the top-level Chat link is removed; the sidebar's
+    // global-library links (Agents/Connectors/Skills & Tools) carry aria-labels.
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const chatLink = screen.getByRole('link', { name: 'Chat' })
-    expect(chatLink).toBeTruthy()
+    const agentsLink = screen.getByRole('link', { name: 'Agents' })
+    expect(agentsLink).toBeTruthy()
   })
 })
 
@@ -239,27 +241,28 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
 // M5-4: ARIA current on active nav items
 // ---------------------------------------------------------------------------
 
-// BDD: Given the sidebar is open and the current route is "/",
-// When the Chat nav item renders,
-// Then it has aria-current="page".
+// BDD: Given the sidebar is open and the current route is "/" (a workspace
+// redirect, not a library route), When the library nav items render, Then none
+// of them is marked aria-current="page" — the active state is route-accurate.
 // Traces to: src/components/layout/Sidebar.tsx — aria-current={isActive ? 'page' : undefined}
-describe('Sidebar — aria-current on active nav items', () => {
-  it('Chat link has aria-current="page" when pathname is "/"', () => {
+describe('Sidebar — aria-current on active library items', () => {
+  it('library links are NOT active at pathname "/" (no library route matches)', () => {
     // useLocation is mocked to return { pathname: '/' }
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const chatLink = screen.getByRole('link', { name: 'Chat' })
-    expect(chatLink.getAttribute('aria-current')).toBe('page')
+    const agentsLink = screen.getByRole('link', { name: 'Agents' })
+    const connectorsLink = screen.getByRole('link', { name: 'Connectors' })
+    expect(agentsLink.getAttribute('aria-current')).toBeNull()
+    expect(connectorsLink.getAttribute('aria-current')).toBeNull()
   })
 
-  it('non-active nav links do not have aria-current', () => {
+  it('Settings link is not active at pathname "/"', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const agentsLink = screen.getByRole('link', { name: 'Agents' })
-    // pathname is '/', so Agents is NOT active
-    expect(agentsLink.getAttribute('aria-current')).toBeNull()
+    const settingsLink = screen.getByRole('link', { name: 'Settings' })
+    expect(settingsLink.getAttribute('aria-current')).toBeNull()
   })
 })
 

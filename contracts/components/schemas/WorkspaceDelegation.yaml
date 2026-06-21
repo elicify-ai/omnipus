@@ -1,0 +1,33 @@
+type: object
+description: >
+  The per-workspace delegation graph (M5). This is the editable source of truth
+  surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view —
+  always workspace-scoped, never global. Nodes are the workspace team's agents
+  (core_team ∪ every agent named by an edge); edges are the directed delegation
+  authorizations. The per-agent delegation_policy remains as an enforcement cap,
+  but this graph is what the UI edits.
+required:
+  - workspace_id
+  - edges
+properties:
+  workspace_id:
+    type: string
+    description: ID of the workspace this delegation graph belongs to.
+    example: "01J8Z9ABCDEF0123456789ABCD"
+  edges:
+    type: array
+    description: >
+      The directed delegation edges. May be empty (no delegation configured).
+      Deduplicated by (from_agent, to_agent) at write time — last writer wins.
+    items:
+      $ref: './WorkspaceDelegationEdge.yaml'
+  team:
+    type: array
+    description: >
+      The workspace team roster (node set) — the union of the workspace core_team
+      and every agent referenced by an edge. Computed at read time; informational,
+      so the UI can render isolated nodes that have no edges yet.
+    items:
+      type: string
+    example: ["mia", "jim", "planner", "explorer", "researcher"]
+additionalProperties: false

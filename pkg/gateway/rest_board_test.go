@@ -928,7 +928,7 @@ func TestEnsureDefaultWorkspace(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// First call: must create the default project.
-	require.NoError(t, ensureDefaultWorkspace(api.homePath, ""),
+	require.NoError(t, ensureDefaultWorkspace(api.homePath, "", nil),
 		"first ensureDefaultWorkspace call must not return an error")
 
 	// GET /api/v1/workspaces → must contain exactly one default project named "My Workspace".
@@ -952,7 +952,7 @@ func TestEnsureDefaultWorkspace(t *testing.T) {
 	assert.Equal(t, 1, defaultCount, "exactly one default project must exist after first call")
 
 	// Second call: must be idempotent — still exactly one default project.
-	require.NoError(t, ensureDefaultWorkspace(api.homePath, ""),
+	require.NoError(t, ensureDefaultWorkspace(api.homePath, "", nil),
 		"second ensureDefaultWorkspace call must not return an error")
 
 	wList2 := httptest.NewRecorder()

@@ -29,7 +29,14 @@ import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/work
 import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
 import { Route as AppAgentsTrustRouteImport } from './routes/_app/agents.trust'
 import { Route as AppAgentsAgentIdRouteImport } from './routes/_app/agents.$agentId'
+import { Route as AppWorkspacesWorkspaceIdIndexRouteImport } from './routes/_app/workspaces.$workspaceId.index'
+import { Route as AppWorkspacesWorkspaceIdTeamRouteImport } from './routes/_app/workspaces.$workspaceId.team'
+import { Route as AppWorkspacesWorkspaceIdSettingsRouteImport } from './routes/_app/workspaces.$workspaceId.settings'
+import { Route as AppWorkspacesWorkspaceIdListRouteImport } from './routes/_app/workspaces.$workspaceId.list'
+import { Route as AppWorkspacesWorkspaceIdGraphRouteImport } from './routes/_app/workspaces.$workspaceId.graph'
+import { Route as AppWorkspacesWorkspaceIdChatRouteImport } from './routes/_app/workspaces.$workspaceId.chat'
 import { Route as AppWorkspacesWorkspaceIdCalendarRouteImport } from './routes/_app/workspaces.$workspaceId.calendar'
+import { Route as AppWorkspacesWorkspaceIdBoardRouteImport } from './routes/_app/workspaces.$workspaceId.board'
 
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
@@ -131,10 +138,52 @@ const AppAgentsAgentIdRoute = AppAgentsAgentIdRouteImport.update({
   path: '/$agentId',
   getParentRoute: () => AppAgentsRoute,
 } as any)
+const AppWorkspacesWorkspaceIdIndexRoute =
+  AppWorkspacesWorkspaceIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdTeamRoute =
+  AppWorkspacesWorkspaceIdTeamRouteImport.update({
+    id: '/team',
+    path: '/team',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdSettingsRoute =
+  AppWorkspacesWorkspaceIdSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdListRoute =
+  AppWorkspacesWorkspaceIdListRouteImport.update({
+    id: '/list',
+    path: '/list',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdGraphRoute =
+  AppWorkspacesWorkspaceIdGraphRouteImport.update({
+    id: '/graph',
+    path: '/graph',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdChatRoute =
+  AppWorkspacesWorkspaceIdChatRouteImport.update({
+    id: '/chat',
+    path: '/chat',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
 const AppWorkspacesWorkspaceIdCalendarRoute =
   AppWorkspacesWorkspaceIdCalendarRouteImport.update({
     id: '/calendar',
     path: '/calendar',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdBoardRoute =
+  AppWorkspacesWorkspaceIdBoardRouteImport.update({
+    id: '/board',
+    path: '/board',
     getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
   } as any)
 
@@ -158,7 +207,14 @@ export interface FileRoutesByFullPath {
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/agents/': typeof AppAgentsIndexRoute
   '/workspaces/': typeof AppWorkspacesIndexRoute
+  '/workspaces/$workspaceId/board': typeof AppWorkspacesWorkspaceIdBoardRoute
   '/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
+  '/workspaces/$workspaceId/chat': typeof AppWorkspacesWorkspaceIdChatRoute
+  '/workspaces/$workspaceId/graph': typeof AppWorkspacesWorkspaceIdGraphRoute
+  '/workspaces/$workspaceId/list': typeof AppWorkspacesWorkspaceIdListRoute
+  '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
+  '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
+  '/workspaces/$workspaceId/': typeof AppWorkspacesWorkspaceIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/landing': typeof LandingRoute
@@ -176,10 +232,16 @@ export interface FileRoutesByTo {
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/agents/trust': typeof AppAgentsTrustRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
-  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/agents': typeof AppAgentsIndexRoute
   '/workspaces': typeof AppWorkspacesIndexRoute
+  '/workspaces/$workspaceId/board': typeof AppWorkspacesWorkspaceIdBoardRoute
   '/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
+  '/workspaces/$workspaceId/chat': typeof AppWorkspacesWorkspaceIdChatRoute
+  '/workspaces/$workspaceId/graph': typeof AppWorkspacesWorkspaceIdGraphRoute
+  '/workspaces/$workspaceId/list': typeof AppWorkspacesWorkspaceIdListRoute
+  '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
+  '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -203,7 +265,14 @@ export interface FileRoutesById {
   '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/_app/agents/': typeof AppAgentsIndexRoute
   '/_app/workspaces/': typeof AppWorkspacesIndexRoute
+  '/_app/workspaces/$workspaceId/board': typeof AppWorkspacesWorkspaceIdBoardRoute
   '/_app/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
+  '/_app/workspaces/$workspaceId/chat': typeof AppWorkspacesWorkspaceIdChatRoute
+  '/_app/workspaces/$workspaceId/graph': typeof AppWorkspacesWorkspaceIdGraphRoute
+  '/_app/workspaces/$workspaceId/list': typeof AppWorkspacesWorkspaceIdListRoute
+  '/_app/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
+  '/_app/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
+  '/_app/workspaces/$workspaceId/': typeof AppWorkspacesWorkspaceIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -227,7 +296,14 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId'
     | '/agents/'
     | '/workspaces/'
+    | '/workspaces/$workspaceId/board'
     | '/workspaces/$workspaceId/calendar'
+    | '/workspaces/$workspaceId/chat'
+    | '/workspaces/$workspaceId/graph'
+    | '/workspaces/$workspaceId/list'
+    | '/workspaces/$workspaceId/settings'
+    | '/workspaces/$workspaceId/team'
+    | '/workspaces/$workspaceId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/landing'
@@ -245,10 +321,16 @@ export interface FileRouteTypes {
     | '/agents/$agentId'
     | '/agents/trust'
     | '/sessions/$sessionId'
-    | '/workspaces/$workspaceId'
     | '/agents'
     | '/workspaces'
+    | '/workspaces/$workspaceId/board'
     | '/workspaces/$workspaceId/calendar'
+    | '/workspaces/$workspaceId/chat'
+    | '/workspaces/$workspaceId/graph'
+    | '/workspaces/$workspaceId/list'
+    | '/workspaces/$workspaceId/settings'
+    | '/workspaces/$workspaceId/team'
+    | '/workspaces/$workspaceId'
   id:
     | '__root__'
     | '/_app'
@@ -271,7 +353,14 @@ export interface FileRouteTypes {
     | '/_app/workspaces/$workspaceId'
     | '/_app/agents/'
     | '/_app/workspaces/'
+    | '/_app/workspaces/$workspaceId/board'
     | '/_app/workspaces/$workspaceId/calendar'
+    | '/_app/workspaces/$workspaceId/chat'
+    | '/_app/workspaces/$workspaceId/graph'
+    | '/_app/workspaces/$workspaceId/list'
+    | '/_app/workspaces/$workspaceId/settings'
+    | '/_app/workspaces/$workspaceId/team'
+    | '/_app/workspaces/$workspaceId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -423,11 +512,60 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsAgentIdRouteImport
       parentRoute: typeof AppAgentsRoute
     }
+    '/_app/workspaces/$workspaceId/': {
+      id: '/_app/workspaces/$workspaceId/'
+      path: '/'
+      fullPath: '/workspaces/$workspaceId/'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdIndexRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/team': {
+      id: '/_app/workspaces/$workspaceId/team'
+      path: '/team'
+      fullPath: '/workspaces/$workspaceId/team'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdTeamRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/settings': {
+      id: '/_app/workspaces/$workspaceId/settings'
+      path: '/settings'
+      fullPath: '/workspaces/$workspaceId/settings'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdSettingsRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/list': {
+      id: '/_app/workspaces/$workspaceId/list'
+      path: '/list'
+      fullPath: '/workspaces/$workspaceId/list'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdListRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/graph': {
+      id: '/_app/workspaces/$workspaceId/graph'
+      path: '/graph'
+      fullPath: '/workspaces/$workspaceId/graph'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdGraphRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/chat': {
+      id: '/_app/workspaces/$workspaceId/chat'
+      path: '/chat'
+      fullPath: '/workspaces/$workspaceId/chat'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdChatRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
     '/_app/workspaces/$workspaceId/calendar': {
       id: '/_app/workspaces/$workspaceId/calendar'
       path: '/calendar'
       fullPath: '/workspaces/$workspaceId/calendar'
       preLoaderRoute: typeof AppWorkspacesWorkspaceIdCalendarRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/board': {
+      id: '/_app/workspaces/$workspaceId/board'
+      path: '/board'
+      fullPath: '/workspaces/$workspaceId/board'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdBoardRouteImport
       parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
   }
@@ -450,13 +588,28 @@ const AppAgentsRouteWithChildren = AppAgentsRoute._addFileChildren(
 )
 
 interface AppWorkspacesWorkspaceIdRouteChildren {
+  AppWorkspacesWorkspaceIdBoardRoute: typeof AppWorkspacesWorkspaceIdBoardRoute
   AppWorkspacesWorkspaceIdCalendarRoute: typeof AppWorkspacesWorkspaceIdCalendarRoute
+  AppWorkspacesWorkspaceIdChatRoute: typeof AppWorkspacesWorkspaceIdChatRoute
+  AppWorkspacesWorkspaceIdGraphRoute: typeof AppWorkspacesWorkspaceIdGraphRoute
+  AppWorkspacesWorkspaceIdListRoute: typeof AppWorkspacesWorkspaceIdListRoute
+  AppWorkspacesWorkspaceIdSettingsRoute: typeof AppWorkspacesWorkspaceIdSettingsRoute
+  AppWorkspacesWorkspaceIdTeamRoute: typeof AppWorkspacesWorkspaceIdTeamRoute
+  AppWorkspacesWorkspaceIdIndexRoute: typeof AppWorkspacesWorkspaceIdIndexRoute
 }
 
 const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildren =
   {
+    AppWorkspacesWorkspaceIdBoardRoute: AppWorkspacesWorkspaceIdBoardRoute,
     AppWorkspacesWorkspaceIdCalendarRoute:
       AppWorkspacesWorkspaceIdCalendarRoute,
+    AppWorkspacesWorkspaceIdChatRoute: AppWorkspacesWorkspaceIdChatRoute,
+    AppWorkspacesWorkspaceIdGraphRoute: AppWorkspacesWorkspaceIdGraphRoute,
+    AppWorkspacesWorkspaceIdListRoute: AppWorkspacesWorkspaceIdListRoute,
+    AppWorkspacesWorkspaceIdSettingsRoute:
+      AppWorkspacesWorkspaceIdSettingsRoute,
+    AppWorkspacesWorkspaceIdTeamRoute: AppWorkspacesWorkspaceIdTeamRoute,
+    AppWorkspacesWorkspaceIdIndexRoute: AppWorkspacesWorkspaceIdIndexRoute,
   }
 
 const AppWorkspacesWorkspaceIdRouteWithChildren =

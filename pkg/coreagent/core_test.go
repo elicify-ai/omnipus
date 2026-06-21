@@ -41,17 +41,22 @@ func TestCoreAgentCount(t *testing.T) {
 		"BaseAgents() must return exactly 4 base core agents (Spec-3: mia, jim, ava, ray — max retired)")
 
 	all := coreagent.All()
-	require.Len(t, all, 5,
-		"All() must return the 4 base agents + 1 worker (base/worker split)")
+	require.Len(t, all, 8,
+		"All() must return the 4 base agents + 1 worker + 3 specialist subagents (M5/M6)")
 
-	// The worker is present and is the only worker-tier entry.
+	// The worker is present and is the only generic-worker entry.
 	workerCount := 0
+	specialistCount := 0
 	for _, a := range all {
 		if coreagent.IsWorkerID(a.ID) {
 			workerCount++
 		}
+		if coreagent.IsSpecialistID(a.ID) {
+			specialistCount++
+		}
 	}
 	require.Equal(t, 1, workerCount, "All() must include exactly one worker (the seeded general-purpose worker)")
+	require.Equal(t, 3, specialistCount, "All() must include the 3 specialist subagents (Planner/Explorer/Researcher)")
 }
 
 // TestCoreAgentDisplayOrder verifies Mia is first (default selection for new users).
@@ -310,8 +315,8 @@ func TestSeedConfigAddsAllCoreAgents(t *testing.T) {
 
 	assert.True(t, modified,
 		"SeedConfig must return true when agents are added to an empty config")
-	assert.Len(t, cfg.Agents.List, 5,
-		"SeedConfig must add 4 base core agents + 1 worker to an empty config (Spec-3: max retired; worker tier added)")
+	assert.Len(t, cfg.Agents.List, 8,
+		"SeedConfig must add 4 base + 1 worker + 3 specialists (M5/M6: Planner/Explorer/Researcher)")
 
 	// Verify each core agent was seeded with Locked=true
 	seededIDs := make(map[string]config.AgentConfig)
@@ -326,7 +331,7 @@ func TestSeedConfigAddsAllCoreAgents(t *testing.T) {
 			assert.True(t, ac.Locked,
 				"agent %s must be seeded with Locked=true to protect identity fields", ca.ID)
 			wantType := config.AgentTypeCore
-			if coreagent.IsWorkerID(ca.ID) {
+			if coreagent.IsSubagentTierID(ca.ID) {
 				wantType = config.AgentTypeWorker
 			}
 			assert.Equal(t, wantType, ac.Type,
@@ -351,17 +356,17 @@ func TestSeedConfigAddsAllCoreAgents(t *testing.T) {
 func TestSeedConfigIsIdempotent(t *testing.T) {
 	cfg := &config.Config{}
 
-	// First call: adds all 4 base agents + the worker
+	// First call: adds all 4 base agents + the worker + 3 specialists
 	modified1 := coreagent.SeedConfig(cfg)
 	assert.True(t, modified1, "first SeedConfig call must return true (agents added)")
-	assert.Len(t, cfg.Agents.List, 5)
+	assert.Len(t, cfg.Agents.List, 8)
 
 	// Second call: must be a no-op
 	modified2 := coreagent.SeedConfig(cfg)
 	assert.False(t, modified2,
 		"second SeedConfig call must return false — all agents already present")
-	assert.Len(t, cfg.Agents.List, 5,
-		"SeedConfig must not duplicate agents on repeated calls (4 base + 1 worker)")
+	assert.Len(t, cfg.Agents.List, 8,
+		"SeedConfig must not duplicate agents on repeated calls (4 base + 1 worker + 3 specialists)")
 }
 
 // TestSeedConfigPreservesExistingAgents verifies SeedConfig adds missing core agents
@@ -380,9 +385,9 @@ func TestSeedConfigPreservesExistingAgents(t *testing.T) {
 
 	modified := coreagent.SeedConfig(cfg)
 	assert.True(t, modified, "SeedConfig must add missing core agents")
-	// 4 base core agents + 1 worker + 1 existing custom agent
-	assert.Len(t, cfg.Agents.List, 6,
-		"SeedConfig must preserve existing agents while adding the 4 base core agents + the worker")
+	// 4 base core agents + 1 worker + 3 specialists + 1 existing custom agent
+	assert.Len(t, cfg.Agents.List, 9,
+		"SeedConfig must preserve existing agents while adding the 4 base core agents + the worker + 3 specialists")
 
 	// Verify custom agent is still present and unchanged
 	found := false

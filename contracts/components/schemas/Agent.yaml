@@ -71,9 +71,23 @@ properties:
     type: string
     maxLength: 256
     description: >
-      Model name string used for LLM calls (resolved from defaults when not
-      explicitly set on the agent). May be "provider/model" format for OpenRouter.
-    example: "claude-sonnet-4-6"
+      Model slug used for LLM calls (resolved from defaults when not explicitly
+      set on the agent). With the O3 two-field model, this is the bare model slug
+      (e.g. "google/gemini-2.5-flash"); routing is keyed by the explicit `provider`
+      field. A legacy combined slug ("openrouter/google/gemini-2.5-flash") is split
+      into {model, provider} by the config-load migration. Never inferred at call
+      time once `provider` is set.
+    example: "google/gemini-2.5-flash"
+  provider:
+    type: string
+    maxLength: 64
+    description: >
+      Explicit routing key for the agent's primary model (O3 two-field model),
+      mirroring fallback_models[].provider. Distinct from any "provider/" prefix
+      embedded in `model`. When set, model resolution uses this provider directly
+      and never infers one. Empty/absent for agents that predate the migration or
+      whose model resolves via the default provider.
+    example: "openrouter"
   description:
     type: string
     description: Short description of the agent's purpose.

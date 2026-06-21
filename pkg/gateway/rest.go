@@ -369,6 +369,43 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 // jsonOK writes body as a 200 OK JSON response.
 func jsonOK(w http.ResponseWriter, body any) { writeJSON(w, http.StatusOK, body) }
 
+// setAgentHeartbeat echoes the agent's per-agent heartbeat schedule fields (O6)
+// onto the wire response. Heartbeat is per-agent for Main agents; a worker never
+// has one (its stored flag, if any, is ignored). When an agent has not set its
+// own heartbeat (HeartbeatEnabled nil and interval 0), the migrated/global
+// default is surfaced as the effective value so the form shows a sensible state.
+func setAgentHeartbeat(ag *gen.Agent, ac config.AgentConfig, cfg *config.Config) {
+	if ac.IsWorker() {
+		// Subagents never have a heartbeat — report disabled regardless of stored bits.
+		ag.HeartbeatEnabled = false
+		ag.HeartbeatInterval = 0
+		return
+	}
+	if ac.HeartbeatEnabled != nil {
+		ag.HeartbeatEnabled = *ac.HeartbeatEnabled
+	} else {
+		ag.HeartbeatEnabled = cfg.Heartbeat.Enabled
+	}
+	if ac.HeartbeatInterval > 0 {
+		ag.HeartbeatInterval = ac.HeartbeatInterval
+	} else {
+		ag.HeartbeatInterval = cfg.Heartbeat.Interval
+	}
+}
+
+// setAgentModelProvider echoes the agent's explicit primary-model provider (O3
+// two-field model) onto the wire response. A nil model or an empty provider
+// leaves ag.Provider unset (absent on the wire), signaling default-provider
+// resolution. Used by every agent response builder so create/list/get/update all
+// round-trip the provider field consistently.
+func setAgentModelProvider(ag *gen.Agent, model *config.AgentModelConfig) {
+	if model == nil || model.Provider == "" {
+		return
+	}
+	p := model.Provider
+	ag.Provider = &p
+}
+
 // jsonCreated writes body as a 201 Created JSON response. Use this instead of
 // `w.WriteHeader(http.StatusCreated); jsonOK(w, ...)` — that ordering drops the
 // Content-Type and the response is served as text/plain (#96).
@@ -1338,6 +1375,8 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
 		ag.Model = &model
+		setAgentModelProvider(&ag, ac.Model)
+		setAgentHeartbeat(&ag, ac, cfg)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
 		ag.Default = boolPtr(ac.Default)
@@ -1392,6 +1431,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked
 			ag.Model = &model
+			setAgentModelProvider(&ag, ac.Model)
+			setAgentHeartbeat(&ag, ac, cfg)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 			ag.Soul = soul
 			ag.Heartbeat = heartbeat
@@ -1501,6 +1542,21 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
 		return
 	}
+	// O6 / O12.1 — heartbeat + voice are Main-only (form matrix rows 10–13): a
+	// Subagent / subagent_3p create that tries to set them is rejected. Subagents
+	// run only via delegation (no schedule) and are not chat personas (no voice).
+	if createType == config.AgentTypeWorker {
+		if (req.HeartbeatEnabled != nil && *req.HeartbeatEnabled) ||
+			(req.HeartbeatInterval != nil && *req.HeartbeatInterval > 0) ||
+			(req.Heartbeat != nil && strings.TrimSpace(*req.Heartbeat) != "") {
+			jsonErr(w, http.StatusBadRequest, "a worker cannot have heartbeat (Subagents run only via delegation)")
+			return
+		}
+		if req.Voice != nil && strings.TrimSpace(*req.Voice) != "" {
+			jsonErr(w, http.StatusBadRequest, "a worker cannot have a per-agent voice (workers are not chat personas)")
+			return
+		}
+	}
 	// W2 spec §3.1 row 16 / §9.2 F-13 (mirror of PUT path): fallback_models
 	// is capped at 2 entries. Server-enforced so direct REST callers (not the
 	// SPA) cannot smuggle more entries past the schema validator.
@@ -1550,6 +1606,20 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Model != nil && *req.Model != "" {
 		ac.Model = &config.AgentModelConfig{Primary: *req.Model}
+		// O3 two-field model: persist the explicit primary provider when supplied.
+		if req.Provider != nil && strings.TrimSpace(*req.Provider) != "" {
+			ac.Model.Provider = strings.TrimSpace(*req.Provider)
+		}
+	}
+	// O6 — per-agent heartbeat (Main only; worker create already rejected above).
+	if createType != config.AgentTypeWorker {
+		if req.HeartbeatEnabled != nil {
+			hb := *req.HeartbeatEnabled
+			ac.HeartbeatEnabled = &hb
+		}
+		if req.HeartbeatInterval != nil {
+			ac.HeartbeatInterval = *req.HeartbeatInterval
+		}
 	}
 	if req.Skills != nil && len(*req.Skills) > 0 {
 		ac.Skills = make([]string, len(*req.Skills))
@@ -1604,10 +1674,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if dpIn := delegationInputFromCreateRequest(&req); dpIn != nil {
 		cfg := a.agentLoop.GetConfig()
 		// selfID = the new agent's id (known at create time) so a self-ref A→A is
-		// rejected; selfIsWorker reflects the new agent's type so a worker created
-		// with a non-empty to[] is rejected (worker-leaf invariant). No existing
-		// stored policy on create → grandfathering is a no-op.
-		dp, errMsg := buildDelegationPolicy(dpIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg), ac.ID, ac.IsWorker())
+		// rejected. A Subagent/worker created with a non-empty to[] is now allowed
+		// (bounded by depth, not the worker tier). No existing stored policy on
+		// create → grandfathering is a no-op.
+		dp, errMsg := buildDelegationPolicy(dpIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg), ac.ID)
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
@@ -1677,7 +1747,20 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			newAgent["icon"] = ac.Icon
 		}
 		if ac.Model != nil {
-			newAgent["model"] = map[string]any{"primary": ac.Model.Primary}
+			modelMap := map[string]any{"primary": ac.Model.Primary}
+			// O3 two-field model: persist the explicit primary provider so it
+			// round-trips through a config reload and drives resolution.
+			if ac.Model.Provider != "" {
+				modelMap["provider"] = ac.Model.Provider
+			}
+			newAgent["model"] = modelMap
+		}
+		// O6 — per-agent heartbeat persistence (Main only).
+		if ac.HeartbeatEnabled != nil {
+			newAgent["heartbeat_enabled"] = *ac.HeartbeatEnabled
+		}
+		if ac.HeartbeatInterval > 0 {
+			newAgent["heartbeat_interval"] = ac.HeartbeatInterval
 		}
 		if ac.Tools != nil {
 			builtinMap := map[string]any{
@@ -1787,6 +1870,8 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	ag.Type = coreagent.ToWireType(ac)
 	ag.Locked = ac.Locked
 	ag.Model = &model
+	setAgentModelProvider(&ag, ac.Model)
+	setAgentHeartbeat(&ag, ac, cfgAfterCreate)
 	// Echo the just-persisted soul so the FE round-trip works (req.Soul was
 	// write-dropped before this fix; a created agent would come back with
 	// soul="" regardless of what the caller sent). Status is derived from
@@ -1810,6 +1895,11 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if len(warnings) > 0 {
 		w := strings.Join(warnings, "; ")
 		ag.Warning = &w
+	}
+	// O6 — register the new agent's heartbeat schedule when it was created with
+	// heartbeat enabled (Main only; workers were rejected earlier).
+	if ac.HeartbeatEnabled != nil && *ac.HeartbeatEnabled {
+		a.reconcileHeartbeatSchedules()
 	}
 	jsonCreated(w, ag)
 }
@@ -1893,6 +1983,9 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 			},
 		})
 	}
+	// O6 — drop any heartbeat schedule the deleted agent owned (the reconciler
+	// removes heartbeat jobs whose agent is no longer in config).
+	a.reconcileHeartbeatSchedules()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1974,8 +2067,9 @@ func firstForbiddenSubagent3pField(req any) (string, bool) {
 		// a subagent_3p PUT. Fields that ARE valid for a worker — model,
 		// timeout_seconds, max_tool_iterations, color, icon, description, and
 		// delegation_policy — must be accepted (a delegation_policy with a
-		// non-empty to[] is still independently bounded by buildDelegationPolicy's
-		// worker-leaf check). The external CLI manages its own isolation, tools,
+		// non-empty to[] is now allowed for a Subagent and bounded by
+		// buildDelegationPolicy's depth cap). The external CLI manages its own
+		// isolation, tools,
 		// and skills, so tools_cfg / sandbox_profile / shell_policy /
 		// fallback_models / model_params / skills stay forbidden (O13).
 		if r.ToolsCfg != nil {
@@ -2235,8 +2329,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			foundAgent.DelegationPolicy, // existing stored policy (may be nil)
 			rosterIDSet(cfg),
 			delegationDepthCeiling(cfg),
-			foundAgent.ID,         // selfID: reject A→A self-delegation
-			foundAgent.IsWorker(), // worker-leaf: reject a non-empty to[] on a worker
+			foundAgent.ID, // selfID: reject A→A self-delegation
 		)
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
@@ -2306,6 +2399,22 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 						agentMap["model"] = modelMap
 					}
 					modelMap["primary"] = newModel
+				}
+				// O3 two-field model: persist (or clear) the explicit primary
+				// provider. A non-empty value pins the provider; an explicit empty
+				// string clears it (fall back to default-provider resolution).
+				if req.Provider != nil {
+					provider := strings.TrimSpace(*req.Provider)
+					modelMap, _ := agentMap["model"].(map[string]any)
+					if modelMap == nil {
+						modelMap = map[string]any{}
+						agentMap["model"] = modelMap
+					}
+					if provider == "" {
+						delete(modelMap, "provider")
+					} else {
+						modelMap["provider"] = provider
+					}
 				}
 				if req.TimeoutSeconds != nil {
 					agentMap["timeout_seconds"] = *req.TimeoutSeconds
@@ -2467,6 +2576,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 						delete(agentMap, "delegation_policy")
 					}
 				}
+				// O6 — heartbeat IS per-agent: persist heartbeat_enabled /
+				// heartbeat_interval onto THIS agent's entry, never the global
+				// heartbeat block (the old global write bled onto every agent).
+				// Worker rejection happened earlier (a worker PUT carrying these
+				// fields 400s before reaching persistence).
+				if req.HeartbeatEnabled != nil {
+					agentMap["heartbeat_enabled"] = *req.HeartbeatEnabled
+				}
+				if req.HeartbeatInterval != nil {
+					agentMap["heartbeat_interval"] = *req.HeartbeatInterval
+				}
 				// Optimistic concurrency timestamp: refresh on every successful save.
 				agentMap["updated_at"] = now.Format(time.RFC3339)
 				break
@@ -2489,20 +2609,9 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				delete(agentMap, "default")
 			}
 		}
-		// Heartbeat fields are top-level in config.json.
-		if req.HeartbeatEnabled != nil || req.HeartbeatInterval != nil {
-			hbMap, _ := m["heartbeat"].(map[string]any)
-			if hbMap == nil {
-				hbMap = map[string]any{}
-				m["heartbeat"] = hbMap
-			}
-			if req.HeartbeatEnabled != nil {
-				hbMap["enabled"] = *req.HeartbeatEnabled
-			}
-			if req.HeartbeatInterval != nil {
-				hbMap["interval"] = *req.HeartbeatInterval
-			}
-		}
+		// O6: heartbeat is now per-agent (written inside the agent-found block
+		// above), no longer a global block. The global cfg.Heartbeat mirror is
+		// left untouched for legacy round-trip.
 		return nil
 	}); err != nil {
 		if errors.Is(err, errConflict) {
@@ -2594,6 +2703,13 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		}
 	}
 
+	// O6 — re-reconcile heartbeat schedules when the heartbeat changed (enabled,
+	// interval, or HEARTBEAT.md content). Runs after any reload so the reconciler
+	// reads the fresh per-agent config + updated HEARTBEAT.md.
+	if req.HeartbeatEnabled != nil || req.HeartbeatInterval != nil || req.Heartbeat != nil {
+		a.reconcileHeartbeatSchedules()
+	}
+
 	// #73: a model-only change is intentionally config-only (no reload above, so
 	// the WebSocket and conversation context survive). But persisting to config +
 	// SwapConfig does NOT touch the already-constructed agent instance — its
@@ -2651,6 +2767,53 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	ag.Locked = foundAgent.Locked
 	ag.Model = &model
+	// O3 two-field model: echo the explicit primary provider. When the request
+	// touched provider, the request value is authoritative (a non-empty string
+	// sets it; an empty string clears it → absent on the wire). Otherwise reflect
+	// the persisted provider from the reloaded config.
+	switch {
+	case req.Provider != nil:
+		if p := strings.TrimSpace(*req.Provider); p != "" {
+			ag.Provider = &p
+		}
+	default:
+		if cur := a.agentLoop.GetConfig(); cur != nil {
+			for i := range cur.Agents.List {
+				if cur.Agents.List[i].ID == agentID {
+					setAgentModelProvider(&ag, cur.Agents.List[i].Model)
+					break
+				}
+			}
+		}
+	}
+	// O6 — per-agent heartbeat: echo the effective schedule fields. A worker
+	// never has a heartbeat. The request value (when present) is authoritative;
+	// otherwise reflect the reloaded per-agent config, falling back to the global
+	// default for an agent that has never set its own.
+	if foundAgent.IsWorker() {
+		ag.HeartbeatEnabled = false
+		ag.HeartbeatInterval = 0
+	} else {
+		var reloaded *config.AgentConfig
+		if cur := a.agentLoop.GetConfig(); cur != nil {
+			for i := range cur.Agents.List {
+				if cur.Agents.List[i].ID == agentID {
+					reloaded = &cur.Agents.List[i]
+					break
+				}
+			}
+		}
+		if req.HeartbeatEnabled != nil {
+			ag.HeartbeatEnabled = *req.HeartbeatEnabled
+		} else if reloaded != nil && reloaded.HeartbeatEnabled != nil {
+			ag.HeartbeatEnabled = *reloaded.HeartbeatEnabled
+		}
+		if req.HeartbeatInterval != nil {
+			ag.HeartbeatInterval = *req.HeartbeatInterval
+		} else if reloaded != nil && reloaded.HeartbeatInterval > 0 {
+			ag.HeartbeatInterval = reloaded.HeartbeatInterval
+		}
+	}
 	ag.Status = gen.AgentStatus(computeAgentStatus(agentID, activeIDs, soul, foundAgent.Locked))
 	// Hide compiled prompts for locked (core) agents.
 	if foundAgent.Locked {

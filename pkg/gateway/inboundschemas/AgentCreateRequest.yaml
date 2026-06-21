@@ -36,8 +36,19 @@ properties:
   model:
     type: string
     description: >
-      Model name for LLM calls. When omitted, the global agents.defaults.model_name is used.
-    example: "claude-sonnet-4-6"
+      Model slug for LLM calls. When omitted, the global agents.defaults.model_name
+      is used. With the O3 two-field model this is the bare slug; pair it with
+      `provider` for explicit routing.
+    example: "google/gemini-2.5-flash"
+  provider:
+    type: string
+    maxLength: 64
+    description: >
+      Explicit routing key for the primary model (O3 two-field model), mirroring
+      fallback_models[].provider. When set, resolution uses it directly and never
+      infers a provider. Optional; when omitted the model resolves via the default
+      provider.
+    example: "openrouter"
   color:
     type: string
     pattern: '^#[0-9A-Fa-f]{6}$'
