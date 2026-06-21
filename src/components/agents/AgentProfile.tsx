@@ -144,7 +144,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
   const providerGroups = connectedProviders
     .filter((p) => (p.models ?? []).length > 0)
-    .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
+    .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, providerId: p.id, models: p.models ?? [] }))
 
   // W6-C2 / I9: model → provider-id lookup. Extracted to
   // `src/lib/agents/modelToProvider.ts` so the same helper is
@@ -197,6 +197,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [model, setModel] = useState('')
+  // O3 two-field: explicit provider routing key for the primary model.
+  // Paired with model via onPairChange on the ModelSelector. Empty = resolve
+  // via default provider (back-compat with pre-O3 agents).
+  const [primaryProvider, setPrimaryProvider] = useState('')
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
   const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
   // W6-B4 / G3: `default` flag mirrors Agent.default on the wire. At most one
@@ -267,6 +271,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setName(agent.name ?? '')
     setDescription(agent.description ?? '')
     setModel(agent.model ?? '')
+    // O3 two-field: hydrate the explicit provider routing key.
+    setPrimaryProvider(agent.provider ?? '')
     setSelectedColor(agent.color)
     setSelectedIcon((agent.icon as IconName) ?? 'Robot')
     // W6-B4 / G3: hydrate the `default` flag from the agent response. The
@@ -336,6 +342,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       return {
         ...identity,
         model,
+        // O3 two-field: include provider only when non-empty.
+        provider: primaryProvider.trim() !== '' ? primaryProvider.trim() : undefined,
         soul,
         instructions,
         rate_limits: rateLimits,
@@ -347,6 +355,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     return {
       ...identity,
       model,
+      // O3 two-field: include provider only when non-empty.
+      provider: primaryProvider.trim() !== '' ? primaryProvider.trim() : undefined,
       // Editor state matches the wire shape 1:1; emit `undefined` for
       // empty (treated as "no fallbacks" by the backend).
       fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
@@ -390,7 +400,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       executor,
     }
   }, [
-    agent?.type, name, description, model, selectedColor, selectedIcon, isDefault, fallbackModels,
+    agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, instructions, voice, heartbeat,
     timeoutPayload, timeoutSeconds, maxToolIterations, steeringMode,
@@ -881,6 +891,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               models={availableModels}
               value={model}
               onChange={(v) => { markDirty(); setModel(v) }}
+              onPairChange={({ provider: p }) => { setPrimaryProvider(p) }}
               placeholder="Provider default"
               providerGroups={providerGroups}
               onUnknownModel={(m) => addToast({

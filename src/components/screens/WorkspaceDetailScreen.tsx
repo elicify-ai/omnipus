@@ -20,6 +20,7 @@ import {
   milestonesQueryKeys,
 } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import type { BoardAltitude } from '@/store/workspacesStore'
 import { cn } from '@/lib/utils'
 
 // Graph DAG view is Sprint 4 — placeholder only (do NOT build)
@@ -31,7 +32,7 @@ interface WorkspaceDetailScreenProps {
 
 export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProps) {
   const navigate = useNavigate()
-  const { activeMilestoneId, setActiveMilestoneId } = useWorkspacesStore()
+  const { activeMilestoneId, setActiveMilestoneId, boardAltitude, setBoardAltitude } = useWorkspacesStore()
   const [viewMode, setViewMode] = useState<ViewMode>('board')
   // Store task id only; derive the displayed task from live query data
   // so the detail panel reflects post-mutation state immediately.
@@ -243,7 +244,10 @@ export function WorkspaceDetailScreen({ workspaceId }: WorkspaceDetailScreenProp
         <BoardView
           tasks={tasks}
           milestones={milestones}
+          agents={agents}
           activeMilestoneId={activeMilestoneId}
+          altitude={boardAltitude}
+          onAltitudeChange={(next: BoardAltitude) => setBoardAltitude(next)}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
           onNewTask={() => setCreateTaskOpen(true)}
         />

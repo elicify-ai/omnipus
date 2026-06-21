@@ -39,12 +39,12 @@ vi.mock('@/components/ui/popover', () => {
 const FLAT_MODELS = ['claude-3-haiku', 'claude-3-sonnet', 'gpt-4o', 'gemini-2.5-flash']
 
 const TWO_PROVIDER_GROUPS: ModelGroup[] = [
-  { providerName: 'Anthropic', models: ['claude-3-haiku', 'claude-3-sonnet'] },
-  { providerName: 'OpenAI', models: ['gpt-4o', 'gpt-4o-mini'] },
+  { providerName: 'Anthropic', providerId: 'anthropic', models: ['claude-3-haiku', 'claude-3-sonnet'] },
+  { providerName: 'OpenAI', providerId: 'openai', models: ['gpt-4o', 'gpt-4o-mini'] },
 ]
 
 const ONE_PROVIDER_GROUPS: ModelGroup[] = [
-  { providerName: 'Anthropic', models: ['claude-3-haiku', 'claude-3-sonnet'] },
+  { providerName: 'Anthropic', providerId: 'anthropic', models: ['claude-3-haiku', 'claude-3-sonnet'] },
 ]
 
 function renderSelector(
@@ -275,5 +275,108 @@ describe('ModelSelector — unresolved indicator (W6-C4 / G12)', () => {
     expect(input.getAttribute('aria-invalid')).toBe('true')
     // Also picks up the test id prefix for parity with the combobox path.
     expect(screen.getByTestId('primary-model-input-unresolved')).toBeInTheDocument()
+  })
+})
+
+// =====================================================================
+// O3 two-field model selector — onPairChange callback
+// =====================================================================
+
+describe('ModelSelector — O3 onPairChange ({model, provider} pair)', () => {
+  it('calls onPairChange with model + provider when picking from a grouped dropdown', () => {
+    const onChange = vi.fn()
+    const onPairChange = vi.fn()
+    const allModels = TWO_PROVIDER_GROUPS.flatMap((g) => g.models)
+    render(
+      <ModelSelector
+        models={allModels}
+        value=""
+        onChange={onChange}
+        onPairChange={onPairChange}
+        providerGroups={TWO_PROVIDER_GROUPS}
+      />,
+    )
+    // Pick claude-3-haiku (in the Anthropic group, providerId='anthropic').
+    fireEvent.click(screen.getByText('claude-3-haiku'))
+    expect(onChange).toHaveBeenCalledWith('claude-3-haiku')
+    expect(onPairChange).toHaveBeenCalledWith({ model: 'claude-3-haiku', provider: 'anthropic' })
+  })
+
+  it('resolves the provider from the correct group for OpenAI models', () => {
+    const onChange = vi.fn()
+    const onPairChange = vi.fn()
+    const allModels = TWO_PROVIDER_GROUPS.flatMap((g) => g.models)
+    render(
+      <ModelSelector
+        models={allModels}
+        value=""
+        onChange={onChange}
+        onPairChange={onPairChange}
+        providerGroups={TWO_PROVIDER_GROUPS}
+      />,
+    )
+    fireEvent.click(screen.getByText('gpt-4o'))
+    expect(onChange).toHaveBeenCalledWith('gpt-4o')
+    expect(onPairChange).toHaveBeenCalledWith({ model: 'gpt-4o', provider: 'openai' })
+  })
+
+  it('does NOT call onPairChange for free-text "Use <slug>" picks', () => {
+    const onChange = vi.fn()
+    const onPairChange = vi.fn()
+    const allModels = TWO_PROVIDER_GROUPS.flatMap((g) => g.models)
+    render(
+      <ModelSelector
+        models={allModels}
+        value=""
+        onChange={onChange}
+        onPairChange={onPairChange}
+        providerGroups={TWO_PROVIDER_GROUPS}
+      />,
+    )
+    const input = screen.getByPlaceholderText(/search models/i)
+    fireEvent.change(input, { target: { value: 'my-custom-model' } })
+    // Click the "Use my-custom-model" option.
+    const customItem = screen.getByText(/my-custom-model/)
+    fireEvent.click(customItem)
+    // onChange fires for the free-text slug.
+    expect(onChange).toHaveBeenCalledWith('my-custom-model')
+    // onPairChange must NOT be called for custom (unresolvable) picks.
+    expect(onPairChange).not.toHaveBeenCalled()
+  })
+
+  it('passes empty provider string when group has no providerId', () => {
+    const onChange = vi.fn()
+    const onPairChange = vi.fn()
+    const groupsWithoutId: ModelGroup[] = [
+      { providerName: 'Legacy Provider', models: ['legacy-model-1'] },
+    ]
+    render(
+      <ModelSelector
+        models={['legacy-model-1']}
+        value=""
+        onChange={onChange}
+        onPairChange={onPairChange}
+        providerGroups={groupsWithoutId}
+      />,
+    )
+    fireEvent.click(screen.getByText('legacy-model-1'))
+    expect(onPairChange).toHaveBeenCalledWith({ model: 'legacy-model-1', provider: '' })
+  })
+
+  it('works without onPairChange (backward compatibility — does not throw)', () => {
+    const onChange = vi.fn()
+    const allModels = TWO_PROVIDER_GROUPS.flatMap((g) => g.models)
+    expect(() => {
+      render(
+        <ModelSelector
+          models={allModels}
+          value=""
+          onChange={onChange}
+          providerGroups={TWO_PROVIDER_GROUPS}
+        />,
+      )
+      fireEvent.click(screen.getByText('claude-3-haiku'))
+    }).not.toThrow()
+    expect(onChange).toHaveBeenCalledWith('claude-3-haiku')
   })
 })

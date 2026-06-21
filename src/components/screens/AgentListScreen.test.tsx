@@ -34,7 +34,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgents: vi.fn(), updateAgent: vi.fn(), testAgentRunner: vi.fn() }
+  return { ...actual, fetchAgents: vi.fn(), fetchWorkspaces: vi.fn(), updateAgent: vi.fn(), testAgentRunner: vi.fn() }
 })
 
 // CreateAgentModal pulls in heavy deps; stub it to keep the screen test focused.
@@ -49,7 +49,8 @@ vi.mock('@/store/auth', () => ({
     selector({ token: 'test-token', role: 'admin', username: 'admin' }),
 }))
 
-import { fetchAgents } from '@/lib/api'
+import { fetchAgents, fetchWorkspaces } from '@/lib/api'
+import type { Workspace } from '@/lib/api'
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   return {
@@ -72,6 +73,21 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
   }
 }
 
+function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
+  return {
+    id: 'ws-1',
+    name: 'Alpha Workspace',
+    status: 'active',
+    pinned: false,
+    pin_order: 0,
+    task_count: 0,
+    created_at: '2025-01-01T00:00:00Z',
+    updated_at: '2025-01-01T00:00:00Z',
+    core_team: [],
+    ...overrides,
+  }
+}
+
 function renderScreen() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -84,6 +100,7 @@ function renderScreen() {
 beforeEach(() => {
   mockNavigate.mockClear()
   vi.mocked(fetchAgents).mockReset()
+  vi.mocked(fetchWorkspaces).mockResolvedValue([])
   // Default: optimistic detection — every CLI available. Tests that need a
   // missing-CLI scenario override this in their body.
   fetchSpy.mockReset()
@@ -451,5 +468,150 @@ describe('AgentListScreen — external CLI sub-picker disclosure', () => {
     })
     expect(screen.getByTestId('add-external-codex')).not.toBeDisabled()
     expect(screen.getByTestId('cli-detect-warning')).toBeInTheDocument()
+  })
+})
+
+// Two-tab view (Agents library + Workspace Teams).
+describe('AgentListScreen — two-tab view', () => {
+  it('renders both tab triggers: "Agents" and "Workspace Teams"', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([])
+    renderScreen()
+    // Tabs render immediately (no async wait needed; they're part of the static shell).
+    await screen.findByTestId('agents-tab-library')
+    expect(screen.getByTestId('agents-tab-library')).toBeInTheDocument()
+    expect(screen.getByTestId('agents-tab-teams')).toBeInTheDocument()
+  })
+
+  it('shows the agents library by default (library tab is active on mount)', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([])
+    renderScreen()
+    // The base-agents-section is in the library tab content which is visible by default.
+    await screen.findByTestId('base-agents-section')
+    expect(screen.getByTestId('base-agents-section')).toBeInTheDocument()
+  })
+
+  it('switching to the Workspace Teams tab shows the teams panel and hides the library roster', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-alpha', name: 'Alpha' }),
+    ])
+    renderScreen()
+    // Wait for agents to load (confirms the library tab content is ready).
+    await screen.findByTestId('base-agents-section')
+    // Radix Tabs triggers on mousedown + click — fire both events.
+    const teamsTab = screen.getByTestId('agents-tab-teams')
+    fireEvent.mouseDown(teamsTab)
+    fireEvent.click(teamsTab)
+    // The workspace team row becomes visible once the workspaces query resolves.
+    await screen.findByTestId('workspace-team-row-ws-alpha')
+    expect(screen.getByTestId('workspace-team-row-ws-alpha')).toBeInTheDocument()
+    // The roster sections are no longer visible (library tab is inactive).
+    expect(screen.queryByTestId('base-agents-section')).not.toBeInTheDocument()
+  })
+
+  it('workspace team rows link to /workspaces/$workspaceId/team', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-beta', name: 'Beta' }),
+    ])
+    renderScreen()
+    await screen.findByTestId('base-agents-section')
+    const teamsTab = screen.getByTestId('agents-tab-teams')
+    fireEvent.mouseDown(teamsTab)
+    fireEvent.click(teamsTab)
+    const row = await screen.findByTestId('workspace-team-row-ws-beta')
+    // The row is an anchor (Link) element — navigates to the workspace team tab.
+    // The router mock renders Link as <a {...rest}> so `to` passes as an attribute.
+    expect(row.tagName.toLowerCase()).toBe('a')
+    expect(row).toHaveAttribute('to', '/workspaces/$workspaceId/team')
+  })
+
+  it('shows empty state when there are no workspaces in the teams tab', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([])
+    renderScreen()
+    await screen.findByTestId('base-agents-section')
+    const teamsTab = screen.getByTestId('agents-tab-teams')
+    fireEvent.mouseDown(teamsTab)
+    fireEvent.click(teamsTab)
+    // The teams tab content renders; empty state appears once workspaces query resolves.
+    await screen.findByText(/no workspaces yet/i)
+    expect(screen.getByText(/no workspaces yet/i)).toBeInTheDocument()
+  })
+})
+
+// Library workspace filter (filter by workspace team membership).
+describe('AgentListScreen — library filter by workspace', () => {
+  it('renders the workspace filter trigger when workspaces exist', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-1', name: 'Alpha' }),
+    ])
+    renderScreen()
+    await screen.findByTestId('workspace-filter-trigger')
+    expect(screen.getByTestId('workspace-filter-trigger')).toBeInTheDocument()
+  })
+
+  it('filter menu lists all workspaces and an "All agents" option', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-1', name: 'Alpha' }),
+      makeWorkspace({ id: 'ws-2', name: 'Beta' }),
+    ])
+    renderScreen()
+    const trigger = await screen.findByTestId('workspace-filter-trigger')
+    fireEvent.click(trigger)
+    // The filter menu opens — Radix Popover portals to body.
+    await waitFor(() => {
+      expect(screen.getByTestId('workspace-filter-all')).toBeInTheDocument()
+      expect(screen.getByTestId('workspace-filter-ws-1')).toBeInTheDocument()
+      expect(screen.getByTestId('workspace-filter-ws-2')).toBeInTheDocument()
+    })
+  })
+
+  it('filtering by workspace shows only agents whose id is in that workspace core_team', async () => {
+    const mia = makeAgent({ id: 'mia', name: 'Mia', type: 'core', locked: true })
+    const jim = makeAgent({ id: 'jim', name: 'Jim', type: 'core', locked: true })
+    vi.mocked(fetchAgents).mockResolvedValue([mia, jim])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-1', name: 'Alpha', core_team: ['mia'] }),
+    ])
+    renderScreen()
+    const trigger = await screen.findByTestId('workspace-filter-trigger')
+    fireEvent.click(trigger)
+    const wsOption = await screen.findByTestId('workspace-filter-ws-1')
+    fireEvent.click(wsOption)
+    // After filtering: mia's card is visible; jim's card is not.
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-card-mia')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('agent-card-jim')).not.toBeInTheDocument()
+  })
+
+  it('clear filter button resets to all agents', async () => {
+    const mia = makeAgent({ id: 'mia', name: 'Mia', type: 'core', locked: true })
+    const jim = makeAgent({ id: 'jim', name: 'Jim', type: 'core', locked: true })
+    vi.mocked(fetchAgents).mockResolvedValue([mia, jim])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-1', name: 'Alpha', core_team: ['mia'] }),
+    ])
+    renderScreen()
+    // Apply the filter.
+    const trigger = await screen.findByTestId('workspace-filter-trigger')
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByTestId('workspace-filter-ws-1'))
+    // Wait for filter to apply.
+    await waitFor(() => {
+      expect(screen.queryByTestId('agent-card-jim')).not.toBeInTheDocument()
+    })
+    // Click the clear button.
+    const clearBtn = screen.getByTestId('workspace-filter-clear')
+    fireEvent.click(clearBtn)
+    // Both agents should now be visible (after Accordion expands the built-in roster).
+    await waitFor(() => {
+      expect(screen.queryByTestId('workspace-filter-clear')).not.toBeInTheDocument()
+    })
   })
 })

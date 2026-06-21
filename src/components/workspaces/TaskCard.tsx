@@ -1,7 +1,9 @@
 import { cn } from '@/lib/utils'
-import type { Task } from '@/lib/api'
-import type { Milestone } from '@/lib/api'
+import type { Task, Agent, Milestone } from '@/lib/api'
 import { CheckSquare } from '@phosphor-icons/react'
+import { RollupBadge } from './RollupBadge'
+import { TaskChildren } from './TaskChildren'
+import type { BoardAltitude } from '@/store/workspacesStore'
 
 // Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted
 export const PRIORITY_BADGE: Record<number, { label: string; className: string }> = {
@@ -15,15 +17,36 @@ export const PRIORITY_BADGE: Record<number, { label: string; className: string }
 interface TaskCardProps {
   task: Task
   milestones?: Milestone[]
+  /**
+   * Agents cache — required for delegation roll-up avatar rendering.
+   * When absent, roll-up avatars fall back to Robot icon + status colour.
+   */
+  agents?: Agent[]
+  /**
+   * Board altitude. 'top-level' (default) = children collapsed;
+   * 'show-all' = children expanded inline under this card.
+   */
+  altitude?: BoardAltitude
   onClick: () => void
+  onChildClick?: (child: Task) => void
 }
 
-export function TaskCard({ task, milestones = [], onClick }: TaskCardProps) {
+export function TaskCard({
+  task,
+  milestones = [],
+  agents = [],
+  altitude = 'top-level',
+  onClick,
+  onChildClick,
+}: TaskCardProps) {
   const priority = task.priority ?? 3
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
   const milestone = task.milestone_id ? milestones.find((m) => m.id === task.milestone_id) : null
   const todos = task.todos ?? []
   const doneTodos = todos.filter((t) => t.done).length
+  const rollup = task.rollup ?? []
+  const hasRollup = rollup.length > 0
+  const showChildren = altitude === 'show-all'
 
   return (
     <div
@@ -36,7 +59,12 @@ export function TaskCard({ task, milestones = [], onClick }: TaskCardProps) {
           onClick()
         }
       }}
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 cursor-pointer transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]"
+      className={cn(
+        'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 cursor-pointer',
+        'transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
+        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]',
+        hasRollup && 'border-[#d4af37]/30',
+      )}
     >
       {/* Top row: priority badge + title */}
       <div className="flex items-start gap-2">
@@ -61,6 +89,11 @@ export function TaskCard({ task, milestones = [], onClick }: TaskCardProps) {
         </div>
       )}
 
+      {/* Delegation roll-up badge (only on parent cards with active sub-agent runs) */}
+      {hasRollup && (
+        <RollupBadge rollup={rollup} agents={agents} />
+      )}
+
       {/* Bottom row: agent badge + milestone tag */}
       {(task.agent_name || task.agent_id || milestone) && (
         <div className="mt-2 flex items-center gap-1.5 flex-wrap">
@@ -75,6 +108,14 @@ export function TaskCard({ task, milestones = [], onClick }: TaskCardProps) {
             </span>
           )}
         </div>
+      )}
+
+      {/* Nested children — only when altitude = 'show-all' */}
+      {showChildren && (
+        <TaskChildren
+          parentTaskId={task.id}
+          onChildClick={onChildClick ?? onClick}
+        />
       )}
     </div>
   )
