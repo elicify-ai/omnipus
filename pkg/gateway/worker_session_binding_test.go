@@ -7,15 +7,21 @@
 // Tests for the worker-is-not-a-chat-target / not-a-direct-runner guards at the
 // gateway session-binding and execution-binding chokepoints:
 //   - createSessionHTTP rejects a worker agent_id (RESIDUAL PATH 5)
-//   - validateBoardTaskAgentID rejects a worker direct assignee (RESIDUAL PATH 7)
+//   - POST /api/v1/tasks rejects a direct worker agent_id assignment (RESIDUAL PATH 7 - Sprint 2)
 //   - firstEnabledAgentID skips a worker (RESIDUAL PATH 6)
-//   - delegation-created worker task still succeeds (control proving Jim→worker works)
+//   - delegation-created worker task still succeeds (control: Jim→worker works)
+//
+// Sprint 2 changes: validateBoardTaskAgentID and handleBoardTaskPost are DELETED
+// (part of the removed /board/tasks surface). The worker-guard for direct task
+// assignment is now exercised via POST /api/v1/tasks with agent_id=worker.
+// TestDelegationWorkerTaskStillSucceeds is rewritten to use task.Task directly.
 
 package gateway
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,7 +35,7 @@ import (
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // newWorkerTestRestAPI builds a restAPI whose config holds a base default agent
@@ -64,7 +70,8 @@ func newWorkerTestRestAPI(t *testing.T) (*restAPI, string) {
 	api := &restAPI{
 		agentLoop: al,
 		homePath:  tmpDir,
-		taskStore: taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
+		taskStore: task.New(filepath.Join(tmpDir, "tasks")),
+		taskLock:  task.TaskFileLock,
 	}
 	t.Cleanup(func() { api.agentLoop.WaitForActiveRequests() })
 	return api, tmpDir
@@ -93,68 +100,92 @@ func TestCreateSessionHTTP_RejectsWorker(t *testing.T) {
 		"a base agent must be able to back a session (control)")
 }
 
-// TestValidateBoardTaskAgentID_RejectsWorker verifies RESIDUAL PATH 7: a board task
-// directly assigned to a worker is rejected — direct (human/REST-initiated)
-// assignment of a worker is forbidden; workers run only via delegation. A base
-// agent and an empty agent_id are accepted.
-func TestValidateBoardTaskAgentID_RejectsWorker(t *testing.T) {
+// TestTaskPost_RejectsWorkerAssignee verifies RESIDUAL PATH 7 via the unified
+// task surface: POST /api/v1/tasks with agent_id="hans" (a worker) returns 400.
+// Worker direct assignment is forbidden; workers run only via delegation.
+// Sprint 2: replaces the deleted TestBoardTaskPost_RejectsWorkerAssignee
+// (which called the removed handleBoardTaskPost/validateBoardTaskAgentID).
+//
+// Previously BLOCKED (RESIDUAL PATH 7): validateTaskAgentID is now implemented
+// in pkg/gateway/rest_tasks.go and wired into handleTaskCreate. When the registry
+// is non-empty it rejects any agent_id whose IsWorker flag is true with 400,
+// citing "is a worker and cannot be directly assigned a task".
+//
+// Traces to: RESIDUAL PATH 7 (worker direct-assignment guard)
+func TestTaskPost_RejectsWorkerAssignee(t *testing.T) {
 	api, _ := newWorkerTestRestAPI(t)
+	wsID := ensureTestWorkspace(t, api)
 
-	// Worker → error.
-	err := api.validateBoardTaskAgentID("hans")
-	require.Error(t, err, "a worker direct assignee must be rejected")
-	assert.Contains(t, strings.ToLower(err.Error()), "worker",
-		"the error must explain a worker cannot be directly assigned")
+	// Attempt to directly assign a task to the worker agent "hans" → 400.
+	workerBody := fmt.Sprintf(
+		`{"title":"WorkerAssignTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans"}`,
+		wsID,
+	)
+	wWorker := httptest.NewRecorder()
+	rWorker := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(workerBody))
+	rWorker.Header.Set("Content-Type", "application/json")
+	rWorker.URL.Path = "/api/v1/tasks"
+	api.HandleTasks(wWorker, rWorker)
 
-	// Base agent → nil (control).
-	require.NoError(t, api.validateBoardTaskAgentID("mia"),
-		"a base agent must be a valid direct assignee")
+	require.Equal(t, http.StatusBadRequest, wWorker.Code,
+		"POST with a worker agent_id must return 400; body=%s", wWorker.Body.String())
+	assert.Contains(t, strings.ToLower(wWorker.Body.String()), "worker",
+		"400 body must explain that a worker cannot be directly assigned a task")
 
-	// Empty agent_id → nil (start resolves default).
-	require.NoError(t, api.validateBoardTaskAgentID(""),
-		"empty agent_id must remain valid")
+	// Differentiation: a base agent (mia) must still be accepted → 201.
+	// Two different agent types → two different response codes proves the guard is real.
+	baseBody := fmt.Sprintf(
+		`{"title":"BaseAgentAssignTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"mia"}`,
+		wsID,
+	)
+	wBase := httptest.NewRecorder()
+	rBase := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(baseBody))
+	rBase.Header.Set("Content-Type", "application/json")
+	rBase.URL.Path = "/api/v1/tasks"
+	api.HandleTasks(wBase, rBase)
+
+	require.Equal(t, http.StatusCreated, wBase.Code,
+		"POST with a non-worker agent_id must return 201 (differentiation); body=%s", wBase.Body.String())
+	require.NotEqual(t, wWorker.Code, wBase.Code,
+		"worker POST and base-agent POST must return different status codes (guard is not hardcoded)")
 }
 
-// TestBoardTaskPost_RejectsWorkerAssignee verifies the end-to-end REST path:
-// POST /api/v1/board/tasks with a worker agent_id returns 400.
-func TestBoardTaskPost_RejectsWorkerAssignee(t *testing.T) {
-	api, _ := newWorkerTestRestAPI(t)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
-		strings.NewReader(`{"name":"do a thing","agent_id":"hans"}`))
-	api.handleBoardTaskPost(w, r)
-	require.Equal(t, http.StatusBadRequest, w.Code,
-		"a board task directly assigned to a worker must be rejected with 400")
-	assert.Contains(t, strings.ToLower(w.Body.String()), "worker")
-}
-
-// TestDelegationWorkerTaskStillSucceeds is the CONTROL that proves the
-// validateBoardTaskAgentID worker guard does NOT break Jim→worker delegation.
-// Delegation creates worker-targeted tasks through the task_create tool, which
-// writes directly via taskstore.TaskStore.Create — a SEPARATE path that never
-// calls the REST validator. Creating a worker-assigned task this way must succeed.
+// TestDelegationWorkerTaskStillSucceeds is the CONTROL that proves the worker
+// guard on the REST API does NOT block Jim→worker delegation. Delegation
+// creates worker-targeted tasks through task_create → taskStore.Create
+// directly — bypassing the REST validation layer. Creating a worker-assigned
+// task this way must succeed.
+// Sprint 2: rewritten from taskstore.TaskEntity to task.Task.
 func TestDelegationWorkerTaskStillSucceeds(t *testing.T) {
 	api, _ := newWorkerTestRestAPI(t)
 
+	// Use a synthetic workspace ID: the store.Create validates workspace_id is
+	// non-empty (via normalize) but does NOT FK-check it (that's REST-layer only).
+	const delegationWorkspaceID = "01JXDELEGATIONWS000000001"
+
 	// Simulate the delegation path: Jim's task_create tool writes a worker-targeted
 	// task straight to the task store. This must NOT be blocked.
-	entity := &taskstore.TaskEntity{
-		ID:          "01JXDELEGATEDWORKERTASK0001",
+	entity := &task.Task{
+		ID:          "test-delegated-worker-task-001",
 		Title:       "delegated work",
 		Prompt:      "do the analysis",
 		AgentID:     "hans", // worker assignee — legitimate for delegation
 		CreatedBy:   "jim",
-		Status:      "queued", // taskstore execution status (mirrors task_create tool)
-		TriggerType: "delegation",
+		Status:      task.StatusInbox, // unified status: inbox on creation
+		Action:      task.ActionLLM,
+		WorkspaceID: delegationWorkspaceID,
 	}
 	require.NoError(t, api.taskStore.Create(entity),
-		"delegation (task_create → taskstore.Create) must still create a worker-targeted task")
+		"delegation (task_create → taskStore.Create) must still create a worker-targeted task")
 
 	got, err := api.taskStore.Get(entity.ID)
-	require.NoError(t, err)
+	require.NoError(t, err, "taskStore.Get must find the delegated task")
 	assert.Equal(t, "hans", got.AgentID,
 		"the delegated worker task must persist with the worker as assignee")
+	assert.Equal(t, task.StatusInbox, got.Status,
+		"the delegated task status must be inbox (unified vocabulary)")
+	assert.Equal(t, "delegated work", got.Title,
+		"the delegated task title must match the original")
 }
 
 // TestFirstEnabledAgentID_SkipsWorker verifies RESIDUAL PATH 6: the last-resort

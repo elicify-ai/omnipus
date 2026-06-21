@@ -67,7 +67,6 @@ import {
   MeInfo as MeInfoSchema,
   // Newly wired schemas:
   Provider as ProviderSchema,
-  Task as TaskSchema,
   GatewayStatus as GatewayStatusSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ChannelEntry as ChannelEntrySchema,
@@ -104,11 +103,10 @@ import {
   ScheduleRunResult as ScheduleRunResultSchema,
   // #264 Notifications (contract-first #8):
   NotificationList as NotificationListSchema,
-  // Level-1 workspaces + board tasks + token stats (contract-first #8):
+  // Level-1 workspaces + unified tasks + token stats (contract-first #8):
   Workspace as WorkspaceSchema,
   WorkspaceSessionLink as WorkspaceSessionLinkSchema,
-  BoardTask as BoardTaskSchema,
-  BoardTaskListResponse as BoardTaskListResponseSchema,
+  Task as TaskSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
   // Milestones (contract-first #8):
   Milestone as MilestoneSchema,
@@ -293,14 +291,17 @@ import type {
   AgentCreateRequest,
   FallbackModel,
   ChannelRouting,
-  // Level-1 workspaces + board tasks + token stats (contract-first #8):
+  // Level-1 workspaces + unified tasks + token stats (contract-first #8):
   Workspace,
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
-  BoardTask,
-  BoardTaskListResponse,
   WorkspaceSessionLink,
   TokenUsageSummary,
+  // Unified task types (Sprint 2) — imported once here (Task was already imported above):
+  TaskCreateRequest,
+  TaskUpdateRequest,
+  Todo,
+  TaskTrigger,
   // #264 Schedules (contract-first #8):
   Schedule,
   ScheduleCreate,
@@ -309,9 +310,6 @@ import type {
   ScheduleRunResult,
   // #264 Notifications (contract-first #8):
   NotificationList,
-  // Level-1 board task request types:
-  BoardTaskCreateRequest,
-  BoardTaskUpdateRequest,
   // Milestones:
   Milestone,
   MilestoneCreateRequest,
@@ -413,16 +411,17 @@ export type {
   AgentCreateRequest,
   FallbackModel,
   ChannelRouting,
-  // Level-1 workspaces + board tasks + token stats:
+  // Level-1 workspaces + unified tasks + token stats:
   Workspace,
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
-  BoardTask,
-  BoardTaskListResponse,
   WorkspaceSessionLink,
   TokenUsageSummary,
-  BoardTaskCreateRequest,
-  BoardTaskUpdateRequest,
+  // Unified task types (Sprint 2) — Task already exported above, add new ones:
+  TaskCreateRequest,
+  TaskUpdateRequest,
+  Todo,
+  TaskTrigger,
   Milestone,
   MilestoneCreateRequest,
   MilestoneUpdateRequest,
@@ -1421,40 +1420,83 @@ export function rotateGatewayToken(): Promise<{ token: string }> {
   return request('/config/gateway/rotate-token', { method: 'POST' }, RotateTokenResponseSchema as ZodType<{ token: string }>)
 }
 
-// ── Tasks ─────────────────────────────────────────────────────────────────────
+// ── Tasks (unified Sprint 2 model) ───────────────────────────────────────────
+//
+// One entity replaces both the legacy workflow Task and GTD BoardTask outright.
+// All types are from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Task.yaml / TaskCreateRequest.yaml /
+// TaskUpdateRequest.yaml.
+//
+// Endpoints:
+//   GET    /tasks              → Task[]   (list, workspace-scoped)
+//   POST   /tasks              → Task     (create, lands in inbox)
+//   GET    /tasks/{id}         → Task
+//   PATCH  /tasks/{id}         → Task     (partial update — method is PATCH)
+//   DELETE /tasks/{id}         → void
+//   GET    /tasks/{id}/subtasks → Task[]
+//   PUT    /tasks/{id}/todos    → Task     (replace checklist atomically)
+//   PUT    /tasks/{id}/dependencies → Task (replace blocked_by atomically)
+//
+// "Start" semantics: there is no /start endpoint. Set status=in_progress via
+// PATCH to start a task (drag or Run button).
 
-// Task — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/Task.yaml.
+export const tasksQueryKeys = {
+  list: (params?: { workspace_id?: string; status?: string; agent_id?: string; milestone_id?: string; surface?: string }) => {
+    const cleaned = params
+      ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
+      : {}
+    return ['tasks', cleaned] as const
+  },
+  detail: (id: string) => ['tasks', id] as const,
+  subtasks: (id: string) => ['tasks', id, 'subtasks'] as const,
+}
 
-export function fetchTasks(status?: Task['status']): Promise<Task[]> {
-  const qs = status ? '?' + new URLSearchParams({ status }).toString() : ''
+// Keep boardTasksQueryKeys as an alias so tests and existing queries still compile
+// during the transition — it redirects to the same unified key space.
+export const boardTasksQueryKeys = tasksQueryKeys
+
+export function fetchTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; milestone_id?: string; surface?: string }): Promise<Task[]> {
+  const search = new URLSearchParams()
+  if (params?.workspace_id) search.set('workspace_id', params.workspace_id)
+  if (params?.status) search.set('status', params.status)
+  if (params?.agent_id) search.set('agent_id', params.agent_id)
+  if (params?.milestone_id) search.set('milestone_id', params.milestone_id)
+  if (params?.surface) search.set('surface', params.surface)
+  const qs = search.toString() ? '?' + search.toString() : ''
   return request<Task[]>(`/tasks${qs}`, undefined, z.array(TaskSchema) as ZodType<Task[]>)
+}
+
+// Keep fetchBoardTasks as an alias so existing call-sites compile during transition.
+export function fetchBoardTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; milestone_id?: string }): Promise<Task[]> {
+  return fetchTasks(params)
+}
+
+export function fetchTask(id: string): Promise<Task> {
+  return request<Task>(`/tasks/${encodeURIComponent(id)}`, undefined, TaskSchema as ZodType<Task>)
 }
 
 export function fetchSubtasks(taskId: string): Promise<Task[]> {
   return request<Task[]>(`/tasks/${encodeURIComponent(taskId)}/subtasks`, undefined, z.array(TaskSchema) as ZodType<Task[]>)
 }
 
-export function createTask(data: {
-  title: string
-  prompt: string
-  agent_id?: string
-  priority?: number
-  parent_task_id?: string
-}): Promise<Task> {
-  return request<Task>('/tasks', { method: 'POST', body: JSON.stringify(data) }, TaskSchema as ZodType<Task>)
+export function createTask(body: TaskCreateRequest): Promise<Task> {
+  return request<Task>('/tasks', { method: 'POST', body: JSON.stringify(body) }, TaskSchema as ZodType<Task>)
 }
 
-export function updateTask(id: string, data: Partial<Task>): Promise<Task> {
-  return request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, TaskSchema as ZodType<Task>)
+export function updateTask(id: string, data: TaskUpdateRequest): Promise<Task> {
+  return request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }, TaskSchema as ZodType<Task>)
 }
 
-export function startTask(id: string): Promise<void> {
-  return request(`/tasks/${encodeURIComponent(id)}/start`, { method: 'POST' })
+export function setTaskTodos(taskId: string, todos: Todo[]): Promise<Task> {
+  return request<Task>(`/tasks/${encodeURIComponent(taskId)}/todos`, { method: 'PUT', body: JSON.stringify(todos) }, TaskSchema as ZodType<Task>)
+}
+
+export function setTaskDependencies(taskId: string, blockedBy: string[]): Promise<Task> {
+  return request<Task>(`/tasks/${encodeURIComponent(taskId)}/dependencies`, { method: 'PUT', body: JSON.stringify(blockedBy) }, TaskSchema as ZodType<Task>)
 }
 
 export function deleteTask(id: string): Promise<void> {
-  return request(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  return request<void>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 // ── #264 Schedules ──────────────────────────────────────────────────────────────
@@ -2478,63 +2520,6 @@ export function fetchWorkspaceSessions(id: string): Promise<WorkspaceSessionLink
     `/workspaces/${encodeURIComponent(id)}/sessions`,
     undefined,
     z.array(WorkspaceSessionLinkSchema) as ZodType<WorkspaceSessionLink[]>,
-  )
-}
-
-// ── GTD Board Tasks ───────────────────────────────────────────────────────────
-//
-// Board tasks are the GTD Kanban items. All types are re-exported from generated
-// openapi-types (contract-first #8). See contracts/components/schemas/BoardTask*.yaml.
-
-export const boardTasksQueryKeys = {
-  list: (params?: { workspace_id?: string; status?: string; milestone_id?: string; agent_id?: string }) => {
-    const cleaned = params
-      ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
-      : {}
-    return ['board-tasks', cleaned] as const
-  },
-  detail: (id: string) => ['board-tasks', id] as const,
-}
-
-export function fetchBoardTasks(params?: { workspace_id?: string; status?: string; milestone_id?: string; agent_id?: string }): Promise<BoardTask[]> {
-  const search = new URLSearchParams()
-  if (params?.workspace_id) search.set('workspace_id', params.workspace_id)
-  if (params?.status) search.set('status', params.status)
-  if (params?.milestone_id) search.set('milestone_id', params.milestone_id)
-  if (params?.agent_id) search.set('agent_id', params.agent_id)
-  const qs = search.toString() ? '?' + search.toString() : ''
-  return request<BoardTaskListResponse>(
-    `/board/tasks${qs}`,
-    undefined,
-    BoardTaskListResponseSchema as ZodType<BoardTaskListResponse>,
-  ).then((res) => res.items)
-}
-
-export function createBoardTask(body: BoardTaskCreateRequest): Promise<BoardTask> {
-  return request<BoardTask>(
-    '/board/tasks',
-    { method: 'POST', body: JSON.stringify(body) },
-    BoardTaskSchema as ZodType<BoardTask>,
-  )
-}
-
-export function updateBoardTask(id: string, body: BoardTaskUpdateRequest): Promise<BoardTask> {
-  return request<BoardTask>(
-    `/board/tasks/${encodeURIComponent(id)}`,
-    { method: 'PUT', body: JSON.stringify(body) },
-    BoardTaskSchema as ZodType<BoardTask>,
-  )
-}
-
-export function deleteBoardTask(id: string): Promise<void> {
-  return request<void>(`/board/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
-}
-
-export function startBoardTask(id: string): Promise<BoardTask> {
-  return request<BoardTask>(
-    `/board/tasks/${encodeURIComponent(id)}/start`,
-    { method: 'POST' },
-    BoardTaskSchema as ZodType<BoardTask>,
   )
 }
 

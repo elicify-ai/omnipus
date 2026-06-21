@@ -359,49 +359,46 @@ describe('fetchWorkspaceSessions', () => {
   })
 })
 
-// ── fetchBoardTasks ───────────────────────────────────────────────────────────
+// ── fetchTasks (unified Sprint 2 model) ──────────────────────────────────────
+//
+// Replaces the old fetchBoardTasks tests. The unified endpoint is GET /tasks
+// (not /board/tasks). Returns Task[] directly (no wrapper object).
 
-describe('fetchBoardTasks', () => {
-  it('calls GET /api/v1/board/tasks?status=inbox and returns the items array', async () => {
-    // BDD: Given a server that returns a board task list response,
-    // When fetchBoardTasks({ status: "inbox" }) is called,
-    // Then GET /api/v1/board/tasks?status=inbox is requested,
-    // And the returned array contains the items from the response.
-    // Traces to: wave4-level1-project-task-mgmt spec — fetchBoardTasks shape
-    const payload = {
-      items: [
-        { id: 't1', name: 'Fix bug', status: 'inbox', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
-        { id: 't2', name: 'Write tests', status: 'inbox', created_at: '2026-06-01T00:01:00Z', updated_at: '2026-06-01T00:01:00Z' },
-      ],
-      total: 2,
-    }
+describe('fetchTasks', () => {
+  it('calls GET /api/v1/tasks?status=inbox and returns the Task array', async () => {
+    // BDD: Given a server that returns a task list,
+    // When fetchTasks({ status: "inbox" }) is called,
+    // Then GET /api/v1/tasks?status=inbox is requested,
+    // And the returned array contains the tasks.
+    // Traces to: sprint2-spec.md §6 — GET /tasks endpoint
+    const payload = [
+      { id: 't1', title: 'Fix bug', action: 'llm', status: 'inbox', priority: 3, workspace_id: 'ws-1', surface: 'user', owner: 'alice', created_by: 'alice', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
+      { id: 't2', title: 'Write tests', action: 'llm', status: 'inbox', priority: 2, workspace_id: 'ws-1', surface: 'user', owner: 'alice', created_by: 'alice', created_at: '2026-06-01T00:01:00Z', updated_at: '2026-06-01T00:01:00Z' },
+    ]
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
 
-    const { fetchBoardTasks } = await import('./api')
-    const result = await fetchBoardTasks({ status: 'inbox' })
+    const { fetchTasks } = await import('./api')
+    const result = await fetchTasks({ status: 'inbox' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/board/tasks')
+    expect(url).toContain('/api/v1/tasks')
     expect(url).toContain('status=inbox')
 
-    // fetchBoardTasks returns res.items (not the full wrapper).
     expect(result).toHaveLength(2)
     expect(result[0].id).toBe('t1')
-    expect(result[0].name).toBe('Fix bug')
+    expect(result[0].title).toBe('Fix bug')
     expect(result[1].id).toBe('t2')
   })
 
-  it('calls GET /api/v1/board/tasks without query params when no filters given', async () => {
+  it('calls GET /api/v1/tasks without query params when no filters given', async () => {
     // BDD: Given no filters,
-    // When fetchBoardTasks() is called,
-    // Then URL does not contain ?status= or ?project_id=.
-    // Traces to: wave4-level1-project-task-mgmt spec — fetchBoardTasks no-filter
-    const payload = { items: [], total: 0 }
-    fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
+    // When fetchTasks() is called,
+    // Then URL does not contain ?status= or ?workspace_id=.
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse([]))
 
-    const { fetchBoardTasks } = await import('./api')
-    const result = await fetchBoardTasks()
+    const { fetchTasks } = await import('./api')
+    const result = await fetchTasks()
 
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).not.toContain('status=')
@@ -409,113 +406,117 @@ describe('fetchBoardTasks', () => {
     expect(result).toEqual([])
   })
 
-  it('fetchBoardTasks includes workspace_id in query string when provided', async () => {
-    // BDD: Given fetchBoardTasks({ workspace_id: 'proj-abc' }) is called,
+  it('fetchTasks includes workspace_id in query string when provided', async () => {
+    // BDD: Given fetchTasks({ workspace_id: 'proj-abc' }) is called,
     // When the API request is made,
-    // Then the URL contains 'workspace_id=proj-abc',
-    // And the URL does NOT contain 'status='.
-    // Traces to: project-task-management-level1-spec.md — TC-002 fetchBoardTasks workspace_id filter
-    const payload = {
-      items: [
-        { id: 't-proj-1', name: 'Project task', status: 'inbox', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
-      ],
-      total: 1,
-    }
+    // Then the URL contains 'workspace_id=proj-abc'.
+    // Traces to: sprint2-spec.md §6 — workspace-scoped task list
+    const payload = [
+      { id: 't-ws-1', title: 'Workspace task', action: 'llm', status: 'next', priority: 3, workspace_id: 'proj-abc', surface: 'user', owner: 'alice', created_by: 'alice', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
+    ]
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
 
-    const { fetchBoardTasks } = await import('./api')
-    const result = await fetchBoardTasks({ workspace_id: 'proj-abc' })
+    const { fetchTasks } = await import('./api')
+    const result = await fetchTasks({ workspace_id: 'proj-abc' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
 
-    // Must include the workspace_id filter.
     expect(url).toContain('workspace_id=proj-abc')
-
-    // Must NOT include a status filter (none was requested).
     expect(url).not.toContain('status=')
 
-    // Result is the items array from the response.
     expect(result).toHaveLength(1)
-    expect(result[0].id).toBe('t-proj-1')
-    expect(result[0].name).toBe('Project task')
+    expect(result[0].id).toBe('t-ws-1')
+    expect(result[0].title).toBe('Workspace task')
   })
 })
 
-// ── createBoardTask ───────────────────────────────────────────────────────────
+// ── createTask (unified Sprint 2 model) ──────────────────────────────────────
+//
+// Replaces the old createBoardTask tests. POST /tasks, body is TaskCreateRequest
+// (title, action, priority, workspace_id, surface — no status field, server seeds inbox).
 
-describe('createBoardTask', () => {
-  it('calls POST /api/v1/board/tasks and returns the created BoardTask', async () => {
-    // BDD: Given a valid BoardTaskCreateRequest,
-    // When createBoardTask({ name: "New task", status: "inbox" }) is called,
-    // Then POST /api/v1/board/tasks is requested with the correct body,
-    // And the created BoardTask is returned.
-    // Traces to: project-task-management-level1-spec.md — createBoardTask shape
+describe('createTask', () => {
+  it('calls POST /api/v1/tasks and returns the created Task', async () => {
+    // BDD: Given a valid TaskCreateRequest,
+    // When createTask({ title: "New task", action: "llm", ... }) is called,
+    // Then POST /api/v1/tasks is requested with the correct body,
+    // And the created Task (in inbox) is returned.
+    // Traces to: sprint2-spec.md §6 — POST /tasks
     const created = {
       id: 'task-001',
-      name: 'New task',
+      title: 'New task',
+      action: 'llm',
       status: 'inbox',
+      priority: 3,
+      workspace_id: 'ws-test',
+      surface: 'user',
+      owner: 'alice',
+      created_by: 'alice',
       created_at: '2026-06-08T10:00:00Z',
       updated_at: '2026-06-08T10:00:00Z',
     }
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(created, 201))
 
-    const { createBoardTask } = await import('./api')
-    const result = await createBoardTask({ name: 'New task', status: 'inbox' })
+    const { createTask } = await import('./api')
+    const result = await createTask({ title: 'New task', action: 'llm', priority: 3, workspace_id: 'ws-test', surface: 'user' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/board/tasks')
+    expect(url).toContain('/api/v1/tasks')
     expect((init as RequestInit).method).toBe('POST')
 
-    // Verify request body contains name and status.
     const body = JSON.parse((init as RequestInit).body as string)
-    expect(body.name).toBe('New task')
-    expect(body.status).toBe('inbox')
+    expect(body.title).toBe('New task')
+    expect(body.action).toBe('llm')
 
-    // Verify the returned BoardTask has correct fields.
     expect(result.id).toBe('task-001')
-    expect(result.name).toBe('New task')
+    expect(result.title).toBe('New task')
     expect(result.status).toBe('inbox')
   })
 
-  it('differentiation test: creating two different tasks returns different BoardTasks', async () => {
-    // Anti-hardcode: two POST calls with different names must produce different results.
-    // Traces to: project-task-management-level1-spec.md — createBoardTask differentiation
-    const task1 = { id: 'task-alpha', name: 'Alpha task', status: 'inbox', created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T10:00:00Z' }
-    const task2 = { id: 'task-beta', name: 'Beta task', status: 'next', created_at: '2026-06-08T11:00:00Z', updated_at: '2026-06-08T11:00:00Z' }
+  it('differentiation test: creating two different tasks returns different Tasks', async () => {
+    // Anti-hardcode: two POST calls with different titles must produce different results.
+    const task1 = {
+      id: 'task-alpha', title: 'Alpha task', action: 'llm', status: 'inbox', priority: 3,
+      workspace_id: 'ws-1', surface: 'user', owner: 'alice', created_by: 'alice',
+      created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T10:00:00Z',
+    }
+    const task2 = {
+      id: 'task-beta', title: 'Beta task', action: 'llm', status: 'inbox', priority: 1,
+      workspace_id: 'ws-1', surface: 'user', owner: 'alice', created_by: 'alice',
+      created_at: '2026-06-08T11:00:00Z', updated_at: '2026-06-08T11:00:00Z',
+    }
 
     fetchSpy
       .mockResolvedValueOnce(makeJsonResponse(task1, 201))
       .mockResolvedValueOnce(makeJsonResponse(task2, 201))
 
-    const { createBoardTask } = await import('./api')
-    const r1 = await createBoardTask({ name: 'Alpha task', status: 'inbox' })
-    const r2 = await createBoardTask({ name: 'Beta task', status: 'next' })
+    const { createTask } = await import('./api')
+    const r1 = await createTask({ title: 'Alpha task', action: 'llm', priority: 3, workspace_id: 'ws-1', surface: 'user' })
+    const r2 = await createTask({ title: 'Beta task', action: 'llm', priority: 1, workspace_id: 'ws-1', surface: 'user' })
 
     expect(r1.id).toBe('task-alpha')
     expect(r2.id).toBe('task-beta')
     expect(r1.id).not.toBe(r2.id)
-    expect(r1.name).not.toBe(r2.name)
-    expect(r1.status).not.toBe(r2.status)
+    expect(r1.title).not.toBe(r2.title)
   })
 
   it('throws ApiError on 400 response', async () => {
     // BDD: Given an invalid request body,
-    // When createBoardTask is called,
+    // When createTask is called,
     // Then an ApiError with status 400 is thrown.
-    // Traces to: project-task-management-level1-spec.md — createBoardTask error path
     fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: 'name is required' }), {
+      new Response(JSON.stringify({ error: 'title is required' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       }),
     )
 
-    const { createBoardTask, ApiError, isApiError } = await import('./api')
+    const { createTask, ApiError, isApiError } = await import('./api')
     let thrown: unknown
     try {
-      await createBoardTask({ name: '' })
+      await createTask({ title: '', action: 'llm', priority: 3, workspace_id: 'ws-1', surface: 'user' })
     } catch (err) {
       thrown = err
     }
@@ -524,54 +525,83 @@ describe('createBoardTask', () => {
   })
 })
 
-// ── updateBoardTask ───────────────────────────────────────────────────────────
+// ── updateTask (unified Sprint 2 model) ──────────────────────────────────────
+//
+// Replaces the old updateBoardTask tests. PATCH /tasks/{id} (not PUT /board/tasks/{id}).
+// Accepts 7-state status vocab: inbox/next/planning/in_progress/blocked/done/failed.
 
-describe('updateBoardTask', () => {
-  it('calls PUT /api/v1/board/tasks/{id} and returns the updated BoardTask', async () => {
-    // BDD: Given an existing task id and a BoardTaskUpdateRequest,
-    // When updateBoardTask("task-001", { status: "next" }) is called,
-    // Then PUT /api/v1/board/tasks/task-001 is requested with the correct body,
-    // And the updated BoardTask is returned.
-    // Traces to: project-task-management-level1-spec.md — updateBoardTask shape
+describe('updateTask', () => {
+  it('calls PATCH /api/v1/tasks/{id} and returns the updated Task', async () => {
+    // BDD: Given an existing task id and a TaskUpdateRequest,
+    // When updateTask("task-001", { status: "next" }) is called,
+    // Then PATCH /api/v1/tasks/task-001 is requested with the correct body,
+    // And the updated Task is returned.
+    // Traces to: sprint2-spec.md §6 — PATCH /tasks/{id}
     const updated = {
       id: 'task-001',
-      name: 'Fix bug',
+      title: 'Fix bug',
+      action: 'llm',
       status: 'next',
+      priority: 3,
+      workspace_id: 'ws-1',
+      surface: 'user',
+      owner: 'alice',
+      created_by: 'alice',
       created_at: '2026-06-08T10:00:00Z',
       updated_at: '2026-06-08T12:00:00Z',
     }
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(updated))
 
-    const { updateBoardTask } = await import('./api')
-    const result = await updateBoardTask('task-001', { status: 'next' })
+    const { updateTask } = await import('./api')
+    const result = await updateTask('task-001', { status: 'next' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/board/tasks/task-001')
-    expect((init as RequestInit).method).toBe('PUT')
+    expect(url).toContain('/api/v1/tasks/task-001')
+    expect((init as RequestInit).method).toBe('PATCH')
 
-    // Verify request body contains the update fields.
     const body = JSON.parse((init as RequestInit).body as string)
     expect(body.status).toBe('next')
 
-    // Verify the returned BoardTask has updated status.
     expect(result.id).toBe('task-001')
     expect(result.status).toBe('next')
   })
 
+  it('accepts all 7 status values', async () => {
+    // Verify the 7-state lifecycle statuses are accepted as update values.
+    const statuses = ['inbox', 'next', 'planning', 'in_progress', 'blocked', 'done', 'failed'] as const
+    for (const status of statuses) {
+      const updated = {
+        id: 'task-001', title: 'T', action: 'llm', status, priority: 3,
+        workspace_id: 'ws-1', surface: 'user', owner: 'alice', created_by: 'alice',
+        created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T12:00:00Z',
+      }
+      fetchSpy.mockResolvedValueOnce(makeJsonResponse(updated))
+      const { updateTask } = await import('./api')
+      const result = await updateTask('task-001', { status })
+      expect(result.status).toBe(status)
+    }
+  })
+
   it('differentiation test: updating two different tasks returns different results', async () => {
-    // Anti-hardcode: two PUT calls with different ids must produce different results.
-    // Traces to: project-task-management-level1-spec.md — updateBoardTask differentiation
-    const t1 = { id: 'task-x', name: 'Task X', status: 'active', created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T13:00:00Z' }
-    const t2 = { id: 'task-y', name: 'Task Y Done', status: 'done', created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T14:00:00Z' }
+    const t1 = {
+      id: 'task-x', title: 'Task X', action: 'llm', status: 'in_progress', priority: 2,
+      workspace_id: 'ws-1', surface: 'user', owner: 'alice', created_by: 'alice',
+      created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T13:00:00Z',
+    }
+    const t2 = {
+      id: 'task-y', title: 'Task Y Done', action: 'llm', status: 'done', priority: 3,
+      workspace_id: 'ws-1', surface: 'user', owner: 'alice', created_by: 'alice',
+      created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T14:00:00Z',
+    }
 
     fetchSpy
       .mockResolvedValueOnce(makeJsonResponse(t1))
       .mockResolvedValueOnce(makeJsonResponse(t2))
 
-    const { updateBoardTask } = await import('./api')
-    const r1 = await updateBoardTask('task-x', { status: 'next' })
-    const r2 = await updateBoardTask('task-y', { status: 'done' })
+    const { updateTask } = await import('./api')
+    const r1 = await updateTask('task-x', { status: 'in_progress' })
+    const r2 = await updateTask('task-y', { status: 'done' })
 
     expect(r1.id).toBe('task-x')
     expect(r2.id).toBe('task-y')
@@ -579,46 +609,39 @@ describe('updateBoardTask', () => {
   })
 })
 
-// ── deleteBoardTask ───────────────────────────────────────────────────────────
+// ── deleteTask (unified Sprint 2 model) ──────────────────────────────────────
+//
+// Replaces the old deleteBoardTask tests. DELETE /tasks/{id} (not /board/tasks/{id}).
 
-describe('deleteBoardTask', () => {
-  it('calls DELETE /api/v1/board/tasks/{id} and resolves without error', async () => {
+describe('deleteTask', () => {
+  it('calls DELETE /api/v1/tasks/{id} and resolves without error', async () => {
     // BDD: Given an existing task id,
-    // When deleteBoardTask("task-del-001") is called,
-    // Then DELETE /api/v1/board/tasks/task-del-001 is requested,
+    // When deleteTask("task-del-001") is called,
+    // Then DELETE /api/v1/tasks/task-del-001 is requested,
     // And the function resolves without throwing.
-    // Traces to: project-task-management-level1-spec.md — deleteBoardTask shape
-    // Note: request() calls res.json(); mock returns {} so it parses cleanly.
+    // Traces to: sprint2-spec.md §6 — DELETE /tasks/{id}
     fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
 
-    const { deleteBoardTask } = await import('./api')
-    await expect(deleteBoardTask('task-del-001')).resolves.not.toThrow()
+    const { deleteTask } = await import('./api')
+    await expect(deleteTask('task-del-001')).resolves.not.toThrow()
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/board/tasks/task-del-001')
+    expect(url).toContain('/api/v1/tasks/task-del-001')
     expect((init as RequestInit).method).toBe('DELETE')
   })
 
   it('sends the correct encoded id in the URL', async () => {
-    // BDD: Given a task id,
-    // When deleteBoardTask is called,
-    // Then the URL contains the exact id.
-    // Traces to: project-task-management-level1-spec.md — deleteBoardTask URL encoding
     fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
 
-    const { deleteBoardTask } = await import('./api')
-    await deleteBoardTask('board-task-xyz-999')
+    const { deleteTask } = await import('./api')
+    await deleteTask('task-xyz-999')
 
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('board-task-xyz-999')
+    expect(url).toContain('task-xyz-999')
   })
 
   it('throws ApiError on 404 response', async () => {
-    // BDD: Given a task id that does not exist,
-    // When deleteBoardTask is called,
-    // Then an ApiError with status 404 is thrown.
-    // Traces to: project-task-management-level1-spec.md — deleteBoardTask error path
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ error: 'task not found' }), {
         status: 404,
@@ -626,10 +649,10 @@ describe('deleteBoardTask', () => {
       }),
     )
 
-    const { deleteBoardTask, ApiError, isApiError } = await import('./api')
+    const { deleteTask, ApiError, isApiError } = await import('./api')
     let thrown: unknown
     try {
-      await deleteBoardTask('missing-task-id')
+      await deleteTask('missing-task-id')
     } catch (err) {
       thrown = err
     }

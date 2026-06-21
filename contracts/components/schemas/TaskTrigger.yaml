@@ -1,0 +1,86 @@
+title: TaskTrigger
+description: >
+  When (and how) a Task fires (Detail #3). Modelled as an extensible
+  `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can
+  grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+
+  ## Tier 2 (now)
+  `type` is one of:
+    - `manual`    — no automatic trigger. The task starts when a human drags its
+                    card into `in_progress`, or via Run / Create & Run. For an
+                    `llm` action that runs the assigned agent. `config` is empty.
+    - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
+                    Unix epoch-milliseconds instant (required).
+    - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
+                    interval in milliseconds (required, min 1000). Each fire spawns
+                    a FRESH run (fresh session + run history + pause).
+    - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
+                    expression (required). Each fire spawns a FRESH run.
+
+  `once`/`every`/`recurring` triggers are executed by the existing per-agent
+  Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just
+  a task with a time trigger; a heartbeat is a `recurring` task with
+  `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger`
+  semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this
+  type rather than `ScheduleTrigger`.
+
+  ## v0.3 growth path (design intent — DO NOT build in Tier 2)
+  The discriminated `type` enum grows additively with event kinds:
+  `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the
+  autonomous-loop primitive), `on_message` (channel match), `webhook`, and
+  `on_condition` (threshold). Each new kind carries its own keys inside `config`
+  (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`;
+  `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not
+  a flat list) will be introduced as an additional optional `expr` field or a
+  `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2
+  `{type, config}` shape intact. Because every field beyond `type` lives under the
+  open `config` object, none of these additions break the Tier 2 wire shape.
+type: object
+required:
+  - type
+  - config
+additionalProperties: false
+properties:
+  type:
+    type: string
+    enum:
+      - manual
+      - once
+      - every
+      - recurring
+    description: >
+      The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds
+      event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`)
+      additively.
+    example: "recurring"
+  config:
+    type: object
+    additionalProperties: false
+    description: >
+      Kind-specific parameters. The relevant subset depends on `type`:
+      `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` →
+      `cron_expr`. Validated server-side against `type`. This object is the open
+      growth surface — v0.3 event kinds add their own keys here without changing
+      the outer shape.
+    properties:
+      at_ms:
+        type: integer
+        format: int64
+        description: >
+          Unix epoch milliseconds for a one-shot fire. Required when
+          `type = once`; ignored otherwise.
+        example: 1781000000000
+      every_ms:
+        type: integer
+        format: int64
+        minimum: 1000
+        description: >
+          Interval in milliseconds between fires. Required when `type = every`
+          (minimum 1000ms); ignored otherwise.
+        example: 3600000
+      cron_expr:
+        type: string
+        description: >
+          Cron expression (5 or 6 fields). Required when `type = recurring`;
+          ignored otherwise.
+        example: "0 9 * * MON"

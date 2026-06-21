@@ -8,34 +8,37 @@ import {
 } from '@/components/ui/select'
 import { PRIORITY_BADGE } from './TaskCard'
 import { cn } from '@/lib/utils'
-import type { BoardTask } from '@/lib/api'
+import type { Task } from '@/lib/api'
 import type { Milestone } from '@/lib/api'
 
 type SortDir = 'desc' | 'asc'
 
+// 7-state unified vocabulary
 const STATUS_LABELS: Record<string, string> = {
-  inbox:   'Inbox',
-  next:    'Next',
-  active:  'Active',
-  waiting: 'Waiting',
-  done:    'Done',
-  failed:  'Failed',
+  inbox:       'Inbox',
+  next:        'Next',
+  planning:    'Planning',
+  in_progress: 'In Progress',
+  blocked:     'Blocked',
+  done:        'Done',
+  failed:      'Failed',
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  inbox:   'text-[var(--color-muted)]',
-  next:    'text-blue-400',
-  active:  'text-yellow-400',
-  waiting: 'text-purple-400',
-  done:    'text-green-400',
-  failed:  'text-red-400',
+  inbox:       'text-[var(--color-muted)]',
+  next:        'text-blue-400',
+  planning:    'text-purple-400',
+  in_progress: 'text-yellow-400',
+  blocked:     'text-orange-400',
+  done:        'text-green-400',
+  failed:      'text-red-400',
 }
 
 interface ListViewProps {
-  tasks: BoardTask[]
+  tasks: Task[]
   milestones: Milestone[]
   agents: { id: string; name: string }[]
-  onTaskClick: (task: BoardTask) => void
+  onTaskClick: (task: Task) => void
 }
 
 export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewProps) {
@@ -45,7 +48,10 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
   const [filterAgent, setFilterAgent] = useState<string>('__all__')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
-  const filtered = tasks
+  // Filter out heartbeat/non-user surface tasks from general list view
+  const userTasks = tasks.filter((t) => t.surface === 'user' || t.surface === undefined)
+
+  const filtered = userTasks
     .filter((t) => filterStatus === '__all__' || t.status === filterStatus)
     .filter((t) => filterPriority === '__all__' || String(t.priority ?? 3) === filterPriority)
     .filter((t) => filterMilestone === '__all__' || (filterMilestone === '__unscheduled__' ? !t.milestone_id : t.milestone_id === filterMilestone))
@@ -120,9 +126,9 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
                 Pri
               </th>
               <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-                Name
+                Title
               </th>
-              <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-20">
+              <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-24">
                 Status
               </th>
               <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-28">
@@ -174,7 +180,7 @@ function TaskRow({
   agents,
   onClick,
 }: {
-  task: BoardTask
+  task: Task
   milestones: Milestone[]
   agents: { id: string; name: string }[]
   onClick: () => void
@@ -182,7 +188,7 @@ function TaskRow({
   const priority = task.priority ?? 3
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
   const milestone = task.milestone_id ? milestones.find((m) => m.id === task.milestone_id) : null
-  const agentName = task.agent_id ? (agents.find((a) => a.id === task.agent_id)?.name ?? task.agent_id) : null
+  const agentName = task.agent_name ?? (task.agent_id ? (agents.find((a) => a.id === task.agent_id)?.name ?? task.agent_id) : null)
 
   return (
     <tr
@@ -203,7 +209,7 @@ function TaskRow({
         </span>
       </td>
       <td className="px-2 py-2.5">
-        <span className="text-sm text-[var(--color-secondary)] line-clamp-1">{task.name}</span>
+        <span className="text-sm text-[var(--color-secondary)] line-clamp-1">{task.title}</span>
       </td>
       <td className="px-2 py-2.5">
         <span className={cn('text-xs font-medium', STATUS_COLORS[task.status] ?? 'text-[var(--color-muted)]')}>

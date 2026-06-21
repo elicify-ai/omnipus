@@ -327,6 +327,69 @@ type IntegrationProvider = {
   requires_key: boolean;
   active?: boolean | undefined;
 };
+type Task = {
+  id: string;
+  title: string;
+  description?: string | undefined;
+  prompt?: string | undefined;
+  action: "llm";
+  status:
+    | "inbox"
+    | "next"
+    | "planning"
+    | "in_progress"
+    | "blocked"
+    | "done"
+    | "failed";
+  agent_id?: string | undefined;
+  agent_name?: string | undefined;
+  priority?: number | undefined;
+  blocked_by?: Array<string> | undefined;
+  todos?: Array<Todo> | undefined;
+  parent_task_id?: string | undefined;
+  workspace_id: string;
+  milestone_id?: string | undefined;
+  trigger?: TaskTrigger | undefined;
+  due?: string | undefined;
+  surface?: ("user" | "heartbeat") | undefined;
+  source_channel?: string | undefined;
+  source_chat_id?: string | undefined;
+  session_id?: string | undefined;
+  result?: string | undefined;
+  artifacts?: Array<string> | undefined;
+  owner: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | undefined;
+  completed_at?: string | undefined;
+  rollup?:
+    | Array<{
+        agent_id: string;
+        label: string;
+        status:
+          | "inbox"
+          | "next"
+          | "planning"
+          | "in_progress"
+          | "blocked"
+          | "done"
+          | "failed";
+      }>
+    | undefined;
+};
+type Todo = {
+  text: string;
+  done: boolean;
+};
+type TaskTrigger = {
+  type: "manual" | "once" | "every" | "recurring";
+  config: Partial<{
+    at_ms: number;
+    every_ms: number;
+    cron_expr: string;
+  }>;
+};
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -404,6 +467,49 @@ type ActivityEvent = {
 type RotateTokenResponse = {
   token: BearerToken;
 };
+type TaskCreateRequest = {
+  title: string;
+  prompt?: string | undefined;
+  description?: string | undefined;
+  action: "llm";
+  agent_id?: string | undefined;
+  priority?: number | undefined;
+  trigger?: TaskTrigger | undefined;
+  blocked_by?: Array<string> | undefined;
+  todos?: Array<Todo> | undefined;
+  parent_task_id?: string | undefined;
+  workspace_id: string;
+  milestone_id?: string | undefined;
+  due?: string | undefined;
+  surface?: ("user" | "heartbeat") | undefined;
+  source_channel?: string | undefined;
+  source_chat_id?: string | undefined;
+};
+type TaskUpdateRequest = Partial<{
+  title: string;
+  description: string;
+  prompt: string;
+  status:
+    | "inbox"
+    | "next"
+    | "planning"
+    | "in_progress"
+    | "blocked"
+    | "done"
+    | "failed";
+  agent_id: string;
+  priority: number;
+  blocked_by: Array<string>;
+  todos: Array<Todo>;
+  trigger: TaskTrigger;
+  due: string;
+  milestone_id: string;
+  surface: "user" | "heartbeat";
+  result: string;
+  artifacts: Array<string>;
+  started_at: string;
+  completed_at: string;
+}>;
 type ChannelConfigureRequest = Partial<
   {
     instance_id: string;
@@ -507,88 +613,6 @@ type Notification = {
   session_id?: string | undefined;
   agent_id?: string | undefined;
 };
-type BoardTask = {
-  id: string;
-  name: string;
-  description?: string | undefined;
-  status: GTDBoardTaskStatus;
-  workspace_id?: string | undefined;
-  agent_id?: string | undefined;
-  prompt?: string | undefined;
-  priority?: number | undefined;
-  milestone_id?: string | undefined;
-  session_id?: string | undefined;
-  result?: string | undefined;
-  created_at: string;
-  updated_at: string;
-  owner?: string | undefined;
-  start?: string | undefined;
-  due?: string | undefined;
-  recurrence?: string | undefined;
-  blocked_by?: Array<string> | undefined;
-};
-type GTDBoardTaskStatus =
-  | "inbox"
-  | "next"
-  | "active"
-  | "waiting"
-  | "done"
-  | "failed";
-type BoardTaskListItem = {
-  id: string;
-  name: string;
-  description?: string | undefined;
-  status: GTDBoardTaskStatus;
-  workspace_id?: string | undefined;
-  agent_id?: string | undefined;
-  prompt?: string | undefined;
-  priority?: number | undefined;
-  milestone_id?: string | undefined;
-  session_id?: string | undefined;
-  result?: string | undefined;
-  created_at: string;
-  updated_at: string;
-  owner?: string | undefined;
-  start?: string | undefined;
-  due?: string | undefined;
-  recurrence?: string | undefined;
-  blocked_by?: Array<string> | undefined;
-};
-type BoardTaskListResponse = {
-  items: Array<BoardTaskListItem>;
-  total: number;
-};
-type BoardTaskCreateRequest = {
-  name: string;
-  description?: string | undefined;
-  status?: GTDBoardTaskStatus | undefined;
-  workspace_id?: string | undefined;
-  agent_id?: string | undefined;
-  prompt?: string | undefined;
-  priority?: number | undefined;
-  milestone_id?: string | undefined;
-  start?: string | undefined;
-  due?: string | undefined;
-  recurrence?: string | undefined;
-  blocked_by?: Array<string> | undefined;
-};
-type BoardTaskUpdateRequest = Partial<{
-  name: string;
-  description: string;
-  status: BoardTaskUpdateStatus;
-  workspace_id: string;
-  agent_id: string;
-  prompt: string;
-  priority: number;
-  milestone_id: string;
-  session_id: string;
-  result: string;
-  start: string;
-  due: string;
-  recurrence: string;
-  blocked_by: Array<string>;
-}>;
-type BoardTaskUpdateStatus = "inbox" | "next" | "waiting" | "done" | "failed";
 type MilestoneListResponse = {
   milestones: Array<Milestone>;
   total: number;
@@ -1681,55 +1705,123 @@ export const DevicesResponse: z.ZodType<DevicesResponse> = z.object({
   pending: z.array(DevicePending).max(100),
   paired: z.array(DevicePaired).max(100),
 });
-export const Task = z
+export const Todo: z.ZodType<Todo> = z.object({
+  text: z.string().min(1).max(500),
+  done: z.boolean(),
+});
+export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
+  type: z.enum(["manual", "once", "every", "recurring"]),
+  config: z
+    .object({
+      at_ms: z.number().int(),
+      every_ms: z.number().int().gte(1000),
+      cron_expr: z.string(),
+    })
+    .partial(),
+});
+export const Task: z.ZodType<Task> = z
   .object({
     id: z.string(),
-    title: z.string(),
-    prompt: z.string(),
+    title: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
+    prompt: z.string().max(10000).optional(),
+    action: z.literal("llm"),
+    status: z.enum([
+      "inbox",
+      "next",
+      "planning",
+      "in_progress",
+      "blocked",
+      "done",
+      "failed",
+    ]),
     agent_id: z.string().optional(),
     agent_name: z.string().optional(),
-    created_by: z.string().optional(),
+    priority: z.number().int().gte(1).lte(5).optional().default(3),
+    blocked_by: z.array(z.string()).optional(),
+    todos: z.array(Todo).optional(),
     parent_task_id: z.string().optional(),
-    priority: z.number().int().gte(0).lte(100),
-    status: z.enum(["queued", "assigned", "running", "completed", "failed"]),
-    result: z.string().optional(),
-    artifacts: z.array(z.string()).optional(),
+    workspace_id: z.string(),
+    milestone_id: z.string().optional(),
+    trigger: TaskTrigger.optional(),
+    due: z.string().datetime({ offset: true }).optional(),
+    surface: z.enum(["user", "heartbeat"]).optional().default("user"),
+    source_channel: z.string().optional(),
+    source_chat_id: z.string().optional(),
     session_id: z.string().optional(),
-    trigger_type: z.enum(["manual", "time", "event"]),
-    created_at: z.string().datetime({ offset: true }).optional(),
+    result: z.string().max(50000).optional(),
+    artifacts: z.array(z.string()).optional(),
+    owner: z.string(),
+    created_by: z.string(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
     started_at: z.string().datetime({ offset: true }).optional(),
     completed_at: z.string().datetime({ offset: true }).optional(),
-    blocked_by: z.array(z.string()).optional(),
+    rollup: z
+      .array(
+        z.object({
+          agent_id: z.string(),
+          label: z.string(),
+          status: z.enum([
+            "inbox",
+            "next",
+            "planning",
+            "in_progress",
+            "blocked",
+            "done",
+            "failed",
+          ]),
+        })
+      )
+      .optional(),
   })
   .passthrough();
-export const TaskCreateRequest = z.object({
-  title: z.string(),
-  prompt: z.string().optional(),
+export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
+  title: z.string().min(1).max(200),
+  prompt: z.string().max(10000).optional(),
+  description: z.string().max(2000).optional(),
+  action: z.literal("llm"),
   agent_id: z.string().optional(),
-  priority: z.number().int().gte(0).lte(100).optional(),
-  parent_task_id: z.string().optional(),
-  trigger_type: z.enum(["manual", "time", "event"]).optional(),
-  name: z.string().optional(),
-  description: z.string().optional(),
+  priority: z.number().int().gte(1).lte(5).optional().default(3),
+  trigger: TaskTrigger.optional(),
   blocked_by: z.array(z.string()).optional(),
+  todos: z.array(Todo).optional(),
+  parent_task_id: z.string().optional(),
+  workspace_id: z.string(),
+  milestone_id: z.string().optional(),
+  due: z.string().datetime({ offset: true }).optional(),
+  surface: z.enum(["user", "heartbeat"]).optional().default("user"),
+  source_channel: z.string().optional(),
+  source_chat_id: z.string().optional(),
 });
-export const TaskUpdateRequest = z
+export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
   .object({
-    status: z.enum(["queued", "assigned", "running", "completed", "failed"]),
-    result: z.string(),
-    artifacts: z.array(z.string()),
-    title: z.string(),
+    title: z.string().min(1).max(200),
+    description: z.string().max(2000),
+    prompt: z.string().max(10000),
+    status: z.enum([
+      "inbox",
+      "next",
+      "planning",
+      "in_progress",
+      "blocked",
+      "done",
+      "failed",
+    ]),
     agent_id: z.string(),
-    priority: z.number().int(),
+    priority: z.number().int().gte(1).lte(5),
+    blocked_by: z.array(z.string()),
+    todos: z.array(Todo),
+    trigger: TaskTrigger,
+    due: z.string().datetime({ offset: true }),
+    milestone_id: z.string(),
+    surface: z.enum(["user", "heartbeat"]),
+    result: z.string().max(50000),
+    artifacts: z.array(z.string()),
     started_at: z.string().datetime({ offset: true }),
     completed_at: z.string().datetime({ offset: true }),
-    name: z.string(),
-    description: z.string(),
   })
   .partial();
-export const TaskAcceptedResponse = z
-  .object({ status: z.literal("accepted"), task_id: z.string() })
-  .passthrough();
 export const McpServer = z
   .object({
     id: z.string(),
@@ -1934,103 +2026,6 @@ export const MilestoneUpdateRequest = z
     name: z.string().min(1).max(200),
     description: z.string().max(2000),
     due_date: z.string().nullable(),
-  })
-  .partial()
-  .passthrough();
-export const GTDBoardTaskStatus = z.enum([
-  "inbox",
-  "next",
-  "active",
-  "waiting",
-  "done",
-  "failed",
-]);
-export const BoardTaskListItem: z.ZodType<BoardTaskListItem> = z
-  .object({
-    id: z.string(),
-    name: z.string().min(1),
-    description: z.string().max(2000).optional(),
-    status: GTDBoardTaskStatus,
-    workspace_id: z.string().optional(),
-    agent_id: z.string().optional(),
-    prompt: z.string().max(10000).optional(),
-    priority: z.number().int().gte(1).lte(5).optional(),
-    milestone_id: z.string().optional(),
-    session_id: z.string().optional(),
-    result: z.string().max(50000).optional(),
-    created_at: z.string().datetime({ offset: true }),
-    updated_at: z.string().datetime({ offset: true }),
-    owner: z.string().optional(),
-    start: z.string().datetime({ offset: true }).optional(),
-    due: z.string().datetime({ offset: true }).optional(),
-    recurrence: z.string().optional(),
-    blocked_by: z.array(z.string()).optional(),
-  })
-  .passthrough();
-export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
-  .object({ items: z.array(BoardTaskListItem), total: z.number().int() })
-  .passthrough();
-export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
-  .object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000).optional(),
-    status: GTDBoardTaskStatus.optional(),
-    workspace_id: z.string().optional(),
-    agent_id: z.string().optional(),
-    prompt: z.string().max(10000).optional(),
-    priority: z.number().int().gte(1).lte(5).optional(),
-    milestone_id: z.string().optional(),
-    start: z.string().datetime({ offset: true }).optional(),
-    due: z.string().datetime({ offset: true }).optional(),
-    recurrence: z.string().optional(),
-    blocked_by: z.array(z.string()).optional(),
-  })
-  .passthrough();
-export const BoardTask: z.ZodType<BoardTask> = z
-  .object({
-    id: z.string(),
-    name: z.string().min(1),
-    description: z.string().max(2000).optional(),
-    status: GTDBoardTaskStatus,
-    workspace_id: z.string().optional(),
-    agent_id: z.string().optional(),
-    prompt: z.string().max(10000).optional(),
-    priority: z.number().int().gte(1).lte(5).optional(),
-    milestone_id: z.string().optional(),
-    session_id: z.string().optional(),
-    result: z.string().max(50000).optional(),
-    created_at: z.string().datetime({ offset: true }),
-    updated_at: z.string().datetime({ offset: true }),
-    owner: z.string().optional(),
-    start: z.string().datetime({ offset: true }).optional(),
-    due: z.string().datetime({ offset: true }).optional(),
-    recurrence: z.string().optional(),
-    blocked_by: z.array(z.string()).optional(),
-  })
-  .passthrough();
-export const BoardTaskUpdateStatus = z.enum([
-  "inbox",
-  "next",
-  "waiting",
-  "done",
-  "failed",
-]);
-export const BoardTaskUpdateRequest: z.ZodType<BoardTaskUpdateRequest> = z
-  .object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000),
-    status: BoardTaskUpdateStatus,
-    workspace_id: z.string(),
-    agent_id: z.string(),
-    prompt: z.string().max(10000),
-    priority: z.number().int().gte(1).lte(5),
-    milestone_id: z.string(),
-    session_id: z.string(),
-    result: z.string().max(50000),
-    start: z.string().datetime({ offset: true }),
-    due: z.string().datetime({ offset: true }),
-    recurrence: z.string(),
-    blocked_by: z.array(z.string()),
   })
   .partial()
   .passthrough();
@@ -2784,216 +2779,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 405,
         description: `Method not allowed.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/board/tasks",
-    alias: "listBoardTasks",
-    description: `Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by workspace_id and status. Default limit 200, max 1000.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "workspace_id",
-        type: "Query",
-        schema: z.string().optional(),
-      },
-      {
-        name: "status",
-        type: "Query",
-        schema: z
-          .enum(["inbox", "next", "active", "waiting", "done", "failed"])
-          .optional(),
-      },
-      {
-        name: "agent_id",
-        type: "Query",
-        schema: z.string().optional(),
-      },
-      {
-        name: "milestone_id",
-        type: "Query",
-        schema: z.string().optional(),
-      },
-      {
-        name: "limit",
-        type: "Query",
-        schema: z.number().int().lte(1000).optional().default(200),
-      },
-      {
-        name: "offset",
-        type: "Query",
-        schema: z.number().int().optional().default(0),
-      },
-    ],
-    response: BoardTaskListResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/board/tasks",
-    alias: "createBoardTask",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: BoardTaskCreateRequest,
-      },
-    ],
-    response: BoardTask,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/board/tasks/:id",
-    alias: "getBoardTask",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: BoardTask,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/board/tasks/:id",
-    alias: "updateBoardTask",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: BoardTaskUpdateRequest,
-      },
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: BoardTask,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "delete",
-    path: "/board/tasks/:id",
-    alias: "deleteBoardTask",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: z.void(),
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/board/tasks/:id/start",
-    alias: "startBoardTask",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: BoardTask,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
         schema: ErrorResponse,
       },
     ],
@@ -5299,19 +5084,68 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/tasks",
     alias: "listTasks",
-    description: `Returns all tasks, optionally filtered by status. Admin-only.`,
+    description: `Returns tasks in a workspace, filterable by status, agent, milestone, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and &#x60;surface: user&#x60; tasks are returned; use the filters to widen. Workspace-scoped. Admin-only.
+`,
     requestFormat: "json",
     parameters: [
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
       {
         name: "status",
         type: "Query",
         schema: z
-          .enum(["queued", "assigned", "running", "completed", "failed"])
+          .enum([
+            "inbox",
+            "next",
+            "planning",
+            "in_progress",
+            "blocked",
+            "done",
+            "failed",
+          ])
           .optional(),
+      },
+      {
+        name: "agent_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "milestone_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "surface",
+        type: "Query",
+        schema: z.enum(["user", "heartbeat"]).optional(),
+      },
+      {
+        name: "parent_task_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().lte(1000).optional().default(200),
+      },
+      {
+        name: "offset",
+        type: "Query",
+        schema: z.number().int().optional().default(0),
       },
     ],
     response: z.array(Task),
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -5323,7 +5157,8 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "post",
     path: "/tasks",
     alias: "createTask",
-    description: `Creates a new task. Admin-only.`,
+    description: `Creates a new task. Lands in &#x60;inbox&#x60; regardless of input (Detail #8 landing rule). Workspace-scoped (workspace_id required in the body). Admin-only.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -5347,10 +5182,38 @@ Polled by the SPA StatusBar every 15 seconds.
     ],
   },
   {
-    method: "put",
+    method: "get",
+    path: "/tasks/:id",
+    alias: "getTask",
+    description: `Returns a single task by ID, including read-time rollup. Admin-only.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Task,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "patch",
     path: "/tasks/:id",
     alias: "updateTask",
-    description: `Updates task fields. Admin-only.`,
+    description: `Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to &#x60;in_progress&#x60; / Run is a status PATCH; there is no separate /start endpoint. Admin-only.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -5379,6 +5242,11 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
         schema: ErrorResponse,
       },
     ],
@@ -5411,10 +5279,53 @@ Polled by the SPA StatusBar every 15 seconds.
     ],
   },
   {
-    method: "post",
-    path: "/tasks/:id/start",
-    alias: "startTask",
-    description: `Assigns and starts a queued task. Admin-only.`,
+    method: "put",
+    path: "/tasks/:id/dependencies",
+    alias: "setTaskDependencies",
+    description: `Replaces the task&#x27;s &#x60;blocked_by&#x60; set atomically. A write-time DAG cycle validator rejects self-edges and cycles (max depth 50). Returns the updated task. Admin-only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.array(z.string()),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Task,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/tasks/:id/subtasks",
+    alias: "listSubtasks",
+    description: `Returns all subtasks (children with this parent_task_id). Admin-only.`,
     requestFormat: "json",
     parameters: [
       {
@@ -5423,7 +5334,7 @@ Polled by the SPA StatusBar every 15 seconds.
         schema: z.string(),
       },
     ],
-    response: TaskAcceptedResponse,
+    response: z.array(Task),
     errors: [
       {
         status: 401,
@@ -5438,20 +5349,31 @@ Polled by the SPA StatusBar every 15 seconds.
     ],
   },
   {
-    method: "get",
-    path: "/tasks/:id/subtasks",
-    alias: "listSubtasks",
-    description: `Returns all subtasks for a given parent task. Admin-only.`,
+    method: "put",
+    path: "/tasks/:id/todos",
+    alias: "setTaskTodos",
+    description: `Replaces the task&#x27;s &#x60;todos&#x60; array atomically (Tier-1 checklist; Detail #3 of the three-tier model). Returns the updated task. Admin-only.
+`,
     requestFormat: "json",
     parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.array(Todo),
+      },
       {
         name: "id",
         type: "Path",
         schema: z.string(),
       },
     ],
-    response: z.array(Task),
+    response: Task,
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -6712,7 +6634,7 @@ export const TaskStatusChangedFrame = z
     type: z.literal("task_status_changed"),
     session_id: z.string().min(1),
     task_id: z.string().min(1),
-    status: z.enum(["queued", "assigned", "running", "completed", "failed"]),
+    status: z.enum(["inbox", "next", "planning", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
   })
   .strict();

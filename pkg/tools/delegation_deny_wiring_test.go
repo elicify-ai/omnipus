@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // These tests prove the delegation-deny WIRING inside SpawnTool.Execute and
@@ -120,7 +120,8 @@ func TestSpawnTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
 // TestTaskCreateTool_DelegationDenyChecker_Aborts proves the deny-checker aborts a
 // task_create delegation before any task is persisted.
 func TestTaskCreateTool_DelegationDenyChecker_Aborts(t *testing.T) {
-	store := taskstore.New(t.TempDir())
+	// Sprint 2: taskstore.New → task.New (unified store).
+	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
 
 	var gotTarget string
@@ -150,7 +151,8 @@ func TestTaskCreateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	}
 
 	// Prove no task was persisted (the deny must short-circuit before store.Create).
-	tasks, err := store.List(taskstore.TaskFilter{})
+	// Sprint 2: task.Filter replaces taskstore.TaskFilter.
+	tasks, err := store.List(task.Filter{})
 	if err != nil {
 		t.Fatalf("list tasks: %v", err)
 	}
@@ -163,7 +165,8 @@ func TestTaskCreateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 // checker, the legacy boolean delegateCheck is consulted and a disallowed target
 // is rejected without persisting a task.
 func TestTaskCreateTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
-	store := taskstore.New(t.TempDir())
+	// Sprint 2: taskstore.New → task.New (unified store).
+	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
 
 	var checkedTarget string
@@ -188,7 +191,8 @@ func TestTaskCreateTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
 		t.Errorf("expected legacy delegateCheck to receive 'blocked-agent', got %q", checkedTarget)
 	}
 
-	tasks, err := store.List(taskstore.TaskFilter{})
+	// Sprint 2: task.Filter replaces taskstore.TaskFilter.
+	tasks, err := store.List(task.Filter{})
 	if err != nil {
 		t.Fatalf("list tasks: %v", err)
 	}

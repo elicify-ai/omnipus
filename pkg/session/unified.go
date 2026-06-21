@@ -54,6 +54,9 @@ type MetaPatch struct {
 	// Owner stamps the authenticated user who created the session.
 	// Only written when non-nil; empty string is a valid value (clears ownership).
 	Owner *string
+	// WorkspaceID tags the session with the active workspace (M4 workspace→turn
+	// binding). Only written when non-nil; empty string clears the tag.
+	WorkspaceID *string
 }
 
 // UnifiedMeta extends SessionMeta with the session type field.
@@ -350,6 +353,9 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	}
 	if patch.Owner != nil {
 		meta.Owner = *patch.Owner
+	}
+	if patch.WorkspaceID != nil {
+		meta.WorkspaceID = *patch.WorkspaceID
 	}
 	meta.UpdatedAt = time.Now().UTC()
 	return us.writeMetaLocked(sessionID, meta)

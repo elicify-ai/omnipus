@@ -23,8 +23,8 @@ import (
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // milestone mirrors the on-disk format of ~/.omnipus/milestones/{id}.json.
@@ -45,14 +45,14 @@ type milestone struct { // not-wire-format: on-disk JSON cache; mapped to genera
 var dueDatePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 // milestoneFileLock is the process-wide striped mutex pool for milestone file
-// read-modify-write paths, keyed by milestone ID. It mirrors boardtask.TaskFileLock
+// read-modify-write paths, keyed by milestone ID. It mirrors task.TaskFileLock
 // (same StripedLock type): the milestone PUT handler must acquire the per-ID lock
 // across the WHOLE read→mutate→write so two concurrent PUTs on the same milestone
 // cannot lose an update. The advisory flock inside writeMilestoneFile only serialises
 // the write itself, not the preceding read, so it is insufficient on its own.
 //
 //nolint:gochecknoglobals
-var milestoneFileLock = &boardtask.StripedLock{}
+var milestoneFileLock = &task.StripedLock{}
 
 // milestonesDir returns the absolute path of ~/.omnipus/milestones/.
 func (a *restAPI) milestonesDir() string {
@@ -152,7 +152,7 @@ func milestoneToWireWithProgress(
 // over all GTD task files. Used for milestone progress computation (FR-L2-010).
 func computeMilestoneCounts(home string) (map[string][2]int, error) {
 	counts := make(map[string][2]int) // [0]=total, [1]=done
-	if err := scanGTDTasks(home, func(_ string, t boardTask) {
+	if err := scanTasks(home, func(_ string, t task.Task) {
 		if t.MilestoneID == "" {
 			return
 		}
@@ -181,7 +181,7 @@ func milestoneProgress(total, done int) float64 {
 // Best-effort: individual file errors are logged as WARN, not returned (FR-L2-011).
 //
 // The scan is only used to identify candidate task IDs; the actual read→mutate→write
-// for each candidate is performed under the process-wide boardtask.TaskFileLock striped
+// for each candidate is performed under the process-wide task.TaskFileLock striped
 // mutex (with a re-read inside the lock), so a concurrent PUT/start/advance on the same
 // task cannot be clobbered. Taking only the advisory flock (as before) was insufficient:
 // it serialised writers against each other but the in-process board-task handlers RMW
@@ -192,7 +192,7 @@ func clearMilestoneOnTasks(home, milestoneID string) {
 	// Phase 1: collect candidate IDs (the lock-free scan may see slightly stale
 	// state, which is fine — the authoritative check happens under the lock below).
 	var candidates []string
-	if err := scanGTDTasks(home, func(id string, t boardTask) {
+	if err := scanTasks(home, func(id string, t task.Task) {
 		if t.MilestoneID == milestoneID {
 			candidates = append(candidates, id)
 		}
@@ -206,7 +206,7 @@ func clearMilestoneOnTasks(home, milestoneID string) {
 	// lock to avoid clobbering a concurrent mutation.
 	for _, id := range candidates {
 		taskPath := filepath.Join(tasksDir, id+".json")
-		mu := boardtask.TaskFileLock.Get(id)
+		mu := task.TaskFileLock.Get(id)
 		mu.Lock()
 		func() {
 			defer mu.Unlock()
@@ -218,7 +218,7 @@ func clearMilestoneOnTasks(home, milestoneID string) {
 				}
 				return
 			}
-			var fresh boardTask
+			var fresh task.Task
 			if jsonErr := json.Unmarshal(freshData, &fresh); jsonErr != nil {
 				slog.Warn("rest: milestones: cascade clear: re-read task corrupt",
 					"task_id", id, "milestone_id", milestoneID, "error", jsonErr)
@@ -494,7 +494,7 @@ func (a *restAPI) handleMilestonePut(
 
 	// Hold the per-milestone striped lock across the WHOLE read-modify-write so
 	// two concurrent PUTs on the same milestone cannot lose an update. Mirrors the
-	// board-task RMW (boardtask.TaskFileLock). The advisory flock inside
+	// board-task RMW (task.TaskFileLock). The advisory flock inside
 	// writeMilestoneFile only spans the write, not the read, so it is insufficient.
 	mu := milestoneFileLock.Get(milestoneID)
 	mu.Lock()

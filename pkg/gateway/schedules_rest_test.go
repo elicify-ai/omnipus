@@ -191,8 +191,7 @@ func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
 	assert.Equal(t, "mia", got.AgentID, "failed worker-owner PUT must not change stored owner")
 }
 
-// ptr is a local helper to take the address of a string literal.
-func ptr(s string) *string { return &s }
+// Note: ptr() helper is provided by rest_tasks.go as ptr[T any](v T) *T — use that.
 
 func TestSchedulesAPI_InvalidTrigger400(t *testing.T) {
 	api, _ := newSchedulesTestAPI(t)

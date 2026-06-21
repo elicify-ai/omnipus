@@ -30,7 +30,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/dingtalk"
@@ -65,6 +64,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/skills"
 	"github.com/dapicom-ai/omnipus/pkg/state"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 	"github.com/dapicom-ai/omnipus/pkg/voice"
 )
@@ -1506,7 +1506,7 @@ func setupAndStartServices(
 		notifStore:      runningServices.notifStore,      // #264: notification center
 		auditor:         agentLoop.AuditLogger(),         // shared audit logger for REST mutations
 		selfWriteReg:    selfWriteReg,                    // suppress watcher reload on app-initiated writes
-		taskLock:        boardtask.TaskFileLock,          // shared striped lock for board task RMW
+		taskLock:        task.TaskFileLock,               // shared striped lock for board task RMW
 	}
 	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
@@ -1538,10 +1538,10 @@ func setupAndStartServices(
 		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
 	}
 
-	// Recover board tasks left "active" by a crashed/abandoned previous process.
+	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
 	// Runs before the HTTP listener accepts connections (StartAll, below), so no
-	// /start handler can race reconciliation.
-	api.reconcileStuckBoardTasks()
+	// handler can race reconciliation.
+	api.reconcileStuckTasks()
 
 	// Drop blocked_by edges pointing at task files that no longer exist, so the
 	// dependency graph self-heals on boot (a waiting task gated only on an orphan

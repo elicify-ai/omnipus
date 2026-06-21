@@ -4,13 +4,16 @@
 
 package systools_test
 
-// T3: sysagent field preservation regression for feat/level1-project-task-mgmt.
+// T3: sysagent field preservation regression for the unified task store (Sprint 2).
 //
 // BRD bug #404 secondary: the old system.task.update used a minimal 8-field struct
 // that silently dropped prompt, priority, milestone_id, session_id, result, and
-// owner on every write.  The fix: TaskUpdateTool now reads the FULL boardtask.Task
-// (gtdTask = boardtask.Task) before modifying fields, so only the fields that are
-// explicitly present in the args map are overwritten.
+// owner on every write. The fix: TaskUpdateTool now reads the FULL task.Task
+// before modifying fields, so only the fields explicitly present in the args map
+// are overwritten.
+//
+// Rewritten for Sprint 2: boardtask.Task is deleted; we now use task.Task directly.
+// Name field → Title field. The system.task.create tool requires workspace_id.
 
 import (
 	"context"
@@ -23,32 +26,32 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // TestRegression_SysagentTaskUpdate_PreservesAllFields guards against the bug
 // where system.task.update used a minimal struct that silently dropped prompt,
 // priority, milestone_id, session_id, result, and owner on every write.
 //
-// BDD: Given a GTD board task on disk with prompt, priority, milestone_id,
+// BDD: Given a task on disk with prompt, priority, milestone_id,
 //
 //	session_id, result, owner, and agent_id populated,
 //
 // When system.task.update is called with only {"id":..., "name":"New Name"},
-// Then reading the task back shows the new name AND all other fields intact.
+// Then reading the task back shows the new title AND all other fields intact.
 //
 // Also: update with agent_id:"" must NOT clear the existing agent_id.
 //
 // Traces to: feat/level1-project-task-mgmt — #404 secondary: field-preserving
-// read-modify-write in TaskUpdateTool.Execute
+// read-modify-write in TaskUpdateTool.Execute (Sprint 2: via task.Patch).
 func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
-	// Traces to: #404 secondary — system.task.update field-preserving RMW via boardtask.Task
+	// Traces to: #404 secondary — system.task.update field-preserving RMW via task.Task
 	deps, home := newTestDepsWithHome(t)
 
 	// Create the tasks dir and write the task directly to disk with all fields
-	// populated. We write via JSON so we can include fields that the create tool
-	// does not expose (prompt, priority, milestone_id, session_id, result, owner).
+	// populated. We write via JSON so we can include fields the create tool does
+	// not expose (prompt, priority, milestone_id, session_id, result, owner).
 	tasksDir := filepath.Join(home, "tasks")
 	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
 
@@ -62,19 +65,21 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	wantPriority := 2
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	original := boardtask.Task{
+	// Write via task.Task (Sprint 2: boardtask.Task deleted, unified store uses task.Task).
+	original := task.Task{
 		ID:          taskID,
-		Name:        "OriginalName",
+		Title:       "OriginalName", // Sprint 2: Name→Title
 		Description: "Original description",
 		Prompt:      wantPrompt,
 		Priority:    wantPriority,
 		MilestoneID: wantMilestoneID,
 		SessionID:   wantSessionID,
 		Result:      wantResult,
-		Status:      boardtask.StatusInbox,
-		WorkspaceID: "",
+		Status:      task.StatusInbox,
+		WorkspaceID: testWorkspaceID,
 		AgentID:     wantAgentID,
 		Owner:       wantOwner,
+		Action:      task.ActionLLM,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -83,6 +88,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, taskID+".json"), taskBytes, 0o600))
 
 	// Invoke system.task.update with ONLY a name change.
+	// Sprint 2: the tool uses "name" arg key (maps to Title internally).
 	tool := systools.NewTaskUpdateTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
 		"id":   taskID,
@@ -94,11 +100,11 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	// Read back the on-disk file and verify every preserved field.
 	rawBytes, err := os.ReadFile(filepath.Join(tasksDir, taskID+".json"))
 	require.NoError(t, err)
-	var got boardtask.Task
+	var got task.Task
 	require.NoError(t, json.Unmarshal(rawBytes, &got))
 
-	assert.Equal(t, "Updated Name", got.Name,
-		"name must be updated by system.task.update")
+	assert.Equal(t, "Updated Name", got.Title,
+		"title must be updated by system.task.update")
 
 	assert.Equal(t, wantPrompt, got.Prompt,
 		"prompt must survive a partial system.task.update (old minimal-struct bug zeroed it) #404")
@@ -125,7 +131,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 		"description must survive a partial system.task.update #404")
 
 	// Differentiation test: a SECOND update with only "status" change must also
-	// preserve name (= "Updated Name") and all other fields.  Two different inputs
+	// preserve title (= "Updated Name") and all other fields. Two different inputs
 	// must produce two different outputs.
 	result2 := tool.Execute(context.Background(), map[string]any{
 		"id":     taskID,
@@ -135,12 +141,12 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 
 	rawBytes2, err := os.ReadFile(filepath.Join(tasksDir, taskID+".json"))
 	require.NoError(t, err)
-	var got2 boardtask.Task
+	var got2 task.Task
 	require.NoError(t, json.Unmarshal(rawBytes2, &got2))
 
-	assert.Equal(t, "Updated Name", got2.Name,
-		"name must still be 'Updated Name' after status-only update (not reverted)")
-	assert.Equal(t, boardtask.StatusNext, got2.Status,
+	assert.Equal(t, "Updated Name", got2.Title,
+		"title must still be 'Updated Name' after status-only update (not reverted)")
+	assert.Equal(t, task.StatusNext, got2.Status,
 		"status must be updated to 'next' by second update")
 	assert.Equal(t, wantPrompt, got2.Prompt,
 		"prompt must still be intact after second update")
@@ -148,6 +154,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 		"owner must still be intact after second update")
 
 	// Guard: agent_id:"" must NOT clear an existing agent_id.
+	// The new tool only applies agent_id when the value is non-empty (v != "").
 	result3 := tool.Execute(context.Background(), map[string]any{
 		"id":       taskID,
 		"agent_id": "",
@@ -156,7 +163,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 
 	rawBytes3, err := os.ReadFile(filepath.Join(tasksDir, taskID+".json"))
 	require.NoError(t, err)
-	var got3 boardtask.Task
+	var got3 task.Task
 	require.NoError(t, json.Unmarshal(rawBytes3, &got3))
 	assert.Equal(t, wantAgentID, got3.AgentID,
 		"system.task.update with agent_id:\"\" must NOT clear existing agent_id (#404 secondary)")
@@ -169,63 +176,74 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 // This is a differentiation test: two creates with different names/statuses must
 // produce files with different content (not hardcoded values).
 //
+// Sprint 2: system.task.create now requires workspace_id; we seed a workspace
+// file before calling the tool.
+//
 // Traces to: feat/level1-project-task-mgmt — #404 board task field coverage
 func TestRegression_SysagentTaskCreate_FieldsRoundTrip(t *testing.T) {
-	// Traces to: #404 — create tool field round-trip
+	// Traces to: #404 — create tool field round-trip (Sprint 2: unified task store)
 	deps, home := newTestDepsWithHome(t)
+
+	// Seed the workspace so system.task.create can validate workspace_id.
+	seedWorkspace(t, home, testWorkspaceID)
+
 	create := systools.NewTaskCreateTool(deps)
 
 	// Create task 1: name="Alpha", status="inbox", agent_id="agent-1"
 	r1 := create.Execute(context.Background(), map[string]any{
-		"name":     "Alpha",
-		"status":   "inbox",
-		"agent_id": "agent-1",
+		"name":         "Alpha",
+		"status":       "inbox",
+		"agent_id":     "agent-1",
+		"workspace_id": testWorkspaceID,
 	})
 	require.False(t, r1.IsError, "create Alpha must succeed; got: %s", r1.ForLLM)
 	var resp1 map[string]any
 	require.NoError(t, json.Unmarshal([]byte(r1.ForLLM), &resp1))
 	id1, ok := resp1["id"].(string)
-	require.True(t, ok, "create must return an id")
+	require.True(t, ok, "create must return an id; got: %v", resp1)
 
 	// Create task 2: name="Beta", status="next", agent_id="agent-2"
 	r2 := create.Execute(context.Background(), map[string]any{
-		"name":     "Beta",
-		"status":   "next",
-		"agent_id": "agent-2",
+		"name":         "Beta",
+		"status":       "next",
+		"agent_id":     "agent-2",
+		"workspace_id": testWorkspaceID,
 	})
 	require.False(t, r2.IsError, "create Beta must succeed; got: %s", r2.ForLLM)
 	var resp2 map[string]any
 	require.NoError(t, json.Unmarshal([]byte(r2.ForLLM), &resp2))
 	id2, ok := resp2["id"].(string)
-	require.True(t, ok, "create must return an id")
+	require.True(t, ok, "create must return an id; got: %v", resp2)
 
 	// Differentiation: two different inputs must produce different IDs and content.
 	assert.NotEqual(t, id1, id2, "two creates must produce different task IDs")
 
 	// Read back from disk and verify all fields.
+	// Sprint 2: on-disk format is task.Task; Title replaces Name.
 	tasksDir := filepath.Join(home, "tasks")
 
 	rawBytes1, err := os.ReadFile(filepath.Join(tasksDir, id1+".json"))
 	require.NoError(t, err)
-	var disk1 boardtask.Task
+	var disk1 task.Task
 	require.NoError(t, json.Unmarshal(rawBytes1, &disk1))
-	assert.Equal(t, "Alpha", disk1.Name, "task1 name must be Alpha on disk")
-	assert.Equal(t, boardtask.StatusInbox, disk1.Status, "task1 status must be inbox on disk")
+	assert.Equal(t, "Alpha", disk1.Title, "task1 title must be Alpha on disk")
+	assert.Equal(t, task.StatusInbox, disk1.Status, "task1 status must be inbox on disk")
 	assert.Equal(t, "agent-1", disk1.AgentID, "task1 agent_id must be agent-1 on disk")
 	assert.NotEmpty(t, disk1.ID, "task1 ID must be non-empty on disk")
 	assert.NotEmpty(t, disk1.CreatedAt, "task1 created_at must be non-empty on disk")
+	assert.Equal(t, testWorkspaceID, disk1.WorkspaceID, "task1 workspace_id must be set on disk")
 
 	rawBytes2, err := os.ReadFile(filepath.Join(tasksDir, id2+".json"))
 	require.NoError(t, err)
-	var disk2 boardtask.Task
+	var disk2 task.Task
 	require.NoError(t, json.Unmarshal(rawBytes2, &disk2))
-	assert.Equal(t, "Beta", disk2.Name, "task2 name must be Beta on disk")
-	assert.Equal(t, boardtask.StatusNext, disk2.Status, "task2 status must be next on disk")
+	assert.Equal(t, "Beta", disk2.Title, "task2 title must be Beta on disk")
+	assert.Equal(t, task.StatusNext, disk2.Status, "task2 status must be next on disk")
 	assert.Equal(t, "agent-2", disk2.AgentID, "task2 agent_id must be agent-2 on disk")
 
 	// The two tasks must be entirely different.
-	assert.NotEqual(t, disk1.Name, disk2.Name,
-		"two tasks created with different names must have different names on disk")
+	assert.NotEqual(t, disk1.Title, disk2.Title,
+		"two tasks created with different names must have different titles on disk")
 	assert.NotEqual(t, disk1.Status, disk2.Status,
 		"two tasks created with different statuses must have different statuses on disk")
 }

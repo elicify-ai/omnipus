@@ -25,7 +25,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ func newPatchOwnershipAPI(
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
+		taskStore:     task.New(filepath.Join(tmpDir, "tasks")),
 	}
 	return api, tmpDir, auditDir
 }
@@ -417,7 +417,7 @@ func TestPatchOwnership_DifferentAgents_ProduceDifferentResults(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
+		taskStore:     task.New(filepath.Join(tmpDir, "tasks")),
 	}
 
 	admin := &config.UserConfig{Username: "admin", Role: config.UserRoleAdmin}

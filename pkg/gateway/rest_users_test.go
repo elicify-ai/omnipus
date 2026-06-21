@@ -27,7 +27,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // canonicalTokenRE enforces the generateUserToken() format contract:
@@ -96,7 +96,7 @@ func newUserMgmtAPI(t *testing.T, users []any) (*restAPI, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
+		taskStore:     task.New(filepath.Join(tmpDir, "tasks")),
 	}
 	return api, tmpDir
 }

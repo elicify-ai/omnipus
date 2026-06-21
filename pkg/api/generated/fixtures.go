@@ -975,53 +975,138 @@ func FixturePingFrame_Edge() PingFrame {
 func FixtureTask_Populated() Task {
 	agentId := "jim"
 	agentName := "Jim"
-	createdBy := "admin"
 	parentTaskId := "parent-task-00000000-0000-0000-0000-000000000001"
+	prompt := "Summarize the last 7 days of gateway logs."
+	description := "Look for anomalies in the last 7 days of gateway logs."
+	milestoneId := "m-1234"
 	result := "Found 3 anomalies in the log."
 	sessionId := "sess-00000000-0000-0000-0000-000000000002"
+	sourceChannel := "telegram"
+	sourceChatId := "chat-12345"
+	priority := 3
+	blockedBy := []string{"550e8400-e29b-41d4-a716-446655440001"}
 	artifacts := []string{"/workspace/report.pdf", "/workspace/chart.png"}
+	due := time.Date(2026, 7, 31, 17, 0, 0, 0, time.UTC)
 	createdAt := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
 	startedAt := time.Date(2026, 5, 16, 10, 1, 0, 0, time.UTC)
 	completedAt := time.Date(2026, 5, 16, 10, 5, 30, 0, time.UTC)
-	return Task{
-		Id:           "550e8400-e29b-41d4-a716-446655440000",
-		Title:        "Analyze logs",
-		Prompt:       "Summarize the last 7 days of gateway logs.",
-		AgentId:      &agentId,
-		AgentName:    &agentName,
-		CreatedBy:    &createdBy,
-		ParentTaskId: &parentTaskId,
-		Priority:     5,
-		Status:       TaskStatus("completed"),
-		Result:       &result,
-		SessionId:    &sessionId,
-		Artifacts:    &artifacts,
-		TriggerType:  TaskTriggerType("manual"),
-		CreatedAt:    &createdAt,
-		StartedAt:    &startedAt,
-		CompletedAt:  &completedAt,
+	surface := TaskSurface("user")
+	t := Task{
+		Id:            "550e8400-e29b-41d4-a716-446655440000",
+		Title:         "Analyze logs",
+		Description:   &description,
+		Prompt:        &prompt,
+		Action:        TaskAction("llm"),
+		Status:        TaskStatus("done"),
+		AgentId:       &agentId,
+		AgentName:     &agentName,
+		Priority:      &priority,
+		BlockedBy:     &blockedBy,
+		ParentTaskId:  &parentTaskId,
+		WorkspaceId:   "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		MilestoneId:   &milestoneId,
+		Due:           &due,
+		Surface:       &surface,
+		SourceChannel: &sourceChannel,
+		SourceChatId:  &sourceChatId,
+		SessionId:     &sessionId,
+		Result:        &result,
+		Artifacts:     &artifacts,
+		Owner:         "alice",
+		CreatedBy:     "admin",
+		CreatedAt:     createdAt,
+		UpdatedAt:     completedAt,
+		StartedAt:     &startedAt,
+		CompletedAt:   &completedAt,
 	}
+	t.Todos = &[]struct {
+		Done bool   `json:"done"`
+		Text string `json:"text"`
+	}{{Text: "Draft the summary section", Done: false}}
+	t.Trigger = &struct {
+		Config struct {
+			AtMs     *int64  `json:"at_ms,omitempty"`
+			CronExpr *string `json:"cron_expr,omitempty"`
+			EveryMs  *int64  `json:"every_ms,omitempty"`
+		} `json:"config"`
+		Type TaskTriggerType `json:"type"`
+	}{Type: TaskTriggerType("manual")}
+	return t
 }
 
 // FixtureTask_ZeroValue — Go zero values.
-// Expected: FAIL because id="", title="", prompt="", status="" (not in enum),
-// trigger_type="" (not in enum), priority=0 (valid — minimum: 0).
+// Expected: FAIL because id="", title="", action="" (not in enum),
+// status="" (not in enum), workspace_id="" (required), owner/created_by empty.
 func FixtureTask_ZeroValue() Task {
 	return Task{}
 }
 
-// FixtureTask_Edge — queued task, no agent, unicode title, max priority.
+// FixtureTask_Edge — inbox task, no agent, unicode title, max priority,
+// recurring trigger.
 func FixtureTask_Edge() Task {
+	prompt := repeatStr("task prompt content ", 20)
+	priority := 5
 	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	return Task{
+	t := Task{
 		Id:          "00000000-0000-0000-0000-000000000001",
 		Title:       "unicode-task-title-タスク-rocket",
-		Prompt:      repeatStr("task prompt content ", 20),
-		Priority:    100,
-		Status:      TaskStatus("queued"),
-		TriggerType: TaskTriggerType("event"),
-		CreatedAt:   &createdAt,
+		Prompt:      &prompt,
+		Action:      TaskAction("llm"),
+		Status:      TaskStatus("inbox"),
+		Priority:    &priority,
+		WorkspaceId: "00000000-0000-0000-0000-0000000000ff",
+		Owner:       "alice",
+		CreatedBy:   "alice",
+		CreatedAt:   createdAt,
+		UpdatedAt:   createdAt,
 	}
+	cron := "0 9 * * MON"
+	t.Trigger = &struct {
+		Config struct {
+			AtMs     *int64  `json:"at_ms,omitempty"`
+			CronExpr *string `json:"cron_expr,omitempty"`
+			EveryMs  *int64  `json:"every_ms,omitempty"`
+		} `json:"config"`
+		Type TaskTriggerType `json:"type"`
+	}{Type: TaskTriggerType("recurring")}
+	t.Trigger.Config.CronExpr = &cron
+	return t
+}
+
+// FixtureTaskTrigger_Populated — a recurring time trigger.
+func FixtureTaskTrigger_Populated() TaskTrigger {
+	cron := "0 9 * * MON"
+	tr := TaskTrigger{Type: TaskTriggerType("recurring")}
+	tr.Config.CronExpr = &cron
+	return tr
+}
+
+// FixtureTaskTrigger_ZeroValue — Go zero values. Expected: FAIL (type="" not in enum).
+func FixtureTaskTrigger_ZeroValue() TaskTrigger {
+	return TaskTrigger{}
+}
+
+// FixtureTaskTrigger_Edge — a once trigger at an absolute instant.
+func FixtureTaskTrigger_Edge() TaskTrigger {
+	at := int64(1781000000000)
+	tr := TaskTrigger{Type: TaskTriggerType("once")}
+	tr.Config.AtMs = &at
+	return tr
+}
+
+// FixtureTodo_Populated — a checklist item.
+func FixtureTodo_Populated() Todo {
+	return Todo{Text: "Draft the summary section", Done: false}
+}
+
+// FixtureTodo_ZeroValue — Go zero values. Expected: FAIL (text="" minLength 1).
+func FixtureTodo_ZeroValue() Todo {
+	return Todo{}
+}
+
+// FixtureTodo_Edge — a completed checklist item with unicode text.
+func FixtureTodo_Edge() Todo {
+	return Todo{Text: "完了-done-✓", Done: true}
 }
 
 // ── McpServer ─────────────────────────────────────────────────────────────────
@@ -2035,27 +2120,6 @@ func FixtureUploadFilesResponse_Edge() UploadFilesResponse {
 	}
 }
 
-// ── TaskAcceptedResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/TaskAcceptedResponse.yaml
-
-func FixtureTaskAcceptedResponse_Populated() TaskAcceptedResponse {
-	return TaskAcceptedResponse{
-		TaskId: "550e8400-e29b-41d4-a716-446655440000",
-		Status: TaskAcceptedResponseStatus("accepted"),
-	}
-}
-
-func FixtureTaskAcceptedResponse_ZeroValue() TaskAcceptedResponse {
-	return TaskAcceptedResponse{}
-}
-
-func FixtureTaskAcceptedResponse_Edge() TaskAcceptedResponse {
-	return TaskAcceptedResponse{
-		TaskId: "00000000-0000-0000-0000-000000000001",
-		Status: TaskAcceptedResponseStatus("accepted"),
-	}
-}
-
 // ── AgentOwnerUpdateResponse ──────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml
 
@@ -2082,30 +2146,6 @@ func FixtureAgentOwnerUpdateResponse_Edge() AgentOwnerUpdateResponse {
 // ── Level-1 / Spec-3 / Spec-6 REST response fixtures ─────────────────────────
 // Marshal-validate roundtrip coverage for the REST response types served by the
 // gateway, so a Go struct producing schema-invalid JSON is caught by CI.
-
-// ── BoardTask ────────────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/BoardTask.yaml
-
-func FixtureBoardTask_Populated() BoardTask {
-	return BoardTask{
-		Id:          "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-		Name:        "Fix login bug",
-		Description: strPtr("The login form rejects valid credentials."),
-		Status:      BoardTaskStatusActive,
-		WorkspaceId: strPtr("a1b2c3d4-e5f6-7890-abcd-ef1234567890"),
-		AgentId:     strPtr("mia"),
-		Priority:    intPtr(2),
-		Owner:       strPtr("alice"),
-		CreatedAt:   time.Date(2026, 6, 8, 14, 22, 0, 0, time.UTC),
-		UpdatedAt:   time.Date(2026, 6, 8, 15, 0, 0, 0, time.UTC),
-	}
-}
-
-// FixtureBoardTask_ZeroValue — Go zero values. Expected to FAIL validation:
-// status is "" (not in enum) and name is "" (minLength: 1).
-func FixtureBoardTask_ZeroValue() BoardTask {
-	return BoardTask{}
-}
 
 // ── Milestone ────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/Milestone.yaml

@@ -1,15 +1,32 @@
 title: Task
 description: >
-  A task record as returned by GET /tasks, GET /tasks/{id}/subtasks, and
-  POST /tasks. Maps to the task.Task struct on the Go side.
+  The unified Task entity (Sprint 2, Tier 2) — one record that replaces both the
+  legacy workflow `Task` and the GTD `BoardTask` schemas outright. There is no
+  back-compat: per remediation Detail #7 there is no migration, no compat shim, and
+  no dual status/title vocabulary. Every task belongs to a workspace
+  (`workspace_id` is required-scoped) and may be a top-level task (no
+  `parent_task_id`) or a subtask (delegation / decomposition child). Maps to the
+  `task.Task` Go struct (the new `pkg/task` store) on the backend.
+
+  Returned by GET /tasks, GET /tasks/{id}, GET /tasks/{id}/subtasks, POST /tasks,
+  and PATCH /tasks/{id}.
 type: object
 required:
+  # NOTE: priority and surface are intentionally NOT in `required` — they carry
+  # a `default:` (3 / user). The server always populates them on responses, but
+  # combining `required` with `default` makes the generated Zod schema treat the
+  # field as optional while the generated TS type treats it as required, which
+  # is a codegen mismatch. The project convention (no schema mixes `required`
+  # with `default`) is honoured here: defaulted fields stay out of `required`.
   - id
   - title
-  - prompt
-  - priority
+  - action
   - status
-  - trigger_type
+  - workspace_id
+  - owner
+  - created_by
+  - created_at
+  - updated_at
 properties:
   id:
     type: string
@@ -17,89 +34,225 @@ properties:
     example: "550e8400-e29b-41d4-a716-446655440000"
   title:
     type: string
-    description: Human-readable task title.
-    example: "Analyze logs"
+    minLength: 1
+    maxLength: 200
+    description: Human-readable task title (the name field).
+    example: "Analyze gateway logs"
+  description:
+    type: string
+    maxLength: 2000
+    description: Optional free-form task description (human-facing notes).
+    example: "Look for anomalies in the last 7 days of gateway logs."
   prompt:
     type: string
-    description: Full task description / prompt given to the agent.
-    example: "Summarize the last 7 days of gateway logs."
-  agent_id:
+    maxLength: 10000
+    description: >
+      Optional agent prompt for an `llm` action — the instruction handed to the
+      assigned agent when the task runs.
+    example: "Summarize the last 7 days of gateway logs and flag anomalies."
+  action:
     type: string
-    description: ID of the agent assigned to this task. Absent when unassigned.
-    example: "jim"
-  agent_name:
-    type: string
-    description: Display name of the assigned agent. Absent when unassigned.
-    example: "Jim"
-  created_by:
-    type: string
-    description: Username of the user who created the task.
-    example: "admin"
-  parent_task_id:
-    type: string
-    description: ID of the parent task (for subtasks). Absent on top-level tasks.
-    example: "parent-task-uuid"
-  priority:
-    type: integer
-    description: Task priority (higher = more urgent). Default is 0.
-    minimum: 0
-    maximum: 100
-    example: 5
+    enum:
+      - llm
+    description: >
+      What kind of work the task performs. Tier 2 ships **`llm` only** (run an
+      agent). The enum reserves room for v0.3 action types — `human` (approval
+      gate), `tool` (run a tool directly), `notify` (send a notification), and
+      `sub_workflow` (expand into a child workflow) — which will be added
+      additively to this enum without a breaking change.
+    example: "llm"
   status:
     type: string
     enum:
-      - queued
-      - assigned
-      - running
-      - completed
+      - inbox
+      - next
+      - planning
+      - in_progress
+      - blocked
+      - done
       - failed
-    description: Current lifecycle status of the task.
-    example: "queued"
-  result:
+    description: >
+      Current lifecycle state (Detail #1, 7-state). `inbox` captured/untriaged ·
+      `next` triaged & ready · `planning` agent decomposing (light in Tier 2) ·
+      `in_progress` worked by a human OR agent (decoupled from /start) · `blocked`
+      auto side-state for an unmet dependency (set automatically; clears to `next`
+      when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything
+      lands in `inbox` by default; nothing auto-lands in `next`.
+    example: "inbox"
+  agent_id:
     type: string
-    description: Text result produced by the agent on completion. Absent while running.
-    example: "Found 3 anomalies in the log."
-  artifacts:
-    type: array
-    items:
-      type: string
-    description: Paths to output files or artifact references produced by the task.
-    example:
-      - "/workspace/report.pdf"
-  session_id:
+    description: >
+      ID of the agent assigned to this task. Optional — human-only tasks have
+      none.
+    example: "jim"
+  agent_name:
     type: string
-    description: Session ID created when the task was started.
-    example: "session-uuid"
-  trigger_type:
-    type: string
-    enum:
-      - manual
-      - time
-      - event
-    description: How the task was triggered.
-    example: "manual"
-  created_at:
-    type: string
-    format: date-time
-    description: RFC3339 timestamp when the task was created.
-    example: "2026-05-16T10:00:00Z"
-  started_at:
-    type: string
-    format: date-time
-    description: RFC3339 timestamp when the task was started. Absent until started.
-    example: "2026-05-16T10:01:00Z"
-  completed_at:
-    type: string
-    format: date-time
-    description: RFC3339 timestamp when the task completed or failed. Absent while running.
-    example: "2026-05-16T10:05:30Z"
+    description: >
+      Display name of the assigned agent. Read-time only (resolved from the agent
+      registry; never authoritative storage).
+    example: "Jim"
+  priority:
+    type: integer
+    minimum: 1
+    maximum: 5
+    default: 3
+    description: Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
+    example: 3
   blocked_by:
     type: array
     items:
       type: string
     description: >
-      List of task IDs that must reach "completed" status before this task is
-      eligible for dispatch. The Orchestrator coordinator (task_executor.onTaskComplete)
-      advances tasks whose blocked_by set is fully satisfied. Absent when empty.
+      Ordered list of task IDs that must reach `done` before this task is
+      eligible to advance (DAG ordering only — an AND-join, no conditional
+      semantics in Tier 2). A write-time cycle validator (carried over from the
+      legacy boardtask store) rejects self-edges, 2-node, and N-node cycles;
+      orphan edges (target deleted) are dropped on load; max depth 50. Empty when
+      the task has no dependencies.
     example:
       - "550e8400-e29b-41d4-a716-446655440001"
+  todos:
+    type: array
+    items:
+      $ref: ./Todo.yaml
+    description: >
+      Lightweight `{text, done}` checklist items on this task (Tier 1 of the
+      three-tier model). A todo is NOT a task — it has no agent, no status, no
+      trigger. Distinct from a subtask (a full child Task with `parent_task_id`).
+  parent_task_id:
+    type: string
+    description: >
+      ID of the parent task. Present on subtasks (delegation / decomposition
+      children); absent on top-level tasks. Board/List/Graph/Calendar render
+      top-level tasks; subtasks nest under their parent.
+    example: "parent-task-00000000-0000-0000-0000-000000000001"
+  workspace_id:
+    type: string
+    description: >
+      Workspace this task belongs to. Required-scoped — every task lives in a
+      workspace; reads and writes are workspace-scoped.
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  milestone_id:
+    type: string
+    description: Optional milestone this task is grouped under.
+    example: "m-1234"
+  trigger:
+    $ref: ./TaskTrigger.yaml
+  due:
+    type: string
+    format: date-time
+    description: >
+      Optional deadline (RFC 3339 UTC) for task completion. Separate from
+      `trigger` — `due` is a target date, `trigger` is what fires the run.
+    example: "2026-07-31T17:00:00Z"
+  surface:
+    type: string
+    enum:
+      - user
+      - heartbeat
+    default: user
+    description: >
+      Which UI surface owns this task (Detail #5). `user` (default) → shows on all
+      four general views (Board/List/Graph/Calendar). A non-`user` surface (first:
+      `heartbeat`) → hidden from ALL general views and rendered only by its owning
+      feature's dedicated UI (heartbeat → the agent profile). A reusable pattern:
+      future system-ish features set their own surface, get the task+trigger
+      engine for free, and never clutter the board/calendar.
+    example: "user"
+  source_channel:
+    type: string
+    description: >
+      Originating channel for a delegated task (Detail #6) — the channel a
+      task-mode delegation should deliver its result back to.
+    example: "telegram"
+  source_chat_id:
+    type: string
+    description: >
+      Originating chat/conversation ID for a delegated task (Detail #6) — paired
+      with `source_channel` for result delivery.
+    example: "chat-12345"
+  session_id:
+    type: string
+    description: Session ID created/linked when the task runs.
+    example: "session-uuid"
+  result:
+    type: string
+    maxLength: 50000
+    description: Text result produced on completion. Absent while running.
+    example: "Found 3 anomalies in the gateway logs."
+  artifacts:
+    type: array
+    items:
+      type: string
+    description: Paths to output files / artifact references produced by the task.
+    example:
+      - "/workspace/report.pdf"
+  owner:
+    type: string
+    description: >
+      Username of the user who owns this task. Set server-side at creation;
+      read-only.
+    example: "alice"
+  created_by:
+    type: string
+    description: >
+      Username (or agent ID) that created the task. Set server-side at creation;
+      read-only.
+    example: "admin"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC 3339 timestamp when the task was created.
+    example: "2026-06-20T10:00:00Z"
+  updated_at:
+    type: string
+    format: date-time
+    description: RFC 3339 timestamp of the last update.
+    example: "2026-06-20T10:05:00Z"
+  started_at:
+    type: string
+    format: date-time
+    description: RFC 3339 timestamp when the task started. Absent until started.
+    example: "2026-06-20T10:01:00Z"
+  completed_at:
+    type: string
+    format: date-time
+    description: >
+      RFC 3339 timestamp when the task reached `done` or `failed`. Absent until
+      then.
+    example: "2026-06-20T10:05:30Z"
+  rollup:
+    type: array
+    items:
+      type: object
+      required:
+        - agent_id
+        - label
+        - status
+      additionalProperties: false
+      properties:
+        agent_id:
+          type: string
+          description: ID of the live child sub-agent run.
+          example: "ray"
+        label:
+          type: string
+          description: Short human label for the child run (board roll-up badge text).
+          example: "Research latest AI papers"
+        status:
+          type: string
+          enum:
+            - inbox
+            - next
+            - planning
+            - in_progress
+            - blocked
+            - done
+            - failed
+          description: Current status of the child run.
+          example: "in_progress"
+    description: >
+      Read-time only (Detail #6): derived list of live child sub-agent runs used to
+      render board roll-up badges ("▸ N sub-agents running"). COMPUTED on read from
+      the children whose `parent_task_id` equals this task's id — NEVER stored on
+      the task record. Absent when the task has no live children.

@@ -1735,13 +1735,13 @@ export interface paths {
         };
         /**
          * List tasks
-         * @description Returns all tasks, optionally filtered by status. Admin-only.
+         * @description Returns tasks in a workspace, filterable by status, agent, milestone, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and `surface: user` tasks are returned; use the filters to widen. Workspace-scoped. Admin-only.
          */
         get: operations["listTasks"];
         put?: never;
         /**
          * Create a task
-         * @description Creates a new task. Admin-only.
+         * @description Creates a new task. Lands in `inbox` regardless of input (Detail #8 landing rule). Workspace-scoped (workspace_id required in the body). Admin-only.
          */
         post: operations["createTask"];
         delete?: never;
@@ -1757,12 +1757,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
         /**
-         * Update a task
-         * @description Updates task fields. Admin-only.
+         * Get a task by ID
+         * @description Returns a single task by ID, including read-time rollup. Admin-only.
          */
-        put: operations["updateTask"];
+        get: operations["getTask"];
+        put?: never;
         post?: never;
         /**
          * Delete a task
@@ -1771,7 +1771,11 @@ export interface paths {
         delete: operations["deleteTask"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update a task
+         * @description Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to `in_progress` / Run is a status PATCH; there is no separate /start endpoint. Admin-only.
+         */
+        patch: operations["updateTask"];
         trace?: never;
     };
     "/tasks/{id}/subtasks": {
@@ -1783,7 +1787,7 @@ export interface paths {
         };
         /**
          * List subtasks
-         * @description Returns all subtasks for a given parent task. Admin-only.
+         * @description Returns all subtasks (children with this parent_task_id). Admin-only.
          */
         get: operations["listSubtasks"];
         put?: never;
@@ -1794,7 +1798,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/{id}/start": {
+    "/tasks/{id}/todos": {
         parameters: {
             query?: never;
             header?: never;
@@ -1802,12 +1806,32 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
         /**
-         * Start a task
-         * @description Assigns and starts a queued task. Admin-only.
+         * Replace a task's checklist
+         * @description Replaces the task's `todos` array atomically (Tier-1 checklist; Detail #3 of the three-tier model). Returns the updated task. Admin-only.
          */
-        post: operations["startTask"];
+        put: operations["setTaskTodos"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{id}/dependencies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace a task's dependencies
+         * @description Replaces the task's `blocked_by` set atomically. A write-time DAG cycle validator rejects self-edges and cycles (max depth 50). Returns the updated task. Admin-only.
+         */
+        put: operations["setTaskDependencies"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2176,63 +2200,6 @@ export interface paths {
         post?: never;
         /** Delete a milestone */
         delete: operations["deleteWorkspaceMilestone"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/board/tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List GTD board tasks
-         * @description Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by workspace_id and status. Default limit 200, max 1000.
-         */
-        get: operations["listBoardTasks"];
-        put?: never;
-        /** Create a GTD board task */
-        post: operations["createBoardTask"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/board/tasks/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get a GTD board task by ID */
-        get: operations["getBoardTask"];
-        /** Update a GTD board task (partial update) */
-        put: operations["updateBoardTask"];
-        post?: never;
-        /** Delete a GTD board task */
-        delete: operations["deleteBoardTask"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/board/tasks/{id}/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Start a board task — create session, link it, set status active */
-        post: operations["startBoardTask"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4712,7 +4679,8 @@ export interface components {
         };
         /**
          * Task
-         * @description A task record as returned by GET /tasks, GET /tasks/{id}/subtasks, and POST /tasks. Maps to the task.Task struct on the Go side.
+         * @description The unified Task entity (Sprint 2, Tier 2) — one record that replaces both the legacy workflow `Task` and the GTD `BoardTask` schemas outright. There is no back-compat: per remediation Detail #7 there is no migration, no compat shim, and no dual status/title vocabulary. Every task belongs to a workspace (`workspace_id` is required-scoped) and may be a top-level task (no `parent_task_id`) or a subtask (delegation / decomposition child). Maps to the `task.Task` Go struct (the new `pkg/task` store) on the backend.
+         *     Returned by GET /tasks, GET /tasks/{id}, GET /tasks/{id}/subtasks, POST /tasks, and PATCH /tasks/{id}.
          */
         Task: {
             /**
@@ -4721,94 +4689,166 @@ export interface components {
              */
             id: string;
             /**
-             * @description Human-readable task title.
-             * @example Analyze logs
+             * @description Human-readable task title (the name field).
+             * @example Analyze gateway logs
              */
             title: string;
             /**
-             * @description Full task description / prompt given to the agent.
-             * @example Summarize the last 7 days of gateway logs.
+             * @description Optional free-form task description (human-facing notes).
+             * @example Look for anomalies in the last 7 days of gateway logs.
              */
-            prompt: string;
+            description?: string;
             /**
-             * @description ID of the agent assigned to this task. Absent when unassigned.
+             * @description Optional agent prompt for an `llm` action — the instruction handed to the assigned agent when the task runs.
+             * @example Summarize the last 7 days of gateway logs and flag anomalies.
+             */
+            prompt?: string;
+            /**
+             * @description What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
+             * @example llm
+             * @enum {string}
+             */
+            action: "llm";
+            /**
+             * @description Current lifecycle state (Detail #1, 7-state). `inbox` captured/untriaged · `next` triaged & ready · `planning` agent decomposing (light in Tier 2) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
+             * @example inbox
+             * @enum {string}
+             */
+            status: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+            /**
+             * @description ID of the agent assigned to this task. Optional — human-only tasks have none.
              * @example jim
              */
             agent_id?: string;
             /**
-             * @description Display name of the assigned agent. Absent when unassigned.
+             * @description Display name of the assigned agent. Read-time only (resolved from the agent registry; never authoritative storage).
              * @example Jim
              */
             agent_name?: string;
             /**
-             * @description Username of the user who created the task.
-             * @example admin
-             */
-            created_by?: string;
-            /**
-             * @description ID of the parent task (for subtasks). Absent on top-level tasks.
-             * @example parent-task-uuid
-             */
-            parent_task_id?: string;
-            /**
-             * @description Task priority (higher = more urgent). Default is 0.
-             * @example 5
+             * @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
+             * @default 3
+             * @example 3
              */
             priority: number;
             /**
-             * @description Current lifecycle status of the task.
-             * @example queued
+             * @description Ordered list of task IDs that must reach `done` before this task is eligible to advance (DAG ordering only — an AND-join, no conditional semantics in Tier 2). A write-time cycle validator (carried over from the legacy boardtask store) rejects self-edges, 2-node, and N-node cycles; orphan edges (target deleted) are dropped on load; max depth 50. Empty when the task has no dependencies.
+             * @example [
+             *       "550e8400-e29b-41d4-a716-446655440001"
+             *     ]
+             */
+            blocked_by?: string[];
+            /** @description Lightweight `{text, done}` checklist items on this task (Tier 1 of the three-tier model). A todo is NOT a task — it has no agent, no status, no trigger. Distinct from a subtask (a full child Task with `parent_task_id`). */
+            todos?: components["schemas"]["Todo"][];
+            /**
+             * @description ID of the parent task. Present on subtasks (delegation / decomposition children); absent on top-level tasks. Board/List/Graph/Calendar render top-level tasks; subtasks nest under their parent.
+             * @example parent-task-00000000-0000-0000-0000-000000000001
+             */
+            parent_task_id?: string;
+            /**
+             * @description Workspace this task belongs to. Required-scoped — every task lives in a workspace; reads and writes are workspace-scoped.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            workspace_id: string;
+            /**
+             * @description Optional milestone this task is grouped under.
+             * @example m-1234
+             */
+            milestone_id?: string;
+            trigger?: components["schemas"]["TaskTrigger"];
+            /**
+             * Format: date-time
+             * @description Optional deadline (RFC 3339 UTC) for task completion. Separate from `trigger` — `due` is a target date, `trigger` is what fires the run.
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description Which UI surface owns this task (Detail #5). `user` (default) → shows on all four general views (Board/List/Graph/Calendar). A non-`user` surface (first: `heartbeat`) → hidden from ALL general views and rendered only by its owning feature's dedicated UI (heartbeat → the agent profile). A reusable pattern: future system-ish features set their own surface, get the task+trigger engine for free, and never clutter the board/calendar.
+             * @default user
+             * @example user
              * @enum {string}
              */
-            status: "queued" | "assigned" | "running" | "completed" | "failed";
+            surface: "user" | "heartbeat";
             /**
-             * @description Text result produced by the agent on completion. Absent while running.
-             * @example Found 3 anomalies in the log.
+             * @description Originating channel for a delegated task (Detail #6) — the channel a task-mode delegation should deliver its result back to.
+             * @example telegram
+             */
+            source_channel?: string;
+            /**
+             * @description Originating chat/conversation ID for a delegated task (Detail #6) — paired with `source_channel` for result delivery.
+             * @example chat-12345
+             */
+            source_chat_id?: string;
+            /**
+             * @description Session ID created/linked when the task runs.
+             * @example session-uuid
+             */
+            session_id?: string;
+            /**
+             * @description Text result produced on completion. Absent while running.
+             * @example Found 3 anomalies in the gateway logs.
              */
             result?: string;
             /**
-             * @description Paths to output files or artifact references produced by the task.
+             * @description Paths to output files / artifact references produced by the task.
              * @example [
              *       "/workspace/report.pdf"
              *     ]
              */
             artifacts?: string[];
             /**
-             * @description Session ID created when the task was started.
-             * @example session-uuid
+             * @description Username of the user who owns this task. Set server-side at creation; read-only.
+             * @example alice
              */
-            session_id?: string;
+            owner: string;
             /**
-             * @description How the task was triggered.
-             * @example manual
-             * @enum {string}
+             * @description Username (or agent ID) that created the task. Set server-side at creation; read-only.
+             * @example admin
              */
-            trigger_type: "manual" | "time" | "event";
-            /**
-             * Format: date-time
-             * @description RFC3339 timestamp when the task was created.
-             * @example 2026-05-16T10:00:00Z
-             */
-            created_at?: string;
+            created_by: string;
             /**
              * Format: date-time
-             * @description RFC3339 timestamp when the task was started. Absent until started.
-             * @example 2026-05-16T10:01:00Z
+             * @description RFC 3339 timestamp when the task was created.
+             * @example 2026-06-20T10:00:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 timestamp of the last update.
+             * @example 2026-06-20T10:05:00Z
+             */
+            updated_at: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 timestamp when the task started. Absent until started.
+             * @example 2026-06-20T10:01:00Z
              */
             started_at?: string;
             /**
              * Format: date-time
-             * @description RFC3339 timestamp when the task completed or failed. Absent while running.
-             * @example 2026-05-16T10:05:30Z
+             * @description RFC 3339 timestamp when the task reached `done` or `failed`. Absent until then.
+             * @example 2026-06-20T10:05:30Z
              */
             completed_at?: string;
-            /**
-             * @description List of task IDs that must reach "completed" status before this task is eligible for dispatch. The Orchestrator coordinator (task_executor.onTaskComplete) advances tasks whose blocked_by set is fully satisfied. Absent when empty.
-             * @example [
-             *       "550e8400-e29b-41d4-a716-446655440001"
-             *     ]
-             */
-            blocked_by?: string[];
+            /** @description Read-time only (Detail #6): derived list of live child sub-agent runs used to render board roll-up badges ("▸ N sub-agents running"). COMPUTED on read from the children whose `parent_task_id` equals this task's id — NEVER stored on the task record. Absent when the task has no live children. */
+            rollup?: {
+                /**
+                 * @description ID of the live child sub-agent run.
+                 * @example ray
+                 */
+                agent_id: string;
+                /**
+                 * @description Short human label for the child run (board roll-up badge text).
+                 * @example Research latest AI papers
+                 */
+                label: string;
+                /**
+                 * @description Current status of the child run.
+                 * @example in_progress
+                 * @enum {string}
+                 */
+                status: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+            }[];
         };
         /**
          * McpServer
@@ -5607,23 +5647,6 @@ export interface components {
             files: components["schemas"]["UploadedFile"][];
         };
         /**
-         * TaskAcceptedResponse
-         * @description Response from POST /api/v1/tasks/{id}/start (HTTP 202 Accepted). Confirms that the task has been queued for execution.
-         */
-        TaskAcceptedResponse: {
-            /**
-             * @description Acceptance status. Always "accepted".
-             * @example accepted
-             * @enum {string}
-             */
-            status: "accepted";
-            /**
-             * @description The ID of the task that was accepted for execution.
-             * @example task_abc123
-             */
-            task_id: string;
-        };
-        /**
          * AgentOwnerUpdateResponse
          * @description Response from PATCH /api/v1/agents/{id}/ownership. Confirms the ownership change.
          */
@@ -5704,118 +5727,240 @@ export interface components {
         };
         /**
          * TaskCreateRequest
-         * @description Request body for POST /api/v1/tasks. Creates a new task. The fields name/description are backward-compat aliases for title/prompt.
+         * @description Request body for POST /tasks — the ONE unified create form (Detail #8) that replaces the two legacy create bodies (`TaskCreateRequest` and `BoardTaskCreateRequest`). No back-compat aliases.
+         *     Landing rule (Detail #8): every created task lands in `inbox`. Nothing auto-lands in `next`; only a fully-captured task can be manually triaged to `next` via PATCH. `status` is therefore NOT a create-time field — the server always seeds `inbox`.
+         *     Start semantics (Detail #8): a task with no trigger (`manual`) starts when dragged to `in_progress` / Run; a task with a time trigger fires itself. The "Create & Run now" UX (create + start immediately) is a client action layered on top of this create + a subsequent start, not a distinct request field.
          */
         TaskCreateRequest: {
             /**
              * @description Task title.
-             * @example Analyze logs
+             * @example Analyze gateway logs
              */
             title: string;
             /**
-             * @description Task description / prompt for the agent.
-             * @example Summarize the last 7 days of gateway logs.
+             * @description Optional agent prompt for an `llm` action.
+             * @example Summarize the last 7 days of gateway logs and flag anomalies.
              */
             prompt?: string;
             /**
-             * @description Agent to assign the task to.
+             * @description Optional free-form description.
+             * @example Look for anomalies in the last 7 days.
+             */
+            description?: string;
+            /**
+             * @description Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
+             * @example llm
+             * @enum {string}
+             */
+            action: "llm";
+            /**
+             * @description Optional agent to assign the task to.
              * @example jim
              */
             agent_id?: string;
             /**
-             * @description Task priority (higher = more urgent). Defaults to 3.
-             * @example 5
+             * @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
+             * @default 3
+             * @example 3
              */
-            priority?: number;
+            priority: number;
+            trigger?: components["schemas"]["TaskTrigger"];
             /**
-             * @description Parent task ID (for creating subtasks).
-             * @example task-uuid-123
-             */
-            parent_task_id?: string;
-            /**
-             * @description How the task was triggered. Defaults to "manual".
-             * @example manual
-             * @enum {string}
-             */
-            trigger_type?: "manual" | "time" | "event";
-            /**
-             * @description Backward-compat alias for title.
-             * @example Analyze logs
-             */
-            name?: string;
-            /**
-             * @description Backward-compat alias for prompt.
-             * @example Summarize the last 7 days.
-             */
-            description?: string;
-            /**
-             * @description Task IDs that must complete before this task is dispatched. Validated at creation time: each ID must exist and must not create a cycle.
+             * @description Task IDs this task depends on (depends-on / blocked_by). Each must exist and must not create a cycle (validated at creation).
              * @example [
              *       "550e8400-e29b-41d4-a716-446655440001"
              *     ]
              */
             blocked_by?: string[];
+            /** @description Optional initial checklist items. */
+            todos?: components["schemas"]["Todo"][];
+            /**
+             * @description Optional parent task ID — set when creating a subtask (delegation / decomposition child).
+             * @example parent-task-00000000-0000-0000-0000-000000000001
+             */
+            parent_task_id?: string;
+            /**
+             * @description Workspace this task belongs to. Required — every task is workspace-scoped.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            workspace_id: string;
+            /**
+             * @description Optional milestone to group the task under.
+             * @example m-1234
+             */
+            milestone_id?: string;
+            /**
+             * Format: date-time
+             * @description Optional deadline (RFC 3339 UTC).
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features (e.g. heartbeat) set their own surface so the task is hidden from general views.
+             * @default user
+             * @example user
+             * @enum {string}
+             */
+            surface: "user" | "heartbeat";
+            /**
+             * @description Originating channel for a delegated task (Detail
+             * @example telegram
+             */
+            source_channel?: string;
+            /**
+             * @description Originating chat/conversation ID for a delegated task (Detail
+             * @example chat-12345
+             */
+            source_chat_id?: string;
         };
         /**
          * TaskUpdateRequest
-         * @description Request body for PUT /api/v1/tasks/{id}. Updates fields on an existing task. All fields are optional — only provided fields are updated. The fields name/description are backward-compat aliases for title/result.
+         * @description Request body for PATCH /tasks/{id} — the unified partial-update body that replaces the two legacy update bodies (`TaskUpdateRequest` and `BoardTaskUpdateRequest`). No back-compat aliases. All fields are optional; only provided fields are updated (PATCH semantics). At least one field is required.
+         *     `status` accepts the full 7-state vocabulary. Note: `blocked` is normally an AUTO side-state managed by the dependency engine (set when a `blocked_by` dep is unmet, cleared to `next` when deps complete); setting it directly is allowed but the engine may override on the next dependency evaluation. Advancing a partial task to `next` is rejected server-side (Detail #8 — only fully-captured tasks may be triaged to `next`).
          */
         TaskUpdateRequest: {
-            /**
-             * @description New task status.
-             * @example completed
-             * @enum {string}
-             */
-            status?: "queued" | "assigned" | "running" | "completed" | "failed";
-            /**
-             * @description Task result or output summary.
-             * @example Logs analyzed successfully.
-             */
-            result?: string;
-            /**
-             * @description List of artifact paths produced by the task.
-             * @example [
-             *       "output.txt"
-             *     ]
-             */
-            artifacts?: string[];
             /**
              * @description New task title.
              * @example Updated task title
              */
             title?: string;
             /**
-             * @description Agent to re-assign the task to.
+             * @description New free-form description.
+             * @example Revised notes.
+             */
+            description?: string;
+            /**
+             * @description New agent prompt.
+             * @example Re-run the analysis over 14 days instead of 7.
+             */
+            prompt?: string;
+            /**
+             * @description New task status (7-state lifecycle, Detail
+             * @example in_progress
+             * @enum {string}
+             */
+            status?: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+            /**
+             * @description Re-assign the task to this agent.
              * @example jim
              */
             agent_id?: string;
             /**
-             * @description New task priority.
-             * @example 3
+             * @description New task priority (1 highest .. 5 lowest).
+             * @example 2
              */
             priority?: number;
             /**
+             * @description Replacement dependency set (replaces the current `blocked_by` atomically). Write-time cycle validator rejects self-edges and cycles; max depth 50.
+             * @example []
+             */
+            blocked_by?: string[];
+            /** @description Replacement checklist (replaces the current `todos` atomically). */
+            todos?: components["schemas"]["Todo"][];
+            trigger?: components["schemas"]["TaskTrigger"];
+            /**
+             * Format: date-time
+             * @description New deadline (RFC 3339 UTC).
+             * @example 2026-08-15T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description New milestone grouping.
+             * @example m-5678
+             */
+            milestone_id?: string;
+            /**
+             * @description New UI surface ownership (Detail
+             * @example user
+             * @enum {string}
+             */
+            surface?: "user" | "heartbeat";
+            /**
+             * @description Task result or output summary.
+             * @example Logs analyzed; 3 anomalies found.
+             */
+            result?: string;
+            /**
+             * @description Replacement list of artifact paths produced by the task.
+             * @example [
+             *       "/workspace/report.pdf"
+             *     ]
+             */
+            artifacts?: string[];
+            /**
              * Format: date-time
              * @description When the task started execution.
-             * @example 2026-05-16T10:00:00Z
+             * @example 2026-06-20T10:00:00Z
              */
             started_at?: string;
             /**
              * Format: date-time
-             * @description When the task completed execution.
-             * @example 2026-05-16T10:05:00Z
+             * @description When the task completed or failed.
+             * @example 2026-06-20T10:05:00Z
              */
             completed_at?: string;
+        };
+        /**
+         * Todo
+         * @description A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no status enum, no trigger, and no ID — it is a simple `{text, done}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need independent status/agent/trigger.
+         */
+        Todo: {
             /**
-             * @description Backward-compat alias for title.
-             * @example Updated task title
+             * @description The checklist item text.
+             * @example Draft the summary section
              */
-            name?: string;
+            text: string;
             /**
-             * @description Backward-compat alias for result.
-             * @example Logs analyzed successfully.
+             * @description Whether the checklist item is complete.
+             * @example false
              */
-            description?: string;
+            done: boolean;
+        };
+        /**
+         * TaskTrigger
+         * @description When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+         *     ## Tier 2 (now) `type` is one of:
+         *       - `manual`    — no automatic trigger. The task starts when a human drags its
+         *                       card into `in_progress`, or via Run / Create & Run. For an
+         *                       `llm` action that runs the assigned agent. `config` is empty.
+         *       - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
+         *                       Unix epoch-milliseconds instant (required).
+         *       - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
+         *                       interval in milliseconds (required, min 1000). Each fire spawns
+         *                       a FRESH run (fresh session + run history + pause).
+         *       - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
+         *                       expression (required). Each fire spawns a FRESH run.
+         *
+         *     `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+         *     ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+         */
+        TaskTrigger: {
+            /**
+             * @description The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+             * @example recurring
+             * @enum {string}
+             */
+            type: "manual" | "once" | "every" | "recurring";
+            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape. */
+            config: {
+                /**
+                 * Format: int64
+                 * @description Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
+                 * @example 1781000000000
+                 */
+                at_ms?: number;
+                /**
+                 * Format: int64
+                 * @description Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
+                 * @example 3600000
+                 */
+                every_ms?: number;
+                /**
+                 * @description Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+                 * @example 0 9 * * MON
+                 */
+                cron_expr?: string;
+            };
         };
         /**
          * ProviderUpdateRequest
@@ -6434,243 +6579,6 @@ export interface components {
             pin_order?: number;
             core_team?: string[];
             repository?: string;
-        };
-        /**
-         * @description GTD board task status.
-         * @enum {string}
-         */
-        GTDBoardTaskStatus: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
-        /**
-         * @description GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
-         * @enum {string}
-         */
-        BoardTaskUpdateStatus: "inbox" | "next" | "waiting" | "done" | "failed";
-        /** @description A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics. */
-        BoardTask: {
-            /**
-             * @description UUID task identifier
-             * @example b2c3d4e5-f6a7-8901-bcde-f12345678901
-             */
-            id: string;
-            /**
-             * @description Task name.
-             * @example Fix login bug
-             */
-            name: string;
-            /** @description Optional task description. */
-            description?: string;
-            status: components["schemas"]["GTDBoardTaskStatus"];
-            /**
-             * @description Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
-             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
-             */
-            workspace_id?: string;
-            /**
-             * @description Optional agent responsible for this task.
-             * @example mia
-             */
-            agent_id?: string;
-            /** @description Optional agent prompt attached to the task. */
-            prompt?: string;
-            /** @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified. */
-            priority?: number;
-            /** @description Optional milestone this task belongs to. */
-            milestone_id?: string;
-            /** @description Optional session linked to this task. */
-            session_id?: string;
-            /** @description Optional task result or output. */
-            result?: string;
-            /**
-             * Format: date-time
-             * @example 2026-06-08T14:22:00Z
-             */
-            created_at: string;
-            /**
-             * Format: date-time
-             * @example 2026-06-08T15:00:00Z
-             */
-            updated_at: string;
-            /**
-             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
-             * @example alice
-             */
-            owner?: string;
-            /**
-             * Format: date-time
-             * @description Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-             * @example 2026-07-01T09:00:00Z
-             */
-            start?: string;
-            /**
-             * Format: date-time
-             * @description Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
-             * @example 2026-07-31T17:00:00Z
-             */
-            due?: string;
-            /**
-             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
-             * @example FREQ=WEEKLY;BYDAY=MO
-             */
-            recurrence?: string;
-            /**
-             * @description Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
-             * @example [
-             *       "01J1A2B3C4D5E6F7G8H9I0J1K2",
-             *       "01J1A2B3C4D5E6F7G8H9I0J1K3"
-             *     ]
-             */
-            blocked_by?: string[];
-        };
-        /** @description A single item in the board task list response. Equivalent to BoardTask. Defined as a plain object (not allOf) so that oapi-codegen emits []BoardTaskListItem rather than an inline anonymous struct in BoardTaskListResponse. */
-        BoardTaskListItem: {
-            /**
-             * @description UUID task identifier
-             * @example b2c3d4e5-f6a7-8901-bcde-f12345678901
-             */
-            id: string;
-            /**
-             * @description Task name.
-             * @example Fix login bug
-             */
-            name: string;
-            /** @description Optional task description. */
-            description?: string;
-            status: components["schemas"]["GTDBoardTaskStatus"];
-            /**
-             * @description Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
-             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
-             */
-            workspace_id?: string;
-            /**
-             * @description Optional agent responsible for this task.
-             * @example mia
-             */
-            agent_id?: string;
-            /** @description Optional agent prompt attached to the task. */
-            prompt?: string;
-            /** @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified. */
-            priority?: number;
-            /** @description Optional milestone this task belongs to. */
-            milestone_id?: string;
-            /** @description Optional session linked to this task. */
-            session_id?: string;
-            /** @description Optional task result or output. */
-            result?: string;
-            /**
-             * Format: date-time
-             * @example 2026-06-08T14:22:00Z
-             */
-            created_at: string;
-            /**
-             * Format: date-time
-             * @example 2026-06-08T15:00:00Z
-             */
-            updated_at: string;
-            /**
-             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
-             * @example alice
-             */
-            owner?: string;
-            /**
-             * Format: date-time
-             * @description Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-             * @example 2026-07-01T09:00:00Z
-             */
-            start?: string;
-            /**
-             * Format: date-time
-             * @description Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
-             * @example 2026-07-31T17:00:00Z
-             */
-            due?: string;
-            /**
-             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
-             * @example FREQ=WEEKLY;BYDAY=MO
-             */
-            recurrence?: string;
-            /**
-             * @description Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
-             * @example [
-             *       "01J1A2B3C4D5E6F7G8H9I0J1K2",
-             *       "01J1A2B3C4D5E6F7G8H9I0J1K3"
-             *     ]
-             */
-            blocked_by?: string[];
-        };
-        /** @description Paginated list response for GET /board/tasks */
-        BoardTaskListResponse: {
-            items: components["schemas"]["BoardTaskListItem"][];
-            /**
-             * @description Total number of tasks matching the filter (before pagination).
-             * @example 42
-             */
-            total: number;
-        };
-        BoardTaskCreateRequest: {
-            name: string;
-            description?: string;
-            status?: components["schemas"]["GTDBoardTaskStatus"];
-            workspace_id?: string;
-            agent_id?: string;
-            prompt?: string;
-            priority?: number;
-            milestone_id?: string;
-            /**
-             * Format: date-time
-             * @description Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-             * @example 2026-07-01T09:00:00Z
-             */
-            start?: string;
-            /**
-             * Format: date-time
-             * @description Optional due date/time (RFC 3339 UTC). Deadline for task completion.
-             * @example 2026-07-31T17:00:00Z
-             */
-            due?: string;
-            /**
-             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
-             * @example FREQ=WEEKLY;BYDAY=MO
-             */
-            recurrence?: string;
-            /**
-             * @description Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Max depth 50.
-             * @example []
-             */
-            blocked_by?: string[];
-        };
-        BoardTaskUpdateRequest: {
-            name?: string;
-            description?: string;
-            status?: components["schemas"]["BoardTaskUpdateStatus"];
-            workspace_id?: string;
-            agent_id?: string;
-            prompt?: string;
-            priority?: number;
-            milestone_id?: string;
-            session_id?: string;
-            result?: string;
-            /**
-             * Format: date-time
-             * @description Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
-             * @example 2026-07-01T09:00:00Z
-             */
-            start?: string;
-            /**
-             * Format: date-time
-             * @description Optional due date/time (RFC 3339 UTC). Deadline for task completion.
-             * @example 2026-07-31T17:00:00Z
-             */
-            due?: string;
-            /**
-             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
-             * @example FREQ=WEEKLY;BYDAY=MO
-             */
-            recurrence?: string;
-            /**
-             * @description Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Replaces the current blocked_by list atomically. Max depth 50.
-             * @example []
-             */
-            blocked_by?: string[];
         };
         /** @description A session that has been auto-linked to a workspace via tool use. */
         WorkspaceSessionLink: {
@@ -10470,8 +10378,22 @@ export interface operations {
     listTasks: {
         parameters: {
             query?: {
-                /** @description Filter tasks by status. */
-                status?: "queued" | "assigned" | "running" | "completed" | "failed";
+                /** @description Filter by workspace ID. Tasks are workspace-scoped; when omitted the server resolves the active workspace. */
+                workspace_id?: string;
+                /** @description Filter tasks by status (7-state lifecycle). */
+                status?: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+                /** @description Filter by assigned agent ID. */
+                agent_id?: string;
+                /** @description Filter by milestone ID. */
+                milestone_id?: string;
+                /** @description Filter by UI surface (Detail #5). Defaults to `user` when omitted — dedicated-UI tasks (e.g. heartbeat) are excluded from general listings. */
+                surface?: "user" | "heartbeat";
+                /** @description When set, returns the subtasks of this parent (equivalent to GET /tasks/{id}/subtasks). When omitted, only top-level tasks are returned. */
+                parent_task_id?: string;
+                /** @description Maximum items to return. */
+                limit?: number;
+                /** @description Pagination offset. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -10488,6 +10410,7 @@ export interface operations {
                     "application/json": components["schemas"]["Task"][];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
         };
     };
@@ -10505,7 +10428,7 @@ export interface operations {
         };
         responses: {
             /** @description Created task. */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10515,6 +10438,54 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Task. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Task deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
         };
     };
     updateTask: {
@@ -10545,29 +10516,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
-        };
-    };
-    deleteTask: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Task ID. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Task deleted. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
         };
     };
     listSubtasks: {
@@ -10595,7 +10544,7 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    startTask: {
+    setTaskTodos: {
         parameters: {
             query?: never;
             header?: never;
@@ -10605,19 +10554,55 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Todo"][];
+            };
+        };
         responses: {
-            /** @description Task accepted and queued for execution. */
-            202: {
+            /** @description Updated task. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskAcceptedResponse"];
+                    "application/json": components["schemas"]["Task"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+        };
+    };
+    setTaskDependencies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": string[];
+            };
+        };
+        responses: {
+            /** @description Updated task. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
         };
     };
     listMcpServers: {
@@ -11399,169 +11384,6 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    listBoardTasks: {
-        parameters: {
-            query?: {
-                /** @description Filter by workspace ID. */
-                workspace_id?: string;
-                /** @description Filter by GTD status. */
-                status?: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
-                /** @description Filter by agent ID. */
-                agent_id?: string;
-                /** @description Filter by milestone ID. */
-                milestone_id?: string;
-                /** @description Maximum items to return. */
-                limit?: number;
-                /** @description Pagination offset. */
-                offset?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Board task list with total count */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BoardTaskListResponse"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-        };
-    };
-    createBoardTask: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BoardTaskCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Created board task */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BoardTask"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-        };
-    };
-    getBoardTask: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Board task */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BoardTask"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-        };
-    };
-    updateBoardTask: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BoardTaskUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Updated board task (full object) */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BoardTask"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-        };
-    };
-    deleteBoardTask: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Deleted */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-        };
-    };
-    startBoardTask: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Task started; session_id and status=active set. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BoardTask"];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
-        };
-    };
     getTokenStats: {
         parameters: {
             query?: {
@@ -11725,7 +11547,6 @@ export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusRe
 export type OperationResult = components["schemas"]["OperationResult"];
 export type ToolApprovalResponse = components["schemas"]["ToolApprovalResponse"];
 export type UploadFilesResponse = components["schemas"]["UploadFilesResponse"];
-export type TaskAcceptedResponse = components["schemas"]["TaskAcceptedResponse"];
 export type AgentOwnerUpdateResponse = components["schemas"]["AgentOwnerUpdateResponse"];
 export type ActivityEventsResponse = components["schemas"]["ActivityEventsResponse"];
 export type RotateTokenResponse = components["schemas"]["RotateTokenResponse"];
@@ -11734,6 +11555,8 @@ export type UserContextRequest = components["schemas"]["UserContextRequest"];
 export type UserContextResponse = components["schemas"]["UserContextResponse"];
 export type TaskCreateRequest = components["schemas"]["TaskCreateRequest"];
 export type TaskUpdateRequest = components["schemas"]["TaskUpdateRequest"];
+export type Todo = components["schemas"]["Todo"];
+export type TaskTrigger = components["schemas"]["TaskTrigger"];
 export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
@@ -11764,13 +11587,6 @@ export type NotificationList = components["schemas"]["NotificationList"];
 export type Workspace = components["schemas"]["Workspace"];
 export type WorkspaceCreateRequest = components["schemas"]["WorkspaceCreateRequest"];
 export type WorkspaceUpdateRequest = components["schemas"]["WorkspaceUpdateRequest"];
-export type GTDBoardTaskStatus = components["schemas"]["GTDBoardTaskStatus"];
-export type BoardTaskUpdateStatus = components["schemas"]["BoardTaskUpdateStatus"];
-export type BoardTask = components["schemas"]["BoardTask"];
-export type BoardTaskListItem = components["schemas"]["BoardTaskListItem"];
-export type BoardTaskListResponse = components["schemas"]["BoardTaskListResponse"];
-export type BoardTaskCreateRequest = components["schemas"]["BoardTaskCreateRequest"];
-export type BoardTaskUpdateRequest = components["schemas"]["BoardTaskUpdateRequest"];
 export type WorkspaceSessionLink = components["schemas"]["WorkspaceSessionLink"];
 export type Milestone = components["schemas"]["Milestone"];
 export type MilestoneCreateRequest = components["schemas"]["MilestoneCreateRequest"];

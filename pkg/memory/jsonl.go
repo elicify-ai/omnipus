@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 const (
@@ -49,7 +49,7 @@ type sessionMeta struct {
 // append-only, which is both fast and crash-safe.
 type JSONLStore struct {
 	dir   string
-	locks boardtask.StripedLock
+	locks task.StripedLock
 }
 
 // NewJSONLStore creates a new JSONL-backed store rooted at dir.
@@ -64,7 +64,7 @@ func NewJSONLStore(dir string) (*JSONLStore, error) {
 // sessionLock returns a mutex for the given session key.
 // Keys are mapped to a fixed pool of 64 shards via FNV-32a hash, so
 // memory usage is O(1) regardless of total session count.
-// Delegates to boardtask.StripedLock for the canonical sharded-mutex implementation.
+// Delegates to task.StripedLock for the canonical sharded-mutex implementation.
 func (s *JSONLStore) sessionLock(key string) *sync.Mutex {
 	return s.locks.Get(key)
 }

@@ -20,11 +20,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/taskstore"
+	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // newTestRestAPIWithHome creates a restAPI with homePath and onboardingMgr wired.
@@ -56,8 +55,8 @@ func newTestRestAPIWithHome(t *testing.T) *restAPI {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
-		taskLock:      boardtask.TaskFileLock,
+		taskStore:     task.New(tmpDir + "/tasks"),
+		taskLock:      task.TaskFileLock,
 	}
 }
 
@@ -146,27 +145,31 @@ func TestHandleTasksGET(t *testing.T) {
 }
 
 // TestHandleTasksPOST verifies POST /api/v1/tasks returns 201 with a UUID id.
-// BDD: Given a valid task name,
-// When POST /api/v1/tasks {"name":"Test task"} is called,
-// Then 201 with id in UUID format.
+// BDD: Given a valid TaskCreateRequest (title + action + workspace_id),
+// When POST /api/v1/tasks is called,
+// Then 201 with id in UUID format and title matching the request.
 // Traces to: wave5b-system-agent-spec.md — E4: task creation with UUID id
+// Sprint 2: uses unified task model (title+action+workspace_id, not legacy name).
 func TestHandleTasksPOST(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+	wsID := createWorkspaceViaAPI(t, api, "E4TestWorkspace", "")
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(`{"name":"Test task"}`))
+	body := fmt.Sprintf(`{"title":"Test task","action":"llm","workspace_id":%q}`, wsID)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/tasks"
 	api.HandleTasks(w, r)
 
-	require.Equal(t, http.StatusCreated, w.Code)
-	var task struct {
+	require.Equal(t, http.StatusCreated, w.Code,
+		"POST /api/v1/tasks must return 201; body=%s", w.Body.String())
+	var created struct {
 		ID    string `json:"id"`
 		Title string `json:"title"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &task))
-	assert.True(t, isUUID(task.ID), "task id must be a UUID, got %q", task.ID)
-	assert.Equal(t, "Test task", task.Title)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	assert.True(t, isUUID(created.ID), "task id must be a UUID, got %q", created.ID)
+	assert.Equal(t, "Test task", created.Title, "title must match the request")
 }
 
 // TestHandleProvidersGET verifies GET /api/v1/providers returns 200 with an array.
@@ -344,65 +347,72 @@ func TestOnboardingPersistence(t *testing.T) {
 // are persisted and returned by GET /api/v1/tasks.
 // BDD: Given an empty task store,
 // When POST /api/v1/tasks is called twice and GET /api/v1/tasks is called,
-// Then 2 tasks are returned. PUT /api/v1/tasks/{id} updates status.
+// Then 2 tasks are returned. PATCH /api/v1/tasks/{id} updates status.
 // Traces to: wave5b-system-agent-spec.md — Scenario: Task persistence (E8)
+// Sprint 2: rewritten to use unified task model (gen.Task, PATCH for updates).
 func TestTaskPersistence(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+	wsID := createWorkspaceViaAPI(t, api, "E8PersistWorkspace", "")
+
+	postTask := func(title string) gen.Task {
+		t.Helper()
+		body := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q}`, title, wsID)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.URL.Path = "/api/v1/tasks"
+		api.HandleTasks(w, r)
+		require.Equal(t, http.StatusCreated, w.Code, "POST /tasks must return 201; body=%s", w.Body.String())
+		var tsk gen.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+		return tsk
+	}
 
 	// Step 1: POST task 1 → 201 with UUID id.
-	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest(http.MethodPost, "/api/v1/tasks",
-		strings.NewReader(`{"name":"Test task one"}`))
-	r1.Header.Set("Content-Type", "application/json")
-	r1.URL.Path = "/api/v1/tasks"
-	api.HandleTasks(w1, r1)
-	require.Equal(t, http.StatusCreated, w1.Code)
+	task1 := postTask("Test task one")
+	assert.True(t, isUUID(task1.Id), "task1 id must be UUID, got %q", task1.Id)
+	assert.Equal(t, "Test task one", task1.Title, "title must match request")
+	assert.Equal(t, gen.TaskStatus("inbox"), task1.Status, "default status must be inbox")
 
-	var task1 taskstore.TaskEntity
-	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &task1))
-	assert.True(t, isUUID(task1.ID), "task1 id must be UUID, got %q", task1.ID)
-	assert.Equal(t, "Test task one", task1.Title)
-
-	// Step 2: GET /tasks → 1 task.
+	// Step 2: GET /tasks → 1 task (persistence test: must be on disk).
 	wList1 := httptest.NewRecorder()
 	rList1 := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
 	rList1.URL.Path = "/api/v1/tasks"
 	api.HandleTasks(wList1, rList1)
 	require.Equal(t, http.StatusOK, wList1.Code)
-	var tasks1 []taskstore.TaskEntity
+	var tasks1 []gen.Task
 	require.NoError(t, json.Unmarshal(wList1.Body.Bytes(), &tasks1))
 	assert.Len(t, tasks1, 1, "list must contain 1 task after first POST")
 
 	// Step 3: POST task 2 → 201.
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPost, "/api/v1/tasks",
-		strings.NewReader(`{"name":"Test task two"}`))
-	r2.Header.Set("Content-Type", "application/json")
-	r2.URL.Path = "/api/v1/tasks"
-	api.HandleTasks(w2, r2)
-	require.Equal(t, http.StatusCreated, w2.Code)
+	task2 := postTask("Test task two")
+	assert.True(t, isUUID(task2.Id), "task2 id must be UUID")
+	assert.NotEqual(t, task1.Id, task2.Id, "each task must get a unique ID")
 
-	// Step 4: GET /tasks → 2 tasks.
+	// Step 4: GET /tasks → 2 tasks (persistence: both must survive).
 	wList2 := httptest.NewRecorder()
 	rList2 := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
 	rList2.URL.Path = "/api/v1/tasks"
 	api.HandleTasks(wList2, rList2)
 	require.Equal(t, http.StatusOK, wList2.Code)
-	var tasks2 []taskstore.TaskEntity
+	var tasks2 []gen.Task
 	require.NoError(t, json.Unmarshal(wList2.Body.Bytes(), &tasks2))
 	assert.Len(t, tasks2, 2, "list must contain 2 tasks after second POST")
 
-	// Step 5: PUT /tasks/{id} {"status":"running"} → 200 (queued→running is a valid transition).
-	wPut := httptest.NewRecorder()
-	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/tasks/"+task1.ID,
-		strings.NewReader(`{"status":"running"}`))
-	rPut.Header.Set("Content-Type", "application/json")
-	rPut.URL.Path = "/api/v1/tasks/" + task1.ID
-	api.HandleTasks(wPut, rPut)
-	require.Equal(t, http.StatusOK, wPut.Code)
-	var updated taskstore.TaskEntity
-	require.NoError(t, json.Unmarshal(wPut.Body.Bytes(), &updated))
-	assert.Equal(t, "running", updated.Status, "PUT must update status to 'running'")
+	// Step 5: PATCH /tasks/{id} {"status":"next"} → 200, status persists on read-back.
+	// Sprint 2: PUT is replaced by PATCH; "running" → "next" (unified 7-state vocabulary).
+	wPatch := httptest.NewRecorder()
+	rPatch := httptest.NewRequest(http.MethodPatch, "/api/v1/tasks/"+task1.Id,
+		strings.NewReader(`{"status":"next"}`))
+	rPatch.Header.Set("Content-Type", "application/json")
+	rPatch.URL.Path = "/api/v1/tasks/" + task1.Id
+	api.HandleTasks(wPatch, rPatch)
+	require.Equal(t, http.StatusOK, wPatch.Code,
+		"PATCH /tasks/{id} status=next must return 200; body=%s", wPatch.Body.String())
+	var updated gen.Task
+	require.NoError(t, json.Unmarshal(wPatch.Body.Bytes(), &updated))
+	assert.Equal(t, gen.TaskStatus("next"), updated.Status,
+		"PATCH must update status to 'next' (unified vocabulary)")
 }
 
 // --- E9: createAgent concurrency test ---

@@ -20,16 +20,17 @@ import {
 } from '@/components/ui/select'
 import { SmartSelect } from '@/components/ui/smart-select'
 import {
-  createBoardTask,
+  createTask,
+  updateTask,
   fetchAgents,
   isWorker,
   fetchMilestones,
-  boardTasksQueryKeys,
+  tasksQueryKeys,
   workspacesQueryKeys,
   milestonesQueryKeys,
   isApiError,
 } from '@/lib/api'
-import type { BoardTask, Milestone } from '@/lib/api'
+import type { Milestone } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 import { PRIORITY_BADGE } from './TaskCard'
@@ -44,7 +45,7 @@ interface CreateTaskSlideOverProps {
 }
 
 interface FormState {
-  name: string
+  title: string
   prompt: string
   priority: number
   milestoneId: string
@@ -52,7 +53,7 @@ interface FormState {
 }
 
 const INITIAL_FORM: FormState = {
-  name: '',
+  title: '',
   prompt: '',
   priority: 3,
   milestoneId: '__none__',
@@ -72,7 +73,7 @@ export function CreateTaskSlideOver({
     ...INITIAL_FORM,
     milestoneId: milestoneId ?? '__none__',
   })
-  const [nameError, setNameError] = useState('')
+  const [titleError, setTitleError] = useState('')
 
   // Sync milestone pre-fill when active filter changes
   useEffect(() => {
@@ -94,22 +95,24 @@ export function CreateTaskSlideOver({
     staleTime: 60_000,
   })
 
-  function buildBody(status: BoardTask['status']) {
+  function buildBody() {
     return {
-      name: form.name.trim(),
+      title: form.title.trim(),
+      action: 'llm' as const,
       prompt: form.prompt.trim() || undefined,
       priority: form.priority,
-      status,
       workspace_id: workspaceId,
+      surface: 'user' as const,
       milestone_id: form.milestoneId === '__none__' ? undefined : form.milestoneId || undefined,
       agent_id: form.agentId === '__none__' ? undefined : form.agentId || undefined,
     }
   }
 
+  // Create only — lands in inbox
   const createMutation = useMutation({
-    mutationFn: (status: BoardTask['status']) => createBoardTask(buildBody(status)),
+    mutationFn: () => createTask(buildBody()),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
       addToast({ message: 'Task created', variant: 'success' })
       resetAndClose()
@@ -120,27 +123,49 @@ export function CreateTaskSlideOver({
     },
   })
 
-  function handleSubmit(status: BoardTask['status']) {
-    if (!form.name.trim()) {
-      setNameError('Name is required')
+  // Create & Run now — create then PATCH to in_progress
+  const createAndRunMutation = useMutation({
+    mutationFn: async () => {
+      const task = await createTask(buildBody())
+      return updateTask(task.id, { status: 'in_progress' })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
+      addToast({ message: 'Task created and started', variant: 'success' })
+      resetAndClose()
+    },
+    onError: (err) => {
+      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to create task'
+      addToast({ message: msg, variant: 'error' })
+    },
+  })
+
+  function handleSubmit(runNow: boolean) {
+    if (!form.title.trim()) {
+      setTitleError('Title is required')
       return
     }
-    setNameError('')
-    createMutation.mutate(status)
+    setTitleError('')
+    if (runNow) {
+      createAndRunMutation.mutate()
+    } else {
+      createMutation.mutate()
+    }
   }
 
   function resetAndClose() {
     setForm({ ...INITIAL_FORM, milestoneId: milestoneId ?? '__none__' })
-    setNameError('')
+    setTitleError('')
     onOpenChange(false)
   }
-
 
   function handleOpenChange(next: boolean) {
     if (!next) resetAndClose()
     else onOpenChange(next)
   }
 
+  const isPending = createMutation.isPending || createAndRunMutation.isPending
   const priorityBadge = PRIORITY_BADGE[form.priority] ?? PRIORITY_BADGE[3]
 
   return (
@@ -153,23 +178,23 @@ export function CreateTaskSlideOver({
         </SheetHeader>
 
         <div className="flex flex-col flex-1 gap-5 py-4 overflow-y-auto">
-          {/* Name */}
+          {/* Title */}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ct-name" className="text-[var(--color-secondary)]">
-              Name <span className="text-[var(--color-error)]">*</span>
+            <Label htmlFor="ct-title" className="text-[var(--color-secondary)]">
+              Title <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Input
-              id="ct-name"
-              value={form.name}
-              onChange={(e) => { setForm((s) => ({ ...s, name: e.target.value })); setNameError('') }}
-              placeholder="Task name"
+              id="ct-title"
+              value={form.title}
+              onChange={(e) => { setForm((s) => ({ ...s, title: e.target.value })); setTitleError('') }}
+              placeholder="Task title"
               autoFocus
-              maxLength={500}
-              aria-invalid={!!nameError}
-              aria-describedby={nameError ? 'ct-name-error' : undefined}
+              maxLength={200}
+              aria-invalid={!!titleError}
+              aria-describedby={titleError ? 'ct-title-error' : undefined}
             />
-            {nameError && (
-              <p id="ct-name-error" className="text-xs text-[var(--color-error)]">{nameError}</p>
+            {titleError && (
+              <p id="ct-title-error" className="text-xs text-[var(--color-error)]">{titleError}</p>
             )}
           </div>
 
@@ -266,7 +291,7 @@ export function CreateTaskSlideOver({
             type="button"
             variant="ghost"
             onClick={() => handleOpenChange(false)}
-            disabled={createMutation.isPending}
+            disabled={isPending}
             className="flex-1"
           >
             Cancel
@@ -274,19 +299,19 @@ export function CreateTaskSlideOver({
           <Button
             type="button"
             variant="outline"
-            onClick={() => handleSubmit('inbox')}
-            disabled={createMutation.isPending}
+            onClick={() => handleSubmit(false)}
+            disabled={isPending}
             className="flex-1"
           >
-            {createMutation.isPending ? 'Creating…' : 'Create'}
+            {isPending ? 'Creating…' : 'Create'}
           </Button>
           <Button
             type="button"
-            onClick={() => handleSubmit('next')}
-            disabled={createMutation.isPending}
+            onClick={() => handleSubmit(true)}
+            disabled={isPending}
             className="flex-1 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent)]/90"
           >
-            {createMutation.isPending ? 'Creating…' : 'Create & Start'}
+            {isPending ? 'Creating…' : 'Create & Run'}
           </Button>
         </SheetFooter>
       </SheetContent>

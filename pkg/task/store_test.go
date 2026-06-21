@@ -1,0 +1,509 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package task
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// removeFileRaw deletes a task's JSON file directly, bypassing Store.Delete (and
+// thus its cascade). Used to simulate a manual deletion / crash leaving a
+// dangling blocked_by edge.
+func removeFileRaw(s *Store, id string) error {
+	return os.Remove(filepath.Join(s.dir, id+".json"))
+}
+
+func newStore(t *testing.T) *Store {
+	t.Helper()
+	return New(t.TempDir())
+}
+
+// mkTask returns a minimally-valid task in the given workspace.
+func mkTask(title, ws string) *Task {
+	return &Task{Title: title, Action: ActionLLM, WorkspaceID: ws}
+}
+
+func TestCreateGetRoundTrip(t *testing.T) {
+	s := newStore(t)
+	in := mkTask("Analyze logs", "ws-1")
+	in.Prompt = "do it"
+	in.Priority = 2
+	in.Todos = []Todo{{Text: "step one", Done: false}}
+	if err := s.Create(in); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if in.ID == "" {
+		t.Fatal("Create did not assign an ID")
+	}
+	if in.Status != StatusInbox {
+		t.Fatalf("default status = %q, want inbox", in.Status)
+	}
+	got, err := s.Get(in.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Title != "Analyze logs" || got.WorkspaceID != "ws-1" || got.Priority != 2 {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	if len(got.Todos) != 1 || got.Todos[0].Text != "step one" {
+		t.Fatalf("todos not preserved: %+v", got.Todos)
+	}
+	if got.CreatedAt == "" || got.UpdatedAt == "" {
+		t.Fatal("timestamps not stamped")
+	}
+}
+
+func TestCreateValidation(t *testing.T) {
+	s := newStore(t)
+	cases := []struct {
+		name string
+		t    *Task
+	}{
+		{"no title", &Task{Action: ActionLLM, WorkspaceID: "ws"}},
+		{"no workspace", &Task{Title: "x", Action: ActionLLM}},
+		{"bad priority", &Task{Title: "x", Action: ActionLLM, WorkspaceID: "ws", Priority: 9}},
+		{"bad status", &Task{Title: "x", Action: ActionLLM, WorkspaceID: "ws", Status: "bogus"}},
+		{"bad action", &Task{Title: "x", Action: "tool", WorkspaceID: "ws"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := s.Create(c.t); err == nil {
+				t.Fatalf("expected validation error for %s", c.name)
+			}
+		})
+	}
+}
+
+func TestUpdatePartial(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	if err := s.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+	newStatus := StatusInProgress
+	newTitle := "renamed"
+	got, err := s.Update(tk.ID, Patch{Status: &newStatus, Title: &newTitle})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Status != StatusInProgress || got.Title != "renamed" {
+		t.Fatalf("update not applied: %+v", got)
+	}
+	// Unspecified fields preserved.
+	if got.WorkspaceID != "ws" || got.Action != ActionLLM {
+		t.Fatalf("update clobbered other fields: %+v", got)
+	}
+}
+
+func TestUpdateNotFound(t *testing.T) {
+	s := newStore(t)
+	st := StatusDone
+	if _, err := s.Update("missing", Patch{Status: &st}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+// --- DAG validator ---
+
+func TestBlockedBySelfEdgeRejected(t *testing.T) {
+	s := newStore(t)
+	a := mkTask("a", "ws")
+	if err := s.Create(a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(a.ID, Patch{BlockedBy: &[]string{a.ID}}); !errors.Is(err, ErrBlockedBySelfEdge) {
+		t.Fatalf("want self-edge rejection, got %v", err)
+	}
+}
+
+func TestBlockedByTwoNodeCycleRejected(t *testing.T) {
+	s := newStore(t)
+	a, b := mkTask("a", "ws"), mkTask("b", "ws")
+	if err := s.Create(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create(b); err != nil {
+		t.Fatal(err)
+	}
+	// a depends on b — OK.
+	if _, err := s.Update(a.ID, Patch{BlockedBy: &[]string{b.ID}}); err != nil {
+		t.Fatalf("a→b should be allowed: %v", err)
+	}
+	// b depends on a — closes a 2-node cycle, must be rejected.
+	if _, err := s.Update(b.ID, Patch{BlockedBy: &[]string{a.ID}}); !errors.Is(err, ErrBlockedByCycle) {
+		t.Fatalf("want cycle rejection, got %v", err)
+	}
+}
+
+func TestBlockedByNNodeCycleRejected(t *testing.T) {
+	s := newStore(t)
+	a, b, c := mkTask("a", "ws"), mkTask("b", "ws"), mkTask("c", "ws")
+	for _, tk := range []*Task{a, b, c} {
+		if err := s.Create(tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustUpdate(t, s, a.ID, Patch{BlockedBy: &[]string{b.ID}})
+	mustUpdate(t, s, b.ID, Patch{BlockedBy: &[]string{c.ID}})
+	// c→a closes a→b→c→a.
+	if _, err := s.Update(c.ID, Patch{BlockedBy: &[]string{a.ID}}); !errors.Is(err, ErrBlockedByCycle) {
+		t.Fatalf("want N-node cycle rejection, got %v", err)
+	}
+}
+
+func TestBlockedByMissingTargetRejected(t *testing.T) {
+	s := newStore(t)
+	a := mkTask("a", "ws")
+	if err := s.Create(a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(a.ID, Patch{BlockedBy: &[]string{"does-not-exist"}}); err == nil {
+		t.Fatal("expected rejection of missing blocked_by target")
+	}
+}
+
+// --- auto-advance ---
+
+func TestAdvanceBlockedDependents(t *testing.T) {
+	s := newStore(t)
+	dep := mkTask("dep", "ws")
+	if err := s.Create(dep); err != nil {
+		t.Fatal(err)
+	}
+	blocked := mkTask("blocked", "ws")
+	blocked.Status = StatusBlocked
+	blocked.BlockedBy = []string{dep.ID}
+	if err := s.Create(blocked); err != nil {
+		t.Fatal(err)
+	}
+	// While dep is not done, advancing is a no-op.
+	advanced, err := s.AdvanceBlockedDependents(dep.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(advanced) != 0 {
+		t.Fatalf("should not advance while dep not done, got %v", advanced)
+	}
+	// Mark dep done, then advance.
+	done := StatusDone
+	mustUpdate(t, s, dep.ID, Patch{Status: &done})
+	advanced, err = s.AdvanceBlockedDependents(dep.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(advanced) != 1 || advanced[0] != blocked.ID {
+		t.Fatalf("expected %s advanced, got %v", blocked.ID, advanced)
+	}
+	got, _ := s.Get(blocked.ID)
+	if got.Status != StatusNext {
+		t.Fatalf("blocked task should advance to next, got %q", got.Status)
+	}
+}
+
+func TestAdvanceWaitsForAllDeps(t *testing.T) {
+	s := newStore(t)
+	d1, d2 := mkTask("d1", "ws"), mkTask("d2", "ws")
+	if err := s.Create(d1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create(d2); err != nil {
+		t.Fatal(err)
+	}
+	blocked := mkTask("blocked", "ws")
+	blocked.Status = StatusBlocked
+	blocked.BlockedBy = []string{d1.ID, d2.ID}
+	if err := s.Create(blocked); err != nil {
+		t.Fatal(err)
+	}
+	done := StatusDone
+	mustUpdate(t, s, d1.ID, Patch{Status: &done})
+	advanced, _ := s.AdvanceBlockedDependents(d1.ID)
+	if len(advanced) != 0 {
+		t.Fatalf("should stay blocked until ALL deps done, got %v", advanced)
+	}
+	mustUpdate(t, s, d2.ID, Patch{Status: &done})
+	advanced, _ = s.AdvanceBlockedDependents(d2.ID)
+	if len(advanced) != 1 {
+		t.Fatalf("should advance once all deps done, got %v", advanced)
+	}
+}
+
+// --- delete + cascade ---
+
+func TestDeleteCascadesEdges(t *testing.T) {
+	s := newStore(t)
+	dep := mkTask("dep", "ws")
+	if err := s.Create(dep); err != nil {
+		t.Fatal(err)
+	}
+	blocked := mkTask("blocked", "ws")
+	blocked.BlockedBy = []string{dep.ID}
+	if err := s.Create(blocked); err != nil {
+		t.Fatal(err)
+	}
+	unblocked, err := s.Delete(dep.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unblocked) != 1 || unblocked[0] != blocked.ID {
+		t.Fatalf("delete should report %s unblocked, got %v", blocked.ID, unblocked)
+	}
+	got, _ := s.Get(blocked.ID)
+	if len(got.BlockedBy) != 0 {
+		t.Fatalf("edge not cascade-cleaned: %v", got.BlockedBy)
+	}
+}
+
+func TestDeleteNotFound(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.Delete("missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestDropOrphanEdges(t *testing.T) {
+	s := newStore(t)
+	dep := mkTask("dep", "ws")
+	if err := s.Create(dep); err != nil {
+		t.Fatal(err)
+	}
+	a := mkTask("a", "ws")
+	a.BlockedBy = []string{dep.ID}
+	if err := s.Create(a); err != nil {
+		t.Fatal(err)
+	}
+	// No orphans yet.
+	removed, err := s.DropOrphanEdges()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Fatalf("no orphans expected, removed %d", removed)
+	}
+	// Remove dep's file out-of-band (simulate manual deletion / crash) so a's
+	// edge now dangles, WITHOUT going through Delete (which would cascade-clean).
+	if err := removeFileRaw(s, dep.ID); err != nil {
+		t.Fatal(err)
+	}
+	removed, err = s.DropOrphanEdges()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected 1 orphan edge removed, got %d", removed)
+	}
+	got, _ := s.Get(a.ID)
+	if len(got.BlockedBy) != 0 {
+		t.Fatalf("orphan edge not dropped: %v", got.BlockedBy)
+	}
+}
+
+// --- subtasks (parent cycle) ---
+
+func TestSubtaskParentCycleRejected(t *testing.T) {
+	s := newStore(t)
+	parent := mkTask("parent", "ws")
+	if err := s.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	child := mkTask("child", "ws")
+	child.ParentTaskID = parent.ID
+	if err := s.Create(child); err != nil {
+		t.Fatalf("child with valid parent should be created: %v", err)
+	}
+	// A task cannot be its own parent.
+	self := mkTask("self", "ws")
+	self.ID = "self-id"
+	self.ParentTaskID = "self-id"
+	if err := s.Create(self); !errors.Is(err, ErrParentCycle) {
+		t.Fatalf("want parent self-cycle rejection, got %v", err)
+	}
+}
+
+func TestSubtaskListByParent(t *testing.T) {
+	s := newStore(t)
+	parent := mkTask("parent", "ws")
+	if err := s.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		c := mkTask("child", "ws")
+		c.ParentTaskID = parent.ID
+		if err := s.Create(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A top-level task too.
+	if err := s.Create(mkTask("top", "ws")); err != nil {
+		t.Fatal(err)
+	}
+	children, err := s.List(Filter{ParentTaskID: parent.ID, ParentTaskIDSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 3 {
+		t.Fatalf("expected 3 children, got %d", len(children))
+	}
+	// Top-level filter (parent == "").
+	tops, err := s.List(Filter{ParentTaskIDSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tops) != 2 { // parent + top
+		t.Fatalf("expected 2 top-level tasks, got %d", len(tops))
+	}
+}
+
+// --- triggers ---
+
+func TestTriggerValidation(t *testing.T) {
+	at := int64(1781000000000)
+	every := int64(3600000)
+	tooFast := int64(500)
+	cron := "0 9 * * MON"
+	good := []*Trigger{
+		{Type: TriggerManual},
+		{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
+		{Type: TriggerEvery, Config: TriggerConfig{EveryMs: &every}},
+		{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+	}
+	for _, tr := range good {
+		if err := ValidateTrigger(tr); err != nil {
+			t.Fatalf("trigger %q should be valid: %v", tr.Type, err)
+		}
+	}
+	bad := []*Trigger{
+		{Type: "bogus"},
+		{Type: TriggerOnce},  // missing at_ms
+		{Type: TriggerEvery}, // missing every_ms
+		{Type: TriggerEvery, Config: TriggerConfig{EveryMs: &tooFast}}, // below min
+		{Type: TriggerRecurring}, // missing cron
+	}
+	for _, tr := range bad {
+		if err := ValidateTrigger(tr); err == nil {
+			t.Fatalf("trigger %q should be invalid", tr.Type)
+		}
+	}
+}
+
+func TestTriggerPersisted(t *testing.T) {
+	s := newStore(t)
+	cron := "0 9 * * MON"
+	tk := mkTask("recurring", "ws")
+	tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
+	if err := s.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(tk.ID)
+	if got.Trigger == nil || got.Trigger.Type != TriggerRecurring {
+		t.Fatalf("trigger not persisted: %+v", got.Trigger)
+	}
+	if got.Trigger.Config.CronExpr == nil || *got.Trigger.Config.CronExpr != cron {
+		t.Fatalf("trigger config not persisted: %+v", got.Trigger.Config)
+	}
+}
+
+// --- workspace scoping ---
+
+func TestWorkspaceScopedList(t *testing.T) {
+	s := newStore(t)
+	for _, ws := range []string{"ws-a", "ws-a", "ws-b"} {
+		if err := s.Create(mkTask("t", ws)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := s.List(Filter{WorkspaceID: "ws-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a) != 2 {
+		t.Fatalf("ws-a should have 2 tasks, got %d", len(a))
+	}
+	b, _ := s.List(Filter{WorkspaceID: "ws-b"})
+	if len(b) != 1 {
+		t.Fatalf("ws-b should have 1 task, got %d", len(b))
+	}
+}
+
+func TestSurfaceScopedList(t *testing.T) {
+	s := newStore(t)
+	u := mkTask("user", "ws")
+	if err := s.Create(u); err != nil {
+		t.Fatal(err)
+	}
+	hb := mkTask("hb", "ws")
+	hb.Surface = SurfaceHeartbeat
+	if err := s.Create(hb); err != nil {
+		t.Fatal(err)
+	}
+	users, _ := s.List(Filter{Surface: SurfaceUser})
+	if len(users) != 1 || users[0].Title != "user" {
+		t.Fatalf("surface=user filter wrong: %+v", users)
+	}
+	hbs, _ := s.List(Filter{Surface: SurfaceHeartbeat})
+	if len(hbs) != 1 || hbs[0].Title != "hb" {
+		t.Fatalf("surface=heartbeat filter wrong: %+v", hbs)
+	}
+}
+
+// --- claim ---
+
+func TestClaimForRun(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusNext
+	if err := s.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.ClaimForRun(tk.ID, time.Now())
+	if err != nil {
+		t.Fatalf("ClaimForRun: %v", err)
+	}
+	if claimed.Status != StatusInProgress || claimed.StartedAt == "" {
+		t.Fatalf("claim did not transition to in_progress: %+v", claimed)
+	}
+	// A second claim must fail (already in_progress).
+	if _, err := s.ClaimForRun(tk.ID, time.Now()); !errors.Is(err, ErrAlreadyClaimed) {
+		t.Fatalf("second claim should fail, got %v", err)
+	}
+}
+
+func TestClaimForRunRejectsNonNext(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws") // defaults to inbox
+	if err := s.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimForRun(tk.ID, time.Now()); !errors.Is(err, ErrAlreadyClaimed) {
+		t.Fatalf("inbox task should not be claimable, got %v", err)
+	}
+}
+
+func TestClaimParentFollowUpOnce(t *testing.T) {
+	s := newStore(t)
+	p := mkTask("parent", "ws")
+	if err := s.Create(p); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.ClaimParentFollowUp(p.ID)
+	if err != nil || !first {
+		t.Fatalf("first claim should win: %v %v", first, err)
+	}
+	second, err := s.ClaimParentFollowUp(p.ID)
+	if err != nil || second {
+		t.Fatalf("second claim should lose: %v %v", second, err)
+	}
+}
+
+func mustUpdate(t *testing.T, s *Store, id string, p Patch) {
+	t.Helper()
+	if _, err := s.Update(id, p); err != nil {
+		t.Fatalf("Update(%s): %v", id, err)
+	}
+}

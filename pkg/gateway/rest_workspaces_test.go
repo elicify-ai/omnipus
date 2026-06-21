@@ -459,18 +459,19 @@ func TestHandleWorkspaces_CascadeDelete_TasksAndLinksGone(t *testing.T) {
 	// Step 1: Create a project via REST → get project ID P.
 	projID := createWorkspaceViaAPI(t, api, "CascadeProject", "cascade test project")
 
-	// Step 2: Create a board task via REST with workspace_id=P → get task ID T.
-	taskBody := fmt.Sprintf(`{"name":"CascadeTask","workspace_id":%q}`, projID)
+	// Step 2: Create a unified task via REST with workspace_id=P → get task ID T.
+	// Sprint 2: POST /api/v1/tasks (replaces /board/tasks); "title" + "action" required.
+	taskBody := fmt.Sprintf(`{"title":"CascadeTask","action":"llm","workspace_id":%q}`, projID)
 	wTask := httptest.NewRecorder()
-	rTask := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(taskBody))
+	rTask := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(taskBody))
 	rTask.Header.Set("Content-Type", "application/json")
-	rTask.URL.Path = "/api/v1/board/tasks"
-	api.HandleBoardTasks(wTask, rTask)
-	require.Equal(t, http.StatusCreated, wTask.Code, "create board task must return 201; body=%s", wTask.Body.String())
-	var createdTask gen.BoardTask
+	rTask.URL.Path = "/api/v1/tasks"
+	api.HandleTasks(wTask, rTask)
+	require.Equal(t, http.StatusCreated, wTask.Code, "create task must return 201; body=%s", wTask.Body.String())
+	var createdTask gen.Task
 	require.NoError(t, json.Unmarshal(wTask.Body.Bytes(), &createdTask))
 	taskID := createdTask.Id
-	require.NotEmpty(t, taskID, "created board task must have non-empty id")
+	require.NotEmpty(t, taskID, "created task must have non-empty id")
 
 	// Verify the task file exists before delete.
 	taskPath := filepath.Join(api.homePath, "tasks", taskID+".json")
@@ -529,15 +530,16 @@ func TestHandleWorkspaces_ConcurrentDelete(t *testing.T) {
 	// Step 1: Create a project via POST /api/v1/workspaces.
 	projID := createWorkspaceViaAPI(t, api, "ConcurrentDeleteProject", "concurrent delete test")
 
-	// Step 2: Create a board task linked to the project via POST /api/v1/board/tasks.
-	taskBody := fmt.Sprintf(`{"name":"ConcurrentTask","workspace_id":%q}`, projID)
+	// Step 2: Create a unified task linked to the project via POST /api/v1/tasks.
+	// Sprint 2: /board/tasks replaced by /api/v1/tasks; "title"+"action" required.
+	taskBody := fmt.Sprintf(`{"title":"ConcurrentTask","action":"llm","workspace_id":%q}`, projID)
 	wTask := httptest.NewRecorder()
-	rTask := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(taskBody))
+	rTask := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(taskBody))
 	rTask.Header.Set("Content-Type", "application/json")
-	rTask.URL.Path = "/api/v1/board/tasks"
-	api.HandleBoardTasks(wTask, rTask)
+	rTask.URL.Path = "/api/v1/tasks"
+	api.HandleTasks(wTask, rTask)
 	require.Equal(t, http.StatusCreated, wTask.Code,
-		"create board task must return 201; body=%s", wTask.Body.String())
+		"create task must return 201; body=%s", wTask.Body.String())
 
 	// Step 3: Launch 2 goroutines that simultaneously DELETE the project.
 	type result struct {

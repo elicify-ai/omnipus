@@ -1,10 +1,14 @@
 /**
  * CreateTaskSlideOver.test.tsx
  *
- * Tests for the CreateTaskSlideOver component covering all BDD scenarios
- * from the project-task-management-level1-spec.
- *
- * Traces to: project-task-management-level1-spec.md — CreateTaskSlideOver BDD scenarios
+ * Tests for the CreateTaskSlideOver component against the unified Sprint 2
+ * Task model. Key changes from the old BoardTask model:
+ *   - Field: `name` → `title`
+ *   - API:   `createBoardTask` → `createTask`
+ *   - Action: always `llm`, surface: always `user`
+ *   - No `status` in create body — server always seeds `inbox`
+ *   - "Create & Start" → "Create & Run" (create + PATCH to in_progress)
+ *   - Validation label: "Name" → "Title"
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -21,15 +25,17 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchMilestones: vi.fn().mockResolvedValue([]),
-    createBoardTask: vi.fn(),
-    boardTasksQueryKeys: { list: () => ['board-tasks'] },
+    createTask: vi.fn(),
+    updateTask: vi.fn(),
+    tasksQueryKeys: { list: () => ['tasks'] },
+    boardTasksQueryKeys: { list: () => ['tasks'] },
     workspacesQueryKeys: { list: () => ['workspaces'] },
     milestonesQueryKeys: { list: (id: string) => ['milestones', id] },
     isApiError: vi.fn().mockReturnValue(false),
   }
 })
 
-import { createBoardTask, fetchAgents, fetchMilestones } from '@/lib/api'
+import { createTask, updateTask, fetchAgents, fetchMilestones } from '@/lib/api'
 
 const mockAddToast = vi.fn()
 
@@ -46,6 +52,24 @@ function makeClient() {
   return new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
+}
+
+// Minimal Task shape returned by mock createTask
+function makeCreatedTask(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'new-task',
+    title: 'New task',
+    action: 'llm',
+    status: 'inbox',
+    priority: 3,
+    workspace_id: 'proj-test',
+    surface: 'user',
+    owner: 'alice',
+    created_by: 'alice',
+    created_at: '2026-06-20T10:00:00Z',
+    updated_at: '2026-06-20T10:00:00Z',
+    ...overrides,
+  }
 }
 
 function renderSlideOver(props: Partial<{
@@ -78,7 +102,8 @@ function renderSlideOver(props: Partial<{
 beforeEach(() => {
   vi.mocked(fetchAgents).mockResolvedValue([])
   vi.mocked(fetchMilestones).mockResolvedValue([])
-  vi.mocked(createBoardTask).mockReset()
+  vi.mocked(createTask).mockReset()
+  vi.mocked(updateTask).mockReset()
   mockAddToast.mockReset()
 })
 
@@ -88,12 +113,11 @@ describe('CreateTaskSlideOver — renders all fields', () => {
   it('renders with all expected form fields and action buttons', async () => {
     // BDD: Given the CreateTaskSlideOver is open,
     // When it renders,
-    // Then Name, Prompt, Priority, Milestone placeholder, Agent, Create, and Create & Start are visible.
-    // Traces to: project-task-management-level1-spec.md — CreateTaskSlideOver render test
+    // Then Title, Prompt, Priority, Milestone placeholder, Agent, Create, and Create & Run are visible.
     renderSlideOver()
 
-    // Name field — by label
-    expect(screen.getByLabelText(/name/i)).toBeInTheDocument()
+    // Title field — by label
+    expect(screen.getByLabelText(/title/i)).toBeInTheDocument()
 
     // Prompt / Instructions field
     expect(screen.getByLabelText(/prompt/i)).toBeInTheDocument()
@@ -107,157 +131,137 @@ describe('CreateTaskSlideOver — renders all fields', () => {
     // Create button
     expect(screen.getByRole('button', { name: /^create$/i })).toBeInTheDocument()
 
-    // Create & Start button
-    expect(screen.getByRole('button', { name: /create & start/i })).toBeInTheDocument()
+    // Create & Run button
+    expect(screen.getByRole('button', { name: /create & run/i })).toBeInTheDocument()
 
     // Cancel button
     expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
   })
 })
 
-describe('CreateTaskSlideOver — Create button calls createBoardTask with status inbox', () => {
-  it('Create calls createBoardTask with status: inbox when name is filled', async () => {
-    // BDD: Given a valid task name is entered,
+describe('CreateTaskSlideOver — Create button calls createTask and lands in inbox', () => {
+  it('Create calls createTask with correct body (no status field — server seeds inbox)', async () => {
+    // BDD: Given a valid task title is entered,
     // When the user clicks Create,
-    // Then createBoardTask is called with status: 'inbox'.
-    // Traces to: project-task-management-level1-spec.md — CreateTaskSlideOver create-inbox scenario
-    const created = {
-      id: 'new-task',
-      name: 'My task',
-      status: 'inbox',
-      created_at: '2026-06-09T10:00:00Z',
-      updated_at: '2026-06-09T10:00:00Z',
-    }
-    vi.mocked(createBoardTask).mockResolvedValueOnce(created as never)
+    // Then createTask is called with title, action:'llm', workspace_id, surface:'user'.
+    // Status is NOT sent — server always seeds inbox.
+    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask({ title: 'My task' }) as never)
 
     renderSlideOver()
 
-    // Fill in the task name
-    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'My task' } })
-
-    // Click the Create button
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'My task' } })
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
-    await waitFor(() => expect(vi.mocked(createBoardTask)).toHaveBeenCalledOnce())
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
 
-    const callArg = vi.mocked(createBoardTask).mock.calls[0][0]
-    expect(callArg.name).toBe('My task')
-    expect(callArg.status).toBe('inbox')
+    const callArg = vi.mocked(createTask).mock.calls[0][0]
+    expect(callArg.title).toBe('My task')
+    expect(callArg.action).toBe('llm')
+    expect(callArg.surface).toBe('user')
     expect(callArg.workspace_id).toBe('proj-test')
+    // No status field in the create body
+    expect((callArg as Record<string, unknown>).status).toBeUndefined()
+    // No updateTask call for plain "Create"
+    expect(vi.mocked(updateTask)).not.toHaveBeenCalled()
   })
 
-  it('differentiation test: Create sends inbox, Create & Start sends next — different statuses', async () => {
-    // Anti-hardcode: two calls with different buttons must produce different status values.
-    // Traces to: project-task-management-level1-spec.md — CreateTaskSlideOver differentiation
-    const inboxTask = { id: 'inbox-task', name: 'Task A', status: 'inbox', created_at: '2026-06-09T10:00:00Z', updated_at: '2026-06-09T10:00:00Z' }
-    const nextTask = { id: 'next-task', name: 'Task B', status: 'next', created_at: '2026-06-09T10:01:00Z', updated_at: '2026-06-09T10:01:00Z' }
+  it('differentiation test: Create vs Create & Run produce different API call sequences', async () => {
+    // Anti-hardcode: Create calls createTask only; Create & Run calls createTask + updateTask(in_progress).
+    const inboxTask = makeCreatedTask({ id: 'inbox-task', title: 'Task A' })
+    const runTask = makeCreatedTask({ id: 'run-task', title: 'Task B', status: 'in_progress' })
+    const runTaskInProgress = makeCreatedTask({ id: 'run-task', status: 'in_progress' })
 
     const onOpenChange = vi.fn()
 
-    // First render — Create → inbox
+    // First render — Create → createTask only
     const { unmount } = render(
       <QueryClientProvider client={makeClient()}>
         <CreateTaskSlideOver open onOpenChange={onOpenChange} workspaceId="proj-1" />
       </QueryClientProvider>,
     )
-    vi.mocked(createBoardTask).mockResolvedValueOnce(inboxTask as never)
-    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Task A' } })
+    vi.mocked(createTask).mockResolvedValueOnce(inboxTask as never)
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Task A' } })
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
-    await waitFor(() => expect(vi.mocked(createBoardTask)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(createBoardTask).mock.calls[0][0].status).toBe('inbox')
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateTask)).not.toHaveBeenCalled()
     unmount()
 
-    vi.mocked(createBoardTask).mockReset()
+    vi.mocked(createTask).mockReset()
+    vi.mocked(updateTask).mockReset()
 
-    // Second render — Create & Start → next
+    // Second render — Create & Run → createTask + updateTask(in_progress)
     render(
       <QueryClientProvider client={makeClient()}>
         <CreateTaskSlideOver open onOpenChange={vi.fn()} workspaceId="proj-1" />
       </QueryClientProvider>,
     )
-    vi.mocked(createBoardTask).mockResolvedValueOnce(nextTask as never)
-    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Task B' } })
-    fireEvent.click(screen.getByRole('button', { name: /create & start/i }))
-    await waitFor(() => expect(vi.mocked(createBoardTask)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(createBoardTask).mock.calls[0][0].status).toBe('next')
+    vi.mocked(createTask).mockResolvedValueOnce(runTask as never)
+    vi.mocked(updateTask).mockResolvedValueOnce(runTaskInProgress as never)
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Task B' } })
+    fireEvent.click(screen.getByRole('button', { name: /create & run/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateTask).mock.calls[0][1]).toMatchObject({ status: 'in_progress' })
   })
 })
 
-describe('CreateTaskSlideOver — Create & Start calls createBoardTask with status next', () => {
-  it('Create & Start calls createBoardTask with status: next when name is filled', async () => {
-    // BDD: Given a valid task name is entered,
-    // When the user clicks Create & Start,
-    // Then createBoardTask is called with status: 'next'.
-    // Traces to: project-task-management-level1-spec.md — CreateTaskSlideOver create-next scenario
-    const created = {
-      id: 'next-task',
-      name: 'Start immediately',
-      status: 'next',
-      created_at: '2026-06-09T10:00:00Z',
-      updated_at: '2026-06-09T10:00:00Z',
-    }
-    vi.mocked(createBoardTask).mockResolvedValueOnce(created as never)
+describe('CreateTaskSlideOver — Create & Run calls createTask then PATCH in_progress', () => {
+  it('Create & Run calls createTask then updateTask with status in_progress', async () => {
+    // BDD: Given a valid task title is entered,
+    // When the user clicks Create & Run,
+    // Then createTask is called first, then updateTask(id, { status: 'in_progress' }).
+    const created = makeCreatedTask({ id: 'run-task', title: 'Start immediately' })
+    const running = makeCreatedTask({ id: 'run-task', status: 'in_progress' })
+
+    vi.mocked(createTask).mockResolvedValueOnce(created as never)
+    vi.mocked(updateTask).mockResolvedValueOnce(running as never)
 
     renderSlideOver()
 
-    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Start immediately' } })
-    fireEvent.click(screen.getByRole('button', { name: /create & start/i }))
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Start immediately' } })
+    fireEvent.click(screen.getByRole('button', { name: /create & run/i }))
 
-    await waitFor(() => expect(vi.mocked(createBoardTask)).toHaveBeenCalledOnce())
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledOnce())
 
-    const callArg = vi.mocked(createBoardTask).mock.calls[0][0]
-    expect(callArg.name).toBe('Start immediately')
-    expect(callArg.status).toBe('next')
+    const updateArg = vi.mocked(updateTask).mock.calls[0][1]
+    expect(updateArg).toMatchObject({ status: 'in_progress' })
   })
 })
 
-describe('CreateTaskSlideOver — name is required validation', () => {
-  it('clicking Create with empty name shows validation error and makes no API call', async () => {
-    // BDD: Given the Name field is empty,
+describe('CreateTaskSlideOver — title is required validation', () => {
+  it('clicking Create with empty title shows validation error and makes no API call', async () => {
+    // BDD: Given the Title field is empty,
     // When the user clicks Create,
-    // Then "Name is required" error is displayed,
-    // And createBoardTask is NOT called.
-    // Traces to: project-task-management-level1-spec.md — CreateTaskSlideOver name-required validation
+    // Then "Title is required" error is displayed,
+    // And createTask is NOT called.
     renderSlideOver()
 
-    // Name field is empty by default — click Create
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
-    expect(await screen.findByText(/name is required/i)).toBeInTheDocument()
-    expect(vi.mocked(createBoardTask)).not.toHaveBeenCalled()
+    expect(await screen.findByText(/title is required/i)).toBeInTheDocument()
+    expect(vi.mocked(createTask)).not.toHaveBeenCalled()
   })
 
-  it('clicking Create & Start with empty name shows validation error and makes no API call', async () => {
-    // BDD: Given the Name field is empty,
-    // When the user clicks Create & Start,
-    // Then validation error shown and API not called.
-    // Traces to: project-task-management-level1-spec.md — CreateTaskSlideOver name-required validation (create-start)
+  it('clicking Create & Run with empty title shows validation error and makes no API call', async () => {
     renderSlideOver()
 
-    fireEvent.click(screen.getByRole('button', { name: /create & start/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create & run/i }))
 
-    expect(await screen.findByText(/name is required/i)).toBeInTheDocument()
-    expect(vi.mocked(createBoardTask)).not.toHaveBeenCalled()
+    expect(await screen.findByText(/title is required/i)).toBeInTheDocument()
+    expect(vi.mocked(createTask)).not.toHaveBeenCalled()
   })
 })
 
 describe('CreateTaskSlideOver — priority defaults', () => {
   it('priority defaults to P3 when slide-over opens', async () => {
-    // BDD: Given the CreateTaskSlideOver is opened without pre-filled priority,
-    // When it renders,
-    // Then the priority select shows P3 as the selected value (the select trigger
-    // renders "P3 — Medium" and the label badge shows "P3").
-    // Traces to: project-task-management-level1-spec.md — CreateTaskSlideOver priority-default
     renderSlideOver()
 
     await act(async () => {})
 
-    // The Select trigger renders the selected value as "P3 — Medium"
-    // getAllByText ensures we handle multiple matches gracefully
     const p3Elements = screen.getAllByText(/p3/i)
     expect(p3Elements.length).toBeGreaterThanOrEqual(1)
 
-    // Verify none of them show a different priority (e.g. P1, P2, P4, P5)
     expect(screen.queryByText(/^p1/i)).toBeNull()
     expect(screen.queryByText(/^p2/i)).toBeNull()
     expect(screen.queryByText(/^p4/i)).toBeNull()
@@ -265,9 +269,6 @@ describe('CreateTaskSlideOver — priority defaults', () => {
   })
 })
 
-// Workers (type:'worker') are delegation-only labour — never a DIRECT task
-// runner. Assigning one as a task's agent_id would make it run the task via
-// processTaskDirect, which is forbidden. The assignee picker must exclude them.
 describe('CreateTaskSlideOver — workers excluded from the agent assignee picker', () => {
   const agentsWithWorker = [
     { id: 'mia', name: 'Mia', type: 'core', default: false },
@@ -277,14 +278,10 @@ describe('CreateTaskSlideOver — workers excluded from the agent assignee picke
 
   it('does not offer a worker as an assignee option; lists base agents', async () => {
     vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker as never)
-    // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
     Element.prototype.scrollIntoView = vi.fn()
 
     renderSlideOver()
 
-    // Locate the Agent assignee picker specifically: the "Agent" <Label> and the
-    // SmartSelect (Radix Select) combobox are siblings inside the same field <div>.
-    // (Other comboboxes — Priority, Milestone — must not be targeted.)
     const agentLabel = await screen.findByText('Agent')
     const fieldRoot = agentLabel.parentElement as HTMLElement
     const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
@@ -306,11 +303,6 @@ describe('CreateTaskSlideOver — workers excluded from the agent assignee picke
 
 describe('CreateTaskSlideOver — Cancel closes the slide-over', () => {
   it('clicking Cancel calls onOpenChange(false) and makes no API call', async () => {
-    // BDD: Given the slide-over is open,
-    // When the user clicks Cancel,
-    // Then onOpenChange(false) is called,
-    // And no API call is made.
-    // Traces to: project-task-management-level1-spec.md — CreateTaskSlideOver cancel scenario
     const user = userEvent.setup()
     const onOpenChange = vi.fn()
 
@@ -323,6 +315,6 @@ describe('CreateTaskSlideOver — Cancel closes the slide-over', () => {
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     expect(onOpenChange).toHaveBeenCalledWith(false)
-    expect(vi.mocked(createBoardTask)).not.toHaveBeenCalled()
+    expect(vi.mocked(createTask)).not.toHaveBeenCalled()
   })
 })

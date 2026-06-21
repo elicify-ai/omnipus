@@ -1,28 +1,22 @@
-// Calendar/Automations Shell — Spec-5 (FR-8.3)
+// Calendar view — shows tasks with time triggers (once/every/recurring) and milestones by date.
 //
-// Render-only surface showing scheduled board tasks (by `start`/`due`) and
-// workspace milestones (by `due_date`). Grouped by month and sorted by date.
+// Data sources:
+//   - Tasks:       GET /api/v1/tasks?workspace_id={id}  (Task[])
+//   - Milestones:  GET /api/v1/workspaces/{id}/milestones (Milestone[])
 //
-// No scheduling engine runs in v0.1.0 — this is a shell only.
-// Recurrence is stored-not-run; the automations engine is v0.2.0.
-//
-// Data sources (OBS-003: no new wire type needed):
-//   - Board tasks:  GET /api/v1/board/tasks?workspace_id={id}  (BoardTask[])
-//   - Milestones:   GET /api/v1/workspaces/{id}/milestones     (Milestone[])
-//
-// Both endpoints already exist; the new `start`, `due`, and `recurrence` fields
-// on BoardTask are used here to build the calendar view.
+// Only tasks with a time trigger (once/every/recurring) appear on the calendar.
+// Tasks with no trigger (manual) or surface!=user are excluded.
 
 import { useQuery } from '@tanstack/react-query'
 import { CalendarBlank, Flag, ArrowClockwise } from '@phosphor-icons/react'
 import {
-  fetchBoardTasks,
+  fetchTasks,
   fetchMilestones,
-  boardTasksQueryKeys,
+  tasksQueryKeys,
   milestonesQueryKeys,
   type Milestone,
+  type Task,
 } from '@/lib/api'
-import type { BoardTask } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 interface CalendarScreenProps {
@@ -32,14 +26,21 @@ interface CalendarScreenProps {
 // CalendarEvent is a unified view model for tasks and milestones with a date.
 // not-wire-format: internal view model only; never sent over the network.
 type CalendarEvent =
-  | { kind: 'task-start'; date: Date; task: BoardTask }
-  | { kind: 'task-due'; date: Date; task: BoardTask }
+  | { kind: 'task-trigger'; date: Date; task: Task; label: string }
+  | { kind: 'task-due'; date: Date; task: Task }
   | { kind: 'milestone'; date: Date; milestone: Milestone }
 
 /** Parse a date string (date or date-time, ISO 8601). Returns null on failure. */
 function parseDate(s: string | null | undefined): Date | null {
   if (!s) return null
   const d = new Date(s)
+  return isNaN(d.getTime()) ? null : d
+}
+
+/** Parse a unix timestamp (ms). Returns null on failure. */
+function parseMs(ms: number | null | undefined): Date | null {
+  if (!ms) return null
+  const d = new Date(ms)
   return isNaN(d.getTime()) ? null : d
 }
 
@@ -70,13 +71,15 @@ function groupByMonth(events: CalendarEvent[]): Map<string, CalendarEvent[]> {
 
 /** Render a single calendar event row. */
 function EventRow({ event }: { event: CalendarEvent }) {
-  if (event.kind === 'task-start' || event.kind === 'task-due') {
+  if (event.kind === 'task-trigger' || event.kind === 'task-due') {
     const { task } = event
-    const label = event.kind === 'task-start' ? 'Start' : 'Due'
+    const label = event.kind === 'task-trigger' ? event.label : 'Due'
     const labelClass =
-      event.kind === 'task-start'
+      event.kind === 'task-trigger'
         ? 'text-[#E2E8F0]/60 bg-white/5'
         : 'text-[#D4AF37] bg-[#D4AF37]/10'
+    const isRecurring = task.trigger && (task.trigger.type === 'every' || task.trigger.type === 'recurring')
+
     return (
       <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-white/5 transition-colors">
         <span className="w-14 shrink-0 text-right text-sm font-mono text-[#E2E8F0]/50">
@@ -90,8 +93,8 @@ function EventRow({ event }: { event: CalendarEvent }) {
         >
           {label}
         </span>
-        <span className="flex-1 text-sm text-[#E2E8F0] truncate">{task.name}</span>
-        {task.recurrence && (
+        <span className="flex-1 text-sm text-[#E2E8F0] truncate">{task.title}</span>
+        {isRecurring && (
           <ArrowClockwise
             size={14}
             weight="regular"
@@ -103,14 +106,14 @@ function EventRow({ event }: { event: CalendarEvent }) {
           className={cn(
             'shrink-0 px-1.5 py-0.5 rounded text-xs capitalize',
             task.status === 'done' && 'text-emerald-400 bg-emerald-400/10',
-            task.status === 'active' && 'text-blue-400 bg-blue-400/10',
-            task.status === 'waiting' && 'text-amber-400 bg-amber-400/10',
+            task.status === 'in_progress' && 'text-blue-400 bg-blue-400/10',
+            task.status === 'blocked' && 'text-amber-400 bg-amber-400/10',
             task.status === 'failed' && 'text-red-400 bg-red-400/10',
-            (task.status === 'inbox' || task.status === 'next') &&
+            (task.status === 'inbox' || task.status === 'next' || task.status === 'planning') &&
               'text-[#E2E8F0]/60 bg-white/5',
           )}
         >
-          {task.status}
+          {task.status === 'in_progress' ? 'in progress' : task.status}
         </span>
       </div>
     )
@@ -134,8 +137,8 @@ function EventRow({ event }: { event: CalendarEvent }) {
 
 export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   const { data: tasks = [], isLoading: tasksLoading, isError: tasksError } = useQuery({
-    queryKey: boardTasksQueryKeys.list({ workspace_id: workspaceId }),
-    queryFn: () => fetchBoardTasks({ workspace_id: workspaceId }),
+    queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
+    queryFn: () => fetchTasks({ workspace_id: workspaceId }),
     staleTime: 30_000,
     enabled: !!workspaceId,
   })
@@ -150,14 +153,27 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   const isLoading = tasksLoading || milestonesLoading
   const isError = tasksError || milestonesError
 
-  // Build unified event list from tasks (start + due) and milestones (due_date).
+  // Build unified event list from tasks (trigger fire time + due) and milestones (due_date).
   const events: CalendarEvent[] = []
 
   for (const task of tasks) {
-    const startDate = parseDate(task.start)
-    if (startDate) {
-      events.push({ kind: 'task-start', date: startDate, task })
+    // Skip non-user-surface tasks
+    if (task.surface && task.surface !== 'user') continue
+
+    if (task.trigger) {
+      const { type, config } = task.trigger
+      if (type === 'once' && config?.at_ms) {
+        const d = parseMs(config.at_ms)
+        if (d) events.push({ kind: 'task-trigger', date: d, task, label: 'Fires' })
+      } else if (type === 'every' && config?.every_ms) {
+        // Show next fire as "now + interval" approximation
+        const d = new Date(Date.now() + config.every_ms)
+        events.push({ kind: 'task-trigger', date: d, task, label: 'Repeats' })
+      } else if (type === 'recurring' && config?.cron_expr) {
+        // No local cron parser available; skip in-calendar until Sprint 4 adds server-computed next_fire_at
+      }
     }
+
     const dueDate = parseDate(task.due)
     if (dueDate) {
       events.push({ kind: 'task-due', date: dueDate, task })
@@ -184,7 +200,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         <CalendarBlank size={20} weight="regular" className="text-[#D4AF37]" />
         <h1 className="text-base font-semibold font-[Outfit]">Calendar</h1>
         <span className="ml-auto text-xs text-[#E2E8F0]/40">
-          Shell only — scheduling engine is v0.2.0
+          Recurring tasks with time triggers — set due or trigger on a task to see it here
         </span>
       </div>
 
@@ -208,7 +224,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
             <p className="text-sm">No scheduled tasks or milestones yet.</p>
             <p className="text-xs">
               Set a{' '}
-              <span className="font-mono text-[#E2E8F0]/60">start</span>
+              <span className="font-mono text-[#E2E8F0]/60">trigger</span>
               {' or '}
               <span className="font-mono text-[#E2E8F0]/60">due</span>
               {' date on a task to see it here.'}

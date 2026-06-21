@@ -102,33 +102,50 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
     expect(mock.type).toBe('Main')
   })
 
-  // ── Task ──────────────────────────────────────────────────────────────────
+  // ── Task (unified Sprint 2 model) ─────────────────────────────────────────
 
   it('Task mock shape satisfies interface', () => {
     const mock = {
       id: '550e8400-e29b-41d4-a716-446655440000',
       title: 'Test task',
-      prompt: '',
+      action: 'llm' as const,
       priority: 1,
-      trigger_type: 'manual' as const,
-      status: 'queued' as const,
+      status: 'inbox' as const,
+      workspace_id: 'ws-test',
+      surface: 'user' as const,
+      owner: 'alice',
+      created_by: 'alice',
+      created_at: '2026-06-20T10:00:00Z',
+      updated_at: '2026-06-20T10:00:00Z',
     } satisfies Task
 
     expect(mock.id).toBeTruthy()
-    expect(mock.status).toBe('queued')
+    expect(mock.status).toBe('inbox')
   })
 
-  it('Task with all optional fields satisfies interface', () => {
+  it('Task with 7-state status satisfies interface', () => {
+    // Verify each of the 7 unified statuses is valid
+    const statuses: Task['status'][] = ['inbox', 'next', 'planning', 'in_progress', 'blocked', 'done', 'failed']
+    expect(statuses).toHaveLength(7)
+
     const mock = {
       id: '550e8400-e29b-41d4-a716-446655440001',
       title: 'Full task',
+      action: 'llm' as const,
       prompt: 'Do the thing',
       priority: 5,
-      trigger_type: 'manual' as const,
-      status: 'running' as const,
+      status: 'in_progress' as const,
+      workspace_id: 'ws-test',
+      surface: 'user' as const,
+      owner: 'alice',
+      created_by: 'alice',
+      created_at: '2026-06-20T10:00:00Z',
+      updated_at: '2026-06-20T10:01:00Z',
+      todos: [{ text: 'Step 1', done: false }, { text: 'Step 2', done: true }],
     } satisfies Task
 
-    expect(mock.status).toBe('running')
+    expect(mock.status).toBe('in_progress')
+    expect(mock.todos).toHaveLength(2)
   })
 
   // ── Provider ──────────────────────────────────────────────────────────────

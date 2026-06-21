@@ -214,7 +214,7 @@ export const TaskStatusChangedFrame = z
     type: z.literal("task_status_changed"),
     session_id: z.string().min(1),
     task_id: z.string().min(1),
-    status: z.enum(["queued", "assigned", "running", "completed", "failed"]),
+    status: z.enum(["inbox", "next", "planning", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
   })
   .strict();
