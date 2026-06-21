@@ -182,6 +182,23 @@ describe('TaskDetailPanel — 7-state status rendering', () => {
     renderPanel(task)
     expect(await screen.findByRole('button', { name: /Retry/i })).toBeInTheDocument()
   })
+
+  it('shows blocked as a read-only badge (not a dropdown) — blocked is backend-derived', async () => {
+    // BDD: Given a task with status "blocked" (set by the backend when a dependency is unmet),
+    // When TaskDetailPanel renders,
+    // Then "Blocked" appears as a read-only badge (same pattern as in_progress),
+    // And the Start Task button does NOT appear (blocked tasks are not user-startable),
+    // And no dropdown picker offers "blocked" as a selectable value.
+    // Traces to: fix-3-blocked-derived-state — blocked must not be user-selectable
+    const task = makeTask({ status: 'blocked' })
+    renderPanel(task)
+
+    // Read-only badge must be present
+    expect(await screen.findByText(/Blocked/i)).toBeInTheDocument()
+
+    // Start Task button must NOT appear (blocked is not startable)
+    expect(screen.queryByRole('button', { name: /Start Task/i })).toBeNull()
+  })
 })
 
 // ── Prompt field tests ────────────────────────────────────────────────────────

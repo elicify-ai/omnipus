@@ -55,7 +55,7 @@ properties:
     example: "recurring"
   config:
     type: object
-    additionalProperties: false
+    additionalProperties: true
     description: >
       Kind-specific parameters. The relevant subset depends on `type`:
       `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` →

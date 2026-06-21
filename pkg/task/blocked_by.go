@@ -10,8 +10,11 @@
 //   - Auto-advance (AdvanceBlockedDependents) transitions a dependent from
 //     `blocked` → `next` once every task in its blocked_by reaches `done`.
 //   - CascadeDeleteEdges drops a deleted task's ID from every other task's
-//     blocked_by and reports the tasks that became fully unblocked.
-//   - DropOrphanEdges removes blocked_by entries whose target file is gone.
+//     blocked_by and reports the tasks that became fully unblocked (every
+//     remaining blocker done, not merely an emptied list).
+//   - DropOrphanEdges removes blocked_by entries whose target file is gone. It
+//     is run explicitly on boot via the gateway's reconcileOrphanBlockedByEdges
+//     (NOT implicitly on every load).
 
 package task
 
@@ -33,16 +36,17 @@ import (
 const maxBlockedByDepth = 50
 
 // ErrBlockedByCycle is returned when a blocked_by update would create a cycle.
-var ErrBlockedByCycle = errors.New("blocked_by: cycle detected")
+// It wraps ErrValidation so the REST seam maps it to HTTP 400 via errors.Is.
+var ErrBlockedByCycle = fmt.Errorf("%w: blocked_by cycle detected", ErrValidation)
 
 // ErrBlockedByDepthExceeded is returned when the chain exceeds maxBlockedByDepth.
-var ErrBlockedByDepthExceeded = errors.New("blocked_by: dependency chain too deep (max 50)")
+var ErrBlockedByDepthExceeded = fmt.Errorf("%w: blocked_by dependency chain too deep (max 50)", ErrValidation)
 
 // ErrBlockedBySelfEdge is returned when a task lists itself in blocked_by.
-var ErrBlockedBySelfEdge = errors.New("blocked_by: task cannot be blocked by itself")
+var ErrBlockedBySelfEdge = fmt.Errorf("%w: task cannot be blocked by itself", ErrValidation)
 
 // ErrParentCycle is returned when a parent_task_id edge would create a cycle.
-var ErrParentCycle = errors.New("parent_task_id: edge would create a cycle")
+var ErrParentCycle = fmt.Errorf("%w: parent_task_id edge would create a cycle", ErrValidation)
 
 // maxParentDepth bounds the parent chain walk.
 const maxParentDepth = 50
@@ -59,11 +63,11 @@ func (s *Store) validateBlockedByLocked(taskID string, newBlockedBy []string) er
 			return ErrBlockedBySelfEdge
 		}
 		if err := validateID(dep); err != nil {
-			return fmt.Errorf("blocked_by contains invalid ID %q: %w", dep, err)
+			return fmt.Errorf("%w: blocked_by contains invalid ID %q: %v", ErrValidation, dep, err)
 		}
 		if _, err := s.load(dep); err != nil {
 			if errors.Is(err, ErrNotFound) {
-				return fmt.Errorf("blocked_by task %q not found", dep)
+				return fmt.Errorf("%w: blocked_by task %q not found", ErrValidation, dep)
 			}
 			return fmt.Errorf("blocked_by: could not verify task %q: %w", dep, err)
 		}
@@ -253,7 +257,9 @@ func (s *Store) AdvanceBlockedDependents(completedID string) (advancedIDs []stri
 }
 
 // cascadeDeleteEdges removes deletedID from the blocked_by list of every other
-// task. It returns the IDs that became fully unblocked. Caller must already
+// task. It returns the IDs that became fully unblocked — meaning every REMAINING
+// blocker is satisfied (the list is now empty OR every surviving blocker is
+// already `done`), so the dependent is now dispatchable. Caller must already
 // have removed the deleted task's own file.
 func (s *Store) cascadeDeleteEdges(deletedID string) (unblockedIDs []string, err error) {
 	entries, err := os.ReadDir(s.dir)
@@ -262,6 +268,20 @@ func (s *Store) cascadeDeleteEdges(deletedID string) (unblockedIDs []string, err
 			return nil, nil
 		}
 		return nil, fmt.Errorf("task: cascadeDeleteEdges: ReadDir: %w", err)
+	}
+	// Cache blocker statuses so we don't re-read the same file for every dependent.
+	statusCache := make(map[string]Status)
+	depDone := func(depID string) bool {
+		if st, ok := statusCache[depID]; ok {
+			return st == StatusDone
+		}
+		dt, lerr := s.load(depID)
+		if lerr != nil {
+			statusCache[depID] = "" // missing/unreadable → treated as not-done
+			return false
+		}
+		statusCache[depID] = dt.Status
+		return dt.Status == StatusDone
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -304,7 +324,17 @@ func (s *Store) cascadeDeleteEdges(deletedID string) (unblockedIDs []string, err
 			continue
 		}
 		slog.Info("task: cascade-cleaned blocked_by edge", "task_id", id, "deleted_dep", deletedID)
-		if len(newDeps) == 0 {
+		// A dependent is fully unblocked when every REMAINING blocker is done
+		// (vacuously true for an empty set). Reporting only on emptiness stranded
+		// a multi-dep task whose other deps were already done (the bug).
+		allRemainingDone := true
+		for _, dep := range newDeps {
+			if !depDone(dep) {
+				allRemainingDone = false
+				break
+			}
+		}
+		if allRemainingDone {
 			unblockedIDs = append(unblockedIDs, id)
 		}
 	}
@@ -370,7 +400,9 @@ func (s *Store) DropOrphanEdges() (int, error) {
 		}
 		mu := s.lock.Get(id)
 		mu.Lock()
-		werr := fileutil.WriteFileAtomic(path, newData, 0o600)
+		werr := fileutil.WithFlock(path, func() error {
+			return fileutil.WriteFileAtomic(path, newData, 0o600)
+		})
 		mu.Unlock()
 		if werr != nil {
 			slog.Warn("task: DropOrphanEdges: write failed", "file", e.Name(), "error", werr)

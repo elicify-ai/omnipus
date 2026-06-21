@@ -6978,16 +6978,7 @@ type Task struct {
 	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
 		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
-		Config struct {
-			// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
-			AtMs *int64 `json:"at_ms,omitempty"`
-
-			// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
-			CronExpr *string `json:"cron_expr,omitempty"`
-
-			// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-			EveryMs *int64 `json:"every_ms,omitempty"`
-		} `json:"config"`
+		Config Task_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskTriggerType `json:"type"`
@@ -7011,6 +7002,19 @@ type TaskStatus string
 
 // TaskSurface Which UI surface owns this task (Detail #5). `user` (default) → shows on all four general views (Board/List/Graph/Calendar). A non-`user` surface (first: `heartbeat`) → hidden from ALL general views and rendered only by its owning feature's dedicated UI (heartbeat → the agent profile). A reusable pattern: future system-ish features set their own surface, get the task+trigger engine for free, and never clutter the board/calendar.
 type TaskSurface string
+
+// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+type Task_Trigger_Config struct {
+	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
+	AtMs *int64 `json:"at_ms,omitempty"`
+
+	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	CronExpr *string `json:"cron_expr,omitempty"`
+
+	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
+	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // TaskTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskTriggerType string
@@ -7084,16 +7088,7 @@ type TaskCreateRequest struct {
 	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
 		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
-		Config struct {
-			// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
-			AtMs *int64 `json:"at_ms,omitempty"`
-
-			// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
-			CronExpr *string `json:"cron_expr,omitempty"`
-
-			// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-			EveryMs *int64 `json:"every_ms,omitempty"`
-		} `json:"config"`
+		Config TaskCreateRequest_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskCreateRequestTriggerType `json:"type"`
@@ -7108,6 +7103,19 @@ type TaskCreateRequestAction string
 
 // TaskCreateRequestSurface UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features (e.g. heartbeat) set their own surface so the task is hidden from general views.
 type TaskCreateRequestSurface string
+
+// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+type TaskCreateRequest_Trigger_Config struct {
+	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
+	AtMs *int64 `json:"at_ms,omitempty"`
+
+	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	CronExpr *string `json:"cron_expr,omitempty"`
+
+	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
+	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // TaskCreateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskCreateRequestTriggerType string
@@ -7129,19 +7137,23 @@ type TaskCreateRequestTriggerType string
 // ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 type TaskTrigger struct {
 	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
-	Config struct {
-		// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
-		AtMs *int64 `json:"at_ms,omitempty"`
-
-		// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
-		CronExpr *string `json:"cron_expr,omitempty"`
-
-		// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-		EveryMs *int64 `json:"every_ms,omitempty"`
-	} `json:"config"`
+	Config TaskTrigger_Config `json:"config"`
 
 	// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 	Type TaskTriggerType `json:"type"`
+}
+
+// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+type TaskTrigger_Config struct {
+	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
+	AtMs *int64 `json:"at_ms,omitempty"`
+
+	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	CronExpr *string `json:"cron_expr,omitempty"`
+
+	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
+	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // TaskUpdateRequest Request body for PATCH /tasks/{id} — the unified partial-update body that replaces the two legacy update bodies (`TaskUpdateRequest` and `BoardTaskUpdateRequest`). No back-compat aliases. All fields are optional; only provided fields are updated (PATCH semantics). At least one field is required.
@@ -7215,16 +7227,7 @@ type TaskUpdateRequest struct {
 	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
 		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
-		Config struct {
-			// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
-			AtMs *int64 `json:"at_ms,omitempty"`
-
-			// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
-			CronExpr *string `json:"cron_expr,omitempty"`
-
-			// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-			EveryMs *int64 `json:"every_ms,omitempty"`
-		} `json:"config"`
+		Config TaskUpdateRequest_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskUpdateRequestTriggerType `json:"type"`
@@ -7236,6 +7239,19 @@ type TaskUpdateRequestStatus string
 
 // TaskUpdateRequestSurface New UI surface ownership (Detail
 type TaskUpdateRequestSurface string
+
+// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+type TaskUpdateRequest_Trigger_Config struct {
+	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
+	AtMs *int64 `json:"at_ms,omitempty"`
+
+	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	CronExpr *string `json:"cron_expr,omitempty"`
+
+	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
+	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskUpdateRequestTriggerType string
@@ -8301,6 +8317,398 @@ func (a McpToolsListResponse_Item) MarshalJSON() ([]byte, error) {
 	object["name"], err = json.Marshal(a.Name)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'name': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for Task_Trigger_Config. Returns the specified
+// element and whether it was found
+func (a Task_Trigger_Config) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for Task_Trigger_Config
+func (a *Task_Trigger_Config) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for Task_Trigger_Config to handle AdditionalProperties
+func (a *Task_Trigger_Config) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["at_ms"]; found {
+		err = json.Unmarshal(raw, &a.AtMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'at_ms': %w", err)
+		}
+		delete(object, "at_ms")
+	}
+
+	if raw, found := object["cron_expr"]; found {
+		err = json.Unmarshal(raw, &a.CronExpr)
+		if err != nil {
+			return fmt.Errorf("error reading 'cron_expr': %w", err)
+		}
+		delete(object, "cron_expr")
+	}
+
+	if raw, found := object["every_ms"]; found {
+		err = json.Unmarshal(raw, &a.EveryMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'every_ms': %w", err)
+		}
+		delete(object, "every_ms")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for Task_Trigger_Config to handle AdditionalProperties
+func (a Task_Trigger_Config) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.AtMs != nil {
+		object["at_ms"], err = json.Marshal(a.AtMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'at_ms': %w", err)
+		}
+	}
+
+	if a.CronExpr != nil {
+		object["cron_expr"], err = json.Marshal(a.CronExpr)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'cron_expr': %w", err)
+		}
+	}
+
+	if a.EveryMs != nil {
+		object["every_ms"], err = json.Marshal(a.EveryMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for TaskCreateRequest_Trigger_Config. Returns the specified
+// element and whether it was found
+func (a TaskCreateRequest_Trigger_Config) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for TaskCreateRequest_Trigger_Config
+func (a *TaskCreateRequest_Trigger_Config) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for TaskCreateRequest_Trigger_Config to handle AdditionalProperties
+func (a *TaskCreateRequest_Trigger_Config) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["at_ms"]; found {
+		err = json.Unmarshal(raw, &a.AtMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'at_ms': %w", err)
+		}
+		delete(object, "at_ms")
+	}
+
+	if raw, found := object["cron_expr"]; found {
+		err = json.Unmarshal(raw, &a.CronExpr)
+		if err != nil {
+			return fmt.Errorf("error reading 'cron_expr': %w", err)
+		}
+		delete(object, "cron_expr")
+	}
+
+	if raw, found := object["every_ms"]; found {
+		err = json.Unmarshal(raw, &a.EveryMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'every_ms': %w", err)
+		}
+		delete(object, "every_ms")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for TaskCreateRequest_Trigger_Config to handle AdditionalProperties
+func (a TaskCreateRequest_Trigger_Config) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.AtMs != nil {
+		object["at_ms"], err = json.Marshal(a.AtMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'at_ms': %w", err)
+		}
+	}
+
+	if a.CronExpr != nil {
+		object["cron_expr"], err = json.Marshal(a.CronExpr)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'cron_expr': %w", err)
+		}
+	}
+
+	if a.EveryMs != nil {
+		object["every_ms"], err = json.Marshal(a.EveryMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for TaskTrigger_Config. Returns the specified
+// element and whether it was found
+func (a TaskTrigger_Config) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for TaskTrigger_Config
+func (a *TaskTrigger_Config) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for TaskTrigger_Config to handle AdditionalProperties
+func (a *TaskTrigger_Config) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["at_ms"]; found {
+		err = json.Unmarshal(raw, &a.AtMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'at_ms': %w", err)
+		}
+		delete(object, "at_ms")
+	}
+
+	if raw, found := object["cron_expr"]; found {
+		err = json.Unmarshal(raw, &a.CronExpr)
+		if err != nil {
+			return fmt.Errorf("error reading 'cron_expr': %w", err)
+		}
+		delete(object, "cron_expr")
+	}
+
+	if raw, found := object["every_ms"]; found {
+		err = json.Unmarshal(raw, &a.EveryMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'every_ms': %w", err)
+		}
+		delete(object, "every_ms")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for TaskTrigger_Config to handle AdditionalProperties
+func (a TaskTrigger_Config) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.AtMs != nil {
+		object["at_ms"], err = json.Marshal(a.AtMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'at_ms': %w", err)
+		}
+	}
+
+	if a.CronExpr != nil {
+		object["cron_expr"], err = json.Marshal(a.CronExpr)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'cron_expr': %w", err)
+		}
+	}
+
+	if a.EveryMs != nil {
+		object["every_ms"], err = json.Marshal(a.EveryMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for TaskUpdateRequest_Trigger_Config. Returns the specified
+// element and whether it was found
+func (a TaskUpdateRequest_Trigger_Config) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for TaskUpdateRequest_Trigger_Config
+func (a *TaskUpdateRequest_Trigger_Config) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for TaskUpdateRequest_Trigger_Config to handle AdditionalProperties
+func (a *TaskUpdateRequest_Trigger_Config) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["at_ms"]; found {
+		err = json.Unmarshal(raw, &a.AtMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'at_ms': %w", err)
+		}
+		delete(object, "at_ms")
+	}
+
+	if raw, found := object["cron_expr"]; found {
+		err = json.Unmarshal(raw, &a.CronExpr)
+		if err != nil {
+			return fmt.Errorf("error reading 'cron_expr': %w", err)
+		}
+		delete(object, "cron_expr")
+	}
+
+	if raw, found := object["every_ms"]; found {
+		err = json.Unmarshal(raw, &a.EveryMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'every_ms': %w", err)
+		}
+		delete(object, "every_ms")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for TaskUpdateRequest_Trigger_Config to handle AdditionalProperties
+func (a TaskUpdateRequest_Trigger_Config) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.AtMs != nil {
+		object["at_ms"], err = json.Marshal(a.AtMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'at_ms': %w", err)
+		}
+	}
+
+	if a.CronExpr != nil {
+		object["cron_expr"], err = json.Marshal(a.CronExpr)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'cron_expr': %w", err)
+		}
+	}
+
+	if a.EveryMs != nil {
+		object["every_ms"], err = json.Marshal(a.EveryMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
 	}
 
 	for fieldName, field := range a.AdditionalProperties {

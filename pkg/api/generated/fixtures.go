@@ -495,7 +495,7 @@ func FixtureTaskStatusChangedFrame_Populated() TaskStatusChangedFrame {
 		Type:      "task_status_changed",
 		SessionId: "sess-1",
 		TaskId:    "task-uuid-1",
-		Status:    "completed",
+		Status:    "done",
 		AgentId:   &agentId,
 	}
 }
@@ -1024,12 +1024,8 @@ func FixtureTask_Populated() Task {
 		Text string `json:"text"`
 	}{{Text: "Draft the summary section", Done: false}}
 	t.Trigger = &struct {
-		Config struct {
-			AtMs     *int64  `json:"at_ms,omitempty"`
-			CronExpr *string `json:"cron_expr,omitempty"`
-			EveryMs  *int64  `json:"every_ms,omitempty"`
-		} `json:"config"`
-		Type TaskTriggerType `json:"type"`
+		Config Task_Trigger_Config `json:"config"`
+		Type   TaskTriggerType     `json:"type"`
 	}{Type: TaskTriggerType("manual")}
 	return t
 }
@@ -1062,12 +1058,8 @@ func FixtureTask_Edge() Task {
 	}
 	cron := "0 9 * * MON"
 	t.Trigger = &struct {
-		Config struct {
-			AtMs     *int64  `json:"at_ms,omitempty"`
-			CronExpr *string `json:"cron_expr,omitempty"`
-			EveryMs  *int64  `json:"every_ms,omitempty"`
-		} `json:"config"`
-		Type TaskTriggerType `json:"type"`
+		Config Task_Trigger_Config `json:"config"`
+		Type   TaskTriggerType     `json:"type"`
 	}{Type: TaskTriggerType("recurring")}
 	t.Trigger.Config.CronExpr = &cron
 	return t

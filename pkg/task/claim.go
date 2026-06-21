@@ -12,8 +12,13 @@ import (
 
 // ErrAlreadyClaimed is returned by ClaimForRun when the task is not in a
 // dispatchable state (already in_progress, terminal, or claimed by a concurrent
-// caller).
+// caller). It is a control-flow sentinel, NOT a wire validation error.
 var ErrAlreadyClaimed = errors.New("task already claimed")
+
+// ErrAlreadyRunning is returned by SpawnReset when a trigger fire would stomp a
+// task that is already in_progress (the trigger overlap guard). The trigger
+// executor treats it as a benign skip, not a failure.
+var ErrAlreadyRunning = errors.New("task already running")
 
 // ClaimForRun atomically transitions a dispatchable task to in_progress under
 // the per-task lock, making the transition a single critical section. A task is

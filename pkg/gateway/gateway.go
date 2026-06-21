@@ -118,6 +118,7 @@ func (r *configSelfWriteRegistry) consume(h [32]byte) bool {
 
 type services struct {
 	CronService      *cron.CronService
+	TaskTrigger      *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
 	HeartbeatService *heartbeat.HeartbeatService
 	MediaStore       media.MediaStore
 	// notifStore backs schedule-failure notifications and the header
@@ -1006,6 +1007,7 @@ type servicesSnapshot struct {
 	bundle           credentials.SecretBundle
 	ChannelManager   *channels.Manager
 	CronService      *cron.CronService
+	TaskTrigger      *agent.TaskTriggerScheduler
 	HeartbeatService *heartbeat.HeartbeatService
 	MediaStore       media.MediaStore
 	DeviceService    *devices.Service
@@ -1016,6 +1018,7 @@ func snapshotServices(svc *services) servicesSnapshot {
 		bundle:           svc.bundle,
 		ChannelManager:   svc.ChannelManager,
 		CronService:      svc.CronService,
+		TaskTrigger:      svc.TaskTrigger,
 		HeartbeatService: svc.HeartbeatService,
 		MediaStore:       svc.MediaStore,
 		DeviceService:    svc.DeviceService,
@@ -1026,6 +1029,7 @@ func restoreServices(svc *services, snap servicesSnapshot) {
 	svc.bundle = snap.bundle
 	svc.ChannelManager = snap.ChannelManager
 	svc.CronService = snap.CronService
+	svc.TaskTrigger = snap.TaskTrigger
 	svc.HeartbeatService = snap.HeartbeatService
 	svc.MediaStore = snap.MediaStore
 	svc.DeviceService = snap.DeviceService
@@ -1185,6 +1189,26 @@ func setupAndStartServices(
 		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
 	}
 	fmt.Println("✓ Heartbeat service started")
+
+	// Task time-trigger executor: fires once/every/recurring task triggers via a
+	// dedicated CronService instance (reusing the pkg/cron engine, NOT a second
+	// scheduler). Boot-reconciles existing tasks' triggers, then the create/
+	// update/delete REST + tool paths (re)register/remove jobs via
+	// AgentLoop.NotifyTaskUpserted / NotifyTaskDeleted.
+	if tStore := agent.GetTaskStore(agentLoop); tStore != nil {
+		triggerStorePath := filepath.Join(homePath, "tasks_triggers", "jobs.json")
+		runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
+			triggerStorePath, tStore, agent.GetTaskExecutor(agentLoop),
+		)
+		if startErr := runningServices.TaskTrigger.Start(); startErr != nil {
+			return nil, fmt.Errorf("error starting task trigger scheduler: %w", startErr)
+		}
+		agentLoop.SetTaskTriggerScheduler(runningServices.TaskTrigger)
+		if recErr := runningServices.TaskTrigger.Reconcile(); recErr != nil {
+			slog.Error("gateway: task trigger boot reconcile failed", "error", recErr)
+		}
+		fmt.Println("✓ Task trigger scheduler started")
+	}
 
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
@@ -1719,6 +1743,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
+	if runningServices.TaskTrigger != nil {
+		runningServices.TaskTrigger.Stop()
+	}
 	if runningServices.MediaStore != nil {
 		if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 			fms.Stop()
@@ -1858,6 +1885,23 @@ func restartServices(
 		runningServices.restAPIRef.cronService.Store(runningServices.CronService)
 	}
 	fmt.Println("  ✓ Cron service restarted")
+
+	// Restart the task time-trigger scheduler on its dedicated CronService. The
+	// previous instance was already Stop()'d in stopAndCleanupServices(isReload).
+	if tStore := agent.GetTaskStore(al); tStore != nil {
+		triggerStorePath := filepath.Join(filepath.Dir(cfg.WorkspacePath()), "tasks_triggers", "jobs.json")
+		runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
+			triggerStorePath, tStore, agent.GetTaskExecutor(al),
+		)
+		if startErr := runningServices.TaskTrigger.Start(); startErr != nil {
+			return fmt.Errorf("error restarting task trigger scheduler: %w", startErr)
+		}
+		al.SetTaskTriggerScheduler(runningServices.TaskTrigger)
+		if recErr := runningServices.TaskTrigger.Reconcile(); recErr != nil {
+			slog.Error("gateway: task trigger reconcile failed on reload", "error", recErr)
+		}
+		fmt.Println("  ✓ Task trigger scheduler restarted")
+	}
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),

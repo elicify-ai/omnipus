@@ -43,13 +43,12 @@ import { cn } from '@/lib/utils'
 
 // ── Status config ──────────────────────────────────────────────────────────────
 
-// 7-state unified lifecycle
+// User-settable status options (blocked is excluded — it is backend-derived and read-only)
 const STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] = [
   { value: 'inbox',       label: 'Inbox',       color: 'text-[var(--color-muted)]' },
   { value: 'next',        label: 'Next',        color: 'text-blue-400' },
   { value: 'planning',    label: 'Planning',    color: 'text-purple-400' },
   { value: 'in_progress', label: 'In Progress', color: 'text-yellow-400' },
-  { value: 'blocked',     label: 'Blocked',     color: 'text-orange-400' },
   { value: 'done',        label: 'Done',        color: 'text-green-400' },
   { value: 'failed',      label: 'Failed',      color: 'text-red-400' },
 ]
@@ -301,6 +300,11 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           <Badge className="h-8 text-xs bg-yellow-400/10 text-yellow-400 border-transparent rounded-md px-2 inline-flex items-center">
             In Progress
           </Badge>
+        ) : task.status === 'blocked' ? (
+          // blocked is backend-derived (unmet dependency) — show read-only, not selectable
+          <Badge className="h-8 text-xs bg-orange-400/10 text-orange-400 border-transparent rounded-md px-2 inline-flex items-center">
+            Blocked (dependency unmet)
+          </Badge>
         ) : (
           <SmartSelect
             value={task.status}
@@ -386,7 +390,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         <Field label="Trigger">
           <p className="text-xs text-[var(--color-muted)]">
             {task.trigger.type === 'manual' && 'Manual (drag to run)'}
-            {task.trigger.type === 'once' && `Once — ${task.trigger.config?.at_ms ? new Date(task.trigger.config.at_ms).toLocaleString() : '(unset)'}`}
+            {task.trigger.type === 'once' && `Fires ${task.trigger.config?.at_ms ? new Date(task.trigger.config.at_ms).toLocaleString() : '(unset)'}`}
             {task.trigger.type === 'every' && `Every ${task.trigger.config?.every_ms ? Math.round(task.trigger.config.every_ms / 60000) + 'm' : '(unset)'}`}
             {task.trigger.type === 'recurring' && `Recurring — ${task.trigger.config?.cron_expr ?? '(no cron)'}`}
           </p>
