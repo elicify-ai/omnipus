@@ -35,42 +35,37 @@
 <section><div class="wrap">
   <div class="eyebrow">The to-be · at a glance</div>
   <h2>The app shell — how it looks</h2>
-  <p class="sub">Left: the <b>workspace switcher</b> + the <b>base agents / sub workers</b> roster + nav. Centre: chat, with the delegation <b>call-tree</b>, generated images, a <b>play</b> button (agent voice) and a <b>mic</b>. Right: a live <b>activity</b> rail. Everything below is a zoom into one region.</p>
+  <p class="sub">Left: the <b>workspace list</b> (primary nav) + <b>global libraries</b>. Centre: the active workspace with its tabs — <b>Chat</b> is the default landing tab, with the delegation <b>call-tree</b>, a <b>mic</b>, and generated images. Right: a live <b>activity</b> rail. Everything below is a zoom into one region.</p>
   <pre class="wire"><span class="h">┌──────────────┬─────────────────────────────────────────────┬──────────────┐</span>
-<span class="h">│</span> Omnipus      <span class="h">│</span> Chat · <span class="b">My Workspace</span>          <span class="m">search   You v</span> <span class="h">│</span>  ACTIVITY    <span class="h">│</span>
+<span class="h">│</span> Omnipus      <span class="h">│</span> <span class="b">My Workspace</span> · Chat  <span class="m">Board List Graph Cal Team</span>   <span class="h">│</span>  ACTIVITY    <span class="h">│</span>
 <span class="h">├──────────────┤</span>                                             <span class="h">├──────────────┤</span>
-<span class="h">│</span> <span class="m">Workspace v</span>  <span class="h">│</span>  You:  draft the competitor brief           <span class="h">│</span> <span class="g">> Ray</span>  task   <span class="h">│</span>
-<span class="h">│</span> <span class="b">· My Work...</span>   <span class="h">│</span>                                             <span class="h">│</span>   -> 40 jobs   <span class="h">│</span>
-<span class="h">│</span> <span class="m">· Acme</span>       <span class="h">│</span>  <span class="p">PA</span> > on it — delegating to Ray      <span class="h">│</span> <span class="g">> sub</span>  await  <span class="h">│</span>
+<span class="h">│</span> WORKSPACES   <span class="h">│</span>  You:  draft the competitor brief           <span class="h">│</span> <span class="g">> Ray</span>  task   <span class="h">│</span>
+<span class="h">│</span> <span class="b">⭐ My Work...</span> <span class="h">│</span>                                             <span class="h">│</span>   -> 40 jobs   <span class="h">│</span>
+<span class="h">│</span> <span class="m">· Acme</span>       <span class="h">│</span>  <span class="p">Mia</span> > on it — delegating to Ray      <span class="h">│</span> <span class="g">> sub</span>  await  <span class="h">│</span>
 <span class="h">│</span> <span class="m">· Q3 Launch</span>  <span class="h">│</span>     <span class="m">[ > Ray · task · running        ]</span>       <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span>              <span class="h">│</span>     <span class="m">[ > generate_image · logo.png ]</span> img   <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span> <span class="g">BASE</span>         <span class="h">│</span>  <span class="p">PA</span> > here's the brief + a logo.   <span class="g">> vox</span>    <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span>  Mia·Asst *  <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span>  Jim·Orch    <span class="h">│</span> ─────────────────────────────────────────── <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span>  Ray·Scout   <span class="h">│</span>  <span class="g">( mic )</span> Type or speak...               <span class="g">send</span> <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span>  Ava·Builder <span class="h">│</span>  <span class="m">+ image · workspace: My Workspace</span>          <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span> <span class="m">SUB</span>          <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span>  <span class="m">worker(s)</span>   <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> <span class="m">Archive ›</span>    <span class="h">│</span>     <span class="m">[ > generate_image · logo.png ]</span> img   <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span>              <span class="h">│</span>  <span class="p">Mia</span> > here's the brief + a logo.   <span class="g">> vox</span>    <span class="h">│</span>              <span class="h">│</span>
 <span class="h">├──────────────┤</span>                                             <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span> Chat · Tasks <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span> Calendar     <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span> Automations  <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span> Connectors   <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
-<span class="h">│</span> Memory · Set.<span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Agents       <span class="h">│</span> ─────────────────────────────────────────── <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Connectors   <span class="h">│</span>  <span class="g">( mic )</span> Type or speak...  <span class="m">Mia v</span>       <span class="g">send</span> <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Skills&amp;Tools <span class="h">│</span>  <span class="m">+ image · workspace: My Workspace</span>          <span class="h">│</span>              <span class="h">│</span>
+<span class="h">├──────────────┤</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Settings     <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
+<span class="h">│</span> Sign out     <span class="h">│</span>                                             <span class="h">│</span>              <span class="h">│</span>
 <span class="h">└──────────────┴─────────────────────────────────────────────┴──────────────┘</span></pre>
-  <p class="note"><b>New vs today:</b> the workspace switcher + base-agents / sub-workers split (left), the unified call-tree + generated image + the <b>voice playback</b> + <b>mic</b> (centre), and the activity rail (right).</p>
+  <p class="note"><b>New vs today:</b> <b>WORKSPACES</b> is the primary nav (My Workspace ⭐ default + named + Archive); chat, tasks, calendar, and team live as <b>tabs inside the active workspace</b>; global libraries (Agents · Connectors · Skills &amp; Tools) stay in the sidebar below. The agent picker (Mia v) in the chat bar is scoped to the workspace team. <b>Automations is removed</b> — tasks with triggers replace it.</p>
 </div></section>
 
 <!-- 1 · GLOBAL SHELL -->
 <section><div class="wrap">
   <div class="eyebrow">Screen 1 · the frame</div>
   <h2>Global shell &amp; navigation</h2>
-  <p class="sub">The top-level surface map binds context to the <b>existing sidebar workspace switcher</b>, adds a few renames that reflect the new model, and two new shells.</p>
+  <p class="sub">The sidebar restructures around <b>workspaces as the primary nav</b>. Chat, Tasks, Calendar, and Team move from top-level routes into <b>tabs inside the active workspace</b>. Global reusable assets (Agents, Connectors, Skills &amp; Tools, Settings) remain in the sidebar.</p>
   <div class="grid g2">
     <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Top-level screens: Chat, Agents, Channels, Skills, Tools, Monitor (with Schedules + Token Usage), Tasks/Projects, Command Center, Settings.</p></div>
-    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">Context comes from the <b>existing sidebar workspace switcher</b> — My Workspace (default) vs a named workspace — not a new mode. <span class="mono">Channels</span> → <b>Connectors</b>. <span class="mono">Monitor/Schedules</span> reframed as <b>Automations</b>. A new <b>Calendar</b> surface. Settings gains tabs.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">Sidebar = <b>WORKSPACES</b> primary list (My Workspace ⭐ + named + Archive) + global libraries: <b>Agents</b> (library + Workspace Teams) · <b>Connectors</b> · <b>Skills &amp; Tools</b> · Settings · Sign out. <span class="mono">Channels</span> → <b>Connectors</b>. <b>Chat → workspace Chat tab.</b> <b>Tasks → Board/List/Graph/Calendar tabs.</b> <b>Calendar → workspace tab.</b> <b>Automations → REMOVED</b> (tasks with triggers replace it). App default front door = <b>My Workspace → Chat → Mia.</b></p></div>
   </div>
-  <p class="note" style="margin-top:10px"><b>When:</b> workspace-switcher context + renames + Calendar/Automations shells = <span class="rel r1">v0.1.0</span></p>
+  <p class="note" style="margin-top:10px"><b>When:</b> IA reframe (workspace tabs + sidebar restructure) = <span class="rel r1">v0.1.0</span></p>
 </div></section>
 
 <!-- 1b · ONBOARDING -->
@@ -100,39 +95,43 @@
 
 <!-- 2 · CHAT -->
 <section><div class="wrap">
-  <div class="eyebrow">Screen 2 · the home surface</div>
-  <h2>Chat</h2>
-  <p class="sub">Chat-first stays. The fragmented run indicators collapse into one timeline.</p>
+  <div class="eyebrow">Screen 2 · the default workspace tab</div>
+  <h2>Chat — workspace view</h2>
+  <p class="sub">Chat is no longer a global front door — it is the <b>default tab of the active workspace</b>. You're always in a workspace; picking a workspace sets the full context (chat, tasks, memory, team). The app's default front door is <b>My Workspace → Chat → Mia</b>.</p>
   <div class="grid g2">
-    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Chat-first. A handoff agent-switch indicator; spawned subagents render as a collapsible <span class="mono">SubagentBlock</span>; tool calls visible &amp; collapsible.</p></div>
-    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">A unified <b>call-tree activity view</b> — handover + delegation + tasks in one timeline. The current <a href="spaces.html">workspace</a> in context. Plus <b>multimodal</b>: a <b>mic</b> (voice-in), a <b>▶ play</b> per agent message (its <a href="tools.html">own voice</a>), and inline <b>generated images</b>.</p></div>
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Chat-first, but a global top-level route. A handoff agent-switch indicator; spawned subagents render as a collapsible <span class="mono">SubagentBlock</span>; tool calls visible &amp; collapsible.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>Chat = the default (first) tab of a workspace.</b> The <b>agent picker is scoped to the workspace's team</b> (only agents assigned to this workspace appear). Every session is tagged with the active <span class="mono">workspace_id</span>. The <b>conversation-history panel is filtered by the active workspace</b> — you see only this project's conversations. A unified <b>call-tree activity view</b> — handover + delegation + tasks in one timeline. Plus <b>multimodal</b>: a <b>mic</b> (voice-in), a <b>▶ play</b> per agent message, and inline <b>generated images</b>.</p></div>
   </div>
-  <p class="note" style="margin-top:10px"><b>When:</b> basic activity view (surfacing what exists) <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; richer <span class="rel r5">v1.0.0</span></p>
+  <p class="note" style="margin-top:10px"><b>When:</b> workspace-scoped chat tab + team-scoped agent picker + session workspace tag = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; richer call-tree + multimodal = <span class="rel r5">v1.0.0</span></p>
 </div></section>
 
 <!-- 3 · AGENTS -->
 <section><div class="wrap">
-  <div class="eyebrow">Screen 3 · the roster</div>
+  <div class="eyebrow">Screen 3 · the global library</div>
   <h2>Agents</h2>
-  <p class="sub">The roster splits into base agents vs sub-agent workers — and, for the first time, a place to see and edit who delegates to whom.</p>
+  <p class="sub">The Agents screen is a <b>global library</b> — agent definitions live here, independent of any workspace. It has two views: the <b>agent library</b> (all agents, filterable by workspace) and <b>Workspace Teams</b> (the per-workspace delegation graphs).</p>
   <div class="grid g2">
     <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Agent list, create, profile, ★ default. <b>No delegation UI at all.</b></p></div>
-    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">Two roster sections. <b>Base agents</b> — the 4 cores (<a href="agents.html">Mia·Assistant⭐ · Jim·Orchestrator · Ray·Scout · Ava·Builder</a>) + your custom agents (chat targets, own connection, heartbeat, durable memory); specialists / Maker arrive via <b>marketplace packs</b>. <b>Sub agents</b> — the seeded general-purpose worker + your custom workers, in a separate section: <b>no heartbeat · no own connection · ephemeral memory · depth-limited · leaner model · not chat targets</b> (the test-run button is the exception). Plus a <b>Delegation tab</b> in the profile (who I can delegate to + modes + accept-from) and a read-only <b>trust-graph</b> matrix.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">Two views: <b>Agents (library)</b> — all agent definitions with <b>filter [All | by workspace]</b>; editing an agent here applies globally everywhere it is used. <b>Workspace Teams</b> — an index of every per-workspace team; click a team → the workspace's <b>delegation graph</b> (same graph as the workspace Team tab, one source of truth). Roster sections: <b>MAIN AGENTS</b> — 4 cores (<a href="agents.html">Mia⭐ · Jim · Ray · Ava</a>) in a "BUILT-IN ROSTER" accordion (adaptive expand) + custom Main agents; <b>SUBAGENTS</b> — seeded specialists (Planner / Explorer / Researcher) + custom subagents: <b>no heartbeat · delegation-only · not chat targets</b>. Editing is via the existing <b>AgentProfile slide-over</b> from anywhere you see an agent.</p></div>
   </div>
-  <pre class="wire">Agents                                      + New agent v
+  <pre class="wire">Agents               [ Agents (library) │ Workspace Teams ]
 ────────────────────────────────────────────────────────
-BASE                               chat · heartbeat · memory
-  * Mia·Assistant   Jim·Orchestrator   Ray·Scout   Ava·Builder
-                              + specialists / Maker via packs
-SUB AGENTS                   delegation only · no heartbeat
-  general-purpose worker             + custom worker
+MAIN AGENTS                                    + New Main
+  <span class="m">No custom Main agents yet. Create one, or use a built-in below.</span>
+  BUILT-IN ROSTER  (collapsed once you have custom Mains)
+    Mia·Assistant ⭐   Jim·Orchestrator   Ray·Scout   Ava·Builder
+SUBAGENTS                              delegation only · + New Sub
+  Planner   Explorer   Researcher      + custom subagent
+────────────────────────────────────────────────────────
+Workspace Teams
+  My Workspace    4 agents  [ view team graph ]
+  Acme            3 agents  [ view team graph ]
 ────────────────────────────────────────────────────────
 Profile · Ray     [ Persona │ Tools │ Delegation │ Voice ]
-  Delegation >  can delegate to (to):  worker +
-                accept_from:  <span class="m">[ later — v0.1.0 enforces to+modes ]</span>
-                trust-graph:  Mia -> Jim -> Ray   (matrix)
+  Delegation >  can delegate to (to):  Planner  Explorer +
+                trust-graph per workspace  (Team tab is home)
   Voice >  ElevenLabs · "Rachel" v   speed 1.0     > test</pre>
-  <p class="note" style="margin-top:10px"><b>When:</b> base / sub roster sections + Delegation tab + trust-graph + seed sub agent + the auto-provisioned Assistant = <span class="rel r1">v0.1.0</span></p>
+  <p class="note" style="margin-top:10px"><b>When:</b> library + Workspace Teams views + MAIN AGENTS/SUBAGENTS sections + adaptive BUILT-IN ROSTER + seed specialists (Planner/Explorer/Researcher) + delegation graph = <span class="rel r1">v0.1.0</span></p>
 </div></section>
 
 <!-- 4 · CONNECTORS -->
@@ -156,57 +155,82 @@ Profile · Ray     [ Persona │ Tools │ Delegation │ Voice ]
 
 <!-- 5 · TASKS / PROJECTS -->
 <section><div class="wrap">
-  <div class="eyebrow">Screen 5 · the board</div>
-  <h2>Tasks / Projects</h2>
-  <p class="sub">The board gains time, dependencies and a plan view — the surface where <a href="delegation.html">delegation</a> becomes orchestration.</p>
+  <div class="eyebrow">Screen 5 · workspace tabs</div>
+  <h2>Tasks — Board · List · Graph · Calendar</h2>
+  <p class="sub">Tasks are no longer a separate top-level route. They live as <b>four tabs inside the active workspace</b>: Board (kanban), List (flat), Graph (dependency DAG), and Calendar (recurring tasks by date). A single unified task model; one store.</p>
   <div class="grid g2">
-    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">A board; <span class="mono">agent_id</span> assignee; <span class="mono">milestone_id</span>; workspace. <b>No dates, no dependencies.</b></p></div>
-    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>start / due / repeat</b> fields; <span class="mono">blocked_by</span> <b>dependencies</b>; a <b>plan (DAG) view</b>; a <b>workspace</b> scope selector; <b>delegated-by</b> + assignee shown.</p></div>
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">Two separate task stores (GTD board + workflow queue). Board + List + Execution views. <b>No Graph view. No dates. No dependencies visible.</b></p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>One unified task entity</b>, 7-state lifecycle (inbox · next · planning · in progress · blocked · done · failed). Four workspace tabs: <b>Board</b> (kanban by status; delegation roll-ups: parent card shows "▸ N sub-agents" badge, children nested/collapsed) · <b>List</b> (flat/filterable) · <b>Graph</b> (task DAG — tasks as nodes, <span class="mono">blocked_by</span> as edges) · <b>Calendar</b> (recurring/scheduled tasks by fire date). Tasks carry <span class="mono">workspace_id</span>, <span class="mono">trigger</span>, <span class="mono">due</span>, <span class="mono">action</span>, <span class="mono">blocked_by</span>, <span class="mono">parent_task_id</span>. <b>Delegated tasks are visible cards</b> on the board.</p></div>
   </div>
-  <pre class="wire">Tasks · My Workspace          [ Board │ Plan ]      + Task
-────────────────────────────────────────────────────────
- PLAN  (DAG)
-    ┌ Research A -> Ray ┐
-    │                  ├-> Draft brief -> Jim -> Schedule -> automation
-    └ Research B -> Ray ┘         ^ blocked_by
- Task "Draft brief"    start []   due []   repeat []    -> Jim</pre>
-  <p class="note" style="margin-top:10px"><b>When:</b> additive fields + workspace scope (shapes) = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; functional dates/recurrence/deps + basic plans = <span class="rel r2">v0.2.0</span> &nbsp;·&nbsp; full plan / coordinator = <span class="rel r5">v1.0.0</span></p>
+  <pre class="wire">My Workspace  [ Chat │ <b>Board</b> │ List │ Graph │ Calendar │ Team │ Settings ]
+──────────────────────────────────────────────────────────────────────────
+ BOARD (kanban · 7 states)                                  + Task
+  Inbox          Next          In Progress      Done
+  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐
+  │Draft brief│  │Research A │  │Competitor │  │Logo       │
+  │→ Jim      │  │→ Ray      │  │brief→Jim  │  │✓          │
+  │           │  │           │  │▸ 2 sub    │  │           │
+  └───────────┘  └───────────┘  └───────────┘  └───────────┘
+ GRAPH (DAG)
+    ┌ Research A → Ray ┐
+    │                 ├→ Draft brief → Jim
+    └ Research B → Ray ┘     ^ blocked_by
+ Task detail:  title · prompt · action[llm] · trigger[every Mon 9am]
+               due [] · blocked_by [] · agent → Jim</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> unified task model + 7-state lifecycle + Board/List/Graph/Calendar tabs = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; workflow engine (conditional edges, event triggers) = v0.3+</p>
 </div></section>
 
-<!-- 6 · AUTOMATIONS -->
+<!-- 6 · AUTOMATIONS — REMOVED -->
 <section><div class="wrap">
-  <div class="eyebrow">Screen 6 · the reframed surface</div>
-  <h2>Monitor / Schedules → <span class="gold">Automations</span></h2>
-  <p class="sub">A cron list becomes a trigger → action rule builder; schedules become one kind of trigger.</p>
+  <div class="eyebrow">Screen 6 · removed surface</div>
+  <h2>Automations → <span class="gold">removed</span></h2>
+  <p class="sub">The Automations screen is <b>removed</b>. Automation is no longer a separate concept — it is a property of a task. Tasks with <b>time triggers</b> (once / every / recurring) replace the old schedules/automations surface. The <b>Calendar tab</b> (inside each workspace) shows recurring tasks by date. Heartbeat is a per-agent recurring task (visible in the agent profile, hidden from the board).</p>
   <div class="grid g2">
-    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">A schedules list (cron); Monitor token-usage.</p></div>
-    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note">A <b>trigger → action</b> rule builder; a <b>system automations</b> filter (heartbeat shown as system); schedules become <b>time-triggers</b>.</p></div>
+    <div class="card"><h4>As-is <span class="tag t-have">exists</span></h4><p class="note">A schedules list (cron); Monitor token-usage. Automations screen exists as a stub pointing at Command Center.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>No Automations screen.</b> Schedules/automations are expressed as <b>tasks with triggers</b> (<span class="mono">trigger: {kind: once|every|recurring, …}</span>) and live on the Board/Calendar. Heartbeat = a per-agent recurring-trigger task (<span class="mono">surface: heartbeat</span>) — shown on the agent profile, filtered out of the board. The sidebar Automations entry is removed entirely.</p></div>
   </div>
-  <pre class="wire">Automations                                   + New rule
-────────────────────────────────────────────────────────
-  WHEN  task done v           ->    THEN  notify v
-  WHEN  every Mon 9am v       ->    THEN  run agent: Ray v
-  WHEN  email received v      ->    THEN  create task v
-  ───────────  > System:  heartbeat · Dreamcatcher ──────</pre>
-  <p class="note" style="margin-top:10px"><b>When:</b> reframed read-only surface = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; functional engine + rule builder = <span class="rel r2">v0.2.0</span> &nbsp;·&nbsp; webhook-out + external integration = <span class="rel r5">v1.0.0</span></p>
+  <p class="note" style="margin-top:10px"><b>When:</b> Automations screen removed + tasks with triggers replace it = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; workflow engine (event triggers, conditional edges, rule builder) = v0.3+</p>
 </div></section>
 
-<!-- 7 · CALENDAR -->
+<!-- 7 · CALENDAR (workspace tab) -->
 <section><div class="wrap">
-  <div class="eyebrow">Screen 7 · new surface</div>
-  <h2>Calendar <span class="tag t-new">greenfield</span></h2>
-  <p class="sub">A brand-new surface that unifies tasks, schedules and milestones on a timeline, scoped per workspace.</p>
+  <div class="eyebrow">Screen 7 · workspace tab</div>
+  <h2>Calendar — workspace tab <span class="tag t-new">greenfield</span></h2>
+  <p class="sub">Calendar is a <b>tab inside each workspace</b> (not a standalone top-level route). It shows <b>recurring and scheduled tasks</b> for that workspace by their fire date. Previously an orphan route, now properly surfaced as the fourth workspace tab.</p>
   <div class="grid g2">
-    <div class="card"><h4>As-is <span class="tag t-new">greenfield</span></h4><p class="note">None. There is no calendar surface today.</p></div>
-    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>per-workspace (incl. My Workspace)</b> (via the sidebar workspace switcher); <b>All + 4 category filters</b> (System events · Calendar events · Milestones · Scheduled tasks); import via <b>iCal → provider OAuth → CalDAV</b>.</p></div>
+    <div class="card"><h4>As-is <span class="tag t-part">partial</span></h4><p class="note">A calendar view exists but is an <b>orphan route</b> — linked from nowhere in the sidebar. Per-workspace, but unreachable in normal navigation.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>Workspace Calendar tab</b> — shows tasks with time triggers (once / every / recurring) scoped to the active workspace by fire date. Heartbeat tasks are hidden (<span class="mono">surface: heartbeat</span>) — they are shown only on the agent profile. Import via <b>iCal → provider OAuth → CalDAV</b> later. The tab is always present; if no scheduled tasks exist, shows an empty state with a + Task shortcut.</p></div>
   </div>
-  <pre class="wire">Calendar · My Workspace v   [All][System][Events][Miles][Tasks]
-────────────────────────────────────────────────────────
+  <pre class="wire">My Workspace  [ Chat │ Board │ List │ Graph │ <b>Calendar</b> │ Team │ Settings ]
+──────────────────────────────────────────────────────────────────────────
+Calendar · My Workspace            [All][Events][Milestones][Tasks]
   Mon        Tue        Wed        Thu        Fri
   # Report              o Google (import)        * Milestone
-  o Heartbeat                       # Task due
-                  + Add iCal subscription</pre>
-  <p class="note" style="margin-top:10px"><b>When:</b> surface showing real tasks/schedules/milestones = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; iCal subscribe + real scheduling = <span class="rel r2">v0.2.0</span> &nbsp;·&nbsp; provider OAuth two-way = <span class="rel r5">v1.0.0</span></p>
+  # every Mon 9am                   # Task due
+                  + Task (with trigger)</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> workspace Calendar tab showing scheduled tasks = <span class="rel r1">v0.1.0</span> &nbsp;·&nbsp; iCal subscribe = <span class="rel r2">v0.2.0</span> &nbsp;·&nbsp; provider OAuth two-way = <span class="rel r5">v1.0.0</span></p>
+</div></section>
+
+<!-- 7b · TEAM TAB -->
+<section><div class="wrap">
+  <div class="eyebrow">Screen 7b · workspace tab</div>
+  <h2>Team — workspace tab <span class="tag t-new">greenfield</span></h2>
+  <p class="sub">Each workspace has a <b>Team tab</b> — the per-workspace delegation graph. Adding an agent to the team and setting delegation edges are the <b>same action</b>.</p>
+  <div class="grid g2">
+    <div class="card"><h4>As-is <span class="tag t-part">partial</span></h4><p class="note">Trust-graph matrix in the Agent Delegation tab (global, per-agent). No per-workspace team concept.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h4>To-be</h4><p class="note"><b>Workspace Team tab</b> = the per-workspace <b>delegation graph</b>. Nodes = agents on this project. <b>[+ Add agent] / remove = add/remove a node = team membership.</b> Edges = delegation: drag to connect; click edge → set modes/depth. My Workspace is pre-seeded with the default team (4 base + Planner/Explorer/Researcher) + default edges. The same graph is also reachable from <b>Agents → Workspace Teams</b> (one source of truth). Editing an agent opens the existing AgentProfile slide-over.</p></div>
+  </div>
+  <pre class="wire">My Workspace  [ Chat │ Board │ List │ Graph │ Calendar │ <b>Team</b> │ Settings ]
+──────────────────────────────────────────────────────────────────────────
+Team · My Workspace                                   + Add agent
+  [Mia ⭐]──delegate──>[Jim]──delegate──>[Planner]
+                                 │
+                                 ├──>[Explorer]
+                                 └──>[Researcher]
+  [Ray]   [Ava]
+  click edge → modes: await|background|task   depth: 1
+  + Add agent   [ remove ]   (edit) → AgentProfile slide-over</pre>
+  <p class="note" style="margin-top:10px"><b>When:</b> Team tab + per-workspace delegation graph + Workspace Teams view in Agents = <span class="rel r1">v0.1.0</span></p>
 </div></section>
 
 <!-- 8 · SETTINGS -->
@@ -261,14 +285,17 @@ Settings > Integrations
   <h2>Every surface, one table</h2>
   <table class="scr">
     <tr><th>Screen</th><th>The headline change</th><th>First lands</th></tr>
-    <tr><td><b>Global shell</b></td><td>Workspace switcher (existing sidebar) · Channels→Connectors · Monitor→Automations · +Calendar</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td><b>Global shell</b></td><td>Sidebar = WORKSPACES primary nav (My Workspace ⭐ + named + Archive) + global libraries (Agents · Connectors · Skills &amp; Tools) + Settings. Chat/Tasks/Calendar/Team → workspace tabs. Channels→Connectors. Automations → removed.</td><td><span class="rel r1">v0.1.0</span></td></tr>
     <tr><td><b>Onboarding</b></td><td>3 steps (name · one password · model key) → auto-provision your Assistant ("meet your Assistant")</td><td><span class="rel r1">v0.1.0</span></td></tr>
-    <tr><td><b>Chat</b></td><td>Unified call-tree activity view · workspace in context</td><td><span class="rel r1">v0.1.0</span> <span class="rel r5">v1.0.0</span></td></tr>
-    <tr><td><b>Agents</b></td><td>4-base roster (Mia⭐·Jim·Ray·Ava) + sub workers · Delegation tab · trust-graph · seed sub agent · Assistant</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td><b>Chat (workspace tab)</b></td><td>Default tab of active workspace · agent picker scoped to workspace team · sessions tagged workspace_id · conversation history filtered by workspace</td><td><span class="rel r1">v0.1.0</span> <span class="rel r5">v1.0.0</span></td></tr>
+    <tr><td><b>Agents</b></td><td>Global library with two views: Agents (library, filter by workspace) + Workspace Teams (per-workspace delegation graphs). MAIN AGENTS + SUBAGENTS sections; BUILT-IN ROSTER adaptive accordion. Seed Planner/Explorer/Researcher specialists.</td><td><span class="rel r1">v0.1.0</span></td></tr>
     <tr><td><b>Connectors</b></td><td>Instance list · identity + agent binding</td><td><span class="rel r1">v0.1.0</span> <span class="rel r3">v0.3.0</span> <span class="rel r4">v0.4.0</span></td></tr>
-    <tr><td><b>Tasks / Projects</b></td><td>Dates · dependencies · plan (DAG) view · workspace scope</td><td><span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span> <span class="rel r5">v1.0.0</span></td></tr>
-    <tr><td><b>Automations</b></td><td>Trigger→action rule builder · system filter</td><td><span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span> <span class="rel r5">v1.0.0</span></td></tr>
-    <tr><td><b>Calendar</b></td><td>New surface · per-workspace scope (incl. My Workspace) · All + 4 filters · iCal/OAuth/CalDAV</td><td><span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span> <span class="rel r5">v1.0.0</span></td></tr>
+    <tr><td><b>Board (workspace tab)</b></td><td>Unified task model (7-state lifecycle) · kanban with delegation roll-ups (▸ N sub-agents badge, children nested)</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td><b>List (workspace tab)</b></td><td>Flat/filterable view of all tasks in the workspace</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td><b>Graph (workspace tab)</b></td><td>Task DAG — tasks as nodes, blocked_by as dependency edges</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td><b>Calendar (workspace tab)</b></td><td>Recurring/scheduled tasks by fire date · was an orphan route, now surfaced as 4th workspace tab</td><td><span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span> <span class="rel r5">v1.0.0</span></td></tr>
+    <tr><td><b>Team (workspace tab)</b></td><td>Per-workspace delegation graph · nodes = team members · edges = delegation (modes/depth) · same graph as Agents → Workspace Teams</td><td><span class="rel r1">v0.1.0</span></td></tr>
+    <tr><td><b>Automations</b></td><td><b>Removed.</b> Tasks with triggers (once/every/recurring) replace it. Heartbeat = per-agent recurring task (agent profile only).</td><td>—</td></tr>
     <tr><td><b>Settings</b> + <b>Profile</b></td><td>Top-right Profile menu (name · password · appearance · log out) · user mgmt → password reset only · Settings = app config · Max parallel agents · password re-type on sensitive · tool-provider Integrations</td><td><span class="rel r1">v0.1.0</span> <span class="rel r4">v0.4.0</span> <span class="rel r5">v1.0.0</span></td></tr>
     <tr><td><b>Memory</b></td><td>Two-room view (private + project) · graph/backlinks · Dreamcatcher review · bleve search (no embeddings)</td><td><span class="rel r1">v0.1.0</span> <span class="rel r2">v0.2.0</span></td></tr>
     <tr><td><b><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a> / Integrations</b></td><td>Provider-picker per tool (search · voice · image) · per-agent voice · image-gen · mic + ▶ playback in chat</td><td><span class="rel r1">v0.1.0</span> <span class="rel r5">v1.0.0</span></td></tr>
@@ -280,16 +307,17 @@ Settings > Integrations
   <div class="eyebrow">The point</div>
   <h2>What ships in <span class="gold">v0.1.0</span> is real, not placeholder</h2>
   <p class="sub">Every v0.1.0 row above sits on actual data — because v0.1.0 lands the structural <b>shapes</b> first, the UI is never thrown away later.</p>
-  <div class="callout g"><b>v0.1.0 lands the data shapes the rest builds on:</b>
+  <div class="callout g"><b>v0.1.0 lands the data shapes and IA the rest builds on:</b>
     <ul class="clean" style="margin-top:8px">
-      <li>The <b>Workspace scoping key</b> threaded through tasks, memory, calendar and connections.</li>
+      <li>The <b>workspace-as-project IA</b> — chat, tasks, calendar, and team as workspace tabs; WORKSPACES as primary nav; Automations removed.</li>
+      <li>The <b>Workspace scoping key</b> (<span class="mono">workspace_id</span>) threaded through tasks, memory, calendar, sessions (tag), and connections.</li>
+      <li>The <b>unified task model</b> — one store, 7-state lifecycle, unified fields (action · trigger · blocked_by · parent_task_id · workspace_id).</li>
       <li>The <b>Connection-as-instance</b> model — capped at one per type, but the instance shape is real.</li>
-      <li>The agent <span class="mono">tier</span> field (base / sub) — the two-section roster.</li>
-      <li>The <b>delegation-policy</b> contract type (to · modes · accept_from).</li>
-      <li>The additive <b>task fields</b> (start / due / repeat / <span class="mono">blocked_by</span>).</li>
+      <li>The agent <b>kind taxonomy</b> (Main / Subagent / subagent_3p) + seeded specialists (Planner / Explorer / Researcher).</li>
+      <li>The <b>per-workspace delegation graph</b> (Team tab + Agents → Workspace Teams) — one source of truth.</li>
     </ul>
   </div>
-  <p class="note">Because the shapes are correct on day one, the v0.1.0 UI sits on real data and is <b>not</b> reshaped later — later releases add <b>behavior</b> (functional recurrence, OAuth, rule engines, multi-instance), not new structure. See <a href="roadmap.html">the roadmap</a> for the release sequence and <a href="blueprint.html">the blueprint</a> for the underlying data model.</p>
+  <p class="note">Because the shapes are correct on day one, the v0.1.0 UI sits on real data and is <b>not</b> reshaped later — later releases add <b>behavior</b> (workflow engine, OAuth, rule engines, multi-instance), not new structure. See <a href="roadmap.html">the roadmap</a> for the release sequence and <a href="blueprint.html">the blueprint</a> for the underlying data model.</p>
 </div></section>
 
 <footer><div class="wrap"><p><a href="time.html" style="color:var(--muted)">← Calendar &amp; Automations</a> &nbsp;·&nbsp; Next: <a href="impact.html">Impact →</a></p></div></footer>

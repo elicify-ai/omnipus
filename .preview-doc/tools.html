@@ -19,7 +19,7 @@
   <div class="crumb"><a href="index.html">Overview</a> / Tools, Providers &amp; Multimodal</div>
   <div class="eyebrow">Capabilities · grounded in code</div>
   <h1>Tools, Providers &amp; Multimodal</h1>
-  <p class="lede">Agents reach the world through <b style="color:#fff">tools</b> — search, image, voice. The key pattern, already half-built: <b style="color:#fff">every external tool has a pluggable provider</b> you pick in Settings. Web search and voice-in already work this way; we standardize it and add the missing pieces — <b style="color:#fff">agent voices, image generation</b>, and a provider-picker UI.</p>
+  <p class="lede">Agents reach the world through <b style="color:#fff">tools</b> — search, email, voice. The key pattern, already half-built: <b style="color:#fff">every external tool has a pluggable provider</b> you pick in Settings. Web search and voice-in already work this way; we standardize it and add the missing pieces — <b style="color:#fff">email tools</b> (read, search, send, reply) over a per-agent mailbox configured in Connectors, <b style="color:#fff">agent voices</b>, and <b style="color:#fff">image generation</b>. Provider-picker UI and chat mic in v0.1.0; TTS + image-gen in v0.2.</p>
 </div></div>
 
 <!-- LANDSCAPE -->
@@ -32,8 +32,9 @@
     <tr><td>Voice-in (STT)</td><td><span class="tag t-have">multi-provider · wired</span></td><td class="e"><span class="mono">pkg/voice/</span> <span class="mono">Transcriber</span> — <b>Groq/Whisper · ElevenLabs · audio-model</b>; <span class="mono">DetectTranscriber</span> picks one; wired to the loop (<span class="mono">gateway.go:1141</span>).</td></tr>
     <tr><td>Vision (image-in)</td><td><span class="tag t-have">works</span></td><td class="e">Multimodal content across providers — base64 → image block (<span class="mono">anthropic_messages:320</span>), <span class="mono">image_url</span> (<span class="mono">common.go:109</span>), OpenAI <span class="mono">InputImage</span>. Agents already <i>see</i> images.</td></tr>
     <tr><td>Image render</td><td><span class="tag t-have">works</span></td><td class="e">Inline markdown images · attachment cards · lightbox. <b>Generated images would render for free.</b></td></tr>
-    <tr><td>Voice-out (TTS) · agent voices</td><td><span class="tag t-new">greenfield</span></td><td class="e">No speech synthesis yet. "One voice per agent" is new.</td></tr>
-    <tr><td>Image generation</td><td><span class="tag t-new">greenfield</span></td><td class="e">No image-gen tool/provider. The display is free; the tool isn't.</td></tr>
+    <tr><td>Email (read/send)</td><td><span class="tag t-new">tools · v0.1.0</span></td><td class="e"><span class="mono">read_inbox · search_email · read_message · send_email · reply</span> tools over a per-agent IMAP/SMTP mailbox configured in Connectors. Pull-based — agent works inbox on heartbeat; un-handled mail → Board tasks. No inbox UI yet (workspace Email tab → v0.2).</td></tr>
+    <tr><td>Voice-out (TTS) · agent voices</td><td><span class="tag t-new">v0.2</span></td><td class="e">No speech synthesis yet. "One voice per agent" is new. Deferred to v0.2.</td></tr>
+    <tr><td>Image generation</td><td><span class="tag t-new">v0.2</span></td><td class="e">No image-gen tool/provider. The display is free; the tool isn't. Deferred to v0.2.</td></tr>
     <tr><td>Realtime voice</td><td><span class="tag t-new">greenfield</span></td><td class="e">Full-duplex spoken conversation — not present.</td></tr>
     <tr><td>Provider-picker UI</td><td><span class="tag t-part">LLM only</span></td><td class="e">Settings exposes <b>LLM providers</b> only (<span class="mono">ProvidersSection</span>); search + voice are <b>config/env-only</b> — working backend, no UI.</td></tr>
   </table>
@@ -50,8 +51,9 @@
       <li><b>LLM</b> — OpenRouter · OpenAI · Anthropic <span class="tag t-have">+ failover</span></li>
       <li><b>Web search</b> — Brave · Tavily · Perplexity · SearXNG · GLM · Baidu <span class="tag t-have">exists</span></li>
       <li><b>Voice-in (STT)</b> — Groq/Whisper · ElevenLabs · audio-model <span class="tag t-have">exists</span></li>
-      <li><b>Image</b> — OpenAI · Replicate/Fal (Flux) · Stability · SD-local <span class="tag t-new">new</span></li>
-      <li><b>Voice-out (TTS)</b> — ElevenLabs · OpenAI · Cartesia · Piper-local <span class="tag t-new">new</span></li>
+      <li><b>Email</b> — IMAP/SMTP (pure-Go), one mailbox per agent, Connectors config <span class="tag t-new">v0.1.0 tool</span></li>
+      <li><b>Image</b> — OpenAI · Replicate/Fal (Flux) · Stability · SD-local <span class="tag t-new">v0.2</span></li>
+      <li><b>Voice-out (TTS)</b> — ElevenLabs · OpenAI · Cartesia · Piper-local <span class="tag t-new">v0.2</span></li>
     </ul></div>
     <div class="card" style="border-color:var(--gold-dim)"><h3>Two delivery modes — sovereignty</h3><ul class="clean">
       <li><b>API (default)</b> — HTTP to a hosted service; pure-Go, single binary, no CGo</li>
@@ -95,11 +97,13 @@
   <div class="eyebrow">Where it lands</div>
   <h2>Sequencing</h2>
   <div class="grid g3">
-    <div class="card" style="border-color:var(--gold-dim)"><h3><span class="rel r1">v0.1.0</span> Surface what exists</h3><ul class="clean">
+    <div class="card" style="border-color:var(--gold-dim)"><h3><span class="rel r1">v0.1.0</span> Surface what exists + email tool</h3><ul class="clean">
       <li><b>Integrations</b> provider-picker — surfaces the existing multi-provider <b>search</b> + <b>voice-in</b> (cheap, high-leverage)</li>
       <li><b>Mic</b> button in the composer — voice-in capture (the transcriber backend already exists)</li>
+      <li><b>Email tools</b> — <span class="mono">read_inbox · search_email · read_message · send_email · reply</span> over a per-agent IMAP/SMTP mailbox account (configured in Connectors). Agent works inbox on heartbeat; un-handled mail → Board tasks. <b>No inbox UI yet</b> — the workspace Email tab lands in v0.2.</li>
     </ul></div>
-    <div class="card"><h3><span class="rel r2">v0.2.0</span> Voices + images</h3><ul class="clean">
+    <div class="card"><h3><span class="rel r2">v0.2.0</span> Voices + images + email inbox UI</h3><ul class="clean">
+      <li><b>Email inbox UI</b> — the workspace "Email" tab (inbox view + agent replies/actions; email-client surface)</li>
       <li><b>One voice per agent</b> — a <span class="mono">Synthesizer</span> interface + a <span class="mono">voice</span> field on Primary personas + chat <b>playback</b></li>
       <li><b>Image generation</b> — a <span class="mono">generate_image</span> tool + <span class="mono">ImageProvider</span> (display is free)</li>
     </ul></div>
@@ -109,7 +113,7 @@
       <li>Per-agent provider overrides · voice notes over channels · image edits/variations</li>
     </ul></div>
   </div>
-  <div class="callout b">Effort is lower than it looks: search + voice-in + vision + image-render are <b>done</b>. The genuinely new work is <b>TTS (agent voices)</b>, <b>image-gen</b>, and the <b>Integrations UI</b> — see the wireframes on <a href="ui-changes.html">UI Changes</a>, the cost on <a href="impact.html">Impact</a>.</div>
+  <div class="callout b">Effort is lower than it looks: search + voice-in + vision + image-render + the IMAP/SMTP transport are <b>done</b>. The genuinely new work in v0.1.0 is the <b>email tool surface</b> + wiring to heartbeat/Board, and the <b>Integrations UI</b>. TTS (agent voices) + image-gen are v0.2. See the wireframes on <a href="ui-changes.html">UI Changes</a>, the cost on <a href="impact.html">Impact</a>.</div>
 </div></section>
 
 <footer><div class="wrap"><p><a href="channels.html" style="color:var(--muted)">← Channels</a> &nbsp;·&nbsp; Next: <a href="memory.html">Agent Memory →</a></p></div></footer>

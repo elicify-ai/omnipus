@@ -9,52 +9,270 @@
 
 <div class="wrap"><div class="hero">
   <div class="crumb"><a href="index.html">Overview</a> / Workspaces</div>
-  <div class="eyebrow">The structural foundation, simplified</div>
+  <div class="eyebrow">The structural foundation</div>
   <h1>Workspaces</h1>
-  <p class="lede"><b style="color:#fff">One container — the Workspace</b> — holds everything for a context: tasks, memory, calendar, automations, connections, member agents. One pre-seeded default (<b style="color:#fff">My Workspace</b>), named workspaces for real work, and the sidebar switcher sets the context. No abstract "spaces", no mode switcher. <span style="color:var(--muted)">(Channels &amp; Connections have their <a href="channels.html">own page →</a>)</span></p>
+  <p class="lede"><b style="color:#fff">A Workspace is a project</b> — everything to deliver it lives inside: tasks, team, memory, sessions, settings. One pre-seeded default (<b style="color:#fff">My Workspace</b>), named workspaces for real work. The sidebar switcher picks the active workspace; <b style="color:#fff">chat is its front view</b>, not a global front door. No abstract "spaces", no mode switcher. <span style="color:var(--muted)">(Channels &amp; Connections have their <a href="channels.html">own page →</a>)</span></p>
 </div></div>
 
 <!-- PROJECTS -->
 <section id="projects"><div class="wrap">
-  <div class="eyebrow">Simplification · "Rooms"/"Spaces" → just Workspaces</div>
-  <h2>One container, and context is <span class="gold">which workspace you're in</span></h2>
-  <p class="sub">An earlier draft had three parallel "space" tiers (User · Agent · Project) plus a global scope switcher — too many systems doing the same job. Collapse them: there is <b>one container, the Workspace</b>. You never pick a "scope" — the context is simply <b>which workspace you've selected</b> in the <b>workspace switcher already in the sidebar</b>.</p>
+  <div class="eyebrow">Workspace = project, not instance</div>
+  <h2>One workspace, one project — <span class="gold">everything inside it</span></h2>
+  <p class="sub">A Workspace is a <b>project container</b> — not an active "instance" or a scope filter. Everything needed to deliver the project lives inside it: its tasks, its team of agents, its shared memory room, its sessions. Picking a workspace in the sidebar sets the entire context (chat, tasks, memory, team). You never pick a separate "scope" — context is simply <b>which workspace you've selected</b>.</p>
   <div class="fig">
-  <svg viewBox="0 0 980 250" width="100%" role="img" font-family="Inter,sans-serif">
+  <svg viewBox="0 0 980 260" width="100%" role="img" font-family="Inter,sans-serif">
     <defs><marker id="g" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b8b97"/></marker></defs>
-    <rect x="30" y="30" width="220" height="200" rx="12" fill="#0e0e12" stroke="#23232a"/>
+    <rect x="30" y="30" width="220" height="210" rx="12" fill="#0e0e12" stroke="#23232a"/>
     <text x="48" y="54" fill="#8b8b97" font-size="10.5" font-family="JetBrains Mono" letter-spacing="1">SIDEBAR · workspace switcher</text>
     <g font-size="12.5">
-      <rect x="46" y="68" width="188" height="34" rx="8" fill="#16161c" stroke="#a78bfa"/><text x="60" y="90" fill="#a78bfa">🏠 My Workspace (default)</text>
+      <rect x="46" y="68" width="188" height="34" rx="8" fill="#16161c" stroke="#a78bfa"/><text x="60" y="90" fill="#a78bfa">⭐ My Workspace (default)</text>
       <rect x="46" y="110" width="188" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="60" y="132" fill="#cdd3de">📁 Acme</text>
       <rect x="46" y="152" width="188" height="34" rx="8" fill="#16161c" stroke="#2a2a31"/><text x="60" y="174" fill="#cdd3de">📁 Q3 Launch</text>
-      <rect x="46" y="194" width="188" height="26" rx="8" fill="#101014" stroke="#2a2a31"/><text x="60" y="211" fill="#5f5f6b" font-size="11">+ new workspace</text>
+      <rect x="46" y="194" width="188" height="34" rx="8" fill="#101014" stroke="#2a2a31"/><text x="60" y="215" fill="#5f5f6b" font-size="11">+ new workspace</text>
     </g>
-    <text x="340" y="48" fill="#5f5f6b" font-size="11" text-anchor="middle">picking a workspace sets the whole context</text>
+    <text x="340" y="48" fill="#5f5f6b" font-size="11" text-anchor="middle">picking a workspace enters it (Chat tab)</text>
     <line x1="250" y1="85" x2="430" y2="85" stroke="#8b8b97" stroke-dasharray="3 3" marker-end="url(#g)"/>
     <line x1="250" y1="127" x2="430" y2="127" stroke="#8b8b97" stroke-dasharray="3 3" marker-end="url(#g)"/>
-    <rect x="440" y="40" width="510" height="180" rx="14" fill="#101014" stroke="#60a5fa"/>
-    <text x="466" y="66" fill="#60a5fa" font-family="Outfit" font-weight="700" font-size="15">📁 The selected Workspace = the context</text>
-    <g font-size="12" fill="#cdd3de"><text x="466" y="92">· tasks · milestones · shared memory room</text><text x="466" y="114">· calendar · automations · its connections</text><text x="466" y="136">· member agents (incl. their private memory)</text></g>
-    <rect x="466" y="156" width="460" height="46" rx="9" fill="#0e0e12" stroke="#a78bfa"/><text x="486" y="174" fill="#a78bfa" font-size="11.5">My Workspace is special: the Assistant is bound to it</text><text x="486" y="190" fill="#8b8b97" font-size="11">(your accounts · email · calendar) — but it's still just a Workspace.</text>
+    <rect x="440" y="20" width="510" height="230" rx="14" fill="#101014" stroke="#60a5fa"/>
+    <text x="466" y="46" fill="#60a5fa" font-family="Outfit" font-weight="700" font-size="15">📁 Workspace = project — everything inside</text>
+    <g font-size="11.5" fill="#8b8b97">
+      <text x="466" y="68">Chat · Board · List · Graph · Calendar · Team · Settings</text>
+    </g>
+    <g font-size="12" fill="#cdd3de">
+      <text x="466" y="96">· tasks (board, list, DAG, calendar)</text>
+      <text x="466" y="116">· team of agents + delegation graph</text>
+      <text x="466" y="136">· shared workspace memory room</text>
+      <text x="466" y="156">· sessions (tagged with this workspace)</text>
+    </g>
+    <rect x="466" y="172" width="460" height="56" rx="9" fill="#0e0e12" stroke="#a78bfa"/>
+    <text x="486" y="191" fill="#a78bfa" font-size="11.5">My Workspace ⭐ — the pre-seeded default</text>
+    <text x="486" y="208" fill="#8b8b97" font-size="11">The Assistant's home. Your email + calendar live here.</text>
+    <text x="486" y="224" fill="#5f5f6b" font-size="10.5">Pre-seeded team: Mia · Jim · Ray · Ava + Planner / Explorer / Researcher</text>
   </svg>
-  <div class="figcap">Pick a workspace in the sidebar → that's your context. The Assistant is bound to My Workspace; team agents work in whichever workspace you've selected.</div>
+  <div class="figcap">Pick a workspace in the sidebar → you enter it on the Chat tab. The workspace is the project; its team, tasks, memory, and sessions are all scoped to it.</div>
   </div>
+
   <div class="grid g2">
-    <div class="card"><h3>How context is decided — no switcher mode</h3><ul class="clean">
-      <li><b>Mia (your Assistant)</b> → <b>My Workspace</b>; can recall across all your workspaces</li>
-      <li><b>The other base agents</b> (Jim · Ray · Ava) → the <b>selected workspace</b>, and work in whichever workspace you've selected</li>
-      <li><b>Workers</b> inherit the caller's workspace; <b>handover</b> stays within it</li>
-      <li>The sidebar <b>workspace switcher</b> (already in the product) is the only control — it sets the overall context</li>
+    <div class="card"><h3>What stays per-workspace</h3><ul class="clean">
+      <li><b>Team</b> — which agents are on this project (their membership, not their definition)</li>
+      <li><b>Delegation graph</b> — the edges (who can delegate to whom, with what modes/depth) within the team</li>
+      <li><b>Workspace memory room</b> — the shared room all team agents read/write here</li>
+      <li><b>Tasks</b> — the board, list, graph, and calendar views; every task carries a <span class="mono">workspace_id</span></li>
+      <li><b>Sessions</b> — tagged with this workspace; "this project's conversations" is a filtered view</li>
     </ul></div>
-    <div class="card"><h3>Pre-seeded</h3><ul class="clean">
-      <li><b>My Workspace</b> — the one default; the Assistant's home; your connected accounts (email · calendar), your default tasks; team agents work here too by default</li>
-      <li>You create <b>named workspaces</b> ("Acme", "Q3 Launch") for real work — "+ new workspace"</li>
-      <li><span class="muted">Naming: code currently seeds the default as <span class="mono">"Main"</span> — proposed rename to default workspace <span class="mono">"My Workspace"</span></span></li>
+    <div class="card"><h3>What stays global (reusable library)</h3><ul class="clean">
+      <li><b>Agent personas</b> — Mia, Jim, Ray, Ava, and every custom agent live in the global Agents library; editing an agent applies everywhere it is used</li>
+      <li><b>Connectors</b> — channels and connections (Telegram, email, …) are globally managed</li>
+      <li><b>Skills &amp; Tools</b> — globally installed, available to all agents</li>
+      <li><b>Settings</b> — gateway, security, and credentials are global</li>
     </ul></div>
   </div>
+
   <div class="callout">Naming goes <b>all the way down</b>: we rename <span class="mono">project → workspace</span> across code, contracts and storage too — today's <span class="mono">project_id → workspace_id</span>, <span class="mono">rest_projects.go → rest_workspaces.go</span>, <span class="mono">Project.yaml → Workspace.yaml</span>, <span class="mono">users/&lt;user&gt;/projects/ → /workspaces/</span>, and the memory "project room" → "workspace room". A <b>v0.1.0 migration</b> (contract-affecting, Constraint #8), done up front so nothing downstream carries the old name. <span class="muted">(Pages cite today's <span class="mono">project_*</span> names as the current code.)</span></div>
-  <div class="callout b">Tenancy, precisely: Omnipus is a <b>single-user</b> self-hosted app — <b>one user</b> (name set at onboarding), <b>one password</b>. No multi-user, no RBAC roles, no tenancy. Sensitive settings (model/billing keys, channel setup, security, deletes) are protected by <b style="color:var(--blue)">re-typing the same password</b> — a sudo-style confirm, not a second credential or admin account. <span class="mono">owner=username</span> (#406) survives only as <b>attribution</b> ("you" vs which agent created something), never an access gate. Workspaces, agents, memory and tasks are simply yours — nothing is hidden or access-gated.</div>
+  <div class="callout b">Tenancy, precisely: Omnipus is a <b>single-user</b> self-hosted app — <b>one user</b> (name set at onboarding), <b>one password</b>. No multi-user, no RBAC roles, no tenancy. Sensitive settings (model/billing keys, channel setup, security, deletes) are protected by <b style="color:var(--blue)">re-typing the same password</b> — a sudo-style confirm, not a second credential or admin account. <span class="mono">owner=username</span> survives only as <b>attribution</b> ("you" vs which agent created something), never an access gate. Workspaces, agents, memory and tasks are simply yours — nothing is hidden or access-gated.</div>
+</div></section>
+
+<!-- WORKSPACE DETAIL SCREEN -->
+<section id="workspace-detail"><div class="wrap">
+  <div class="eyebrow">The workspace detail screen</div>
+  <h2>Seven tabs — <span class="gold">Chat is the default</span></h2>
+  <p class="sub">Entering a workspace opens its <b>Chat tab</b> — chat-first, always. The other tabs give you the task views and the team graph. Every tab is scoped entirely to this workspace; there is no global task board or global team graph.</p>
+
+  <div class="fig">
+  <svg viewBox="0 0 980 320" width="100%" role="img" font-family="Inter,sans-serif">
+    <!-- tab bar -->
+    <rect x="30" y="30" width="920" height="46" rx="10" fill="#0e0e12" stroke="#23232a"/>
+    <g font-size="12" font-family="Inter,sans-serif">
+      <rect x="38" y="37" width="62" height="32" rx="7" fill="#a78bfa"/><text x="69" y="58" fill="#fff" text-anchor="middle" font-weight="700">Chat</text>
+      <text x="145" y="58" fill="#8b8b97" text-anchor="middle">Board</text>
+      <text x="210" y="58" fill="#8b8b97" text-anchor="middle">List</text>
+      <text x="270" y="58" fill="#8b8b97" text-anchor="middle">Graph</text>
+      <text x="340" y="58" fill="#8b8b97" text-anchor="middle">Calendar</text>
+      <text x="410" y="58" fill="#8b8b97" text-anchor="middle">Team</text>
+      <text x="476" y="58" fill="#8b8b97" text-anchor="middle">Settings</text>
+      <text x="620" y="58" fill="#3a3a44" font-size="10.5" font-family="JetBrains Mono">Email → v0.2 (when workspace hosts email)</text>
+    </g>
+    <!-- chat panel -->
+    <rect x="30" y="90" width="920" height="210" rx="10" fill="#101014" stroke="#2a2a31"/>
+    <text x="56" y="118" fill="#60a5fa" font-size="13" font-weight="700" font-family="Outfit">Chat — front view of the active workspace</text>
+    <g font-size="11.5" fill="#8b8b97">
+      <text x="56" y="140">Agent picker scoped to this workspace's team (only team members appear)</text>
+      <text x="56" y="160">Sessions tagged with this workspace_id — conversation history filtered here</text>
+      <text x="56" y="180">Picking a workspace in the sidebar sets the chat context; sessions are workspace-aware</text>
+      <text x="56" y="200">Agent memory recall is workspace-scoped (workspace room + agent's private bank)</text>
+    </g>
+    <rect x="56" y="218" width="860" height="62" rx="8" fill="#0e0e12" stroke="#23232a"/>
+    <text x="76" y="240" fill="#5f5f6b" font-size="11" font-family="JetBrains Mono">App default: My Workspace → Chat → Mia</text>
+    <text x="76" y="260" fill="#5f5f6b" font-size="11">Switching workspace = new context; next chat turn uses the new workspace_id tag</text>
+    <text x="76" y="278" fill="#5f5f6b" font-size="11">The conversation-history panel shows only this workspace's sessions</text>
+  </svg>
+  <div class="figcap">Entering a workspace always lands on Chat. Chat is not a global front door — it is the front view of the active workspace.</div>
+  </div>
+
+  <div class="grid g3">
+    <div class="card"><h3>Chat <span class="mono" style="color:var(--muted);font-size:0.8em">default tab</span></h3>
+      <p>The front view of the workspace. Agent picker shows only this workspace's team. Sessions are tagged with the workspace; the history panel is filtered to this workspace's conversations.</p>
+    </div>
+    <div class="card"><h3>Board · List · Graph · Calendar <span class="mono" style="color:var(--muted);font-size:0.8em">task views</span></h3>
+      <ul class="clean">
+        <li><b>Board</b> — kanban by the 7-state lifecycle (Inbox → Next → Planning → In Progress → Blocked → Done → Failed)</li>
+        <li><b>List</b> — flat, filterable</li>
+        <li><b>Graph</b> — the <b>task DAG</b>: tasks as nodes, <span class="mono">blocked_by</span> as dependency edges</li>
+        <li><b>Calendar</b> — scheduled/recurring tasks by fire time</li>
+      </ul>
+    </div>
+    <div class="card"><h3>Team <span class="mono" style="color:var(--muted);font-size:0.8em">delegation graph</span></h3>
+      <p>The per-workspace <b>delegation graph</b>. Nodes = agents on this project. <b>[+ Add agent] / remove</b> = add/remove a node = team membership. <b>Edges = delegation</b> (drag to connect; click edge → modes/depth). Managing the team and managing delegation are the <b>same action in one view</b>.</p>
+    </div>
+  </div>
+
+  <div class="callout"><b>Two distinct graphs in a workspace</b> — same visual idea, different contents: the <b>Task DAG</b> (tasks as nodes, dependencies as edges — the Graph tab) and the <b>Team graph</b> (agents as nodes, delegation as edges — the Team tab). They are separate views with separate data.</div>
+
+  <div class="card" style="margin-top:1.5rem"><h3>Settings <span class="mono" style="color:var(--muted);font-size:0.8em">workspace tab</span></h3>
+    <p>Workspace properties — name, description, repository link, owner attribution, archive. Distinct from global Settings (gateway, security, credentials).</p>
+  </div>
+</div></section>
+
+<!-- SIDEBAR IA -->
+<section id="sidebar"><div class="wrap">
+  <div class="eyebrow">Sidebar reorganization</div>
+  <h2>Workspaces are <span class="gold">primary nav</span>; libraries are global</h2>
+  <p class="sub">The mental model: the sidebar = "switch project, or go to a global library." Per-workspace work (chat, tasks, team) lives inside the workspace. Global reusable assets (agent personas, connectors, skills, settings) stay in the sidebar.</p>
+
+  <div class="fig">
+  <svg viewBox="0 0 980 340" width="100%" role="img" font-family="Inter,sans-serif">
+    <rect x="30" y="20" width="240" height="310" rx="12" fill="#0e0e12" stroke="#23232a"/>
+    <!-- workspaces section -->
+    <text x="50" y="50" fill="#8b8b97" font-size="10" font-family="JetBrains Mono" letter-spacing="1">WORKSPACES</text>
+    <rect x="46" y="60" width="208" height="34" rx="8" fill="#16161c" stroke="#a78bfa"/>
+    <text x="62" y="82" fill="#a78bfa" font-size="12.5">⭐ My Workspace</text>
+    <rect x="46" y="102" width="208" height="30" rx="8" fill="#16161c" stroke="#2a2a31"/>
+    <text x="62" y="122" fill="#cdd3de" font-size="12">📁 Acme</text>
+    <rect x="46" y="140" width="208" height="30" rx="8" fill="#16161c" stroke="#2a2a31"/>
+    <text x="62" y="160" fill="#cdd3de" font-size="12">📁 Q3 Launch</text>
+    <rect x="46" y="178" width="208" height="24" rx="8" fill="#101014" stroke="#2a2a31"/>
+    <text x="62" y="194" fill="#5f5f6b" font-size="11">+ new workspace</text>
+    <!-- divider -->
+    <line x1="46" y1="214" x2="254" y2="214" stroke="#2a2a31"/>
+    <!-- global libraries -->
+    <text x="50" y="232" fill="#8b8b97" font-size="10" font-family="JetBrains Mono" letter-spacing="1">GLOBAL LIBRARIES</text>
+    <text x="62" y="254" fill="#8b8b97" font-size="12">Agents</text>
+    <text x="62" y="274" fill="#8b8b97" font-size="12">Connectors</text>
+    <text x="62" y="294" fill="#8b8b97" font-size="12">Skills &amp; Tools</text>
+    <!-- divider -->
+    <line x1="46" y1="308" x2="254" y2="308" stroke="#2a2a31"/>
+    <text x="62" y="326" fill="#5f5f6b" font-size="12">Settings · Sign out · Pin</text>
+
+    <!-- annotations -->
+    <text x="310" y="80" fill="#a78bfa" font-size="12" font-weight="600">⭐ My Workspace — pre-seeded default</text>
+    <text x="310" y="98" fill="#5f5f6b" font-size="11">The Assistant's home. Your email account lives here.</text>
+    <line x1="270" y1="77" x2="304" y2="77" stroke="#a78bfa" stroke-dasharray="3 3" marker-end="url(#g)"/>
+
+    <text x="310" y="140" fill="#cdd3de" font-size="12">Named workspaces = your projects</text>
+    <text x="310" y="158" fill="#5f5f6b" font-size="11">Click → enter on Chat tab · My Workspace + Archive also in list</text>
+    <line x1="270" y1="118" x2="304" y2="138" stroke="#8b8b97" stroke-dasharray="3 3" marker-end="url(#g)"/>
+
+    <text x="310" y="250" fill="#cdd3de" font-size="12">Agents library + Workspace Teams view</text>
+    <text x="310" y="268" fill="#5f5f6b" font-size="11">Agent personas are global; workspace membership is per-workspace</text>
+    <line x1="270" y1="249" x2="304" y2="249" stroke="#8b8b97" stroke-dasharray="3 3" marker-end="url(#g)"/>
+
+    <text x="310" y="290" fill="#cdd3de" font-size="12">Globally managed; no workspace scope</text>
+    <line x1="270" y1="279" x2="304" y2="288" stroke="#8b8b97" stroke-dasharray="3 3" marker-end="url(#g)"/>
+  </svg>
+  <div class="figcap">The sidebar is reorganized: Workspaces is the primary nav list (My Workspace ⭐ + named + Archive). Global libraries (Agents, Connectors, Skills &amp; Tools, Settings) stay below.</div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card"><h3>What moved</h3><ul class="clean">
+      <li><b>Chat</b> → workspace Chat tab (no longer a top-level sidebar item)</li>
+      <li><b>Tasks / Board / Calendar</b> → workspace Board / List / Graph / Calendar tabs</li>
+      <li><b>Automations</b> → <b>REMOVED</b> (scheduling is now tasks with triggers; no separate screen)</li>
+      <li><b>Workspaces</b> → promoted to the primary nav section at the top</li>
+      <li><b>Team</b> → new workspace Team tab (delegation graph)</li>
+    </ul></div>
+    <div class="card"><h3>What stays global</h3><ul class="clean">
+      <li><b>Agents</b> — the persona library + Workspace Teams index (see below)</li>
+      <li><b>Connectors</b> — channels and connections</li>
+      <li><b>Skills &amp; Tools</b> — globally installed</li>
+      <li><b>Settings</b> — gateway, security, credentials</li>
+    </ul></div>
+  </div>
+</div></section>
+
+<!-- TEAM + DELEGATION -->
+<section id="team"><div class="wrap">
+  <div class="eyebrow">Team tab — per-workspace delegation</div>
+  <h2>The Team tab <span class="gold">= the delegation graph</span></h2>
+  <p class="sub">A workspace's Team tab is its delegation graph. Nodes are the agents on this project; edges are the delegation rules between them. Adding or removing an agent IS adding or removing a team member — and drawing or deleting an edge IS editing the delegation policy. You manage the team and the delegation in one view.</p>
+
+  <div class="grid g2">
+    <div class="card"><h3>Team membership</h3><ul class="clean">
+      <li><b>[+ Add agent]</b> pulls from the global Agents library and adds that agent to this workspace's team (adds a node to the graph)</li>
+      <li><b>Remove</b> — removes the agent from this workspace's team (removes the node + its edges)</li>
+      <li>The agent's <b>global persona is unchanged</b> — only participation in this workspace changes</li>
+      <li>My Workspace is pre-seeded: Mia · Jim · Ray · Ava + Planner / Explorer / Researcher specialist subagents + default delegation edges</li>
+    </ul></div>
+    <div class="card"><h3>Delegation edges</h3><ul class="clean">
+      <li>Drag between two agent nodes → create a delegation edge</li>
+      <li>Click an edge → set modes (await / background / task) and depth</li>
+      <li>Delegation is <b>per-workspace</b> — the same agent can have different delegation rules in different workspaces</li>
+      <li>The delegation graph is owned by the workspace; the workspace Team tab and the Agents → "Workspace Teams" view show the <b>same data</b> (one source of truth)</li>
+    </ul></div>
+  </div>
+
+  <div class="callout"><b>Agent personas stay global.</b> Adding Mia to a workspace does not copy her definition — it adds her as a member. Editing her profile (from the library, the Workspace Teams view, or the Team tab) applies <b>everywhere she is used</b>. A small cue clarifies this: <i>"Editing Mia — applies everywhere she's used."</i> Per-workspace agent overrides are out of scope for 0.1.0.</div>
+
+  <div class="card" style="margin-top:1.5rem"><h3>Agents area — two views</h3>
+    <ul class="clean">
+      <li><b>Agents (library)</b> — all agent persona definitions; filter <span class="mono">[All | by workspace]</span> to see membership</li>
+      <li><b>Workspace Teams</b> — an index of every per-workspace team; clicking a team opens that workspace's delegation graph — the same graph as the workspace Team tab</li>
+    </ul>
+    <p>Editing an agent is available from everywhere you see one (library · Workspace Teams · workspace Team tab) and reuses the existing <span class="mono">AgentProfile</span> slide-over panel — no new component.</p>
+  </div>
+</div></section>
+
+<!-- MEMORY -->
+<section id="memory"><div class="wrap">
+  <div class="eyebrow">Memory model</div>
+  <h2>Sessions are <span class="gold">tagged</span>, not partitioned</h2>
+  <p class="sub">Sessions are stored per-agent and <b>tagged</b> with a <span class="mono">workspace_id</span> — they are not moved or copied into the workspace. "This project's conversations" is a filtered view, not a separate store. A session can carry more than one workspace tag if a conversation spans projects.</p>
+
+  <div class="grid g2">
+    <div class="card"><h3>Sessions</h3><ul class="clean">
+      <li>Stored per-agent (<span class="mono">agents/&lt;id&gt;/sessions/</span>) + <b>tagged</b> with <span class="mono">workspace_id</span></li>
+      <li><span class="mono">SessionMeta.WorkspaceID</span> already exists in the codebase — no re-keying needed</li>
+      <li>The chat history panel in a workspace <b>filters by the active workspace tag</b></li>
+      <li><b>Per-project continuity:</b> resuming a workspace picks the last session tagged with that workspace (so an agent resumes "where I left off on this project")</li>
+      <li>A session can carry &gt;1 workspace tag if a conversation genuinely spans projects; the task Jim creates goes to its own <span class="mono">workspace_id</span> independent of the chat</li>
+    </ul></div>
+    <div class="card"><h3>Memory rooms</h3><ul class="clean">
+      <li><b>Workspace memory room</b> — the shared room all team agents read/write (scoped to this workspace; lives at <span class="mono">workspaces/&lt;id&gt;/.omnipus/</span>)</li>
+      <li><b>Agent's private cross-workspace bank</b> — memories saved with <span class="mono">remember(scope=private)</span> go to <span class="mono">agents/&lt;id&gt;/.omnipus/</span> and are read in every workspace</li>
+      <li><b>Recall</b> = current workspace room + agent's private bank. Mia additionally wide-reads all owned workspace rooms</li>
+      <li>Agent personas stay global; only the workspace room (shared) and the private bank (agent-wide) carry per-workspace memory</li>
+    </ul></div>
+  </div>
+</div></section>
+
+<!-- MY WORKSPACE -->
+<section id="my-workspace"><div class="wrap">
+  <div class="eyebrow">The pre-seeded default</div>
+  <h2>My Workspace <span class="gold">⭐</span></h2>
+  <p class="sub">My Workspace is the one pre-seeded, delete-protected default. It is the Assistant's home and the app default front door (<b>My Workspace → Chat → Mia</b>). It comes with a pre-seeded team and default delegation edges.</p>
+  <div class="grid g2">
+    <div class="card"><h3>Pre-seeded team</h3><ul class="clean">
+      <li><b>Mia</b> (Assistant ⭐) — your primary chat colleague; bound to My Workspace; can recall across all your workspace rooms</li>
+      <li><b>Jim</b> (Orchestrator) · <b>Ray</b> (Scout) · <b>Ava</b> (Builder) — the other three base agents</li>
+      <li><b>Planner</b> · <b>Explorer</b> · <b>Researcher</b> — specialist subagents, seeded by default; Planner delegates to Explorer + Researcher; Jim delegates to Planner</li>
+      <li>Default delegation edges are seeded from each agent's role; new workspaces seed edges on agent add</li>
+    </ul></div>
+    <div class="card"><h3>Special properties</h3><ul class="clean">
+      <li>The only workspace that cannot be deleted</li>
+      <li>The Assistant's email account (if configured) lives here; email is a tool operated in My Workspace</li>
+      <li>Mia can additionally wide-read all your workspace memory rooms (cross-workspace recall); other agents are scoped to their current workspace</li>
+      <li>Named workspaces for real projects ("Acme", "Q3 Launch") work exactly the same way — My Workspace is just the default, not structurally special</li>
+    </ul></div>
+  </div>
 </div></section>
 
 <section><div class="wrap">

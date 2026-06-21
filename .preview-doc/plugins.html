@@ -20,7 +20,7 @@
   <div class="crumb"><a href="index.html">Overview</a> / Plugins &amp; Marketplaces</div>
   <div class="eyebrow">Extensibility · grounded in code + ecosystem</div>
   <h1>Plugins &amp; Marketplaces</h1>
-  <p class="lede">Two ways the system grows: <b style="color:#fff">marketplaces</b> you connect to (a provider model — ClawHub, Omnipus, GitHub) and <b style="color:#fff">plugins</b> you install (a bundle of skills · agents · MCP · channels · provider-config). The surprise from the code: <b style="color:#fff">the multi-marketplace machinery already exists</b>, and a plugin is <b style="color:#fff">composition over subsystems we already ship</b> — not a new runtime.</p>
+  <p class="lede">Two distinct concepts — <b style="color:#fff">do not conflate them:</b> <b style="color:#fff">Skill marketplaces</b> (ClawHub · GitHub · future Omnipus Market) are registries you search and install <em>skills</em> from; <b style="color:#fff">Plugin bundles</b> (<span class="mono">omnipus-plugin.json</span>) are packages of skills + agents + MCP + channels + providers installed by the bundle installer. <b>v0.1.0 ships the structural SHAPES</b> (the registry list + the bundle manifest — both already built). The plugin <b>installer + Marketplaces UI + Omnipus Marketplace are v0.2</b>. Skills are installable in v0.1.0; plugins/agent-packs are v0.2. Everything compiled-in (4 base agents + Worker + Planner/Explorer/Researcher + 4 embedded skills + 3 runner drivers) is seeded, not installed via a plugin.</p>
 </div></div>
 
 <!-- LANDSCAPE -->
@@ -40,9 +40,9 @@
 
 <!-- MARKETPLACES -->
 <section><div class="wrap">
-  <div class="eyebrow">Part 1 · the provider model, a third time</div>
-  <h2>Skill marketplaces = swappable providers</h2>
-  <p class="sub">A "marketplace" is the same pattern the doc already uses twice — <a href="tools.html">per-tool providers</a> and <a href="channels.html">multi-instance Connections</a>. Configure several; search fans out across all of them.</p>
+  <div class="eyebrow">Part 1 · the provider model, a third time — SKILL registries only</div>
+  <h2>Skill marketplaces = swappable providers <small style="font-size:.7em;font-weight:400;color:var(--muted)">(not plugin bundles)</small></h2>
+  <p class="sub">A "marketplace" here is a <b>SKILL registry</b> — the same swappable-provider pattern used for <a href="tools.html">per-tool providers</a> and <a href="channels.html">multi-instance Connections</a>. Configure several skill registries; search fans out across all of them. <b>Plugin bundles are separate</b> (see Part 2 below) — a GitHub repo can host either a bare skill or a bundle; the installer detects <span class="mono">omnipus-plugin.json</span> to decide which it is.</p>
   <div class="grid g2">
     <div class="card"><h3>Already in code</h3><ul class="clean">
       <li><span class="mono">SkillRegistry</span> interface + <span class="mono">RegistryManager</span> — <span class="mono">AddRegistry</span> / <span class="mono">GetRegistry(name)</span></li>
@@ -50,10 +50,10 @@
       <li><span class="mono">ClawHubRegistry</span> wired (default <span class="mono">clawhub.ai</span>); <span class="mono">InstallFromGitHub</span> installs from any repo, SSRF-guarded + hash-verified</li>
       <li>Each result already carries <b>verified / malware / suspicious</b> flags</li>
     </ul></div>
-    <div class="card" style="border-color:var(--gold-dim)"><h3>The one structural gap</h3><p class="note"><span class="mono">RegistryConfig</span> holds a <b>single typed</b> ClawHub config. To connect many marketplaces it becomes a <b>list</b> — the identical single→list refactor as Connection-as-instance and tool-providers. <b>Do all three together, once, in v0.1.0.</b></p>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>Status: done for v0.1.0</h3><p class="note"><span class="mono">config.go:2743 Marketplaces []MarketplaceConfig</span> — the single→list refactor is <b>already done</b> (for SKILL registries). <b>This list is for skill marketplaces, not plugin bundles.</b> No dedicated plugin marketplace in v0.1.0 — the Omnipus Marketplace (which will serve plugin bundles) is v0.2.</p>
       <ul class="clean" style="margin-top:8px">
-        <li><b>v0.1.0 first-class</b> — ClawHub (default) · GitHub repo</li>
-        <li><b>Second batch</b> — <b>Omnipus Marketplace</b> goes live &amp; <b>replaces ClawHub</b> as default · MCP registries (official · Smithery · Glama) · Claude Code git-repo marketplaces</li>
+        <li><b>v0.1.0</b> — ClawHub (default) · GitHub repo (skill registries, already wired)</li>
+        <li><b>v0.2</b> — <b>Omnipus Marketplace</b> goes live &amp; <b>replaces ClawHub</b> as default (serves plugin bundles + skills) · Marketplaces UI · plugin installer · MCP registries (official · Smithery · Glama)</li>
       </ul>
     </div>
   </div>
@@ -64,7 +64,7 @@
   <span class="m">Omnipus Market      https://market.omnipus.ai   2nd batch — becomes default, replaces ClawHub</span>
   ────────────────────────────────────────────────────────────
   search fans out across all enabled  ·  install is sandboxed + hash-verified</pre>
-  <p class="note" style="margin-top:4px">The <b>Marketplaces UI</b> itself is deferred; the <b>provider-list shape</b> is the v0.1.0 structural piece.</p>
+  <p class="note" style="margin-top:4px">The <b>Marketplaces UI</b> (Settings → Marketplaces) and the <b>plugin installer</b> are v0.2. The <b>skill-marketplace registry list</b> (<span class="mono">Marketplaces []MarketplaceConfig</span>) is the v0.1.0 structural shape — already built. <b>Skills</b> are installable in v0.1.0 via <span class="mono">skill.install/remove/search/list</span> tools; <b>plugin bundles/agent-packs</b> are not installable until v0.2.</p>
 </div></section>
 
 <!-- DEFAULT SKILLS + AUTHORING LOOP -->
@@ -110,7 +110,7 @@
     <div class="card"><h3>Component-level hybrid manifest</h3><p class="note">Reuse the <b>universal unit formats</b> verbatim — <span class="mono">SKILL.md</span> + <span class="mono">.mcp.json</span> — so <b>skills &amp; MCP servers from ClawHub / Claude Code marketplaces drop straight in</b>. Agents/channels/providers use Omnipus-native shapes. Distribute via git-repo <span class="mono">marketplace.json</span>.</p></div>
     <div class="card"><h3>Why not full compatibility?</h3><p class="note">Only <b>skills + MCP servers transfer cleanly</b> across ecosystems. Claude Code agents differ from our <span class="mono">AGENT.md</span>+<span class="mono">SOUL.md</span> (needs a converter); hooks/output-styles/monitors are IDE concepts with no equivalent; <b>OpenClaw plugins are JS</b> — not runnable in a pure-Go binary. So: compat where it's real, native where it isn't.</p></div>
   </div>
-  <div class="callout b"><b>Beyond the 4 base agents = installable agent packs.</b> Everything past the four cores — Maker/creative-media, ops/devops, smart-home, domain specialists, and Max-style automation — ships as an <b>agent pack</b>: a bundle of <b>agent + skills + providers</b> (the same manifest above). That's why the base stays at <b>four</b> — the rest is opt-in, marketplace-installed, not compiled in.</div>
+  <div class="callout b"><b>What ships compiled-in (not plugins):</b> 4 base agents (Mia · Jim · Ray · Ava) + Worker subagent + <b>Planner / Explorer / Researcher specialists</b> + 4 embedded skills + 3 runner drivers (Claude Code · opencode · Codex). These are <b>seeded at boot, not installed via the plugin system</b> — there is no installer to deliver a pack in v0.1.0. <b>Beyond that = installable agent packs (v0.2):</b> Maker/creative-media, ops/devops, smart-home, domain specialists ship as bundles once the plugin installer exists. That's why the compiled-in base stays lean — the rest is opt-in, marketplace-installed.</div>
   <div class="callout">No new runtime, no in-process code: a bundle carries <b>declarations</b>; its only <b>executable</b> parts are MCP servers / sidecars — which already run out-of-process. This keeps the <b>single static binary, pure-Go, no-CGo</b> constraints intact.</div>
 </div></section>
 
@@ -179,21 +179,23 @@
   <div class="eyebrow">Where it lands</div>
   <h2>Sequencing — shapes now, machinery later</h2>
   <div class="grid g3">
-    <div class="card" style="border-color:var(--gold-dim)"><h3><span class="rel r1">v0.1.0</span> Lock the shapes</h3><ul class="clean">
-      <li>The <b>plugin bundle manifest</b> (component-level hybrid — <span class="mono">SKILL.md</span> + <span class="mono">.mcp.json</span> verbatim, native agents/channels/providers)</li>
-      <li>The <b>marketplace-provider list</b> — <span class="mono">RegistryConfig</span> single→list (same one-time refactor as Connections / tool-providers)</li>
-      <li>ClawHub (default) + GitHub as configurable marketplaces</li>
+    <div class="card" style="border-color:var(--gold-dim)"><h3><span class="rel r1">v0.1.0</span> Shapes only — already built</h3><ul class="clean">
+      <li>The <b>plugin bundle manifest</b> (<span class="mono">omnipus-plugin.json</span> / <span class="mono">BundleManifest</span> + <span class="mono">Validate()</span>) — already in <span class="mono">pkg/skills/manifest.go</span></li>
+      <li>The <b>skill-marketplace registry list</b> (<span class="mono">Marketplaces []MarketplaceConfig</span>) — already done; ClawHub (default) + GitHub wired</li>
+      <li>4 skill tools wired: <span class="mono">install / remove / search / list</span> + skill authoring (<span class="mono">create / edit</span>)</li>
+      <li><b>NO actual installable plugins in v0.1.0</b> — zero plugins ship; the shapes are the deliverable. Compiled-in seeded defaults (4 base + Worker + Planner/Explorer/Researcher + 4 skills + 3 runners) are not plugins.</li>
     </ul></div>
-    <div class="card"><h3><span class="rel r2">v0.2.0</span>+ Machinery</h3><ul class="clean">
+    <div class="card"><h3><span class="rel r2">v0.2.0</span> Installer + UI + marketplace</h3><ul class="clean">
       <li>The <b>plugin installer</b> (fan-out to subsystems) + <b>Marketplaces UI</b></li>
       <li><b>Own-process kernel-confined</b> exec for bundled MCP/sidecars (signed · consent · deny-by-default)</li>
-      <li>The <b>Omnipus Marketplace</b> goes live &amp; <b>replaces ClawHub</b> as default; more providers — MCP registries · Claude Code git-repo marketplaces</li>
+      <li>The <b>Omnipus Marketplace</b> goes live &amp; <b>replaces ClawHub</b> as default; MCP registries · Claude Code git-repo marketplaces</li>
+      <li><b>Agent packs installable</b> — Maker/creative-media, ops/devops, domain specialists as installable bundles</li>
     </ul></div>
     <div class="card"><h3><span class="rel rl">later</span> Optional</h3><ul class="clean">
       <li><b>WASM (wazero)</b> — pure-Go, in-process-isolated runtime for bundled <i>logic</i> without a subprocess. Strongest isolation, but a large new subsystem and no ecosystem targets it — flagged, not committed.</li>
     </ul></div>
   </div>
-  <div class="callout b">Refactoring-avoidance: the <b>manifest shape</b> + the <b>marketplace-provider list</b> are persisted/structural → they land in v0.1.0 so bundles never need migrating. The <b>installer, UI, more providers, and the sandbox-wrapping of bundled processes</b> are additive behaviour → they layer on with no re-cut. See <a href="roadmap.html">Roadmap</a> · <a href="decisions.html">Decisions</a>.</div>
+  <div class="callout b">Refactoring-avoidance: the <b>bundle manifest shape</b> + the <b>skill-marketplace registry list</b> are persisted/structural → both already built in v0.1.0 so neither needs migrating later. The <b>installer, Marketplaces UI, Omnipus Marketplace, more providers, and the sandbox-wrapping of bundled processes</b> are additive behaviour (v0.2) → they layer on with no re-cut. <b>Skills are installable now; plugin bundles/agent-packs are not.</b> See <a href="roadmap.html">Roadmap</a> · <a href="decisions.html">Decisions</a>.</div>
 </div></section>
 
 <footer><div class="wrap"><p><a href="tools.html" style="color:var(--muted)">← Tools</a> &nbsp;·&nbsp; Next: <a href="memory.html">Agent Memory →</a> &nbsp;·&nbsp; Grounded in <span class="mono">pkg/skills</span> · <span class="mono">pkg/mcp</span> · the plugin-extensibility assessment · and prior art (ClawHub · MCP registries · Claude Code &amp; OpenClaw plugins).</p></div></footer>
