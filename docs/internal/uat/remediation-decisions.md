@@ -427,6 +427,106 @@ gives agents full freedom.
 
 ---
 
+## Part 5 — 0.1.0 module-by-module completeness assessment
+Authoritative scope = `.preview-doc/roadmap.html` (foundation-first: 0.1.0 lands all structural SHAPES +
+the one Connection migration + IA shell + existing engines surfaced; later releases add behaviour only).
+We go module by module: assess current code vs the 0.1.0 scope, decide how to fill gaps.
+
+### M1 — Memory + procedural memory — ASSESSED 2026-06-20: ~90% complete
+Scope (0.1.0 = shapes + logs + tools; ranking/graph/Dreamcatcher → v0.2). Current state (file:line in the
+assessment): ✅ two-room topology (`pkg/memrooms/rooms.go`, `pkg/agent/memory.go`), ✅ full per-memory
+frontmatter (`memrooms/memory_file.go:75-101`, no migration), ✅ 3 tools remember/recall/retrospective
+(`pkg/tools/memory.go`), ✅ append-only logs counters.jsonl + born_in/cited_in + minhash.jsonl,
+✅ procedural memory `system.skill.create/.edit` + 4 embedded default skills seeded at boot
+(`pkg/skills/embed.go`), ✅ session_end idle recap (`pkg/agent/session_end.go`).
+**Gaps + decisions — both IN SCOPE for 0.1.0 (LOCKED 2026-06-20):**
+- **G1 (bleve recall) → 0.1.0:** wire `recall` to the **bleve BM25 query** (index already built/populated at
+  `pkg/memrooms/index/`; replaces the substring scan at `memory_file.go:199`). Graph/MOC/recency-boosted
+  *ranking* still v0.2 — so 0.1.0 = "find by FTS," v0.2 = "rank intelligently."
+- **G2 (edges.jsonl + tags.json) → 0.1.0:** **write them now** (don't defer). Even though derived/rebuildable,
+  starting all append-only logs in 0.1.0 means v0.2 graph/ranking inherits complete history with zero rebuild
+  logic. edges from body wikilinks, tags snapshot from frontmatter.
+- **Memory module = CLOSED.** ~90% already built; these two gaps are the only 0.1.0 work.
+
+### M2 — Tasks / Calendar / Automations — ASSESSED 2026-06-20: lots built, but as 3 systems
+**Built (more than expected):** `pkg/boardtask` (GTD board, REST, full blocked_by DAG + auto-advance) ·
+`pkg/taskstore` (workflow queue, tool-only, full blocked_by DAG) · **`pkg/cron`** (per-agent Schedules —
+**fully executes today**: cron/interval, owner-aware, retry, history, session modes) · Calendar view
+(render-only) · Automations screen (read-only over schedules) · Board/List/Execution views + create/detail ·
+workspace_id + sidebar switcher. So much "v0.2 behaviour" already works (blocked_by, the cron scheduler).
+**Why two task stores:** historical/incremental, NOT architectural — human GTD board vs agent/delegation
+workflow queue grew separately with different status vocabularies, then patched to coexist (title-field
+disambiguator; `task_list(scope=both)` already reads+merges both). They are both just "tasks."
+**How they interface:** bridged at the tool layer (`pkg/sysagent/tools/task.go`), merged at read time;
+board `/start` runs the agent directly in a session, `task_create` queues a workflow task for the
+orchestrator. → Unifying (D3) just REMOVES the hacks (disambiguator, dual enums, merge reads).
+**0.1.0 Tasks work = CONSOLIDATION, not greenfield** (the DAG, the cron scheduler, calendar render all
+exist) — merge boardtask + taskstore → one store; fold `pkg/cron` in as the **trigger executor** (a schedule
+= a task with a recurring trigger); build the **Graph** view; keep Board/List/Calendar; drop Execution.
+**Decisions:**
+- **Unify the 3 systems in 0.1.0** (supersedes the roadmap's conservative two-store task section). cron
+  becomes the trigger engine.
+- **REMOVE Automations** — route `src/routes/_app/automations.tsx` + the sidebar item; dissolves into task
+  management. (Confirms D4/O8.)
+- **Calendar is an ORPHAN route** (built, linked nowhere) → make it a first-class **view** in the workspace
+  task UI (Board/List/Graph/Calendar), properly surfaced.
+
+### Todos vs subtasks vs tasks — three tiers — LOCKED (2026-06-21)
+Supersedes the earlier "todo as `surface: scratchpad`" sketch AND the (wrong) "todo = subtask" version.
+A **todo is NOT a subtask** — it is deliberately simpler.
+
+| Tier | What it is | Weight |
+|------|-----------|--------|
+| **Todo** | a simple checklist line **embedded in a task** (`task.todos = [{text, done}]`) — the agent's lightweight working checklist | light — NOT a task; no card, no assignment/trigger/deps |
+| **Subtask** | a **full child task** (`parent_task_id`) — real decomposition; delegatable/schedulable/independently tracked | full task |
+| **Task** | the durable work item | — |
+
+- A task can hold **todos** (a cheap embedded checklist) **and/or** **subtasks** (real child tasks).
+- **Scratchpad = a task's embedded `todos`.** Simple, but **persists** because it lives on the task → a
+  heartbeat-driven agent **resumes** its checklist. (Ephemeral/in-context todos broke this — why it changed.)
+- **Promote (todo → subtask):** when a checklist item turns out to be its own unit of work (needs an agent,
+  a schedule, dependencies, independent tracking), promote it from a lightweight todo to a full subtask.
+- **Agent rule:** working through steps on a task → **todos** (cheap, no board clutter). A step that is its
+  own unit of work → **promote to a subtask**. Trivial single step → just do it in-context (no entity).
+- **Plan scale:** simple sequential plan → **todos**; a plan needing structure/deps/delegation → **subtasks**
+  (the DAG). So "an LLM plan is a DAG of tasks" applies at the **subtask** tier; todos are the cheap tier below.
+- **UI:** todos render as an in-line **checklist** (in chat while worked, in the task detail on the board);
+  subtasks render as the Detail #6 **nested roll-up** cards. No `surface: scratchpad` (dropped). Surfaces
+  remain `user` (board) + `heartbeat`.
+- **Data model:** add a lightweight **`todos: [{text, done}]`** field to the Task entity (Detail #2);
+  subtasks continue via `parent_task_id` + `blocked_by`.
+
+### Bounded subagent delegation + Planner/Explorer/Researcher specialists — LOCKED (2026-06-21)
+**Supersedes the roadmap's "workers are leaves / specialists = marketplace packs only" 0.1.0 lines.**
+- **Drop the strict-leaf rule → bounded subagent delegation.** A subagent's delegation policy may carry
+  **`depth ≥ 1` + a trust set**, letting it delegate to other subagents. The existing **`depth` field is the
+  real bound** (strict-leaf was just "depth = 0 for subagents," redundant with depth). This is what makes
+  "specialists that use specialists" possible.
+- **Three specialist SUBAGENTS, shipped by default** (delegation-only, no heartbeat — NOT Mains):
+  - **Planner** — deep decomposition/planning; produces the task DAG/workflow; **delegates to Explorer +
+    Researcher** (within depth+trust) to gather context before planning.
+  - **Explorer** — file + memory exploration (internal context).
+  - **Researcher** — external-source research.
+- **Mains stay the 4 chat colleagues** (Mia/Jim/Ray/Ava). They are NOT promoted; specialists you *invoke* are
+  subagents, not chat colleagues. **Ray (Scout)** = the chat-facing research colleague who *delegates to* the
+  Researcher subagent (no duplication). **Jim (Orchestrator)** invokes the Planner.
+- **Open (minor):** preinstalled-base vs default-installed specialist *pack* — either way they ship by default.
+  Touches M5 (delegation) + M6 (roster).
+- **Backend already supports this (verified 2026-06-21):** the per-agent `delegation_policy.depth` is **genuinely
+  enforced** — `ResolveDelegationDepth` (`config.go:1152-1157`) reads it; the deny checker denies on reach for
+  both modes (`loop.go:1794-1800` spawn, `:1845-1850` await); layered under a global hard ceiling
+  `SubTurn.MaxDepth`=3 (`subturn.go:27`). UAT group-4 confirmed empirically. **No hard "worker can't delegate"
+  block exists** — `IsWorker()` checks (`loop.go:3783-3836`) only stop workers being *chat targets*; the
+  "leaf" behaviour is just the default empty policy. **So bounded delegation is a SMALL unlock:** give the
+  Planner subagent a trust-set+depth policy, and let the UI/backend *allow* a subagent to carry a delegation
+  policy (verify any reject-policy-on-worker check). The depth/trust/mode enforcement engine is already done.
+
+### M5 — Delegation — PARTIALLY ASSESSED 2026-06-21
+- `delegation_policy` = `to · accept_from · modes · depth · budget` (contract complete; **to + modes + depth
+  enforced**; accept_from/budget reserved). Depth enforcement verified (see above). Trust-graph UI exists with
+  the depth field. Gaps for our decisions: allow subagent→subagent delegation in the UI/backend (bounded-
+  delegation decision), surface subagent outgoing edges in the trust-graph.
+
 ## Part 4 — Next steps (after decisions lock)
 **No Albert ADR** (operator decision 2026-06-20) — **this decision log is the spec of record.**
 1. **O1 — release routing** (last open decision; slots everything into phases).
