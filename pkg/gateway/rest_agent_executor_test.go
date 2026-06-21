@@ -762,7 +762,17 @@ func TestCreateAgent_ReloadFailure_ReturnsWarning(t *testing.T) {
 func TestUpdateAgent_ModelLiveApplyFailure_ReturnsWarning(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"model":"unresolvable-model-no-provider"}`
+	// The model string must genuinely fail live-apply so the warning path fires.
+	// A *bare* slug ("foo") is NOT a reliable failure trigger: the PUT handler
+	// reloads config via refreshConfigAndRewireServices, which seeds the built-in
+	// provider catalog (incl. passthrough providers openrouter/vivgrid). A bare
+	// slug then resolves through passthrough and live-apply SUCCEEDS — no warning.
+	// A slug whose prefix is a *known provider name* (here "anthropic") is not
+	// hijacked by passthrough (looksLikeBareModelSlug → false), and with no
+	// matching configured/credentialed anthropic model it fails resolution in
+	// ApplyAgentModel → resolvedModelConfig, which is exactly the live-apply
+	// failure this test asserts surfaces as a warning.
+	body := `{"model":"anthropic/omnipus-nonexistent-model-zzz"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
