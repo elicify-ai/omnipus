@@ -5,24 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
-
-// defaultTaskWorkspaceID is the fallback workspace a tool-created task lands in
-// when no active workspace is bound to the turn. Mirrors the pre-seeded
-// "My Workspace" default ID created at boot.
-const defaultTaskWorkspaceID = "default"
-
-// resolveWorkspaceID returns the active workspace from ctx, falling back to the
-// default workspace when none is bound (M4 workspace→turn binding gap).
-func resolveWorkspaceID(ctx context.Context) string {
-	if ws := ToolWorkspaceID(ctx); ws != "" {
-		return ws
-	}
-	return defaultTaskWorkspaceID
-}
 
 // TaskListTool lists tasks for the calling agent.
 type TaskListTool struct {
@@ -100,10 +88,21 @@ type TaskCreateTool struct {
 	// onCreate, when non-nil, is invoked after a task is successfully created so
 	// the caller can emit a task_status_changed event.
 	onCreate func(*task.Task)
+	// home is the OMNIPUS_HOME path used to resolve the default workspace ID
+	// when no workspace is bound to the current turn context. Set via SetHome.
+	home string
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
 	return &TaskCreateTool{store: store}
+}
+
+// SetHome configures the OMNIPUS_HOME path so that task_create can resolve the
+// real default workspace ID (via workspace.ResolveDefaultID) when no workspace
+// is bound to the turn context. The agent loop calls this after constructing the
+// tool (pkg/agent/loop.go ~line 1608).
+func (t *TaskCreateTool) SetHome(home string) {
+	t.home = home
 }
 
 // SetDelegateChecker sets the function that checks whether delegation to a target agent is allowed.
@@ -159,6 +158,25 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 	}
 }
 
+// resolveWorkspaceID returns the workspace ID for the current turn. It first
+// checks the turn context (explicitly bound workspace), then falls back to the
+// real default workspace on disk (via workspace.ResolveDefaultID). It returns
+// an error rather than inventing a literal ID, so chat-delegated tasks never
+// land in an invisible workspace.
+func (t *TaskCreateTool) resolveWorkspaceID(ctx context.Context) (string, error) {
+	if ws := ToolWorkspaceID(ctx); ws != "" {
+		return ws, nil
+	}
+	if t.home != "" {
+		id, err := workspace.ResolveDefaultID(t.home)
+		if err != nil {
+			return "", fmt.Errorf("could not resolve default workspace: %w", err)
+		}
+		return id, nil
+	}
+	return "", fmt.Errorf("no active workspace bound and no default workspace resolver configured")
+}
+
 func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	title, _ := args["title"].(string)
 	prompt, _ := args["prompt"].(string)
@@ -191,6 +209,11 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	parentTaskID, _ := args["parent_task_id"].(string)
 
+	wsID, err := t.resolveWorkspaceID(ctx)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("could not resolve workspace: %v", err))
+	}
+
 	// A delegated task is ready to be picked up by the executor: it lands in
 	// `next` (triaged & dispatchable) rather than `inbox`. Detail #6: it carries
 	// a parent link and the originating channel for result delivery.
@@ -202,7 +225,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		CreatedBy:    callerID,
 		Priority:     priority,
 		ParentTaskID: parentTaskID,
-		WorkspaceID:  resolveWorkspaceID(ctx),
+		WorkspaceID:  wsID,
 		Status:       task.StatusNext,
 	}
 
@@ -378,10 +401,12 @@ func (t *TaskAddTodoTool) Execute(ctx context.Context, args map[string]any) *Too
 		return ErrorResult("text is required")
 	}
 
-	mu := t.store.Lock(taskID)
-	mu.Lock()
-	defer mu.Unlock()
+	callerID := ToolAgentID(ctx)
+	if callerID == "" {
+		return ErrorResult("agent ID not set in context; cannot verify task ownership")
+	}
 
+	// Ownership gate: load the task first to verify the caller owns it.
 	existing, err := t.store.Get(taskID)
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -389,11 +414,19 @@ func (t *TaskAddTodoTool) Execute(ctx context.Context, args map[string]any) *Too
 		}
 		return ErrorResult(fmt.Sprintf("could not load task: %v", err))
 	}
-	newTodos := append(append([]task.Todo{}, existing.Todos...), task.Todo{Text: text, Done: false})
-	if _, err := t.store.Update(taskID, task.Patch{Todos: &newTodos}); err != nil {
+	if existing.AgentID != callerID && existing.CreatedBy != callerID {
+		return ErrorResult("you can only modify tasks you own or are assigned")
+	}
+
+	// AppendTodo takes the per-task lock once internally — do not hold Lock() here.
+	updated, err := t.store.AppendTodo(taskID, task.Todo{Text: text, Done: false})
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			return ErrorResult(fmt.Sprintf("task %q not found", taskID))
+		}
 		return ErrorResult(fmt.Sprintf("task_add_todo failed: %v", err))
 	}
-	return NewToolResult(fmt.Sprintf(`{"task_id":%q,"todos":%d}`, taskID, len(newTodos)))
+	return NewToolResult(fmt.Sprintf(`{"task_id":%q,"todos":%d}`, taskID, len(updated.Todos)))
 }
 
 // TaskAddDependencyTool adds a blocked_by edge (this task depends on another).
@@ -433,10 +466,12 @@ func (t *TaskAddDependencyTool) Execute(ctx context.Context, args map[string]any
 		return ErrorResult("blocked_by is required")
 	}
 
-	mu := t.store.Lock(taskID)
-	mu.Lock()
-	defer mu.Unlock()
+	callerID := ToolAgentID(ctx)
+	if callerID == "" {
+		return ErrorResult("agent ID not set in context; cannot verify task ownership")
+	}
 
+	// Ownership gate: caller must own or be assigned the dependent task.
 	existing, err := t.store.Get(taskID)
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -444,16 +479,33 @@ func (t *TaskAddDependencyTool) Execute(ctx context.Context, args map[string]any
 		}
 		return ErrorResult(fmt.Sprintf("could not load task: %v", err))
 	}
-	for _, dep := range existing.BlockedBy {
-		if dep == blocker {
-			return NewToolResult(fmt.Sprintf(`{"task_id":%q,"blocked_by":%q,"already":true}`, taskID, blocker))
-		}
+	if existing.AgentID != callerID && existing.CreatedBy != callerID {
+		return ErrorResult("you can only modify tasks you own or are assigned")
 	}
-	newDeps := append(append([]string{}, existing.BlockedBy...), blocker)
-	if _, err := t.store.Update(taskID, task.Patch{BlockedBy: &newDeps}); err != nil {
+
+	// Cross-workspace dependency guard: load the blocker and verify it is in the
+	// same workspace as the dependent task. There is an inherent TOCTOU here; the
+	// store's DAG validator still validates the edge itself atomically.
+	blockerTask, err := t.store.Get(blocker)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			return ErrorResult(fmt.Sprintf("blocker task %q not found", blocker))
+		}
+		return ErrorResult(fmt.Sprintf("could not load blocker task: %v", err))
+	}
+	if blockerTask.WorkspaceID != existing.WorkspaceID {
+		return ErrorResult("blocker task is in a different workspace")
+	}
+
+	// AddDependency takes the per-task lock once internally — do not hold Lock() here.
+	updated, added, err := t.store.AddDependency(taskID, blocker)
+	if err != nil {
 		return ErrorResult(fmt.Sprintf("task_add_dependency failed: %v", err))
 	}
-	return NewToolResult(fmt.Sprintf(`{"task_id":%q,"blocked_by":%q}`, taskID, blocker))
+	if !added {
+		return NewToolResult(fmt.Sprintf(`{"task_id":%q,"blocked_by":%q,"already":true}`, taskID, blocker))
+	}
+	return NewToolResult(fmt.Sprintf(`{"task_id":%q,"blocked_by":%q,"status":%q}`, taskID, blocker, updated.Status))
 }
 
 // --- TaskDeleteTool ---
@@ -488,12 +540,45 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if taskID == "" {
 		return ErrorResult("task_id is required")
 	}
-	if _, err := t.store.Delete(taskID); err != nil {
+
+	callerID := ToolAgentID(ctx)
+	if callerID == "" {
+		return ErrorResult("agent ID not set in context; cannot verify task ownership")
+	}
+
+	// Ownership gate: load the task first to verify the caller owns it.
+	existing, err := t.store.Get(taskID)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			return ErrorResult(fmt.Sprintf("task %q not found", taskID))
+		}
+		return ErrorResult(fmt.Sprintf("could not load task: %v", err))
+	}
+	if existing.AgentID != callerID && existing.CreatedBy != callerID {
+		return ErrorResult("you can only modify/delete tasks you own or are assigned")
+	}
+
+	unblocked, err := t.store.Delete(taskID)
+	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			return ErrorResult(fmt.Sprintf("task %q not found", taskID))
 		}
 		return ErrorResult(fmt.Sprintf("could not delete task: %v", err))
 	}
+
+	// Advance any dependents that became fully unblocked by this delete.
+	// The cascade only rewrote the blocked_by edges; a task that was `blocked`
+	// with this task as its only blocker must be moved to `next`. AdvanceUnblocked
+	// is a no-op when the dependent is not `blocked` and uses the internal hatch
+	// so the transition guard does not reject blocked→next.
+	for _, depID := range unblocked {
+		if _, uErr := t.store.AdvanceUnblocked(depID); uErr != nil {
+			slog.Warn("task_delete: advance unblocked dependent failed", "deleted_id", taskID, "dependent_id", depID, "error", uErr)
+			continue
+		}
+		slog.Info("task_delete: advanced unblocked dependent blocked→next", "deleted_id", taskID, "advanced_id", depID)
+	}
+
 	return NewToolResult(fmt.Sprintf(`{"deleted":%q}`, taskID))
 }
 

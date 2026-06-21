@@ -5960,6 +5960,8 @@ export interface components {
                  * @example 0 9 * * MON
                  */
                 cron_expr?: string;
+            } & {
+                [key: string]: unknown;
             };
         };
         /**

@@ -515,6 +515,14 @@ func (te *TaskExecutor) failTask(taskID, reason string) {
 	te.emitStatusChanged(updated, task.StatusFailed)
 }
 
+// SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just
+// fired. The task has already been reset to `next` by Store.SpawnReset; this
+// claims and dispatches it via the normal ExecuteTask path. ExecuteTask already
+// guards status==next and concurrency, so no additional gate is needed here.
+func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string) error {
+	return te.ExecuteTask(ctx, taskID)
+}
+
 // ResizeDispatchSema updates the global dispatch semaphore capacity.
 func (te *TaskExecutor) ResizeDispatchSema(newCap int) {
 	te.dispatchSema.Resize(newCap)

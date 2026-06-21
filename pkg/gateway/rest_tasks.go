@@ -126,18 +126,7 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 
 // --- wire mapping -----------------------------------------------------------
 
-// taskTriggerType is the anonymous generated struct for a Task.Trigger.
-// Defined as a local alias of the generated inline shape so the mapping reads
-// cleanly. Mirrors gen.Task.Trigger and gen.TaskCreateRequest.Trigger.
-type wireTrigger = struct {
-	Config struct {
-		AtMs     *int64  `json:"at_ms,omitempty"`
-		CronExpr *string `json:"cron_expr,omitempty"`
-		EveryMs  *int64  `json:"every_ms,omitempty"`
-	} `json:"config"`
-	Type gen.TaskTriggerType `json:"type"`
-}
-
+// wireTodo mirrors the gen.Task.Todos element inline type.
 type wireTodo = struct {
 	Done bool   `json:"done"`
 	Text string `json:"text"`
@@ -236,22 +225,30 @@ func (a *restAPI) toWireTask(t task.Task) gen.Task {
 	return out
 }
 
-// toWireTrigger maps an internal trigger to the anonymous generated struct.
-func toWireTrigger(tr *task.Trigger) *wireTrigger {
-	wt := &wireTrigger{Type: gen.TaskTriggerType(tr.Type)}
+// toWireTrigger maps an internal trigger to the gen.Task.Trigger inline type.
+// The field type is an anonymous struct wrapping gen.Task_Trigger_Config so we
+// build it in place and return via a temp gen.Task to extract the pointer type.
+func toWireTrigger(tr *task.Trigger) *struct {
+	Config gen.Task_Trigger_Config `json:"config"`
+	Type   gen.TaskTriggerType     `json:"type"`
+} {
+	cfg := gen.Task_Trigger_Config{}
 	if tr.Config.AtMs != nil {
 		v := *tr.Config.AtMs
-		wt.Config.AtMs = &v
+		cfg.AtMs = &v
 	}
 	if tr.Config.EveryMs != nil {
 		v := *tr.Config.EveryMs
-		wt.Config.EveryMs = &v
+		cfg.EveryMs = &v
 	}
 	if tr.Config.CronExpr != nil {
 		v := *tr.Config.CronExpr
-		wt.Config.CronExpr = &v
+		cfg.CronExpr = &v
 	}
-	return wt
+	return &struct {
+		Config gen.Task_Trigger_Config `json:"config"`
+		Type   gen.TaskTriggerType     `json:"type"`
+	}{Config: cfg, Type: gen.TaskTriggerType(tr.Type)}
 }
 
 // buildTrigger constructs an internal trigger from its primitive parts. The
@@ -353,9 +350,14 @@ func (a *restAPI) resolveAgentName(agentID string) string {
 func ptr[T any](v T) *T { return &v }
 
 // parseTimeOrNow parses an RFC 3339 timestamp, falling back to now on error.
+// Fix #5: logs a Warn when a non-empty string fails to parse (empty is normal
+// for an unset optional field and does not warrant a log line).
 func parseTimeOrNow(s string) time.Time {
 	if ts, err := time.Parse(time.RFC3339, s); err == nil {
 		return ts
+	}
+	if s != "" {
+		slog.Warn("rest_tasks: corrupt timestamp, defaulting to now", "value", s)
 	}
 	return time.Now().UTC()
 }
@@ -540,12 +542,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Due != nil {
 		t.Due = req.Due.UTC().Format(time.RFC3339)
 	}
-	if req.SourceChannel != nil {
-		t.SourceChannel = *req.SourceChannel
-	}
-	if req.SourceChatId != nil {
-		t.SourceChatID = *req.SourceChatId
-	}
+	// source_channel/source_chat_id are internal routing, set ONLY server-side
+	// from the delegating turn context (the task_create tool sets them from
+	// ToolChannel/ToolChatID); never client-supplied.
 	if req.BlockedBy != nil {
 		t.BlockedBy = *req.BlockedBy
 	}
@@ -570,6 +569,11 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 
 	a.auditTask("task.create", t.ID)
 	a.emitTaskStatus(t)
+	// Register the task's time trigger (once/every/recurring) so it actually
+	// fires; a no-op for manual/heartbeat tasks.
+	if a.agentLoop != nil {
+		a.agentLoop.NotifyTaskUpserted(t)
+	}
 	jsonCreated(w, a.toWireTask(*t))
 }
 
@@ -582,6 +586,13 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.TaskUpdateRequest
 	if !decodeAndValidate(w, r, "TaskUpdateRequest", &req, validateEnabled) {
+		return
+	}
+
+	// Fix #6: blocked is a derived side-state; reject it at the gateway seam
+	// before reaching the store (defense-in-depth alongside ErrBlockedNotSettable).
+	if req.Status != nil && task.Status(*req.Status) == task.StatusBlocked {
+		jsonErr(w, http.StatusBadRequest, "blocked is a derived side-state and cannot be set directly")
 		return
 	}
 
@@ -702,6 +713,11 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 
 	a.auditTask("task.update", id)
 	a.emitTaskStatus(updated)
+	// Re-sync the task's time trigger: a changed/added/removed trigger or a move
+	// to a terminal status (re)registers or removes its cron job.
+	if a.agentLoop != nil {
+		a.agentLoop.NotifyTaskUpserted(updated)
+	}
 	jsonOK(w, a.toWireTask(*updated))
 }
 
@@ -725,61 +741,58 @@ func (a *restAPI) handleTaskDelete(w http.ResponseWriter, id string) {
 	// gone) and is still `blocked` must advance to `next` — the cascade only
 	// rewrote the edges, not the status.
 	for _, depID := range unblocked {
-		t, gErr := a.taskStore.Get(depID)
-		if gErr != nil || t.Status != task.StatusBlocked {
-			continue
-		}
-		next := task.StatusNext
-		if _, uErr := a.taskStore.Update(depID, task.Patch{Status: &next}); uErr != nil {
+		// AdvanceUnblocked is a no-op when the dependent is not `blocked`; it uses
+		// the internal hatch so the transition guard does not reject blocked→next.
+		if _, uErr := a.taskStore.AdvanceUnblocked(depID); uErr != nil {
 			slog.Warn("rest: task delete: advance unblocked dependent failed", "id", depID, "error", uErr)
 			continue
 		}
 		slog.Info("rest: deleted task advanced unblocked dependent blocked→next", "deleted_id", id, "advanced_id", depID)
+	}
+	// Remove the deleted task's time-trigger cron job (if any) so it does not
+	// fire against a missing task.
+	if a.agentLoop != nil {
+		a.agentLoop.NotifyTaskDeleted(id)
 	}
 	a.auditTask("task.delete", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleTaskTodos handles PUT /api/v1/tasks/{id}/todos — replaces the checklist.
-// The body reuses the generated TaskUpdateRequest wire type (its `todos` field);
-// only that field is applied.
+// The contract body is SetTaskTodosJSONRequestBody = []gen.Todo (a bare JSON
+// array, NOT the TaskUpdateRequest object). An empty array is valid and clears
+// the checklist.
 func (a *restAPI) handleTaskTodos(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
 		return
 	}
-	var req gen.TaskUpdateRequest
-	if !decodeTaskJSONBody(w, r, &req) {
+	var body gen.SetTaskTodosJSONRequestBody
+	if !decodeTaskJSONBody(w, r, &body) {
 		return
 	}
-	if req.Todos == nil {
-		jsonErr(w, http.StatusBadRequest, "todos is required")
-		return
-	}
-	todos := make([]task.Todo, 0, len(*req.Todos))
-	for _, td := range *req.Todos {
+	todos := make([]task.Todo, 0, len(body))
+	for _, td := range body {
 		todos = append(todos, task.Todo{Text: td.Text, Done: td.Done})
 	}
 	a.applyTaskFieldUpdate(w, id, task.Patch{Todos: &todos}, "todos")
 }
 
 // handleTaskDependencies handles PUT /api/v1/tasks/{id}/dependencies — replaces
-// the blocked_by set (with cycle validation). The body reuses the generated
-// TaskUpdateRequest wire type (its `blocked_by` field).
+// the blocked_by set (with cycle validation). The contract body is
+// SetTaskDependenciesJSONRequestBody = []string (a bare JSON array, NOT the
+// TaskUpdateRequest object). Cycle/self-edge rejection surfaces as 400 via
+// isTaskValidationErr → ErrValidation.
 func (a *restAPI) handleTaskDependencies(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
 		return
 	}
-	var req gen.TaskUpdateRequest
-	if !decodeTaskJSONBody(w, r, &req) {
+	var body gen.SetTaskDependenciesJSONRequestBody
+	if !decodeTaskJSONBody(w, r, &body) {
 		return
 	}
-	if req.BlockedBy == nil {
-		jsonErr(w, http.StatusBadRequest, "blocked_by is required")
-		return
-	}
-	a.applyTaskFieldUpdate(w, id, task.Patch{BlockedBy: req.BlockedBy}, "dependencies")
+	a.applyTaskFieldUpdate(w, id, task.Patch{BlockedBy: &body}, "dependencies")
 }
 
 // applyTaskFieldUpdate applies a single-field patch and writes the standard
@@ -838,24 +851,13 @@ func (a *restAPI) auditTask(event, id string) {
 }
 
 // isTaskValidationErr reports whether err is a user-facing validation error
-// (400) rather than an internal failure (500). The task store returns plain
-// fmt.Errorf validation errors and sentinel cycle errors.
+// (400) rather than an internal failure (500). All store validation errors wrap
+// task.ErrValidation (ErrBlockedByCycle, ErrBlockedBySelfEdge,
+// ErrBlockedByDepthExceeded, ErrParentCycle, ErrIllegalTransition,
+// ErrBlockedNotSettable, and all verr() calls). ErrNotFound is handled
+// separately as 404 by every caller — it must NOT match here.
 func isTaskValidationErr(err error) bool {
-	if errors.Is(err, task.ErrBlockedByCycle) ||
-		errors.Is(err, task.ErrBlockedBySelfEdge) ||
-		errors.Is(err, task.ErrBlockedByDepthExceeded) ||
-		errors.Is(err, task.ErrParentCycle) {
-		return true
-	}
-	msg := err.Error()
-	for _, frag := range []string{
-		"is required", "must be", "invalid", "not found", "cannot", "blocked_by", "trigger", "todo",
-	} {
-		if strings.Contains(msg, frag) {
-			return true
-		}
-	}
-	return false
+	return errors.Is(err, task.ErrValidation)
 }
 
 // --- boot reconciliation (folded from board_reconcile.go) -------------------

@@ -10,8 +10,9 @@
 // There is no back-compat (remediation Detail #7): one entity, one 7-state
 // status vocabulary, one create/update path. The store carries over from
 // pkg/boardtask: the blocked_by DAG cycle validator (self-edge / 2-node /
-// N-node cycle rejection, max depth 50, orphan-edge drop on load) and the
-// auto-advance behaviour (blocked → next when every dependency reaches done).
+// N-node cycle rejection, max depth 50, orphan-edge drop on boot via
+// DropOrphanEdges) and the auto-advance behaviour (blocked → next when every
+// dependency reaches done).
 //
 // Concurrency: per-entity read-modify-write paths are serialised by the
 // process-wide 64-shard StripedLock (lock.go) keyed by task ID, with an

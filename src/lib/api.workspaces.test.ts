@@ -748,3 +748,166 @@ describe('fetchTokenStats', () => {
     expect(thrown instanceof ApiError && thrown.status).toBe(500)
   })
 })
+
+// ── setTaskTodos ──────────────────────────────────────────────────────────────
+
+// Minimal valid Task response payload — all required Zod schema fields included.
+// The `request()` helper validates the response with TaskSchema, so mock payloads
+// must satisfy the schema (workspace_id, owner, created_by are required).
+function makeTaskResponse(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'task-id',
+    title: 'Default task',
+    action: 'llm',
+    status: 'inbox',
+    priority: 3,
+    workspace_id: 'ws-default',
+    surface: 'user',
+    owner: 'alice',
+    created_by: 'alice',
+    created_at: '2026-06-01T00:00:00Z',
+    updated_at: '2026-06-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+describe('setTaskTodos', () => {
+  it('calls PUT /api/v1/tasks/{id}/todos with a bare JSON array body', async () => {
+    // BDD: Given a task id and an array of todos,
+    // When setTaskTodos("task-123", [{text:"Draft intro",done:false}]) is called,
+    // Then PUT /api/v1/tasks/task-123/todos is requested,
+    // And the body is a bare JSON array (NOT a wrapped object like {todos:[...]}).
+    // Traces to: unified-task-contract spec — setTaskTodos bare-array contract
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(
+      makeTaskResponse({ id: 'task-123', title: 'My task', todos: [{ text: 'Draft intro', done: false }] })
+    ))
+
+    const { setTaskTodos } = await import('./api')
+    const result = await setTaskTodos('task-123', [{ text: 'Draft intro', done: false }])
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+
+    // Must be PUT to the /todos sub-resource.
+    expect(url).toContain('/api/v1/tasks/task-123/todos')
+    expect((init as RequestInit).method).toBe('PUT')
+
+    // Body must be a bare JSON array — NOT {todos: [...]} or any other wrapper.
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(Array.isArray(body)).toBe(true)
+    expect(body).toHaveLength(1)
+    expect(body[0]).toEqual({ text: 'Draft intro', done: false })
+
+    // Sanity: returned task has the updated todos.
+    expect(result.id).toBe('task-123')
+    expect(result.todos).toHaveLength(1)
+  })
+
+  it('sends an empty array when todos list is empty', async () => {
+    // BDD: Given a task id and an empty todos array,
+    // When setTaskTodos("task-abc", []) is called,
+    // Then the body is "[]" (bare empty array, not null / {todos:[]}).
+    // Traces to: unified-task-contract spec — setTaskTodos empty list
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(
+      makeTaskResponse({ id: 'task-abc', title: 'Empty todos task', todos: [] })
+    ))
+
+    const { setTaskTodos } = await import('./api')
+    await setTaskTodos('task-abc', [])
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(Array.isArray(body)).toBe(true)
+    expect(body).toHaveLength(0)
+  })
+
+  it('differentiation test: two different task ids hit different URLs', async () => {
+    // Anti-hardcode: two calls with different task ids must go to different URLs.
+    // Traces to: unified-task-contract spec — setTaskTodos URL encoding
+    fetchSpy
+      .mockResolvedValueOnce(makeJsonResponse(makeTaskResponse({ id: 'task-aaa', title: 'Task task-aaa' })))
+      .mockResolvedValueOnce(makeJsonResponse(makeTaskResponse({ id: 'task-bbb', title: 'Task task-bbb' })))
+
+    const { setTaskTodos } = await import('./api')
+    await setTaskTodos('task-aaa', [{ text: 'Step 1', done: true }])
+    await setTaskTodos('task-bbb', [{ text: 'Step 2', done: false }])
+
+    const [url1] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const [url2] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    expect(url1).toContain('/tasks/task-aaa/todos')
+    expect(url2).toContain('/tasks/task-bbb/todos')
+    expect(url1).not.toBe(url2)
+  })
+})
+
+// ── setTaskDependencies ───────────────────────────────────────────────────────
+
+describe('setTaskDependencies', () => {
+  it('calls PUT /api/v1/tasks/{id}/dependencies with a bare JSON array body', async () => {
+    // BDD: Given a task id and an array of dependency task ids,
+    // When setTaskDependencies("task-456", ["dep-001","dep-002"]) is called,
+    // Then PUT /api/v1/tasks/task-456/dependencies is requested,
+    // And the body is a bare JSON array of string ids (NOT {blocked_by:[...]} or any wrapper).
+    // Traces to: unified-task-contract spec — setTaskDependencies bare-array contract
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(
+      makeTaskResponse({ id: 'task-456', title: 'Dependent task', status: 'blocked', blocked_by: ['dep-001', 'dep-002'] })
+    ))
+
+    const { setTaskDependencies } = await import('./api')
+    const result = await setTaskDependencies('task-456', ['dep-001', 'dep-002'])
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+
+    // Must be PUT to the /dependencies sub-resource.
+    expect(url).toContain('/api/v1/tasks/task-456/dependencies')
+    expect((init as RequestInit).method).toBe('PUT')
+
+    // Body must be a bare JSON array of strings — NOT {blocked_by: [...]} or any wrapper.
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(Array.isArray(body)).toBe(true)
+    expect(body).toHaveLength(2)
+    expect(body[0]).toBe('dep-001')
+    expect(body[1]).toBe('dep-002')
+
+    // Sanity: returned task has the updated blocked_by list.
+    expect(result.id).toBe('task-456')
+    expect(result.blocked_by).toEqual(['dep-001', 'dep-002'])
+  })
+
+  it('sends an empty array to clear all dependencies', async () => {
+    // BDD: Given a task id and an empty dependency list,
+    // When setTaskDependencies("task-xyz", []) is called,
+    // Then the body is "[]" (bare empty array — clears all deps).
+    // Traces to: unified-task-contract spec — setTaskDependencies clear
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(
+      makeTaskResponse({ id: 'task-xyz', title: 'Unblocked task', status: 'next', priority: 2, blocked_by: [] })
+    ))
+
+    const { setTaskDependencies } = await import('./api')
+    await setTaskDependencies('task-xyz', [])
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(Array.isArray(body)).toBe(true)
+    expect(body).toHaveLength(0)
+  })
+
+  it('differentiation test: two different task ids hit different URLs', async () => {
+    // Anti-hardcode: two calls with different ids must go to different URLs.
+    // Traces to: unified-task-contract spec — setTaskDependencies URL encoding
+    fetchSpy
+      .mockResolvedValueOnce(makeJsonResponse(makeTaskResponse({ id: 'task-p1', title: 'Task task-p1' })))
+      .mockResolvedValueOnce(makeJsonResponse(makeTaskResponse({ id: 'task-p2', title: 'Task task-p2' })))
+
+    const { setTaskDependencies } = await import('./api')
+    await setTaskDependencies('task-p1', ['dep-a'])
+    await setTaskDependencies('task-p2', ['dep-b', 'dep-c'])
+
+    const [url1] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const [url2] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    expect(url1).toContain('/tasks/task-p1/dependencies')
+    expect(url2).toContain('/tasks/task-p2/dependencies')
+    expect(url1).not.toBe(url2)
+  })
+})

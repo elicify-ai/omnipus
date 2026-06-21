@@ -111,6 +111,10 @@ type AgentLoop struct {
 	// Task management
 	taskStore    *task.Store
 	taskExecutor *TaskExecutor
+	// taskTrigger fires once/every/recurring task triggers via the dedicated
+	// trigger CronService. Set at boot by the gateway (SetTaskTriggerScheduler);
+	// nil in tests / before wiring. All notify paths are nil-safe.
+	taskTrigger *TaskTriggerScheduler
 
 	// Security (SEC-15, SEC-17): audit logging and policy evaluation.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
@@ -1606,6 +1610,10 @@ func registerSharedTools(
 			agent.Tools.Register(tools.NewTaskListTool(al.taskStore))
 
 			taskCreate := tools.NewTaskCreateTool(al.taskStore)
+			// Resolve the real default workspace (is_default ULID) when a
+			// chat-delegated task has no workspace bound to the turn — never the
+			// literal "default" (which would land it in an invisible workspace).
+			taskCreate.SetHome(filepath.Dir(cfg.WorkspacePath()))
 			taskCreate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
 			// FR-6.2: full-policy gate — trust set + mode("task") + depth.
 			// Takes precedence over the boolean delegate checker.
@@ -1620,13 +1628,20 @@ func registerSharedTools(
 					SessionID: "task:" + entity.ID,
 					AgentID:   entity.AgentID,
 				})
+				// Register the task's time trigger (no-op for manual/heartbeat).
+				al.NotifyTaskUpserted(entity)
 			})
 			agent.Tools.Register(taskCreate)
 
 			taskUpdate := tools.NewTaskUpdateTool(al.taskStore)
-			if al.taskExecutor != nil {
-				taskUpdate.SetOnComplete(al.taskExecutor.onTaskComplete)
-			}
+			taskUpdate.SetOnComplete(func(t *task.Task) {
+				if al.taskExecutor != nil {
+					al.taskExecutor.onTaskComplete(t)
+				}
+				// A terminal update removes the task's trigger job (OnTaskUpserted
+				// drops jobs for terminal tasks); a non-terminal update re-syncs it.
+				al.NotifyTaskUpserted(t)
+			})
 			agent.Tools.Register(taskUpdate)
 
 			agent.Tools.Register(tools.NewTaskAddTodoTool(al.taskStore))
@@ -2830,6 +2845,38 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 // GetTaskExecutor returns the shared TaskExecutor (may be nil in tests).
 func GetTaskExecutor(al *AgentLoop) *TaskExecutor {
 	return al.taskExecutor
+}
+
+// SetTaskTriggerScheduler installs the task time-trigger scheduler so every task
+// create/update/delete path can (re)register or remove the task's cron trigger.
+// Called once at boot by the gateway. Idempotent.
+func (al *AgentLoop) SetTaskTriggerScheduler(s *TaskTriggerScheduler) {
+	al.mu.Lock()
+	al.taskTrigger = s
+	al.mu.Unlock()
+}
+
+// taskTriggerScheduler returns the installed scheduler under the loop lock.
+func (al *AgentLoop) taskTriggerScheduler() *TaskTriggerScheduler {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.taskTrigger
+}
+
+// NotifyTaskUpserted (re)registers or removes the task's time-trigger cron job
+// after a create or update. Nil-safe — a no-op when no scheduler is wired (tests).
+func (al *AgentLoop) NotifyTaskUpserted(t *task.Task) {
+	if s := al.taskTriggerScheduler(); s != nil && t != nil {
+		s.OnTaskUpserted(t)
+	}
+}
+
+// NotifyTaskDeleted removes the task's time-trigger cron job after a delete.
+// Nil-safe — a no-op when no scheduler is wired (tests).
+func (al *AgentLoop) NotifyTaskDeleted(taskID string) {
+	if s := al.taskTriggerScheduler(); s != nil && taskID != "" {
+		s.OnTaskDeleted(taskID)
+	}
 }
 
 // GetSSRFChecker returns the singleton SSRFChecker built from the SSRF policy

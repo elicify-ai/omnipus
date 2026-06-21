@@ -384,11 +384,15 @@ type Todo = {
 };
 type TaskTrigger = {
   type: "manual" | "once" | "every" | "recurring";
-  config: Partial<{
-    at_ms: number;
-    every_ms: number;
-    cron_expr: string;
-  }>;
+  config: Partial<
+    {
+      at_ms: number;
+      every_ms: number;
+      cron_expr: string;
+    } & {
+      [key: string]: any;
+    }
+  >;
 };
 type DoctorResult = {
   score: number;
@@ -1717,7 +1721,8 @@ export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
       every_ms: z.number().int().gte(1000),
       cron_expr: z.string(),
     })
-    .partial(),
+    .partial()
+    .passthrough(),
 });
 export const Task: z.ZodType<Task> = z
   .object({

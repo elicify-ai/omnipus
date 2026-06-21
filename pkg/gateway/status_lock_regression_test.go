@@ -15,7 +15,6 @@
 package gateway
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,58 +163,64 @@ func TestTaskStatus_TypedConstants(t *testing.T) {
 
 // ── PATCH status vocabulary ───────────────────────────────────────────────────
 
-// TestTask_PATCH_AllStatuses_Allowed asserts that PATCH with any of the 7
-// unified statuses returns 200 (no status is guarded via PATCH in Sprint 2 —
-// "active" is gone, "in_progress" is directly settable).
+// TestTask_PATCH_AllStatuses_Allowed asserts that each of the 7 unified statuses
+// is reachable via legal lifecycle transitions, and that `blocked` is NOT directly
+// settable via PATCH (it is a derived side-state — Fix #6 gateway seam guard).
 //
-// Sprint 2: "PUT status=active → 403" rule DELETED. Any of the 7 statuses is
-// now directly settable via PATCH.
+// Sprint 2 lifecycle: inbox → next → planning | in_progress → done | failed.
+// inbox → failed is also allowed directly. `blocked` is derived from blocked_by
+// deps and is rejected at the gateway seam with 400.
 //
-// NOTE: advancing to "next" requires the task to have a prompt or description
-// (the production handler enforces "a partial task cannot be advanced to next").
-// Tasks created with a prompt/description satisfy this guard.
-//
-// Differentiation: testing two different valid statuses proves neither is
-// hardcoded.
+// Differentiation: testing two different paths proves neither is hardcoded.
 //
 // Traces to: pkg/gateway/rest_tasks.go HandleTasks PATCH — Sprint 2 status rules
 func TestTask_PATCH_AllStatuses_Allowed(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wsID := ensureTestWorkspace(t, api)
 
-	// "next" requires a non-empty prompt or description.
-	// Use PATCH body that sets both status and description together for "next".
-	tests := []struct {
-		status string
-		body   string
-	}{
-		// next requires prompt/description — supply description in the same PATCH.
-		{"next", `{"status":"next","description":"ready to go"}`},
-		{"planning", `{"status":"planning"}`},
-		// in_progress requires prompt/description — supply description.
-		{"in_progress", `{"status":"in_progress","description":"working on it"}`},
-		{"blocked", `{"status":"blocked"}`},
-		{"done", `{"status":"done"}`},
-		{"failed", `{"status":"failed"}`},
-		{"inbox", `{"status":"inbox"}`},
-	}
-	for _, tc := range tests {
-		t.Run("status="+tc.status, func(t *testing.T) {
-			tsk := createTaskViaAPI(t, api, fmt.Sprintf("Task_%s", tc.status), wsID)
-			wPatch := patchTask(t, api, tsk.Id, tc.body)
+	// inbox → next (needs description for the partial-task guard).
+	tskNext := createTaskViaAPI(t, api, "Task_next", wsID)
+	wNext := patchTask(t, api, tskNext.Id, `{"status":"next","description":"ready to go"}`)
+	assert.Equal(t, http.StatusOK, wNext.Code,
+		"PATCH inbox→next must return 200; body=%s", wNext.Body.String())
 
-			assert.Equal(t, http.StatusOK, wPatch.Code,
-				"PATCH status=%q must return 200 (all 7 statuses directly settable in Sprint 2); body=%s",
-				tc.status, wPatch.Body.String())
-		})
-	}
+	// inbox → next → planning.
+	tskPlanning := createTaskViaAPI(t, api, "Task_planning", wsID)
+	wPN := patchTask(t, api, tskPlanning.Id, `{"status":"next","description":"ready"}`)
+	require.Equal(t, http.StatusOK, wPN.Code, "inbox→next; body=%s", wPN.Body.String())
+	wPlanning := patchTask(t, api, tskPlanning.Id, `{"status":"planning"}`)
+	assert.Equal(t, http.StatusOK, wPlanning.Code,
+		"PATCH next→planning must return 200; body=%s", wPlanning.Body.String())
 
-	// Differentiation: PATCH with "in_progress" → 200 (was blocked in old "active" era).
-	tskInProg := createTaskViaAPI(t, api, "InProgressTask", wsID)
-	wInProg := patchTask(t, api, tskInProg.Id, `{"status":"in_progress","description":"doing it"}`)
+	// inbox → next → in_progress (directly settable, no /start required in Sprint 2).
+	tskInProg := createTaskViaAPI(t, api, "Task_in_progress", wsID)
+	wIPn := patchTask(t, api, tskInProg.Id, `{"status":"next","description":"doing it"}`)
+	require.Equal(t, http.StatusOK, wIPn.Code, "inbox→next; body=%s", wIPn.Body.String())
+	wInProg := patchTask(t, api, tskInProg.Id, `{"status":"in_progress"}`)
 	assert.Equal(t, http.StatusOK, wInProg.Code,
-		"PATCH status=in_progress must return 200 (directly settable, no /start required); body=%s",
+		"PATCH next→in_progress must return 200 (directly settable, no /start required); body=%s",
 		wInProg.Body.String())
+
+	// inbox → next → in_progress → done.
+	tskDone := createTaskViaAPI(t, api, "Task_done", wsID)
+	patchTask(t, api, tskDone.Id, `{"status":"next","description":"done path"}`)
+	patchTask(t, api, tskDone.Id, `{"status":"in_progress"}`)
+	wDone := patchTask(t, api, tskDone.Id, `{"status":"done"}`)
+	assert.Equal(t, http.StatusOK, wDone.Code,
+		"PATCH in_progress→done must return 200; body=%s", wDone.Body.String())
+
+	// inbox → failed (legal direct transition).
+	tskFailed := createTaskViaAPI(t, api, "Task_failed", wsID)
+	wFailed := patchTask(t, api, tskFailed.Id, `{"status":"failed"}`)
+	assert.Equal(t, http.StatusOK, wFailed.Code,
+		"PATCH inbox→failed must return 200; body=%s", wFailed.Body.String())
+
+	// `blocked` is a derived side-state → PATCH status=blocked must return 400 (Fix #6).
+	tskBlocked := createTaskViaAPI(t, api, "Task_blocked_guard", wsID)
+	wBlocked := patchTask(t, api, tskBlocked.Id, `{"status":"blocked"}`)
+	assert.Equal(t, http.StatusBadRequest, wBlocked.Code,
+		"PATCH status=blocked must return 400 (derived side-state; Fix #6 gateway seam guard); body=%s",
+		wBlocked.Body.String())
 
 	// PATCH with invalid/old status "active" → 400 (not in the 7-state vocabulary).
 	tskActive := createTaskViaAPI(t, api, "OldActiveTask", wsID)

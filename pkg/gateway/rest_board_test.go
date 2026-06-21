@@ -61,18 +61,57 @@ func createTaskViaAPI(t *testing.T, api *restAPI, title, workspaceID string) gen
 	return tsk
 }
 
-// createTaskWithStatusViaAPI creates a task and immediately PATCHes its status.
-// status must be one of the 7 valid statuses (not "in_progress" via this helper;
-// use PATCH directly for in_progress to distinguish from the old /start path).
+// createTaskWithStatusViaAPI creates a task and advances it to the requested
+// status via the correct legal transition path. Legal paths are:
+//
+//	inbox → next (needs description for the partial-task guard)
+//	inbox → next → planning
+//	inbox → next → in_progress
+//	inbox → next → in_progress → done
+//	inbox → next → in_progress → failed
+//
+// `blocked` is a derived side-state and cannot be set via PATCH; seed to disk
+// for tests that need a task in the `blocked` status.
 func createTaskWithStatusViaAPI(t *testing.T, api *restAPI, title, workspaceID, status string) gen.Task {
 	t.Helper()
+	if workspaceID == "" {
+		workspaceID = ensureTestWorkspace(t, api)
+	}
 	tsk := createTaskViaAPI(t, api, title, workspaceID)
 	if status == "" || status == "inbox" {
 		return tsk // inbox is the default
 	}
+	// inbox → next (all further transitions require next first)
+	wNext := patchTask(t, api, tsk.Id, `{"status":"next","description":"task ready"}`)
+	require.Equal(t, http.StatusOK, wNext.Code,
+		"createTaskWithStatusViaAPI: inbox→next must return 200; body=%s", wNext.Body.String())
+	if status == "next" {
+		var updated gen.Task
+		require.NoError(t, json.Unmarshal(wNext.Body.Bytes(), &updated))
+		return updated
+	}
+	// next → planning
+	if status == "planning" {
+		w := patchTask(t, api, tsk.Id, `{"status":"planning"}`)
+		require.Equal(t, http.StatusOK, w.Code,
+			"createTaskWithStatusViaAPI: next→planning must return 200; body=%s", w.Body.String())
+		var updated gen.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+		return updated
+	}
+	// next → in_progress
+	wIP := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+	require.Equal(t, http.StatusOK, wIP.Code,
+		"createTaskWithStatusViaAPI: next→in_progress must return 200; body=%s", wIP.Body.String())
+	if status == "in_progress" {
+		var updated gen.Task
+		require.NoError(t, json.Unmarshal(wIP.Body.Bytes(), &updated))
+		return updated
+	}
+	// in_progress → done or failed
 	w := patchTask(t, api, tsk.Id, fmt.Sprintf(`{"status":%q}`, status))
 	require.Equal(t, http.StatusOK, w.Code,
-		"createTaskWithStatusViaAPI: PATCH status=%q must return 200; body=%s", status, w.Body.String())
+		"createTaskWithStatusViaAPI: in_progress→%s must return 200; body=%s", status, w.Body.String())
 	var updated gen.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
 	return updated
@@ -106,6 +145,29 @@ func getTaskStatus(t *testing.T, api *restAPI, id string) gen.TaskStatus {
 func ensureTestWorkspace(t *testing.T, api *restAPI) string {
 	t.Helper()
 	return createWorkspaceViaAPI(t, api, "TestWorkspace_"+t.Name(), "")
+}
+
+// seedBlockedTask creates a task (via API) with the given blocked_by list and
+// seeds it directly to disk in `blocked` status. It is used by tests that need
+// a task in the derived `blocked` side-state, since PATCH status=blocked is
+// correctly rejected at the gateway seam (Fix #6).
+func seedBlockedTask(t *testing.T, api *restAPI, id, title, workspaceID string, blockedBy []string) {
+	t.Helper()
+	tasksDir := filepath.Join(api.homePath, "tasks")
+	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
+	now := "2026-01-01T00:00:00Z"
+	deps := ""
+	for i, dep := range blockedBy {
+		if i > 0 {
+			deps += ","
+		}
+		deps += fmt.Sprintf("%q", dep)
+	}
+	data := fmt.Sprintf(
+		`{"id":%q,"title":%q,"action":"llm","status":"blocked","workspace_id":%q,"blocked_by":[%s],"created_at":%q,"updated_at":%q}`,
+		id, title, workspaceID, deps, now, now,
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, id+".json"), []byte(data), 0o600))
 }
 
 // writeUnifiedTaskFile writes a raw task JSON file for direct-on-disk seeding in tests

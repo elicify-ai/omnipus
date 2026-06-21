@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
@@ -48,28 +49,29 @@ func TestHandleTasks_CompleteAdvancesBlockedDependent(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wsID := ensureTestWorkspace(t, api)
 
-	// Create A (next) and B (inbox).
+	// Create A (the blocker) and advance it to next.
 	a := createTaskViaAPI(t, api, "Blocker A", wsID)
-	b := createTaskViaAPI(t, api, "Dependent B", wsID)
-
-	// Advance A to next (description required by the partial-task guard).
 	wA := patchTask(t, api, a.Id, `{"status":"next","description":"blocker task ready"}`)
 	require.Equal(t, 200, wA.Code, "PATCH A→next must return 200; body=%s", wA.Body.String())
 
-	// Gate B: set blocked_by=[A] and status=blocked.
-	wGate := patchTask(t, api, b.Id, fmt.Sprintf(`{"status":"blocked","blocked_by":[%q]}`, a.Id))
-	require.Equal(t, 200, wGate.Code, "gate B (blocked_by=[A]) must return 200; body=%s", wGate.Body.String())
+	// Gate B: seed directly to disk in `blocked` status with blocked_by=[A].
+	// status=blocked is a derived side-state rejected at the gateway seam;
+	// use seedBlockedTask for test setup.
+	const bID = "test-fr65-complete-advance-b-01"
+	seedBlockedTask(t, api, bID, "Dependent B", wsID, []string{a.Id})
 
-	// Verify B is blocked before A completes.
-	require.Equal(t, gen.TaskStatus("blocked"), getTaskStatus(t, api, b.Id),
+	// Precondition: B must be blocked before A completes.
+	require.Equal(t, gen.TaskStatus("blocked"), getTaskStatus(t, api, bID),
 		"precondition: B must be blocked before A completes")
 
-	// Complete A: PATCH A→done.
+	// Advance A through in_progress → done.
+	wIP := patchTask(t, api, a.Id, `{"status":"in_progress"}`)
+	require.Equal(t, 200, wIP.Code, "PATCH A→in_progress; body=%s", wIP.Body.String())
 	wDone := patchTask(t, api, a.Id, `{"status":"done"}`)
 	require.Equal(t, 200, wDone.Code, "PATCH A→done must return 200; body=%s", wDone.Body.String())
 
 	// B must now be advanced to next (FR-6.5 auto-advance).
-	require.Equal(t, gen.TaskStatus("next"), getTaskStatus(t, api, b.Id),
+	require.Equal(t, gen.TaskStatus("next"), getTaskStatus(t, api, bID),
 		"B must be advanced blocked→next after A is done (FR-6.5)")
 }
 
@@ -91,7 +93,6 @@ func TestHandleTasks_CompleteWithUnsatisfiedDepStaysBlocked(t *testing.T) {
 
 	a := createTaskViaAPI(t, api, "Blocker A", wsID)
 	x := createTaskViaAPI(t, api, "Blocker X", wsID)
-	c := createTaskViaAPI(t, api, "Dependent C", wsID)
 
 	// Advance both blockers to next (description required by the partial-task guard).
 	wA := patchTask(t, api, a.Id, `{"status":"next","description":"blocker A ready"}`)
@@ -99,22 +100,26 @@ func TestHandleTasks_CompleteWithUnsatisfiedDepStaysBlocked(t *testing.T) {
 	wX := patchTask(t, api, x.Id, `{"status":"next","description":"blocker X ready"}`)
 	require.Equal(t, 200, wX.Code, "PATCH X→next; body=%s", wX.Body.String())
 
-	// Gate C: blocked_by [A, X], status=blocked.
-	wGate := patchTask(t, api, c.Id, fmt.Sprintf(`{"status":"blocked","blocked_by":[%q,%q]}`, a.Id, x.Id))
-	require.Equal(t, 200, wGate.Code, "gate C (blocked_by=[A,X]); body=%s", wGate.Body.String())
+	// Gate C: seed directly to disk in `blocked` status with blocked_by=[A, X].
+	const cID = "test-fr65-unsatisfied-c-00001"
+	seedBlockedTask(t, api, cID, "Dependent C", wsID, []string{a.Id, x.Id})
 
-	// Complete only A. X is still next — C must stay blocked.
+	// Complete only A (next→in_progress→done). X is still next — C must stay blocked.
+	wIPa := patchTask(t, api, a.Id, `{"status":"in_progress"}`)
+	require.Equal(t, 200, wIPa.Code, "PATCH A→in_progress; body=%s", wIPa.Body.String())
 	wDoneA := patchTask(t, api, a.Id, `{"status":"done"}`)
 	require.Equal(t, 200, wDoneA.Code, "PATCH A→done; body=%s", wDoneA.Body.String())
 
-	require.Equal(t, gen.TaskStatus("blocked"), getTaskStatus(t, api, c.Id),
+	require.Equal(t, gen.TaskStatus("blocked"), getTaskStatus(t, api, cID),
 		"C must stay blocked while X is not done (only one dep satisfied)")
 
-	// Now complete X — C must advance to next (all deps done).
+	// Complete X — C must advance to next (all deps done).
+	wIPx := patchTask(t, api, x.Id, `{"status":"in_progress"}`)
+	require.Equal(t, 200, wIPx.Code, "PATCH X→in_progress; body=%s", wIPx.Body.String())
 	wDoneX := patchTask(t, api, x.Id, `{"status":"done"}`)
 	require.Equal(t, 200, wDoneX.Code, "PATCH X→done; body=%s", wDoneX.Body.String())
 
-	require.Equal(t, gen.TaskStatus("next"), getTaskStatus(t, api, c.Id),
+	require.Equal(t, gen.TaskStatus("next"), getTaskStatus(t, api, cID),
 		"C must advance blocked→next once BOTH A and X are done (FR-6.5)")
 }
 
@@ -136,11 +141,11 @@ func TestHandleTasks_BlockedByDAG_CycleRejected(t *testing.T) {
 	a := createTaskViaAPI(t, api, "A (would-be cycle root)", wsID)
 	b := createTaskViaAPI(t, api, "B depends on A", wsID)
 
-	// Gate B: blocked_by [A]. Valid.
-	wGate := patchTask(t, api, b.Id, fmt.Sprintf(`{"status":"blocked","blocked_by":[%q]}`, a.Id))
-	require.Equal(t, 200, wGate.Code, "gate B; body=%s", wGate.Body.String())
+	// Gate B: set blocked_by=[A] (status stays inbox — only the edge matters for cycle detection).
+	wGate := patchTask(t, api, b.Id, fmt.Sprintf(`{"blocked_by":[%q]}`, a.Id))
+	require.Equal(t, 200, wGate.Code, "gate B blocked_by=[A]; body=%s", wGate.Body.String())
 
-	// Try to make A depend on B — creates 2-node cycle → 400.
+	// Try to make A depend on B — creates 2-node cycle A→B→A → 400.
 	wCycle := patchTask(t, api, a.Id, fmt.Sprintf(`{"blocked_by":[%q]}`, b.Id))
 	require.Equal(t, 400, wCycle.Code,
 		"PATCH A blocked_by=[B] must return 400 (cycle A→B→A); body=%s", wCycle.Body.String())
@@ -152,7 +157,7 @@ func TestHandleTasks_BlockedByDAG_CycleRejected(t *testing.T) {
 		"PATCH C blocked_by=[A] must return 200 (no cycle); body=%s", wNoCycle.Body.String())
 
 	// The two PATCH calls return different codes — proves cycle detection is real.
-	require.NotEqual(t, wCycle.Code, wNoCycle.Code,
+	assert.NotEqual(t, wCycle.Code, wNoCycle.Code,
 		"cycle PATCH and non-cycle PATCH must return different status codes (not hardcoded)")
 }
 
@@ -177,20 +182,17 @@ func TestHandleTasks_DeleteAdvancesBlockedDependent(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wsID := ensureTestWorkspace(t, api)
 
-	// Create A (the blocker) and B (the dependent).
+	// Create A (the blocker).
 	a := createTaskViaAPI(t, api, "Blocker A", wsID)
-	b := createTaskViaAPI(t, api, "Dependent B", wsID)
 
-	// Advance A to next (description required by the partial-task guard).
-	wA := patchTask(t, api, a.Id, `{"status":"next","description":"blocker task ready"}`)
-	require.Equal(t, 200, wA.Code, "PATCH A→next must return 200; body=%s", wA.Body.String())
-
-	// Gate B: blocked_by=[A], status=blocked.
-	wGate := patchTask(t, api, b.Id, fmt.Sprintf(`{"status":"blocked","blocked_by":[%q]}`, a.Id))
-	require.Equal(t, 200, wGate.Code, "gate B (blocked_by=[A]) must return 200; body=%s", wGate.Body.String())
+	// Gate B: seed directly to disk in `blocked` status with blocked_by=[A].
+	// status=blocked is a derived side-state rejected at the gateway seam;
+	// use seedBlockedTask for test setup.
+	const bID = "test-fr65-delete-advance-b-001"
+	seedBlockedTask(t, api, bID, "Dependent B", wsID, []string{a.Id})
 
 	// Precondition: B must be blocked before A is deleted.
-	require.Equal(t, gen.TaskStatus("blocked"), getTaskStatus(t, api, b.Id),
+	require.Equal(t, gen.TaskStatus("blocked"), getTaskStatus(t, api, bID),
 		"precondition: B must be blocked before A is deleted")
 
 	// DELETE A — this should cascade-clear B.blocked_by and advance B to next.
@@ -202,9 +204,7 @@ func TestHandleTasks_DeleteAdvancesBlockedDependent(t *testing.T) {
 		"DELETE A must return 204; body=%s", wDel.Body.String())
 
 	// Differentiation / content assertion: B must now be next, not still blocked.
-	// This proves handleTaskDelete actually advances the dependent — a no-op would
-	// leave status="blocked" (different from "next"), which require.Equal catches.
-	require.Equal(t, gen.TaskStatus("next"), getTaskStatus(t, api, b.Id),
+	require.Equal(t, gen.TaskStatus("next"), getTaskStatus(t, api, bID),
 		"B must be advanced blocked→next after its only blocker A is deleted (FR-6.5 cascade delete advance)")
 }
 
