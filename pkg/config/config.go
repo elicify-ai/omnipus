@@ -3306,10 +3306,15 @@ func migrateGlobalHeartbeatToAgent(cfg *Config) {
 //   - skips agents whose Model is nil or whose Primary is empty;
 //   - skips when Provider is already set (already migrated, or operator-supplied);
 //   - only splits when the FIRST slug segment is a known provider protocol AND
-//     there is a remaining model path after it (so a bare "gpt-4o" or a
-//     vendor-prefixed "google/gemini-2.5-flash" — where "google" is a model
-//     vendor, not a configured provider protocol — is left untouched unless the
-//     leading segment is genuinely a provider protocol).
+//     there is a remaining model path after it (so a bare "gpt-4o", or a
+//     vendor-prefixed "meta-llama/llama-3-70b" — where "meta-llama" is a model
+//     vendor that is NOT in knownProviderProtocols — is left untouched, because
+//     its leading segment is not a configured provider protocol).
+//
+// NOTE: a leading segment like "google" or "openai" IS a known protocol, so
+// "google/gemini-2.5-flash" DOES split (Provider="google",
+// Primary="gemini-2.5-flash"). Use a non-protocol vendor prefix as the
+// "untouched" example, not a real provider name.
 //
 // Mirrors migrateProviderFields (model_list) using the same protocol set so the
 // two stay consistent.

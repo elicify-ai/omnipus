@@ -22,7 +22,7 @@ import {
   type TaskGraphNode,
 } from './taskGraph'
 import '@xyflow/react/dist/style.css'
-import './reactflow-theme.css'
+import '../reactflow-theme.css'
 
 // Registered once (stable identity) so React Flow doesn't warn about a new
 // nodeTypes object every render.
@@ -113,7 +113,7 @@ function GraphViewInner({ tasks, agents, onTaskClick, selectedTaskId }: GraphVie
           variant={BackgroundVariant.Dots}
           gap={22}
           size={1}
-          color="#222228"
+          color="var(--color-border)"
         />
         <Controls
           showInteractive={false}
@@ -124,7 +124,6 @@ function GraphViewInner({ tasks, agents, onTaskClick, selectedTaskId }: GraphVie
           zoomable
           nodeColor={minimapNodeColor}
           nodeStrokeWidth={2}
-          maskColor="rgba(10,10,11,0.6)"
           className="!bottom-4 !right-4"
         />
       </ReactFlow>

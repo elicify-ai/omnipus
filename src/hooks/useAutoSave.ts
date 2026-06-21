@@ -56,7 +56,16 @@ export function useAutoSave<T>(
 
   // Track whether initial hydration has happened.
   const initializedRef = useRef(false)
+  // The JSON last SEEN by the change effect — used only to debounce-dedupe
+  // (don't re-fire a save for identical data). Advanced eagerly when data
+  // changes; NOT a record of what's been persisted.
   const previousJsonRef = useRef<string>('')
+  // The JSON of the last data that SUCCESSFULLY persisted. `hasPendingChanges()`
+  // compares against THIS (not `previousJsonRef`) so a failed PUT keeps the data
+  // "pending" — the unmount flush + page-hide beacon still fire and retry it.
+  // Without this, a thrown save would still mark the edit as saved and the
+  // user's delegation-edge changes would silently vanish on reload.
+  const lastSavedJsonRef = useRef<string>('')
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestDataRef = useRef<T>(data)
@@ -65,15 +74,21 @@ export function useAutoSave<T>(
   latestDataRef.current = data
 
   const hasPendingChanges = useCallback(() => {
-    return JSON.stringify(latestDataRef.current) !== previousJsonRef.current
+    return JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current
   }, [])
 
   const doSave = useCallback(async () => {
     if (disabled) return
     setStatus('saving')
     setError(undefined)
+    // Snapshot what we're about to persist so success marks exactly that JSON
+    // saved (data may change again while the request is in flight).
+    const inFlightJson = JSON.stringify(latestDataRef.current)
     try {
       await saveFnRef.current(latestDataRef.current)
+      // Only NOW is the data durable — advance the saved marker so
+      // hasPendingChanges() flips false for this exact payload.
+      lastSavedJsonRef.current = inFlightJson
       setStatus('saved')
       setLastSavedAt(new Date())
       // Fade back to idle after 2s. Cancel any previous fade timer first to
@@ -94,14 +109,16 @@ export function useAutoSave<T>(
 
     const json = JSON.stringify(data)
 
-    // Skip first render (initial load).
+    // Skip first render (initial load) — the loaded data is the persisted
+    // baseline, so it is both "last seen" and "last saved".
     if (!initializedRef.current) {
       initializedRef.current = true
       previousJsonRef.current = json
+      lastSavedJsonRef.current = json
       return
     }
 
-    // Skip if data hasn't changed.
+    // Skip if data hasn't changed since the last change we observed.
     if (json === previousJsonRef.current) return
     previousJsonRef.current = json
 

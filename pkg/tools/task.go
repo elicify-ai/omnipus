@@ -91,6 +91,12 @@ type TaskCreateTool struct {
 	// home is the OMNIPUS_HOME path used to resolve the default workspace ID
 	// when no workspace is bound to the current turn context. Set via SetHome.
 	home string
+	// maxDelegationDepth is the hard ceiling on the task-mode delegation
+	// generation counter. A task_create issued from within a task run whose
+	// generation already equals (or exceeds) this bound is rejected, so an
+	// A→B→A task→task chain cannot recurse unboundedly. Set via
+	// SetMaxDelegationDepth; 0 disables the bound (no caller should leave it 0).
+	maxDelegationDepth int
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
@@ -108,6 +114,13 @@ func (t *TaskCreateTool) SetHome(home string) {
 // SetDelegateChecker sets the function that checks whether delegation to a target agent is allowed.
 func (t *TaskCreateTool) SetDelegateChecker(fn func(targetAgentID string) bool) {
 	t.delegateCheck = fn
+}
+
+// SetMaxDelegationDepth installs the hard task-mode recursion bound. A
+// task_create issued from within a task run whose stored DelegationDepth is
+// already >= the bound is rejected. The agent loop passes agent.maxTaskDepth (10).
+func (t *TaskCreateTool) SetMaxDelegationDepth(bound int) {
+	t.maxDelegationDepth = bound
 }
 
 // SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2).
@@ -202,6 +215,21 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult(fmt.Sprintf("delegation to %s not allowed", agentID))
 	}
 
+	// Task-mode recursion bound (SEC): a task_create issued from *within* a task
+	// run carries that run's delegation generation on the context. Each task→task
+	// hop increments the generation; reject once it would exceed the hard ceiling.
+	// This is the runtime bound the per-agent depth gate cannot enforce on its own
+	// because every task run starts a FRESH turn at turnState depth 0 — without
+	// this counter, an A→B→A task-mode chain would recurse unboundedly.
+	parentDepth := ToolDelegationDepth(ctx)
+	childDepth := parentDepth + 1
+	if t.maxDelegationDepth > 0 && childDepth > t.maxDelegationDepth {
+		return ErrorResult(fmt.Sprintf(
+			"delegation denied: maximum task delegation depth (%d) reached — cannot create a further delegated task",
+			t.maxDelegationDepth,
+		))
+	}
+
 	priority := 3
 	if p, ok := args["priority"].(float64); ok && p >= 1 && p <= 5 {
 		priority = int(p)
@@ -218,15 +246,16 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// `next` (triaged & dispatchable) rather than `inbox`. Detail #6: it carries
 	// a parent link and the originating channel for result delivery.
 	entity := &task.Task{
-		Title:        title,
-		Prompt:       prompt,
-		Action:       task.ActionLLM,
-		AgentID:      agentID,
-		CreatedBy:    callerID,
-		Priority:     priority,
-		ParentTaskID: parentTaskID,
-		WorkspaceID:  wsID,
-		Status:       task.StatusNext,
+		Title:           title,
+		Prompt:          prompt,
+		Action:          task.ActionLLM,
+		AgentID:         agentID,
+		CreatedBy:       callerID,
+		Priority:        priority,
+		ParentTaskID:    parentTaskID,
+		WorkspaceID:     wsID,
+		Status:          task.StatusNext,
+		DelegationDepth: childDepth,
 	}
 
 	// Propagate the originating channel so completed tasks can route results back.

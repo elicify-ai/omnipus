@@ -120,7 +120,12 @@ type services struct {
 	CronService      *cron.CronService
 	TaskTrigger      *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
 	HeartbeatService *heartbeat.HeartbeatService
-	MediaStore       media.MediaStore
+	// TaskDrain owns the queued-task (`next` → dispatch) poll unconditionally,
+	// independent of which heartbeat path is active. The legacy HeartbeatService
+	// is skipped when a per-agent heartbeat is active, so the drain cannot live
+	// there or `next` tasks would silently never dispatch on those installs.
+	TaskDrain  *heartbeat.TaskDrainService
+	MediaStore media.MediaStore
 	// notifStore backs schedule-failure notifications and the header
 	// notification center (#264). Created once at boot, reused across reloads.
 	notifStore *notifications.Store
@@ -1200,10 +1205,26 @@ func setupAndStartServices(
 		slog.Warn("gateway: heartbeat schedule reconcile failed", "error", hbErr)
 	}
 
+	// Queued-task draining (dispatch of `next` tasks) is owned UNCONDITIONALLY by
+	// the dedicated TaskDrainService below — never by the heartbeat path. This is
+	// the fix for the silent-failure where enabling any per-agent heartbeat skipped
+	// the legacy global HeartbeatService (the historical sole caller of
+	// CheckQueuedTasks), so `next` tasks never dispatched (no log, no error). The
+	// drain runs regardless of which heartbeat path is active.
+	if te := agent.GetTaskExecutor(agentLoop); te != nil {
+		runningServices.TaskDrain = heartbeat.NewTaskDrainService(te, 0)
+		runningServices.TaskDrain.Start()
+		fmt.Println("✓ Queued-task drain owned by: TaskDrainService (dedicated poll)")
+	} else {
+		fmt.Println("⚠ Queued-task drain disabled: no task executor available")
+	}
+
 	// Legacy global heartbeat service: the per-agent schedule path (above) is the
 	// O6 source of truth. To avoid double-firing, only start the legacy
 	// workspace-wide heartbeat when NO per-agent heartbeat is configured (e.g. a
 	// config that predates the migration AND has no default-agent heartbeat).
+	// NOTE: the legacy service no longer owns the queued-task poll — the
+	// TaskDrainService above does — so it runs ONLY the HEARTBEAT.md prompt half.
 	if !perAgentHeartbeatActive {
 		runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 			cfg.WorkspacePath(),
@@ -1212,13 +1233,10 @@ func setupAndStartServices(
 		)
 		runningServices.HeartbeatService.SetBus(msgBus)
 		runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
-		if te := agent.GetTaskExecutor(agentLoop); te != nil {
-			runningServices.HeartbeatService.SetTaskChecker(te)
-		}
 		if err = runningServices.HeartbeatService.Start(); err != nil {
 			return nil, fmt.Errorf("error starting heartbeat service: %w", err)
 		}
-		fmt.Println("✓ Heartbeat service started")
+		fmt.Println("✓ Heartbeat service started (HEARTBEAT.md prompt only)")
 	} else {
 		fmt.Println("✓ Heartbeat running as per-agent schedules (legacy global service skipped)")
 	}
@@ -1773,6 +1791,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.HeartbeatService != nil {
 		runningServices.HeartbeatService.Stop()
 	}
+	if runningServices.TaskDrain != nil {
+		runningServices.TaskDrain.Stop()
+	}
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
@@ -1936,6 +1957,15 @@ func restartServices(
 		fmt.Println("  ✓ Task trigger scheduler restarted")
 	}
 
+	// Queued-task draining is owned by the dedicated TaskDrainService, never the
+	// heartbeat path — restart it here so dispatch survives a reload regardless of
+	// the heartbeat configuration.
+	if te := agent.GetTaskExecutor(al); te != nil {
+		runningServices.TaskDrain = heartbeat.NewTaskDrainService(te, 0)
+		runningServices.TaskDrain.Start()
+		fmt.Println("  ✓ Queued-task drain restarted (TaskDrainService)")
+	}
+
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),
 		cfg.Heartbeat.Interval,
@@ -1943,13 +1973,10 @@ func restartServices(
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
 	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(al))
-	if te := agent.GetTaskExecutor(al); te != nil {
-		runningServices.HeartbeatService.SetTaskChecker(te)
-	}
 	if err = runningServices.HeartbeatService.Start(); err != nil {
 		return fmt.Errorf("error restarting heartbeat service: %w", err)
 	}
-	fmt.Println("  ✓ Heartbeat service restarted")
+	fmt.Println("  ✓ Heartbeat service restarted (HEARTBEAT.md prompt only)")
 
 	// N-D fix: build and wire the NEW store BEFORE stopping the old one so that
 	// any upload whose scheduleSave fires in the narrow window between the Stop

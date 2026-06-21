@@ -8,31 +8,12 @@ import {
 } from '@/components/ui/select'
 import { PRIORITY_BADGE } from './TaskCard'
 import { cn } from '@/lib/utils'
+// 7-state unified vocabulary + colour — single source of truth.
+import { STATUS_LABELS, statusColor, statusLabel } from '@/lib/statusColors'
 import type { Task } from '@/lib/api'
 import type { Milestone } from '@/lib/api'
 
 type SortDir = 'desc' | 'asc'
-
-// 7-state unified vocabulary
-const STATUS_LABELS: Record<string, string> = {
-  inbox:       'Inbox',
-  next:        'Next',
-  planning:    'Planning',
-  in_progress: 'In Progress',
-  blocked:     'Blocked',
-  done:        'Done',
-  failed:      'Failed',
-}
-
-const STATUS_COLORS: Record<string, string> = {
-  inbox:       'text-[var(--color-muted)]',
-  next:        'text-blue-400',
-  planning:    'text-purple-400',
-  in_progress: 'text-yellow-400',
-  blocked:     'text-orange-400',
-  done:        'text-green-400',
-  failed:      'text-red-400',
-}
 
 interface ListViewProps {
   tasks: Task[]
@@ -212,8 +193,8 @@ function TaskRow({
         <span className="text-sm text-[var(--color-secondary)] line-clamp-1">{task.title}</span>
       </td>
       <td className="px-2 py-2.5">
-        <span className={cn('text-xs font-medium', STATUS_COLORS[task.status] ?? 'text-[var(--color-muted)]')}>
-          {STATUS_LABELS[task.status] ?? task.status}
+        <span className="text-xs font-medium" style={{ color: statusColor(task.status) }}>
+          {statusLabel(task.status)}
         </span>
       </td>
       <td className="px-2 py-2.5">

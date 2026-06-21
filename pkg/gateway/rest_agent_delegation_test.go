@@ -541,6 +541,34 @@ func TestUpdateAgent_EmptyToIDRejected(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "must not be empty")
 }
 
+// TestUpdateAgent_DelegationCycleRejected proves a multi-hop delegation cycle
+// across agents (test-agent→ava→test-agent) is rejected at write time. First
+// test-agent→ava is set; then ava→test-agent would close the loop → 400.
+func TestUpdateAgent_DelegationCycleRejected(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+
+	// test-agent → ava.
+	require.Equal(t, http.StatusOK, putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["task"]}}`).Code)
+
+	// ava → test-agent would form the cycle test-agent→ava→test-agent.
+	w := putAgent(t, api, "ava",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"test-agent"}],"modes":["task"]}}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "cycle must be rejected; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "cycle")
+}
+
+// TestUpdateAgent_DelegationNoCycleAcrossAgents proves a non-cyclic chain
+// (test-agent→ava, ava→ray) is accepted — only true loops are rejected.
+func TestUpdateAgent_DelegationNoCycleAcrossAgents(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	require.Equal(t, http.StatusOK, putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["task"]}}`).Code)
+	w := putAgent(t, api, "ava",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ray"}],"modes":["task"]}}`)
+	require.Equal(t, http.StatusOK, w.Code, "acyclic chain must be allowed; body: %s", w.Body.String())
+}
+
 // TestUpdateAgent_DepthAtCeilingAccepted proves depth == ceiling (3) is the
 // boundary that is accepted (above the ceiling is the rejecting case).
 func TestUpdateAgent_DepthAtCeilingAccepted(t *testing.T) {

@@ -339,16 +339,24 @@ func TestOnboardingNeverReshow(t *testing.T) {
 // Test #15 — TestCoreAgentDefaults (partial)
 // --------------------------------------------------------------------------
 
-// TestCoreAgentDefaults verifies agent defaults on fresh install (Spec-3 roster re-cast).
+// TestCoreAgentDefaults verifies agent defaults on fresh install (Spec-3 roster
+// re-cast + S3 specialist seeding).
 //
 // The agent list is seeded via SeedConfig and includes:
-// omnipus-system + 4 base core agents (mia, jim, ava, ray). Max was retired.
-// The old roster (general-assistant, researcher, content-creator) is removed.
+//   - omnipus-system (wire type 'system')
+//   - 4 base core agents: mia, jim, ava, ray (wire type 'core'). Max was retired.
+//   - 3 seeded specialist subagents: planner, explorer, researcher (wire type
+//     'Subagent' — they are subagent-tier, native executor).
 //
-// Traces to: Spec-3 (v0.1.0 roster re-cast) — 4-base roster seeded.
+// The legacy ad-hoc 'content-creator'/'general-assistant' roster is removed.
+// NOTE: 'researcher' is NOT a removed legacy ID any more — it is a seeded S3
+// specialist, so it is asserted PRESENT here.
+//
+// Traces to: Spec-3 (v0.1.0 roster re-cast) + S3 specialist seeding.
 // BDD: "Given default config seeded with SeedConfig, When agent list loaded,
 //
-//	Then omnipus-system present with type 'system'; 4 base core agents present with type 'core'"
+//	Then omnipus-system present with type 'system'; 4 base core agents present
+//	with type 'core'; 3 specialists present with type 'Subagent'."
 func TestCoreAgentDefaults(t *testing.T) {
 	api := newWave5bTestAPI(t)
 
@@ -393,14 +401,31 @@ func TestCoreAgentDefaults(t *testing.T) {
 			}
 		})
 	}
+	// S3 seeded specialist subagents must all be present with wire type "Subagent"
+	// (subagent-tier, native executor). The S3 agent added planner/explorer/
+	// researcher to SeedConfig; this gateway test must reflect that roster.
+	specialists := []string{"planner", "explorer", "researcher"}
+	for _, id := range specialists {
+		t.Run(id+" specialist is present with type Subagent", func(t *testing.T) {
+			agType, found := agentsByID[id]
+			assert.True(t, found,
+				"specialist subagent %q must be present in agent list after SeedConfig (S3)", id)
+			if found {
+				assert.Equal(t, "Subagent", agType,
+					"specialist subagent %q must have wire type 'Subagent'", id)
+			}
+		})
+	}
+
 	// Max must NOT be present as a seeded base agent.
 	t.Run("max is not a seeded base agent (Spec-3)", func(t *testing.T) {
 		_, found := agentsByID["max"]
 		assert.False(t, found, "max must not be in the seeded roster after Spec-3 re-cast")
 	})
 
-	// Old roster agents must NOT be present.
-	for _, oldID := range []string{"general-assistant", "researcher", "content-creator"} {
+	// Old ad-hoc roster agents must NOT be present. NOTE: 'researcher' is a seeded
+	// S3 specialist now (asserted present above), so it is NOT in this removed set.
+	for _, oldID := range []string{"general-assistant", "content-creator"} {
 		_, found := agentsByID[oldID]
 		assert.False(t, found,
 			"old agent %q must NOT be present — removed in issue #45", oldID)

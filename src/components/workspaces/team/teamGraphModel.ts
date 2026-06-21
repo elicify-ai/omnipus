@@ -69,10 +69,16 @@ export function normalizeDepth(raw: unknown): number | undefined {
 // The editor's working state is two pieces:
 //   - `members`: the ordered set of agent ids on the team (node set).
 //   - `edges`:   the directed delegation edges, each with its own modes/depth.
-// Both persist together via updateWorkspaceDelegation: membership is implicit in
-// the union of `team` (sent as isolated members carry no edge) — but because the
-// PUT body is edges-only, an isolated member with no edge is held client-side
-// and re-derived from `team[]` on refetch. See buildSavePayload / mergeMembers.
+//
+// PERSISTENCE CAVEAT (important): the PUT body is EDGES-ONLY. The backend then
+// computes the persisted team as `core_team ∪ {every edge endpoint}`. So an
+// EDGELESS member — added to the node set but with no incident edge — is NOT
+// persisted: it survives only in client state and DISAPPEARS on the next
+// refetch (unless it's already in core_team). It is therefore NOT "re-derived
+// from team[] on refetch". The editor surfaces this to the user (see
+// `isMemberPersisted` / the unsaved-member hint in WorkspaceTeamTab) so an
+// agent doesn't silently vanish: to keep a member on the team, connect it with
+// at least one delegation edge. See buildSaveEdges.
 
 export interface TeamEdgeEdit {
   from: string
@@ -270,28 +276,30 @@ export function buildTeamGraphModel(
 
 // ── Mutations (immutable) ────────────────────────────────────────────────────
 
-export type ConnectionRejection =
-  | 'self-edge'
-  | 'duplicate'
-  | 'worker-source'
-  | 'not-member'
+export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member'
 
 /**
  * Validate a candidate edge from → to against the current edit state.
  *   - no self-edges (A → A)
- *   - no duplicate (from, to) pair
- *   - a worker (Subagent / subagent_3p) is a delegation LEAF — it may receive
- *     work but never delegates onward, so it can't be a source
  *   - both endpoints must be team members
+ *   - no duplicate (from, to) pair
+ *
+ * Delegation is BOUNDED, not tier-gated: the Sprint-3 backend unlocked onward
+ * delegation for any agent (the seed wires Planner, a `Subagent`/worker, →
+ * Explorer/Researcher) and bounds depth per-edge instead. So ANY team member —
+ * worker or not — may be a delegation SOURCE here; the per-edge depth cap (set
+ * in the edge editor) is what limits how far a chain runs. We intentionally do
+ * NOT block a worker source — doing so would make the FE unable to draw the very
+ * Planner→Researcher edge the backend seeds. The trailing `workerIds` param is
+ * kept for signature stability with the call sites but no longer gates the edge.
  */
 export function validateConnection(
   from: string,
   to: string,
   state: TeamEditState,
-  workerIds: ReadonlySet<string>,
+  _workerIds?: ReadonlySet<string>,
 ): ConnectionRejection | null {
   if (from === to) return 'self-edge'
-  if (workerIds.has(from)) return 'worker-source'
   if (!state.members.includes(from) || !state.members.includes(to)) return 'not-member'
   if (state.edges.some((e) => e.from === from && e.to === to)) return 'duplicate'
   return null
@@ -302,7 +310,7 @@ export function addEdge(
   state: TeamEditState,
   from: string,
   to: string,
-  workerIds: ReadonlySet<string>,
+  workerIds?: ReadonlySet<string>,
 ): TeamEditState {
   if (validateConnection(from, to, state, workerIds) !== null) return state
   return {
@@ -405,6 +413,35 @@ export function buildSaveEdges(state: TeamEditState): WorkspaceDelegationEdge[] 
     if (typeof e.depth === 'number') out.depth = e.depth
     return out
   })
+}
+
+// ── Membership persistence ───────────────────────────────────────────────────
+//
+// The PUT persists EDGES only; the backend derives team = core_team ∪ edge
+// endpoints. So a member is only durable if it is in core_team OR has at least
+// one incident edge. An edgeless, non-core member is "unsaved" — it will be
+// dropped on refetch. These helpers let the UI flag that honestly.
+
+/** True if `agentId` will survive a save (core member, or has an incident edge). */
+export function isMemberPersisted(
+  state: TeamEditState,
+  agentId: string,
+  coreTeam: ReadonlySet<string>,
+): boolean {
+  if (coreTeam.has(agentId)) return true
+  return state.edges.some((e) => e.from === agentId || e.to === agentId)
+}
+
+/**
+ * Members that the next save will silently drop: on the team's node set but not
+ * in core_team and not touched by any edge. The UI hints the user to connect
+ * them with a delegation edge to keep them.
+ */
+export function unsavedMembers(
+  state: TeamEditState,
+  coreTeam: ReadonlySet<string>,
+): string[] {
+  return state.members.filter((id) => !isMemberPersisted(state, id, coreTeam))
 }
 
 // ── Equality / reconciliation ────────────────────────────────────────────────

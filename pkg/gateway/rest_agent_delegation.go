@@ -211,12 +211,48 @@ func existingLocalRefSet(existing *config.DelegationPolicy) map[string]bool {
 // existing stored values are preserved from `existing` so a to/modes/depth edit
 // never clobbers seeded inert fields. When the input DOES send them, they are
 // taken from the input.
+// peerDelegationGraph builds the local-ref delegation adjacency of every agent
+// in cfg EXCEPT selfID (whose edges are being replaced by this PUT/POST). It is
+// fed to the cycle check so a new selfID→To edge set is rejected when combined
+// with the rest of the roster's policies it would form a delegation cycle
+// (A→B→A). Wildcard ("*") and remote-a2a refs are skipped — they have no
+// concrete in-roster target node.
+func peerDelegationGraph(cfg *config.Config, selfID string) map[string][]string {
+	if cfg == nil {
+		return nil
+	}
+	self := strings.TrimSpace(selfID)
+	graph := make(map[string][]string, len(cfg.Agents.List))
+	for i := range cfg.Agents.List {
+		ac := &cfg.Agents.List[i]
+		if ac.ID == self {
+			continue
+		}
+		dp := ac.DelegationPolicy
+		if dp == nil {
+			continue
+		}
+		for _, ref := range dp.To {
+			if normalizeRefKind(ref.Kind) != config.AgentRefKindLocal {
+				continue
+			}
+			id := strings.TrimSpace(ref.ID)
+			if id == "" || id == "*" {
+				continue
+			}
+			graph[ac.ID] = append(graph[ac.ID], id)
+		}
+	}
+	return graph
+}
+
 func buildDelegationPolicy(
 	in *delegationPolicyInput,
 	existing *config.DelegationPolicy,
 	rosterIDs map[string]bool,
 	depthCeiling int,
 	selfID string,
+	peerGraph map[string][]string,
 ) (*config.DelegationPolicy, string) {
 	out := &config.DelegationPolicy{}
 
@@ -269,6 +305,33 @@ func buildDelegationPolicy(
 	} else if existing != nil {
 		// Input omits "to": preserve the stored to-list unchanged.
 		out.To = existing.To
+	}
+
+	// Cycle rejection (config footgun): combine this agent's new local To edges
+	// with the rest of the roster's existing delegation graph and reject if the
+	// result contains a directed cycle (A→B→A). The runtime depth cap bounds an
+	// actual delegation chain, but a cyclic config graph is still a footgun, so it
+	// is rejected at write time with a clear 400. Wildcard/remote refs are skipped
+	// (no concrete in-roster node).
+	if self := strings.TrimSpace(selfID); self != "" && len(out.To) > 0 {
+		graph := make(map[string][]string, len(peerGraph)+1)
+		for k, v := range peerGraph {
+			graph[k] = v
+		}
+		for _, ref := range out.To {
+			if normalizeRefKind(ref.Kind) != config.AgentRefKindLocal {
+				continue
+			}
+			id := strings.TrimSpace(ref.ID)
+			if id == "" || id == "*" {
+				continue
+			}
+			graph[self] = append(graph[self], id)
+		}
+		if cycleNode := detectDelegationCycle(graph); cycleNode != "" {
+			return nil, "delegation policy would create a cycle (a delegation chain that loops back, e.g. through " +
+				cycleNode + "); cycles are not allowed"
+		}
 	}
 
 	// modes: validate the enum subset, map to canonical DelegationMode.

@@ -11,6 +11,7 @@
 package gateway
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -167,4 +168,43 @@ func TestReconcileHeartbeat_LeavesUserSchedulesAlone(t *testing.T) {
 	}
 	assert.True(t, names["my-daily-digest"], "user schedule must not be removed")
 	assert.True(t, names[heartbeatJobName("mia")], "heartbeat job must be created")
+}
+
+// TestReconcileHeartbeat_MessageDriftRestampsInPlace proves that editing an
+// agent's HEARTBEAT.md re-stamps the existing heartbeat job's message in place
+// (same job ID, no duplicate). The reconciler's drift check includes
+// Payload.Message, so a content change must converge the stored job.
+func TestReconcileHeartbeat_MessageDriftRestampsInPlace(t *testing.T) {
+	cs := newReconcileCron(t)
+	ws := t.TempDir()
+	hbPath := filepath.Join(ws, "HEARTBEAT.md")
+	require.NoError(t, os.WriteFile(hbPath, []byte("Check the build queue."), 0o600))
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{ID: "mia", Type: config.AgentTypeCore, HeartbeatEnabled: boolPtrHB(true), HeartbeatInterval: 15},
+			},
+		},
+	}
+	resolve := func(string) string { return ws }
+
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, resolve))
+	first := heartbeatJobsFor(cs)
+	require.Len(t, first, 1)
+	firstID := first[0].ID
+	assert.Contains(t, first[0].Payload.Message, "Check the build queue.",
+		"initial heartbeat message must embed the HEARTBEAT.md content")
+
+	// Edit HEARTBEAT.md → reconcile → same job, new message.
+	require.NoError(t, os.WriteFile(hbPath, []byte("Review overnight alerts."), 0o600))
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, resolve))
+
+	after := heartbeatJobsFor(cs)
+	require.Len(t, after, 1, "message drift must update in place, not duplicate")
+	assert.Equal(t, firstID, after[0].ID, "same job updated in place")
+	assert.Contains(t, after[0].Payload.Message, "Review overnight alerts.",
+		"edited HEARTBEAT.md content must be re-stamped onto the job")
+	assert.NotContains(t, after[0].Payload.Message, "Check the build queue.",
+		"the stale heartbeat message must be replaced")
 }

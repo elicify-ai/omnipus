@@ -12,6 +12,13 @@
 import dagre from '@dagrejs/dagre'
 import { MarkerType, Position, type Edge, type Node } from '@xyflow/react'
 import type { Task } from '@/lib/api'
+import {
+  STATUS_ANIMATED,
+  STATUS_COLORS,
+  STATUS_LABELS,
+  STATUS_MUTED,
+  type TaskStatus as SharedTaskStatus,
+} from '@/lib/statusColors'
 
 export type TaskStatus = Task['status']
 
@@ -26,23 +33,20 @@ export interface StatusVisual {
   muted: boolean
 }
 
-// 7-state lifecycle mapped to the Sovereign Deep status palette.
-//   inbox     — neutral muted (captured, untriaged)
-//   next      — info blue (triaged, ready)
-//   planning  — info blue, lighter (agent decomposing)
-//   in_progress — Forge Gold (live work — the marquee colour)
-//   blocked   — cancelled orange (unmet dependency)
-//   done      — success green
-//   failed    — error red
-export const STATUS_VISUALS: Record<TaskStatus, StatusVisual> = {
-  inbox: { label: 'Inbox', color: '#9ca3af', animated: false, muted: false },
-  next: { label: 'Next', color: '#3B82F6', animated: false, muted: false },
-  planning: { label: 'Planning', color: '#60A5FA', animated: false, muted: false },
-  in_progress: { label: 'In Progress', color: '#d4af37', animated: true, muted: false },
-  blocked: { label: 'Blocked', color: '#F97316', animated: false, muted: false },
-  done: { label: 'Done', color: '#10b981', animated: false, muted: true },
-  failed: { label: 'Failed', color: '#ef4444', animated: false, muted: false },
-}
+// 7-state lifecycle, projected from the single source of truth in
+// `@/lib/statusColors` so the Graph, Board, roll-ups, and List can never drift.
+// in_progress is Forge Gold (#D4AF37) — the marquee "live work" accent.
+export const STATUS_VISUALS: Record<TaskStatus, StatusVisual> = Object.fromEntries(
+  (Object.keys(STATUS_COLORS) as SharedTaskStatus[]).map((s) => [
+    s,
+    {
+      label: STATUS_LABELS[s],
+      color: STATUS_COLORS[s],
+      animated: STATUS_ANIMATED[s],
+      muted: STATUS_MUTED[s],
+    },
+  ]),
+) as Record<TaskStatus, StatusVisual>
 
 /** Resolve a status to its visual, tolerating unknown values from the wire. */
 export function statusVisual(status: TaskStatus | string | undefined): StatusVisual {
@@ -125,8 +129,9 @@ export function buildTaskGraph(
   const pendingEdges: PendingEdge[] = []
   for (const task of visible) {
     for (const blockerId of task.blocked_by ?? []) {
-      // Drop orphan edges (blocker hidden/deleted) — mirrors the backend's
-      // load-time orphan-edge pruning, so the graph never dangles.
+      // Defensive: a blocker hidden by the surface/parent filter (or deleted)
+      // never yields a dangling edge — we only draw an edge when its blocker is
+      // also a visible node.
       if (!visibleIds.has(blockerId)) continue
       g.setEdge(blockerId, task.id)
       pendingEdges.push({ from: blockerId, to: task.id })

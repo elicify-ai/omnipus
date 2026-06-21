@@ -13,28 +13,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { fetchSubtasks, tasksQueryKeys } from '@/lib/api'
 import type { Task } from '@/lib/api'
+import { STATUS_COLORS as STATUS_DOT, STATUS_LABELS as STATUS_LABEL } from '@/lib/statusColors'
 import { cn } from '@/lib/utils'
-
-/** Status dot colours — Sovereign Deep 7-state */
-const STATUS_DOT: Record<Task['status'], string> = {
-  inbox:       '#9ca3af',
-  next:        '#3B82F6',
-  planning:    '#A855F7',
-  in_progress: '#EAB308',
-  blocked:     '#F97316',
-  done:        '#10b981',
-  failed:      '#ef4444',
-}
-
-const STATUS_LABEL: Record<Task['status'], string> = {
-  inbox:       'Inbox',
-  next:        'Next',
-  planning:    'Planning',
-  in_progress: 'In Progress',
-  blocked:     'Blocked',
-  done:        'Done',
-  failed:      'Failed',
-}
 
 interface TaskChildrenProps {
   parentTaskId: string

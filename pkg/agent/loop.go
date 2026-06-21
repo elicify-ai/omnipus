@@ -321,6 +321,14 @@ type processOptions struct {
 	// detect a per-thread model switch (FR-011) and apply switch-time
 	// compress before the next LLM call.
 	Metadata map[string]string
+
+	// InitialDelegationDepth seeds the root turnState depth for a task run. A
+	// task created from within another task run carries a non-zero generation
+	// (task.Task.DelegationDepth); processTaskDirect seeds it here so the
+	// per-agent DelegationPolicy depth gate (currentDelegationDepth) trips on
+	// onward await/background delegation even though a task run otherwise starts
+	// a fresh turn at depth 0. Interactive/chat turns leave this 0.
+	InitialDelegationDepth int
 }
 
 // ScheduledJobInfo carries the schedule/job identity that ProcessScheduled
@@ -1621,6 +1629,12 @@ func registerSharedTools(
 				currentAgentID, agentCfg, cfg.Agents.Defaults,
 				config.DelegationModeTask, registry,
 			))
+			// Task-mode recursion bound: reject a task_create issued from within a
+			// task run whose delegation generation already sits at the ceiling. The
+			// per-agent depth gate cannot bound task mode on its own because every
+			// task run starts a fresh turn at depth 0 (see processTaskDirect depth
+			// seeding); this hard ceiling closes that gap.
+			taskCreate.SetMaxDelegationDepth(maxTaskDepth)
 			taskCreate.SetOnCreate(func(entity *task.Task) {
 				al.EmitTaskStatusChanged(TaskStatusChangedPayload{
 					TaskID:    entity.ID,
@@ -3130,21 +3144,30 @@ func (al *AgentLoop) processTaskDirect(
 	taskCtx := tools.WithAgentID(ctx, agentID)
 	taskCtx = tools.WithToolContext(taskCtx, "system", "")
 
+	// Carry the task's delegation generation forward. The caller (task executor)
+	// seeds tools.WithDelegationDepth(ctx, task.DelegationDepth) before invoking
+	// this; we read it back to (a) seed the root turnState depth so the per-agent
+	// await/background depth gate trips inside the task run, and (b) keep it on the
+	// context so a nested task_create stamps its child as generation + 1. A normal
+	// chat/board run leaves it 0.
+	delegationDepth := tools.ToolDelegationDepth(taskCtx)
+
 	if taskChatID == "" {
 		taskChatID = "task:" + sessionKey
 	}
 
 	return al.runAgentLoop(taskCtx, ag, processOptions{
-		SessionKey:          sessionKey,
-		Channel:             "webchat",
-		ChatID:              taskChatID,
-		SenderID:            "task-executor",
-		UserMessage:         prompt,
-		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
-		SendResponse:        false,
-		TranscriptSessionID: taskChatID,
-		TranscriptStore:     al.GetAgentStore(agentID),
+		SessionKey:             sessionKey,
+		Channel:                "webchat",
+		ChatID:                 taskChatID,
+		SenderID:               "task-executor",
+		UserMessage:            prompt,
+		DefaultResponse:        defaultResponse,
+		EnableSummary:          false,
+		SendResponse:           false,
+		TranscriptSessionID:    taskChatID,
+		TranscriptStore:        al.GetAgentStore(agentID),
+		InitialDelegationDepth: delegationDepth,
 	})
 }
 
@@ -4132,6 +4155,14 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, opts.SessionKey))
+	// Seed the delegation-chain depth for a task run started from within another
+	// task (opts.InitialDelegationDepth > 0). A task run otherwise begins a fresh
+	// root turn at depth 0, which would make currentDelegationDepth read 0 inside
+	// the run and never trip the per-agent await/background depth gate; seeding the
+	// stored generation here restores the bound. Root chat/board turns pass 0.
+	if opts.InitialDelegationDepth > 0 {
+		ts.depth = opts.InitialDelegationDepth
+	}
 	// Bug 1 fix: wire a resolver so appendToolCallTranscript (and event payloads)
 	// use the runtime-current active agent rather than the turn's starting agent.
 	// After a handoff, sessionActiveAgent reflects the new agent; tool_call entries

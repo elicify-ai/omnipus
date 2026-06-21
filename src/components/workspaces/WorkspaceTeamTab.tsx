@@ -26,6 +26,7 @@ import {
   removeMember,
   setEdgeDepth,
   toggleEdgeMode,
+  unsavedMembers,
   type DelegationMode,
   type TeamEditState,
 } from './team/teamGraphModel'
@@ -172,6 +173,23 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
     return buildTeamGraphModel(editState, agents)
   }, [editState, agents])
 
+  // Edgeless, non-core members are NOT persisted (the PUT is edges-only; the
+  // backend derives team = core_team ∪ edge endpoints). Surface them so an agent
+  // the user added doesn't silently vanish on refetch — the fix is to connect it
+  // with a delegation edge.
+  const coreTeamSet = useMemo(
+    () => new Set(workspace.core_team ?? []),
+    [workspace.core_team],
+  )
+  const unsaved = useMemo(
+    () => (editState ? unsavedMembers(editState, coreTeamSet) : []),
+    [editState, coreTeamSet],
+  )
+  const unsavedNames = useMemo(
+    () => unsaved.map((id) => agents.find((a) => a.id === id)?.name ?? id),
+    [unsaved, agents],
+  )
+
   // ── Mutations ─────────────────────────────────────────────────────────────
   const handleConnect = useCallback(
     (from: string, to: string) =>
@@ -280,9 +298,24 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
         </div>
       )}
 
+      {unsavedNames.length > 0 && (
+        <div
+          role="status"
+          data-testid="team-unsaved-members"
+          className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)]"
+        >
+          <Info size={12} weight="fill" className="shrink-0" />
+          <span>
+            {unsavedNames.join(', ')} {unsavedNames.length === 1 ? 'is' : 'are'} not connected yet —
+            connect {unsavedNames.length === 1 ? 'it' : 'them'} with a delegation edge to keep{' '}
+            {unsavedNames.length === 1 ? 'it' : 'them'} on the team (membership saves with edges).
+          </span>
+        </div>
+      )}
+
       <div className="relative flex-1 min-h-0 p-3">
         {graph.nodes.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-0,#0a0a0b)] p-8 text-center">
+          <div className="flex h-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-0)] p-8 text-center">
             <UsersThree size={32} weight="duotone" className="text-[var(--color-muted)]" />
             <div>
               <p className="font-headline text-sm font-bold text-[var(--color-secondary)]">
@@ -326,7 +359,7 @@ function TeamGraphSkeleton() {
         <div className="ml-auto h-8 w-24 rounded bg-[var(--color-surface-2)] animate-pulse" />
       </div>
       <div className="flex-1 p-3">
-        <div className="relative h-full overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0,#0a0a0b)]">
+        <div className="relative h-full overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)]">
           <div className="flex h-full flex-col items-center justify-center gap-10">
             <div className="flex gap-16">
               <div className="h-[72px] w-[200px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse" />

@@ -99,10 +99,22 @@ describe('WorkspaceTeamGraph — nodes', () => {
     expect(screen.getByText('Planner')).toBeInTheDocument()
   })
 
-  it('marks a worker node as a delegation leaf (no source dot)', () => {
+  it('lets a worker node be a delegation source (bounded delegation, not tier-gated)', () => {
+    // Workers can now START edges — the backend seeds Planner→Researcher, both
+    // workers — so a worker node gets a source handle just like a Main agent.
     renderGraph()
     expect(screen.getByTestId('team-node-mia').getAttribute('data-can-source')).toBe('true')
-    expect(screen.getByTestId('team-node-planner').getAttribute('data-can-source')).toBe('false')
+    expect(screen.getByTestId('team-node-planner').getAttribute('data-can-source')).toBe('true')
+  })
+
+  it('renders a source handle on the worker node so it can start a delegation edge', () => {
+    const { container } = renderGraph()
+    const planner = screen.getByTestId('team-node-planner')
+    // React Flow source handles carry the `.react-flow__handle-bottom` class
+    // (our source dot sits at Position.Bottom). A worker must have one now.
+    expect(planner.querySelector('.source')).not.toBeNull()
+    // Sanity: the canvas still mounts.
+    expect(container.querySelector('[data-testid="team-graph-canvas"]')).not.toBeNull()
   })
 
   it('renders the canvas with controls', () => {

@@ -189,6 +189,12 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 	if t.WorkspaceID != "" {
 		taskCtx = tools.WithWorkspaceID(taskCtx, t.WorkspaceID)
 	}
+	// Carry the task's delegation generation into the run. processTaskDirect reads
+	// it back to seed the root turnState depth (so the per-agent depth gate trips
+	// inside the run) and to stamp any nested task_create as generation + 1. This
+	// is what bounds an A→B→A task-mode delegation chain — without it every task
+	// run starts at depth 0 and the gate never trips (see maxTaskDepth).
+	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
 
 	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
 	prompt := te.buildPrompt(t)
