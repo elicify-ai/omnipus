@@ -585,6 +585,48 @@ revisit only if wanted).
 **Code delta from today:** delegation moves from a per-agent global `delegation_policy` → per-workspace
 (stored with the workspace, keyed by `core_team`). M2 Graph view + M5 per-workspace delegation cover the build.
 
+### Memory model refined — sessions stay per-agent but workspace-TAGGED — LOCKED (2026-06-21)
+Resolves the cross-project edge case (chat in Project A *about* Project B → no "where to store" conflict).
+The fix is **tag, don't partition** — and it's **already the storage shape today.**
+- **Sessions stored per-agent** (`agents/<id>/sessions/`) **+ tagged with `workspace_id`** — the
+  `SessionMeta.WorkspaceID` field **already exists** (`pkg/session/daypartition.go:81`). No re-keying, no move.
+- **"The project owns its conversations" = the tag (a filtered view), not physical location.** A session can
+  carry **>1 workspace tag** if a conversation spans projects. The chat lands where it happened (active
+  workspace); the **task** Jim creates goes to its OWN `workspace_id` (independent of the chat).
+- **Per-project continuity** = the last session carrying that workspace tag (so Jim resumes "where I left off
+  *on this project*"). `last-session` follows the same tag logic.
+- **Memories + learnings:** per-workspace room (default) + the agent's **private cross-workspace bank**
+  (`remember(scope=private)` → `agents/<id>/.omnipus/`, read in every workspace). `recall` = current
+  workspace room + private bank; the Assistant additionally wide-reads all owned workspace rooms.
+- **Remaining 0.1.0 work (small):** (1) **populate** the session `workspace_id` from the active workspace =
+  **M4 Gap 2** (bind active workspace into the turn); (2) workspace UI "this project's conversations" =
+  filter sessions by tag; (3) per-project continuity = last session with that tag. The private room narrows
+  to the cross-workspace bank (no sessions there). *(Supersedes the brief "per-workspace re-key" framing —
+  it's tag-based, already present.)*
+
+### IA reframe — chat is a workspace view; sidebar reorganized — LOCKED (2026-06-21)
+The chat is no longer a global front door — it's the **front view of the active workspace.** You're always in
+a workspace (My Workspace default or a named one); picking a workspace = setting the whole context (chat,
+tasks, memory, team).
+- **Workspace = a container with tabs:** **Chat** (DEFAULT landing tab — chat-first) · **Board** · **List** ·
+  **Graph** (task DAG) · **Calendar** · **Team** (delegation graph) · **Settings** (workspace props).
+  - Chat's **agent picker is scoped to the workspace's team**; every session is tagged with the workspace.
+  - **The conversation-history panel (Sessions) opened from the chat is FILTERED by the active
+    `workspace_id`** — you see only this project's conversations (a session may show in >1 project if it
+    carries multiple workspace tags, per the cross-project edge case).
+- **Sidebar reorganized around workspaces as the primary nav:**
+  - **WORKSPACES** (the primary list — My Workspace ⭐ default + named + Archive) — click one → enter it (on Chat).
+  - **Global libraries:** **Agents** (library + Workspace Teams) · **Connectors** · **Skills & Tools**.
+  - **Settings** · **Sign out** · Pin.
+- **What moved:** Chat → workspace tab · Tasks → Board/List/Graph/Calendar tabs · Calendar (was orphan) →
+  tab · Team → new tab · **Automations → REMOVED** · Workspaces → promoted to primary nav. Agents/Connectors/
+  Skills & Tools/Settings stay **global**.
+- **Mental model:** the sidebar = "switch project, or go to a global library." Per-workspace *work* (chat,
+  tasks, calendar, team) lives **inside** the workspace; **global reusable assets** (agents, connectors,
+  skills, settings) stay in the sidebar. **App default front door = My Workspace → Chat → Mia.**
+- Touches M2 (task views) + M7 (IA shell) + routing. Significant SPA IA change (chat top-level route →
+  workspace tab; sidebar restructure) — but the clean end-state.
+
 ## Part 4 — Next steps (after decisions lock)
 **No Albert ADR** (operator decision 2026-06-20) — **this decision log is the spec of record.**
 1. **O1 — release routing** (last open decision; slots everything into phases).
