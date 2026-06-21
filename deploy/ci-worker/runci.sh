@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Omnipus CI worker entrypoint for a single gate run.
 # Usage: runci.sh <git-ref> <gate>
-#   gate ∈ { all | go-build | go-vet | go-test | contracts | spa | gofmt | quick | embed-build | e2e }
+#   gate ∈ { all | go-build | go-vet | lint | go-test | contracts | spa | gofmt | quick | embed-build | e2e }
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
 #   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus via
 #   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus`.
@@ -48,6 +48,19 @@ run_spaembed() { npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/g
 run_gofmt()    { local n; n=$(gofmt -l . 2>/dev/null | grep -v '^$' | wc -l); echo "gofmt unformatted=$n"; [ "$n" = 0 ]; }
 run_gobuild()  { ensure_spa_stub; CGO_ENABLED=0 go build -tags "$TAGS" ./...; }
 run_govet()    { ensure_spa_stub; CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
+# golangci-lint with CGO_ENABLED=0 (so //go:build !cgo test helpers compile) and the
+# canonical build tags. Pinned to the version pr.yml uses. Installed once to the
+# persistent /cache/go/bin (already on PATH) so it survives stop/start.
+GOLANGCI_VERSION=v2.10.1
+run_lint() {
+  ensure_spa_stub
+  if ! command -v golangci-lint >/dev/null 2>&1; then
+    log "install golangci-lint $GOLANGCI_VERSION"
+    curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+      | sh -s -- -b /cache/go/bin "$GOLANGCI_VERSION" || return 1
+  fi
+  CGO_ENABLED=0 golangci-lint run --build-tags="$TAGS"
+}
 # Full suite with a flake filter: a package that fails the contended full run but passes when
 # re-run isolated (-p 1) is a timing flake (shared vCPUs) → not a real failure. Fails both = real.
 run_gotest() {
@@ -243,6 +256,7 @@ case "$GATE" in
   gofmt)       step gofmt run_gofmt ;;
   go-build)    step go-build run_gobuild ;;
   go-vet)      step go-vet run_govet ;;
+  lint)        step golangci-lint run_lint ;;
   go-test)     step go-build run_gobuild; step go-test run_gotest ;;
   contracts)   step npm-ci run_npm; step verify-contracts run_contracts ;;
   spa)         step npm-ci run_npm; step typecheck run_typecheck; step vitest run_vitest ;;
@@ -254,6 +268,7 @@ case "$GATE" in
     step gofmt run_gofmt
     step go-build run_gobuild
     step go-vet run_govet
+    step golangci-lint run_lint
     step verify-contracts run_contracts
     step typecheck run_typecheck
     step vitest run_vitest
