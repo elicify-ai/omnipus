@@ -47,8 +47,20 @@ func TestNewHTTPClient_NoProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if client.Transport != nil {
-		t.Errorf("expected nil transport without proxy, got %T", client.Transport)
+	// The client now always carries an explicit transport with HTTP/2 disabled
+	// (forced HTTP/1.1) to avoid "http2: response body closed" stream resets on
+	// long-lived streaming LLM responses.
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.Transport)
+	}
+	// (Proxy is intentionally left as the cloned default — ProxyFromEnvironment —
+	// so env-proxy support is preserved; only HTTP/2 is forced off.)
+	if tr.ForceAttemptHTTP2 {
+		t.Error("expected ForceAttemptHTTP2=false (HTTP/2 disabled)")
+	}
+	if tr.TLSNextProto == nil || len(tr.TLSNextProto) != 0 {
+		t.Errorf("expected non-nil empty TLSNextProto to disable h2 ALPN, got %v", tr.TLSNextProto)
 	}
 }
 
