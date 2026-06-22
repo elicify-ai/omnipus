@@ -5,12 +5,12 @@ import { expectA11yClean } from './fixtures/a11y';
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
 // HashRouter: TanStack Router generates href="/#/<path>" links (not href="/<path>").
-// URL patterns use regex that matches the hash-prefixed fragment. Root route
-// matches whether the browser keeps the /#/ fragment or normalizes it away.
+// Workspace-as-project IA: the top-level Chat (/#/) and Monitor (/#/monitor)
+// nav items were removed and Connectors replaced the old Channels item. The
+// main navigation now exposes Agents · Connectors · Skills & Tools · Settings.
 const NAV_ITEMS = [
-  { href: '/#/', urlPattern: /\/(#\/)?$/ },
-  { href: '/#/monitor', urlPattern: /monitor/ },
   { href: '/#/agents', urlPattern: /agents/ },
+  { href: '/#/connectors', urlPattern: /connectors/ },
   { href: '/#/skills', urlPattern: /skills/ },
   { href: '/#/settings', urlPattern: /settings/ },
 ] as const;
