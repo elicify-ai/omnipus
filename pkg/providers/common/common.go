@@ -10,7 +10,6 @@ package common
 import (
 	"bufio"
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +17,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/http2"
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
@@ -42,26 +43,24 @@ const DefaultRequestTimeout = 120 * time.Second
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 // Returns an error if proxy is non-empty and cannot be parsed as a URL.
 //
-// HTTP/2 is intentionally DISABLED (forced HTTP/1.1). Streaming LLM responses are
-// long-lived SSE bodies, and OpenRouter / CDN / proxy intermediaries intermittently
-// reset in-flight HTTP/2 streams mid-response — surfacing as "streaming read error:
-// http2: response body closed". Because tokens have already been streamed to the
-// caller, the agent loop cannot safely inline-retry (it would duplicate text), so a
-// single h2 stream reset aborts the whole turn (no assistant message). Pinning the
-// LLM transport to HTTP/1.1 avoids the h2 stream-reset class entirely; every
-// OpenAI-compatible endpoint (OpenRouter, OpenAI, GLM, …) serves HTTP/1.1 fine.
+// HTTP/2 is KEPT (OpenRouter/Cloudflare negotiate h2 over TLS and reject plain
+// HTTP/1.1 with an h2 SETTINGS frame the h1 client can't parse — "malformed HTTP
+// response"). The real problem is intermittent "streaming read error: http2:
+// response body closed" mid-stream resets, caused by the client reusing a pooled
+// connection the server has since GOAWAY'd/closed. Because tokens have already
+// streamed, the agent loop can't safely inline-retry (would duplicate text), so a
+// single reset aborts the whole turn. The fix is to make h2 connection reuse
+// robust: enable health-check PINGs (ReadIdleTimeout) so a dead connection is
+// detected and discarded instead of reused, and shorten the idle window so stale
+// connections age out quickly.
 func NewHTTPClient(proxy string) (*http.Client, error) {
-	// Clone DefaultTransport to preserve its TLS/dial/timeout tuning, then turn
-	// HTTP/2 off: ForceAttemptHTTP2=false stops the auto-upgrade and a non-nil
-	// empty TLSNextProto disables ALPN h2 negotiation.
+	// Clone DefaultTransport to preserve its TLS/dial/timeout tuning and keep h2.
 	var transport *http.Transport
 	if base, ok := http.DefaultTransport.(*http.Transport); ok {
 		transport = base.Clone()
 	} else {
 		transport = &http.Transport{}
 	}
-	transport.ForceAttemptHTTP2 = false
-	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 
 	if proxy != "" {
 		parsed, err := url.Parse(proxy)
@@ -69,6 +68,18 @@ func NewHTTPClient(proxy string) (*http.Client, error) {
 			return nil, fmt.Errorf("invalid proxy URL %q: %w", proxy, err)
 		}
 		transport.Proxy = http.ProxyURL(parsed)
+	}
+
+	// Age stale pooled connections out quickly (default is 90s).
+	transport.IdleConnTimeout = 30 * time.Second
+
+	// Configure the HTTP/2 transport with health-check pings: if a pooled
+	// connection is idle for ReadIdleTimeout, send a PING; if no PONG arrives
+	// within PingTimeout, mark the connection dead so it is not reused mid-stream.
+	// This eliminates the "http2: response body closed" resets on reused conns.
+	if h2t, err := http2.ConfigureTransports(transport); err == nil && h2t != nil {
+		h2t.ReadIdleTimeout = 15 * time.Second
+		h2t.PingTimeout = 5 * time.Second
 	}
 
 	return &http.Client{
