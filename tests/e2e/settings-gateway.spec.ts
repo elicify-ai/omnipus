@@ -143,11 +143,14 @@ test(
       activePanel.getByText(/log level/i).or(activePanel.getByText(/port/i)).first(),
     ).toBeVisible({ timeout: 10_000 })
 
-    // ── Core assertion A: no role="switch" in the active Gateway panel.
+    // ── Core assertion A: no hot-reload switch in the active Gateway panel.
     // The hot-reload toggle was a shadcn Switch (role="switch"). The bind-address
-    // RiskySettingControl uses buttons, not switches. So zero switches must exist
-    // in the active panel after the hot-reload toggle is removed.
-    await expect(activePanel.getByRole('switch')).not.toBeAttached()
+    // RiskySettingControl uses buttons, not switches. The ONLY legitimate switch
+    // in the Gateway panel is the god-mode toggle (S5/O14 danger zone), so assert
+    // no switch OTHER than god-mode exists (the hot-reload toggle is gone).
+    await expect(
+      activePanel.locator('[role="switch"]:not([data-testid="god-mode-toggle"])'),
+    ).not.toBeAttached()
 
     // ── Core assertion B: no "Hot reload" label text anywhere on the page.
     // The label text matches /hot reload/i regardless of capitalisation.
@@ -194,8 +197,11 @@ test(
     await expect(page.getByTestId('risky-option-none')).not.toBeAttached()
     await expect(page.getByText(/none.*no login/i)).not.toBeAttached()
 
-    // ── Negative assertion (hot-reload): no switch and no label.
-    await expect(activePanel.getByRole('switch')).not.toBeAttached()
+    // ── Negative assertion (hot-reload): no switch (other than the legitimate
+    // god-mode toggle) and no label.
+    await expect(
+      activePanel.locator('[role="switch"]:not([data-testid="god-mode-toggle"])'),
+    ).not.toBeAttached()
     await expect(page.getByText(/hot reload/i)).not.toBeAttached()
   },
 )
