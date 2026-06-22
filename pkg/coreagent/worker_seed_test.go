@@ -142,7 +142,7 @@ func TestSeedConfig_DoesNotReseedExplicitEmptyDelegation(t *testing.T) {
 			List: []config.AgentConfig{
 				{
 					ID:   string(coreagent.IDJim),
-					Name: "Jim — Orchestrator",
+					Name: "Jim — Planner & Orchestrator",
 					Type: config.AgentTypeCore,
 					// Operator chose "deny all delegation": non-nil, empty To.
 					DelegationPolicy: &config.DelegationPolicy{To: []config.AgentRef{}},

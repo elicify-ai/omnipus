@@ -21,21 +21,31 @@ test(
     // reliable but slower than the old gemini pick, so use an explicit generous
     // budget rather than the 270s test.slow() ceiling.
     test.setTimeout(420_000);
-    // Select Mia agent via the agent picker dropdown
+    // Select Jim — the Planner & Orchestrator. Jim is the generalist *doer* with
+    // browser automation in his soul; Mia is a router persona that (correctly)
+    // hands browser tasks off rather than executing them, so she is the wrong
+    // agent for a "do it now" screenshot. (Ray, the Scout, also has the browser
+    // tools — either doer works; Jim is the canonical generalist.)
     const picker = agentPicker(page);
     await expect(picker).toBeVisible({ timeout: 15_000 });
     await picker.click();
 
-    // Find Mia in the dropdown items (Radix DropdownMenuItem)
-    const miaItem = page.locator('[role="menuitem"]').filter({ hasText: /mia/i }).first();
-    await expect(miaItem).toBeVisible({ timeout: 10_000 });
-    await miaItem.click();
+    // Find Jim in the dropdown items (Radix DropdownMenuItem)
+    const jimItem = page.locator('[role="menuitem"]').filter({ hasText: /jim/i }).first();
+    await expect(jimItem).toBeVisible({ timeout: 10_000 });
+    await jimItem.click();
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 10_000 });
 
     const countBefore = await assistantMessages(page).count();
-    await input.fill('Please take a screenshot of example.com and show it to me');
+    // Explicit, single-tool instruction — mirrors the reliable phrasing used by
+    // the spawn-based specs so glm-5.2 takes the screenshot itself instead of
+    // narrating or delegating.
+    await input.fill(
+      'Use the browser tools to take a screenshot of https://example.com and show it to me. ' +
+        'Call browser.navigate then browser.screenshot yourself — do not delegate this.',
+    );
     await input.press('Enter');
 
     await expect(assistantMessages(page)).toHaveCount(countBefore + 1, { timeout: 180_000 });

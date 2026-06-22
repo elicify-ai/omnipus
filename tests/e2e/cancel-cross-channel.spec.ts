@@ -362,28 +362,27 @@ test(
     await newChatBtn.click()
     await expect(input).toBeEnabled({ timeout: 20_000 })
 
-    // Switch to Jim so the parent turn will actually emit `spawn`.
+    // Switch to Jim — the Planner & Orchestrator. Jim has the `await` delegation
+    // mode seeded, so he can run a subagent SYNCHRONOUSLY.
     await selectAgent(page, /Jim/i)
 
-    // Trigger a turn that uses the spawn tool. The prompt mirrors the proven,
-    // reliable spawn instruction from handoff.spec.ts (b) — backticked tool name,
-    // explicit single call, exact arguments, and a hard "do not reply in prose /
-    // do not call any other tool" guardrail. That phrasing reliably gets the model
-    // to emit a `spawn` frame on the e2e model (google/gemini-2.5-flash); short or
-    // loosely-worded prompts intermittently shortcut to inline prose, which is why
-    // a less-explicit earlier version of this test occasionally timed out waiting
-    // for the subagent-collapsed block.
+    // Use the `subagent` tool (AWAIT mode), NOT `spawn` (background). This is the
+    // key to a reliable cancel-cascade window: with `await`, the parent turn BLOCKS
+    // while the subagent runs, so the parent stays "running" (Stop button visible)
+    // for the whole duration of the subagent's work — clicking Stop then cancels
+    // the parent and cascades to the still-running descendant. `spawn` (background)
+    // finalizes the parent immediately, leaving no live turn to cancel.
     //
-    // The subagent task must keep the subagent (and thus the parent turn) RUNNING
-    // for several seconds so a Stop click lands while it's live. The old task
-    // (read_file /etc/hostname ×3) was rejected instantly by the sandbox ("path
-    // escapes workspace", duration 0); a long inline essay streams for seconds.
+    // The subagent writes a long inline essay so it (and the awaiting parent) stay
+    // live long enough for the Stop click to land mid-stream. Explicit single-tool
+    // instruction with a hard "no prose / no other tool" guardrail so glm-5.2
+    // reliably emits the `subagent` call.
     await input.fill(
       [
-        'Call the `spawn` tool exactly once, right now, with these arguments:',
+        'Call the `subagent` tool exactly once, right now, with these arguments:',
         '  label: "cancel cascade test"',
-        '  task: "You are the subagent. Do not use any tools. Write a detailed 250-word essay about renewable energy as continuous inline prose, beginning immediately and writing without stopping until you reach 250 words."',
-        'Do not reply in prose. Do not call any other tool. Call spawn now.',
+        '  task: "You are the subagent. Do not use any tools. Write a detailed 800-word essay about renewable energy as continuous inline prose, beginning immediately and writing without stopping until you reach 800 words."',
+        'Do not reply in prose. Do not call any other tool. Call subagent now.',
       ].join('\n'),
     )
     await input.press('Enter')

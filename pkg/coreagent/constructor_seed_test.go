@@ -265,7 +265,7 @@ func TestSeedConfig_JimProfileMigration(t *testing.T) {
 				List: []config.AgentConfig{
 					{
 						ID:      string(IDJim),
-						Name:    "Jim — Orchestrator",
+						Name:    "Jim — Planner & Orchestrator",
 						Locked:  true,
 						Enabled: &enabled,
 						// SandboxProfile intentionally empty (pre-PR5 config)
@@ -295,7 +295,7 @@ func TestSeedConfig_JimProfileMigration(t *testing.T) {
 				List: []config.AgentConfig{
 					{
 						ID:             string(IDJim),
-						Name:           "Jim — Orchestrator",
+						Name:           "Jim — Planner & Orchestrator",
 						Locked:         true,
 						Enabled:        &enabled,
 						SandboxProfile: config.SandboxProfileHost, // operator override
