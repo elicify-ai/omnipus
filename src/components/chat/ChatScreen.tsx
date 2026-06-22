@@ -1443,9 +1443,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       {(reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
         <div
           data-testid="reconnect-banner"
-          className="mb-2 text-xs text-amber-400 flex items-center gap-1.5"
+          className="mb-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5"
         >
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse" />
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] inline-block animate-pulse" />
           {reconnectPhase === 'slow'
             ? `Reconnecting… (attempt ${reconnectAttempt} — slow retry)`
             : `Reconnecting… (attempt ${reconnectAttempt})`}
@@ -1461,7 +1461,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       {outboundQueue.length > 0 && (
         <div
           data-testid="outbound-queue-indicator"
-          className="mb-2 text-xs text-amber-400 flex items-center gap-1.5"
+          className="mb-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5"
         >
           <Clock size={12} className="shrink-0" />
           {outboundQueue.length === 1

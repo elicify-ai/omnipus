@@ -1495,6 +1495,7 @@ func setupAndStartServices(
 
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	wsHandler := newWSHandler(msgBus, agentLoop, allowedOrigin)
+	wsHandler.home = homePath
 	toolStore := newToolResultStore(homePath)
 	wsHandler.toolStore = toolStore
 	runningServices.toolStore = toolStore

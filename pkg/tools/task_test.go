@@ -470,6 +470,68 @@ func TestTaskCreateTool_WorkspaceFromCtx(t *testing.T) {
 	}
 }
 
+// TestResolveWorkspaceID_StaleCtxFallsBackToDefault proves the M4
+// belt-and-suspenders fix: a ctx-bound workspace ID that does NOT exist on disk
+// (stale/typo'd) is treated as unbound, so the task lands on the real default
+// rather than an invisible board.
+func TestResolveWorkspaceID_StaleCtxFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	const wantID = "01JXDEFAULT000000000000009"
+	seedWorkspaceDefault(t, home, wantID)
+
+	tool := &TaskCreateTool{home: home}
+	// Bind a workspace id that was never written to disk.
+	ctx := WithWorkspaceID(context.Background(), "01JXSTALE0000000000000099")
+	id, err := tool.resolveWorkspaceID(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != wantID {
+		t.Errorf("expected stale ctx id to fall back to default %q, got %q", wantID, id)
+	}
+}
+
+// TestTaskCreateTool_StaleCtxWorkspace_LandsOnDefault proves task_create with a
+// non-existent ctx workspace_id persists the task on the default workspace, not
+// the bogus id.
+func TestTaskCreateTool_StaleCtxWorkspace_LandsOnDefault(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	const defaultWS = "01JXDEFAULT000000000000010"
+	seedWorkspaceDefault(t, home, defaultWS)
+
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+	tool.SetHome(home)
+
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "01JXBOGUS00000000000000099")
+	result := tool.Execute(ctx, map[string]any{
+		"title":    "test",
+		"prompt":   "do it",
+		"agent_id": "agent-b",
+	})
+	if result.IsError {
+		t.Fatalf("task_create failed: %s", result.ForLLM)
+	}
+
+	onDefault, err := store.List(task.Filter{WorkspaceID: defaultWS})
+	if err != nil {
+		t.Fatalf("list default: %v", err)
+	}
+	if len(onDefault) != 1 {
+		t.Errorf("expected task on default workspace %q, got %d", defaultWS, len(onDefault))
+	}
+	onBogus, err := store.List(task.Filter{WorkspaceID: "01JXBOGUS00000000000000099"})
+	if err != nil {
+		t.Fatalf("list bogus: %v", err)
+	}
+	if len(onBogus) != 0 {
+		t.Errorf("expected zero tasks on the bogus workspace, got %d", len(onBogus))
+	}
+}
+
 // TestTaskCreateTool_WorkspaceFromHome proves task_create resolves the default
 // workspace when the context has no bound workspace but SetHome is called.
 func TestTaskCreateTool_WorkspaceFromHome(t *testing.T) {

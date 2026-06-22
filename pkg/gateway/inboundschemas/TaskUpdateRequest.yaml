@@ -73,6 +73,14 @@ properties:
     format: date-time
     description: New deadline (RFC 3339 UTC).
     example: "2026-08-15T17:00:00Z"
+  clear_due:
+    type: boolean
+    description: >
+      When true, clears the task's due date; ignored if `due` is also set to a
+      value. Provides an unambiguous clear mechanism the FE can batch with other
+      field updates (an empty `due` string is not a valid date-time and would be
+      rejected).
+    example: true
   milestone_id:
     type: string
     description: New milestone grouping.

@@ -450,6 +450,88 @@ describe('TaskDetailPanel — editable todos checklist', () => {
   })
 })
 
+describe('TaskDetailPanel — clearing a due date (clear_due)', () => {
+  it('PATCHes clear_due:true and never sends due:"" when the field is cleared', async () => {
+    const { updateTask } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-clear-due', status: 'next', due: '2026-09-10T12:30:00Z' }))
+
+    const due = await screen.findByLabelText(/due date/i)
+    fireEvent.change(due, { target: { value: '' } })
+    fireEvent.blur(due)
+
+    // Clears via the unambiguous flag; never sends the broken empty string.
+    await vi.waitFor(() => {
+      const clearedViaFlag = vi
+        .mocked(updateTask)
+        .mock.calls.some((c) => (c[1] as { clear_due?: boolean }).clear_due === true)
+      expect(clearedViaFlag).toBe(true)
+    })
+    const sentEmptyDue = vi
+      .mocked(updateTask)
+      .mock.calls.some((c) => (c[1] as { due?: string }).due === '')
+    expect(sentEmptyDue).toBe(false)
+  })
+})
+
+describe('TaskDetailPanel — done-terminal status guard', () => {
+  it('renders done as a read-only "Done (final)" badge — no status dropdown', async () => {
+    // Done is terminal (canDropTransition forbids leaving done). The panel must
+    // mirror that: a read-only badge, no selectable picker to a rejected status.
+    renderPanel(makeTask({ id: 'task-done', status: 'done' }))
+
+    expect(await screen.findByTestId('status-done-terminal')).toBeInTheDocument()
+
+    const statusLabel = await screen.findByText(/^status$/i)
+    const fieldRoot = statusLabel.parentElement as HTMLElement
+    // No status picker trigger is rendered for a done task (neither the Radix
+    // combobox nor the searchable listbox button).
+    expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
+    expect(fieldRoot.querySelector('[aria-haspopup="listbox"]')).toBeNull()
+  })
+
+  it('excludes blocked (backend-derived) from the selectable status options', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    // The searchable status popover (cmdk) needs ResizeObserver, which jsdom
+    // does not provide. Stub it for this test.
+    const RealResizeObserver = (globalThis as { ResizeObserver?: unknown }).ResizeObserver
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    renderPanel(makeTask({ id: 'task-next', status: 'next' }))
+
+    const statusLabel = await screen.findByText(/^status$/i)
+    const fieldRoot = statusLabel.parentElement as HTMLElement
+    // 6 options → SmartSelect renders a SearchableSelect (button, listbox popup).
+    const trigger = fieldRoot.querySelector('[aria-haspopup="listbox"]') as HTMLElement
+    expect(trigger).toBeTruthy()
+    fireEvent.click(trigger)
+
+    // Done is a valid forward transition from next and must be offered…
+    expect(await screen.findByRole('option', { name: /^Done$/i })).toBeInTheDocument()
+    // …but blocked is never a selectable target.
+    expect(screen.queryByRole('option', { name: /^Blocked$/i })).toBeNull()
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = RealResizeObserver
+  })
+})
+
+describe('TaskDetailPanel — autosave indicator', () => {
+  it('shows "Saving..." then "Saved" when a field change PATCHes successfully', async () => {
+    const { updateTask } = await import('@/lib/api')
+    vi.mocked(updateTask).mockResolvedValue({} as never)
+    renderPanel(makeTask({ id: 'task-autosave', status: 'next' }))
+
+    const due = await screen.findByLabelText(/due date/i)
+    fireEvent.change(due, { target: { value: '2026-09-10T12:30' } })
+    fireEvent.blur(due)
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
+    await screen.findByText(/saved/i)
+  })
+})
+
 // ── helpers for the SmartSelect-driven fields ──────────────────────────────────
 
 function lastUpdateArg(updateTask: unknown): { trigger?: { type: string; config: Record<string, unknown> }; due?: string } {

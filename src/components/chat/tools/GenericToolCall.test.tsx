@@ -120,6 +120,68 @@ describe('GenericToolCall — marshal-error result sentinel', () => {
   })
 })
 
+// ── BLOCKER 2: delegation-denied sentinel rendering ──────────────────────────
+
+describe('GenericToolCall — delegation-denied result sentinel', () => {
+  it('renders a distinct delegation-failure block (reason + policy), NOT raw JSON', () => {
+    const delegationDenied = {
+      error: 'delegation_denied' as const,
+      reason: 'Scout is not in your trust set for delegation.',
+      policy: 'trust_set' as const,
+      tool: 'delegate',
+      target_agent_id: 'scout-01',
+    }
+
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        result={delegationDenied}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button'))
+
+    const block = screen.getByTestId('result-delegation-denied')
+    expect(block).toBeInTheDocument()
+    // Human reason surfaced verbatim.
+    expect(block).toHaveTextContent('Scout is not in your trust set for delegation.')
+    // Policy axis rendered with its human label.
+    expect(block).toHaveTextContent('Trust set')
+    // Target agent shown when present.
+    expect(block).toHaveTextContent('scout-01')
+    expect(block).toHaveTextContent('Delegation denied')
+
+    // The raw JSON sentinel keys must NOT leak into a code/pre blob.
+    expect(screen.queryByText(/"delegation_denied"/)).toBeNull()
+    expect(screen.queryByText(/"error":/)).toBeNull()
+  })
+
+  it('renders the mode policy axis and omits target agent when absent', () => {
+    const delegationDenied = {
+      error: 'delegation_denied' as const,
+      reason: 'Delegation is disabled in solo mode.',
+      policy: 'mode' as const,
+      tool: 'delegate',
+    }
+
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        result={delegationDenied}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button'))
+
+    const block = screen.getByTestId('result-delegation-denied')
+    expect(block).toHaveTextContent('Delegation is disabled in solo mode.')
+    expect(block).toHaveTextContent('Delegation mode')
+    expect(block).not.toHaveTextContent('Target agent')
+  })
+})
+
 // ── Baseline: non-sentinel result still renders normally ────────────────────
 
 describe('GenericToolCall — baseline rendering', () => {

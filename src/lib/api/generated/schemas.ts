@@ -506,6 +506,7 @@ type TaskUpdateRequest = Partial<{
   todos: Array<Todo>;
   trigger: TaskTrigger;
   due: string;
+  clear_due: boolean;
   milestone_id: string;
   surface: "user" | "heartbeat";
   result: string;
@@ -1857,6 +1858,7 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     todos: z.array(Todo),
     trigger: TaskTrigger,
     due: z.string().datetime({ offset: true }),
+    clear_due: z.boolean(),
     milestone_id: z.string(),
     surface: z.enum(["user", "heartbeat"]),
     result: z.string().max(50000),

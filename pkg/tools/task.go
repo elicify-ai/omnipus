@@ -181,7 +181,14 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 // land in an invisible workspace.
 func (t *TaskCreateTool) resolveWorkspaceID(ctx context.Context) (string, error) {
 	if ws := ToolWorkspaceID(ctx); ws != "" {
-		return ws, nil
+		// Belt-and-suspenders (M4): a bound id that no longer exists on disk
+		// (stale/typo'd) would land the task on an invisible board. Treat a
+		// non-existent ctx id as unbound and fall through to the default.
+		if t.home == "" || workspace.Exists(t.home, ws) {
+			return ws, nil
+		}
+		slog.Warn("task_create: bound workspace_id does not exist — falling back to default",
+			"workspace_id", ws)
 	}
 	if t.home != "" {
 		id, err := workspace.ResolveDefaultID(t.home)

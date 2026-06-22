@@ -354,7 +354,7 @@ export function GatewaySection() {
             const runningPort = portEntry ? String(portEntry.applied_value) : port
             const runningBind = bindEntry ? String(bindEntry.applied_value) : bindAddress
             const savedPort = portEntry ? String(portEntry.persisted_value) : port
-            const savedBind = bindEntry ? String(portEntry?.persisted_value ?? bindAddress) : bindAddress
+            const savedBind = bindEntry ? String(bindEntry.persisted_value) : bindAddress
             const hasPending = Boolean(portEntry || bindEntry)
             if (hasPending) {
               return (
@@ -362,7 +362,7 @@ export function GatewaySection() {
                   Running on{' '}
                   <span className="font-mono">{runningBind}:{runningPort}</span>
                   {' '}—{' '}
-                  <span className="text-amber-300">
+                  <span style={{ color: 'var(--color-warning)' }}>
                     saved <span className="font-mono">{savedBind}:{savedPort}</span>, restart to apply
                   </span>
                 </span>
@@ -377,21 +377,31 @@ export function GatewaySection() {
             notice + changed keys when a restart is pending. */}
         <div
           className={`rounded-lg border px-4 py-3 space-y-2 ${
-            pendingEntries.length > 0
-              ? 'border-amber-500/40 bg-amber-500/10'
-              : 'border-[var(--color-border)] bg-[var(--color-surface-1)]'
+            pendingEntries.length > 0 ? '' : 'border-[var(--color-border)] bg-[var(--color-surface-1)]'
           }`}
+          style={
+            pendingEntries.length > 0
+              ? {
+                  borderColor: 'color-mix(in srgb, var(--color-warning) 40%, transparent)',
+                  backgroundColor: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
+                }
+              : undefined
+          }
         >
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               {pendingEntries.length > 0 ? (
                 <>
-                  <p className="text-sm font-semibold text-amber-300">
+                  <p className="text-sm font-semibold" style={{ color: 'var(--color-warning)' }}>
                     {pendingEntries.length} change{pendingEntries.length !== 1 ? 's' : ''} pending — restart to apply
                   </p>
                   <div className="mt-1 space-y-0.5">
                     {pendingEntries.map((e) => (
-                      <p key={e.key} className="text-[11px] font-mono text-amber-300/70">
+                      <p
+                        key={e.key}
+                        className="text-[11px] font-mono"
+                        style={{ color: 'color-mix(in srgb, var(--color-warning) 70%, transparent)' }}
+                      >
                         {e.key}: {String(e.applied_value)} → {String(e.persisted_value)}
                       </p>
                     ))}

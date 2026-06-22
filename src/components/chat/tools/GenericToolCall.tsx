@@ -13,7 +13,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
-import type { ToolResultRef } from '@/lib/api/generated/asyncapi-types'
+import type { ToolResultRef, DelegationFailure } from '@/lib/api/generated/asyncapi-types'
 import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
 import type { ClientTruncatedResult } from '@/store/chat'
 import { useQuery } from '@tanstack/react-query'
@@ -67,6 +67,34 @@ function isMarshalErrorResult(value: unknown): value is MarshalErrorResult {
     value !== null &&
     typeof (value as Record<string, unknown>)['_marshal_error'] === 'string'
   )
+}
+
+/**
+ * Returns true when the result is the structured delegation-denied sentinel the
+ * backend emits when a delegation tool call is refused by policy. Mirrors the
+ * sentinel-type detector pattern above; matched against the generated
+ * DelegationFailure contract (error: "delegation_denied").
+ */
+function isDelegationFailure(value: unknown): value is DelegationFailure {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['error'] === 'delegation_denied'
+  )
+}
+
+/** Human label for the policy axis that blocked the delegation. */
+function policyAxisLabel(policy: DelegationFailure['policy']): string {
+  switch (policy) {
+    case 'trust_set':
+      return 'Trust set'
+    case 'mode':
+      return 'Delegation mode'
+    case 'depth':
+      return 'Delegation depth'
+    default:
+      return policy
+  }
 }
 
 /** Format bytes into a human-readable size string (e.g. "2.3 MiB"). */
@@ -169,6 +197,55 @@ function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncatedResult 
   )
 }
 
+/**
+ * BLOCKER 2: Renders the structured delegation-denied sentinel the backend emits
+ * when a delegation tool call is refused by policy. Without this path a denied
+ * delegation falls through to plainResult and renders as a raw JSON blob inside a
+ * collapsed "Failed" tool call. We surface the human `reason`, the `policy` axis
+ * that blocked it (trust set / mode / depth), and the target agent when present.
+ */
+function DelegationFailureDisplay({ failure }: { failure: DelegationFailure }) {
+  return (
+    <div
+      data-testid="result-delegation-denied"
+      className="rounded border px-2.5 py-2 mb-1 font-sans text-[10px]"
+      style={{
+        borderColor: 'color-mix(in srgb, var(--color-warning) 40%, transparent)',
+        backgroundColor: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
+      }}
+    >
+      <div className="flex items-center gap-2 mb-1.5">
+        <Prohibit
+          size={13}
+          weight="fill"
+          className="shrink-0"
+          style={{ color: 'var(--color-warning)' }}
+        />
+        <span className="font-medium" style={{ color: 'var(--color-warning)' }}>
+          Delegation denied
+        </span>
+      </div>
+
+      {/* Human-readable reason */}
+      <p className="text-[var(--color-secondary)] leading-relaxed mb-1.5 break-words">
+        {failure.reason}
+      </p>
+
+      {/* Policy axis + target agent metadata */}
+      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[var(--color-muted)]">
+        <dt>Blocked by</dt>
+        <dd className="text-[var(--color-secondary)]">{policyAxisLabel(failure.policy)}</dd>
+        {failure.target_agent_id && (
+          <>
+            <dt>Target agent</dt>
+            <dd className="text-[var(--color-secondary)] break-all">{failure.target_agent_id}</dd>
+          </>
+        )}
+      </dl>
+    </div>
+  )
+}
+
 export function GenericToolCall({
   toolName,
   args,
@@ -203,7 +280,11 @@ export function GenericToolCall({
   const marshalErr = isMarshalErrorResult(result) ? result : null
   const clientTruncated = isClientTruncatedResult(result) ? result : null
   const toolRef = isToolResultRef(result) ? result : null
-  const plainResult = !truncated && !marshalErr && !clientTruncated && !toolRef ? result : undefined
+  const delegationFailure = isDelegationFailure(result) ? result : null
+  const plainResult =
+    !truncated && !marshalErr && !clientTruncated && !toolRef && !delegationFailure
+      ? result
+      : undefined
 
   return (
     <div
@@ -293,6 +374,10 @@ export function GenericToolCall({
 
               {/* G4: ToolResultRef sentinel — server stored full body, fetch on demand */}
               {toolRef && <ToolResultRefDisplay sentinel={toolRef} sessionId={sessionId} />}
+
+              {/* Structured delegation-denied sentinel — render a distinct,
+                  human-readable block instead of a raw JSON blob. */}
+              {delegationFailure && <DelegationFailureDisplay failure={delegationFailure} />}
 
               {/* Plain result: normal rendering */}
               {plainResult !== undefined && (

@@ -140,8 +140,8 @@ describe('WorkerCard — test-result pill keys off result.ok', () => {
     renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'claude-code' } }))
     fireEvent.click(screen.getByTestId('worker-test-run-worker-1'))
     const pill = await screen.findByTestId('worker-test-result-claude-code')
-    // Success tone (emerald) lives on the pill span — not the error/warn tones.
-    expect(pill).toHaveClass('text-emerald-400')
+    // Success tone (success token) lives on the pill span — not the error/warn tones.
+    expect(pill).toHaveClass('text-[var(--color-success)]')
     expect(pill).toHaveTextContent('ready')
     expect(pill).toHaveAttribute('data-reason', 'ok')
   })
@@ -157,7 +157,7 @@ describe('WorkerCard — test-result pill keys off result.ok', () => {
     fireEvent.click(screen.getByTestId('worker-test-run-worker-1'))
     const pill = await screen.findByTestId('worker-test-result-claude-code')
     // Not the success tone — keyed off ok:false.
-    expect(pill).not.toHaveClass('text-emerald-400')
+    expect(pill).not.toHaveClass('text-[var(--color-success)]')
     expect(pill).toHaveTextContent('claude-code not on PATH')
     expect(pill).toHaveAttribute('data-reason', 'missing-binary')
   })
@@ -172,7 +172,7 @@ describe('WorkerCard — test-result pill keys off result.ok', () => {
     renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'claude-code' } }))
     fireEvent.click(screen.getByTestId('worker-test-run-worker-1'))
     const pill = await screen.findByTestId('worker-test-result-claude-code')
-    expect(pill).toHaveClass('text-amber-400')
+    expect(pill).toHaveClass('text-[var(--color-warning)]')
     expect(pill).toHaveTextContent('present but not logged in')
   })
 })

@@ -681,6 +681,12 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	if req.Due != nil {
 		due := req.Due.UTC().Format(time.RFC3339)
 		patch.Due = &due
+	} else if req.ClearDue != nil && *req.ClearDue {
+		// clear_due unambiguously clears the stored due date. Ignored when `due`
+		// is set to a value (the value wins). The store applies *patch.Due
+		// verbatim, so an empty string clears Task.Due (which omits when empty).
+		empty := ""
+		patch.Due = &empty
 	}
 	if req.MilestoneId != nil {
 		patch.MilestoneID = req.MilestoneId

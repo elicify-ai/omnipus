@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -31,6 +31,9 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
+import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import type { AutoSaveStatus } from '@/hooks/useAutoSave'
+import { canDropTransition } from '@/components/workspaces/BoardView'
 import { useUiStore } from '@/store/ui'
 import {
   Play,
@@ -59,30 +62,32 @@ import {
 // ── Status config ──────────────────────────────────────────────────────────────
 
 // User-settable status options (blocked is excluded — it is backend-derived and read-only)
+// Theme-token colours. `text-[color:…]` keeps these as inline-var text colours
+// (no raw Tailwind palette) so the panel tracks "The Sovereign Deep" tokens.
 const STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] = [
   { value: 'inbox',       label: 'Inbox',       color: 'text-[var(--color-muted)]' },
-  { value: 'next',        label: 'Next',        color: 'text-blue-400' },
-  { value: 'planning',    label: 'Planning',    color: 'text-purple-400' },
-  { value: 'in_progress', label: 'In Progress', color: 'text-yellow-400' },
-  { value: 'done',        label: 'Done',        color: 'text-green-400' },
-  { value: 'failed',      label: 'Failed',      color: 'text-red-400' },
+  { value: 'next',        label: 'Next',        color: 'text-[color:var(--color-accent)]' },
+  { value: 'planning',    label: 'Planning',    color: 'text-[color:var(--color-muted)]' },
+  { value: 'in_progress', label: 'In Progress', color: 'text-[color:var(--color-warning)]' },
+  { value: 'done',        label: 'Done',        color: 'text-[color:var(--color-success)]' },
+  { value: 'failed',      label: 'Failed',      color: 'text-[color:var(--color-error)]' },
 ]
 
 const STATUS_BADGE: Record<string, string> = {
   inbox:       'text-[var(--color-muted)] bg-white/5',
-  next:        'text-blue-400 bg-blue-400/10',
-  planning:    'text-purple-400 bg-purple-400/10',
-  in_progress: 'text-yellow-400 bg-yellow-400/10',
-  blocked:     'text-orange-400 bg-orange-400/10',
-  done:        'text-green-400 bg-green-400/10',
-  failed:      'text-red-400 bg-red-400/10',
+  next:        'text-[color:var(--color-accent)] bg-[var(--color-accent)]/10',
+  planning:    'text-[color:var(--color-muted)] bg-white/5',
+  in_progress: 'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
+  blocked:     'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
+  done:        'text-[color:var(--color-success)] bg-[var(--color-success)]/10',
+  failed:      'text-[color:var(--color-error)] bg-[var(--color-error)]/10',
 }
 
 const PRIORITY_CONFIG: Record<number, { label: string; color: string }> = {
-  1: { label: 'P1 — Critical',  color: 'text-red-400' },
-  2: { label: 'P2 — High',      color: 'text-orange-400' },
-  3: { label: 'P3 — Medium',    color: 'text-yellow-400' },
-  4: { label: 'P4 — Low',       color: 'text-blue-400' },
+  1: { label: 'P1 — Critical',  color: 'text-[color:var(--color-error)]' },
+  2: { label: 'P2 — High',      color: 'text-[color:var(--color-warning)]' },
+  3: { label: 'P3 — Medium',    color: 'text-[color:var(--color-warning)]' },
+  4: { label: 'P4 — Low',       color: 'text-[color:var(--color-accent)]' },
   5: { label: 'P5 — Minimal',   color: 'text-[var(--color-muted)]' },
 }
 
@@ -107,12 +112,25 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const [promptDraft, setPromptDraft] = useState('')
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(task?.workspace_id ?? '')
   const [newTodo, setNewTodo] = useState('')
+  // Inline field errors — surfaced instead of silently discarding invalid input.
+  const [triggerError, setTriggerError] = useState('')
+  const [dueError, setDueError] = useState('')
+  const [statusError, setStatusError] = useState('')
+  // Autosave indicator — every field change fires an immediate mutation; this
+  // mirrors the AgentProfile / Gateway pattern so the user sees Saving…/Saved.
+  const [saveStatus, setSaveStatus] = useState<AutoSaveStatus>('idle')
+  const [saveError, setSaveError] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
     setSelectedWorkspaceId(task?.workspace_id ?? '')
     setNewTodo('')
+    setTriggerError('')
+    setDueError('')
+    setStatusError('')
+    setSaveStatus('idle')
+    setSaveError(undefined)
   }, [task?.id, task?.prompt, task?.workspace_id])
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
@@ -147,17 +165,33 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     (t) => t.id !== task?.id && !t.parent_task_id,
   )
 
+  // Reset the "Saved" indicator back to idle after a short fade so it does not
+  // linger between unrelated edits.
+  const savedFadeRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (savedFadeRef.current) clearTimeout(savedFadeRef.current) }, [])
+
   const { mutate: doUpdate } = useMutation({
     mutationFn: (data: TaskUpdateRequest) => {
       if (!task) return Promise.reject(new Error('No task selected'))
       return updateTask(task.id, data)
     },
+    onMutate: () => {
+      if (savedFadeRef.current) clearTimeout(savedFadeRef.current)
+      setSaveError(undefined)
+      setSaveStatus('saving')
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+      setSaveStatus('saved')
+      savedFadeRef.current = setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 2000)
     },
-    onError: (err: unknown) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update task', variant: 'error' }),
+    onError: (err: unknown) => {
+      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update task'
+      setSaveStatus('error')
+      setSaveError(msg)
+      addToast({ message: msg, variant: 'error' })
+    },
   })
 
   // Todos checklist — replace atomically via PUT /tasks/{id}/todos
@@ -295,28 +329,68 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
   function handleTriggerAtChange(value: string) {
     const at = datetimeLocalToMs(value)
-    if (at == null) return
+    if (at == null) {
+      setTriggerError('Pick a valid date and time for the one-time trigger.')
+      return
+    }
+    setTriggerError('')
     doUpdate({ trigger: buildTrigger('once', { at_ms: at }) })
   }
 
   function handleTriggerEveryChange(minutes: number) {
-    if (!Number.isFinite(minutes) || minutes < 1) return
+    if (!Number.isFinite(minutes) || minutes < 1) {
+      setTriggerError('Interval must be at least 1 minute.')
+      return
+    }
+    setTriggerError('')
     doUpdate({ trigger: buildTrigger('every', { every_ms: minutes * 60_000 }) })
   }
 
   function handleTriggerCronChange(cron: string) {
-    if (!cron.trim()) return
+    if (!cron.trim()) {
+      setTriggerError('Enter a cron expression for the recurring trigger.')
+      return
+    }
+    setTriggerError('')
     doUpdate({ trigger: buildTrigger('recurring', { cron_expr: cron.trim() }) })
   }
 
   function handleDueChange(value: string) {
     if (!value) {
-      // Clearing due — send empty string (PATCH treats it as a value the server can clear)
-      doUpdate({ due: '' })
+      // Clearing the due date — the backend exposes an unambiguous `clear_due`
+      // flag (an empty `due` string is not a valid date-time and is rejected).
+      setDueError('')
+      doUpdate({ clear_due: true })
       return
     }
     const iso = datetimeLocalToIso(value)
-    if (iso) doUpdate({ due: iso })
+    if (!iso) {
+      setDueError('Pick a valid date and time.')
+      return
+    }
+    setDueError('')
+    doUpdate({ due: iso })
+  }
+
+  // Done-terminal guard — mirror the board DnD `canDropTransition` so the panel
+  // and the kanban agree on which status transitions the backend will accept.
+  // (Can't leave `done` or `blocked`; can't enter `blocked`.)
+  function isStatusDisabled(target: Task['status']): boolean {
+    if (!task) return false
+    if (target === task.status) return false
+    return !canDropTransition(task.status, target).ok
+  }
+
+  function handleStatusChange(target: Task['status']) {
+    if (!task) return
+    if (target === task.status) return
+    const verdict = canDropTransition(task.status, target)
+    if (!verdict.ok) {
+      setStatusError(verdict.reason ?? 'That status change is not allowed.')
+      return
+    }
+    setStatusError('')
+    doUpdate({ status: target })
   }
 
   async function handleCopyResult() {
@@ -357,6 +431,11 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
   return (
     <div className="space-y-5">
+      {/* Autosave indicator — every field change saves immediately. */}
+      <div className="flex justify-end min-h-[14px]" data-testid="task-detail-autosave">
+        <AutoSaveIndicator status={saveStatus} error={saveError} />
+      </div>
+
       {/* Title */}
       <Field label="Title">
         <p className="text-sm font-medium text-[var(--color-secondary)]">{task.title}</p>
@@ -421,25 +500,43 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Status */}
       <Field label="Status">
         {isRunning ? (
-          <Badge className="h-8 text-xs bg-yellow-400/10 text-yellow-400 border-transparent rounded-md px-2 inline-flex items-center">
+          <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
             In Progress
           </Badge>
         ) : task.status === 'blocked' ? (
           // blocked is backend-derived (unmet dependency) — show read-only, not selectable
-          <Badge className="h-8 text-xs bg-orange-400/10 text-orange-400 border-transparent rounded-md px-2 inline-flex items-center">
+          <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
             Blocked (dependency unmet)
+          </Badge>
+        ) : task.status === 'done' ? (
+          // Done is terminal — mirror canDropTransition (board DnD forbids
+          // leaving done). Show a read-only badge instead of a dropdown that
+          // offers transitions the backend rejects.
+          <Badge
+            data-testid="status-done-terminal"
+            className="h-8 text-xs bg-[var(--color-success)]/10 text-[color:var(--color-success)] border-transparent rounded-md px-2 inline-flex items-center"
+          >
+            Done (final)
           </Badge>
         ) : (
           <SmartSelect
             value={task.status}
-            onValueChange={(val) => doUpdate({ status: val as Task['status'] })}
+            onValueChange={(val) => handleStatusChange(val as Task['status'])}
             triggerClassName="h-8 text-xs"
-            items={STATUS_OPTIONS.map((o) => ({
+            // Done is terminal and blocked is backend-derived — exclude both as
+            // selectable targets (mirrors canDropTransition's "can't enter
+            // blocked / can't leave done"). The current status stays selectable.
+            items={STATUS_OPTIONS.filter(
+              (o) => o.value === task.status || !isStatusDisabled(o.value),
+            ).map((o) => ({
               value: o.value,
               label: o.label,
               className: cn('text-xs', o.color),
             }))}
           />
+        )}
+        {statusError && (
+          <p className="text-xs text-[var(--color-error)] mt-1.5">{statusError}</p>
         )}
       </Field>
 
@@ -528,6 +625,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             className="mt-1.5 text-xs font-mono"
           />
         )}
+        {triggerError && (
+          <p className="text-xs text-[var(--color-error)] mt-1.5">{triggerError}</p>
+        )}
       </Field>
 
       {/* Depends on (blocked_by, editable) */}
@@ -602,6 +702,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           onBlur={(e) => handleDueChange(e.target.value)}
           className="text-xs"
         />
+        {dueError && (
+          <p className="text-xs text-[var(--color-error)] mt-1.5">{dueError}</p>
+        )}
       </Field>
 
       {/* Todos checklist (editable: add / toggle / remove) */}
@@ -619,7 +722,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                 className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity"
               >
                 {todo.done ? (
-                  <CheckSquare size={13} className="shrink-0 text-green-400" />
+                  <CheckSquare size={13} className="shrink-0 text-[color:var(--color-success)]" />
                 ) : (
                   <Square size={13} className="shrink-0 text-[var(--color-muted)]" />
                 )}
@@ -683,7 +786,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {isFailed && (
         <Button
           variant="outline"
-          className="w-full gap-2 text-xs h-8 border-red-500/30 text-red-400 hover:bg-red-500/10"
+          className="w-full gap-2 text-xs h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
           onClick={() => doRetry()}
           disabled={isRetrying}
         >
@@ -711,7 +814,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Result section — done or failed */}
       {showResult && task.result && (
         <Field label="Result">
-          <div className={cn('relative', isFailed && 'ring-1 ring-red-500/30 rounded-md')}>
+          <div className={cn('relative', isFailed && 'ring-1 ring-[var(--color-error)]/30 rounded-md')}>
             <pre className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed">
               {task.result}
             </pre>
@@ -791,7 +894,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         <Button
           variant="ghost"
           size="sm"
-          className="w-full gap-2 text-xs h-8 text-red-400 hover:bg-red-500/10 hover:text-red-400"
+          className="w-full gap-2 text-xs h-8 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10 hover:text-[color:var(--color-error)]"
           onClick={() => doDelete()}
           disabled={isDeleting}
         >

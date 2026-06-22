@@ -883,6 +883,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               placeholder="Provider default"
               providerGroups={providerGroups}
               constrainToCatalog
+              // When the provider list failed to load the catalogue is empty
+              // through no fault of the operator — fall back to free-text entry
+              // so the "enter a model slug manually" copy above is actually
+              // honoured (and the currently-saved model stays visible/editable
+              // instead of being hidden behind a disabled placeholder).
+              allowFreeTextWhenEmpty={providersError}
               emptyCatalogHint="Connect a provider in Settings to pick a model"
             />
             {isLocked && (

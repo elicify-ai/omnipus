@@ -31,6 +31,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -277,6 +278,55 @@ func TestTaskCreate_SourceChannelIgnored(t *testing.T) {
 		"source_channel must not be stored from client-supplied body (exfiltration sink)")
 	assert.Empty(t, schi,
 		"source_chat_id must not be stored from client-supplied body (exfiltration sink)")
+}
+
+// getTaskDue reads a task back via GET /api/v1/tasks/{id} and returns its Due.
+func getTaskDue(t *testing.T, api *restAPI, id string) *time.Time {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+id, nil)
+	r.URL.Path = "/api/v1/tasks/" + id
+	api.HandleTasks(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "getTaskDue GET must return 200; body=%s", w.Body.String())
+	var tsk gen.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+	return tsk.Due
+}
+
+// TestTaskPatch_ClearDue_ClearsPreviouslySetDue proves the clear_due UAT fix: a
+// PATCH with {"clear_due":true} clears a previously-set due date (the empty
+// `due` string is not a valid date-time and cannot express a clear). It also
+// proves a `due` value still sets the date, and that `due` wins when both are
+// present.
+func TestTaskPatch_ClearDue_ClearsPreviouslySetDue(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	tsk := createTaskViaAPI(t, api, "ClearDueTask", "")
+
+	// 1) Set a due date.
+	wSet := patchTask(t, api, tsk.Id, `{"due":"2026-08-15T17:00:00Z"}`)
+	require.Equal(t, http.StatusOK, wSet.Code, "PATCH due=value must return 200; body=%s", wSet.Body.String())
+	due := getTaskDue(t, api, tsk.Id)
+	require.NotNil(t, due, "due must be set after PATCH due=value")
+	assert.Equal(t, "2026-08-15T17:00:00Z", due.UTC().Format(time.RFC3339))
+
+	// 2) Clear it with clear_due=true.
+	wClear := patchTask(t, api, tsk.Id, `{"clear_due":true}`)
+	require.Equal(t, http.StatusOK, wClear.Code, "PATCH clear_due=true must return 200; body=%s", wClear.Body.String())
+	assert.Nil(t, getTaskDue(t, api, tsk.Id), "clear_due=true must clear the previously-set due date")
+
+	// 3) A due value still sets the date (round-trip).
+	wSet2 := patchTask(t, api, tsk.Id, `{"due":"2026-09-01T09:00:00Z"}`)
+	require.Equal(t, http.StatusOK, wSet2.Code, "PATCH due=value must return 200; body=%s", wSet2.Body.String())
+	due2 := getTaskDue(t, api, tsk.Id)
+	require.NotNil(t, due2, "due must be set after a second PATCH due=value")
+	assert.Equal(t, "2026-09-01T09:00:00Z", due2.UTC().Format(time.RFC3339))
+
+	// 4) due wins over clear_due when both are present (clear_due ignored).
+	wBoth := patchTask(t, api, tsk.Id, `{"due":"2026-10-10T10:00:00Z","clear_due":true}`)
+	require.Equal(t, http.StatusOK, wBoth.Code, "PATCH due+clear_due must return 200; body=%s", wBoth.Body.String())
+	dueBoth := getTaskDue(t, api, tsk.Id)
+	require.NotNil(t, dueBoth, "due value must win when batched with clear_due=true")
+	assert.Equal(t, "2026-10-10T10:00:00Z", dueBoth.UTC().Format(time.RFC3339))
 }
 
 // ── Fix #6a: PATCH status=blocked → 400 (gateway seam guard) ─────────────────

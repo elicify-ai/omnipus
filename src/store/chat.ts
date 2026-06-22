@@ -10,6 +10,7 @@ import type { WsReceiveFrame, WsExecApprovalRequestFrame, WsReplayMessageFrame, 
 import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame, ExecApprovalExpiredFrame } from '@/lib/api/generated/asyncapi-types'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { registerSyncChatForeground } from '@/store/session'
@@ -1222,7 +1223,34 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // entirely when no model was picked this session, per spec §18 Q3).
       const modelNameRaw = opts?.model_name
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
-      const modelNameFrame = modelName.length > 0 ? { metadata: { model_name: modelName } } : {}
+
+      // M4 workspace→turn binding (BLOCKER 1). When the user is chatting inside
+      // a workspace, the active workspace id is the single source of truth in
+      // useWorkspacesStore (set by WorkspaceTabContainer from the route param;
+      // null on the global/inbox chat). We forward it as `metadata.workspace_id`
+      // so the server stamps the session with this workspace and any task the
+      // agent creates this turn (task_create / delegation) lands on THIS
+      // workspace's board instead of the agent's default workspace. Absent (or
+      // empty) when not in a workspace, matching the backend's default-workspace
+      // fallback. The contract caps it at 128 chars; an over-length id is dropped
+      // rather than sent (the outbound Zod validator would otherwise toast every
+      // turn for a malformed local id).
+      const activeWorkspaceIdRaw = useWorkspacesStore.getState().activeWorkspaceId
+      const workspaceId =
+        typeof activeWorkspaceIdRaw === 'string' &&
+        activeWorkspaceIdRaw.length > 0 &&
+        activeWorkspaceIdRaw.length <= 128
+          ? activeWorkspaceIdRaw
+          : ''
+
+      // Merge model_name + workspace_id into a single `metadata` object so the
+      // two payload build sites below stay in sync. The frame omits `metadata`
+      // entirely when neither field is present (an empty object would be sent
+      // otherwise, which the server treats the same but is noise on the wire).
+      const metadata: { model_name?: string; workspace_id?: string } = {}
+      if (modelName.length > 0) metadata.model_name = modelName
+      if (workspaceId.length > 0) metadata.workspace_id = workspaceId
+      const metadataFrame = Object.keys(metadata).length > 0 ? { metadata } : {}
       const { connection, isConnected } = useConnectionStore.getState()
       const { activeSessionId, activeAgentId } = useSessionStore.getState()
       const { isStreaming } = get()
@@ -1340,7 +1368,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           session_id: activeSessionId,
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
-          ...modelNameFrame,
+          ...metadataFrame,
         }
         get()._validateOutboundFrame(payload)
         const sent = connection.send(payload)
@@ -1415,7 +1443,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           content,
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
-          ...modelNameFrame,
+          ...metadataFrame,
         }
         get()._validateOutboundFrame(payload2)
         const sent = connection.send(payload2)
