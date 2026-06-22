@@ -25,6 +25,7 @@ import { useModelToProvider } from '@/lib/agents/modelToProvider'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { InheritToggle } from './InheritToggle'
+import { ExecutorInputs } from './Step1Identity'
 import type { Provider } from '@/lib/api/generated/openapi-types'
 import { X } from '@phosphor-icons/react'
 import type { StepProps } from './types'
@@ -35,6 +36,7 @@ export function Step3Tools({
   payload,
   setField,
   initialType,
+  initialCli,
   connectedProviders = [],
   registryTools = [],
   skills = [],
@@ -48,6 +50,26 @@ export function Step3Tools({
 
   return (
     <>
+      {/* subagent_3p: the external CLI runner config is the substance of the
+          final step (tools / fallback policy don't apply to an external
+          runner). Rendered inline (not in the collapsed Advanced disclosure)
+          so the operator can finalize cli_path / env / args before creating.
+          This is the same editor surfaced on Step 1 — both write the same
+          payload, so edits stay in sync. */}
+      {isExternal && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium">External CLI runner</label>
+          <p className="text-xs text-[var(--color-muted)]">
+            The external runner manages its own isolation, auth, and retries.
+          </p>
+          <ExecutorInputs
+            payload={payload}
+            setField={setField}
+            lockedCli={initialCli}
+          />
+        </div>
+      )}
+
       {!isExternal && isNativeSubagent && (
         <InheritToggle
           label="Tools"

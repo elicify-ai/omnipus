@@ -178,12 +178,15 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     timeout_seconds: 300,
     max_tool_iterations: 50,
     steering_mode: 'one-at-a-time',
-    // Native subagents inherit from the caller by default (matches the
-    // existing implicit behaviour). Main / external types ignore these.
-    inherit_model: initialType === 'Subagent',
-    inherit_tools: initialType === 'Subagent',
-    inherit_skills: initialType === 'Subagent',
-    inherit_sandbox: initialType === 'Subagent',
+    // Inherit-from-caller toggles default OFF so the corresponding editors
+    // (model picker, tools, skills, sandbox) render by default and the
+    // operator makes an explicit choice. Inheritance stays an opt-in via the
+    // toggles (available only for native Subagents). Main / external types
+    // ignore these flags entirely.
+    inherit_model: false,
+    inherit_tools: false,
+    inherit_skills: false,
+    inherit_sandbox: false,
   }
 }
 

@@ -6,7 +6,8 @@ import { SessionPanel } from './SessionPanel'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
-import { fetchSessions } from '@/lib/api'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { fetchSessions, fetchWorkspaces, fetchWorkspaceSessions } from '@/lib/api'
 
 // W2-1: SessionPanel chat-session routing regression test.
 //
@@ -63,6 +64,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
       },
     ]),
     createSession: vi.fn(),
+    // Default: no workspaces and no links. Individual workspace-scoping tests
+    // override these with mockResolvedValueOnce. With no active workspace the
+    // panel never calls them, so the default value is irrelevant for the
+    // non-workspace tests above.
+    fetchWorkspaces: vi.fn().mockResolvedValue([]),
+    fetchWorkspaceSessions: vi.fn().mockResolvedValue([]),
   }
 })
 
@@ -86,6 +93,9 @@ beforeEach(() => {
       activeAgentId: null,
       activeAgentType: null,
     })
+    // Reset workspace scope to "no active workspace" so the bulk of the panel
+    // tests exercise the unscoped path; workspace-scoping tests opt in.
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
   })
 })
 
@@ -567,5 +577,106 @@ describe('SessionPanel — channel grouping: search filters and hides empty grou
 
     // The webchat session must still be present
     expect(screen.getByLabelText('Open session: Webchat Alpha')).toBeTruthy()
+  })
+})
+
+// ── Workspace scoping (IA reframe) ────────────────────────────────────────────
+//
+// Regression for the IA reframe: the global "/" front door redirects into the
+// DEFAULT workspace's chat, which sets activeWorkspaceId. The panel must NOT
+// strip unlinked / global / REST-created sessions while in the default
+// workspace (the home/inbox), otherwise those sessions become unreachable —
+// this broke the iframe-preview / warmup e2e specs whose seedAndOpenSession
+// helper creates a session via REST (no workspace→task link) and then opens it
+// from the panel. A NON-default workspace, by contrast, must scope strictly to
+// its own link set.
+describe('SessionPanel — workspace scoping (IA reframe)', () => {
+  it('default workspace shows unlinked sessions (no scoping)', async () => {
+    // BDD: Given the active workspace is the default workspace
+    //      And a session exists that is NOT in any workspace→session link set
+    //      When the panel renders
+    //      Then the unlinked session is still listed (inbox behaviour)
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      { id: 'ws-default', name: 'Inbox', is_default: true } as never,
+    ])
+    // The link set for the default workspace is empty — the REST-created
+    // session has no link. Strict scoping would hide it; we must not.
+    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([])
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-global-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Global Unlinked Session',
+        type: 'chat',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 1,
+      },
+    ])
+
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-default' })
+    })
+
+    renderPanel()
+
+    expect(
+      await screen.findByLabelText('Open session: Global Unlinked Session'),
+    ).toBeTruthy()
+  })
+
+  it('non-default workspace scopes to its own link set, hiding unlinked sessions', async () => {
+    // BDD: Given the active workspace is a NON-default workspace
+    //      And a linked session plus an unlinked session both exist
+    //      When the panel renders
+    //      Then only the linked session is listed
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      { id: 'ws-default', name: 'Inbox', is_default: true } as never,
+      { id: 'ws-project', name: 'Project', is_default: false } as never,
+    ])
+    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([
+      { workspace_id: 'ws-project', session_id: 'sess-linked-1' } as never,
+    ])
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-linked-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Linked Project Session',
+        type: 'chat',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 1,
+      },
+      {
+        id: 'sess-other-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Unlinked Other Session',
+        type: 'chat',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 1,
+      },
+    ])
+
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-project' })
+    })
+
+    renderPanel()
+
+    expect(
+      await screen.findByLabelText('Open session: Linked Project Session'),
+    ).toBeTruthy()
+    await waitFor(() => {
+      expect(
+        screen.queryByLabelText('Open session: Unlinked Other Session'),
+      ).toBeNull()
+    })
   })
 })

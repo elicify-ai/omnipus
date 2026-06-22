@@ -49,23 +49,33 @@ test.describe('create agent wizard', () => {
     await page.getByTestId('wizard-soul').fill('You are a helpful E2E test agent.')
 
     // Voice field (Main only). VoiceProviderSub auto-detects the configured
-    // TTS provider on mount: enum mode renders a Radix Select (options appear
-    // after clicking the trigger), free-text mode renders a plain Input.
-    // In a fresh E2E environment no provider is configured → free-text.
+    // TTS provider on mount (GET /api/v1/voice/provider) and renders one of
+    // three variants:
+    //   - enum     → Radix Select (options appear after clicking the trigger)
+    //   - free-text → plain editable Input
+    //   - disabled  → read-only Input ("Voice provider unavailable …")
+    // In a fresh E2E environment NO TTS provider is configured, so detection
+    // settles to the DISABLED variant (see voice-provider-detect.ts:
+    // `disabledResult('Voice provider unavailable (no provider configured)')`).
+    // The voice field is optional, so when it stays disabled we simply skip
+    // interacting with it — the wizard can still advance and create the agent
+    // without a voice value. Only fill/select when the field becomes enabled
+    // (i.e. a provider IS configured).
     const voiceContainer = modal.getByTestId('wizard-voice')
     await expect(voiceContainer).toBeVisible()
     const voiceField = voiceContainer.getByTestId('voice-field')
-    // Detection runs async on mount (field starts disabled); wait for it to
-    // settle before interacting.
-    await expect(voiceField).toBeEnabled({ timeout: 10_000 })
-    await voiceField.click()
-    // Enum mode → a dropdown of [role="option"] opens. Free-text mode → no
-    // options; type a value instead.
-    const voiceOptions = page.locator('[role="option"]')
-    if ((await voiceOptions.count()) > 0) {
-      await voiceOptions.first().click()
-    } else {
-      await voiceField.fill('alloy')
+    // Detection runs async on mount; give it a moment to settle, then branch
+    // on whether the field ended up enabled (provider present) or disabled
+    // (no provider — the fresh-env case).
+    await expect(voiceField).toBeVisible({ timeout: 10_000 })
+    if (await voiceField.isEnabled()) {
+      await voiceField.click()
+      const voiceOptions = page.locator('[role="option"]')
+      if ((await voiceOptions.count()) > 0) {
+        await voiceOptions.first().click()
+      } else {
+        await voiceField.fill('alloy')
+      }
     }
 
     await modal.getByTestId('wizard-next-2').click()
@@ -88,23 +98,33 @@ test.describe('create agent wizard', () => {
     await page.getByTestId('wizard-soul').fill('You are a helpful E2E test agent.')
 
     // Voice field (Main only). VoiceProviderSub auto-detects the configured
-    // TTS provider on mount: enum mode renders a Radix Select (options appear
-    // after clicking the trigger), free-text mode renders a plain Input.
-    // In a fresh E2E environment no provider is configured → free-text.
+    // TTS provider on mount (GET /api/v1/voice/provider) and renders one of
+    // three variants:
+    //   - enum     → Radix Select (options appear after clicking the trigger)
+    //   - free-text → plain editable Input
+    //   - disabled  → read-only Input ("Voice provider unavailable …")
+    // In a fresh E2E environment NO TTS provider is configured, so detection
+    // settles to the DISABLED variant (see voice-provider-detect.ts:
+    // `disabledResult('Voice provider unavailable (no provider configured)')`).
+    // The voice field is optional, so when it stays disabled we simply skip
+    // interacting with it — the wizard can still advance and create the agent
+    // without a voice value. Only fill/select when the field becomes enabled
+    // (i.e. a provider IS configured).
     const voiceContainer = modal.getByTestId('wizard-voice')
     await expect(voiceContainer).toBeVisible()
     const voiceField = voiceContainer.getByTestId('voice-field')
-    // Detection runs async on mount (field starts disabled); wait for it to
-    // settle before interacting.
-    await expect(voiceField).toBeEnabled({ timeout: 10_000 })
-    await voiceField.click()
-    // Enum mode → a dropdown of [role="option"] opens. Free-text mode → no
-    // options; type a value instead.
-    const voiceOptions = page.locator('[role="option"]')
-    if ((await voiceOptions.count()) > 0) {
-      await voiceOptions.first().click()
-    } else {
-      await voiceField.fill('alloy')
+    // Detection runs async on mount; give it a moment to settle, then branch
+    // on whether the field ended up enabled (provider present) or disabled
+    // (no provider — the fresh-env case).
+    await expect(voiceField).toBeVisible({ timeout: 10_000 })
+    if (await voiceField.isEnabled()) {
+      await voiceField.click()
+      const voiceOptions = page.locator('[role="option"]')
+      if ((await voiceOptions.count()) > 0) {
+        await voiceOptions.first().click()
+      } else {
+        await voiceField.fill('alloy')
+      }
     }
 
     await modal.getByTestId('wizard-next-2').click()

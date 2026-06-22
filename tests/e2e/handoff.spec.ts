@@ -136,11 +136,19 @@ test.beforeEach(async ({ page }) => {
 });
 
 test(
-  '(a) Ray→Max→Jim chain: transcript shows all three agent labels',
+  '(a) Ray→Ava→Jim chain: transcript shows all three agent labels',
   // Implements #111: assistant messages from different agents show a visible label.
   // Uses transcript-seeding (same approach as replay-fidelity.spec.ts) for determinism —
-  // no real LLM needed. Seeds three assistant messages with agent_ids 'ray', 'max', 'jim'
+  // no real LLM needed. Seeds three assistant messages with agent_ids 'ray', 'ava', 'jim'
   // then asserts that [data-testid="agent-label"] elements appear for each.
+  //
+  // Roster note: this chain originally used 'max', but Max was RETIRED from the
+  // seeded base roster in the v0.1.0 recast (current base: Mia·Assistant, Jim·
+  // Orchestrator, Ava·Builder, Ray·Scout — see pkg/coreagent/core.go::All). It now
+  // uses Ava, a real base agent. Jim's seeded trust graph (coreAgentDelegation)
+  // delegates to [ava, ray, worker], so a Ray→Ava→Jim multi-agent transcript is a
+  // realistic handoff chain. The test only asserts the per-agent label rendering;
+  // it does not drive a real LLM.
   async ({ page }) => {
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
     await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
@@ -161,16 +169,16 @@ test(
       {
         id: 'entry-ray-1',
         role: 'assistant',
-        content: 'Ray here. Handing off to Max.',
+        content: 'Ray here. Handing off to Ava.',
         timestamp: new Date(Date.now() - 5000).toISOString(),
         agent_id: 'ray',
       },
       {
-        id: 'entry-max-1',
+        id: 'entry-ava-1',
         role: 'assistant',
-        content: 'Max here. Handing off to Jim.',
+        content: 'Ava here. Handing off to Jim.',
         timestamp: new Date(Date.now() - 4000).toISOString(),
-        agent_id: 'max',
+        agent_id: 'ava',
       },
       {
         id: 'entry-jim-1',
@@ -191,9 +199,10 @@ test(
 
     // Assert: each agent's id/name appears in at least one label.
     // The label shows the agent name if known, or falls back to agent_id.
-    // Ray, Max, Jim are core agents whose IDs may equal their names.
+    // Ray, Ava, Jim are seeded base (core) agents whose names render from the
+    // agents store; their IDs equal their lower-cased names.
     await expect(agentLabels.filter({ hasText: /ray/i })).toBeVisible()
-    await expect(agentLabels.filter({ hasText: /max/i })).toBeVisible()
+    await expect(agentLabels.filter({ hasText: /ava/i })).toBeVisible()
     await expect(agentLabels.filter({ hasText: /jim/i })).toBeVisible()
   },
 );

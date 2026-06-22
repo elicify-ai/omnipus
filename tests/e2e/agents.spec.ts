@@ -1,9 +1,29 @@
 import { expect } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
+
+// The Built-in roster accordion is rendered with O2 adaptive-expand
+// (AgentListScreen.tsx): when there are NO custom Main agents (the fresh-env
+// case), it opens EXPANDED by default so the core cards are immediately
+// visible; once a custom Main agent exists it defaults collapsed. A blind
+// click on the trigger would TOGGLE it (collapsing the expanded fresh-env
+// accordion and hiding the cards the test needs). This helper makes the
+// roster expanded idempotently: it only clicks the trigger when the
+// accordion item is currently closed.
+async function ensureBuiltInExpanded(page: Page): Promise<void> {
+  const trigger = page.getByTestId('built-in-agents-trigger');
+  await expect(trigger).toBeVisible({ timeout: 15_000 });
+  // Radix AccordionTrigger reflects open/closed via aria-expanded + data-state.
+  const expanded = await trigger.getAttribute('aria-expanded');
+  if (expanded !== 'true') {
+    await trigger.click();
+  }
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true', { timeout: 5_000 });
+}
 
 test.beforeEach(async ({ page }) => {
   // HashRouter: routes live in the fragment, not the pathname.
@@ -27,8 +47,9 @@ test('(a) roster loads with 4 base agents (Mia/Jim/Ava/Ray) plus any custom', as
   // Max is intentionally NOT seeded — see .preview-doc/ for the retirement rationale.
   await expect(page.locator('body')).not.toContainText(/^Max$/m);
 
-  // The built-in roster is collapsed by default; expand it so the core cards render.
-  await page.getByTestId('built-in-agents-trigger').click();
+  // The built-in roster opens expanded by default in a fresh env (O2 adaptive
+  // expand); ensure it's expanded idempotently so the core cards render.
+  await ensureBuiltInExpanded(page);
 
   // AgentCard renders data-testid="agent-card-{id}" and WorkerCard renders "worker-card-{id}"
   const cards = page.locator('[data-testid^="agent-card-"], [data-testid^="worker-card-"]');
@@ -39,8 +60,8 @@ test('(a) roster loads with 4 base agents (Mia/Jim/Ava/Ray) plus any custom', as
 });
 
 test('(b) profile tabs render and switch sections', async ({ page }) => {
-  // The built-in roster is collapsed by default; expand to access core agent cards.
-  await page.getByTestId('built-in-agents-trigger').click();
+  // Ensure the built-in roster is expanded (idempotent) to access core cards.
+  await ensureBuiltInExpanded(page);
 
   // Click the first agent card to open the agent profile slide-over.
   const firstCard = page.locator('[data-testid^="agent-card-"]').first();
@@ -92,9 +113,9 @@ test('(c) "New Main" button on roster opens the create-agent modal', async ({ pa
 });
 
 test('(d) locked fields render read-only on core agents', async ({ page }) => {
-  // The core agents live in the collapsed Built-in roster; expand it first.
+  // The core agents live in the Built-in roster; ensure it's expanded first.
   await page.goto('/#/agents');
-  await page.getByTestId('built-in-agents-trigger').click();
+  await ensureBuiltInExpanded(page);
 
   const jimCard = page.locator('[aria-label*="Jim" i]').first();
   await expect(jimCard).toBeVisible({ timeout: 15_000 });

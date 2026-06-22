@@ -29,6 +29,7 @@ import {
   fetchAgents,
   fetchSessions,
   fetchWorkspaceSessions,
+  fetchWorkspaces,
   renameSession,
   deleteSession,
   isApiError,
@@ -377,17 +378,44 @@ export function SessionPanel() {
   // resolved via the workspace→session links. When no workspace is active the
   // panel shows every session (global / deep-link case).
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
+
+  // The global "/" front door redirects into the DEFAULT workspace's chat, so
+  // the active workspace is almost never null in practice — it is the default
+  // workspace. The default workspace is the home/inbox: it must keep the
+  // pre-IA "show every session" behaviour, otherwise global / deep-linked /
+  // REST-created sessions (which carry no workspace→task link until the agent
+  // creates a task) silently vanish from the only panel that can reach them.
+  // We therefore scope strictly ONLY for non-default workspaces.
+  const { data: workspaces } = useQuery({
+    queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    enabled: sessionPanelOpen && !!activeWorkspaceId,
+    staleTime: 30_000,
+  })
+  const activeIsDefaultWorkspace = useMemo(() => {
+    if (!activeWorkspaceId || !workspaces) return false
+    const active = workspaces.find((w) => w.id === activeWorkspaceId)
+    return active?.is_default === true
+  }, [activeWorkspaceId, workspaces])
+
+  // Only fetch (and apply) the workspace→session link set for a non-default
+  // workspace. In the default workspace we never scope, so the link query is
+  // unnecessary.
+  const scopeToWorkspace = !!activeWorkspaceId && !activeIsDefaultWorkspace
   const { data: workspaceLinks } = useQuery({
     queryKey: workspacesQueryKeys.sessions(activeWorkspaceId ?? ''),
     queryFn: () => fetchWorkspaceSessions(activeWorkspaceId!),
-    enabled: sessionPanelOpen && !!activeWorkspaceId,
+    enabled: sessionPanelOpen && scopeToWorkspace,
     staleTime: 30_000,
   })
   // A session may be tagged with >1 workspace (cross-project edge case), so we
   // include any session whose id appears in this workspace's link set.
   const workspaceSessionIds = useMemo(
-    () => (workspaceLinks ? new Set(workspaceLinks.map((l) => l.session_id)) : null),
-    [workspaceLinks],
+    () =>
+      scopeToWorkspace && workspaceLinks
+        ? new Set(workspaceLinks.map((l) => l.session_id))
+        : null,
+    [scopeToWorkspace, workspaceLinks],
   )
 
   const handleSelectSession = (session: Session) => {
