@@ -1,19 +1,20 @@
 import { type APIRequestContext, request } from '@playwright/test';
 
 const DEFAULT_PROVIDER_ID = 'openrouter';
-// google/gemini-2.5-flash — model for all e2e tests, matching the E2E CI model
-// in .github/workflows/pr.yml. (The previous z-ai/glm-5v-turbo was removed from
-// OpenRouter and is now a dead model — that is why CI failed.) Tool-capable on
-// OpenRouter and generally faster than the prior pick, so existing generous
-// timeouts remain safe. Determinism for "exactly N tool calls" subagent
-// assertions is enforced via the temperature=0 + seed=42 plumbing the suite
-// already passes through to OpenRouter, not by the model alone.
+// z-ai/glm-5.2 — the project's standard model for all e2e tests (mirrored in the
+// Fly CI runner's runci.sh e2e config). The previous google/gemini-2.5-flash
+// pick degraded on OpenRouter (empty responses + "http2: response body closed"
+// stream drops → turns never completed → Bug-3/Bug-5/T24/media all failed), so
+// it was swapped for glm-5.2, a live, reliable, tool-capable model. Determinism
+// for "exactly N tool calls" subagent assertions is enforced via the
+// temperature=0 + seed=42 plumbing the suite already passes through to
+// OpenRouter, not by the model alone.
 //
-// NOTE: CI uses pr.yml's model (this one). The nightly evals
-// (.github/workflows/evals-nightly.yml + evals/cmd/eval-runner/main.go)
-// intentionally stay on z-ai/glm-5-turbo (a LIVE model whose eval baselines
-// depend on it) — the E2E-vs-evals model difference is deliberate.
-const DEFAULT_MODEL = 'google/gemini-2.5-flash';
+// NOTE: the nightly evals (.github/workflows/evals-nightly.yml +
+// evals/cmd/eval-runner/main.go) intentionally stay on z-ai/glm-5-turbo (a LIVE
+// model whose eval baselines depend on it) — the E2E-vs-evals difference is
+// deliberate.
+const DEFAULT_MODEL = 'z-ai/glm-5.2';
 const DEFAULT_USERNAME = 'admin';
 const DEFAULT_PASSWORD = 'admin123';
 

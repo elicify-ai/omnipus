@@ -9,7 +9,7 @@ click things, try the obvious path, note when something is confusing or broken.
 - Each subagent has its **own** gateway instance + `OMNIPUS_HOME`. You cannot break other groups.
 - Base URL and auth file are given in your task prompt. Seeded roster: Mia (Assistant), Jim
   (Orchestrator), Ava (Builder), Ray (Scout) — all `core`/locked — plus a `Worker` (Subagent/locked).
-- Model: `openrouter/google/gemini-2.5-flash` via OpenRouter (real LLM; chats cost real tokens — be economical).
+- Model: `openrouter/z-ai/glm-5.2` via OpenRouter (real LLM; chats cost real tokens — be economical).
 
 ## How to drive the browser
 Write ONE self-contained ESM script **inside the repo** (e.g. `/tmp/uat/g<N>-journey.mjs` is fine,
