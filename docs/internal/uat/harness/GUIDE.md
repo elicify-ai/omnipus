@@ -34,14 +34,26 @@ explore reactively. Run with a timeout: `timeout 180 node <script> 2>&1`.
 ## Navigation — CRITICAL
 The SPA uses **HASH routing**. Direct `page.goto('/agents')` does NOT work (stays on chat).
 Two reliable ways to navigate:
-1. **Direct hash URL:** `await page.goto('/#/agents', { waitUntil:'networkidle' }); await page.waitForTimeout(1500)`
-2. **Like a human — the sidebar drawer:** click the top-left hamburger (first header button), then
-   click a link. Drawer links: **Chat · Tasks · Automations · Agents · Connectors · Skills & Tools ·
-   Workspaces · Settings · Sign out**.
+1. **Direct hash URL** (then `waitForTimeout(1500)`), e.g. `await page.goto('/#/workspaces/<id>/board', {waitUntil:'networkidle'})`.
+2. **Like a human — the sidebar drawer:** click the top-left hamburger (first header button), then click.
 
-Known hash routes: `/#/` (chat) · `/#/agents` (list) · `/#/agents/trust` (delegation graph) ·
-`/#/agents/<id>` (profile slide-over) · `/#/automations` · `/#/settings` · Tasks resolves to
-`/#/workspaces/<id>` (use the drawer "Tasks" link — the id is per-instance). `/#/command-center` redirects to Tasks.
+**⚠️ NEW IA (workspace-as-project — the app was just redesigned; ignore older route lore):**
+- The sidebar is reorganized: **WORKSPACES** (primary list — "My Workspace" ⭐ + any named ones) and a
+  **Library** group: **Agents · Connectors · Skills & Tools**, then **Settings · Sign out**. There is NO
+  top-level Chat/Tasks/Automations anymore (**Automations was removed**).
+- **You're always inside a workspace.** Clicking a workspace enters it and lands on its **Chat** tab. A
+  workspace is a container with a **7-tab bar**: **Chat · Board · List · Graph · Calendar · Team · Settings**.
+- **Routes:** `/#/` redirects to the default workspace's Chat. Workspace tabs:
+  `/#/workspaces/<id>/chat` (default) · `/board` · `/list` · `/graph` (Task DAG) · `/calendar` · `/team`
+  (delegation graph editor) · `/settings`. The `<id>` is per-instance — get it from the sidebar (click "My
+  Workspace") or from `/#/workspaces` (the index). `/#/tasks`, `/#/command-center`, `/#/automations` redirect
+  into the default workspace's tabs.
+- **Agents area** (`/#/agents`): two views — **Agents (library)** (filter All | by workspace; create
+  Main/Subagent/subagent_3p; agent profile slide-over) and **Workspace Teams** (index → links to a workspace's
+  `/team` delegation graph). The agent profile slide-over opens at `/#/agents/<id>`.
+- **Settings** (`/#/settings`): tabs incl. **Gateway** (god-mode toggle + restart control). **Connectors**
+  (`/#/connectors`): channels + the **email mailbox account**.
+- Graph (Task DAG) and Team (delegation graph) render with **React Flow** — pannable canvases; screenshot them.
 
 ## Selectors
 Prefer `getByRole('button'|'link'|'tab', { name })` and `getByText(...)`. For inputs,
@@ -69,15 +81,19 @@ Return a single JSON object:
 ```json
 {
   "group": <N>,
+  "persona": "<your name + who you are, e.g. 'Dana, non-technical first-timer'>",
   "journeys": ["<name>", ...],
-  "steps": [{"journey":"...","action":"...","screenshot":"group-N/NN-label.png","observation":"..."}],
+  "steps": [{"journey":"...","action":"...","screenshot":"group-N/NN-label.png","observation":"...","feeling":"first-person reaction — what you expected, what delighted or frustrated you"}],
   "bugs": [{"severity":"Critical|Major|Minor","title":"...","repro":"...","screenshot":"...","evidence":"console/network/api"}],
   "ux_issues": [{"title":"...","detail":"...","screenshot":"...","recommendation":"..."}],
   "coverage_gaps": [{"title":"...","detail":"...","api_exists_but_ui":"..."}],
   "key_question_answers": {"<question>":"<your answer with evidence>"},
+  "readiness": {"score_1to5": <int>, "would_i_ship_today": "yes|no|with-fixes", "what_felt_premium": "...", "what_felt_janky_or_unfinished": "...", "prose": "your overall felt impression of usability + readiness as a human user"},
   "console_network_errors": ["..."]
 }
 ```
+**You MUST fill `persona`, every step's `feeling`, and the `readiness` block** — sharing how it FEELS to use
+(usability + ship-readiness) is a primary purpose of this UAT, not an afterthought.
 Severity: **Critical** blocks a core function · **Major** feature broken but workaround exists ·
 **Minor** cosmetic/edge · UX = usability concern (put in ux_issues).
 
