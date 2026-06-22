@@ -167,7 +167,7 @@ run_e2e() {
   "providers": [
     {
       "model_name": "openrouter-glm",
-      "model": "openrouter/google/gemini-2.5-flash",
+      "model": "openrouter/z-ai/glm-5.2",
       "api_base": "https://openrouter.ai/api/v1",
       "api_key_ref": "OPENROUTER_API_KEY"
     }
@@ -222,7 +222,7 @@ EOF
   #    on every LLM call.
   log "e2e: complete onboarding"
   jq -n --arg key "$OPENROUTER_API_KEY" \
-    '{provider:{id:"openrouter",api_key:$key,model:"openrouter/google/gemini-2.5-flash"},admin:{username:"admin",password:"admin123"}}' \
+    '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
     | curl -sf -X POST http://localhost:6060/api/v1/onboarding/complete \
         -H 'Content-Type: application/json' -d @- >/dev/null \
     || { echo "Onboarding API failed" >&2; cat "$E2E_LOG" >&2; return 1; }
