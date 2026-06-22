@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/dapicom-ai/omnipus/pkg/task"
 )
-
-func chmod0555(path string) error { return os.Chmod(path, 0o555) }
-func chmod0755(path string) error { return os.Chmod(path, 0o755) }
 
 // fakeTransport is an in-memory Transport for drainer tests.
 type fakeTransport struct {
@@ -375,15 +373,15 @@ func TestDrainer_MaxPerMailboxRespected(t *testing.T) {
 // incremented, but processing continues for the next message.
 // Traces to: drainer.go drainMailbox (store.Create failure branch, continue)
 func TestDrainer_StoreCreateFailureSkipsMessage(t *testing.T) {
-	// Use a read-only store directory to force Create to fail on write.
+	// Force store.Create to fail deterministically for ANY user (including root,
+	// which bypasses chmod-based read-only dirs): point the store at a path *under
+	// a regular file*, so the store's MkdirAll-on-write fails with ENOTDIR.
 	dir := t.TempDir()
-	// Create the store first so it initializes any dirs, then make read-only.
-	store := task.New(dir)
-	// Make the directory read-only so file writes fail.
-	if err := chmod0555(dir); err != nil {
-		t.Skipf("cannot make dir read-only (may be running as root): %v", err)
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
 	}
-	t.Cleanup(func() { chmod0755(dir) }) //nolint:errcheck // cleanup best-effort
+	store := task.New(filepath.Join(blocker, "tasks")) // parent is a file → writes fail
 
 	ft := newFakeTransport(
 		Message{UID: 1, From: "a@x.com", Subject: "Fails"},
