@@ -355,6 +355,19 @@ func DefaultConfig() *Config {
 				TimeoutSeconds:       60,
 				MaxBackgroundSeconds: 300, // 5 minutes; 0 = disabled
 			},
+			// Browser automation is a standard built-in tool — enabled by default
+			// like exec/web/cron. Without this entry tools.browser.Enabled defaulted
+			// to the bool zero value (false), which migrateDeprecatedToolEnableFlags
+			// then translated into a global "browser.*: deny" policy — silently
+			// hiding browser.navigate/screenshot/etc. from EVERY agent's tool list.
+			// Headless on by default for server use; browser.evaluate stays opt-in
+			// (EvaluateEnabled=false) per SEC-04/SEC-06.
+			Browser: BrowserToolConfig{
+				ToolConfig: ToolConfig{
+					Enabled: true,
+				},
+				Headless: true,
+			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,
