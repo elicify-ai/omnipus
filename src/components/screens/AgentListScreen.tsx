@@ -401,11 +401,15 @@ function AgentsLibraryView({
 
             {cliDetectFailed && (
               <div
-                className="flex items-start gap-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 mb-3"
+                className="flex items-start gap-2 rounded-lg border px-3 py-2 mb-3"
+                style={{
+                  borderColor: 'color-mix(in srgb, var(--color-warning) 30%, transparent)',
+                  backgroundColor: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
+                }}
                 data-testid="cli-detect-warning"
               >
-                <WarningCircle size={16} weight="bold" className="mt-0.5 shrink-0 text-amber-400" />
-                <p className="text-xs text-amber-100">
+                <WarningCircle size={16} weight="bold" className="mt-0.5 shrink-0" style={{ color: 'var(--color-warning)' }} />
+                <p className="text-xs" style={{ color: 'var(--color-warning)' }}>
                   Could not detect installed external CLIs. External subagent availability is assumed by default.
                 </p>
               </div>
@@ -524,7 +528,10 @@ export function AgentListScreen() {
       .then((d) => {
         if (!cancelled) setHostClis(d)
       })
-      .catch(() => {
+      .catch((err) => {
+        // Fail soft (the banner explains availability is assumed), but log for
+        // debuggability so a real auth/network regression isn't silent.
+        console.warn('CLI detection failed:', err)
         if (!cancelled) setCliDetectFailed(true)
       })
     return () => {

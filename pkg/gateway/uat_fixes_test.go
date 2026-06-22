@@ -11,6 +11,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,58 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
+
+// TestFetchUpstreamModels covers the OpenAI-compatible /models fetcher against a
+// stub server: success (sorted IDs), non-200, wrong content-type, and bad JSON.
+func TestFetchUpstreamModels(t *testing.T) {
+	t.Run("success returns sorted ids", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/models", r.URL.Path)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"z-model"},{"id":"a-model"},{"id":""}]}`))
+		}))
+		defer srv.Close()
+
+		models, err := fetchUpstreamModels(srv.URL, "key")
+		require.NoError(t, err)
+		// Sorted, empty id dropped.
+		assert.Equal(t, []string{"a-model", "z-model"}, models)
+	})
+
+	t.Run("non-200 returns error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+
+		_, err := fetchUpstreamModels(srv.URL, "key")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "401")
+	})
+
+	t.Run("wrong content-type returns error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html>not json</html>"))
+		}))
+		defer srv.Close()
+
+		_, err := fetchUpstreamModels(srv.URL, "key")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Content-Type")
+	})
+
+	t.Run("bad JSON returns error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":`)) // truncated
+		}))
+		defer srv.Close()
+
+		_, err := fetchUpstreamModels(srv.URL, "key")
+		require.Error(t, err)
+	})
+}
 
 // --- Task 3: whitespace-only name validation ---
 
@@ -191,6 +244,54 @@ func TestProviders_UserModels_RoundTrip(t *testing.T) {
 	}
 	require.NotNil(t, gw)
 	assert.NotContains(t, gw.Models, "mygw/b", "cleared user models must not be returned")
+}
+
+// TestProviders_ModelBounds_Rejected proves the inline bounds caps (M-slug):
+// a models list with >500 entries OR any slug >256 chars is rejected with 400,
+// independent of gateway.validate_inbound (which defaults false in tests). The
+// rejection short-circuits before any config write or reload.
+func TestProviders_ModelBounds_Rejected(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	seedProviderConfig(
+		t, api,
+		map[string]any{"model_name": "mygw", "provider": "mygw", "model": "mygw/a"},
+	)
+
+	t.Run("too many entries", func(t *testing.T) {
+		slugs := make([]string, 0, 501)
+		for i := 0; i < 501; i++ {
+			slugs = append(slugs, fmt.Sprintf("mygw/m%d", i))
+		}
+		payload, err := json.Marshal(map[string]any{"models": slugs})
+		require.NoError(t, err)
+		w := putProviderRaw(t, api, "mygw", string(payload))
+		require.Equal(t, http.StatusBadRequest, w.Code,
+			">500 models must be rejected with 400; body=%s", w.Body.String())
+		assert.Contains(t, w.Body.String(), "500")
+	})
+
+	t.Run("slug too long", func(t *testing.T) {
+		longSlug := "mygw/" + strings.Repeat("x", 260) // > 256 chars total
+		payload, err := json.Marshal(map[string]any{"models": []string{"mygw/ok", longSlug}})
+		require.NoError(t, err)
+		w := putProviderRaw(t, api, "mygw", string(payload))
+		require.Equal(t, http.StatusBadRequest, w.Code,
+			"a slug >256 chars must be rejected with 400; body=%s", w.Body.String())
+		assert.Contains(t, w.Body.String(), "256")
+	})
+
+	t.Run("at the bound is accepted", func(t *testing.T) {
+		// Exactly 500 entries, each within the length cap, is allowed.
+		slugs := make([]string, 0, 500)
+		for i := 0; i < 500; i++ {
+			slugs = append(slugs, fmt.Sprintf("mygw/m%d", i))
+		}
+		payload, err := json.Marshal(map[string]any{"models": slugs})
+		require.NoError(t, err)
+		w := putProviderRaw(t, api, "mygw", string(payload))
+		require.Equal(t, http.StatusOK, w.Code,
+			"exactly 500 models must be accepted; body=%s", w.Body.String())
+	})
 }
 
 // TestProviders_RefreshModels_EndpointlessReturnsUserCatalogue proves the
@@ -381,12 +482,20 @@ func seedProviderConfig(t *testing.T, api *restAPI, entries ...map[string]any) {
 
 func putProvider(t *testing.T, api *restAPI, id, body string) {
 	t.Helper()
+	w := putProviderRaw(t, api, id, body)
+	require.Equal(t, http.StatusOK, w.Code, "PUT provider %s must be 200; body=%s", id, w.Body.String())
+}
+
+// putProviderRaw PUTs a provider and returns the recorder without asserting the
+// status — for tests that expect a non-200 (e.g. bounds rejection).
+func putProviderRaw(t *testing.T, api *restAPI, id, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/providers/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/providers/" + id
 	api.HandleProviders(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "PUT provider %s must be 200; body=%s", id, w.Body.String())
+	return w
 }
 
 func getProviders(t *testing.T, api *restAPI) []gen.Provider {

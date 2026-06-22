@@ -47,6 +47,10 @@ const AVAILABLE_PROVIDERS = [
   { id: 'mistral', display_name: 'Mistral' },
   { id: 'azure', display_name: 'Azure OpenAI' },
   { id: 'zhipu', display_name: 'Zhipu' },
+  // The runtime GLM provider registers as `z-ai` (the id the backend probes for
+  // the live GLM model list). Listing it here makes that provider reachable in
+  // onboarding so the `glm-5.2` capable-default preference can surface.
+  { id: 'z-ai', display_name: 'Z.ai (GLM)' },
   { id: 'moonshot', display_name: 'Moonshot' },
   { id: 'nvidia', display_name: 'NVIDIA' },
   { id: 'minimax', display_name: 'MiniMax' },

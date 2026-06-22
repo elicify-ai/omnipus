@@ -49,6 +49,9 @@ const LIVE_LISTING_PROVIDER_IDS: ReadonlySet<string> = new Set([
   'deepseek',
   'moonshot',
   'zhipu',
+  // The runtime GLM provider registers as `z-ai` (not `zhipu`); it exposes a
+  // live upstream /models listing, so treat it as 'live' on legacy gateways too.
+  'z-ai',
   'cerebras',
   'novita',
   'nvidia',

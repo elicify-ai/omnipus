@@ -29,6 +29,13 @@ describe('providerCatalogMode (UAT model-catalog)', () => {
     expect(isLiveListingProvider(provider({ id: 'anthropic' }))).toBe(true)
   })
 
+  it('treats the GLM provider id `z-ai` as a live listing provider (heuristic)', () => {
+    // The runtime GLM provider registers as `z-ai`, not `zhipu`; its live model
+    // list (incl. glm-5.2) must surface on legacy gateways with no signal.
+    expect(providerCatalogMode(provider({ id: 'z-ai' }))).toBe('live')
+    expect(isLiveListingProvider(provider({ id: 'z-ai' }))).toBe(true)
+  })
+
   it('defaults unknown / endpoint-less providers to manual', () => {
     expect(providerCatalogMode(provider({ id: 'ollama' }))).toBe('manual')
     expect(providerCatalogMode(provider({ id: 'some-self-hosted-thing' }))).toBe('manual')

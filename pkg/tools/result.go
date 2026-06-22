@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
@@ -147,27 +148,6 @@ const (
 	DenyDepth DelegationDenyReason = "depth"
 )
 
-// DelegationFailure is the structured payload emitted in a denied delegation's
-// tool result. It is JSON-serialized into ToolResult.ForLLM (and thus forwarded
-// verbatim as the tool_call_result frame's `result`), so the SPA can switch on
-// the `error` discriminator ("delegation_denied") and render a distinct block
-// with the human-readable reason and the policy axis that fired.
-//
-// Contract: contracts/components/schemas/DelegationFailure.yaml. The Go shape
-// here is the producer side; the SPA consumes the generated TS/Zod type.
-type DelegationFailure struct {
-	// Error is the fixed discriminator the SPA matches on.
-	Error string `json:"error"`
-	// Reason is the human-readable explanation (also fed to the LLM).
-	Reason string `json:"reason"`
-	// Policy is the delegation-policy axis that rejected the call.
-	Policy DelegationDenyReason `json:"policy"`
-	// Tool is the delegation tool that was denied (spawn / subagent / task_create).
-	Tool string `json:"tool"`
-	// TargetAgentID is the requested delegation target, when one was named.
-	TargetAgentID string `json:"target_agent_id,omitempty"`
-}
-
 // DelegationDenial is the value the policy deny-checkers return: nil means the
 // delegation is ALLOWED; a non-nil value carries the structured denial.
 type DelegationDenial struct {
@@ -177,32 +157,60 @@ type DelegationDenial struct {
 	TargetAgentID string
 }
 
+// validDelegationPolicy reports whether p is one of the contract's enum values
+// (asyncapi.yaml DelegationFailure.policy: trust_set | mode | depth).
+func validDelegationPolicy(p DelegationDenyReason) bool {
+	switch p {
+	case DenyTrustSet, DenyMode, DenyDepth:
+		return true
+	default:
+		return false
+	}
+}
+
 // DelegationDeniedResult builds a structured error ToolResult for a denied
-// delegation. ForLLM is the JSON-encoded DelegationFailure so both the LLM and
-// the SPA receive the same typed shape; IsError is set so the frame status is
+// delegation. ForLLM is the JSON-encoded DelegationFailure (the generated wire
+// type, contracts/asyncapi.yaml → pkg/api/generated) so both the LLM and the
+// SPA receive the same typed shape; IsError is set so the frame status is
 // "error". The wrapped Err preserves the reason for logging.
+//
+// Invariant defense: the contract requires reason (minLength:1) and a policy
+// enum value. A denial that arrives with an empty reason or an unrecognized
+// policy would serialize a schema-invalid payload the SPA silently drops, so we
+// default a non-empty reason and a valid policy axis before marshaling.
 func DelegationDeniedResult(tool string, d *DelegationDenial) *ToolResult {
 	if d == nil {
 		// Defensive: never produce a "denied" result without a denial.
 		return ErrorResult("delegation denied")
 	}
-	failure := DelegationFailure{
-		Error:         "delegation_denied",
-		Reason:        d.Reason,
-		Policy:        d.Policy,
-		Tool:          tool,
-		TargetAgentID: d.TargetAgentID,
+	reason := d.Reason
+	if reason == "" {
+		reason = "delegation denied by policy"
+	}
+	policy := d.Policy
+	if !validDelegationPolicy(policy) {
+		policy = DenyTrustSet
+	}
+	failure := generated.DelegationFailure{
+		Error:  "delegation_denied",
+		Reason: reason,
+		Policy: string(policy),
+		Tool:   tool,
+	}
+	if d.TargetAgentID != "" {
+		tgt := d.TargetAgentID
+		failure.TargetAgentId = &tgt
 	}
 	encoded, err := json.Marshal(failure)
 	if err != nil {
 		// Fall back to a plain text error if marshaling somehow fails.
-		return ErrorResult("delegation denied: " + d.Reason).
-			WithError(fmt.Errorf("delegation policy denied (%s): %s", tool, d.Reason))
+		return ErrorResult("delegation denied: " + reason).
+			WithError(fmt.Errorf("delegation policy denied (%s): %s", tool, reason))
 	}
 	return (&ToolResult{
 		ForLLM:  string(encoded),
 		IsError: true,
-	}).WithError(fmt.Errorf("delegation policy denied (%s): %s", tool, d.Reason))
+	}).WithError(fmt.Errorf("delegation policy denied (%s): %s", tool, reason))
 }
 
 // ErrorResult creates a ToolResult representing an error.

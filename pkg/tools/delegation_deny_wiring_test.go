@@ -6,15 +6,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
 // decodeDelegationFailure parses a denied-delegation tool result's ForLLM as the
-// structured DelegationFailure payload, failing the test if it is not valid JSON
-// with the expected discriminator.
-func decodeDelegationFailure(t *testing.T, result *ToolResult) DelegationFailure {
+// generated DelegationFailure wire type, failing the test if it is not valid
+// JSON with the expected discriminator.
+func decodeDelegationFailure(t *testing.T, result *ToolResult) generated.DelegationFailure {
 	t.Helper()
-	var failure DelegationFailure
+	var failure generated.DelegationFailure
 	if err := json.Unmarshal([]byte(result.ForLLM), &failure); err != nil {
 		t.Fatalf("delegation failure result is not valid JSON: %v (got: %s)", err, result.ForLLM)
 	}
@@ -22,6 +23,14 @@ func decodeDelegationFailure(t *testing.T, result *ToolResult) DelegationFailure
 		t.Fatalf("expected error discriminator 'delegation_denied', got %q (raw: %s)", failure.Error, result.ForLLM)
 	}
 	return failure
+}
+
+// targetAgentID returns the failure's target agent id, or "" when unset.
+func targetAgentID(f generated.DelegationFailure) string {
+	if f.TargetAgentId == nil {
+		return ""
+	}
+	return *f.TargetAgentId
 }
 
 // These tests prove the delegation-deny WIRING inside SpawnTool.Execute and
@@ -65,14 +74,14 @@ func TestSpawnTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	if failure.Tool != "spawn" {
 		t.Errorf("expected structured failure tool 'spawn', got %q", failure.Tool)
 	}
-	if failure.Policy != DenyTrustSet {
+	if failure.Policy != string(DenyTrustSet) {
 		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
 	}
 	if !strings.Contains(failure.Reason, "target untrusted") {
 		t.Errorf("expected the checker's reason to surface, got: %s", failure.Reason)
 	}
-	if failure.TargetAgentID != "evil-agent" {
-		t.Errorf("expected target_agent_id 'evil-agent', got %q", failure.TargetAgentID)
+	if targetAgentID(failure) != "evil-agent" {
+		t.Errorf("expected target_agent_id 'evil-agent', got %q", targetAgentID(failure))
 	}
 	if gotTarget != "evil-agent" {
 		t.Errorf("expected checker to receive target 'evil-agent', got %q", gotTarget)
@@ -175,7 +184,7 @@ func TestTaskCreateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	if failure.Tool != "task_create" {
 		t.Errorf("expected structured failure tool 'task_create', got %q", failure.Tool)
 	}
-	if failure.Policy != DenyMode {
+	if failure.Policy != string(DenyMode) {
 		t.Errorf("expected policy %q, got %q", DenyMode, failure.Policy)
 	}
 	if !strings.Contains(failure.Reason, "forbidden for target") {
@@ -220,7 +229,7 @@ func TestTaskCreateTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
 		t.Fatalf("expected legacy delegateCheck denial to return an error, got %+v", result)
 	}
 	failure := decodeDelegationFailure(t, result)
-	if failure.Tool != "task_create" || failure.Policy != DenyTrustSet {
+	if failure.Tool != "task_create" || failure.Policy != string(DenyTrustSet) {
 		t.Errorf("expected structured task_create/trust_set failure, got %+v", failure)
 	}
 	if !strings.Contains(failure.Reason, "delegation to blocked-agent not allowed") {
@@ -237,6 +246,76 @@ func TestTaskCreateTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
 	}
 	if len(tasks) != 0 {
 		t.Errorf("expected zero tasks persisted on denied delegation, got %d", len(tasks))
+	}
+}
+
+// TestSubagentTool_DelegationDenyChecker_Aborts proves the deny-checker aborts a
+// subagent (await-mode) delegation: the structured failure carries Tool=="subagent"
+// and the spawner never runs (no sub-turn).
+func TestSubagentTool_DelegationDenyChecker_Aborts(t *testing.T) {
+	tool := NewSubagentTool(NewSubagentManager(&MockLLMProvider{}, "test-model", "/tmp/test"))
+
+	spawned := false
+	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
+		spawned = true
+		return NewToolResult("ran"), nil
+	}))
+
+	tool.SetDelegationDenyChecker(func(context.Context) *DelegationDenial {
+		return &DelegationDenial{
+			Reason:        "delegation depth cap reached",
+			Policy:        DenyDepth,
+			TargetAgentID: "deep-agent",
+		}
+	})
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"task":  "do the thing",
+		"label": "deep work",
+	})
+
+	if result == nil || !result.IsError {
+		t.Fatalf("expected denied subagent delegation to return an error result, got %+v", result)
+	}
+	failure := decodeDelegationFailure(t, result)
+	if failure.Tool != "subagent" {
+		t.Errorf("expected structured failure tool 'subagent', got %q", failure.Tool)
+	}
+	if failure.Policy != string(DenyDepth) {
+		t.Errorf("expected policy %q, got %q", DenyDepth, failure.Policy)
+	}
+	if !strings.Contains(failure.Reason, "depth cap reached") {
+		t.Errorf("expected the checker's reason to surface, got: %s", failure.Reason)
+	}
+	if targetAgentID(failure) != "deep-agent" {
+		t.Errorf("expected target_agent_id 'deep-agent', got %q", targetAgentID(failure))
+	}
+	if spawned {
+		t.Error("spawner must NOT run when delegation is denied")
+	}
+}
+
+// TestDelegationDeniedResult_DefaultsInvariant proves the contract invariant
+// defense: a denial with an empty reason / invalid policy still serializes a
+// schema-valid DelegationFailure (non-empty reason, enum policy) the SPA can
+// render, rather than a silently-dropped payload.
+func TestDelegationDeniedResult_DefaultsInvariant(t *testing.T) {
+	result := DelegationDeniedResult("spawn", &DelegationDenial{}) // empty reason + invalid policy
+	if result == nil || !result.IsError {
+		t.Fatalf("expected an error result, got %+v", result)
+	}
+	failure := decodeDelegationFailure(t, result)
+	if failure.Reason == "" {
+		t.Error("reason must be defaulted to a non-empty string (contract minLength:1)")
+	}
+	switch failure.Policy {
+	case string(DenyTrustSet), string(DenyMode), string(DenyDepth):
+		// valid enum value
+	default:
+		t.Errorf("policy must be defaulted to a valid enum value, got %q", failure.Policy)
+	}
+	if failure.Tool != "spawn" {
+		t.Errorf("expected tool 'spawn', got %q", failure.Tool)
 	}
 }
 

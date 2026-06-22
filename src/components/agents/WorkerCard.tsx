@@ -180,9 +180,9 @@ function WorkerTestResultPill({ result }: { result: RunnerTestResponse }) {
   const warn = !ok && result.reason === 'unauthenticated'
   const Icon = ok ? CheckCircle : warn ? WarningCircle : XCircle
   const tone = ok
-    ? 'text-emerald-400'
+    ? 'text-[var(--color-success)]'
     : warn
-      ? 'text-amber-400'
+      ? 'text-[var(--color-warning)]'
       : 'text-[var(--color-error)]'
   return (
     <span

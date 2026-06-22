@@ -33,6 +33,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/pairing"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/validation"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
 // replayLiveBufferCap is the capacity of replayDivertCh (FR-I-009).
@@ -144,6 +145,11 @@ type WSHandler struct {
 	// toolStore persists tool results that exceed InlineToolResultMaxBytes.
 	// Set by the gateway after construction (nil = disabled, which is the test default).
 	toolStore *toolResultStore
+
+	// home is the OMNIPUS_HOME path, used to validate a client-supplied
+	// workspace_id (workspace.Exists) before binding it to a session. Set by the
+	// gateway after construction; empty in tests that do not exercise binding.
+	home string
 
 	// lastPairingState caches the most-recently-emitted whatsapp_pairing frame
 	// bytes for each channelID (key: string, value: []byte).  Written by the
@@ -961,6 +967,18 @@ func (h *WSHandler) handleChatMessage(
 	}
 
 	sessionID := frameSessionID
+
+	// M4: validate the client-supplied workspace_id at the binding boundary
+	// before it is ever stamped onto session meta. A bad/stale/typo'd id would
+	// otherwise persist tasks to a workspace no board renders while the agent
+	// reports success. On a miss, drop the binding and fall back to the default
+	// (resolveWorkspaceID/ResolveDefaultID picks up the real default) rather
+	// than stamping the bogus id.
+	if workspaceID != "" && h.home != "" && !workspace.Exists(h.home, workspaceID) {
+		slog.Warn("ws: dropping unknown workspace_id binding — falling back to default",
+			"workspace_id", workspaceID, "chat_id", chatID)
+		workspaceID = ""
+	}
 
 	// Pick the right store for the operation:
 	//

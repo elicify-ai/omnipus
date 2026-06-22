@@ -4661,6 +4661,24 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		if !decodeAndValidate(w, r, "ProviderUpdateRequest", &req, validateEnabled) {
 			return
 		}
+		// Bounds enforcement (M-slug): cap the model list inline so the limits
+		// hold even when schema validation is skipped (validate_inbound=false is
+		// the default). Mirrors the inline name/description caps in
+		// rest_workspaces.go. dedupeNonEmpty applies no maxItems / length cap.
+		if req.Models != nil {
+			const maxModels = 500
+			const maxSlugLen = 256
+			if len(*req.Models) > maxModels {
+				jsonErr(w, http.StatusBadRequest, fmt.Sprintf("models exceeds %d entries", maxModels))
+				return
+			}
+			for _, slug := range *req.Models {
+				if len(slug) > maxSlugLen {
+					jsonErr(w, http.StatusBadRequest, fmt.Sprintf("model slug exceeds %d characters", maxSlugLen))
+					return
+				}
+			}
+		}
 		// Check if the provider already exists.
 		cfg := a.agentLoop.GetConfig()
 		found := false

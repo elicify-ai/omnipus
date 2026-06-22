@@ -6083,6 +6083,11 @@ export interface components {
              */
             due?: string;
             /**
+             * @description When true, clears the task's due date; ignored if `due` is also set to a value. Provides an unambiguous clear mechanism the FE can batch with other field updates (an empty `due` string is not a valid date-time and would be rejected).
+             * @example true
+             */
+            clear_due?: boolean;
+            /**
              * @description New milestone grouping.
              * @example m-5678
              */

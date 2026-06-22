@@ -278,7 +278,8 @@ func maybeOffloadResult(
 
 // parseDelegationFailure inspects a tool result string and, when it is a JSON
 // object emitted by the delegation tools' structured-denial path (discriminator
-// "error":"delegation_denied" — see pkg/tools.DelegationFailure), returns the
+// "error":"delegation_denied" — the generated DelegationFailure wire type, built
+// in pkg/tools.DelegationDeniedResult), returns the
 // parsed object (for the frame's `result` field), the human-readable reason (for
 // the frame's `error` field), and true. Otherwise it returns (nil, "", false)
 // and the caller forwards the raw string unchanged. This is what lets the SPA

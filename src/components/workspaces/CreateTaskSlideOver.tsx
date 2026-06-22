@@ -362,10 +362,10 @@ export function CreateTaskSlideOver({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="1" className="text-xs text-red-400">P1 — Critical</SelectItem>
-                <SelectItem value="2" className="text-xs text-orange-400">P2 — High</SelectItem>
-                <SelectItem value="3" className="text-xs text-yellow-400">P3 — Medium</SelectItem>
-                <SelectItem value="4" className="text-xs text-blue-400">P4 — Low</SelectItem>
+                <SelectItem value="1" className="text-xs text-[color:var(--color-error)]">P1 — Critical</SelectItem>
+                <SelectItem value="2" className="text-xs text-[color:var(--color-warning)]">P2 — High</SelectItem>
+                <SelectItem value="3" className="text-xs text-[color:var(--color-warning)]">P3 — Medium</SelectItem>
+                <SelectItem value="4" className="text-xs text-[color:var(--color-accent)]">P4 — Low</SelectItem>
                 <SelectItem value="5" className="text-xs text-[var(--color-muted)]">P5 — Minimal</SelectItem>
               </SelectContent>
             </Select>

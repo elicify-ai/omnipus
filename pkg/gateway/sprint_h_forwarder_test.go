@@ -351,3 +351,79 @@ func TestSpawn_SubTurnEnd_AfterParentDone_CancelsWatchdog(t *testing.T) {
 	assert.False(t, hasInterrupted,
 		"watchdog must not fire when sub-turn ended normally before the timeout")
 }
+
+// TestToolExecEnd_DelegationDenied_SubstitutesStructuredResult proves the UAT
+// fix wiring in eventForwarder: a tool result with status=="error" whose Result
+// is a structured delegation_denied payload is substituted — frame.Result
+// becomes the parsed object (not the raw string) and frame.Error carries the
+// human-readable reason. Mirrors the forwarder tests above.
+func TestToolExecEnd_DelegationDenied_SubstitutesStructuredResult(t *testing.T) {
+	bus := agent.NewEventBus()
+	defer bus.Close()
+	h := makeMinimalHandler()
+	wc, ch := makeForwarderTestConn(64)
+	done := runForwarder(h, wc, "chat-1", bus)
+
+	denial := `{"error":"delegation_denied","reason":"target untrusted","policy":"trust_set","tool":"spawn","target_agent_id":"evil"}`
+	bus.Emit(agent.Event{
+		Kind: agent.EventKindToolExecEnd,
+		Payload: agent.ToolExecEndPayload{
+			ToolCallID: session.ToolCallID("call-deny"),
+			ChatID:     "chat-1",
+			SessionID:  "sess-1",
+			Tool:       "spawn",
+			IsError:    true,
+			Result:     denial,
+		},
+	})
+
+	bus.Close()
+	<-done
+
+	require.Len(t, ch, 1)
+	frame := drainFrame(t, ch)
+	assert.Equal(t, "tool_call_result", frame.Type)
+	assert.Equal(t, "error", frame.Status, "denied delegation must be an error result")
+	assert.Equal(t, "target untrusted", frame.Error,
+		"frame.error must carry the human-readable denial reason")
+
+	// frame.Result must be the parsed object, not the raw JSON string.
+	obj, ok := frame.Result.(map[string]any)
+	require.True(t, ok, "result must be substituted with the parsed object, got %T", frame.Result)
+	assert.Equal(t, "delegation_denied", obj["error"])
+	assert.Equal(t, "trust_set", obj["policy"])
+	assert.Equal(t, "spawn", obj["tool"])
+}
+
+// TestToolExecEnd_PlainError_NotSubstituted proves the negative case: an ordinary
+// error result is forwarded as the raw string, not parsed into an object.
+func TestToolExecEnd_PlainError_NotSubstituted(t *testing.T) {
+	bus := agent.NewEventBus()
+	defer bus.Close()
+	h := makeMinimalHandler()
+	wc, ch := makeForwarderTestConn(64)
+	done := runForwarder(h, wc, "chat-1", bus)
+
+	bus.Emit(agent.Event{
+		Kind: agent.EventKindToolExecEnd,
+		Payload: agent.ToolExecEndPayload{
+			ToolCallID: session.ToolCallID("call-err"),
+			ChatID:     "chat-1",
+			SessionID:  "sess-1",
+			Tool:       "fs.read",
+			IsError:    true,
+			Result:     "permission denied",
+		},
+	})
+
+	bus.Close()
+	<-done
+
+	require.Len(t, ch, 1)
+	frame := drainFrame(t, ch)
+	assert.Equal(t, "tool_call_result", frame.Type)
+	assert.Equal(t, "error", frame.Status)
+	assert.Empty(t, frame.Error, "a plain error must not set the delegation error field")
+	assert.Equal(t, "permission denied", frame.Result,
+		"a plain error result must be forwarded as the raw string")
+}

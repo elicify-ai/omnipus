@@ -7312,6 +7312,9 @@ type TaskUpdateRequest struct {
 	// BlockedBy Replacement dependency set (replaces the current `blocked_by` atomically). Write-time cycle validator rejects self-edges and cycles; max depth 50.
 	BlockedBy *[]string `json:"blocked_by,omitempty"`
 
+	// ClearDue When true, clears the task's due date; ignored if `due` is also set to a value. Provides an unambiguous clear mechanism the FE can batch with other field updates (an empty `due` string is not a valid date-time and would be rejected).
+	ClearDue *bool `json:"clear_due,omitempty"`
+
 	// CompletedAt When the task completed or failed.
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
