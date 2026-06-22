@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
 )
@@ -47,21 +48,32 @@ func TestNewHTTPClient_NoProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// The client now always carries an explicit transport with HTTP/2 disabled
-	// (forced HTTP/1.1) to avoid "http2: response body closed" stream resets on
-	// long-lived streaming LLM responses.
+	// The client now always carries an explicit transport with HTTP/2 KEPT but
+	// configured with health-check pings (ReadIdleTimeout) so stale pooled
+	// connections are detected and not reused mid-stream — the fix for intermittent
+	// "http2: response body closed" resets on streaming LLM responses.
 	tr, ok := client.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("expected *http.Transport, got %T", client.Transport)
 	}
-	// (Proxy is intentionally left as the cloned default — ProxyFromEnvironment —
-	// so env-proxy support is preserved; only HTTP/2 is forced off.)
-	if tr.ForceAttemptHTTP2 {
-		t.Error("expected ForceAttemptHTTP2=false (HTTP/2 disabled)")
+	// http2.ConfigureTransports installs the "h2" ALPN handler — proof h2 is on.
+	if tr.TLSNextProto == nil {
+		t.Fatal("expected TLSNextProto to be configured for HTTP/2")
 	}
-	if tr.TLSNextProto == nil || len(tr.TLSNextProto) != 0 {
-		t.Errorf("expected non-nil empty TLSNextProto to disable h2 ALPN, got %v", tr.TLSNextProto)
+	if _, ok := tr.TLSNextProto["h2"]; !ok {
+		t.Errorf("expected an 'h2' TLSNextProto handler (HTTP/2 enabled), got keys %v", keysOf(tr.TLSNextProto))
 	}
+	if tr.IdleConnTimeout != 30*time.Second {
+		t.Errorf("expected IdleConnTimeout=30s, got %v", tr.IdleConnTimeout)
+	}
+}
+
+func keysOf[V any](m map[string]V) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }
 
 func TestNewHTTPClient_InvalidProxy(t *testing.T) {
