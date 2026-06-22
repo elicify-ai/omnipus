@@ -251,8 +251,8 @@ test(
     // Navigate to the Channels screen. A single goto() after routes are set is
     // deterministic and keeps the storageState auth token applied (same pattern
     // as channels-routing.spec.ts).
-    await page.goto(`${BASE_URL}/#/channels`)
-    await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
+    await page.goto(`${BASE_URL}/#/connectors`)
+    await expect(page).toHaveURL(/connectors/, { timeout: 10_000 })
 
     // Wait for the WhatsApp card to appear.
     const configureBtn = page.getByRole('button', { name: /configure whatsapp/i })
@@ -314,8 +314,8 @@ test(
     await mockWebSocket(page)
     await stubChannelsRest(page, /* nativeAvailable */ false)
 
-    await page.goto(`${BASE_URL}/#/channels`)
-    await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
+    await page.goto(`${BASE_URL}/#/connectors`)
+    await expect(page).toHaveURL(/connectors/, { timeout: 10_000 })
 
     const configureBtn = page.getByRole('button', { name: /configure whatsapp/i })
     await expect(configureBtn).toBeVisible({ timeout: 15_000 })
@@ -462,8 +462,8 @@ test(
     }
 
     // ── Step 5: Navigate to the Channels screen ──
-    await page.goto(`${BASE_URL}/#/channels`)
-    await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
+    await page.goto(`${BASE_URL}/#/connectors`)
+    await expect(page).toHaveURL(/connectors/, { timeout: 10_000 })
 
     // ── Step 6: Open the Configure WhatsApp panel ──
     const configureBtn = page.getByRole('button', { name: /configure whatsapp/i })

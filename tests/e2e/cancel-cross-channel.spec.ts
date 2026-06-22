@@ -330,10 +330,10 @@ test(
 test(
   'T24 — cancel cascades to subagent: transcript.jsonl records turn_canceled with descendants',
   async ({ page }) => {
-    // 270s: matches sibling spawn-based tests (handoff(b), subagent(a/d)) which
-    // complete in 6-16s standalone, up to 60-90s under suite load. test.slow()
-    // ceiling.
-    test.slow()
+    // glm-5.2 (the standard e2e model) is reliable but slower than the old gemini
+    // pick — the spawn turn + the subagent's inline essay + cancel can exceed the
+    // 270s test.slow() ceiling under suite load. Use an explicit higher budget.
+    test.setTimeout(480_000)
 
     await page.goto('/')
 
@@ -382,7 +382,7 @@ test(
       [
         'Call the `spawn` tool exactly once, right now, with these arguments:',
         '  label: "cancel cascade test"',
-        '  task: "You are the subagent. Do not use any tools. Write a detailed 600-word essay about renewable energy as continuous inline prose, beginning immediately and writing without stopping until you reach 600 words."',
+        '  task: "You are the subagent. Do not use any tools. Write a detailed 250-word essay about renewable energy as continuous inline prose, beginning immediately and writing without stopping until you reach 250 words."',
         'Do not reply in prose. Do not call any other tool. Call spawn now.',
       ].join('\n'),
     )

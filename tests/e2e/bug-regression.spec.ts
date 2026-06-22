@@ -79,6 +79,9 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
   test(
     '(Bug-3-a) two chats opened in parallel both receive replies',
     async ({ page, context }) => {
+      // Real LLM turns in two tabs; glm-5.2 (the standard e2e model) is reliable
+      // but slower than the old gemini pick, so budget the full slow ceiling.
+      test.slow()
       // BDD: Given two browser tabs open to different chat sessions
       //      When a message is sent in each tab within a short window
       //      Then both tabs receive at least one assistant message within 30s
@@ -114,9 +117,10 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       await input1.press('Enter')
       await input2.press('Enter')
 
-      // Both must get a reply within 30s. With the mock LLM this should be < 5s;
-      // we use 30s to give the real LLM time as well.
-      const replyTimeout = 30_000
+      // Both must get a settled reply. glm-5.2 (the standard e2e model) is
+      // reliable but slower than the old gemini pick, and concurrent turns share
+      // the model, so allow generous headroom.
+      const replyTimeout = 90_000
 
       // The contract under test is "both sessions are serviced concurrently"
       // (no session starvation). The assertion MUST wait for a SETTLED reply, not
@@ -162,6 +166,9 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-a) navigating away and back to a session preserves message order',
     async ({ page }) => {
+      // Real LLM turn + replay; glm-5.2 (the standard e2e model) is reliable but
+      // slower than the old gemini pick, so budget the full slow ceiling.
+      test.slow()
       // BDD: Given a chat session with at least 1 assistant message
       //      When the user navigates to another page and back
       //      Then the messages appear in the same order as before
@@ -182,7 +189,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       // Send a message and wait for reply.
       await input.fill('Bug-5 replay order test message one')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 })
 
       // Capture the text of the first assistant message.
       const firstMessageText = await assistantMessages(page).first().textContent()
@@ -199,7 +206,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       await page.waitForLoadState('networkidle')
 
       // Wait for messages to restore via replay.
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 15_000 })
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 45_000 })
         .catch((e) => {
           throw new Error(
             `BUG-5: After navigating back to the session, the assistant message ` +
@@ -224,6 +231,9 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-b) two-turn session: turns appear in chronological order after replay',
     async ({ page }) => {
+      // Two real LLM turns + replay; glm-5.2 (the standard e2e model) is reliable
+      // but slower than the old gemini pick, so budget the full slow ceiling.
+      test.slow()
       // BDD: Given a session with 2 turns (user→assistant, user→assistant)
       //      When the user navigates away and back
       //      Then turn 1 appears before turn 2 (causal order preserved)
@@ -243,12 +253,12 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       // Turn 1.
       await input.fill('Bug-5 turn 1 — first message')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 })
 
       // Turn 2.
       await input.fill('Bug-5 turn 2 — second message')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(2, { timeout: 30_000 })
+      await expect(assistantMessages(page)).toHaveCount(2, { timeout: 90_000 })
 
       // Capture original ordering.
       const originalTexts = await assistantMessages(page).allTextContents()
@@ -261,7 +271,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       await page.waitForLoadState('networkidle')
 
       // Wait for 2 messages to restore.
-      await expect(assistantMessages(page)).toHaveCount(2, { timeout: 15_000 })
+      await expect(assistantMessages(page)).toHaveCount(2, { timeout: 45_000 })
         .catch((e) => {
           throw new Error(
             `BUG-5: After navigating back, expected 2 assistant messages but got fewer. ` +

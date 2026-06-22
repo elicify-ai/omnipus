@@ -16,11 +16,11 @@ test.beforeEach(async ({ page }) => {
 test(
   '(a) screenshot inline render: Mia screenshots example.com and renders an img',
   async ({ page }) => {
-    // test.slow() triples the global 90s test timeout to 270s. The screenshot
-    // flow exercises the LLM (tool selection) + Chromium (screenshot) +
-    // SPA (media render). End-to-end can take 60-120s under suite load even
-    // though every layer alone is sub-30s.
-    test.slow();
+    // The screenshot flow exercises the LLM (tool selection) + Chromium
+    // (screenshot) + SPA (media render). glm-5.2 (the standard e2e model) is
+    // reliable but slower than the old gemini pick, so use an explicit generous
+    // budget rather than the 270s test.slow() ceiling.
+    test.setTimeout(420_000);
     // Select Mia agent via the agent picker dropdown
     const picker = agentPicker(page);
     await expect(picker).toBeVisible({ timeout: 15_000 });
@@ -38,11 +38,11 @@ test(
     await input.fill('Please take a screenshot of example.com and show it to me');
     await input.press('Enter');
 
-    await expect(assistantMessages(page)).toHaveCount(countBefore + 1, { timeout: 120_000 });
+    await expect(assistantMessages(page)).toHaveCount(countBefore + 1, { timeout: 180_000 });
 
     // InlineMedia in ChatScreen renders img tags for image media (ChatScreen.tsx:219)
     const mediaImg = page.locator('img[src*="/api/v1/media/"]').first();
-    await expect(mediaImg).toBeVisible({ timeout: 60_000 });
+    await expect(mediaImg).toBeVisible({ timeout: 90_000 });
 
     const dimensions = await mediaImg.evaluate((img: HTMLImageElement) => ({
       naturalWidth: img.naturalWidth,
