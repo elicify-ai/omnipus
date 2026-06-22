@@ -3255,14 +3255,16 @@ func TestIsMessagingChannel(t *testing.T) {
 	messaging := []string{
 		"telegram", "discord", "slack", "whatsapp_native", "matrix", "irc",
 		"google-chat", "line", "wecom", "weixin", "dingtalk", "qq",
-		"email", "whatsapp", "feishu",
+		"whatsapp", "feishu",
 	}
 	for _, ch := range messaging {
 		assert.True(t, isMessagingChannel(ch),
 			"expected %q to be a messaging channel", ch)
 	}
 
-	nonMessaging := []string{"webchat", "system", "cli", "subagent", "cron", "", "unknown"}
+	// "email" is NOT a messaging channel — M11 re-modeled email as an agent TOOL
+	// (read/send over IMAP/SMTP), not a conversational push channel.
+	nonMessaging := []string{"email", "webchat", "system", "cli", "subagent", "cron", "", "unknown"}
 	for _, ch := range nonMessaging {
 		assert.False(t, isMessagingChannel(ch),
 			"expected %q to NOT be a messaging channel", ch)
