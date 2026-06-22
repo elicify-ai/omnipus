@@ -68,3 +68,56 @@ deps/todos/drag-drop) that leave Graph/Calendar unpopulatable via the UI. The cr
 and `cli-detect` 401 are cheap, high-visibility fixes. Recommended next sprint: the onboarding model+error fix,
 the task-form field completeness + drag-drop, the M4 workspace-binding for delegated tasks, and the 4 cross-
 cutting UX papercuts. Technical-beta-ready today; public-GA-ready after those.
+
+---
+
+## Fix-wave outcome (2026-06-22, branch `feat/0.1.0-uat-fixes`)
+
+Every finding above was triaged with the operator and fixed. Implementation ran as two waves
+(dev → 7-reviewer gate → fix wave), all local gates green (`gofmt` 0 · `go build` · `typecheck` ·
+`vitest` 2721 pass · `golangci` 0 · `verify-contracts`), CI worker `go-test` **ALL GATES GREEN**.
+
+**Onboarding / model picker (G1, cross-cutting #1):** model picker is now catalogue-constrained —
+a model not in the provider's catalogue cannot be selected, so the `UNRESOLVED` badge can no longer
+fire. Two modes: providers WITH a live `/models` endpoint expose a **real-time list from the
+provider API** (`Provider.has_models_endpoint=true`, `POST /providers/{id}/refresh-models`);
+providers WITHOUT an endpoint take **user-added model slugs** (`ProviderUpdateRequest.models`) as
+their catalogue, editable in Settings → Providers. Onboarding pre-selects a **capable default**
+(prefers `glm-5.2`). *(Verified live: openrouter shows "Live model list" + "Refresh models", 340
+models.)*
+
+**cli-detect 401 (cross-cutting #2):** the call now routes through the authed client (sends the
+bearer token); the false "could not detect external CLIs" banner is gone.
+
+**Tasks (G3):** create form + detail panel gained **Trigger (None/Once/Every/Recurring),
+Depends-on (`blocked_by`), Due date, and Todos**; the board now supports **drag-and-drop** across
+the 7 status columns (mirrors the backend transition rules). Graph (DAG) and Calendar are now
+populatable through the UI. Clearing a due date works via a new `clear_due` flag.
+
+**Delegation (G4):** **M4 workspace binding** wired end-to-end — the SPA sends
+`metadata.workspace_id` on the chat frame; the backend stamps it on the session (first-bind-wins,
+validates the workspace exists, else default + WARN) so delegated/created tasks land on the active
+workspace's board. A denied delegation now renders a **structured "delegation denied" block**
+(reason + policy axis + target) instead of LLM prose / raw JSON.
+
+**God-mode (G6) — re-run with `--allow-god-mode` (the original UAT-setup gap): PASS.**
+Live-validated through the browser on a gateway booted with the flag and `dev_mode_bypass=false`:
+toggle is enabled (availability=true) → **password step-up modal** → "God-mode is active" banner →
+backend `enabled:true` → audit `security_setting_change` (HMAC-chained, actor=admin) → config
+persisted. The OFF path is symmetrically re-auth-gated and restores protections. Screenshots:
+`screenshots/godmode/`.
+
+**Settings (G6):** restart-pending **badge** replaces the re-firing modal; Performance **autosaves**;
+Devices tab gained an explainer + "Pair a device" entry.
+
+**Connectors / skills (G7):** plain-English mailbox copy (no "cap-1 in 0.1"), synthetic Discord
+placeholder, Built-in Tools drill-down, Browse-Skills featured list.
+
+**Edge (G8):** whitespace-only **workspace + agent names rejected** (trim-validate); "Back to my
+workspace" on the not-found page; model-slug bounds enforced server-side regardless of
+`validate_inbound`.
+
+**Revised verdict:** the two GA blockers (onboarding first-chat failure, task-form completeness) and
+both cross-cutting papercuts are resolved; M4 and the delegation-failure block — the two
+backend-only half-contracts the 7-reviewer gate caught — are now wired end-to-end and tested.
+Pending final CI `all` (incl. Playwright e2e) before the merge-to-`main` PR (human-gated).
