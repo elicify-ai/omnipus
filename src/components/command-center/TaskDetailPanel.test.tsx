@@ -32,8 +32,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSubtasks: vi.fn().mockResolvedValue([]),
     fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
+    fetchTasks: vi.fn().mockResolvedValue([]),
     updateTask: vi.fn().mockResolvedValue({}),
     deleteTask: vi.fn().mockResolvedValue(undefined),
+    setTaskTodos: vi.fn().mockResolvedValue({}),
+    setTaskDependencies: vi.fn().mockResolvedValue({}),
     isApiError: vi.fn().mockReturnValue(false),
     tasksQueryKeys: actual.tasksQueryKeys,
     milestonesQueryKeys: actual.milestonesQueryKeys,
@@ -107,8 +110,15 @@ function renderPanel(task: Task | null, onClose = vi.fn()) {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-beforeEach(() => {
+beforeEach(async () => {
   mockNavigate.mockReset()
+  const api = await import('@/lib/api')
+  vi.mocked(api.updateTask).mockReset().mockResolvedValue({} as never)
+  vi.mocked(api.setTaskTodos).mockReset().mockResolvedValue({} as never)
+  vi.mocked(api.setTaskDependencies).mockReset().mockResolvedValue({} as never)
+  vi.mocked(api.fetchTasks).mockReset().mockResolvedValue([])
+  vi.mocked(api.fetchSubtasks).mockReset().mockResolvedValue([])
+  mockAddToast.mockReset()
 })
 
 describe('TaskDetailPanel — Open in Chat (#250 regression)', () => {
@@ -337,3 +347,122 @@ describe('TaskDetailPanel — renders subtask section when subtasks exist', () =
     expect(await screen.findByText(/subtask alpha/i)).toBeInTheDocument()
   })
 })
+
+// ── Full task UX edits (trigger / depends-on / due / todos) ────────────────────
+
+describe('TaskDetailPanel — editable trigger', () => {
+  it('selecting "Recurring" PATCHes a recurring trigger with a default cron', async () => {
+    const { updateTask } = await import('@/lib/api')
+    Element.prototype.scrollIntoView = vi.fn()
+    renderPanel(makeTask({ id: 'task-trig', status: 'next' }))
+
+    // The Trigger field SmartSelect — open it and choose Recurring
+    const recurringOption = await openSmartSelectAndFind(/trigger/i, /recurring \(cron\)/i)
+    fireEvent.click(recurringOption)
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
+    const arg = lastUpdateArg(updateTask)
+    expect(arg.trigger?.type).toBe('recurring')
+    expect(arg.trigger?.config.cron_expr).toBeTruthy()
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('editing the cron expression PATCHes the new cron on blur', async () => {
+    const { updateTask } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-cron', status: 'next', trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } } }))
+
+    const cron = await screen.findByLabelText(/cron expression/i)
+    fireEvent.change(cron, { target: { value: '15 6 * * *' } })
+    fireEvent.blur(cron)
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
+    const arg = lastUpdateArg(updateTask)
+    expect(arg.trigger?.config.cron_expr).toBe('15 6 * * *')
+  })
+})
+
+describe('TaskDetailPanel — editable due date', () => {
+  it('setting a due date PATCHes due as RFC3339 on blur', async () => {
+    const { updateTask } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-due', status: 'next' }))
+
+    const due = await screen.findByLabelText(/due date/i)
+    fireEvent.change(due, { target: { value: '2026-09-10T12:30' } })
+    fireEvent.blur(due)
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
+    const arg = lastUpdateArg(updateTask)
+    expect(arg.due).toBe(new Date('2026-09-10T12:30').toISOString())
+  })
+})
+
+describe('TaskDetailPanel — editable dependencies (blocked_by)', () => {
+  it('toggling a candidate calls setTaskDependencies with the new blocked_by set', async () => {
+    const { fetchTasks, setTaskDependencies } = await import('@/lib/api')
+    vi.mocked(fetchTasks).mockResolvedValueOnce([
+      makeTask({ id: 'other-1', title: 'Other Task One' }),
+    ])
+    renderPanel(makeTask({ id: 'task-dep', status: 'next', workspace_id: 'ws-test' }))
+
+    // Open the depends-on popover
+    fireEvent.click(await screen.findByText(/no dependencies/i))
+    fireEvent.click(await screen.findByText('Other Task One'))
+
+    await waitFor(() => expect(vi.mocked(setTaskDependencies)).toHaveBeenCalled())
+    expect(vi.mocked(setTaskDependencies).mock.calls[0][1]).toEqual(['other-1'])
+  })
+})
+
+describe('TaskDetailPanel — editable todos checklist', () => {
+  it('adding a checklist item calls setTaskTodos with the appended item', async () => {
+    const { setTaskTodos } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-todo', status: 'next', todos: [{ text: 'Existing', done: false }] }))
+
+    const input = await screen.findByLabelText(/new checklist item/i)
+    fireEvent.change(input, { target: { value: 'Brand new' } })
+    fireEvent.click(screen.getByRole('button', { name: /add checklist item/i }))
+
+    await waitFor(() => expect(vi.mocked(setTaskTodos)).toHaveBeenCalled())
+    expect(vi.mocked(setTaskTodos).mock.calls[0][1]).toEqual([
+      { text: 'Existing', done: false },
+      { text: 'Brand new', done: false },
+    ])
+  })
+
+  it('toggling a checklist item calls setTaskTodos with the flipped done flag', async () => {
+    const { setTaskTodos } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-toggle', status: 'next', todos: [{ text: 'Flip me', done: false }] }))
+
+    fireEvent.click(await screen.findByLabelText(/toggle flip me/i))
+
+    await waitFor(() => expect(vi.mocked(setTaskTodos)).toHaveBeenCalled())
+    expect(vi.mocked(setTaskTodos).mock.calls[0][1]).toEqual([{ text: 'Flip me', done: true }])
+  })
+
+  it('removing a checklist item calls setTaskTodos without it', async () => {
+    const { setTaskTodos } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-rm', status: 'next', todos: [{ text: 'Keep', done: false }, { text: 'Drop', done: false }] }))
+
+    fireEvent.click(await screen.findByLabelText(/remove checklist item drop/i))
+
+    await waitFor(() => expect(vi.mocked(setTaskTodos)).toHaveBeenCalled())
+    expect(vi.mocked(setTaskTodos).mock.calls[0][1]).toEqual([{ text: 'Keep', done: false }])
+  })
+})
+
+// ── helpers for the SmartSelect-driven fields ──────────────────────────────────
+
+function lastUpdateArg(updateTask: unknown): { trigger?: { type: string; config: Record<string, unknown> }; due?: string } {
+  const mock = vi.mocked(updateTask as (id: string, data: unknown) => Promise<unknown>)
+  return mock.mock.calls[mock.mock.calls.length - 1][1] as never
+}
+
+async function openSmartSelectAndFind(fieldLabel: RegExp, optionLabel: RegExp): Promise<HTMLElement> {
+  // Each Field renders its label text followed by the control. Find the field
+  // wrapper by its label, then click the combobox trigger inside it.
+  const label = await screen.findByText(fieldLabel)
+  const fieldRoot = label.parentElement as HTMLElement
+  const combo = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+  fireEvent.click(combo)
+  return screen.findByText(optionLabel)
+}

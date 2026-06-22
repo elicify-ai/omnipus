@@ -3,6 +3,29 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
 
+// The ModelSelector is now a CONSTRAINED dropdown (UAT model-catalog fix):
+// with no providers it renders a disabled "no models" state (no <input>). This
+// integration test fills the model via the trigger test id, so stub the
+// selector with a plain forwarding <input>. Picker behaviour is covered by
+// model-selector.test.tsx.
+vi.mock('@/components/ui/model-selector', () => ({
+  ModelSelector: ({
+    value,
+    onChange,
+    triggerTestId,
+  }: {
+    value: string
+    onChange: (v: string) => void
+    triggerTestId?: string
+  }) => (
+    <input
+      data-testid={triggerTestId ?? 'model-selector'}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  ),
+}))
+
 // test_create_agent_flow (test #29)
 // Traces to: agent-form-requirements.md §5.3-§5.5 (W4) and
 // wave5a-wire-ui-spec.md — Scenario: Creating a custom agent.

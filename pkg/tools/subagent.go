@@ -328,9 +328,9 @@ type SubagentTool struct {
 	// delegationDeny, when non-nil, applies the full delegation policy (trust
 	// set + modes + depth — FR-6.2) for the synchronous "await" mode. It receives
 	// the call ctx (for current delegation depth) and returns a non-empty reason
-	// to DENY or "" to ALLOW. Takes precedence over delegateChecker so the LLM
-	// sees *why* the delegation was rejected.
-	delegationDeny func(ctx context.Context) string
+	// to DENY or nil to ALLOW. Takes precedence over delegateChecker so the LLM
+	// (and the SPA) see *why* the delegation was rejected.
+	delegationDeny func(ctx context.Context) *DelegationDenial
 }
 
 func NewSubagentTool(manager *SubagentManager) *SubagentTool {
@@ -361,7 +361,7 @@ func (t *SubagentTool) SetDelegateChecker(check func() bool) {
 // trust set + modes ("await") + depth. Returns a non-empty reason to DENY or ""
 // to ALLOW. When set, it takes precedence over the boolean delegateChecker so a
 // rejected sync delegation surfaces a clear reason to the LLM.
-func (t *SubagentTool) SetDelegationDenyChecker(check func(ctx context.Context) string) {
+func (t *SubagentTool) SetDelegationDenyChecker(check func(ctx context.Context) *DelegationDenial) {
 	t.delegationDeny = check
 }
 
@@ -396,9 +396,8 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// Delegation policy gate (FR-6.2): trust set + modes ("await") + depth.
 	// The full-policy checker takes precedence and surfaces a specific reason.
 	if t.delegationDeny != nil {
-		if reason := t.delegationDeny(ctx); reason != "" {
-			return ErrorResult("delegation denied: " + reason).
-				WithError(fmt.Errorf("delegation policy denied (subagent): %s", reason))
+		if denial := t.delegationDeny(ctx); denial != nil {
+			return DelegationDeniedResult("subagent", denial)
 		}
 	} else if t.delegateChecker != nil && !t.delegateChecker() {
 		// Backward-compat: legacy boolean trust-only gate.

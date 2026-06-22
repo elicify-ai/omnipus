@@ -1,0 +1,402 @@
+//go:build !cgo
+
+// UAT-fix regression tests (operator decisions):
+//   - Task 3: workspace/agent create+update reject whitespace-only names (400).
+//   - Task 4: provider model catalog — has_models_endpoint signal, user-supplied
+//     model slugs round-trip on PUT, and the /refresh-models endpoint.
+//   - Task 2: the structured-delegation-failure WS forwarder helper.
+
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/config"
+)
+
+// --- Task 3: whitespace-only name validation ---
+
+// TestWorkspaceCreate_WhitespaceName_Rejected proves a whitespace-only workspace
+// name is rejected with 400 (previously accepted as 201).
+func TestWorkspaceCreate_WhitespaceName_Rejected(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"   \t  "}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(w, r)
+
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"whitespace-only workspace name must be 400; body=%s", w.Body.String())
+}
+
+// TestWorkspaceCreate_NameTrimmed proves a name with surrounding whitespace is
+// trimmed before persistence.
+func TestWorkspaceCreate_NameTrimmed(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"  Padded Name  "}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	var ws gen.Workspace
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ws))
+	assert.Equal(t, "Padded Name", ws.Name, "leading/trailing whitespace must be trimmed")
+}
+
+// TestWorkspaceUpdate_WhitespaceName_Rejected proves a whitespace-only name on
+// update is rejected with 400.
+func TestWorkspaceUpdate_WhitespaceName_Rejected(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	id := createWorkspaceViaAPI(t, api, "Original", "")
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id,
+		strings.NewReader(`{"name":"   "}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/workspaces/" + id
+	api.HandleWorkspaces(w, r)
+
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"whitespace-only workspace name on update must be 400; body=%s", w.Body.String())
+}
+
+// TestAgentCreate_WhitespaceName_Rejected proves a whitespace-only agent name is
+// rejected (422, the agent handler's empty-name status).
+func TestAgentCreate_WhitespaceName_Rejected(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
+		strings.NewReader(`{"name":"   ","soul":"x"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code,
+		"whitespace-only agent name must be rejected; body=%s", w.Body.String())
+}
+
+// TestAgentUpdate_WhitespaceName_Rejected proves a whitespace-only agent name on
+// update is rejected.
+func TestAgentUpdate_WhitespaceName_Rejected(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	// Create a valid agent first.
+	cw := httptest.NewRecorder()
+	cr := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
+		strings.NewReader(`{"name":"Valid Agent","soul":"x"}`))
+	cr.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(cw, cr)
+	require.Equal(t, http.StatusCreated, cw.Code, "create body=%s", cw.Body.String())
+	created := decodeAgentResp(t, cw.Body.Bytes())
+
+	uw := httptest.NewRecorder()
+	ur := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+		strings.NewReader(`{"name":"   "}`))
+	ur.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(uw, ur)
+
+	require.Equal(t, http.StatusUnprocessableEntity, uw.Code,
+		"whitespace-only agent name on update must be rejected; body=%s", uw.Body.String())
+}
+
+// --- Task 4: provider model catalog ---
+
+// TestProviders_HasModelsEndpoint_Signal proves the GET response exposes
+// has_models_endpoint=true for a provider with a known upstream base (openrouter)
+// and false for a custom provider with no known base URL. Providers are seeded
+// WITHOUT an API key so the GET does not make a live upstream fetch (hermetic).
+func TestProviders_HasModelsEndpoint_Signal(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	seedProviderConfig(
+		t, api,
+		map[string]any{"model_name": "openrouter", "provider": "openrouter", "model": "openrouter/auto"},
+		map[string]any{
+			"model_name": "mygw", "provider": "mygw", "model": "mygw/llama",
+			"models": []any{"mygw/llama", "mygw/mixtral"},
+		},
+	)
+
+	provs := getProviders(t, api)
+	byID := map[string]gen.Provider{}
+	for _, p := range provs {
+		byID[p.Id] = p
+	}
+
+	or, ok := byID["openrouter"]
+	require.True(t, ok, "openrouter must be present; got %+v", provs)
+	require.NotNil(t, or.HasModelsEndpoint)
+	assert.True(t, *or.HasModelsEndpoint, "openrouter has a live /models endpoint")
+
+	gw, ok := byID["mygw"]
+	require.True(t, ok, "custom provider must be present; got %+v", provs)
+	require.NotNil(t, gw.HasModelsEndpoint)
+	assert.False(t, *gw.HasModelsEndpoint, "custom provider has no live /models endpoint")
+	// The custom provider's catalog is the user-supplied slug list.
+	assert.ElementsMatch(t, []string{"mygw/llama", "mygw/mixtral"}, gw.Models,
+		"endpoint-less provider catalog must be the user-supplied slugs")
+}
+
+// TestProviders_UserModels_RoundTrip proves a user-supplied models list set via
+// PUT persists and is returned by GET for an endpoint-less provider. The provider
+// is seeded first (no api_key) so the PUT only updates the models slug list and
+// never touches the credential store.
+func TestProviders_UserModels_RoundTrip(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	seedProviderConfig(
+		t, api,
+		map[string]any{"model_name": "mygw", "provider": "mygw", "model": "mygw/a"},
+	)
+
+	putProvider(t, api, "mygw", `{"models":["mygw/a","mygw/b","mygw/a"]}`)
+
+	provs := getProviders(t, api)
+	var gw *gen.Provider
+	for i := range provs {
+		if provs[i].Id == "mygw" {
+			gw = &provs[i]
+		}
+	}
+	require.NotNil(t, gw, "mygw must be present; got %+v", provs)
+	// Dedup: the duplicate "mygw/a" collapses to a single entry.
+	assert.ElementsMatch(t, []string{"mygw/a", "mygw/b"}, gw.Models)
+
+	// Clearing the list (empty array) removes the user catalog; the provider
+	// then falls back to its configured default model alias.
+	putProvider(t, api, "mygw", `{"models":[]}`)
+	provs = getProviders(t, api)
+	for i := range provs {
+		if provs[i].Id == "mygw" {
+			gw = &provs[i]
+		}
+	}
+	require.NotNil(t, gw)
+	assert.NotContains(t, gw.Models, "mygw/b", "cleared user models must not be returned")
+}
+
+// TestProviders_RefreshModels_EndpointlessReturnsUserCatalogue proves the
+// /refresh-models endpoint returns the stored slugs for an endpoint-less provider.
+func TestProviders_RefreshModels_EndpointlessReturnsUserCatalogue(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	seedProviderConfig(
+		t, api,
+		map[string]any{
+			"model_name": "mygw", "provider": "mygw", "model": "mygw/a",
+			"models": []any{"mygw/a", "mygw/b"},
+		},
+	)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/providers/mygw/refresh-models", nil)
+	r.URL.Path = "/api/v1/providers/mygw/refresh-models"
+	api.HandleProviders(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var p gen.Provider
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &p))
+	require.NotNil(t, p.HasModelsEndpoint)
+	assert.False(t, *p.HasModelsEndpoint)
+	assert.ElementsMatch(t, []string{"mygw/a", "mygw/b"}, p.Models)
+}
+
+// TestProviders_RefreshModels_NotConfigured_404 proves refresh on an unknown
+// provider returns 404.
+func TestProviders_RefreshModels_NotConfigured_404(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/providers/ghost/refresh-models", nil)
+	r.URL.Path = "/api/v1/providers/ghost/refresh-models"
+	api.HandleProviders(w, r)
+
+	require.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
+}
+
+// --- Task 1 (M4): workspace→turn binding ---
+
+// TestHandleChatMessage_StampsWorkspaceOnSession proves that a chat frame
+// carrying metadata.workspace_id binds the minted session to that workspace, so
+// a task the agent creates during the turn resolves to the ACTIVE workspace
+// (resolveWorkspaceID reads ToolWorkspaceID(ctx), which the loop seeds from the
+// session's WorkspaceID).
+func TestHandleChatMessage_StampsWorkspaceOnSession(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	handler, _ := newTestWSHandlerForModelName(t, msgBus)
+	wc := makeTestConn()
+
+	const wantWS = "01JXWORKSPACE0000000000001"
+	handler.handleChatMessage(
+		context.Background(),
+		"chat-m4-1", // chatID
+		"",          // frameSessionID (empty → mint a new session)
+		"do it",     // content
+		"",          // agentID
+		nil,         // mediaRefs
+		"",          // modelName
+		wantWS,      // workspaceID (active workspace)
+		wc,
+	)
+
+	// Drain the inbound publish, then assert the minted session carries the
+	// workspace binding on its meta.
+	var sessionID string
+	select {
+	case msg := <-msgBus.InboundChan():
+		sessionID = msg.SessionID
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bus.InboundMessage")
+	}
+	require.NotEmpty(t, sessionID, "handleChatMessage must mint a session")
+
+	store := handler.agentLoop.ResolveSessionStore(sessionID)
+	require.NotNil(t, store, "session store must resolve the minted session")
+	meta, err := store.GetMeta(sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+	assert.Equal(t, wantWS, meta.WorkspaceID,
+		"minted session must be bound to the active workspace (M4)")
+}
+
+// --- Task 2: structured delegation-failure forwarder helper ---
+
+// TestParseDelegationFailure proves the WS forwarder helper recognizes a
+// structured delegation_denied result and ignores everything else.
+func TestParseDelegationFailure(t *testing.T) {
+	t.Run("denied", func(t *testing.T) {
+		obj, reason, ok := parseDelegationFailure(
+			`{"error":"delegation_denied","reason":"target untrusted","policy":"trust_set","tool":"spawn"}`,
+		)
+		require.True(t, ok)
+		assert.Equal(t, "target untrusted", reason)
+		assert.Equal(t, "delegation_denied", obj["error"])
+		assert.Equal(t, "trust_set", obj["policy"])
+	})
+	t.Run("ordinary error string is not a denial", func(t *testing.T) {
+		_, _, ok := parseDelegationFailure("some plain tool error")
+		assert.False(t, ok)
+	})
+	t.Run("unrelated json object is not a denial", func(t *testing.T) {
+		_, _, ok := parseDelegationFailure(`{"error":"timeout"}`)
+		assert.False(t, ok)
+	})
+	t.Run("empty string", func(t *testing.T) {
+		_, _, ok := parseDelegationFailure("")
+		assert.False(t, ok)
+	})
+}
+
+// --- helpers ---
+
+// seedProviderConfig writes the given provider entries into config.json (bypassing
+// the credential store) AND into the in-memory config so the GET/PUT handlers
+// observe them without depending on TriggerReload (which is not wired in the test
+// agent loop). Used to set up endpoint-less providers without an API key.
+func seedProviderConfig(t *testing.T, api *restAPI, entries ...map[string]any) {
+	t.Helper()
+	// Wire a reload func that re-reads the providers list from config.json into
+	// the live config — the PUT provider handler calls TriggerReload and returns
+	// 500 if it errors (it does not tolerate ErrReloadNotConfigured).
+	api.agentLoop.SetReloadFunc(func() error {
+		raw, rErr := os.ReadFile(api.configPath())
+		if rErr != nil {
+			return rErr
+		}
+		var m map[string]any
+		if uErr := json.Unmarshal(raw, &m); uErr != nil {
+			return uErr
+		}
+		list, _ := m["providers"].([]any)
+		cfg := api.agentLoop.GetConfig()
+		cfg.Providers = cfg.Providers[:0]
+		for _, item := range list {
+			e, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			mc := &config.ModelConfig{
+				ModelName: asString(e["model_name"]),
+				Provider:  asString(e["provider"]),
+				Model:     asString(e["model"]),
+			}
+			if rawModels, ok := e["models"].([]any); ok {
+				for _, v := range rawModels {
+					if s, ok := v.(string); ok {
+						mc.Models = append(mc.Models, s)
+					}
+				}
+			}
+			cfg.Providers = append(cfg.Providers, mc)
+		}
+		return nil
+	})
+
+	err := api.safeUpdateConfigJSON(func(m map[string]any) error {
+		list := make([]any, 0, len(entries))
+		for _, e := range entries {
+			list = append(list, e)
+		}
+		m["providers"] = list
+		return nil
+	})
+	require.NoError(t, err, "seed provider config")
+
+	// Mirror into the in-memory config (the GET handler reads cfg.Providers).
+	cfg := api.agentLoop.GetConfig()
+	cfg.Providers = cfg.Providers[:0]
+	for _, e := range entries {
+		mc := &config.ModelConfig{
+			ModelName: asString(e["model_name"]),
+			Provider:  asString(e["provider"]),
+			Model:     asString(e["model"]),
+		}
+		if raw, ok := e["models"].([]any); ok {
+			for _, v := range raw {
+				if s, ok := v.(string); ok {
+					mc.Models = append(mc.Models, s)
+				}
+			}
+		}
+		cfg.Providers = append(cfg.Providers, mc)
+	}
+}
+
+func putProvider(t *testing.T, api *restAPI, id, body string) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/providers/"+id, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/providers/" + id
+	api.HandleProviders(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "PUT provider %s must be 200; body=%s", id, w.Body.String())
+}
+
+func getProviders(t *testing.T, api *restAPI) []gen.Provider {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
+	r.URL.Path = "/api/v1/providers"
+	api.HandleProviders(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "GET providers must be 200; body=%s", w.Body.String())
+	var provs []gen.Provider
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &provs))
+	return provs
+}

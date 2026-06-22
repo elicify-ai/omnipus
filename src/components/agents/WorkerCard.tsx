@@ -99,8 +99,11 @@ export function WorkerCard({ agent }: WorkerCardProps) {
                 {executorLabel(agent.executor)}
               </Badge>
               {agent.model && (
+                // UAT 4d: keep the model slug from overflowing into the
+                // "Test run" affordance. min-w-0 + shrink lets it give way in
+                // the flex row, and the max-width cap truncates the remainder.
                 <span
-                  className="text-xs font-mono text-[var(--color-muted)] truncate max-w-[140px]"
+                  className="text-xs font-mono text-[var(--color-muted)] truncate min-w-0 shrink max-w-[140px]"
                   title={agent.model}
                 >
                   {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}

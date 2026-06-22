@@ -1259,6 +1259,51 @@ components:
         preview:
           type: string
 
+    DelegationFailure:
+      title: DelegationFailure
+      description: >
+        Structured tool-result payload emitted in the `result` field of a
+        tool_call_result frame (status="error") when a delegation tool
+        (spawn / subagent / task_create) is denied by the delegation policy
+        (trust set / mode / depth). The SPA matches on the fixed
+        error="delegation_denied" discriminator and renders a distinct
+        delegation-failure block — it does NOT rely on the LLM to narrate the
+        denial. The frame's top-level `error` field carries the same `reason`.
+      type: object
+      required:
+        - error
+        - reason
+        - policy
+        - tool
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          const: delegation_denied
+          description: Fixed discriminator the SPA matches on.
+        reason:
+          type: string
+          minLength: 1
+          description: Human-readable explanation of the denial.
+        policy:
+          type: string
+          enum:
+            - trust_set
+            - mode
+            - depth
+          description: >
+            The delegation-policy axis that rejected the call. trust_set = target
+            not in the caller's 'to' allowlist (or no permitted targets); mode =
+            the delegation mode (await/background/task) is not permitted; depth =
+            the delegation-chain depth cap was reached.
+        tool:
+          type: string
+          minLength: 1
+          description: The delegation tool that was denied (spawn / subagent / task_create).
+        target_agent_id:
+          type: string
+          description: The requested delegation target, when one was named.
+
     ToolCallResultFrame:
       title: ToolCallResultFrame
       description: Server → client tool execution completed.
@@ -1295,6 +1340,7 @@ components:
             - $ref: '#/components/schemas/TruncatedResult'
             - $ref: '#/components/schemas/MarshalErrorResult'
             - $ref: '#/components/schemas/ToolResultRef'
+            - $ref: '#/components/schemas/DelegationFailure'
         status:
           type: string
           enum:

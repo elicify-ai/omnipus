@@ -88,13 +88,14 @@ describe('provider save & connect integration (test #27)', () => {
       expect(reAuth).toHaveBeenCalledWith('my-password')
     })
     await waitFor(() => {
-      // configureProvider(id, apiKey, endpoint?, model?, reAuthToken?)
+      // configureProvider(id, apiKey, endpoint?, model?, reAuthToken?, models?)
       expect(configureProvider).toHaveBeenCalledWith(
         'anthropic',
         'sk-ant-test-1234',
         undefined,
         undefined,
         'consent-token-abc',
+        undefined,
       )
     })
   })

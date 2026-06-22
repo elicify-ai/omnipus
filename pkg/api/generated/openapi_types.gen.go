@@ -5820,10 +5820,13 @@ type Provider struct {
 	// HasApiKey True when the provider has a stored API key in credentials. The key itself is never returned. Absent on legacy entries that predate this field — treat as false when absent.
 	HasApiKey *bool `json:"has_api_key,omitempty"`
 
+	// HasModelsEndpoint True when this provider exposes a live upstream /models endpoint, so the `models` field is the real-time catalogue fetched from the provider API (openrouter, openai, and other OpenAI-compatible gateways with a known base URL). False when no live endpoint is known: the SPA then presents `models` as an editable list of user-supplied model slugs (sent back via the PUT `models` field) which become the provider's catalogue. Absent on legacy entries — treat as false (editable slug list) when absent.
+	HasModelsEndpoint *bool `json:"has_models_endpoint,omitempty"`
+
 	// Id Provider identifier (e.g. "anthropic", "openai", "openrouter").
 	Id string `json:"id"`
 
-	// Models Alphabetically sorted list of model IDs available from this provider, fetched from the upstream /models endpoint when an API key is present. Empty array when the upstream fetch fails or no key is configured.
+	// Models The provider's model catalogue. For providers WITH a live /models endpoint (has_models_endpoint=true) this is the real-time list fetched from upstream when an API key is present (alphabetically sorted). For providers WITHOUT a live endpoint (has_models_endpoint=false) this is the user-supplied list of model slugs configured for the provider. Empty array when the upstream fetch fails, no key is configured, or no slugs have been set. The model picker should be constrained to this catalogue when it is non-empty.
 	Models []string `json:"models"`
 
 	// Name Human-readable provider name (may be the same as id for unknown providers).
@@ -5846,6 +5849,9 @@ type ProviderUpdateRequest struct {
 
 	// Model Default model to use for this provider. Defaults to "default" when not specified on new providers.
 	Model *string `json:"model,omitempty"`
+
+	// Models User-supplied catalogue of model slugs for a provider that does NOT expose a live /models endpoint (custom / unknown OpenAI-compatible gateways). When present, these slugs replace the provider's stored catalogue and constrain the model picker. Ignored for providers WITH a live endpoint (has_models_endpoint=true), whose catalogue is fetched from upstream. Omit to leave the existing list unchanged; send an empty array to clear it.
+	Models *[]string `json:"models,omitempty"`
 }
 
 // RateLimitConfig Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits.

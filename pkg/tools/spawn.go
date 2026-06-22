@@ -20,8 +20,10 @@ type SpawnTool struct {
 	// target agent id ("" when no explicit target was given), and returns a
 	// non-empty human-readable reason string to DENY, or "" to ALLOW. Takes
 	// precedence over allowlistCheck so the LLM sees *why* a delegation was
-	// rejected (mode forbidden / depth exceeded / target untrusted).
-	delegationDeny func(ctx context.Context, targetAgentID string) string
+	// rejected (mode forbidden / depth exceeded / target untrusted). Returns a
+	// non-nil *DelegationDenial to DENY (carrying the structured reason + policy
+	// axis) or nil to ALLOW.
+	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
 }
 
 // Compile-time check: SpawnTool implements AsyncExecutor.
@@ -83,7 +85,7 @@ func (t *SpawnTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
 // "" to ALLOW. When set, it takes precedence over the allowlist checker so the
 // rejected delegation surfaces a clear reason to the LLM instead of a generic
 // "not allowed" message.
-func (t *SpawnTool) SetDelegationDenyChecker(check func(ctx context.Context, targetAgentID string) string) {
+func (t *SpawnTool) SetDelegationDenyChecker(check func(ctx context.Context, targetAgentID string) *DelegationDenial) {
 	t.delegationDeny = check
 }
 
@@ -119,9 +121,8 @@ func (t *SpawnTool) execute(
 	// (including untargeted ones, where mode/depth still apply) so the reason
 	// for any denial is surfaced to the LLM.
 	if t.delegationDeny != nil {
-		if reason := t.delegationDeny(ctx, agentID); reason != "" {
-			return ErrorResult("delegation denied: " + reason).
-				WithError(fmt.Errorf("delegation policy denied (spawn): %s", reason))
+		if denial := t.delegationDeny(ctx, agentID); denial != nil {
+			return DelegationDeniedResult("spawn", denial)
 		}
 	} else if agentID != "" && t.allowlistCheck != nil {
 		// Backward-compat: legacy trust-only allowlist check.

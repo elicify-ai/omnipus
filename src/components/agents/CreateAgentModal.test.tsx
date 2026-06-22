@@ -33,6 +33,29 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
+// The ModelSelector is now a CONSTRAINED dropdown (UAT model-catalog fix):
+// with the mocked empty provider list it renders a disabled "no models"
+// state (no <input>). These modal tests fill the model via the trigger test
+// id to exercise the wire-payload plumbing, so stub the selector with a plain
+// forwarding <input>. Picker mechanics are covered by model-selector.test.tsx.
+vi.mock('@/components/ui/model-selector', () => ({
+  ModelSelector: ({
+    value,
+    onChange,
+    triggerTestId,
+  }: {
+    value: string
+    onChange: (v: string) => void
+    triggerTestId?: string
+  }) => (
+    <input
+      data-testid={triggerTestId ?? 'model-selector'}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  ),
+}))
+
 // Advanced.tsx renders a TanStack Router <Link> to the delegation-trust
 // page. Real Link needs a RouterProvider; stub it to a plain anchor so the
 // wizard can render in isolation.
@@ -68,8 +91,15 @@ async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' 
   // for workers (Subagent / subagent_3p). External agents also require a
   // non-empty CLI path before the step is considered valid.
   fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Research Bot' } })
-  fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'claude-sonnet-4-6' } })
   const type = opts?.initialType ?? 'Main'
+  // UAT 4a: a native Subagent defaults to inheriting its model — turn the
+  // toggle OFF so the model picker appears and we can set an explicit model
+  // (these tests exercise the explicit-model path).
+  if (type === 'Subagent' && screen.queryByTestId('wizard-inherit-model')) {
+    const t = screen.getByTestId('wizard-inherit-model') as HTMLInputElement
+    if (t.checked) fireEvent.click(t)
+  }
+  fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'claude-sonnet-4-6' } })
   if (type !== 'Main') {
     fireEvent.change(screen.getByTestId('wizard-description'), {
       target: { value: 'A research sub-agent' },
@@ -102,8 +132,14 @@ async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' 
   })
   fireEvent.click(screen.getByTestId('wizard-next-2'))
 
-  // Step ③ — Tools. All fields are wire-optional for Main / Subagent,
-  // hidden entirely for subagent_3p. Just confirm the step renders.
+  // Step ③ — Tools. UAT 4a: a native Subagent defaults to inheriting Tools —
+  // turn the toggle OFF so the per-tool editor (wizard-tools-cfg) is shown.
+  if (type === 'Subagent' && screen.queryByTestId('wizard-inherit-tools')) {
+    const t = screen.getByTestId('wizard-inherit-tools') as HTMLInputElement
+    if (t.checked) fireEvent.click(t)
+  }
+  // All fields are wire-optional for Main / Subagent, hidden entirely for
+  // subagent_3p. Just confirm the step renders.
   expect(await screen.findByTestId('wizard-create')).toBeInTheDocument()
 }
 
@@ -227,10 +263,11 @@ describe('CreateAgentModal — step ① Identity (spec §5.3-§5.5)', () => {
   })
 
   it('also requires description for Subagent before Next is enabled', async () => {
+    // UAT 4a: a native Subagent inherits its model by default, so step 1 is
+    // gated on name + description only (no model required while inheriting).
     renderModal({ open: true, onClose: vi.fn(), initialType: 'Subagent' })
     const next = screen.getByTestId('wizard-next-1')
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Sub' } })
-    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
     // Description still empty → Next disabled.
     expect(next).toBeDisabled()
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'd' } })
@@ -261,10 +298,9 @@ describe('CreateAgentModal — step ② Personality (spec §5.3-§5.5)', () => {
 
   it('Subagent wizard does NOT show Heartbeat or Voice (Main-only per spec §3.1 rows 10-13)', async () => {
     renderModal({ open: true, onClose: vi.fn(), initialType: 'Subagent' })
-    // Jump to step 2.
+    // Jump to step 2 (native Subagent inherits the model by default — UAT 4a).
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'W' } })
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'd' } })
-    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
     fireEvent.click(screen.getByTestId('wizard-next-1'))
     expect(await screen.findByTestId('wizard-soul')).toBeInTheDocument()
     expect(screen.queryByTestId('wizard-heartbeat')).toBeNull()

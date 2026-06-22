@@ -19,6 +19,7 @@ import {
   IconPicker,
 } from '../AgentFormFields'
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
+import { InheritToggle } from './InheritToggle'
 import type { IconName } from '@/lib/agentIcons'
 import type { StepProps, WizardCli } from './types'
 
@@ -37,6 +38,9 @@ export function Step1Identity({
 }: StepProps) {
   const isWorker = initialType !== 'Main'
   const isExternal = initialType === 'subagent_3p'
+  // Native subagents can inherit their model from the caller (UAT 4a).
+  const isNativeSubagent = initialType === 'Subagent'
+  const inheritModel = isNativeSubagent && payload.inherit_model === true
 
   // `connectedProviders` is provided by the parent (CreateAgentModal) so
   // the Step 1 / Step 3 sub-components stay query-client-free and the
@@ -107,6 +111,18 @@ export function Step1Identity({
         />
       </div>
 
+      {/* Native-subagent inherit toggle (UAT 4a). ON = model inherited from
+          the caller; the picker is hidden and no model is sent. */}
+      {isNativeSubagent && (
+        <InheritToggle
+          label="Model"
+          inherit={payload.inherit_model === true}
+          onChange={(v) => setField('inherit_model', v)}
+          testId="wizard-inherit-model"
+        />
+      )}
+
+      {!inheritModel && (
       <div className="space-y-2">
         <label htmlFor="wizard-model" className="text-sm font-medium">
           Model <span className="text-[var(--color-error)]" aria-label="required">*</span>
@@ -138,10 +154,11 @@ export function Step1Identity({
             />
           </>
         ) : (
-          /* Main + Subagent: searchable picker filtered by connected providers.
-             showUnresolvedIndicator surfaces an "Unresolved" chip if the saved
-             slug isn't in the provider catalogue — same UX as the model picker
-             on the profile edit slide-over (W6-C4 / G12). */
+          /* Main + Subagent: CONSTRAINED picker fed the connected-provider
+             catalogue (UAT model-catalog fix). Selection is limited to real
+             models, so a non-catalogue slug cannot be saved and the
+             "unresolved" chip can never fire. When no provider is connected
+             the picker shows a disabled "connect a provider" state. */
           <ModelSelector
             models={[...connectedProviders.flatMap((p) => p.models ?? [])]}
             providerGroups={providerGroups}
@@ -150,10 +167,12 @@ export function Step1Identity({
             onPairChange={({ provider: p }) => setField('provider', p)}
             placeholder="Pick a connected model"
             triggerTestId="wizard-model"
-            showUnresolvedIndicator
+            constrainToCatalog
+            emptyCatalogHint="Connect a provider in Settings to pick a model"
           />
         )}
       </div>
+      )}
 
       {/* subagent_3p executor block — rendered in Step 1 so the wireframe
           stays linear (CLI chooser → path → env → args). Re-rendered

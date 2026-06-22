@@ -64,11 +64,41 @@ interface ModelSelectorProps {
    * bare slug stripped of its protocol prefix). Defaults to `true` so the
    * indicator is always on when this component is wired into a free-text
    * picker — pass `false` to opt out (e.g. for read-only displays).
+   *
+   * Ignored when `constrainToCatalog` is `true` — a constrained picker can
+   * only ever hold a catalogue value, so the unresolved state cannot occur.
    */
   showUnresolvedIndicator?: boolean
+  /**
+   * UAT model-catalog fix: when `true`, the picker is a *constrained*
+   * dropdown — selection is limited to the supplied `models` /
+   * `providerGroups` catalogue. The free-text "Use <slug>" row is suppressed
+   * and the "unresolved" indicator never renders (a constrained value is
+   * always in the catalogue, so it cannot be unresolved). When the catalogue
+   * is empty, the picker renders a disabled "no models" state instead of a
+   * free-text input — UNLESS `allowFreeTextWhenEmpty` is also set (the
+   * onboarding bootstrap path for an endpoint-less provider, where the user
+   * must type the first slug because no catalogue exists yet).
+   *
+   * Defaults to `false` to preserve the historical free-text behaviour for
+   * call sites that have not opted in.
+   */
+  constrainToCatalog?: boolean
+  /**
+   * Only meaningful with `constrainToCatalog`. When `true` and the catalogue
+   * is empty, the picker falls back to a free-text <input> so the user can
+   * seed the first model slug for an endpoint-less provider (onboarding).
+   * No unresolved warning is shown in this bootstrap mode.
+   */
+  allowFreeTextWhenEmpty?: boolean
+  /**
+   * Optional message rendered inside the disabled "no models" state of a
+   * constrained picker. Defaults to a generic "connect a provider" hint.
+   */
+  emptyCatalogHint?: string
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint }: ModelSelectorProps) {
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
   // Unique id for the sr-only description the popover's aria-describedby
@@ -76,13 +106,44 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // ModelSelectors are mounted on the same page.
   const descriptionId = React.useId()
 
+  const catalogEmpty =
+    models.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))
+
+  // Constrained empty-catalogue state. The operator decision is that a
+  // non-catalogue model must not be selectable, so when there is nothing to
+  // pick we render a disabled, non-editable placeholder rather than a
+  // free-text input that would flag every value as "unresolved". The
+  // onboarding bootstrap path (`allowFreeTextWhenEmpty`) is the one
+  // exception — there the user must type the first slug for an
+  // endpoint-less provider.
+  if (catalogEmpty && constrainToCatalog && !allowFreeTextWhenEmpty) {
+    return (
+      <div
+        data-testid={triggerTestId}
+        aria-disabled="true"
+        className="flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm cursor-not-allowed opacity-70"
+        style={{
+          borderColor: 'var(--color-border)',
+          backgroundColor: 'var(--color-surface-1)',
+          color: 'var(--color-muted)',
+        }}
+      >
+        <span className="truncate text-xs">
+          {emptyCatalogHint ?? 'No models available — connect a provider first'}
+        </span>
+      </div>
+    )
+  }
+
   // Text input mode — no models available
-  if (models.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))) {
+  if (catalogEmpty) {
     // W6-C4 / G12: in text-input mode the trigger is just an <input>; we
     // surface the unresolved state via a small inline note beneath the
     // input when a non-empty value isn't in the supplied flat list (which
     // is always empty here, so EVERY non-empty value is unresolved).
-    const valueUnresolved = showUnresolvedIndicator && value.trim() !== ''
+    // A constrained bootstrap picker (onboarding manual provider) never
+    // shows the warning — the typed slug becomes the catalogue.
+    const valueUnresolved = showUnresolvedIndicator && !constrainToCatalog && value.trim() !== ''
     return (
       <div className="space-y-1">
         <Input
@@ -121,8 +182,10 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // list, render an "unresolved" chip on the trigger. The chip persists
   // across re-renders (no toast, no flicker) so the user always knows the
   // saved value can't be routed at chat time.
+  // A constrained picker can only hold a catalogue value, so the unresolved
+  // state cannot occur — never render the chip there.
   const valueUnresolved =
-    showUnresolvedIndicator && value.trim() !== '' && !isKnownModelSlugInList(value, allModels)
+    showUnresolvedIndicator && !constrainToCatalog && value.trim() !== '' && !isKnownModelSlugInList(value, allModels)
 
   // Combobox mode — searchable dropdown
   const displayValue = value || placeholder || 'Select a model...'
@@ -296,7 +359,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                   ))}
               </CommandGroup>
             )}
-            {queryRaw && !exactMatch && (
+            {queryRaw && !exactMatch && !constrainToCatalog && (
               <CommandGroup>
                 <CommandItem
                   value={`custom:${queryLower}`}

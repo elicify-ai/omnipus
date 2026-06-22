@@ -2,10 +2,10 @@ package agent
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
 // intPtr is a local helper for building *int policy fields.
@@ -33,9 +33,9 @@ func TestDelegationDenyChecker_AllowedWhenModeTrustDepthPermit(t *testing.T) {
 	check := buildDelegationDenyChecker("mia", cfg, config.AgentDefaults{},
 		config.DelegationModeBackground, nil)
 
-	// current depth 0 < cap 3, target trusted, mode permitted → allowed (no reason).
-	if reason := check(ctxAtDepth(0), "ray"); reason != "" {
-		t.Fatalf("expected delegation allowed, got deny reason: %q", reason)
+	// current depth 0 < cap 3, target trusted, mode permitted → allowed (nil).
+	if denial := check(ctxAtDepth(0), "ray"); denial != nil {
+		t.Fatalf("expected delegation allowed, got deny: %+v", denial)
 	}
 }
 
@@ -47,12 +47,12 @@ func TestDelegationDenyChecker_DeniedWhenTargetNotTrusted(t *testing.T) {
 	check := buildDelegationDenyChecker("mia", cfg, config.AgentDefaults{},
 		config.DelegationModeBackground, nil)
 
-	reason := check(ctxAtDepth(0), "ava") // ava not in To
-	if reason == "" {
+	denial := check(ctxAtDepth(0), "ava") // ava not in To
+	if denial == nil {
 		t.Fatal("expected delegation denied for untrusted target, got allow")
 	}
-	if !strings.Contains(reason, "trust set") {
-		t.Fatalf("expected trust-set reason, got: %q", reason)
+	if denial.Policy != tools.DenyTrustSet {
+		t.Fatalf("expected trust_set policy, got: %q (%s)", denial.Policy, denial.Reason)
 	}
 }
 
@@ -65,12 +65,12 @@ func TestDelegationDenyChecker_DeniedWhenModeForbidden(t *testing.T) {
 	check := buildDelegationDenyChecker("mia", cfg, config.AgentDefaults{},
 		config.DelegationModeBackground, nil)
 
-	reason := check(ctxAtDepth(0), "ray") // target trusted, but mode not allowed
-	if reason == "" {
+	denial := check(ctxAtDepth(0), "ray") // target trusted, but mode not allowed
+	if denial == nil {
 		t.Fatal("expected delegation denied for forbidden mode, got allow")
 	}
-	if !strings.Contains(reason, "mode") {
-		t.Fatalf("expected mode reason, got: %q", reason)
+	if denial.Policy != tools.DenyMode {
+		t.Fatalf("expected mode policy, got: %q (%s)", denial.Policy, denial.Reason)
 	}
 }
 
@@ -84,15 +84,15 @@ func TestDelegationDenyChecker_DeniedWhenDepthExceeded(t *testing.T) {
 	check := buildDelegationDenyChecker("mia", cfg, config.AgentDefaults{},
 		config.DelegationModeBackground, nil)
 
-	if reason := check(ctxAtDepth(1), "ray"); reason != "" {
-		t.Fatalf("depth 1 < cap 2 should be allowed, got deny: %q", reason)
+	if denial := check(ctxAtDepth(1), "ray"); denial != nil {
+		t.Fatalf("depth 1 < cap 2 should be allowed, got deny: %+v", denial)
 	}
-	reason := check(ctxAtDepth(2), "ray") // depth 2 >= cap 2 → deny
-	if reason == "" {
+	denial := check(ctxAtDepth(2), "ray") // depth 2 >= cap 2 → deny
+	if denial == nil {
 		t.Fatal("expected delegation denied at depth cap, got allow")
 	}
-	if !strings.Contains(reason, "depth") {
-		t.Fatalf("expected depth reason, got: %q", reason)
+	if denial.Policy != tools.DenyDepth {
+		t.Fatalf("expected depth policy, got: %q (%s)", denial.Policy, denial.Reason)
 	}
 }
 
@@ -106,9 +106,9 @@ func TestDelegationDenyChecker_UntargetedSkipsTrustButEnforcesMode(t *testing.T)
 	check := buildDelegationDenyChecker("mia", cfg, config.AgentDefaults{},
 		config.DelegationModeBackground, nil)
 
-	reason := check(ctxAtDepth(0), "")
-	if reason == "" || !strings.Contains(reason, "mode") {
-		t.Fatalf("expected mode denial for untargeted background spawn, got: %q", reason)
+	denial := check(ctxAtDepth(0), "")
+	if denial == nil || denial.Policy != tools.DenyMode {
+		t.Fatalf("expected mode denial for untargeted background spawn, got: %+v", denial)
 	}
 }
 
@@ -122,8 +122,8 @@ func TestSubagentDelegationDenyChecker_AllowedWhenPermitted(t *testing.T) {
 	})
 	check := buildSubagentDelegationDenyChecker(cfg, config.AgentDefaults{})
 
-	if reason := check(ctxAtDepth(0)); reason != "" {
-		t.Fatalf("expected sync delegation allowed, got deny: %q", reason)
+	if denial := check(ctxAtDepth(0)); denial != nil {
+		t.Fatalf("expected sync delegation allowed, got deny: %+v", denial)
 	}
 }
 
@@ -134,8 +134,8 @@ func TestSubagentDelegationDenyChecker_DeniedWhenNoTargets(t *testing.T) {
 	})
 	check := buildSubagentDelegationDenyChecker(cfg, config.AgentDefaults{})
 
-	reason := check(ctxAtDepth(0))
-	if reason == "" {
+	denial := check(ctxAtDepth(0))
+	if denial == nil {
 		t.Fatal("expected sync delegation denied with empty To, got allow")
 	}
 }
@@ -148,9 +148,9 @@ func TestSubagentDelegationDenyChecker_DeniedWhenModeForbidden(t *testing.T) {
 	})
 	check := buildSubagentDelegationDenyChecker(cfg, config.AgentDefaults{})
 
-	reason := check(ctxAtDepth(0))
-	if reason == "" || !strings.Contains(reason, "mode") {
-		t.Fatalf("expected mode denial for await, got: %q", reason)
+	denial := check(ctxAtDepth(0))
+	if denial == nil || denial.Policy != tools.DenyMode {
+		t.Fatalf("expected mode denial for await, got: %+v", denial)
 	}
 }
 
@@ -162,9 +162,9 @@ func TestSubagentDelegationDenyChecker_DeniedWhenDepthExceeded(t *testing.T) {
 	})
 	check := buildSubagentDelegationDenyChecker(cfg, config.AgentDefaults{})
 
-	reason := check(ctxAtDepth(1)) // depth 1 >= cap 1
-	if reason == "" || !strings.Contains(reason, "depth") {
-		t.Fatalf("expected depth denial, got: %q", reason)
+	denial := check(ctxAtDepth(1)) // depth 1 >= cap 1
+	if denial == nil || denial.Policy != tools.DenyDepth {
+		t.Fatalf("expected depth denial, got: %+v", denial)
 	}
 }
 
@@ -188,10 +188,10 @@ func TestDelegationDenyChecker_FlipsWhenPolicyRebuilt(t *testing.T) {
 		config.DelegationModeBackground, nil)
 
 	// Under the OLD policy: ava allowed, ray denied (not in trust set).
-	if reason := oldChecker(ctxAtDepth(0), "ava"); reason != "" {
-		t.Fatalf("old policy: expected ava allowed, got deny: %q", reason)
+	if denial := oldChecker(ctxAtDepth(0), "ava"); denial != nil {
+		t.Fatalf("old policy: expected ava allowed, got deny: %+v", denial)
 	}
-	if reason := oldChecker(ctxAtDepth(0), "ray"); reason == "" {
+	if denial := oldChecker(ctxAtDepth(0), "ray"); denial == nil {
 		t.Fatal("old policy: expected ray denied (not in trust set), got allow")
 	}
 
@@ -207,17 +207,17 @@ func TestDelegationDenyChecker_FlipsWhenPolicyRebuilt(t *testing.T) {
 		config.DelegationModeBackground, nil)
 
 	// Under the NEW policy: ray now allowed, ava now denied — the gate FLIPPED.
-	if reason := newChecker(ctxAtDepth(0), "ray"); reason != "" {
-		t.Fatalf("new policy: expected ray allowed after edit, got deny: %q", reason)
+	if denial := newChecker(ctxAtDepth(0), "ray"); denial != nil {
+		t.Fatalf("new policy: expected ray allowed after edit, got deny: %+v", denial)
 	}
-	if reason := newChecker(ctxAtDepth(0), "ava"); reason == "" {
+	if denial := newChecker(ctxAtDepth(0), "ava"); denial == nil {
 		t.Fatal("new policy: expected ava denied after edit (revoked target), got allow")
 	}
 
 	// Defense in depth: the OLD checker (the pre-reload closure) still enforces
 	// the OLD allowlist — proving the rebuild, not in-place mutation, is what
 	// applies the new policy. This is exactly why a delegation edit MUST reload.
-	if reason := oldChecker(ctxAtDepth(0), "ray"); reason == "" {
+	if denial := oldChecker(ctxAtDepth(0), "ray"); denial == nil {
 		t.Fatal("pre-reload checker must still deny ray (proves checker is bound to construction-time config)")
 	}
 }

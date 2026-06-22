@@ -91,6 +91,44 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced
 }
 
+// ── Featured skills (shown when search box is empty) ──────────────────────────
+
+// Popular/featured search terms curated for the empty state of the ClawHub
+// browser. Clicking a suggestion fills the search box and triggers a live query.
+const FEATURED_SUGGESTIONS: { label: string; query: string; description: string }[] = [
+  { label: 'Web search', query: 'web search', description: 'Search the internet from your agent' },
+  { label: 'Summarize', query: 'summarize', description: 'Condense documents and text' },
+  { label: 'Code review', query: 'code review', description: 'Review and audit code' },
+  { label: 'Email', query: 'email', description: 'Read, compose and send emails' },
+  { label: 'Calendar', query: 'calendar', description: 'Manage meetings and events' },
+  { label: 'Data analysis', query: 'data analysis', description: 'Analyse spreadsheets and datasets' },
+]
+
+function FeaturedSkillSuggestions({ onSelect }: { onSelect: (query: string) => void }) {
+  return (
+    <div className="py-4 space-y-4" data-testid="skill-featured-suggestions">
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-[var(--color-secondary)]">Popular categories</p>
+        <p className="text-[11px] text-[var(--color-muted)]">Select a category or type to search the ClawHub registry.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {FEATURED_SUGGESTIONS.map((s) => (
+          <button
+            key={s.query}
+            type="button"
+            data-testid={`featured-suggestion-${s.query.replace(/\s+/g, '-')}`}
+            onClick={() => onSelect(s.query)}
+            className="flex flex-col items-start gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 text-left hover:bg-[var(--color-surface-2)] hover:border-[var(--color-accent)]/40 transition-colors"
+          >
+            <span className="text-xs font-medium text-[var(--color-secondary)]">{s.label}</span>
+            <span className="text-[10px] text-[var(--color-muted)] leading-snug">{s.description}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { addToast } = useUiStore()
@@ -326,12 +364,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
             data-testid="skill-search-results"
           >
             {debouncedQuery.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 gap-2 text-center">
-                <MagnifyingGlass size={32} weight="thin" className="text-[var(--color-border)]" />
-                <p className="text-sm text-[var(--color-muted)]">
-                  Type to search the ClawHub registry.
-                </p>
-              </div>
+              <FeaturedSkillSuggestions onSelect={(term) => setQuery(term)} />
             ) : isSearchError ? (
               <div
                 className="flex flex-col items-center justify-center py-12 gap-2 text-center"

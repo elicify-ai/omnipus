@@ -67,6 +67,7 @@ func TestHandleChatMessage_ForwardsModelNameToBus(t *testing.T) {
 		"",                 // agentID (no per-message agent override → default)
 		nil,                // mediaRefs
 		"z-ai/glm-5-turbo", // modelName
+		"",                 // workspaceID (no active workspace)
 		wc,
 	)
 
@@ -98,6 +99,7 @@ func TestHandleChatMessage_EmptyModelName_DoesNotSetKey(t *testing.T) {
 		"",
 		nil,
 		"", // empty modelName
+		"", // workspaceID (no active workspace)
 		wc,
 	)
 
@@ -130,6 +132,7 @@ func TestHandleChatMessage_WhitespaceModelName_DoesNotSetKey(t *testing.T) {
 		"",
 		nil,
 		"   \t\n", // whitespace only
+		"",        // workspaceID (no active workspace)
 		wc,
 	)
 
@@ -161,6 +164,7 @@ func TestHandleChatMessage_TrimsModelName(t *testing.T) {
 		"",
 		nil,
 		"  z-ai/glm-5-turbo  ", // surrounding whitespace
+		"",                     // workspaceID (no active workspace)
 		wc,
 	)
 
@@ -190,6 +194,7 @@ func TestHandleChatMessage_ModelNameWithAgentID_BothKeysSet(t *testing.T) {
 		"mia", // explicit agent_id
 		nil,
 		"z-ai/glm-5-turbo", // per-turn model
+		"",                 // workspaceID (no active workspace)
 		wc,
 	)
 

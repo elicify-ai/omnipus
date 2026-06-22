@@ -2429,6 +2429,14 @@ type ModelConfig struct {
 	// Name is an alias for ModelName used in some display contexts.
 	Name string `json:"name,omitempty" yaml:"name,omitempty"`
 
+	// Models is the user-supplied catalog of model slugs for providers that do
+	// NOT expose a live /models endpoint (custom / unknown OpenAI-compatible
+	// gateways). For providers WITH a live endpoint the catalog is fetched from
+	// upstream and this field is ignored. The model picker is constrained to this
+	// list when present (UAT model-catalog fix). Empty for endpoint-backed
+	// providers.
+	Models []string `json:"models,omitempty" yaml:"models,omitempty"`
+
 	// isVirtual marks this model as a virtual model generated from multi-key expansion.
 	// Virtual models should not be persisted to config files.
 	isVirtual bool

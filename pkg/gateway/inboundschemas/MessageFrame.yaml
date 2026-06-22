@@ -86,3 +86,17 @@ properties:
           `model` (and then to the active session's default) when
           absent. Empty string is treated the same as absent.
         example: "z-ai/glm-5-turbo"
+      workspace_id:
+        type: string
+        minLength: 1
+        maxLength: 128
+        description: >
+          Active workspace this chat belongs to (M4 workspace→turn binding).
+          When the user sends a message from a workspace chat, the SPA sets
+          this so the server tags the session with the workspace and any task
+          the agent creates during the turn (task_create / delegation) lands on
+          THIS workspace's board instead of the agent's default workspace.
+          Stamped onto the session meta on first use; absent for the global
+          (non-workspace) chat, where created tasks fall back to the default
+          workspace.
+        example: "01JXDEFAULT000000000000001"

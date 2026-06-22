@@ -13,6 +13,8 @@ import type { Agent } from '@/lib/api'
 // suite is stable whether or not the probe endpoint is wired up. Tests
 // that exercise the disabled-state path override the mock to return
 // `{ hasCodex: false }` via fetchMockReset.
+// cli-detect now goes through the authed `fetchCliDetect()` (UAT fix) rather
+// than a raw `fetch`, so we mock that function instead of stubbing global fetch.
 const fetchSpy = vi.fn()
 vi.stubGlobal('fetch', fetchSpy)
 
@@ -34,7 +36,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgents: vi.fn(), fetchWorkspaces: vi.fn(), updateAgent: vi.fn(), testAgentRunner: vi.fn() }
+  return { ...actual, fetchAgents: vi.fn(), fetchWorkspaces: vi.fn(), updateAgent: vi.fn(), testAgentRunner: vi.fn(), fetchCliDetect: vi.fn() }
 })
 
 // CreateAgentModal pulls in heavy deps; stub it to keep the screen test focused.
@@ -49,7 +51,7 @@ vi.mock('@/store/auth', () => ({
     selector({ token: 'test-token', role: 'admin', username: 'admin' }),
 }))
 
-import { fetchAgents, fetchWorkspaces } from '@/lib/api'
+import { fetchAgents, fetchWorkspaces, fetchCliDetect } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -104,10 +106,8 @@ beforeEach(() => {
   // Default: optimistic detection — every CLI available. Tests that need a
   // missing-CLI scenario override this in their body.
   fetchSpy.mockReset()
-  fetchSpy.mockResolvedValue({
-    ok: true,
-    json: async () => ({ hasClaude: true, hasCodex: true, hasOpencode: true }),
-  })
+  vi.mocked(fetchCliDetect).mockReset()
+  vi.mocked(fetchCliDetect).mockResolvedValue({ hasClaude: true, hasCodex: true, hasOpencode: true })
 })
 
 describe('AgentListScreen — base/worker partition', () => {
@@ -432,17 +432,14 @@ describe('AgentListScreen — external CLI sub-picker disclosure', () => {
 
   it('renders the codex sub-option as disabled with a tooltip when hostClis.hasCodex is false', async () => {
     // Override the probe to report codex missing.
-    fetchSpy.mockReset()
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      json: async () => ({ hasClaude: true, hasCodex: false, hasOpencode: true }),
-    })
+    vi.mocked(fetchCliDetect).mockReset()
+    vi.mocked(fetchCliDetect).mockResolvedValue({ hasClaude: true, hasCodex: false, hasOpencode: true })
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
     const workerSection = await screen.findByTestId('worker-agents-section')
-    // Wait for the probe to settle before asserting (the useEffect is async).
+    // Wait for the authed probe to settle before asserting (the useEffect is async).
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith('/api/v1/system/cli-detect')
+      expect(fetchCliDetect).toHaveBeenCalled()
     })
     fireEvent.click(within(workerSection).getByTestId('add-external-trigger'))
     const codex = await screen.findByTestId('add-external-codex')
@@ -456,9 +453,9 @@ describe('AgentListScreen — external CLI sub-picker disclosure', () => {
   })
 
   it('keeps optimistic defaults when the cli-detect endpoint is missing and surfaces a warning', async () => {
-    // Endpoint 404 → optimistic defaults → all CLIs enabled, plus a warning.
-    fetchSpy.mockReset()
-    fetchSpy.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) })
+    // Endpoint failure → optimistic defaults → all CLIs enabled, plus a warning.
+    vi.mocked(fetchCliDetect).mockReset()
+    vi.mocked(fetchCliDetect).mockRejectedValue(new Error('not found'))
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
     const workerSection = await screen.findByTestId('worker-agents-section')

@@ -154,6 +154,16 @@ export const ToolResultRef = z
   })
   .strict();
 
+export const DelegationFailure = z
+  .object({
+    error: z.literal("delegation_denied"),
+    reason: z.string().min(1),
+    policy: z.enum(["trust_set", "mode", "depth"]),
+    tool: z.string().min(1),
+    target_agent_id: z.string().optional(),
+  })
+  .strict();
+
 export const ToolCallResultFrame = z
   .object({
     type: z.literal("tool_call_result"),

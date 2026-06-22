@@ -24,6 +24,7 @@ import type {
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
+import { InheritToggle } from './InheritToggle'
 import type { Provider } from '@/lib/api/generated/openapi-types'
 import { X } from '@phosphor-icons/react'
 import type { StepProps } from './types'
@@ -39,11 +40,23 @@ export function Step3Tools({
   skills = [],
 }: StepProps) {
   const isExternal = initialType === 'subagent_3p'
+  // Native subagents can inherit Tools / Skills from the caller (UAT 4a).
+  const isNativeSubagent = initialType === 'Subagent'
+  const inheritTools = isNativeSubagent && payload.inherit_tools === true
+  const inheritSkills = isNativeSubagent && payload.inherit_skills === true
   const tools: RegistryTool[] = [...registryTools]
 
   return (
     <>
-      {!isExternal && (
+      {!isExternal && isNativeSubagent && (
+        <InheritToggle
+          label="Tools"
+          inherit={payload.inherit_tools === true}
+          onChange={(v) => setField('inherit_tools', v)}
+          testId="wizard-inherit-tools"
+        />
+      )}
+      {!isExternal && !inheritTools && (
         <div className="space-y-2" data-testid="wizard-tools-cfg">
           <label className="text-sm font-medium">Tools policy</label>
           <p className="text-xs text-[var(--color-muted)]">
@@ -62,6 +75,15 @@ export function Step3Tools({
         </div>
       )}
 
+      {isNativeSubagent && (
+        <InheritToggle
+          label="Skills"
+          inherit={payload.inherit_skills === true}
+          onChange={(v) => setField('inherit_skills', v)}
+          testId="wizard-inherit-skills"
+        />
+      )}
+      {!inheritSkills && (
       <div className="space-y-2" data-testid="wizard-skills">
         <label className="text-sm font-medium">Skills</label>
         <p className="text-xs text-[var(--color-muted)]">
@@ -112,6 +134,7 @@ export function Step3Tools({
           </div>
         )}
       </div>
+      )}
 
       {!isExternal && (
         <FallbackEditor
