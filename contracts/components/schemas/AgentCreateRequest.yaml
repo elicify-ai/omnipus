@@ -168,10 +168,10 @@ properties:
       - workspace
       - workspace+net
       - host
-      - off
     description: >
-      Kernel sandbox profile applied to this agent's tool calls. Hidden for Subagent
-      (External) — the CLI manages its own isolation.
+      Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent
+      "off" is retired — "no sandbox" is reachable only via the global god-mode
+      switch. Hidden for Subagent (External) — the CLI manages its own isolation.
     example: "workspace"
   shell_policy:
     $ref: './AgentShellPolicy.yaml'

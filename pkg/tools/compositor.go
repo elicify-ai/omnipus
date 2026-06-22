@@ -117,6 +117,17 @@ func resolveEffectivePolicyWith(
 	agentWildcards, globalWildcards []wildcardEntry,
 	defaultAgentPolicy, defaultGlobalPolicy string,
 ) string {
+	// God-mode override (O14): the global "bypass-permissions" switch floors
+	// EVERY tool's effective policy at "allow" — no permission prompts, no
+	// deny. This is the #1 effect of god mode and intentionally short-circuits
+	// the normal global×agent merge below. It is the single resolution-time
+	// hook for the tool-policy half of god mode, so both ResolveEffectivePolicy
+	// and FilterToolsByPolicy honor it identically. The override is
+	// non-destructive: cfg.Policies / cfg.GlobalPolicies are NOT mutated, so
+	// clearing cfg.GodMode restores the prior decision exactly.
+	if cfg.GodMode {
+		return "allow"
+	}
 	g := resolveFromMap(toolName, cfg.GlobalPolicies, globalWildcards)
 	if g == "" {
 		g = defaultGlobalPolicy
@@ -173,6 +184,15 @@ type ToolPolicyCfg struct {
 	// IsCoreAgent, when true, skips the RequiresAdminAsk fence (FR-061).
 	// Set to true for agents identified by coreagent.GetPrompt(id) != "".
 	IsCoreAgent bool
+
+	// GodMode, when true, activates the O14 global "bypass-permissions"
+	// override: every tool's effective policy is floored at "allow" and the
+	// admin-ask fence is skipped — no tool can remain "ask" or "deny". Set by
+	// agentToolsCfgToPolicy when sandbox.god_mode is on AND god mode is
+	// available (build supports it + --allow-god-mode passed). Non-destructive:
+	// the underlying policy maps are untouched, so clearing this restores the
+	// prior decisions exactly.
+	GodMode bool
 }
 
 // FilterToolsByPolicy returns the subset of tools that pass the scope gate
@@ -259,18 +279,24 @@ func FilterToolsByPolicy(allTools []Tool, agentType string, cfg *ToolPolicyCfg) 
 		// isCoreAgent predicate: the agentID param passed to ApplyAdminAskFence is
 		// unused here because cfg.IsCoreAgent already captured the determination at
 		// FilterToolsByPolicy call time. We capture it in the closure instead.
-		effectivePolicy, _ = policy.ApplyAdminAskFence(
-			effectivePolicy,
-			t.Name(),
-			agentType,
-			func(name string) bool {
-				if asker, ok := t.(interface{ RequiresAdminAsk() bool }); ok {
-					return asker.RequiresAdminAsk()
-				}
-				return false
-			},
-			func(_ string) bool { return cfg.IsCoreAgent },
-		)
+		// God-mode (O14) skips the admin-ask fence entirely: the whole point of
+		// bypass-permissions is that no tool prompts. Without this guard the
+		// fence would re-downgrade an allow back to "ask" for RequiresAdminAsk
+		// tools on custom agents, leaving a path where a tool stays "ask".
+		if !cfg.GodMode {
+			effectivePolicy, _ = policy.ApplyAdminAskFence(
+				effectivePolicy,
+				t.Name(),
+				agentType,
+				func(name string) bool {
+					if asker, ok := t.(interface{ RequiresAdminAsk() bool }); ok {
+						return asker.RequiresAdminAsk()
+					}
+					return false
+				},
+				func(_ string) bool { return cfg.IsCoreAgent },
+			)
+		}
 
 		activeToolMetricsRecorder.IncFilterTotal(agentType, effectivePolicy)
 		out = append(out, t)

@@ -1,0 +1,17 @@
+type: object
+title: GodModeUpdateRequest
+description: >
+  Body for POST /api/v1/gateway/god-mode. Flips the global god-mode
+  ("bypass-permissions") switch. This is a high-blast-radius security change and
+  requires a valid single-use re-auth consent token (password step-up) replayed
+  in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns
+  403 when god mode is unavailable (nogodmode build or --allow-god-mode not
+  passed at boot) and enabled=true.
+required:
+  - enabled
+additionalProperties: false
+properties:
+  enabled:
+    type: boolean
+    description: Desired god-mode state. true turns god mode on, false turns it off.
+    example: true

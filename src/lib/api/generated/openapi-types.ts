@@ -1124,6 +1124,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agents/{id}/mailbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get an agent's email mailbox account (M11)
+         * @description Returns the email mailbox account configured for the specified agent. Email is a TOOL surface (read_inbox, search_email, read_message, send_email, reply), not a conversational channel. The mailbox password is never returned; the `configured` flag reports whether a password is on file in the credential store.
+         */
+        get: operations["getAgentMailbox"];
+        /**
+         * Configure an agent's email mailbox account (M11)
+         * @description Configures the email mailbox account for the specified agent. The password, when present, is routed into the encrypted credential store and persisted only as a reference — it is never written to config.json. Per-(agent, workspace) cap-1 applies: an agent owns one mailbox, and at most one mailbox may be bound to a given workspace (returns 422 on violation).
+         */
+        put: operations["setAgentMailbox"];
+        post?: never;
+        /**
+         * Remove an agent's email mailbox account (M11)
+         * @description Removes the agent's mailbox account from config and deletes the stored mailbox password from the credential store. The email tools are de-registered from the agent on the next reload.
+         */
+        delete: operations["deleteAgentMailbox"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/gateway/rotate-token": {
         parameters: {
             query?: never;
@@ -1178,6 +1206,30 @@ export interface paths {
          * @description Triggers a graceful self-restart: the gateway replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). Used to apply restart-gated settings from the UI without a manual process bounce. The response gives the SPA a status + drain estimate so it can poll /health (and reconnect the WS) to detect the gateway going down and coming back up. High blast radius — admin-only, secured by RequireAdmin + RequireNotBypass; dev_mode_bypass returns 503.
          */
         post: operations["restartGateway"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gateway/god-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the global god-mode runtime state (O14)
+         * @description Returns whether god mode ("bypass-permissions") is currently enabled and whether it is available in this build/boot. Admin-only.
+         */
+        get: operations["getGodMode"];
+        put?: never;
+        /**
+         * Toggle the global god-mode switch (O14, password step-up)
+         * @description Flips the global god-mode ("bypass-permissions") switch and applies or reverts the override live (no restart). When enabled, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — admin-only, secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling while god mode is unavailable (nogodmode build or --allow-god-mode not passed). Every toggle is audit-logged with the acting user.
+         */
+        post: operations["setGodMode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3008,11 +3060,11 @@ export interface components {
             heartbeat_interval: number;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot). Hidden for subagent_3p — CLI manages its own isolation.
+             * @description Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. Per-agent "off" is retired (O13) — "no sandbox" is reachable only via the global god-mode switch. Editable on ALL agents, including locked core agents. Hidden for subagent_3p — CLI manages its own isolation.
              * @example workspace
              * @enum {string}
              */
-            sandbox_profile?: "workspace" | "workspace+net" | "host" | "off";
+            sandbox_profile?: "workspace" | "workspace+net" | "host";
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
@@ -3362,11 +3414,11 @@ export interface components {
             voice?: string | null;
             executor?: components["schemas"]["ExecutorConfig"];
             /**
-             * @description Kernel sandbox profile applied to this agent's tool calls. Hidden for Subagent (External) — the CLI manages its own isolation.
+             * @description Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
              * @example workspace
              * @enum {string}
              */
-            sandbox_profile?: "workspace" | "workspace+net" | "host" | "off";
+            sandbox_profile?: "workspace" | "workspace+net" | "host";
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum seconds a single agent turn may run before being interrupted.
@@ -3455,11 +3507,11 @@ export interface components {
              */
             heartbeat_interval?: number;
             /**
-             * @description New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
+             * @description New sandbox profile. Editable on ALL agents, including locked core agents (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch (POST /api/v1/gateway/god-mode). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
              * @example workspace
              * @enum {string}
              */
-            sandbox_profile?: "workspace" | "workspace+net" | "host" | "off";
+            sandbox_profile?: "workspace" | "workspace+net" | "host";
             /** @description Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents. */
             shell_policy?: {
                 /** @example true */
@@ -3940,7 +3992,17 @@ export interface components {
              * @example workspace
              * @enum {string}
              */
-            default_profile?: "" | "none" | "workspace" | "workspace+net" | "host" | "off";
+            default_profile?: "" | "none" | "workspace" | "workspace+net" | "host";
+            /**
+             * @description O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
+             * @example false
+             */
+            god_mode?: boolean;
+            /**
+             * @description Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. The runtime god_mode switch is a no-op when this is false.
+             * @example false
+             */
+            god_mode_available?: boolean;
             /**
              * @description Global fallback shell command deny-list (regex entries). Per-agent custom patterns extend this list.
              * @example [
@@ -4249,6 +4311,33 @@ export interface components {
              * @example Gateway is restarting; reconnecting shortly.
              */
             message?: string;
+        };
+        /**
+         * GodModeStatus
+         * @description O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode and as the body of a successful POST /api/v1/gateway/god-mode toggle. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
+         */
+        GodModeStatus: {
+            /**
+             * @description Current runtime god-mode state. Always false when `available` is false (the switch is a no-op without availability).
+             * @example false
+             */
+            enabled: boolean;
+            /**
+             * @description Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. When false, POST /api/v1/gateway/god-mode with enabled=true returns 403.
+             * @example false
+             */
+            available: boolean;
+        };
+        /**
+         * GodModeUpdateRequest
+         * @description Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change and requires a valid single-use re-auth consent token (password step-up) replayed in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns 403 when god mode is unavailable (nogodmode build or --allow-god-mode not passed at boot) and enabled=true.
+         */
+        GodModeUpdateRequest: {
+            /**
+             * @description Desired god-mode state. true turns god mode on, false turns it off.
+             * @example true
+             */
+            enabled: boolean;
         };
         /**
          * AboutResponse
@@ -5603,6 +5692,91 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             default_agent_id?: string;
+        };
+        /**
+         * Mailbox
+         * @description An agent's email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox is owned by exactly one agent and surfaces in exactly one workspace (per-(agent, workspace), cap-1 in 0.1.0). The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
+         */
+        Mailbox: {
+            /**
+             * @description ID of the agent that owns this mailbox.
+             * @example mia
+             */
+            agent_id: string;
+            /** @description Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent. */
+            enabled: boolean;
+            /**
+             * @description ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
+             * @example ws_my_workspace
+             */
+            workspace_id?: string;
+            /**
+             * @description IMAP server hostname (implicit TLS / IMAPS).
+             * @example imap.example.com
+             */
+            imap_host?: string;
+            /**
+             * @description IMAP server port. Defaults to 993 when omitted.
+             * @example 993
+             */
+            imap_port?: number;
+            /**
+             * @description SMTP server hostname.
+             * @example smtp.example.com
+             */
+            smtp_host?: string;
+            /**
+             * @description SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
+             * @example 587
+             */
+            smtp_port?: number;
+            /**
+             * @description The email address / login used for IMAP and SMTP authentication.
+             * @example assistant@example.com
+             */
+            username?: string;
+            /** @description True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned. */
+            configured: boolean;
+        };
+        /**
+         * MailboxConfigureRequest
+         * @description Request body to configure an agent's email mailbox account (M11). The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
+         */
+        MailboxConfigureRequest: {
+            /** @description Whether to register the email tools for the owning agent. */
+            enabled: boolean;
+            /**
+             * @description ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
+             * @example ws_my_workspace
+             */
+            workspace_id: string;
+            /**
+             * @description IMAP server hostname (implicit TLS / IMAPS).
+             * @example imap.example.com
+             */
+            imap_host: string;
+            /**
+             * @description IMAP server port. Defaults to 993 when omitted.
+             * @example 993
+             */
+            imap_port?: number;
+            /**
+             * @description SMTP server hostname.
+             * @example smtp.example.com
+             */
+            smtp_host: string;
+            /**
+             * @description SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
+             * @example 587
+             */
+            smtp_port?: number;
+            /**
+             * @description The email address / login used for IMAP and SMTP authentication.
+             * @example assistant@example.com
+             */
+            username: string;
+            /** @description Mailbox password (or app password). Routed to the encrypted credential store; never persisted inline. Omit to keep the existing stored password; send an empty string to clear it. */
+            password?: string;
         };
         /**
          * BackupCreateResponse
@@ -9307,6 +9481,131 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    getAgentMailbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Agent ID.
+                 * @example mia
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agent's mailbox account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Mailbox"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Agent not found, or no mailbox configured for the agent. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    setAgentMailbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Agent ID.
+                 * @example mia
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailboxConfigureRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated mailbox account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Mailbox"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description Agent not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Cap-1 violation (a mailbox already exists for the workspace). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    deleteAgentMailbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Agent ID.
+                 * @example mia
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Mailbox removed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationResult"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Agent not found, or no mailbox configured. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     rotateGatewayToken: {
         parameters: {
             query?: never;
@@ -9408,6 +9707,82 @@ export interface operations {
             };
             500: components["responses"]["500InternalServerError"];
             /** @description Restart unavailable (dev_mode_bypass active). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getGodMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current god-mode state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GodModeStatus"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            /** @description Unavailable (dev_mode_bypass active). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setGodMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GodModeUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Toggle applied. Returns the new state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GodModeStatus"];
+                };
+            };
+            /** @description Invalid request body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Unavailable (dev_mode_bypass active). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11645,6 +12020,8 @@ export type SkillTrustResponse = components["schemas"]["SkillTrustResponse"];
 export type PromptGuardResponse = components["schemas"]["PromptGuardResponse"];
 export type PendingRestartEntry = components["schemas"]["PendingRestartEntry"];
 export type GatewayRestartResponse = components["schemas"]["GatewayRestartResponse"];
+export type GodModeStatus = components["schemas"]["GodModeStatus"];
+export type GodModeUpdateRequest = components["schemas"]["GodModeUpdateRequest"];
 export type AboutResponse = components["schemas"]["AboutResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type GatewayStatus = components["schemas"]["GatewayStatus"];
@@ -11691,6 +12068,8 @@ export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
+export type Mailbox = components["schemas"]["Mailbox"];
+export type MailboxConfigureRequest = components["schemas"]["MailboxConfigureRequest"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
 export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
 export type OperationResult = components["schemas"]["OperationResult"];

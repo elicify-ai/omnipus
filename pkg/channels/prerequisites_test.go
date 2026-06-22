@@ -14,7 +14,7 @@ import (
 func TestPrerequisiteChecker_Registered(t *testing.T) {
 	expected := []string{
 		"telegram", "discord", "dingtalk", "slack", "matrix",
-		"line", "wecom", "weixin", "irc", "google-chat", "email",
+		"line", "wecom", "weixin", "irc", "google-chat",
 	}
 	for _, ch := range expected {
 		checker, ok := getPrerequisite(ch)
@@ -64,30 +64,14 @@ func TestPrerequisiteChecker_TokenRef(t *testing.T) {
 	}
 }
 
-// TestPrerequisiteChecker_Email validates that the email checker enforces all
-// four required fields (imap_host, smtp_host, username, password) and returns
-// ok=true only when all are present.
-func TestPrerequisiteChecker_Email(t *testing.T) {
-	checker, ok := getPrerequisite("email")
-	if !ok {
-		t.Fatal("expected email prerequisite checker")
-	}
-
-	// All missing → not ok
-	_, ok = checker(config.ChannelInstanceConfig{})
-	if ok {
-		t.Fatal("expected ok=false when all email fields are missing")
-	}
-
-	// All present → ok
-	_, ok = checker(config.ChannelInstanceConfig{
-		IMAPHost:      "imap.example.com",
-		SMTPHost:      "smtp.example.com",
-		EmailUsername: "user@example.com",
-		PasswordRef:   "EMAIL_PASSWORD",
-	})
-	if !ok {
-		t.Fatal("expected ok=true when all email fields are present")
+// TestPrerequisiteChecker_EmailNotRegistered asserts that email is NOT a
+// conversational channel (M11): it was de-registered as a channel and re-modeled
+// as a TOOL surface (pkg/email transport + per-agent email tools). No email
+// channel prerequisite checker may be registered, or the channel manager could
+// be coaxed into activating a push channel that no longer exists.
+func TestPrerequisiteChecker_EmailNotRegistered(t *testing.T) {
+	if _, ok := getPrerequisite("email"); ok {
+		t.Fatal("email must NOT have a channel prerequisite checker — it is a tool, not a channel (M11)")
 	}
 }
 

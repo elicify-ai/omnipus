@@ -27,7 +27,6 @@ import {
   fetchSandboxStatus,
   fetchSandboxConfig,
   updateSandboxConfig,
-  fetchAppState,
   isApiError,
 } from '@/lib/api'
 import type { SandboxStatus, SandboxProfile } from '@/lib/api'
@@ -518,13 +517,6 @@ export function SandboxSection(): React.ReactElement {
   const { data: configData, isLoading: configLoading } = useQuery({
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
-  })
-
-  // ── App state (god mode availability) ─────────────────────────────────────
-  const { data: appState } = useQuery({
-    queryKey: ['app-state'],
-    queryFn: fetchAppState,
-    staleTime: 60_000,
   })
 
   // ── Agents query (for default profile selector — we pick the first/system agent) ─
@@ -1173,8 +1165,6 @@ export function SandboxSection(): React.ReactElement {
               <SandboxProfileSelector
                 value={defaultProfile}
                 agentName="new agents"
-                godModeAvailable={appState?.god_mode_available ?? false}
-                godModeOptedIn={appState?.god_mode_opted_in ?? false}
                 onChange={(p) => {
                   markAgentDefaultsTouched()
                   setDefaultProfile(p)

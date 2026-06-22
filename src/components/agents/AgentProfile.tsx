@@ -58,7 +58,6 @@ import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
-  fetchAppState,
   updateAgent,
   deleteAgent,
   fetchProviders,
@@ -123,11 +122,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     staleTime: 30_000,
   })
 
-  const { data: appState } = useQuery({
-    queryKey: ['app-state'],
-    queryFn: fetchAppState,
-    staleTime: 60_000,
-  })
 
   // US-E6: fetch available (installed) skills so the picker can show them.
   const { data: availableSkills = [] } = useQuery<Skill[]>({
@@ -477,10 +471,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // stripped here (B-2 defense-in-depth on the frontend side): the
       // Skills picker is rendered disabled for locked agents, so this strip
       // is the belt-and-suspenders path for any state that may survive hydration.
+      // O13: sandbox_profile is intentionally NOT stripped for locked agents —
+      // a core agent's "locked" status does not extend to its sandbox profile,
+      // which is user-editable. The backend accepts sandbox_profile changes on
+      // locked agents (the locked-field validator no longer guards it).
       const stripped = agent?.locked
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
-            heartbeat: _h, instructions: _ins, sandbox_profile: _sp,
+            heartbeat: _h, instructions: _ins,
             shell_policy: _shp, tools_cfg: _tc, skills: _sk, executor: _ex, ...rest
           }) => rest)(data as Record<string, unknown>)
         : data
@@ -1002,14 +1000,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             )}
           </section>
 
-          {/* Sandbox — editable for custom agents, read-only for locked core
-              agents, hidden for native workers (delegation-only labour
-              agents; sandbox is inherited from the caller). */}
+          {/* Sandbox — editable for ALL agents including locked core agents
+              (O13: locked status does NOT extend to the sandbox profile),
+              hidden for native workers (delegation-only labour agents; sandbox
+              is inherited from the caller). */}
           {!isNativeWorkerAgent && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
                 <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Sandbox</p>
-                {(sandboxProfile === 'workspace+net' || sandboxProfile === 'off') && (
+                {sandboxProfile === 'workspace+net' && (
                   <span
                     data-testid="sandbox-accordion-widening-badge"
                     className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40"
@@ -1019,40 +1018,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 )}
                 <SandboxInfoTooltip />
               </div>
-              {isLocked ? (
-                <div className="space-y-3">
-                  <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
-                    <p className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mb-1">
-                      Profile
+              <div className="space-y-4">
+                  {/* O13: even locked core agents may have their sandbox edited —
+                      surface a note so it's clear this is intentional. */}
+                  {isLocked && (
+                    <p
+                      data-testid="sandbox-locked-editable-note"
+                      className="text-[11px] text-[var(--color-muted)] leading-snug"
+                    >
+                      This is a built-in core agent, but its sandbox profile is still editable.
                     </p>
-                    <p className="text-sm font-medium text-[var(--color-secondary)]">
-                      {sandboxProfile
-                        ? `${formatSandboxProfileLabel(sandboxProfile)} (built-in, locked)`
-                        : 'Built-in (locked)'}
-                    </p>
-                    <p className="text-xs text-[var(--color-muted)] mt-2">
-                      Locked core agents use a built-in sandbox profile that cannot be changed from
-                      the UI. To adjust the global default for new custom agents, see{' '}
-                      <strong>Settings → Security</strong>.
-                    </p>
-                  </div>
-                  {shellDenyPatterns.length > 0 && (
-                    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
-                      <p className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mb-1.5">
-                        Shell deny patterns
-                      </p>
-                      <ul className="space-y-1">
-                        {shellDenyPatterns.map((p, i) => (
-                          <li key={i} className="font-mono text-xs text-[var(--color-secondary)]">
-                            {p}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
                   )}
-                </div>
-              ) : (
-                <div className="space-y-4">
                   {isWorkerAgent && executor?.kind === 'external-cli' && sandboxProfile && sandboxProfile !== 'off' && (
                     <div
                       data-testid="sandbox-external-cli-ignored-callout"
@@ -1070,8 +1046,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   <SandboxProfileSelector
                     value={sandboxProfile}
                     agentName={name || agent.name}
-                    godModeAvailable={appState?.god_mode_available ?? false}
-                    godModeOptedIn={appState?.god_mode_opted_in ?? false}
                     onChange={(p) => { markDirty(); setSandboxProfile(p) }}
                   />
                   <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
@@ -1094,10 +1068,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     )}
                   </div>
                 </div>
-              )}
             </section>
           )}
-        
+
     </div>
   )
 
@@ -2092,18 +2065,6 @@ function SandboxInfoTooltip() {
       )}
     </span>
   )
-}
-
-/** W6-C1 / G5: friendly label for a SandboxProfile wire value. Shared by
- *  the editable branch (SandboxProfileSelector's selected chip) and the
- *  locked branch (read-only summary), so the two surfaces never disagree
- *  on how to spell "workspace+net". The wire enum is `workspace`,
- *  `workspace+net`, `host`, `off`; "none" is the UI-only sentinel that
- *  means "inherit global default" (stripped from the wire payload before
- *  PUT — see `formData`). */
-function formatSandboxProfileLabel(profile: string): string {
-  if (profile === 'workspace+net') return 'Workspace + Net'
-  return profile.charAt(0).toUpperCase() + profile.slice(1)
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {

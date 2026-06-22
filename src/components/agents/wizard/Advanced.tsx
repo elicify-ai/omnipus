@@ -162,12 +162,9 @@ function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsPro
         <SandboxProfileSelector
           value={toWireSandbox(payload.sandbox_profile)}
           agentName={payload.name || 'this agent'}
-          godModeAvailable
-          godModeOptedIn
           onChange={(profile) =>
-            // SandboxProfile includes 'none' which is UI-only — strip it
-            // before writing back to the wire-shaped payload (which
-            // excludes 'none').
+            // 'none' is the UI-only inherit marker — strip it before writing
+            // back to the wire-shaped payload (which excludes 'none').
             setField(
               'sandbox_profile',
               profile === 'none' ? undefined : profile,

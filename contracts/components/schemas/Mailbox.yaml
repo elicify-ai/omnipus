@@ -1,0 +1,52 @@
+title: Mailbox
+description: >
+  An agent's email mailbox account (M11). Email is a TOOL surface, not a
+  conversational channel: a mailbox is owned by exactly one agent and surfaces
+  in exactly one workspace (per-(agent, workspace), cap-1 in 0.1.0). The mailbox
+  password is stored in the encrypted credential store and is NEVER returned by
+  this endpoint — the `configured` flag reports whether a password is on file.
+type: object
+required:
+- agent_id
+- enabled
+- configured
+additionalProperties: false
+properties:
+  agent_id:
+    type: string
+    description: ID of the agent that owns this mailbox.
+    example: "mia"
+  enabled:
+    type: boolean
+    description: >
+      Whether the email tools (read_inbox, search_email, read_message,
+      send_email, reply) are registered for the owning agent.
+  workspace_id:
+    type: string
+    description: "ID of the workspace the mailbox surfaces in (cap-1: unique per workspace)."
+    example: "ws_my_workspace"
+  imap_host:
+    type: string
+    description: IMAP server hostname (implicit TLS / IMAPS).
+    example: "imap.example.com"
+  imap_port:
+    type: integer
+    description: IMAP server port. Defaults to 993 when omitted.
+    example: 993
+  smtp_host:
+    type: string
+    description: SMTP server hostname.
+    example: "smtp.example.com"
+  smtp_port:
+    type: integer
+    description: SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
+    example: 587
+  username:
+    type: string
+    description: The email address / login used for IMAP and SMTP authentication.
+    example: "assistant@example.com"
+  configured:
+    type: boolean
+    description: >
+      True when a mailbox password is present in the credential store (the
+      mailbox can authenticate). The password value itself is never returned.

@@ -24,6 +24,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     updateConfig: vi.fn(),
     fetchGatewayStatus: vi.fn(),
     rotateGatewayToken: vi.fn(),
+    // O14: GatewaySection now embeds the GodModeControl, which reads god-mode
+    // state. Mock it so the section renders deterministically (off + available).
+    fetchGodMode: vi.fn(),
   }
 })
 
@@ -33,7 +36,7 @@ vi.mock('@/store/ui', () => ({
 
 // ── Imports after mocks ────────────────────────────────────────────────────────
 
-import { fetchConfig, fetchGatewayStatus } from '@/lib/api'
+import { fetchConfig, fetchGatewayStatus, fetchGodMode } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { GatewaySection } from './GatewaySection'
 
@@ -88,6 +91,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(useUiStore).mockReturnValue({ addToast: mockAddToast } as never)
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
+  vi.mocked(fetchGodMode).mockResolvedValue({ enabled: false, available: true })
 })
 
 // ── FR-107: no auth_mode:none option ─────────────────────────────────────────
@@ -124,9 +128,13 @@ describe('GatewaySection — US-4 AC2: no hot-reload toggle', () => {
       expect(screen.getByText(/log level/i)).toBeInTheDocument()
     })
     expect(screen.queryByText(/hot reload/i)).not.toBeInTheDocument()
-    // Ensure no switch for hot-reload is in the DOM
-    // The bind-address risky control is still there but the hot-reload Switch is gone
-    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+    // Ensure no switch for hot-reload is in the DOM. (The God-mode switch — O14 —
+    // is an expected, separate control, so assert specifically that no switch is
+    // labelled for hot-reload rather than that no switch exists at all.)
+    const switches = screen.queryAllByRole('switch')
+    expect(
+      switches.some((s) => /hot.?reload/i.test(s.getAttribute('aria-label') ?? '')),
+    ).toBe(false)
   })
 })
 

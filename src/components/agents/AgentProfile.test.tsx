@@ -560,11 +560,14 @@ describe('AgentProfile — Sandbox callout when executor is external-cli (G10)',
     expect(screen.queryByTestId('sandbox-external-cli-ignored-callout')).toBeNull()
   })
 
-  it('does NOT render the callout when sandbox_profile is "off" (warning would be redundant)', async () => {
+  it('does NOT render the callout when a legacy sandbox_profile of "off" is present (warning would be redundant)', async () => {
+    // O13: 'off' is retired from the per-agent enum, but a legacy agent config
+    // may still carry it on the wire — the callout must stay suppressed. We cast
+    // because the generated Agent type no longer admits 'off'.
     vi.mocked(fetchAgent).mockResolvedValue({
       ...mockWorkerAgent,
       executor: { kind: 'external-cli', cli: 'claude-code' },
-      sandbox_profile: 'off',
+      sandbox_profile: 'off' as never,
     })
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
@@ -1255,6 +1258,56 @@ describe('AgentProfile — locked banner (spec §6 BDD #13)', () => {
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
     expect(screen.queryByTestId('locked-banner')).toBeNull()
+  })
+})
+
+// O13 (LOCKED 2026-06-20): the sandbox profile is editable for ALL agents —
+// including locked core agents (locked status does NOT extend to the sandbox),
+// shows the ACTUAL profile (not a vague "Built-in"), and the per-agent picker
+// has NO 'off' option ("no sandbox" is the global god-mode switch only).
+describe('AgentProfile — O13 sandbox profile editability', () => {
+  it('renders an EDITABLE sandbox picker for a locked core agent (not read-only)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, sandbox_profile: 'workspace' })
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    // The radio control (editable) is present — not a read-only summary.
+    // (The form may render in more than one responsive layout, so use *All*.)
+    expect(screen.getAllByTestId('sandbox-profile-radio-workspace').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('sandbox-profile-radio-host').length).toBeGreaterThanOrEqual(1)
+    // The actual profile is reflected as the checked radio (in whichever
+    // responsive layout is mounted).
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId('sandbox-profile-radio-workspace').some((r) => (r as HTMLInputElement).checked),
+      ).toBe(true)
+    })
+    // The note clarifies a locked core agent's sandbox is still editable.
+    expect(screen.getAllByTestId('sandbox-locked-editable-note').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('the per-agent sandbox picker has NO off option', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, sandbox_profile: 'host' })
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    expect(screen.queryByTestId('sandbox-profile-radio-off')).toBeNull()
+  })
+
+  it('SENDS sandbox_profile in the PUT payload for a locked core agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, sandbox_profile: 'workspace' })
+    vi.mocked(updateAgent).mockResolvedValue({ ...mockLockedCoreAgent, sandbox_profile: 'host' })
+    renderProfile('mia')
+    await screen.findByText('Mia')
+
+    // Change the sandbox profile on the locked agent.
+    fireEvent.click(screen.getAllByTestId('sandbox-profile-radio-host')[0])
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+
+    const payload = vi.mocked(updateAgent).mock.calls[0][1] as Record<string, unknown>
+    // O13: sandbox_profile is NOT stripped for locked agents — it must be sent.
+    expect(payload).toHaveProperty('sandbox_profile', 'host')
   })
 })
 

@@ -126,6 +126,8 @@ import {
   VoiceProvider as VoiceProviderSchema,
   // O4 gateway self-restart (contract-first #8):
   GatewayRestartResponse as GatewayRestartResponseSchema,
+  // O14 god-mode switch (contract-first #8):
+  GodModeStatus as GodModeStatusSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -339,6 +341,9 @@ import type {
   VoiceProvider,
   // O4 gateway self-restart (contract-first #8):
   GatewayRestartResponse,
+  // O14 god-mode switch (contract-first #8):
+  GodModeStatus,
+  GodModeUpdateRequest,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -447,6 +452,9 @@ export type {
   RunnerTestResponse,
   // O4 gateway self-restart:
   GatewayRestartResponse,
+  // O14 god-mode switch:
+  GodModeStatus,
+  GodModeUpdateRequest,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -1648,6 +1656,63 @@ export function setChannelRouting(id: string, body: ChannelRouting): Promise<Cha
   )
 }
 
+// ── Email Mailbox Account ─────────────────────────────────────────────────────
+//
+// Email is a TOOL (not a channel) with a per-(agent, workspace) mailbox account,
+// cap-1 in 0.1.0. The config is stored via the existing email channel config
+// endpoint — the backend agent (parallel) will add dedicated mailbox endpoints
+// when the contract is extended. Until then this seam routes through the channel
+// config path; swap the implementation here when the new endpoints land.
+//
+// Wire fields sent / received:
+//   imap_host, imap_port, smtp_host, smtp_port, username — plain text
+//   password — write-only; the backend credential-routes it and never returns it
+//   agent_id  — binds the mailbox to a specific agent (0.1.0: cap-1)
+//   workspace_id — the workspace the mailbox surfaces in (0.1.0: "my-workspace")
+
+// not-wire-format: SPA-internal shape for the email mailbox account config form
+export interface MailboxAccountConfig { // not-wire-format: SPA-internal form-data type for the email mailbox account config panel. Never sent as a standalone wire type; fields are spread into a Record<string,unknown> payload passed to saveMailboxConfig.
+  imap_host: string
+  imap_port: number | ''
+  smtp_host: string
+  smtp_port: number | ''
+  username: string
+  /** Write-only: present only when the user provides a new password; never returned by GET. */
+  password: string
+  /** Agent this mailbox belongs to (cap-1 in 0.1.0). */
+  agent_id: string
+  /** Workspace the mailbox surfaces in (cap-1 in 0.1.0). */
+  workspace_id: string
+  /** Free-form display fields returned by GET (may not be present). */
+  [key: string]: unknown
+}
+
+export const EMAIL_CHANNEL_ID = 'email'
+
+/**
+ * Fetch the current email mailbox account config.
+ * Routes through GET /api/v1/channels/email — the backend never returns the
+ * password field (it is credential-store-routed, stored as password_ref).
+ *
+ * INTEGRATOR NOTE: when the backend agent adds dedicated mailbox endpoints
+ * (GET /api/v1/mailboxes/:agentId), replace the body of this function only.
+ */
+export function fetchMailboxConfig(): Promise<Record<string, unknown>> {
+  return fetchChannelConfig(EMAIL_CHANNEL_ID)
+}
+
+/**
+ * Save the email mailbox account config.
+ * Routes through PUT /api/v1/channels/email/configure — the backend
+ * credential-routes the password field so it is never persisted in plaintext.
+ *
+ * INTEGRATOR NOTE: when the backend agent adds dedicated mailbox endpoints
+ * (PUT /api/v1/mailboxes/:agentId), replace the body of this function only.
+ */
+export function saveMailboxConfig(config: Record<string, unknown>): Promise<void> {
+  return configureChannel(EMAIL_CHANNEL_ID, config)
+}
+
 // ── Skills ────────────────────────────────────────────────────────────────────
 
 // Skill — re-exported from generated openapi-types (contract-first #8).
@@ -2195,6 +2260,38 @@ export function gatewayRestart(): Promise<GatewayRestartResponse> {
   return request<GatewayRestartResponse>('/gateway/restart', {
     method: 'POST',
   }, GatewayRestartResponseSchema)
+}
+
+// ── God-mode (O14) ─────────────────────────────────────────────────────────────
+//
+// God-mode is the single global "bypass-permissions" switch: flipping it ON
+// floors every agent's tool policy at "allow" (no prompts), turns the kernel
+// sandbox off, opens network egress, and disables the shell guard — regardless
+// of per-agent profiles. Audit logging, the prompt-injection guard, and rate
+// limiting STAY ON. The per-agent overrides are non-destructive: switching god
+// mode off restores prior behaviour exactly.
+//
+// GodModeStatus / GodModeUpdateRequest are the generated contract types (#8);
+// see contracts/components/schemas/GodMode*.yaml. fetchGodMode reads the live
+// runtime state ({ enabled, available }); setGodMode flips it.
+//
+// Step-up auth: the POST is re-auth-gated. Callers obtain a single-use consent
+// token via reAuth() and pass it here; it is replayed in the X-Reauth-Token
+// header (a missing/invalid token yields a 403). `available` is false on a
+// nogodmode build or when --allow-god-mode was not passed at boot; enabling
+// then returns 403.
+
+export function fetchGodMode(): Promise<GodModeStatus> {
+  return request<GodModeStatus>('/gateway/god-mode', undefined, GodModeStatusSchema)
+}
+
+export function setGodMode(enabled: boolean, reAuthToken?: string): Promise<GodModeStatus> {
+  const body: GodModeUpdateRequest = { enabled }
+  return request<GodModeStatus>('/gateway/god-mode', {
+    method: 'POST',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
+    body: JSON.stringify(body),
+  }, GodModeStatusSchema)
 }
 
 // Audit log toggle — distinct from GET /audit-log (which returns AuditEntry[]).

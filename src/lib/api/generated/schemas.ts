@@ -102,9 +102,7 @@ type Agent = {
   heartbeat_enabled: boolean;
   heartbeat_interval: number;
   tools_cfg?: AgentToolsCfg | undefined;
-  sandbox_profile?:
-    | ("workspace" | "workspace+net" | "host" | "off")
-    | undefined;
+  sandbox_profile?: ("workspace" | "workspace+net" | "host") | undefined;
   shell_policy?: AgentShellPolicy | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
@@ -212,9 +210,7 @@ type AgentCreateRequest = {
   delegation_policy?: delegation_policy | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
-  sandbox_profile?:
-    | ("workspace" | "workspace+net" | "host" | "off")
-    | undefined;
+  sandbox_profile?: ("workspace" | "workspace+net" | "host") | undefined;
   shell_policy?: AgentShellPolicy | undefined;
   timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
@@ -250,7 +246,7 @@ type AgentUpdateRequest = Partial<{
   steering_mode: "one-at-a-time" | "queue-and-process";
   heartbeat_enabled: boolean;
   heartbeat_interval: number;
-  sandbox_profile: "workspace" | "workspace+net" | "host" | "off";
+  sandbox_profile: "workspace" | "workspace+net" | "host";
   shell_policy: Partial<{
     enable_deny_patterns: boolean;
     custom_deny_patterns: Array<string>;
@@ -1051,9 +1047,7 @@ export const Agent: z.ZodType<Agent> = z
     heartbeat_enabled: z.boolean(),
     heartbeat_interval: z.number().int().gte(0),
     tools_cfg: AgentToolsCfg.optional(),
-    sandbox_profile: z
-      .enum(["workspace", "workspace+net", "host", "off"])
-      .optional(),
+    sandbox_profile: z.enum(["workspace", "workspace+net", "host"]).optional(),
     shell_policy: AgentShellPolicy.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
@@ -1138,9 +1132,7 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   delegation_policy: delegation_policy.optional(),
   voice: z.string().nullish(),
   executor: ExecutorConfig.optional(),
-  sandbox_profile: z
-    .enum(["workspace", "workspace+net", "host", "off"])
-    .optional(),
+  sandbox_profile: z.enum(["workspace", "workspace+net", "host"]).optional(),
   shell_policy: AgentShellPolicy.optional(),
   timeout_seconds: z.number().int().gte(0).optional(),
   max_tool_iterations: z.number().int().gte(0).optional(),
@@ -1161,7 +1153,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
     heartbeat_enabled: z.boolean(),
     heartbeat_interval: z.number().int(),
-    sandbox_profile: z.enum(["workspace", "workspace+net", "host", "off"]),
+    sandbox_profile: z.enum(["workspace", "workspace+net", "host"]),
     shell_policy: z
       .object({
         enable_deny_patterns: z.boolean(),
@@ -1410,14 +1402,9 @@ export const SandboxConfig = z
       .object({ enabled: z.boolean(), allow_internal: z.array(z.string()) })
       .partial()
       .passthrough(),
-    default_profile: z.enum([
-      "",
-      "none",
-      "workspace",
-      "workspace+net",
-      "host",
-      "off",
-    ]),
+    default_profile: z.enum(["", "none", "workspace", "workspace+net", "host"]),
+    god_mode: z.boolean(),
+    god_mode_available: z.boolean(),
     shell_deny_patterns: z.array(z.string()),
     requires_restart: z.boolean(),
     saved: z.boolean(),
@@ -1565,6 +1552,27 @@ export const ChannelTestResponse = z
 export const ChannelRouting = z
   .object({ default_agent_id: z.string() })
   .partial();
+export const Mailbox = z.object({
+  agent_id: z.string(),
+  enabled: z.boolean(),
+  workspace_id: z.string().optional(),
+  imap_host: z.string().optional(),
+  imap_port: z.number().int().optional(),
+  smtp_host: z.string().optional(),
+  smtp_port: z.number().int().optional(),
+  username: z.string().optional(),
+  configured: z.boolean(),
+});
+export const MailboxConfigureRequest = z.object({
+  enabled: z.boolean(),
+  workspace_id: z.string(),
+  imap_host: z.string(),
+  imap_port: z.number().int().optional(),
+  smtp_host: z.string(),
+  smtp_port: z.number().int().optional(),
+  username: z.string(),
+  password: z.string().optional(),
+});
 export const RotateTokenResponse: z.ZodType<RotateTokenResponse> = z.object({
   token: BearerToken.min(72)
     .max(81)
@@ -1585,6 +1593,11 @@ export const GatewayRestartResponse = z
     message: z.string().optional(),
   })
   .passthrough();
+export const GodModeStatus = z.object({
+  enabled: z.boolean(),
+  available: z.boolean(),
+});
+export const GodModeUpdateRequest = z.object({ enabled: z.boolean() });
 export const CredentialSetRequest = z.object({
   key: z.string(),
   value: z.string(),
@@ -2406,6 +2419,120 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/agents/:id/mailbox",
+    alias: "getAgentMailbox",
+    description: `Returns the email mailbox account configured for the specified agent. Email is a TOOL surface (read_inbox, search_email, read_message, send_email, reply), not a conversational channel. The mailbox password is never returned; the &#x60;configured&#x60; flag reports whether a password is on file in the credential store.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Mailbox,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Agent not found, or no mailbox configured for the agent.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/agents/:id/mailbox",
+    alias: "setAgentMailbox",
+    description: `Configures the email mailbox account for the specified agent. The password, when present, is routed into the encrypted credential store and persisted only as a reference — it is never written to config.json. Per-(agent, workspace) cap-1 applies: an agent owns one mailbox, and at most one mailbox may be bound to a given workspace (returns 422 on violation).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailboxConfigureRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Mailbox,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Agent not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Cap-1 violation (a mailbox already exists for the workspace).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/agents/:id/mailbox",
+    alias: "deleteAgentMailbox",
+    description: `Removes the agent&#x27;s mailbox account from config and deletes the stored mailbox password from the credential store. The email tools are de-registered from the agent on the next reload.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: OperationResult,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Agent not found, or no mailbox configured.`,
         schema: ErrorResponse,
       },
       {
@@ -3245,6 +3372,75 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/gateway/god-mode",
+    alias: "getGodMode",
+    description: `Returns whether god mode (&quot;bypass-permissions&quot;) is currently enabled and whether it is available in this build/boot. Admin-only.
+`,
+    requestFormat: "json",
+    response: GodModeStatus,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Unavailable (dev_mode_bypass active).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/gateway/god-mode",
+    alias: "setGodMode",
+    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch and applies or reverts the override live (no restart). When enabled, every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — admin-only, secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling while god mode is unavailable (nogodmode build or --allow-god-mode not passed). Every toggle is audit-logged with the acting user.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ enabled: z.boolean() }),
+      },
+    ],
+    response: GodModeStatus,
+    errors: [
+      {
+        status: 400,
+        description: `Invalid request body.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Unavailable (dev_mode_bypass active).`,
         schema: ErrorResponse,
       },
     ],

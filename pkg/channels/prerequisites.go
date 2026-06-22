@@ -93,22 +93,6 @@ func prereqGoogleChat(inst config.ChannelInstanceConfig) (string, bool) {
 	return "", true
 }
 
-func prereqEmail(inst config.ChannelInstanceConfig) (string, bool) {
-	if inst.IMAPHost == "" {
-		return "imap_host", false
-	}
-	if inst.SMTPHost == "" {
-		return "smtp_host", false
-	}
-	if inst.EmailUsername == "" {
-		return "username", false
-	}
-	if inst.PasswordRef == "" {
-		return "password", false
-	}
-	return "", true
-}
-
 func init() {
 	// Register per-type prerequisite checkers (data-driven replacement for the
 	// former per-type switch in initChannels). A type not listed here activates
@@ -124,7 +108,6 @@ func init() {
 		"weixin":      prereqWeixin,
 		"irc":         prereqIRC,
 		"google-chat": prereqGoogleChat,
-		"email":       prereqEmail,
 	} {
 		RegisterPrerequisite(channelType, checker)
 	}

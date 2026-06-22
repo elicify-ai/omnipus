@@ -1,0 +1,30 @@
+type: object
+title: GodModeStatus
+description: >
+  O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode and as
+  the body of a successful POST /api/v1/gateway/god-mode toggle. God mode is the
+  single global "bypass-permissions" switch: when enabled every agent's tool
+  policy is floored at "allow" (no prompts), the kernel sandbox is off, network
+  egress is open, and the shell guard is off — regardless of per-agent profiles.
+  Audit logging, the prompt-injection guard, and rate limiting are never
+  disabled. The per-agent overrides are non-destructive: switching god mode off
+  restores prior behavior exactly.
+required:
+  - enabled
+  - available
+additionalProperties: false
+properties:
+  enabled:
+    type: boolean
+    description: >
+      Current runtime god-mode state. Always false when `available` is false
+      (the switch is a no-op without availability).
+    example: false
+  available:
+    type: boolean
+    description: >
+      Whether god mode CAN be enabled in this gateway: the build supports it
+      (not compiled with the nogodmode tag) AND --allow-god-mode was passed at
+      boot. When false, POST /api/v1/gateway/god-mode with enabled=true returns
+      403.
+    example: false
