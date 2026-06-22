@@ -83,7 +83,7 @@ func TestCoreAgentIDs(t *testing.T) {
 	}{
 		// Dataset: Spec-3 4-base roster. Names are the full display strings seeded
 		// into config so users see the role alongside the name in the roster card.
-		{coreagent.IDJim, "Jim — Orchestrator"},
+		{coreagent.IDJim, "Jim — Planner & Orchestrator"},
 		{coreagent.IDAva, "Ava — Builder"},
 		{coreagent.IDMia, "Mia — Assistant"},
 		{coreagent.IDRay, "Ray — Scout"},
