@@ -324,7 +324,7 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
                 label="Owning agent"
                 required
                 helpId="mailbox-agent-help"
-                helpText="The agent whose email identity this mailbox represents (cap-1 in 0.1)."
+                helpText="The agent whose email identity this mailbox represents (one mailbox per agent for now)."
               >
                 {agentsError ? (
                   <p className="text-xs text-[var(--color-error)]">Could not load agents.</p>

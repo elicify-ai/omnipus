@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
 import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
+import { pickCapableDefaultModel } from '@/lib/onboarding/defaultModel'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { PROVIDER_HINTS } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
@@ -227,6 +228,13 @@ function OnboardingWizard() {
         setTestStatus('success')
         if (result.models && result.models.length > 0) {
           setAvailableModels(result.models)
+          // UAT fix: pre-select a capable default instead of leaving the
+          // field empty or letting the first (often a tiny/preview/404)
+          // entry win. Only seed when the user has not already picked one
+          // this session (so a re-test doesn't clobber a deliberate choice).
+          setSelectedModel((prev) =>
+            prev.trim() !== '' ? prev : pickCapableDefaultModel(result.models ?? []),
+          )
         }
       } else {
         setTestStatus('error')
@@ -962,11 +970,19 @@ function ModelKeyStep({
                       >
                         Default Model <span style={{ color: 'var(--color-error)' }}>*</span>
                       </label>
+                      {/* UAT model-catalog fix: constrained picker. When the
+                          provider returned a live model list the user picks
+                          from it (no free-text). When it has no listing
+                          endpoint (empty list) we allow free-text so the user
+                          can seed the first slug — but never flag it as
+                          "unresolved". */}
                       <ModelSelector
                         models={availableModels}
                         value={selectedModel}
                         onChange={onSelectModel}
                         providerGroups={providerGroups}
+                        constrainToCatalog
+                        allowFreeTextWhenEmpty
                       />
                       <p className="text-[10px] mt-1.5" style={{ color: 'var(--color-muted)' }}>
                         {availableModels.length > 0

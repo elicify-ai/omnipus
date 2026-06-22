@@ -82,9 +82,10 @@ type TaskCreateTool struct {
 	store         *task.Store
 	delegateCheck func(targetAgentID string) bool
 	// delegationDeny, when non-nil, applies the full delegation policy (trust
-	// set + modes ("task") + depth — FR-6.2). Returns a non-empty reason to
-	// DENY or "" to ALLOW. Takes precedence over delegateCheck.
-	delegationDeny func(ctx context.Context, targetAgentID string) string
+	// set + modes ("task") + depth — FR-6.2). Returns a non-nil *DelegationDenial
+	// to DENY (carrying the structured reason + policy axis) or nil to ALLOW.
+	// Takes precedence over delegateCheck.
+	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
 	// onCreate, when non-nil, is invoked after a task is successfully created so
 	// the caller can emit a task_status_changed event.
 	onCreate func(*task.Task)
@@ -124,7 +125,9 @@ func (t *TaskCreateTool) SetMaxDelegationDepth(bound int) {
 }
 
 // SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2).
-func (t *TaskCreateTool) SetDelegationDenyChecker(fn func(ctx context.Context, targetAgentID string) string) {
+func (t *TaskCreateTool) SetDelegationDenyChecker(
+	fn func(ctx context.Context, targetAgentID string) *DelegationDenial,
+) {
 	t.delegationDeny = fn
 }
 
@@ -208,11 +211,15 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
 	if t.delegationDeny != nil {
-		if reason := t.delegationDeny(ctx, agentID); reason != "" {
-			return ErrorResult("delegation denied: " + reason)
+		if denial := t.delegationDeny(ctx, agentID); denial != nil {
+			return DelegationDeniedResult("task_create", denial)
 		}
 	} else if t.delegateCheck != nil && !t.delegateCheck(agentID) {
-		return ErrorResult(fmt.Sprintf("delegation to %s not allowed", agentID))
+		return DelegationDeniedResult("task_create", &DelegationDenial{
+			Reason:        fmt.Sprintf("delegation to %s not allowed", agentID),
+			Policy:        DenyTrustSet,
+			TargetAgentID: agentID,
+		})
 	}
 
 	// Task-mode recursion bound (SEC): a task_create issued from *within* a task
@@ -224,10 +231,14 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	parentDepth := ToolDelegationDepth(ctx)
 	childDepth := parentDepth + 1
 	if t.maxDelegationDepth > 0 && childDepth > t.maxDelegationDepth {
-		return ErrorResult(fmt.Sprintf(
-			"delegation denied: maximum task delegation depth (%d) reached — cannot create a further delegated task",
-			t.maxDelegationDepth,
-		))
+		return DelegationDeniedResult("task_create", &DelegationDenial{
+			Reason: fmt.Sprintf(
+				"maximum task delegation depth (%d) reached — cannot create a further delegated task",
+				t.maxDelegationDepth,
+			),
+			Policy:        DenyDepth,
+			TargetAgentID: agentID,
+		})
 	}
 
 	priority := 3

@@ -1517,6 +1517,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       >
         <span className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">Model</span>
         <div className="w-[260px]">
+          {/* UAT model-catalog fix: the composer picker is a CONSTRAINED
+              dropdown fed the connected-provider catalogue. A non-catalogue
+              model is not selectable, so the always-on "unresolved" badge can
+              never fire. When no provider catalogue exists the picker renders a
+              disabled "connect a provider" state instead of a free-text input. */}
           <ModelSelector
             models={availableModels}
             value={nextModel ?? ''}
@@ -1524,7 +1529,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             placeholder={activeAgentModel ?? 'Select a model…'}
             providerGroups={providerGroups}
             triggerTestId="composer-model-selector"
-            disabled={availableModels.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))}
+            constrainToCatalog
+            emptyCatalogHint="Connect a provider to pick a model"
           />
         </div>
       </div>

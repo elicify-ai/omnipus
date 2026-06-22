@@ -88,6 +88,21 @@ export interface WizardSubmitPayload {
   timeout_seconds?: number
   max_tool_iterations?: number
   steering_mode?: 'one-at-a-time' | 'queue-and-process'
+  // ── Inherit-from-caller toggles (UAT agent-form fix 4a) ──────────────
+  // UI-only flags (NOT wire fields). A native (in-process) subagent is a
+  // delegation-only worker: by default its Model / Tools / Skills / Sandbox
+  // are inherited from the caller (the agent that delegates to it). These
+  // toggles make that inheritance EXPLICIT and editable in the creation
+  // wizard. When a toggle is ON (inherit), the corresponding editor is
+  // hidden and the field is OMITTED from the create request so the server
+  // keeps the inherited rail. When OFF, the editor is revealed and the
+  // explicit value is sent. They default ON for native Subagents and have
+  // no effect for Main agents (which never inherit) or external subagents
+  // (whose external runner honours their own config).
+  inherit_model?: boolean
+  inherit_tools?: boolean
+  inherit_skills?: boolean
+  inherit_sandbox?: boolean
 }
 
 interface WizardProps {
@@ -163,6 +178,12 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     timeout_seconds: 300,
     max_tool_iterations: 50,
     steering_mode: 'one-at-a-time',
+    // Native subagents inherit from the caller by default (matches the
+    // existing implicit behaviour). Main / external types ignore these.
+    inherit_model: initialType === 'Subagent',
+    inherit_tools: initialType === 'Subagent',
+    inherit_skills: initialType === 'Subagent',
+    inherit_sandbox: initialType === 'Subagent',
   }
 }
 
@@ -222,8 +243,11 @@ export function CreateAgentWizard({
   // Step gating. Step 1 requires name + model + (description if worker).
   // External (subagent_3p) agents also need a selected CLI and a non-empty
   // CLI path before they can leave the Identity step.
+  // A native subagent that inherits its model from the caller does not need a
+  // model selected (the field is omitted from the create request).
+  const modelInherited = initialType === 'Subagent' && payload.inherit_model === true
   const step1Valid = payload.name.trim().length > 0 &&
-    payload.model.trim().length > 0 &&
+    (modelInherited || payload.model.trim().length > 0) &&
     (!isWorker || payload.description.trim().length > 0) &&
     (!isExternal || (!!payload.cli && (payload.executor_cli_path?.trim().length ?? 0) > 0))
   // Step 2 requires soul (whitespace-trimmed non-empty).

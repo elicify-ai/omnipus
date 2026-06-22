@@ -12,6 +12,7 @@ package gateway
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -273,4 +274,28 @@ func maybeOffloadResult(
 		OriginalSizeBytes: len(encoded),
 		Preview:           string(preview),
 	}, true
+}
+
+// parseDelegationFailure inspects a tool result string and, when it is a JSON
+// object emitted by the delegation tools' structured-denial path (discriminator
+// "error":"delegation_denied" — see pkg/tools.DelegationFailure), returns the
+// parsed object (for the frame's `result` field), the human-readable reason (for
+// the frame's `error` field), and true. Otherwise it returns (nil, "", false)
+// and the caller forwards the raw string unchanged. This is what lets the SPA
+// render a denied delegation as a distinct block instead of relying on the LLM
+// to narrate it (UAT fix).
+func parseDelegationFailure(result string) (obj map[string]any, reason string, ok bool) {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" || trimmed[0] != '{' {
+		return nil, "", false
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return nil, "", false
+	}
+	if disc, _ := parsed["error"].(string); disc != "delegation_denied" {
+		return nil, "", false
+	}
+	reason, _ = parsed["reason"].(string)
+	return parsed, reason, true
 }

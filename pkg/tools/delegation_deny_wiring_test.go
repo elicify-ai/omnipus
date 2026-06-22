@@ -2,11 +2,27 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/dapicom-ai/omnipus/pkg/task"
 )
+
+// decodeDelegationFailure parses a denied-delegation tool result's ForLLM as the
+// structured DelegationFailure payload, failing the test if it is not valid JSON
+// with the expected discriminator.
+func decodeDelegationFailure(t *testing.T, result *ToolResult) DelegationFailure {
+	t.Helper()
+	var failure DelegationFailure
+	if err := json.Unmarshal([]byte(result.ForLLM), &failure); err != nil {
+		t.Fatalf("delegation failure result is not valid JSON: %v (got: %s)", err, result.ForLLM)
+	}
+	if failure.Error != "delegation_denied" {
+		t.Fatalf("expected error discriminator 'delegation_denied', got %q (raw: %s)", failure.Error, result.ForLLM)
+	}
+	return failure
+}
 
 // These tests prove the delegation-deny WIRING inside SpawnTool.Execute and
 // TaskCreateTool.Execute — i.e. that a deny-checker installed via
@@ -28,9 +44,13 @@ func TestSpawnTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	}))
 
 	var gotTarget string
-	tool.SetDelegationDenyChecker(func(_ context.Context, targetAgentID string) string {
+	tool.SetDelegationDenyChecker(func(_ context.Context, targetAgentID string) *DelegationDenial {
 		gotTarget = targetAgentID
-		return "target untrusted (mode forbidden)"
+		return &DelegationDenial{
+			Reason:        "target untrusted (mode forbidden)",
+			Policy:        DenyTrustSet,
+			TargetAgentID: targetAgentID,
+		}
 	})
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -41,11 +61,18 @@ func TestSpawnTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	if result == nil || !result.IsError {
 		t.Fatalf("expected denied spawn to return an error result, got %+v", result)
 	}
-	if !strings.Contains(result.ForLLM, "delegation denied") {
-		t.Errorf("expected 'delegation denied' in message, got: %s", result.ForLLM)
+	failure := decodeDelegationFailure(t, result)
+	if failure.Tool != "spawn" {
+		t.Errorf("expected structured failure tool 'spawn', got %q", failure.Tool)
 	}
-	if !strings.Contains(result.ForLLM, "target untrusted") {
-		t.Errorf("expected the checker's reason to surface to the LLM, got: %s", result.ForLLM)
+	if failure.Policy != DenyTrustSet {
+		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
+	}
+	if !strings.Contains(failure.Reason, "target untrusted") {
+		t.Errorf("expected the checker's reason to surface, got: %s", failure.Reason)
+	}
+	if failure.TargetAgentID != "evil-agent" {
+		t.Errorf("expected target_agent_id 'evil-agent', got %q", failure.TargetAgentID)
 	}
 	if gotTarget != "evil-agent" {
 		t.Errorf("expected checker to receive target 'evil-agent', got %q", gotTarget)
@@ -64,7 +91,7 @@ func TestSpawnTool_DelegationDenyChecker_Allows(t *testing.T) {
 		spawned = true
 		return NewToolResult("ran"), nil
 	}))
-	tool.SetDelegationDenyChecker(func(context.Context, string) string { return "" })
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"task":     "do the thing",
@@ -125,9 +152,13 @@ func TestTaskCreateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	tool := NewTaskCreateTool(store)
 
 	var gotTarget string
-	tool.SetDelegationDenyChecker(func(_ context.Context, targetAgentID string) string {
+	tool.SetDelegationDenyChecker(func(_ context.Context, targetAgentID string) *DelegationDenial {
 		gotTarget = targetAgentID
-		return "delegation mode 'task' forbidden for target"
+		return &DelegationDenial{
+			Reason:        "delegation mode 'task' forbidden for target",
+			Policy:        DenyMode,
+			TargetAgentID: targetAgentID,
+		}
 	})
 
 	ctx := WithAgentID(context.Background(), "caller-agent")
@@ -140,11 +171,15 @@ func TestTaskCreateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	if result == nil || !result.IsError {
 		t.Fatalf("expected denied task_create to return an error, got %+v", result)
 	}
-	if !strings.Contains(result.ForLLM, "delegation denied") {
-		t.Errorf("expected 'delegation denied' in message, got: %s", result.ForLLM)
+	failure := decodeDelegationFailure(t, result)
+	if failure.Tool != "task_create" {
+		t.Errorf("expected structured failure tool 'task_create', got %q", failure.Tool)
 	}
-	if !strings.Contains(result.ForLLM, "forbidden for target") {
-		t.Errorf("expected the checker's reason to surface, got: %s", result.ForLLM)
+	if failure.Policy != DenyMode {
+		t.Errorf("expected policy %q, got %q", DenyMode, failure.Policy)
+	}
+	if !strings.Contains(failure.Reason, "forbidden for target") {
+		t.Errorf("expected the checker's reason to surface, got: %s", failure.Reason)
 	}
 	if gotTarget != "evil-agent" {
 		t.Errorf("expected checker to receive 'evil-agent', got %q", gotTarget)
@@ -184,8 +219,12 @@ func TestTaskCreateTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
 	if result == nil || !result.IsError {
 		t.Fatalf("expected legacy delegateCheck denial to return an error, got %+v", result)
 	}
-	if !strings.Contains(result.ForLLM, "delegation to blocked-agent not allowed") {
-		t.Errorf("expected legacy delegateCheck denial message, got: %s", result.ForLLM)
+	failure := decodeDelegationFailure(t, result)
+	if failure.Tool != "task_create" || failure.Policy != DenyTrustSet {
+		t.Errorf("expected structured task_create/trust_set failure, got %+v", failure)
+	}
+	if !strings.Contains(failure.Reason, "delegation to blocked-agent not allowed") {
+		t.Errorf("expected legacy delegateCheck denial message, got: %s", failure.Reason)
 	}
 	if checkedTarget != "blocked-agent" {
 		t.Errorf("expected legacy delegateCheck to receive 'blocked-agent', got %q", checkedTarget)

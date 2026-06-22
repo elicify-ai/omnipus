@@ -1630,12 +1630,17 @@ export const Provider = z.object({
   display_name: z.string().optional(),
   status: z.enum(["connected", "disconnected", "error"]),
   models: z.array(z.string()),
+  has_models_endpoint: z.boolean().optional(),
   has_api_key: z.boolean().optional(),
   warning: z.string().optional(),
   error: z.string().optional(),
 });
 export const ProviderUpdateRequest = z
-  .object({ api_key: z.string(), model: z.string() })
+  .object({
+    api_key: z.string(),
+    model: z.string(),
+    models: z.array(z.string().min(1).max(256)).max(500),
+  })
   .partial();
 export const Skill = z.object({
   id: z.string(),
@@ -6877,6 +6882,16 @@ export const ToolResultRef = z
     ref: z.string().min(1).max(128),
     original_size_bytes: z.number().int().min(0),
     preview: z.string(),
+  })
+  .strict();
+
+export const DelegationFailure = z
+  .object({
+    error: z.literal("delegation_denied"),
+    reason: z.string().min(1),
+    policy: z.enum(["trust_set", "mode", "depth"]),
+    tool: z.string().min(1),
+    target_agent_id: z.string().optional(),
   })
   .strict();
 

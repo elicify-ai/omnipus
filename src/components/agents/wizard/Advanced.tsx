@@ -28,6 +28,7 @@ import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { SandboxProfileSelector } from '../SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from '../ShellDenyPatternsEditor'
 import { ExecutorInputs } from './Step1Identity'
+import { InheritToggle } from './InheritToggle'
 import type { SandboxProfile } from '@/lib/api'
 import type { AdvancedProps, AdvancedFields } from './types'
 
@@ -56,6 +57,7 @@ export function Advanced({
             payload={payload}
             setField={setField}
             isMain={isMain}
+            isNativeSubagent={initialType === 'Subagent'}
           />
         )}
         {isExternal && (
@@ -82,9 +84,10 @@ interface MainAdvancedFieldsProps {
   payload: AdvancedProps['payload']
   setField: AdvancedProps['setField']
   isMain: boolean
+  isNativeSubagent: boolean
 }
 
-function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsProps) {
+function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: MainAdvancedFieldsProps) {
   const modelParams = payload.model_params ?? {}
   const rateLimits = payload.rate_limits ?? {}
   const shellPolicy = payload.shell_policy ?? {
@@ -153,7 +156,20 @@ function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsPro
         </div>
       </div>
 
+      {/* Native-subagent sandbox inherit toggle (UAT 4a). ON = inherit the
+          caller's sandbox; the per-agent selector is hidden and no sandbox
+          profile is sent. */}
+      {isNativeSubagent && (
+        <InheritToggle
+          label="Sandbox"
+          inherit={payload.inherit_sandbox === true}
+          onChange={(v) => setField('inherit_sandbox', v)}
+          testId="wizard-inherit-sandbox"
+        />
+      )}
+
       {/* Sandbox profile */}
+      {!(isNativeSubagent && payload.inherit_sandbox === true) && (
       <div className="space-y-2">
         <p className="text-xs font-medium text-[var(--color-secondary)]">Sandbox profile</p>
         <p className="text-[11px] text-[var(--color-muted)]">
@@ -172,6 +188,7 @@ function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsPro
           }
         />
       </div>
+      )}
 
       {/* Shell deny patterns */}
       <div className="space-y-2">

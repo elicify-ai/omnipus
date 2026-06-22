@@ -25,6 +25,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchMilestones: vi.fn().mockResolvedValue([]),
+    fetchTasks: vi.fn().mockResolvedValue([]),
     createTask: vi.fn(),
     updateTask: vi.fn(),
     tasksQueryKeys: { list: () => ['tasks'] },
@@ -35,7 +36,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { createTask, updateTask, fetchAgents, fetchMilestones } from '@/lib/api'
+import { createTask, updateTask, fetchAgents, fetchMilestones, fetchTasks } from '@/lib/api'
 
 const mockAddToast = vi.fn()
 
@@ -102,6 +103,7 @@ function renderSlideOver(props: Partial<{
 beforeEach(() => {
   vi.mocked(fetchAgents).mockResolvedValue([])
   vi.mocked(fetchMilestones).mockResolvedValue([])
+  vi.mocked(fetchTasks).mockResolvedValue([])
   vi.mocked(createTask).mockReset()
   vi.mocked(updateTask).mockReset()
   mockAddToast.mockReset()
@@ -298,6 +300,164 @@ describe('CreateTaskSlideOver — workers excluded from the agent assignee picke
     })
 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+})
+
+describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / due / todos)', () => {
+  function makeWsTask(over: Record<string, unknown> = {}) {
+    return makeCreatedTask({ id: 'dep-1', title: 'Existing dependency', ...over })
+  }
+
+  it('posts a once trigger with at_ms when "Once" is selected with a datetime', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask({ title: 'Trig' }) as never)
+    Element.prototype.scrollIntoView = vi.fn()
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Trig' } })
+
+    // Open the Trigger select and pick "Once"
+    const trigCombo = document.getElementById('ct-trigger') as HTMLElement
+    fireEvent.click(trigCombo)
+    fireEvent.click(await screen.findByText(/once \(at a time\)/i))
+
+    // Fill the datetime-local input
+    const dt = await screen.findByLabelText(/trigger date and time/i)
+    fireEvent.change(dt, { target: { value: '2026-07-31T17:00' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.trigger?.type).toBe('once')
+    expect(typeof body.trigger?.config.at_ms).toBe('number')
+    expect(body.trigger?.config.at_ms).toBe(new Date('2026-07-31T17:00').getTime())
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('posts an every trigger with every_ms derived from minutes', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
+    Element.prototype.scrollIntoView = vi.fn()
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Every task' } })
+    fireEvent.click(document.getElementById('ct-trigger') as HTMLElement)
+    fireEvent.click(await screen.findByText(/every \(interval\)/i))
+
+    const minutes = await screen.findByLabelText(/interval in minutes/i)
+    fireEvent.change(minutes, { target: { value: '30' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.trigger?.type).toBe('every')
+    expect(body.trigger?.config.every_ms).toBe(30 * 60_000)
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('posts a recurring trigger with the cron expression', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
+    Element.prototype.scrollIntoView = vi.fn()
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Cron task' } })
+    fireEvent.click(document.getElementById('ct-trigger') as HTMLElement)
+    fireEvent.click(await screen.findByText(/recurring \(cron\)/i))
+
+    const cron = await screen.findByLabelText(/cron expression/i)
+    fireEvent.change(cron, { target: { value: '0 8 * * *' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.trigger?.type).toBe('recurring')
+    expect(body.trigger?.config.cron_expr).toBe('0 8 * * *')
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('blocks Create when "Once" is selected but no datetime is set', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    renderSlideOver()
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'No time' } })
+    fireEvent.click(document.getElementById('ct-trigger') as HTMLElement)
+    fireEvent.click(await screen.findByText(/once \(at a time\)/i))
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    expect(await screen.findByText(/pick a date and time/i)).toBeInTheDocument()
+    expect(vi.mocked(createTask)).not.toHaveBeenCalled()
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('posts blocked_by with the selected dependency task IDs', async () => {
+    vi.mocked(fetchTasks).mockResolvedValue([
+      makeWsTask({ id: 'dep-a', title: 'Dependency A' }),
+      makeWsTask({ id: 'dep-b', title: 'Dependency B' }),
+    ] as never)
+    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Dependent' } })
+
+    // Open the depends-on popover and check one dependency
+    fireEvent.click(await screen.findByText(/no dependencies/i))
+    fireEvent.click(await screen.findByText('Dependency A'))
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.blocked_by).toEqual(['dep-a'])
+  })
+
+  it('posts due as an RFC3339 string when a due date is set', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'With due' } })
+    fireEvent.change(screen.getByLabelText(/^due date$/i), { target: { value: '2026-08-01T09:00' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.due).toBe(new Date('2026-08-01T09:00').toISOString())
+  })
+
+  it('posts todos from the checklist as {text, done:false}', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'With todos' } })
+
+    const todoInput = screen.getByLabelText(/new checklist item/i)
+    fireEvent.change(todoInput, { target: { value: 'First item' } })
+    fireEvent.click(screen.getByRole('button', { name: /add checklist item/i }))
+    fireEvent.change(todoInput, { target: { value: 'Second item' } })
+    fireEvent.click(screen.getByRole('button', { name: /add checklist item/i }))
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.todos).toEqual([
+      { text: 'First item', done: false },
+      { text: 'Second item', done: false },
+    ])
+  })
+
+  it('omits trigger/blocked_by/due/todos from the body when none are set', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
+    renderSlideOver()
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Bare' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.trigger).toBeUndefined()
+    expect(body.blocked_by).toBeUndefined()
+    expect(body.due).toBeUndefined()
+    expect(body.todos).toBeUndefined()
   })
 })
 

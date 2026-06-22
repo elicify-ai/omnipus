@@ -504,6 +504,9 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Trim before the length check so a whitespace-only name ("   ") is rejected
+	// as empty rather than silently accepted (UAT fix). Persist the trimmed value.
+	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		jsonErr(w, http.StatusBadRequest, "name is required")
 		return
@@ -609,14 +612,18 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 
 	// Validate fields before touching disk.
 	if req.Name != nil {
-		if *req.Name == "" {
+		// Trim before the empty check so a whitespace-only name is rejected
+		// rather than silently accepted (UAT fix). Persist the trimmed value.
+		trimmedName := strings.TrimSpace(*req.Name)
+		if trimmedName == "" {
 			jsonErr(w, http.StatusBadRequest, "name must not be empty")
 			return
 		}
-		if len(*req.Name) > 200 {
+		if len(trimmedName) > 200 {
 			jsonErr(w, http.StatusBadRequest, "name exceeds 200 characters")
 			return
 		}
+		req.Name = &trimmedName
 	}
 	if req.Description != nil && len(*req.Description) > 2000 {
 		jsonErr(w, http.StatusBadRequest, "description exceeds 2000 characters")

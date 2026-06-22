@@ -4,12 +4,16 @@
  * Spec-3 max-parallel fan-out gate: lets an admin configure
  * max_parallel_agents (the global dispatch semaphore capacity).
  * Admin-only; backed by GET/PUT /api/v1/performance.
+ *
+ * Autosave: changes are applied automatically after a short debounce.
+ * Because PUT /api/v1/performance is re-auth gated (Spec-6 FR-12.2 /
+ * Spec-3 FR-6.6), the ReAuthDialog is opened automatically once the
+ * debounced value settles on a valid input — the Save button is gone.
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Cpu, Info, Warning } from '@phosphor-icons/react'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   fetchPerformanceSettings,
@@ -18,7 +22,8 @@ import {
   type PerformanceSettingsUpdate,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { SaveStatus, useSaveStatus } from './SaveStatus'
+import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { ReAuthDialog } from './ReAuthDialog'
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
@@ -35,11 +40,15 @@ function Skeleton() {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+// Autosave debounce: wait 600 ms of inactivity before opening the reauth dialog.
+const AUTOSAVE_DEBOUNCE_MS = 600
+
 export function PerformanceSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
-  const { state: saveStatus, setState: setSaveStatus } = useSaveStatus()
+  const [saveStatus, setSaveStatus] = useState<AutoSaveStatus>('idle')
   const [inputValue, setInputValue] = useState<string>('')
+  // dirty tracks whether the user has changed the input since the last save.
   const [dirty, setDirty] = useState(false)
 
   // The change waiting on a re-auth consent token, and whether the dialog is
@@ -47,6 +56,9 @@ export function PerformanceSection(): React.ReactElement {
   // FR-6.6); the token is replayed via updatePerformanceSettings's header arg.
   const [pending, setPending] = useState<PerformanceSettingsUpdate | null>(null)
   const [reauthOpen, setReauthOpen] = useState(false)
+
+  // Debounce timer for autosave.
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['performance-settings'],
@@ -70,6 +82,8 @@ export function PerformanceSection(): React.ReactElement {
       setDirty(false)
       setPending(null)
       void queryClient.invalidateQueries({ queryKey: ['performance-settings'] })
+      // Reset to 'idle' after showing 'saved' briefly.
+      setTimeout(() => setSaveStatus('idle'), 2000)
     },
     onError: (err) => {
       setSaveStatus('error')
@@ -79,10 +93,9 @@ export function PerformanceSection(): React.ReactElement {
     },
   })
 
-  // handleSave validates then stages the change and opens the re-auth dialog.
-  // The actual PUT fires from onReAuthConfirmed once the consent token is minted
-  // — mirroring IntegrationsSection's gated-save flow.
-  function handleSave() {
+  // triggerSave validates the current input and opens the ReAuthDialog.
+  // The actual PUT fires from onReAuthConfirmed once the consent token is minted.
+  const triggerSave = useCallback(() => {
     const raw = inputValue.trim()
     const parsed = raw === '' ? 0 : parseInt(raw, 10)
     if (raw !== '' && (isNaN(parsed) || parsed < 2 || parsed > 16)) {
@@ -91,7 +104,33 @@ export function PerformanceSection(): React.ReactElement {
     }
     setPending({ max_parallel_agents: parsed })
     setReauthOpen(true)
+  }, [inputValue, addToast])
+
+  // Autosave: debounce on input change then open the reauth dialog.
+  function handleInputChange(value: string) {
+    setInputValue(value)
+    setDirty(true)
+    setSaveStatus('idle')
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      // Only fire autosave when input is valid (or blank).
+      const raw = value.trim()
+      const parsed = raw === '' ? 0 : parseInt(raw, 10)
+      const isValid = raw === '' || (!isNaN(parsed) && parsed >= 2 && parsed <= 16)
+      if (isValid) {
+        setSaveStatus('saving')
+        setPending({ max_parallel_agents: parsed })
+        setReauthOpen(true)
+      }
+    }, AUTOSAVE_DEBOUNCE_MS)
   }
+
+  // Cleanup debounce timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [])
 
   function onReAuthConfirmed(token: string) {
     if (!pending) return
@@ -137,9 +176,12 @@ export function PerformanceSection(): React.ReactElement {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center gap-2">
-        <Cpu size={18} className="text-[var(--color-secondary)]" />
-        <h2 className="text-sm font-semibold text-[var(--color-secondary)]">Agent Concurrency</h2>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Cpu size={18} className="text-[var(--color-secondary)]" />
+          <h2 className="text-sm font-semibold text-[var(--color-secondary)]">Agent Concurrency</h2>
+        </div>
+        <AutoSaveIndicator status={saveStatus} />
       </div>
 
       {/* Live recommendation card — shown above the input */}
@@ -160,7 +202,7 @@ export function PerformanceSection(): React.ReactElement {
         <div className="space-y-1">
           <p className="text-xs text-[var(--color-muted)] leading-relaxed">
             Controls how many tasks and subagents may run concurrently across all agents.
-            Leave blank to use the auto-detected default.
+            Leave blank to use the auto-detected default. Changes apply after re-authentication.
           </p>
           <div className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
             <Info size={12} />
@@ -178,23 +220,11 @@ export function PerformanceSection(): React.ReactElement {
             max={16}
             placeholder="auto"
             value={inputValue}
-            onChange={(e) => {
-              setInputValue(e.target.value)
-              setDirty(true)
-              setSaveStatus('idle')
-            }}
+            onChange={(e) => handleInputChange(e.target.value)}
             className="w-24 h-7 text-sm"
             aria-label="Max parallel agents"
+            data-testid="performance-max-agents-input"
           />
-          <Button
-            size="sm"
-            onClick={handleSave}
-            disabled={mutation.isPending || reauthOpen || !dirty}
-            className="h-7 px-3 text-xs"
-          >
-            Save
-          </Button>
-          <SaveStatus state={saveStatus} />
         </div>
 
         {/* Over-limit warning — yellow inline notice */}
@@ -225,6 +255,18 @@ export function PerformanceSection(): React.ReactElement {
         description="Re-type your password to change the max parallel agents setting."
         onConfirmed={onReAuthConfirmed}
       />
+
+      {/* Escape hatch: manual trigger exposed for keyboard users / edge cases */}
+      {dirty && !reauthOpen && (
+        <button
+          type="button"
+          data-testid="performance-save-btn"
+          onClick={triggerSave}
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-2 focus:bg-[var(--color-surface-1)] focus:rounded text-xs text-[var(--color-secondary)]"
+        >
+          Save changes
+        </button>
+      )}
     </div>
   )
 }

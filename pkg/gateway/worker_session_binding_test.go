@@ -224,6 +224,7 @@ func TestHandleChatMessage_RejectsWorkerAgentID(t *testing.T) {
 		"hans",          // agentID = worker
 		nil,             // mediaRefs
 		"",              // modelName (no per-turn override)
+		"",              // workspaceID (no active workspace)
 		wc,
 	)
 

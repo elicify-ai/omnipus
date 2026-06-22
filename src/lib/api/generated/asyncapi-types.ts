@@ -160,6 +160,14 @@ export interface ToolResultRef {
   preview: string;
 }
 
+export interface DelegationFailure {
+  error: "delegation_denied";
+  reason: string;
+  policy: "trust_set" | "mode" | "depth";
+  tool: string;
+  target_agent_id?: string;
+}
+
 export interface ToolCallResultFrame {
   type: "tool_call_result";
   session_id: string;

@@ -83,8 +83,13 @@ export function GatewaySection() {
   const queryClient = useQueryClient()
   const [copied, setCopied] = useState(false)
   const [remoteAccessOpen, setRemoteAccessOpen] = useState(false)
-  // O4: restart modal state — shown when a restart-gated setting is saved.
+  // O4: restart modal state — shown ONCE when a save creates new pending changes.
+  // Subsequent visits to this tab while the same changes are pending show the
+  // persistent badge/banner in the section below instead of re-popping the modal.
   const [restartModalOpen, setRestartModalOpen] = useState(false)
+  // Track the last save count that triggered the modal so we only show it once
+  // per save action, not on every tab revisit while the change is pending.
+  const saveModalShownRef = useRef(0)
   const { entries: pendingEntries } = usePendingRestart()
 
   const { data: config, isLoading, isError: isConfigError, refetch: refetchConfig } = useQuery({
@@ -108,9 +113,17 @@ export function GatewaySection() {
   useEffect(() => {
     if (!config) return
     if (isDirtyRef.current) return
-    setBindAddress(config.gateway.bind_address)
-    setPort(config.gateway.port.toString())
+    const newBind = config.gateway.bind_address
+    const newPort = config.gateway.port.toString()
+    setBindAddress(newBind)
+    setPort(newPort)
     setLogLevel(config.gateway.log_level ?? 'info')
+    // Sync prev refs to the loaded config values so the first autosave
+    // comparison starts from the real persisted value, not the useState default.
+    // This prevents the modal from re-opening on tab revisits while a restart
+    // is pending (the initial useEffect would otherwise look like a port change).
+    if (prevPortRef.current === null) prevPortRef.current = newPort
+    if (prevBindRef.current === null) prevBindRef.current = newBind
   }, [config])
 
   const gatewayFormData = useMemo(() => ({
@@ -121,8 +134,11 @@ export function GatewaySection() {
 
   // O4: track which gateway fields are restart-gated so we can show the modal
   // after saving. port and bind_address require a restart; log_level does not.
-  const prevPortRef = useRef(port)
-  const prevBindRef = useRef(bindAddress)
+  // These are initialised to null so that the first useEffect sync (which
+  // populates state from the fetched config) does NOT trigger the changed-flag
+  // and open the modal on every tab visit while a restart is pending.
+  const prevPortRef = useRef<string | null>(null)
+  const prevBindRef = useRef<string | null>(null)
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     gatewayFormData,
@@ -131,8 +147,10 @@ export function GatewaySection() {
       // FR-106: hot_reload is intentionally not sent — always-on backend-side.
       // We cast to satisfy the Partial<Config> signature; frontendToRawConfig
       // guards each field with `!== undefined` so absent fields are skipped.
-      const portChanged = port !== prevPortRef.current
-      const bindChanged = bindAddress !== prevBindRef.current
+      // null means config hasn't loaded yet — treat as no change to avoid
+      // spurious modal pops on the initial config→state sync.
+      const portChanged = prevPortRef.current !== null && port !== prevPortRef.current
+      const bindChanged = prevBindRef.current !== null && bindAddress !== prevBindRef.current
 
       await updateConfig({
         gateway: {
@@ -145,9 +163,14 @@ export function GatewaySection() {
       prevPortRef.current = port
       prevBindRef.current = bindAddress
       queryClient.invalidateQueries({ queryKey: ['config'] })
-      // O4: if a restart-gated field changed, refresh pending list and show modal.
+      // O4: if a restart-gated field changed, refresh pending list and show modal
+      // ONCE for this save event. The saveModalShownRef counter ensures the modal
+      // only pops on the save that created the pending change, not on subsequent
+      // tab visits while the change is still pending (the persistent badge below
+      // serves that role).
       if (portChanged || bindChanged) {
         await queryClient.invalidateQueries({ queryKey: [...PENDING_RESTART_QUERY_KEY] })
+        saveModalShownRef.current++
         setRestartModalOpen(true)
       }
     },

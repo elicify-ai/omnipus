@@ -237,6 +237,16 @@ describe('AgentProfile — core agent sections (test #13)', () => {
     expect(screen.getByTestId('delete-agent-button')).toBeInTheDocument()
   })
 
+  it('shows the autosave scope cue near the save indicator (UAT 4b)', async () => {
+    // Agent edits are autosave-only and apply everywhere the agent is used —
+    // the footer makes that scope explicit next to the save indicator.
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    const cue = screen.getByTestId('autosave-scope-cue')
+    expect(cue).toBeInTheDocument()
+    expect(cue).toHaveTextContent(/apply everywhere this agent is used/i)
+  })
+
   it('shows tools & permissions section when tools are present', async () => {
     // Traces to: wave5a-wire-ui-spec.md — US-7: tools section
     // Wave 5: Tools & Permissions now lives inside the Tools tab; click it

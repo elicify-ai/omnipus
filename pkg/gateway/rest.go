@@ -1477,6 +1477,9 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if !decodeAndValidate(w, r, "AgentCreateRequest", &req, validateEnabled) {
 		return
 	}
+	// Trim before the empty check so a whitespace-only name ("   ") is rejected
+	// rather than silently accepted (UAT fix). Persist the trimmed value.
+	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
@@ -2385,7 +2388,15 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		newModel = foundAgent.Model.Primary
 	}
 	if req.Name != nil {
-		newName = *req.Name
+		// Trim before the empty check so a whitespace-only name is rejected
+		// rather than silently accepted (UAT fix). Persist the trimmed value.
+		trimmedName := strings.TrimSpace(*req.Name)
+		if trimmedName == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "name must not be empty")
+			return
+		}
+		newName = trimmedName
+		req.Name = &trimmedName
 	}
 	if req.Model != nil {
 		newModel = *req.Model
@@ -4524,6 +4535,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// upstream available models for OpenAI-compatible providers.
 		cfg := a.agentLoop.GetConfig()
 		providerModels := make(map[string][]string)
+		// providerUserModels holds the operator-supplied catalog slugs for
+		// providers that have no live /models endpoint (UAT model-catalog fix).
+		providerUserModels := make(map[string][]string)
 		providerAPIKeys := make(map[string]string)
 		providerOrder := make([]string, 0)
 		for _, m := range cfg.Providers {
@@ -4532,6 +4546,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				providerOrder = append(providerOrder, providerName)
 			}
 			providerModels[providerName] = append(providerModels[providerName], m.ModelName)
+			if len(m.Models) > 0 {
+				providerUserModels[providerName] = append(providerUserModels[providerName], m.Models...)
+			}
 			// Resolve API key for upstream model fetching.
 			// APIKeyRef is resolved via process environment (set by InjectFromConfig).
 			if _, hasKey := providerAPIKeys[providerName]; !hasKey {
@@ -4552,9 +4569,15 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		for _, name := range providerOrder {
 			var models []string
 			var modelFetchWarning string
+			// A provider "has a live /models endpoint" when it maps to a known
+			// OpenAI-compatible base URL we can query (openrouter, openai, …).
+			// Providers with no known base (custom / unknown gateways) rely on the
+			// operator-supplied catalog slugs.
+			hasEndpoint := providers_pkg.GetDefaultAPIBase(name) != ""
 			// Try to fetch the full model list from the provider's upstream API.
-			if apiKey, ok := providerAPIKeys[name]; ok {
-				if baseURL := providers_pkg.GetDefaultAPIBase(name); baseURL != "" {
+			if hasEndpoint {
+				if apiKey, ok := providerAPIKeys[name]; ok {
+					baseURL := providers_pkg.GetDefaultAPIBase(name)
 					if upstream, err := fetchUpstreamModels(baseURL, apiKey); err != nil {
 						slog.Warn("rest: failed to fetch upstream models", "provider", name, "error", err)
 						modelFetchWarning = fmt.Sprintf("could not fetch upstream model list: %v", err)
@@ -4563,9 +4586,15 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// Fall back to configured models if upstream fetch failed or returned
-			// nothing. Provider.yaml requires models:array — nil marshals as null
-			// which fails Zod validation on the SPA.
+			// Endpoint-less provider (or upstream fetch failed): use the operator's
+			// supplied catalog slugs as the catalog.
+			if models == nil {
+				if userModels := dedupeNonEmpty(providerUserModels[name]); len(userModels) > 0 {
+					models = userModels
+				}
+			}
+			// Final fallback: the configured default model alias(es). Provider.yaml
+			// requires models:array — nil marshals as null which fails Zod on the SPA.
 			if models == nil {
 				if configured, ok := providerModels[name]; ok && configured != nil {
 					models = configured
@@ -4581,11 +4610,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if _, hasKey := providerAPIKeys[name]; hasKey {
 				status = gen.ProviderStatusConnected
 			}
+			hasEndpointCopy := hasEndpoint
 			p := gen.Provider{
-				Id:     name,
-				Name:   name,
-				Status: status,
-				Models: models,
+				Id:                name,
+				Name:              name,
+				Status:            status,
+				Models:            models,
+				HasModelsEndpoint: &hasEndpointCopy,
 			}
 			if modelFetchWarning != "" {
 				p.Warning = &modelFetchWarning
@@ -4593,11 +4624,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			providers = append(providers, p)
 		}
 		if len(providers) == 0 {
+			falseVal := false
 			providers = append(providers, gen.Provider{
-				Id:     "default",
-				Name:   "Default",
-				Status: gen.ProviderStatusDisconnected,
-				Models: []string{},
+				Id:                "default",
+				Name:              "Default",
+				Status:            gen.ProviderStatusDisconnected,
+				Models:            []string{},
+				HasModelsEndpoint: &falseVal,
 			})
 		}
 		jsonOK(w, providers)
@@ -4675,6 +4708,18 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			}
 			credRefName = ref
 		}
+		// Normalise the user-supplied catalog slugs (UAT model-catalog fix) into
+		// a deduplicated []any for JSON persistence. nil req.Models leaves the
+		// stored list unchanged; a non-nil (incl. empty) list replaces it.
+		var userModelsJSON []any
+		if req.Models != nil {
+			for _, slug := range dedupeNonEmpty(*req.Models) {
+				userModelsJSON = append(userModelsJSON, slug)
+			}
+			if userModelsJSON == nil {
+				userModelsJSON = []any{} // explicit clear
+			}
+		}
 		if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 			providerList, _ := m["providers"].([]any)
 			updated := false
@@ -4693,6 +4738,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					if req.Model != nil && *req.Model != "" {
 						model["model"] = *req.Model
 					}
+					if req.Models != nil {
+						if len(userModelsJSON) > 0 {
+							model["models"] = userModelsJSON
+						} else {
+							delete(model, "models")
+						}
+					}
 					model["provider"] = providerID
 					updated = true
 					break
@@ -4709,6 +4761,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					"provider":    providerID,
 					"model":       modelVal,
 					"api_key_ref": credRefName,
+				}
+				if len(userModelsJSON) > 0 {
+					newEntry["models"] = userModelsJSON
 				}
 				m["providers"] = append(providerList, newEntry)
 			}
@@ -4728,12 +4783,24 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			)
 			return
 		}
+		hasEndpoint := providers_pkg.GetDefaultAPIBase(providerID) != ""
+		respModels := []string{}
+		if req.Models != nil {
+			respModels = dedupeNonEmpty(*req.Models)
+			if respModels == nil {
+				respModels = []string{}
+			}
+		}
 		jsonOK(w, gen.Provider{
-			Id:     providerID,
-			Name:   providerID,
-			Status: gen.ProviderStatusConnected,
-			Models: []string{},
+			Id:                providerID,
+			Name:              providerID,
+			Status:            gen.ProviderStatusConnected,
+			Models:            respModels,
+			HasModelsEndpoint: &hasEndpoint,
 		})
+
+	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/refresh-models"):
+		a.refreshProviderModels(w, r, strings.TrimSuffix(sub, "/refresh-models"))
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
 		// POST /api/v1/providers/{id}/test — verify the provider has an API key configured.
@@ -4798,6 +4865,127 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// dedupeNonEmpty trims, drops empties, and de-duplicates a slice of strings,
+// preserving first-seen order. Returns nil when the result is empty so callers
+// can distinguish "no entries" from "an explicit empty list" at the call site.
+func dedupeNonEmpty(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+// refreshProviderModels handles POST /api/v1/providers/{id}/refresh-models. For a
+// provider WITH a live /models endpoint it re-fetches the upstream catalog and
+// returns the refreshed Provider. For an endpoint-less provider it returns the
+// stored operator-supplied catalog (nothing to refresh). Requires the provider
+// to be configured (404 otherwise) and an API key to query upstream.
+func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, providerID string) {
+	// Auth: post-onboarding requires an authenticated user (same gate as PUT).
+	onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
+	if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
+		jsonErr(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if err := validateEntityID(providerID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid provider id")
+		return
+	}
+
+	cfg := a.agentLoop.GetConfig()
+	var (
+		found       bool
+		apiKey      string
+		userModels  []string
+		defaultName string
+	)
+	for _, m := range cfg.Providers {
+		if m.IsVirtual() {
+			continue
+		}
+		if inferProviderName(m.Provider, m.Model) != providerID {
+			continue
+		}
+		found = true
+		if defaultName == "" {
+			defaultName = m.ModelName
+		}
+		if len(m.Models) > 0 {
+			userModels = append(userModels, m.Models...)
+		}
+		if apiKey == "" {
+			resolved := m.APIKey()
+			if resolved == "" && m.APIKeyRef != "" {
+				if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
+					slog.Warn("rest: refresh-models: credential resolve failed", "ref", m.APIKeyRef, "error", err)
+				} else {
+					resolved = v
+				}
+			}
+			apiKey = resolved
+		}
+	}
+	if !found {
+		jsonErr(w, http.StatusNotFound, fmt.Sprintf("provider %q not configured", providerID))
+		return
+	}
+
+	hasEndpoint := providers_pkg.GetDefaultAPIBase(providerID) != ""
+	status := gen.ProviderStatusDisconnected
+	if apiKey != "" {
+		status = gen.ProviderStatusConnected
+	}
+
+	var models []string
+	var warning string
+	if hasEndpoint {
+		if apiKey == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "no API key configured for this provider")
+			return
+		}
+		baseURL := providers_pkg.GetDefaultAPIBase(providerID)
+		upstream, err := fetchUpstreamModels(baseURL, apiKey)
+		if err != nil {
+			slog.Warn("rest: refresh-models: upstream fetch failed", "provider", providerID, "error", err)
+			warning = fmt.Sprintf("could not fetch upstream model list: %v", err)
+		} else {
+			models = upstream
+		}
+	}
+	// Endpoint-less (or upstream failed): return the stored operator catalog.
+	if models == nil {
+		if um := dedupeNonEmpty(userModels); len(um) > 0 {
+			models = um
+		} else if defaultName != "" {
+			models = []string{defaultName}
+		} else {
+			models = []string{}
+		}
+	}
+
+	resp := gen.Provider{
+		Id:                providerID,
+		Name:              providerID,
+		Status:            status,
+		Models:            models,
+		HasModelsEndpoint: &hasEndpoint,
+	}
+	if warning != "" {
+		resp.Warning = &warning
+	}
+	jsonOK(w, resp)
 }
 
 // --- MCP Servers ---
@@ -5547,7 +5735,8 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 					id = "whatsapp"
 				}
 				if _, matched := entryIDs[id]; !matched {
-					slog.Warn("channels: failed channel has no matching entry in channels list",
+					slog.Warn(
+						"channels: failed channel has no matching entry in channels list",
 						"registry_id", f.Name,
 						"channel", f.Channel,
 						"error", f.Err.Error(),
@@ -6490,7 +6679,8 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		slog.Info("rest: upload: file stored",
+		slog.Info(
+			"rest: upload: file stored",
 			"session_id", sessionID,
 			"filename", sanitized,
 			"size", written,

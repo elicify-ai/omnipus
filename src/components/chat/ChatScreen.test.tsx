@@ -362,41 +362,35 @@ describe('OmnipusComposer — model selector (FR-008/009/010)', () => {
     })
     render(<OmnipusComposer />)
     const trigger = await screen.findByTestId('composer-model-selector')
-    // The picker element must exist and the placeholder attribute
-    // indicates the agent model fallback.
+    // UAT model-catalog fix: the composer picker is now a CONSTRAINED
+    // dropdown. The picker element must exist (combobox when a catalogue is
+    // present, or a disabled "connect a provider" state when empty).
     expect(trigger).toBeInTheDocument()
-    expect(trigger.getAttribute('placeholder')).toMatch(/select a model/i)
-    // W4-20: the previous version of this test only asserted the
-    // placeholder. The FR-009 contract is that the picker stores
-    // activeAgentModel in `nextModel` on seed; assert that here so a
-    // regression that drops the activeAgentModel fallback is caught.
-    // The test fixture has no agents (the test's `useQuery` returns []),
-    // so the activeAgentModel is null and the seed effect must clear
-    // nextModel rather than leave the previous value stale.
+    // W4-20: the FR-009 contract is that the picker stores activeAgentModel in
+    // `nextModel` on seed; assert that here so a regression that drops the
+    // activeAgentModel fallback is caught. The test fixture has no agents (the
+    // test's `useQuery` returns []), so the activeAgentModel is null and the
+    // seed effect must clear nextModel rather than leave a stale value.
     expect(useChatStore.getState().nextModel).toBeNull()
   })
 
-  it('writes the picked model to the chat store so the runtime can forward it on send', async () => {
-    // FR-010: on send, the picker value is sent as Metadata["model_name"].
-    // The runtime's onNew (in useOmnipusRuntime) reads `nextModel` from
-    // the chat store and threads it into sendMessage's opts.model_name.
-    // We can't easily drive the assistant-ui onNew path in this test
-    // (assistant-ui is mocked), so we test the composer's half of the
-    // contract: it writes the picker value to the store, ready for the
-    // runtime to consume. The runtime's contract is covered separately
-    // in omnipus-runtime.attachments.test.tsx.
-    primeActiveAgentAndProviders()
+  it('renders a constrained "connect a provider" state when no catalogue is available (UAT model-catalog fix)', async () => {
+    // UAT model-catalog fix: a non-catalogue model must not be selectable.
+    // With no connected provider catalogue the composer picker renders a
+    // disabled "connect a provider" state — NOT a free-text input that would
+    // flag every value as "unresolved" (the original always-on orange badge
+    // bug). The write-to-store path is covered by the model-selector unit
+    // tests and the store-level forward test below.
+    act(() => {
+      useChatStore.setState({ nextModel: null, messages: [] })
+      useSessionStore.setState({ activeAgentId: 'general-assistant' })
+    })
     render(<OmnipusComposer />)
     const trigger = await screen.findByTestId('composer-model-selector')
-
-    // The test mock returns [] for useQuery, so the ModelSelector falls
-    // back to its text-input mode (no popover). Typing into the input
-    // directly updates the value and triggers the onChange handler.
-    fireEvent.change(trigger, { target: { value: 'z-ai/glm-5-turbo' } })
-
-    // The composer must write the picked model to the chat store so
-    // the runtime's onNew can pick it up.
-    expect(useChatStore.getState().nextModel).toBe('z-ai/glm-5-turbo')
+    expect(trigger).toBeInTheDocument()
+    // No free-text input; the unresolved badge can never appear.
+    expect(screen.queryByText(/unresolved/i)).not.toBeInTheDocument()
+    expect(trigger).toHaveTextContent(/connect a provider/i)
   })
 
   it('sendMessage forwards nextModel as metadata.model_name on the WS frame (store-level contract)', () => {

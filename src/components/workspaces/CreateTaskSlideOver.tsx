@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus, Trash, X, CaretDown } from '@phosphor-icons/react'
 import {
   Sheet,
   SheetContent,
@@ -18,6 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Checkbox } from '@/components/ui/checkbox'
 import { SmartSelect } from '@/components/ui/smart-select'
 import {
   createTask,
@@ -25,15 +28,22 @@ import {
   fetchAgents,
   isWorker,
   fetchMilestones,
+  fetchTasks,
   tasksQueryKeys,
   workspacesQueryKeys,
   milestonesQueryKeys,
   isApiError,
 } from '@/lib/api'
-import type { Milestone } from '@/lib/api'
+import type { Milestone, Task, TaskTrigger, TaskCreateRequest, Todo } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 import { PRIORITY_BADGE } from './TaskCard'
+import {
+  type TriggerKind,
+  buildTrigger,
+  datetimeLocalToMs,
+  datetimeLocalToIso,
+} from './taskFormFields'
 
 interface CreateTaskSlideOverProps {
   open: boolean
@@ -50,6 +60,17 @@ interface FormState {
   priority: number
   milestoneId: string
   agentId: string
+  // Trigger
+  triggerKind: TriggerKind
+  triggerAt: string // datetime-local value (once)
+  triggerEveryMinutes: string // minutes (every)
+  triggerCron: string // cron expr (recurring)
+  // Dependencies
+  blockedBy: string[]
+  // Due
+  due: string // datetime-local value
+  // Todos
+  todos: string[]
 }
 
 const INITIAL_FORM: FormState = {
@@ -58,6 +79,13 @@ const INITIAL_FORM: FormState = {
   priority: 3,
   milestoneId: '__none__',
   agentId: '__none__',
+  triggerKind: 'manual',
+  triggerAt: '',
+  triggerEveryMinutes: '60',
+  triggerCron: '0 9 * * MON',
+  blockedBy: [],
+  due: '',
+  todos: [],
 }
 
 export function CreateTaskSlideOver({
@@ -74,6 +102,8 @@ export function CreateTaskSlideOver({
     milestoneId: milestoneId ?? '__none__',
   })
   const [titleError, setTitleError] = useState('')
+  const [triggerError, setTriggerError] = useState('')
+  const [newTodo, setNewTodo] = useState('')
 
   // Sync milestone pre-fill when active filter changes
   useEffect(() => {
@@ -95,17 +125,91 @@ export function CreateTaskSlideOver({
     staleTime: 60_000,
   })
 
-  function buildBody() {
-    return {
+  // Existing tasks in this workspace — candidate dependencies (depends-on / blocked_by).
+  const { data: wsTasks = [] } = useQuery({
+    queryKey: tasksQueryKeys.list({ workspace_id: workspaceId, surface: 'user' }),
+    queryFn: () => fetchTasks({ workspace_id: workspaceId, surface: 'user' }),
+    staleTime: 10_000,
+    enabled: !!workspaceId && open,
+  })
+
+  // Only top-level tasks are eligible dependencies (subtasks nest under parents).
+  const depCandidates: Task[] = wsTasks.filter((t) => !t.parent_task_id)
+
+  function buildBody(): TaskCreateRequest {
+    const body: TaskCreateRequest = {
       title: form.title.trim(),
-      action: 'llm' as const,
+      action: 'llm',
       prompt: form.prompt.trim() || undefined,
       priority: form.priority,
       workspace_id: workspaceId,
-      surface: 'user' as const,
+      surface: 'user',
       milestone_id: form.milestoneId === '__none__' ? undefined : form.milestoneId || undefined,
       agent_id: form.agentId === '__none__' ? undefined : form.agentId || undefined,
     }
+
+    const trigger = currentTrigger()
+    // Omit manual triggers — they are the implicit default; sending {type:'manual',config:{}} is harmless
+    // but keeping the body lean avoids noise. We DO send non-manual triggers.
+    if (trigger && trigger.type !== 'manual') {
+      body.trigger = trigger
+    }
+
+    if (form.blockedBy.length > 0) {
+      body.blocked_by = form.blockedBy
+    }
+
+    if (form.due) {
+      const iso = datetimeLocalToIso(form.due)
+      if (iso) body.due = iso
+    }
+
+    const todos = currentTodos()
+    if (todos.length > 0) {
+      body.todos = todos
+    }
+
+    return body
+  }
+
+  function currentTrigger(): TaskTrigger | null {
+    if (form.triggerKind === 'once') {
+      const at = datetimeLocalToMs(form.triggerAt)
+      return buildTrigger('once', { at_ms: at ?? undefined })
+    }
+    if (form.triggerKind === 'every') {
+      const minutes = parseInt(form.triggerEveryMinutes, 10)
+      const everyMs = Number.isFinite(minutes) ? minutes * 60_000 : undefined
+      return buildTrigger('every', { every_ms: everyMs })
+    }
+    if (form.triggerKind === 'recurring') {
+      return buildTrigger('recurring', { cron_expr: form.triggerCron.trim() })
+    }
+    return buildTrigger('manual', {})
+  }
+
+  function currentTodos(): Todo[] {
+    return form.todos
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0)
+      .map((text) => ({ text, done: false }))
+  }
+
+  /** Client-side validation of the chosen trigger; returns an error string or ''. */
+  function validateTrigger(): string {
+    if (form.triggerKind === 'once') {
+      if (!form.triggerAt) return 'Pick a date and time for the one-time trigger.'
+      const at = datetimeLocalToMs(form.triggerAt)
+      if (at == null) return 'Invalid trigger date/time.'
+    }
+    if (form.triggerKind === 'every') {
+      const minutes = parseInt(form.triggerEveryMinutes, 10)
+      if (!Number.isFinite(minutes) || minutes < 1) return 'Interval must be at least 1 minute.'
+    }
+    if (form.triggerKind === 'recurring') {
+      if (!form.triggerCron.trim()) return 'Enter a cron expression for the recurring trigger.'
+    }
+    return ''
   }
 
   // Create only — lands in inbox
@@ -147,6 +251,12 @@ export function CreateTaskSlideOver({
       return
     }
     setTitleError('')
+    const tErr = validateTrigger()
+    if (tErr) {
+      setTriggerError(tErr)
+      return
+    }
+    setTriggerError('')
     if (runNow) {
       createAndRunMutation.mutate()
     } else {
@@ -157,12 +267,34 @@ export function CreateTaskSlideOver({
   function resetAndClose() {
     setForm({ ...INITIAL_FORM, milestoneId: milestoneId ?? '__none__' })
     setTitleError('')
+    setTriggerError('')
+    setNewTodo('')
     onOpenChange(false)
   }
 
   function handleOpenChange(next: boolean) {
     if (!next) resetAndClose()
     else onOpenChange(next)
+  }
+
+  function toggleDep(id: string) {
+    setForm((s) => ({
+      ...s,
+      blockedBy: s.blockedBy.includes(id)
+        ? s.blockedBy.filter((x) => x !== id)
+        : [...s.blockedBy, id],
+    }))
+  }
+
+  function addTodo() {
+    const text = newTodo.trim()
+    if (!text) return
+    setForm((s) => ({ ...s, todos: [...s.todos, text] }))
+    setNewTodo('')
+  }
+
+  function removeTodo(idx: number) {
+    setForm((s) => ({ ...s, todos: s.todos.filter((_, i) => i !== idx) }))
   }
 
   const isPending = createMutation.isPending || createAndRunMutation.isPending
@@ -283,6 +415,192 @@ export function CreateTaskSlideOver({
                   .map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
               ]}
             />
+          </div>
+
+          {/* Trigger */}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="ct-trigger" className="text-[var(--color-secondary)]">
+              Trigger
+            </Label>
+            <Select
+              value={form.triggerKind}
+              onValueChange={(v) => { setForm((s) => ({ ...s, triggerKind: v as TriggerKind })); setTriggerError('') }}
+            >
+              <SelectTrigger id="ct-trigger" className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="manual" className="text-xs">None (manual)</SelectItem>
+                <SelectItem value="once" className="text-xs">Once (at a time)</SelectItem>
+                <SelectItem value="every" className="text-xs">Every (interval)</SelectItem>
+                <SelectItem value="recurring" className="text-xs">Recurring (cron)</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {form.triggerKind === 'once' && (
+              <Input
+                aria-label="Trigger date and time"
+                type="datetime-local"
+                value={form.triggerAt}
+                onChange={(e) => { setForm((s) => ({ ...s, triggerAt: e.target.value })); setTriggerError('') }}
+                className="mt-1 text-xs"
+              />
+            )}
+            {form.triggerKind === 'every' && (
+              <div className="mt-1 flex items-center gap-2">
+                <Input
+                  aria-label="Interval in minutes"
+                  type="number"
+                  min={1}
+                  value={form.triggerEveryMinutes}
+                  onChange={(e) => { setForm((s) => ({ ...s, triggerEveryMinutes: e.target.value })); setTriggerError('') }}
+                  className="text-xs w-28"
+                />
+                <span className="text-xs text-[var(--color-muted)]">minutes</span>
+              </div>
+            )}
+            {form.triggerKind === 'recurring' && (
+              <Input
+                aria-label="Cron expression"
+                value={form.triggerCron}
+                onChange={(e) => { setForm((s) => ({ ...s, triggerCron: e.target.value })); setTriggerError('') }}
+                placeholder="0 9 * * MON"
+                className="mt-1 text-xs font-mono"
+              />
+            )}
+            {triggerError && (
+              <p className="text-xs text-[var(--color-error)]">{triggerError}</p>
+            )}
+          </div>
+
+          {/* Depends on (blocked_by) */}
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-[var(--color-secondary)]">Depends on</Label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="justify-between h-9 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-normal"
+                  disabled={depCandidates.length === 0}
+                >
+                  <span className="truncate">
+                    {depCandidates.length === 0
+                      ? 'No other tasks yet'
+                      : form.blockedBy.length === 0
+                        ? 'No dependencies'
+                        : `${form.blockedBy.length} task${form.blockedBy.length === 1 ? '' : 's'} selected`}
+                  </span>
+                  <CaretDown size={12} className="shrink-0 opacity-70" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto p-1" align="start">
+                {depCandidates.map((t) => {
+                  const checked = form.blockedBy.includes(t.id)
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => toggleDep(t.id)}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left hover:bg-[var(--color-surface-2)] transition-colors"
+                    >
+                      <Checkbox checked={checked} className="pointer-events-none" />
+                      <span className="flex-1 truncate text-[var(--color-secondary)]">{t.title}</span>
+                    </button>
+                  )
+                })}
+              </PopoverContent>
+            </Popover>
+            {form.blockedBy.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {form.blockedBy.map((id) => {
+                  const t = depCandidates.find((x) => x.id === id)
+                  return (
+                    <span
+                      key={id}
+                      className="inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-secondary)]"
+                    >
+                      <span className="max-w-[120px] truncate">{t?.title ?? id}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleDep(id)}
+                        aria-label={`Remove dependency ${t?.title ?? id}`}
+                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+                      >
+                        <X size={9} />
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Due date */}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="ct-due" className="text-[var(--color-secondary)]">
+              Due date
+            </Label>
+            <Input
+              id="ct-due"
+              aria-label="Due date"
+              type="datetime-local"
+              value={form.due}
+              onChange={(e) => setForm((s) => ({ ...s, due: e.target.value }))}
+              className="text-xs"
+            />
+          </div>
+
+          {/* Todos */}
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-[var(--color-secondary)]">Checklist</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                aria-label="New checklist item"
+                value={newTodo}
+                onChange={(e) => setNewTodo(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    addTodo()
+                  }
+                }}
+                placeholder="Add a checklist item…"
+                maxLength={500}
+                className="text-xs flex-1"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 px-2 shrink-0"
+                onClick={addTodo}
+                aria-label="Add checklist item"
+                disabled={!newTodo.trim()}
+              >
+                <Plus size={13} />
+              </Button>
+            </div>
+            {form.todos.length > 0 && (
+              <ul className="space-y-1 mt-1">
+                {form.todos.map((text, idx) => (
+                  <li
+                    key={idx}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
+                  >
+                    <span className="flex-1 text-[var(--color-secondary)] truncate">{text}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeTodo(idx)}
+                      aria-label={`Remove checklist item ${text}`}
+                      className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                    >
+                      <Trash size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
 

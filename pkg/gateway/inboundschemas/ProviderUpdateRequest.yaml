@@ -19,3 +19,20 @@ properties:
       Default model to use for this provider. Defaults to "default" when
       not specified on new providers.
     example: "gpt-4o"
+  models:
+    type: array
+    items:
+      type: string
+      minLength: 1
+      maxLength: 256
+    maxItems: 500
+    description: >
+      User-supplied catalogue of model slugs for a provider that does NOT expose
+      a live /models endpoint (custom / unknown OpenAI-compatible gateways). When
+      present, these slugs replace the provider's stored catalogue and constrain
+      the model picker. Ignored for providers WITH a live endpoint
+      (has_models_endpoint=true), whose catalogue is fetched from upstream. Omit
+      to leave the existing list unchanged; send an empty array to clear it.
+    example:
+      - "my-gateway/llama-3.3-70b"
+      - "my-gateway/mixtral-8x7b"

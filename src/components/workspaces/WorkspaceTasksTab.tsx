@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info, Plus } from '@phosphor-icons/react'
 import { MilestoneFilterPills, MILESTONE_FILTER_UNSCHEDULED } from './MilestoneFilterPills'
 import { BoardView } from './BoardView'
@@ -11,9 +11,14 @@ import {
   fetchTasks,
   fetchMilestones,
   fetchAgents,
+  updateTask,
+  isApiError,
   tasksQueryKeys,
   milestonesQueryKeys,
+  workspacesQueryKeys,
 } from '@/lib/api'
+import type { Task } from '@/lib/api'
+import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { BoardAltitude } from '@/store/workspacesStore'
 
@@ -31,9 +36,25 @@ interface WorkspaceTasksTabProps {
  */
 export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps) {
   const { activeMilestoneId, setActiveMilestoneId, boardAltitude, setBoardAltitude } = useWorkspacesStore()
+  const queryClient = useQueryClient()
+  const addToast = useUiStore((s) => s.addToast)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
   const [createMilestoneOpen, setCreateMilestoneOpen] = useState(false)
+
+  // Kanban drag-to-column status change.
+  const moveMutation = useMutation({
+    mutationFn: ({ task, status }: { task: Task; status: Task['status'] }) =>
+      updateTask(task.id, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
+    },
+    onError: (err) => {
+      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to move task'
+      addToast({ message: msg, variant: 'error' })
+    },
+  })
 
   const { data: milestones = [], isError: milestonesError } = useQuery({
     queryKey: milestonesQueryKeys.list(workspaceId),
@@ -121,6 +142,8 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
           onAltitudeChange={(next: BoardAltitude) => setBoardAltitude(next)}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
           onNewTask={() => setCreateTaskOpen(true)}
+          onTaskMove={(task, status) => moveMutation.mutate({ task, status })}
+          onMoveRejected={(reason) => addToast({ message: reason, variant: 'error' })}
         />
       ) : (
         <ListView

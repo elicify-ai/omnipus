@@ -47,7 +47,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { isKnownModelSlug } from '@/lib/agents/model-validation'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
@@ -242,19 +241,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [shellAdvancedOpen, setShellAdvancedOpen] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
-
-  // W6-C4 / G12: when the primary model isn't known to any connected
-  // provider, render a persistent inline warning under the picker. The
-  // ModelSelector's own trigger button already shows an "Unresolved" chip
-  // (src/components/ui/model-selector.tsx); this complementary explanatory
-  // line gives the user a clear next step ("add a provider that supports
-  // this model") per the G12 ticket's product copy. Empty / unset values
-  // are intentionally NOT flagged — that's the default state, not an
-  // unresolved one. Computed AFTER `model` is declared so the reference
-  // is sound; the `useMemo` would be premature here because the consumers
-  // below only need the boolean, not a memoized reference.
-  const primaryModelUnresolved =
-    model.trim() !== '' && !isKnownModelSlug(model, providers)
 
   useEffect(() => {
     if (!agent) return
@@ -885,6 +871,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 Could not load providers. You can still enter a model slug manually.
               </p>
             )}
+            {/* UAT model-catalog fix: CONSTRAINED picker fed the connected-
+                provider catalogue. Selection is limited to real models, so an
+                unresolvable slug cannot be saved here and the inline
+                "unresolved" warning can no longer occur. */}
             <ModelSelector
               models={availableModels}
               value={model}
@@ -892,23 +882,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               onPairChange={({ provider: p }) => { setPrimaryProvider(p) }}
               placeholder="Provider default"
               providerGroups={providerGroups}
-              onUnknownModel={(m) => addToast({
-                message: `"${m}" isn't listed by any connected provider — saving anyway, but the call may not work.`,
-                variant: 'warning',
-              })}
+              constrainToCatalog
+              emptyCatalogHint="Connect a provider in Settings to pick a model"
             />
-            {primaryModelUnresolved && (
-              <p
-                data-testid="primary-model-unresolved"
-                role="status"
-                className="flex items-start gap-1.5 text-[11px] text-[var(--color-warning)] leading-snug"
-              >
-                <WarningCircle size={12} weight="fill" className="shrink-0 mt-0.5" aria-hidden="true" />
-                <span>
-                  Model not in any connected provider — calls will fail until you add a provider that supports this model.
-                </span>
-              </p>
-            )}
             {isLocked && (
               <div className="space-y-1.5">
                 <p className="text-xs text-[var(--color-muted)]">Fallback models</p>
@@ -1280,6 +1256,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   )
                 })}
                 <div className="min-w-[220px] flex-1">
+                  {/* UAT model-catalog fix: fallbacks must be real catalogue
+                      models, so this picker is constrained too. */}
                   <ModelSelector
                     models={availableModels}
                     value=""
@@ -1288,7 +1266,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     providerGroups={providerGroups}
                     triggerTestId="fallback-add-trigger"
                     itemTestIdPrefix="fallback-add-item-"
-                    disabled={availableModels.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))}
+                    constrainToCatalog
+                    emptyCatalogHint="Connect a provider to add fallbacks"
                   />
                 </div>
               </div>
@@ -1929,8 +1908,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           Close button — the Radix X in the top-right corner is the dismiss
           affordance, and SheetContent's onOpenChange wires it back here. */}
       <div className="px-8 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-3">
-        <div data-testid="last-saved-indicator">
-          <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={saveLastSavedAt} />
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <div data-testid="last-saved-indicator">
+            <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={saveLastSavedAt} />
+          </div>
+          {/* UAT 4b: make the autosave scope explicit — edits to a shared agent
+              take effect in every chat / workspace / delegation it is used in. */}
+          <p
+            data-testid="autosave-scope-cue"
+            className="text-[11px] text-[var(--color-muted)] leading-snug"
+          >
+            Changes save automatically and apply everywhere this agent is used.
+          </p>
         </div>
         {!isLocked && (
           <Button

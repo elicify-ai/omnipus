@@ -67,6 +67,7 @@ import {
   MeInfo as MeInfoSchema,
   // Newly wired schemas:
   Provider as ProviderSchema,
+  CliDetect as CliDetectSchema,
   GatewayStatus as GatewayStatusSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ChannelEntry as ChannelEntrySchema,
@@ -248,6 +249,8 @@ import type {
   // Wire types migrated from hand-written interfaces to generated types:
   Agent,
   Provider,
+  ProviderUpdateRequest,
+  CliDetect,
   GatewayStatus,
   Skill,
   SkillSearchResult,
@@ -375,6 +378,7 @@ export type {
   // Wire types migrated from hand-written interfaces:
   Agent,
   Provider,
+  CliDetect,
   GatewayStatus,
   Skill,
   SkillSearchResult,
@@ -1418,11 +1422,17 @@ export function configureProvider(
   endpoint?: string,
   model?: string,
   reAuthToken?: string,
+  models?: string[],
 ): Promise<Provider> {
-  const body: Record<string, string> = {}
+  // ProviderUpdateRequest (contract): api_key/model are strings, models is the
+  // operator-supplied slug catalogue for endpoint-less providers. `endpoint` is
+  // not a contract field — it is merged loosely only when a caller supplies one
+  // (back-compat; no current caller does).
+  const body: ProviderUpdateRequest & { endpoint?: string } = {}
   if (apiKey !== undefined) body.api_key = apiKey
   if (endpoint !== undefined) body.endpoint = endpoint
   if (model !== undefined) body.model = model
+  if (models !== undefined) body.models = models
   return request<Provider>(`/providers/${id}`, {
     method: 'PUT',
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
@@ -1432,6 +1442,25 @@ export function configureProvider(
 
 export function testProvider(id: string): Promise<OperationResult> {
   return request<OperationResult>(`/providers/${id}/test`, { method: 'POST' }, OperationResultSchema as ZodType<OperationResult>)
+}
+
+// refreshProviderModels re-fetches a provider's model catalogue. For a provider
+// WITH a live /models endpoint (has_models_endpoint=true) the backend re-queries
+// upstream and returns the refreshed list; for an endpoint-less provider it
+// returns the stored operator-supplied slug catalogue (nothing to refresh).
+// POST /api/v1/providers/{id}/refresh-models → Provider (contract type).
+export function refreshProviderModels(id: string): Promise<Provider> {
+  return request<Provider>(`/providers/${id}/refresh-models`, { method: 'POST' }, ProviderSchema as ZodType<Provider>)
+}
+
+// fetchCliDetect probes the host for installed external CLIs (claude-code /
+// codex / opencode), used by the Agents screen to gate the "+ External
+// subagent" runtime choices. UAT fix: this MUST go through the authed
+// `request()` wrapper so the bearer token rides along — the previous raw
+// `fetch('/api/v1/system/cli-detect')` sent no auth header and got a 401,
+// surfacing a false "Could not detect installed external CLIs" banner.
+export function fetchCliDetect(): Promise<CliDetect> {
+  return request<CliDetect>('/system/cli-detect', undefined, CliDetectSchema as ZodType<CliDetect>)
 }
 
 export function rotateGatewayToken(): Promise<{ token: string }> {

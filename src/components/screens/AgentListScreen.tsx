@@ -20,7 +20,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, fetchWorkspaces, updateAgent, isApiError, isWorker } from '@/lib/api'
+import { fetchAgents, fetchWorkspaces, updateAgent, fetchCliDetect, isApiError, isWorker } from '@/lib/api'
 import type { Agent, Workspace } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 
@@ -517,9 +517,11 @@ export function AgentListScreen() {
     if (typeof window === 'undefined') return
     if (!authToken) return
     let cancelled = false
-    fetch('/api/v1/system/cli-detect')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('not ok'))))
-      .then((d: HostClis) => {
+    // UAT fix: go through the authed `fetchCliDetect()` (request() wrapper)
+    // so the bearer token is sent. The previous raw fetch had no auth header
+    // and 401'd, producing a false "Could not detect installed CLIs" banner.
+    fetchCliDetect()
+      .then((d) => {
         if (!cancelled) setHostClis(d)
       })
       .catch(() => {

@@ -11,6 +11,7 @@ import {
   CaretDown,
   CaretUp,
   ArrowRight,
+  CaretRight,
 } from '@phosphor-icons/react'
 import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -394,11 +395,26 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
 
   const categories = Object.keys(grouped).sort()
 
+  // Track expanded categories for drill-down (fix #6)
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set())
+
+  function toggleCategory(cat: string) {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev)
+      if (next.has(cat)) {
+        next.delete(cat)
+      } else {
+        next.add(cat)
+      }
+      return next
+    })
+  }
+
   return (
     <div className="space-y-4">
       <p className="text-xs text-[var(--color-muted)]">
-        What your agents can do — grouped by capability area. Individual tool
-        permissions are managed in{' '}
+        What your agents can do — grouped by capability area. Click a category to see the individual tools.
+        Permissions are managed in{' '}
         <a
           href="/settings?tab=security"
           className="inline-flex items-center gap-0.5 text-[var(--color-accent)] hover:opacity-80 underline"
@@ -407,7 +423,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
           Settings → Security
           <ArrowRight size={11} />
         </a>
-        . No tool identifier prefixes (e.g. <span className="font-mono">system.*</span>) are shown here.
+        .
       </p>
 
       {categories.length === 0 ? (
@@ -422,14 +438,22 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
             const description =
               CATEGORY_DESCRIPTIONS[cat] ??
               `${catTools.length} tool${catTools.length !== 1 ? 's' : ''} in this category`
+            const isExpanded = expandedCategories.has(cat)
             return (
               <div
                 key={cat}
-                className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-3"
+                className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
                 data-testid={`tool-category-${cat}`}
               >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
+                {/* Category header row — clickable to expand/collapse */}
+                <button
+                  type="button"
+                  onClick={() => toggleCategory(cat)}
+                  className="flex items-center gap-3 w-full px-4 py-3 text-left hover:bg-[var(--color-surface-2)] transition-colors"
+                  aria-expanded={isExpanded}
+                  data-testid={`tool-category-toggle-${cat}`}
+                >
+                  <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium text-[var(--color-secondary)] capitalize">
                       {cat}
                     </span>
@@ -437,10 +461,35 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                       {description}
                     </p>
                   </div>
-                  <Badge variant="muted" className="text-[10px] shrink-0">
-                    {catTools.length} tool{catTools.length !== 1 ? 's' : ''}
-                  </Badge>
-                </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge variant="muted" className="text-[10px]">
+                      {catTools.length} tool{catTools.length !== 1 ? 's' : ''}
+                    </Badge>
+                    {isExpanded
+                      ? <CaretUp size={13} className="text-[var(--color-muted)]" />
+                      : <CaretRight size={13} className="text-[var(--color-muted)]" />
+                    }
+                  </div>
+                </button>
+                {/* Expanded tool list */}
+                {isExpanded && (
+                  <div
+                    className="px-4 pb-3 border-t border-[var(--color-border)] pt-2"
+                    data-testid={`tool-category-tools-${cat}`}
+                  >
+                    <div className="flex flex-wrap gap-1.5">
+                      {catTools.map((tool) => (
+                        <span
+                          key={tool.name}
+                          className="font-mono text-[10px] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
+                          title={tool.description ?? tool.name}
+                        >
+                          {tool.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })}

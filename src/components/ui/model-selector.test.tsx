@@ -279,6 +279,90 @@ describe('ModelSelector — unresolved indicator (W6-C4 / G12)', () => {
 })
 
 // =====================================================================
+// UAT model-catalog fix — constrained dropdown (no unresolved badge)
+// =====================================================================
+
+describe('ModelSelector — constrainToCatalog (UAT model-catalog fix)', () => {
+  it('does NOT render an unresolved chip for an unknown slug when constrained', () => {
+    // Without constraint this slug would flag "Unresolved"; constrained, it must not.
+    render(
+      <ModelSelector
+        models={FLAT_MODELS}
+        value="gpt-9000-ultra"
+        onChange={vi.fn()}
+        constrainToCatalog
+      />,
+    )
+    expect(screen.queryByText(/unresolved/i)).not.toBeInTheDocument()
+  })
+
+  it('does NOT render the free-text "Use <slug>" row when constrained', () => {
+    render(
+      <ModelSelector
+        models={FLAT_MODELS}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+      />,
+    )
+    const input = screen.getByPlaceholderText(/search models/i)
+    fireEvent.change(input, { target: { value: 'totally-made-up' } })
+    // The catalogue models still filter; the custom "Use …" escape hatch is gone.
+    expect(screen.queryByText(/^Use /)).not.toBeInTheDocument()
+    expect(screen.queryByText(/totally-made-up/)).not.toBeInTheDocument()
+  })
+
+  it('still lets the user pick a catalogue model when constrained', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelSelector
+        models={FLAT_MODELS}
+        value=""
+        onChange={onChange}
+        constrainToCatalog
+      />,
+    )
+    fireEvent.click(screen.getByText('claude-3-haiku'))
+    expect(onChange).toHaveBeenCalledWith('claude-3-haiku')
+  })
+
+  it('renders a disabled "no models" state (not a free-text input) when constrained and empty', () => {
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        triggerTestId="composer-model-selector"
+        emptyCatalogHint="Connect a provider to pick a model"
+      />,
+    )
+    // No free-text input — the operator decision is "non-catalogue model not selectable".
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(screen.getByText(/connect a provider to pick a model/i)).toBeInTheDocument()
+  })
+
+  it('allows free-text bootstrap (no warning) when constrained, empty, and allowFreeTextWhenEmpty', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelSelector
+        models={[]}
+        value="my-first-slug"
+        onChange={onChange}
+        constrainToCatalog
+        allowFreeTextWhenEmpty
+      />,
+    )
+    // Onboarding manual-provider bootstrap: a text input, but never an
+    // "unresolved" warning (the typed slug becomes the catalogue).
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+    expect(screen.queryByText(/not found in any connected provider/i)).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'glm-5.2' } })
+    expect(onChange).toHaveBeenCalledWith('glm-5.2')
+  })
+})
+
+// =====================================================================
 // O3 two-field model selector — onPairChange callback
 // =====================================================================
 

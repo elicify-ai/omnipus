@@ -11,6 +11,31 @@ import { act } from 'react'
 import { CreateAgentWizard } from './CreateAgentWizard'
 import { useUiStore } from '@/store/ui'
 
+// The real ModelSelector is now a CONSTRAINED dropdown (UAT model-catalog fix):
+// with no providers it renders a disabled "no models" state (no <input>). These
+// wizard tests exercise STEP GATING, not picker mechanics, so we stub the
+// selector with a plain forwarding <input> keyed by the trigger test id. The
+// selector's own behaviour is covered by model-selector.test.tsx, and the
+// inherit-toggle rendering is driven by Step1Identity (not the selector), so
+// this stub does not weaken the new 4a coverage.
+vi.mock('@/components/ui/model-selector', () => ({
+  ModelSelector: ({
+    value,
+    onChange,
+    triggerTestId,
+  }: {
+    value: string
+    onChange: (v: string) => void
+    triggerTestId?: string
+  }) => (
+    <input
+      data-testid={triggerTestId ?? 'model-selector'}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  ),
+}))
+
 beforeEach(() => {
   act(() => {
     useUiStore.setState({
@@ -107,10 +132,13 @@ describe('CreateAgentWizard — step gating (spec §9.2)', () => {
   })
 
   it('Next on step 1 stays disabled for Subagent until description is also filled', () => {
+    // Native Subagents inherit the model from the caller by default (UAT 4a),
+    // so the model picker is hidden and only name + description gate step 1.
     renderWizard({ initialType: 'Subagent' })
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'W' } })
-    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
     expect(screen.getByTestId('wizard-next-1')).toBeDisabled()
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'handles X' } })
+    expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled()
   })
 
   it('Next on step 2 stays disabled until soul is non-empty', async () => {
@@ -249,5 +277,49 @@ describe('CreateAgentWizard — Cancel button', () => {
     renderWizard({ onClose })
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
     expect(onClose).toHaveBeenCalledOnce()
+  })
+})
+
+describe('CreateAgentWizard — inherit-from-caller toggles (UAT 4a)', () => {
+  it('renders the Model inherit toggle on step 1 for a native Subagent (ON by default)', () => {
+    renderWizard({ initialType: 'Subagent' })
+    const toggle = screen.getByTestId('wizard-inherit-model') as HTMLInputElement
+    expect(toggle).toBeInTheDocument()
+    // Default ON → inherit from caller → the model picker is hidden.
+    expect(toggle.checked).toBe(true)
+    expect(screen.queryByTestId('wizard-model')).toBeNull()
+  })
+
+  it('reveals the model picker when the Model inherit toggle is turned OFF', () => {
+    renderWizard({ initialType: 'Subagent' })
+    fireEvent.click(screen.getByTestId('wizard-inherit-model'))
+    expect(screen.getByTestId('wizard-model')).toBeInTheDocument()
+  })
+
+  it('does NOT render inherit toggles for a Main agent', () => {
+    renderWizard({ initialType: 'Main' })
+    expect(screen.queryByTestId('wizard-inherit-model')).toBeNull()
+  })
+
+  it('lets a native Subagent advance past step 1 with NO model when inheriting', () => {
+    renderWizard({ initialType: 'Subagent' })
+    // inherit_model defaults ON, so name + description are the only step-1 reqs.
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Researcher' } })
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'does research' } })
+    const next = screen.getByTestId('wizard-next-1') as HTMLButtonElement
+    expect(next).not.toBeDisabled()
+  })
+
+  it('renders the Tools and Skills inherit toggles on step 3 for a native Subagent', async () => {
+    renderWizard({ initialType: 'Subagent' })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Researcher' } })
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'does research' } })
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    fireEvent.change(await screen.findByTestId('wizard-soul'), { target: { value: 'soul' } })
+    fireEvent.click(screen.getByTestId('wizard-next-2'))
+    expect(await screen.findByTestId('wizard-inherit-tools')).toBeInTheDocument()
+    expect(screen.getByTestId('wizard-inherit-skills')).toBeInTheDocument()
+    // Tools editor hidden while inherited (default ON).
+    expect(screen.queryByTestId('wizard-tools-cfg')).toBeNull()
   })
 })

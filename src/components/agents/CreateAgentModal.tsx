@@ -82,27 +82,40 @@ function normalizeWizardType(
 function payloadToCreateRequest(
   payload: WizardSubmitPayload,
 ): AgentCreateRequest {
+  // UAT 4a: native subagents that inherit a field from the caller omit it
+  // from the create request so the server keeps the inherited rail. These
+  // flags are UI-only and never cross the wire. They apply only to native
+  // Subagents (Main never inherits; external subagents run their own config).
+  const isNativeSubagent = payload.type === 'Subagent'
+  const inheritModel = isNativeSubagent && payload.inherit_model === true
+  const inheritTools = isNativeSubagent && payload.inherit_tools === true
+  const inheritSkills = isNativeSubagent && payload.inherit_skills === true
+  const inheritSandbox = isNativeSubagent && payload.inherit_sandbox === true
+
   const req: AgentCreateRequest = {
     type: payload.type,
     name: payload.name.trim(),
     color: payload.color,
     icon: payload.icon,
-    model: payload.model.trim(),
     soul: payload.soul.trim(),
   }
+  // Model omitted when inherited (server falls back to the caller/global model).
+  if (!inheritModel && payload.model.trim()) req.model = payload.model.trim()
   if (payload.description.trim()) req.description = payload.description.trim()
   if (payload.instructions.trim()) req.instructions = payload.instructions.trim()
-  // O3 two-field: forward provider only when non-empty.
-  if (payload.provider && payload.provider.trim() !== '') req.provider = payload.provider.trim()
+  // O3 two-field: forward provider only when non-empty and not inheriting model.
+  if (!inheritModel && payload.provider && payload.provider.trim() !== '') req.provider = payload.provider.trim()
   if (payload.heartbeat !== undefined) req.heartbeat = payload.heartbeat
   if (payload.heartbeat_enabled !== undefined) req.heartbeat_enabled = payload.heartbeat_enabled
   if (payload.heartbeat_interval !== undefined) req.heartbeat_interval = payload.heartbeat_interval
   if (payload.voice !== undefined && payload.voice !== '') req.voice = payload.voice
-  if (payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
-  if (payload.skills !== undefined) req.skills = payload.skills
-  if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
+  // Tools / Skills / Sandbox omitted when inherited so the server keeps the
+  // caller's rail (UAT 4a). Fallback models ride with the primary model.
+  if (!inheritTools && payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
+  if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
+  if (!inheritModel && payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
   if (payload.model_params !== undefined) req.model_params = payload.model_params
-  if (payload.sandbox_profile !== undefined) req.sandbox_profile = payload.sandbox_profile
+  if (!inheritSandbox && payload.sandbox_profile !== undefined) req.sandbox_profile = payload.sandbox_profile
   if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
   if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
   if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds

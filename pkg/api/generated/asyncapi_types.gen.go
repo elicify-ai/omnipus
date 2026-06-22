@@ -50,6 +50,20 @@ type CancelStageFrame struct {
 	Type      string `json:"type"`
 }
 
+// DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator and renders a distinct delegation-failure block — it does NOT rely on the LLM to narrate the denial. The frame's top-level `error` field carries the same `reason`.
+type DelegationFailure struct {
+	// Fixed discriminator the SPA matches on.
+	Error string `json:"error"`
+	// The delegation-policy axis that rejected the call. trust_set = target not in the caller's 'to' allowlist (or no permitted targets); mode = the delegation mode (await/background/task) is not permitted; depth = the delegation-chain depth cap was reached.
+	Policy string `json:"policy"`
+	// Human-readable explanation of the denial.
+	Reason string `json:"reason"`
+	// The requested delegation target, when one was named.
+	TargetAgentId *string `json:"target_agent_id,omitempty"`
+	// The delegation tool that was denied (spawn / subagent / task_create).
+	Tool string `json:"tool"`
+}
+
 // DevicePairingRequestFrame — Server → client device pairing request needs admin approval.
 type DevicePairingRequestFrame struct {
 	DeviceId    string  `json:"device_id"`

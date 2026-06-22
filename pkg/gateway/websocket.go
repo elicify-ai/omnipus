@@ -738,7 +738,14 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 					modelName = v
 				}
 			}
-			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, f.Media, modelName, wc)
+			// M4: workspace→turn binding. When the message originates from a
+			// workspace chat the SPA sets metadata.workspace_id; we stamp it on
+			// the session meta so task_create/delegation lands on this workspace.
+			var workspaceID string
+			if v, ok := f.Metadata["workspace_id"].(string); ok {
+				workspaceID = strings.TrimSpace(v)
+			}
+			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, f.Media, modelName, workspaceID, wc)
 		case string(generated.WsFrameTypeCancel):
 			var f generated.CancelFrame
 			if err := json.Unmarshal(data, &f); err != nil {
@@ -922,6 +929,7 @@ func (h *WSHandler) handleChatMessage(
 	agentID string,
 	mediaRefs []string,
 	modelName string,
+	workspaceID string,
 	wc *wsConn,
 ) {
 	targetAgentID := agentID
@@ -1021,7 +1029,14 @@ func (h *WSHandler) handleChatMessage(
 			// Stamp the session owner from the authenticated WebSocket user (SEC-2/#406).
 			// wc.userID is set at auth time (FR-073); empty on dev-mode bypass.
 			ownerCopy := wc.userID
-			if err := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, Owner: &ownerCopy}); err != nil {
+			metaPatch := session.MetaPatch{Title: &title, Owner: &ownerCopy}
+			// M4: bind the new session to the active workspace so created tasks
+			// land on this workspace's board (not the agent's default).
+			if workspaceID != "" {
+				wsCopy := workspaceID
+				metaPatch.WorkspaceID = &wsCopy
+			}
+			if err := store.SetMeta(meta.ID, metaPatch); err != nil {
 				slog.Warn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
 			}
 			// Ack the new session_id so the SPA can associate all subsequent frames.
@@ -1047,7 +1062,8 @@ func (h *WSHandler) handleChatMessage(
 				return
 			}
 			// Validate that the session actually exists in the store.
-			if _, err := store.GetMeta(sessionID); err != nil {
+			existingMeta, err := store.GetMeta(sessionID)
+			if err != nil {
 				slog.Warn("ws: session not found", "session_id", sessionID, "error", err)
 				sidCopy := sessionID
 				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
@@ -1056,6 +1072,16 @@ func (h *WSHandler) handleChatMessage(
 					SessionId: &sidCopy,
 				})
 				return
+			}
+			// M4: if the resumed session has no workspace binding yet but the
+			// client supplied one (workspace chat), stamp it now so tasks the
+			// agent creates this turn land on the active workspace's board. Never
+			// rewrite an existing binding — the first binding wins.
+			if workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID == "" {
+				wsCopy := workspaceID
+				if err := store.SetMeta(sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); err != nil {
+					slog.Warn("ws: could not bind workspace to session", "session_id", sessionID, "error", err)
+				}
 			}
 			// Track for streamer.
 			h.mu.Lock()
@@ -2216,7 +2242,21 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// InlineToolResultMaxBytes (50 KiB), persist it to disk and substitute a
 			// generated.ToolResultRef sentinel so the WS frame stays small.
 			var liveResult any = p.Result
-			if len(p.Result) > InlineToolResultMaxBytes {
+			// Structured delegation failure (UAT fix): the delegation tools
+			// (spawn / subagent / task_create) emit a DelegationFailure JSON
+			// object as their result when the policy denies the call. Parse it
+			// into a real object so the SPA receives the typed shape (matched on
+			// the "delegation_denied" discriminator) and can render a distinct
+			// block instead of relying on the LLM to narrate the denial. Also
+			// surface the human-readable reason in the frame's error field.
+			var delegationErr string
+			if status == "error" {
+				if obj, reason, isDenial := parseDelegationFailure(p.Result); isDenial {
+					liveResult = obj
+					delegationErr = reason
+				}
+			}
+			if liveResult == any(p.Result) && len(p.Result) > InlineToolResultMaxBytes {
 				// JSON-encode the string to get the exact wire size.
 				if encoded, merr := json.Marshal(p.Result); merr == nil {
 					if sentinel, offloaded := maybeOffloadResult(h.toolStore, evtSID, encoded); offloaded {
@@ -2243,6 +2283,10 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			if p.ParentSpawnCallID != "" {
 				pc := string(p.ParentSpawnCallID)
 				resultF.ParentCallId = &pc
+			}
+			if delegationErr != "" {
+				de := delegationErr
+				resultF.Error = &de
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeToolCallResult), resultF)
 			// When the handoff tool succeeds, notify the frontend to switch agents.

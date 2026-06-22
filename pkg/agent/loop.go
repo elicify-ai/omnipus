@@ -1818,12 +1818,12 @@ func buildDelegationDenyChecker(
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
 	registry *AgentRegistry,
-) func(ctx context.Context, targetAgentID string) string {
+) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 	policy := config.ResolveDelegationPolicy(agentCfg, defaults)
 	toList := config.ResolveDelegationTo(agentCfg, defaults)
 	policyDepth := config.ResolveDelegationDepth(policy)
 
-	return func(ctx context.Context, targetAgentID string) string {
+	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 		// 1. Trust set (only when an explicit target is named).
 		if targetAgentID != "" {
 			var allowed bool
@@ -1837,10 +1837,14 @@ func buildDelegationDenyChecker(
 				logger.WarnCF("agent", "delegation denied: target not in trust set", map[string]any{
 					"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
 				})
-				return fmt.Sprintf(
-					"agent %q is not in this agent's delegation trust set ('to' allowlist)",
-					targetAgentID,
-				)
+				return &tools.DelegationDenial{
+					Reason: fmt.Sprintf(
+						"agent %q is not in this agent's delegation trust set ('to' allowlist)",
+						targetAgentID,
+					),
+					Policy:        tools.DenyTrustSet,
+					TargetAgentID: targetAgentID,
+				}
 			}
 		}
 
@@ -1849,7 +1853,14 @@ func buildDelegationDenyChecker(
 			logger.WarnCF("agent", "delegation denied: mode not permitted", map[string]any{
 				"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
 			})
-			return fmt.Sprintf("delegation mode %q is not permitted by this agent's delegation policy", string(mode))
+			return &tools.DelegationDenial{
+				Reason: fmt.Sprintf(
+					"delegation mode %q is not permitted by this agent's delegation policy",
+					string(mode),
+				),
+				Policy:        tools.DenyMode,
+				TargetAgentID: targetAgentID,
+			}
 		}
 
 		// 3. Depth.
@@ -1859,11 +1870,18 @@ func buildDelegationDenyChecker(
 					"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
 					"current_depth": d, "max_depth": policyDepth,
 				})
-				return fmt.Sprintf("maximum delegation depth (%d) reached — cannot delegate further", policyDepth)
+				return &tools.DelegationDenial{
+					Reason: fmt.Sprintf(
+						"maximum delegation depth (%d) reached — cannot delegate further",
+						policyDepth,
+					),
+					Policy:        tools.DenyDepth,
+					TargetAgentID: targetAgentID,
+				}
 			}
 		}
 
-		return ""
+		return nil
 	}
 }
 
@@ -1874,12 +1892,12 @@ func buildDelegationDenyChecker(
 func buildSubagentDelegationDenyChecker(
 	agentCfg *config.AgentConfig,
 	defaults config.AgentDefaults,
-) func(ctx context.Context) string {
+) func(ctx context.Context) *tools.DelegationDenial {
 	policy := config.ResolveDelegationPolicy(agentCfg, defaults)
 	toList := config.ResolveDelegationTo(agentCfg, defaults)
 	policyDepth := config.ResolveDelegationDepth(policy)
 
-	return func(ctx context.Context) string {
+	return func(ctx context.Context) *tools.DelegationDenial {
 		// 1. Trust: must be able to delegate at all.
 		canDelegate := false
 		if toList != nil {
@@ -1892,7 +1910,10 @@ func buildSubagentDelegationDenyChecker(
 			logger.WarnCF("agent", "delegation denied: no permitted targets", map[string]any{
 				"mode": string(config.DelegationModeAwait),
 			})
-			return "no target agent is permitted by this agent's delegation policy ('to' allowlist is empty)"
+			return &tools.DelegationDenial{
+				Reason: "no target agent is permitted by this agent's delegation policy ('to' allowlist is empty)",
+				Policy: tools.DenyTrustSet,
+			}
 		}
 
 		// 2. Mode.
@@ -1900,10 +1921,13 @@ func buildSubagentDelegationDenyChecker(
 			logger.WarnCF("agent", "delegation denied: mode not permitted", map[string]any{
 				"mode": string(config.DelegationModeAwait),
 			})
-			return fmt.Sprintf(
-				"delegation mode %q is not permitted by this agent's delegation policy",
-				string(config.DelegationModeAwait),
-			)
+			return &tools.DelegationDenial{
+				Reason: fmt.Sprintf(
+					"delegation mode %q is not permitted by this agent's delegation policy",
+					string(config.DelegationModeAwait),
+				),
+				Policy: tools.DenyMode,
+			}
 		}
 
 		// 3. Depth.
@@ -1912,11 +1936,14 @@ func buildSubagentDelegationDenyChecker(
 				logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
 					"mode": string(config.DelegationModeAwait), "current_depth": d, "max_depth": policyDepth,
 				})
-				return fmt.Sprintf("maximum delegation depth (%d) reached — cannot delegate further", policyDepth)
+				return &tools.DelegationDenial{
+					Reason: fmt.Sprintf("maximum delegation depth (%d) reached — cannot delegate further", policyDepth),
+					Policy: tools.DenyDepth,
+				}
 			}
 		}
 
-		return ""
+		return nil
 	}
 }
 
@@ -3847,6 +3874,24 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		}
 	}
 
+	// M4: bind the active workspace into this turn so a task an agent creates
+	// (task_create / delegation) lands on the ACTIVE workspace's board rather
+	// than the agent's default workspace. A web-chat / channel session that was
+	// opened from a workspace carries the workspace ID on its meta (set via the
+	// session-scope PUT or at session creation). Resolve it here so the tool
+	// context (loop.go: WithWorkspaceID) carries it through to resolveWorkspaceID.
+	// Falls back to the inbound metadata key when present (e.g. board-task runs),
+	// and finally to "" — task_create then resolves the real default workspace.
+	workspaceID := ""
+	if transcriptStore != nil && transcriptSessionID != "" {
+		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr == nil && meta != nil {
+			workspaceID = meta.WorkspaceID
+		}
+	}
+	if workspaceID == "" {
+		workspaceID = inboundMetadata(msg, "workspace_id")
+	}
+
 	opts := processOptions{
 		SessionKey:          sessionKey,
 		Channel:             msg.Channel,
@@ -3860,6 +3905,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		SendResponse:        false,
 		TranscriptSessionID: transcriptSessionID,
 		TranscriptStore:     transcriptStore,
+		WorkspaceID:         workspaceID,
 		// Carry inbound metadata so runTurn can detect a per-thread model
 		// switch (FR-011). The map is copied by reference — the turn flow
 		// only reads from it.

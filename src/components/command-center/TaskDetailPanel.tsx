@@ -7,14 +7,17 @@ import {
   fetchSubtasks,
   fetchMilestones,
   fetchWorkspaces,
+  fetchTasks,
   updateTask,
   deleteTask,
+  setTaskTodos,
+  setTaskDependencies,
   isApiError,
   milestonesQueryKeys,
   workspacesQueryKeys,
   tasksQueryKeys,
 } from '@/lib/api'
-import type { Task, TaskUpdateRequest, Todo } from '@/lib/api'
+import type { Task, TaskUpdateRequest, Todo, TaskTrigger } from '@/lib/api'
 import {
   Sheet,
   SheetContent,
@@ -23,8 +26,11 @@ import {
 } from '@/components/ui/sheet'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useUiStore } from '@/store/ui'
 import {
   Play,
@@ -38,8 +44,17 @@ import {
   CheckSquare,
   Square,
   Trash,
+  Plus,
+  CaretDown,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import {
+  type TriggerKind,
+  buildTrigger,
+  toDatetimeLocalValue,
+  datetimeLocalToMs,
+  datetimeLocalToIso,
+} from '@/components/workspaces/taskFormFields'
 
 // ── Status config ──────────────────────────────────────────────────────────────
 
@@ -91,11 +106,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(task?.workspace_id ?? '')
+  const [newTodo, setNewTodo] = useState('')
 
   useEffect(() => {
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
     setSelectedWorkspaceId(task?.workspace_id ?? '')
+    setNewTodo('')
   }, [task?.id, task?.prompt, task?.workspace_id])
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
@@ -119,6 +136,17 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     enabled: task != null && !task.parent_task_id,
   })
 
+  // Sibling tasks in the same workspace — candidate dependencies (exclude self).
+  const { data: wsTasks = [] } = useQuery({
+    queryKey: tasksQueryKeys.list({ workspace_id: task?.workspace_id ?? '', surface: 'user' }),
+    queryFn: () => fetchTasks({ workspace_id: task!.workspace_id, surface: 'user' }),
+    enabled: task != null && !!task.workspace_id,
+    staleTime: 10_000,
+  })
+  const depCandidates: Task[] = wsTasks.filter(
+    (t) => t.id !== task?.id && !t.parent_task_id,
+  )
+
   const { mutate: doUpdate } = useMutation({
     mutationFn: (data: TaskUpdateRequest) => {
       if (!task) return Promise.reject(new Error('No task selected'))
@@ -130,6 +158,32 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update task', variant: 'error' }),
+  })
+
+  // Todos checklist — replace atomically via PUT /tasks/{id}/todos
+  const { mutate: doSetTodos } = useMutation({
+    mutationFn: (todos: Todo[]) => {
+      if (!task) return Promise.reject(new Error('No task selected'))
+      return setTaskTodos(task.id, todos)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+    },
+    onError: (err: unknown) =>
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update checklist', variant: 'error' }),
+  })
+
+  // Dependencies — replace atomically via PUT /tasks/{id}/dependencies
+  const { mutate: doSetDeps } = useMutation({
+    mutationFn: (blockedBy: string[]) => {
+      if (!task) return Promise.reject(new Error('No task selected'))
+      return setTaskDependencies(task.id, blockedBy)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+    },
+    onError: (err: unknown) =>
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update dependencies', variant: 'error' }),
   })
 
   // "Start" = PATCH status to in_progress (no /start endpoint in unified model)
@@ -195,7 +249,74 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     const todos = (task.todos ?? []).map((t, i) =>
       i === index ? { ...t, done: !t.done } : t,
     )
-    doUpdate({ todos })
+    doSetTodos(todos)
+  }
+
+  function handleAddTodo() {
+    if (!task) return
+    const text = newTodo.trim()
+    if (!text) return
+    const todos = [...(task.todos ?? []), { text, done: false }]
+    doSetTodos(todos)
+    setNewTodo('')
+  }
+
+  function handleRemoveTodo(index: number) {
+    if (!task) return
+    const todos = (task.todos ?? []).filter((_, i) => i !== index)
+    doSetTodos(todos)
+  }
+
+  function handleToggleDep(id: string) {
+    if (!task) return
+    const current = task.blocked_by ?? []
+    const next = current.includes(id)
+      ? current.filter((x) => x !== id)
+      : [...current, id]
+    doSetDeps(next)
+  }
+
+  function handleTriggerKindChange(kind: TriggerKind) {
+    if (!task) return
+    // Preserve existing config where it still applies, otherwise sensible defaults.
+    const cfg = task.trigger?.config ?? {}
+    let trigger: TaskTrigger
+    if (kind === 'once') {
+      trigger = buildTrigger('once', { at_ms: typeof cfg.at_ms === 'number' ? cfg.at_ms : Date.now() + 3_600_000 })
+    } else if (kind === 'every') {
+      trigger = buildTrigger('every', { every_ms: typeof cfg.every_ms === 'number' ? cfg.every_ms : 3_600_000 })
+    } else if (kind === 'recurring') {
+      trigger = buildTrigger('recurring', { cron_expr: typeof cfg.cron_expr === 'string' && cfg.cron_expr ? cfg.cron_expr : '0 9 * * MON' })
+    } else {
+      trigger = buildTrigger('manual', {})
+    }
+    doUpdate({ trigger })
+  }
+
+  function handleTriggerAtChange(value: string) {
+    const at = datetimeLocalToMs(value)
+    if (at == null) return
+    doUpdate({ trigger: buildTrigger('once', { at_ms: at }) })
+  }
+
+  function handleTriggerEveryChange(minutes: number) {
+    if (!Number.isFinite(minutes) || minutes < 1) return
+    doUpdate({ trigger: buildTrigger('every', { every_ms: minutes * 60_000 }) })
+  }
+
+  function handleTriggerCronChange(cron: string) {
+    if (!cron.trim()) return
+    doUpdate({ trigger: buildTrigger('recurring', { cron_expr: cron.trim() }) })
+  }
+
+  function handleDueChange(value: string) {
+    if (!value) {
+      // Clearing due — send empty string (PATCH treats it as a value the server can clear)
+      doUpdate({ due: '' })
+      return
+    }
+    const iso = datetimeLocalToIso(value)
+    if (iso) doUpdate({ due: iso })
   }
 
   async function handleCopyResult() {
@@ -230,6 +351,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const showResult = (task.status === 'done' || task.status === 'failed') && !!task.result
   const todos = task.todos ?? []
   const doneTodos = todos.filter((t: Todo) => t.done).length
+  const blockedBy = task.blocked_by ?? []
+  const triggerKind: TriggerKind = task.trigger?.type ?? 'manual'
+  const triggerCfg = task.trigger?.config ?? {}
 
   return (
     <div className="space-y-5">
@@ -360,16 +484,139 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         />
       </Field>
 
-      {/* Todos checklist */}
-      {todos.length > 0 && (
-        <Field label={`Todos (${doneTodos}/${todos.length})`}>
-          <div className="space-y-1">
-            {todos.map((todo: Todo, idx: number) => (
+      {/* Trigger (editable) */}
+      <Field label="Trigger">
+        <SmartSelect
+          value={triggerKind}
+          onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
+          triggerClassName="h-8 text-xs"
+          items={[
+            { value: 'manual', label: 'None (manual)', className: 'text-xs' },
+            { value: 'once', label: 'Once (at a time)', className: 'text-xs' },
+            { value: 'every', label: 'Every (interval)', className: 'text-xs' },
+            { value: 'recurring', label: 'Recurring (cron)', className: 'text-xs' },
+          ]}
+        />
+        {triggerKind === 'once' && (
+          <Input
+            aria-label="Trigger date and time"
+            type="datetime-local"
+            defaultValue={toDatetimeLocalValue(typeof triggerCfg.at_ms === 'number' ? triggerCfg.at_ms : undefined)}
+            onBlur={(e) => handleTriggerAtChange(e.target.value)}
+            className="mt-1.5 text-xs"
+          />
+        )}
+        {triggerKind === 'every' && (
+          <div className="mt-1.5 flex items-center gap-2">
+            <Input
+              aria-label="Interval in minutes"
+              type="number"
+              min={1}
+              defaultValue={typeof triggerCfg.every_ms === 'number' ? String(Math.round(triggerCfg.every_ms / 60_000)) : '60'}
+              onBlur={(e) => handleTriggerEveryChange(parseInt(e.target.value, 10))}
+              className="text-xs w-28"
+            />
+            <span className="text-xs text-[var(--color-muted)]">minutes</span>
+          </div>
+        )}
+        {triggerKind === 'recurring' && (
+          <Input
+            aria-label="Cron expression"
+            defaultValue={typeof triggerCfg.cron_expr === 'string' ? triggerCfg.cron_expr : '0 9 * * MON'}
+            onBlur={(e) => handleTriggerCronChange(e.target.value)}
+            placeholder="0 9 * * MON"
+            className="mt-1.5 text-xs font-mono"
+          />
+        )}
+      </Field>
+
+      {/* Depends on (blocked_by, editable) */}
+      <Field label="Depends on">
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              className="justify-between h-8 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-normal w-full"
+              disabled={depCandidates.length === 0}
+            >
+              <span className="truncate">
+                {depCandidates.length === 0
+                  ? 'No other tasks'
+                  : blockedBy.length === 0
+                    ? 'No dependencies'
+                    : `${blockedBy.length} task${blockedBy.length === 1 ? '' : 's'} selected`}
+              </span>
+              <CaretDown size={12} className="shrink-0 opacity-70" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto p-1" align="start">
+            {depCandidates.map((t) => {
+              const checked = blockedBy.includes(t.id)
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => handleToggleDep(t.id)}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left hover:bg-[var(--color-surface-1)] transition-colors"
+                >
+                  <Checkbox checked={checked} className="pointer-events-none" />
+                  <span className="flex-1 truncate text-[var(--color-secondary)]">{t.title}</span>
+                </button>
+              )
+            })}
+          </PopoverContent>
+        </Popover>
+        {blockedBy.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {blockedBy.map((id) => {
+              const dep = depCandidates.find((x) => x.id === id) ?? wsTasks.find((x) => x.id === id)
+              return (
+                <span
+                  key={id}
+                  className="inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-secondary)]"
+                >
+                  <span className="max-w-[120px] truncate">{dep?.title ?? id}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleDep(id)}
+                    aria-label={`Remove dependency ${dep?.title ?? id}`}
+                    className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+                  >
+                    <X size={9} />
+                  </button>
+                </span>
+              )
+            })}
+          </div>
+        )}
+      </Field>
+
+      {/* Due date (editable) */}
+      <Field label="Due date">
+        <Input
+          aria-label="Due date"
+          type="datetime-local"
+          defaultValue={toDatetimeLocalValue(task.due)}
+          key={task.id + (task.due ?? '')}
+          onBlur={(e) => handleDueChange(e.target.value)}
+          className="text-xs"
+        />
+      </Field>
+
+      {/* Todos checklist (editable: add / toggle / remove) */}
+      <Field label={`Checklist${todos.length > 0 ? ` (${doneTodos}/${todos.length})` : ''}`}>
+        <div className="space-y-1">
+          {todos.map((todo: Todo, idx: number) => (
+            <div
+              key={idx}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
+            >
               <button
-                key={idx}
                 type="button"
                 onClick={() => handleToggleTodo(idx)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs hover:bg-[var(--color-surface-1)] transition-colors text-left"
+                aria-label={`Toggle ${todo.text}`}
+                className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity"
               >
                 {todo.done ? (
                   <CheckSquare size={13} className="shrink-0 text-green-400" />
@@ -380,22 +627,45 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                   {todo.text}
                 </span>
               </button>
-            ))}
-          </div>
-        </Field>
-      )}
-
-      {/* Trigger */}
-      {task.trigger && (
-        <Field label="Trigger">
-          <p className="text-xs text-[var(--color-muted)]">
-            {task.trigger.type === 'manual' && 'Manual (drag to run)'}
-            {task.trigger.type === 'once' && `Fires ${task.trigger.config?.at_ms ? new Date(task.trigger.config.at_ms).toLocaleString() : '(unset)'}`}
-            {task.trigger.type === 'every' && `Every ${task.trigger.config?.every_ms ? Math.round(task.trigger.config.every_ms / 60000) + 'm' : '(unset)'}`}
-            {task.trigger.type === 'recurring' && `Recurring — ${task.trigger.config?.cron_expr ?? '(no cron)'}`}
-          </p>
-        </Field>
-      )}
+              <button
+                type="button"
+                onClick={() => handleRemoveTodo(idx)}
+                aria-label={`Remove checklist item ${todo.text}`}
+                className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+              >
+                <Trash size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 mt-1.5">
+          <Input
+            aria-label="New checklist item"
+            value={newTodo}
+            onChange={(e) => setNewTodo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                handleAddTodo()
+              }
+            }}
+            placeholder="Add a checklist item…"
+            maxLength={500}
+            className="text-xs flex-1 h-8"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 px-2 shrink-0"
+            onClick={handleAddTodo}
+            aria-label="Add checklist item"
+            disabled={!newTodo.trim()}
+          >
+            <Plus size={13} />
+          </Button>
+        </div>
+      </Field>
 
       {/* Start button — inbox / next / planning tasks */}
       {isStartable && (

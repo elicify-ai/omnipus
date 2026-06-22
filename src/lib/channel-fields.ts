@@ -83,7 +83,7 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
       label: 'Bot Token',
       type: 'password',
       required: true,
-      placeholder: 'MTAx...',
+      placeholder: 'YOUR_BOT_TOKEN_HERE',
       helpText: 'Get from Discord Developer Portal → Bot → Token',
       helpLink: { label: 'Discord Developer Portal', url: 'https://discord.com/developers/applications' },
     },
