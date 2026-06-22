@@ -10,6 +10,7 @@ package common
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,28 +41,40 @@ const DefaultRequestTimeout = 120 * time.Second
 
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 // Returns an error if proxy is non-empty and cannot be parsed as a URL.
+//
+// HTTP/2 is intentionally DISABLED (forced HTTP/1.1). Streaming LLM responses are
+// long-lived SSE bodies, and OpenRouter / CDN / proxy intermediaries intermittently
+// reset in-flight HTTP/2 streams mid-response — surfacing as "streaming read error:
+// http2: response body closed". Because tokens have already been streamed to the
+// caller, the agent loop cannot safely inline-retry (it would duplicate text), so a
+// single h2 stream reset aborts the whole turn (no assistant message). Pinning the
+// LLM transport to HTTP/1.1 avoids the h2 stream-reset class entirely; every
+// OpenAI-compatible endpoint (OpenRouter, OpenAI, GLM, …) serves HTTP/1.1 fine.
 func NewHTTPClient(proxy string) (*http.Client, error) {
-	client := &http.Client{
-		Timeout: DefaultRequestTimeout,
+	// Clone DefaultTransport to preserve its TLS/dial/timeout tuning, then turn
+	// HTTP/2 off: ForceAttemptHTTP2=false stops the auto-upgrade and a non-nil
+	// empty TLSNextProto disables ALPN h2 negotiation.
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
 	}
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+
 	if proxy != "" {
 		parsed, err := url.Parse(proxy)
 		if err != nil {
 			return nil, fmt.Errorf("invalid proxy URL %q: %w", proxy, err)
 		}
-		// Preserve http.DefaultTransport settings (TLS, HTTP/2, timeouts, etc.)
-		if base, ok := http.DefaultTransport.(*http.Transport); ok {
-			tr := base.Clone()
-			tr.Proxy = http.ProxyURL(parsed)
-			client.Transport = tr
-		} else {
-			// Fallback: minimal transport if DefaultTransport is not *http.Transport.
-			client.Transport = &http.Transport{
-				Proxy: http.ProxyURL(parsed),
-			}
-		}
+		transport.Proxy = http.ProxyURL(parsed)
 	}
-	return client, nil
+
+	return &http.Client{
+		Timeout:   DefaultRequestTimeout,
+		Transport: transport,
+	}, nil
 }
 
 // --- Message serialization ---
