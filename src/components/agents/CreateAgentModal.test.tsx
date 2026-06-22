@@ -263,11 +263,12 @@ describe('CreateAgentModal — step ① Identity (spec §5.3-§5.5)', () => {
   })
 
   it('also requires description for Subagent before Next is enabled', async () => {
-    // UAT 4a: a native Subagent inherits its model by default, so step 1 is
-    // gated on name + description only (no model required while inheriting).
+    // Inherit toggles default OFF (UAT e2e fix), so a native Subagent's step 1
+    // is gated on name + model + description.
     renderModal({ open: true, onClose: vi.fn(), initialType: 'Subagent' })
     const next = screen.getByTestId('wizard-next-1')
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Sub' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
     // Description still empty → Next disabled.
     expect(next).toBeDisabled()
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'd' } })
@@ -298,8 +299,9 @@ describe('CreateAgentModal — step ② Personality (spec §5.3-§5.5)', () => {
 
   it('Subagent wizard does NOT show Heartbeat or Voice (Main-only per spec §3.1 rows 10-13)', async () => {
     renderModal({ open: true, onClose: vi.fn(), initialType: 'Subagent' })
-    // Jump to step 2 (native Subagent inherits the model by default — UAT 4a).
+    // Inherit toggles default OFF — fill name + model + description to reach step 2.
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'W' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'd' } })
     fireEvent.click(screen.getByTestId('wizard-next-1'))
     expect(await screen.findByTestId('wizard-soul')).toBeInTheDocument()

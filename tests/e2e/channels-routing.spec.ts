@@ -78,12 +78,12 @@ async function apiHeaders(page: Page): Promise<Record<string, string>> {
   }
 }
 
-// ── (a) Channels sidebar item ─────────────────────────────────────────────────
+// ── (a) Connectors sidebar item ───────────────────────────────────────────────
 // BDD: Given the user is logged in,
-//      When they click the "Channels" nav item in the sidebar,
-//      Then the browser navigates to /#/channels.
+//      When they click the "Connectors" nav item in the sidebar,
+//      Then the browser navigates to /#/connectors.
 //
-// Traces to: sprint/258-jun-2026 — Sidebar "Channels" nav item.
+// Traces to: sprint/258-jun-2026 — Sidebar "Connectors" nav item (IA rename).
 
 test('(a) Channels sidebar item navigates to /#/channels', async ({ page }) => {
   await page.goto('/')
@@ -95,15 +95,15 @@ test('(a) Channels sidebar item navigates to /#/channels', async ({ page }) => {
   const nav = page.locator('nav[aria-label="Main navigation"]')
   await expect(nav).toBeVisible({ timeout: 5_000 })
 
-  // HashRouter: link href="/#/channels"
-  const channelsLink = nav.locator('a[href="/#/channels"]')
-  await expect(channelsLink).toBeVisible({ timeout: 5_000 })
+  // HashRouter: link href="/#/connectors" (renamed from Channels in the IA update)
+  const connectorsLink = nav.locator('a[href="/#/connectors"]')
+  await expect(connectorsLink).toBeVisible({ timeout: 5_000 })
 
-  // Verify the link contains the label text "Channels".
-  await expect(channelsLink).toContainText('Channels')
+  // Verify the link contains the label text "Connectors".
+  await expect(connectorsLink).toContainText('Connectors')
 
-  await channelsLink.click()
-  await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
+  await connectorsLink.click()
+  await expect(page).toHaveURL(/connectors/, { timeout: 10_000 })
 })
 
 // ── (b) Channel feed renders cards ────────────────────────────────────────────
@@ -114,16 +114,16 @@ test('(a) Channels sidebar item navigates to /#/channels', async ({ page }) => {
 // Traces to: sprint/258-jun-2026 — Channels screen, channel feed list.
 
 test('(b) channel feed renders at least one channel card', async ({ page }) => {
-  // Navigate directly via hash route.
-  await page.goto('/#/channels')
-  await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
+  // Navigate directly via hash route (renamed from /#/channels to /#/connectors).
+  await page.goto('/#/connectors')
+  await expect(page).toHaveURL(/connectors/, { timeout: 10_000 })
 
   // Wait for either channel cards or the empty state — both are valid depending
   // on whether channels are configured in the CI gateway.
-  // The Channels screen renders channel names as <span> text inside card rows.
+  // ConnectorsScreen renders channel cards as div[data-testid="channel-card-{id}"].
   // If no channels are configured, an empty state paragraph is shown instead.
   const channelContent = page.locator(
-    '[data-testid^="channel-card-"], p:has-text("No channels configured")',
+    '[data-testid^="channel-card-"], p:has-text("No channels configured.")',
   )
   // Allow for data to load (API round-trip + React render).
   await expect(channelContent.first()).toBeVisible({ timeout: 15_000 })
@@ -184,8 +184,9 @@ test('(c) clicking Configure opens the channel config panel sheet', async ({ pag
   })
 
   // Navigate once, with mocks already in place.
-  await page.goto('/#/channels')
-  await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
+  // Route is now /#/connectors (renamed from /#/channels in the IA update).
+  await page.goto('/#/connectors')
+  await expect(page).toHaveURL(/connectors/, { timeout: 10_000 })
 
   // The Configure button must be visible.
   const configureBtn = page.getByRole('button', { name: /configure telegram/i })
@@ -265,8 +266,8 @@ test(
       }
     })
 
-    await page.goto('/#/channels')
-    await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
+    await page.goto('/#/connectors')
+    await expect(page).toHaveURL(/connectors/, { timeout: 10_000 })
 
     const configureBtn = page.getByRole('button', { name: /configure telegram/i })
     await expect(configureBtn).toBeVisible({ timeout: 15_000 })
@@ -376,8 +377,8 @@ test(
       }
     })
 
-    await page.goto('/#/channels')
-    await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
+    await page.goto('/#/connectors')
+    await expect(page).toHaveURL(/connectors/, { timeout: 10_000 })
 
     const configureBtn = page.getByRole('button', { name: /configure telegram/i })
     await expect(configureBtn).toBeVisible({ timeout: 15_000 })

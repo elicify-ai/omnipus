@@ -27,7 +27,6 @@ import { Input } from '@/components/ui/input'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { SandboxProfileSelector } from '../SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from '../ShellDenyPatternsEditor'
-import { ExecutorInputs } from './Step1Identity'
 import { InheritToggle } from './InheritToggle'
 import type { SandboxProfile } from '@/lib/api'
 import type { AdvancedProps, AdvancedFields } from './types'
@@ -41,10 +40,17 @@ export function Advanced({
   payload,
   setField,
   initialType,
-  initialCli,
 }: AdvancedProps) {
   const isExternal = initialType === 'subagent_3p'
   const isMain = initialType === 'Main'
+
+  // subagent_3p has no Advanced knobs: model_params / sandbox / rate limits /
+  // runtime are all rejected on the wire for external agents (the CLI manages
+  // its own isolation, auth, retries). The executor block (cli_path / env /
+  // args) is rendered inline on Step 1 and Step 3 (Step3Tools), NOT here — so
+  // there is no duplicate `wizard-cli-args` on the final step. The disclosure
+  // simply doesn't render for external agents.
+  if (isExternal) return null
 
   return (
     <AdvancedDisclosure
@@ -52,27 +58,12 @@ export function Advanced({
       summary="Model parameters, sandbox, rate limits, and runtime knobs"
     >
       <div className="space-y-5">
-        {!isExternal && (
-          <MainAdvancedFields
-            payload={payload}
-            setField={setField}
-            isMain={isMain}
-            isNativeSubagent={initialType === 'Subagent'}
-          />
-        )}
-        {isExternal && (
-          <div className="space-y-2">
-            <p className="text-xs text-[var(--color-muted)]">
-              External CLI runner manages its own isolation, auth, and retries.
-              Configure the runner below.
-            </p>
-            <ExecutorInputs
-              payload={payload}
-              setField={setField}
-              lockedCli={initialCli}
-            />
-          </div>
-        )}
+        <MainAdvancedFields
+          payload={payload}
+          setField={setField}
+          isMain={isMain}
+          isNativeSubagent={initialType === 'Subagent'}
+        />
       </div>
     </AdvancedDisclosure>
   )

@@ -365,19 +365,25 @@ test(
     // Switch to Jim so the parent turn will actually emit `spawn`.
     await selectAgent(page, /Jim/i)
 
-    // Trigger a turn that uses the spawn tool. The prompt must be explicit enough
-    // to overcome GLM-5v-turbo's tendency to reply in prose on short prompts.
-    // The subagent task must keep the subagent (and thus the parent turn)
-    // RUNNING for several seconds so a Stop click lands while it's live. The old
-    // task (read_file /etc/hostname ×3) was rejected instantly by the sandbox
-    // ("path escapes workspace", duration 0), so the subagent finished in ~4.5s
-    // before Stop could fire. A long inline essay streams for several seconds.
+    // Trigger a turn that uses the spawn tool. The prompt mirrors the proven,
+    // reliable spawn instruction from handoff.spec.ts (b) — backticked tool name,
+    // explicit single call, exact arguments, and a hard "do not reply in prose /
+    // do not call any other tool" guardrail. That phrasing reliably gets the model
+    // to emit a `spawn` frame on the e2e model (google/gemini-2.5-flash); short or
+    // loosely-worded prompts intermittently shortcut to inline prose, which is why
+    // a less-explicit earlier version of this test occasionally timed out waiting
+    // for the subagent-collapsed block.
+    //
+    // The subagent task must keep the subagent (and thus the parent turn) RUNNING
+    // for several seconds so a Stop click lands while it's live. The old task
+    // (read_file /etc/hostname ×3) was rejected instantly by the sandbox ("path
+    // escapes workspace", duration 0); a long inline essay streams for seconds.
     await input.fill(
       [
-        'Call the `spawn` tool exactly once, now, with these arguments:',
+        'Call the `spawn` tool exactly once, right now, with these arguments:',
         '  label: "cancel cascade test"',
-        '  task: "You are a subagent. Do not use any tools. Write a detailed 600-word essay about renewable energy as continuous inline prose, writing without stopping until you reach 600 words."',
-        'Do not reply in prose. Call the spawn tool immediately.',
+        '  task: "You are the subagent. Do not use any tools. Write a detailed 600-word essay about renewable energy as continuous inline prose, beginning immediately and writing without stopping until you reach 600 words."',
+        'Do not reply in prose. Do not call any other tool. Call spawn now.',
       ].join('\n'),
     )
     await input.press('Enter')
