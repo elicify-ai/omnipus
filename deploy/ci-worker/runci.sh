@@ -243,11 +243,14 @@ EOF
   #     Both OPENROUTER_API_KEY (alias for the gateway's api_key_ref) and
   #     OPENROUTER_API_KEY_CI (required by tests/e2e/global-setup.ts preflight check
   #     — see .github/workflows/pr.yml env block) are exported with the same value.
-  log "e2e: run Playwright matrix"
+  # E2E_SPECS (optional, space-separated spec paths) runs a targeted subset
+  # instead of the full matrix — used to re-verify just the previously-failing
+  # specs without paying the full ~30-min wall-clock. Empty = full matrix.
+  log "e2e: run Playwright matrix${E2E_SPECS:+ (targeted: $E2E_SPECS)}"
   OMNIPUS_URL=http://localhost:6060 \
   OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
   OPENROUTER_API_KEY_CI="$OPENROUTER_API_KEY" \
-    npx playwright test
+    npx playwright test ${E2E_SPECS:-}
 
   # 10. Cleanup runs via the trap.
 }
