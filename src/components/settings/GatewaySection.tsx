@@ -28,6 +28,7 @@ import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
 import { usePendingRestart, PENDING_RESTART_QUERY_KEY } from '@/store/restart'
 import { GatewayRestartModal } from './GatewayRestartModal'
+import { GodModeControl, GodModeActiveBanner } from './GodModeControl'
 
 // ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
 
@@ -204,6 +205,9 @@ export function GatewaySection() {
 
   return (
     <div className="space-y-6">
+      {/* O14: persistent god-mode-active banner (shown whenever god-mode is on). */}
+      <GodModeActiveBanner />
+
       {/* FR-107b: persistent unauthenticated-access banner (dev_mode_bypass only) */}
       <UnauthenticatedBanner devModeBypass={devModeBypass} />
 
@@ -391,6 +395,11 @@ export function GatewaySection() {
           </div>
         </div>
       </div>
+
+      <Separator />
+
+      {/* O14: God-mode switch (danger zone) — step-up-gated global override. */}
+      <GodModeControl />
 
       <Separator />
 

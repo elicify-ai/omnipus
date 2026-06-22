@@ -71,7 +71,9 @@ export interface WizardSubmitPayload {
     max_tokens?: number
     top_p?: number
   }
-  sandbox_profile?: 'workspace' | 'workspace+net' | 'host' | 'off'
+  // O13: 'off' removed from the per-agent picker — "no sandbox" is the global
+  // god-mode switch only.
+  sandbox_profile?: 'workspace' | 'workspace+net' | 'host'
   shell_policy?: {
     enable_deny_patterns?: boolean
     custom_deny_patterns?: string[]

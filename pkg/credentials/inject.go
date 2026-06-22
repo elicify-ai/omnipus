@@ -54,6 +54,27 @@ func InjectFromConfig(cfg *config.Config, store *Store) []error {
 		slog.Debug("credentials: injected", "ref", ref, "provider", model.ModelName)
 	}
 
+	// Mailbox passwords (M11): email is a TOOL surface, and the per-agent email
+	// tools resolve their mailbox password via os.Getenv(password_ref) — the same
+	// env-injection pattern as provider keys and skill marketplace credentials.
+	for agentID, mb := range cfg.Mailboxes {
+		ref := strings.TrimSpace(mb.PasswordRef)
+		if ref == "" || injected[ref] {
+			continue
+		}
+		value, err := store.Get(ref)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("mailbox %q: credential %q: %w", agentID, ref, err))
+			continue
+		}
+		if err := os.Setenv(ref, value); err != nil {
+			errs = append(errs, fmt.Errorf("mailbox %q: set env %q: %w", agentID, ref, err))
+			continue
+		}
+		injected[ref] = true
+		slog.Debug("credentials: injected", "ref", ref, "mailbox_agent", agentID)
+	}
+
 	return errs
 }
 
@@ -115,6 +136,11 @@ func ResolveAll(cfg *config.Config, store *Store) (map[string]string, []error) {
 		addRef(inst.PasswordRef)
 		addRef(inst.NickServPasswordRef)
 		addRef(inst.SASLPasswordRef)
+	}
+
+	// Mailbox passwords (M11) — sensitive, must be collected for redaction.
+	for _, mb := range cfg.Mailboxes {
+		addRef(mb.PasswordRef)
 	}
 
 	// Non-channel credential refs.

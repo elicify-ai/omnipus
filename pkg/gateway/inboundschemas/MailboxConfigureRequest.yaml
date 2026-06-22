@@ -1,0 +1,49 @@
+title: MailboxConfigureRequest
+description: >
+  Request body to configure an agent's email mailbox account (M11). The password,
+  when present, is routed into the encrypted credential store and persisted only
+  as a credential reference — it is never written to config.json. Omitting the
+  password leaves any existing stored password unchanged; sending an empty string
+  clears it.
+type: object
+required:
+- enabled
+- workspace_id
+- imap_host
+- smtp_host
+- username
+additionalProperties: false
+properties:
+  enabled:
+    type: boolean
+    description: Whether to register the email tools for the owning agent.
+  workspace_id:
+    type: string
+    description: "ID of the workspace the mailbox surfaces in (cap-1: unique per workspace)."
+    example: "ws_my_workspace"
+  imap_host:
+    type: string
+    description: IMAP server hostname (implicit TLS / IMAPS).
+    example: "imap.example.com"
+  imap_port:
+    type: integer
+    description: IMAP server port. Defaults to 993 when omitted.
+    example: 993
+  smtp_host:
+    type: string
+    description: SMTP server hostname.
+    example: "smtp.example.com"
+  smtp_port:
+    type: integer
+    description: SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
+    example: 587
+  username:
+    type: string
+    description: The email address / login used for IMAP and SMTP authentication.
+    example: "assistant@example.com"
+  password:
+    type: string
+    description: >
+      Mailbox password (or app password). Routed to the encrypted credential
+      store; never persisted inline. Omit to keep the existing stored password;
+      send an empty string to clear it.

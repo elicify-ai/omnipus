@@ -273,3 +273,94 @@ func TestGodModeCoercion_ProfileWorkspace_NeverCoerced(t *testing.T) {
 		t.Errorf("expected profile=workspace to be preserved, got %q", shellTool.ProfileForTest())
 	}
 }
+
+// shellProfileForAgent rewires Tier13 deps and returns the resolved
+// workspace.shell profile for the given agent — the live sandbox profile after
+// the god-mode override is applied at tool-wiring time.
+func shellProfileForAgent(t *testing.T, al *AgentLoop, agentID string) config.SandboxProfile {
+	t.Helper()
+	al.WireTier13Deps(Tier13Deps{})
+	reg := al.GetRegistry()
+	if reg == nil {
+		t.Fatal("GetRegistry returned nil")
+	}
+	ag, ok := reg.GetAgent(agentID)
+	if !ok || ag == nil {
+		t.Fatalf("%s not found in registry", agentID)
+	}
+	rawTool, found := ag.Tools.Get("workspace.shell")
+	if !found {
+		t.Fatal("workspace.shell tool not registered")
+	}
+	shellTool, ok := rawTool.(*tools.WorkspaceShellTool)
+	if !ok {
+		t.Fatalf("workspace.shell is not *WorkspaceShellTool; got %T", rawTool)
+	}
+	return shellTool.ProfileForTest()
+}
+
+// TestGodMode_GlobalSwitch_ForcesSandboxOff_AndReverts proves the O14 sandbox
+// override: when the global god-mode switch (sandbox.god_mode) is active AND
+// available, an agent whose per-agent profile is "workspace" has its sandbox
+// forced OFF at tool-wiring time, regardless of the per-agent setting. The
+// override is non-destructive: clearing sandbox.god_mode restores "workspace".
+func TestGodMode_GlobalSwitch_ForcesSandboxOff_AndReverts(t *testing.T) {
+	if !sandbox.GodModeAvailable {
+		t.Skip("skipping: requires GodModeAvailable=true (default build)")
+	}
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			List: []config.AgentConfig{
+				{ID: "ws-agent", Name: "WS Agent", SandboxProfile: config.SandboxProfileWorkspace},
+			},
+		},
+		Sandbox: config.OmnipusSandboxConfig{
+			GodMode:      true, // global switch ON
+			Experimental: config.ExperimentalConfig{WorkspaceShellEnabled: boolPtr(true)},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	al.SetAllowGodMode(true) // availability granted
+
+	// God mode active → workspace agent forced to off.
+	if got := shellProfileForAgent(t, al, "ws-agent"); got != config.SandboxProfileOff {
+		t.Fatalf("god mode active: expected sandbox forced to off, got %q", got)
+	}
+
+	// Switch the global god-mode OFF and re-wire — profile must revert to the
+	// per-agent "workspace" (the override is non-destructive).
+	cfg.Sandbox.GodMode = false
+	if got := shellProfileForAgent(t, al, "ws-agent"); got != config.SandboxProfileWorkspace {
+		t.Fatalf("god mode off: expected per-agent workspace restored, got %q", got)
+	}
+}
+
+// TestGodMode_GlobalSwitch_Unavailable_NoForce proves the override is inert when
+// availability is not granted (allowGodMode=false): a workspace agent stays
+// workspace even with sandbox.god_mode=true (fail-closed — the switch is a no-op
+// without the boot flag).
+func TestGodMode_GlobalSwitch_Unavailable_NoForce(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			List: []config.AgentConfig{
+				{ID: "ws-agent", Name: "WS Agent", SandboxProfile: config.SandboxProfileWorkspace},
+			},
+		},
+		Sandbox: config.OmnipusSandboxConfig{
+			GodMode:      true, // switch on, but...
+			Experimental: config.ExperimentalConfig{WorkspaceShellEnabled: boolPtr(true)},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	al.SetAllowGodMode(false) // ...availability NOT granted
+
+	if got := shellProfileForAgent(t, al, "ws-agent"); got != config.SandboxProfileWorkspace {
+		t.Fatalf("unavailable: expected workspace preserved (switch inert), got %q", got)
+	}
+}

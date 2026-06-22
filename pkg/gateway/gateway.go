@@ -34,7 +34,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/dingtalk"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/discord"
-	_ "github.com/dapicom-ai/omnipus/pkg/channels/email"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/feishu"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/googlechat"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/irc"
@@ -51,6 +50,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/cron"
 	"github.com/dapicom-ai/omnipus/pkg/datamodel"
 	"github.com/dapicom-ai/omnipus/pkg/devices"
+	"github.com/dapicom-ai/omnipus/pkg/email"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/health"
 	"github.com/dapicom-ai/omnipus/pkg/heartbeat"
@@ -124,8 +124,13 @@ type services struct {
 	// independent of which heartbeat path is active. The legacy HeartbeatService
 	// is skipped when a per-agent heartbeat is active, so the drain cannot live
 	// there or `next` tasks would silently never dispatch on those installs.
-	TaskDrain  *heartbeat.TaskDrainService
-	MediaStore media.MediaStore
+	TaskDrain *heartbeat.TaskDrainService
+	// MailboxDrain owns the M11 unhandled-mail → Board-task poll. Like TaskDrain
+	// it is decoupled from the HEARTBEAT.md path so email work surfaces on the
+	// Board regardless of which heartbeat path is active. Nil when no mailbox is
+	// configured (the scanner is a no-op).
+	MailboxDrain *heartbeat.MailboxDrainService
+	MediaStore   media.MediaStore
 	// notifStore backs schedule-failure notifications and the header
 	// notification center (#264). Created once at boot, reused across reloads.
 	notifStore *notifications.Store
@@ -1219,6 +1224,21 @@ func setupAndStartServices(
 		fmt.Println("⚠ Queued-task drain disabled: no task executor available")
 	}
 
+	// Mailbox drain (M11): unhandled inbound mail → Board tasks. The provider is
+	// rebuilt from live config + the credential store on every tick, so adding,
+	// changing, or removing a mailbox via the Connectors API is picked up without
+	// a restart. Started unconditionally; the scanner is a no-op when no mailbox
+	// is configured.
+	if tStore := agent.GetTaskStore(agentLoop); tStore != nil {
+		provider := email.MailboxProviderFunc(func() []email.Mailbox {
+			return buildMailboxes(agentLoop.GetConfig(), credStore)
+		})
+		drainer := email.NewDrainer(tStore, provider, 0)
+		runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
+		runningServices.MailboxDrain.Start()
+		fmt.Println("✓ Mailbox drain owned by: MailboxDrainService (unhandled mail → Board)")
+	}
+
 	// Legacy global heartbeat service: the per-agent schedule path (above) is the
 	// O6 source of truth. To avoid double-firing, only start the legacy
 	// workspace-wide heartbeat when NO per-agent heartbeat is configured (e.g. a
@@ -1794,6 +1814,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.TaskDrain != nil {
 		runningServices.TaskDrain.Stop()
 	}
+	if runningServices.MailboxDrain != nil {
+		runningServices.MailboxDrain.Stop()
+	}
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
@@ -1964,6 +1987,21 @@ func restartServices(
 		runningServices.TaskDrain = heartbeat.NewTaskDrainService(te, 0)
 		runningServices.TaskDrain.Start()
 		fmt.Println("  ✓ Queued-task drain restarted (TaskDrainService)")
+	}
+
+	// Restart the M11 mailbox drain (unhandled mail → Board tasks). The previous
+	// instance was Stop()'d in stopAndCleanupServices(isReload). The provider reads
+	// live config + the credential store on each tick, so a mailbox added/removed
+	// before this reload is reflected immediately.
+	if tStore := agent.GetTaskStore(al); tStore != nil {
+		credStore := runningServices.credStore
+		provider := email.MailboxProviderFunc(func() []email.Mailbox {
+			return buildMailboxes(al.GetConfig(), credStore)
+		})
+		drainer := email.NewDrainer(tStore, provider, 0)
+		runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
+		runningServices.MailboxDrain.Start()
+		fmt.Println("  ✓ Mailbox drain restarted (MailboxDrainService)")
 	}
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(

@@ -628,8 +628,41 @@ func findModelConfigForProvider(cfg *config.Config, providerName string) (*confi
 // deny showed enforced in the REST view but did NOT block the tool at call
 // time. The full config is required to source those globals; a nil config
 // degrades to per-agent-only (test/legacy construction paths).
+// godModeAvailable is the process-level god-mode AVAILABILITY gate (O14). It is
+// set once at boot by SetAllowGodMode to (--allow-god-mode AND
+// sandbox.GodModeAvailable). The runtime ON/OFF state lives in
+// config.Sandbox.GodMode; god mode is only ACTIVE when both are true. Using a
+// package atomic keeps the free function agentToolsCfgToPolicy (which has no
+// loop receiver) able to consult availability without threading the boot flag
+// through every construction path.
+var godModeAvailable atomic.Bool
+
+// setGodModeAvailable publishes the boot-time availability decision. Called by
+// SetAllowGodMode; safe for concurrent use.
+func setGodModeAvailable(v bool) { godModeAvailable.Store(v) }
+
+// GodModeActive reports whether the global god-mode override is currently in
+// effect: the runtime switch (cfg.Sandbox.GodMode) is on AND god mode is
+// available in this build/boot. This is the single source of truth consulted by
+// every override site (tool policy + sandbox profile) so the decision cannot
+// drift between layers.
+func GodModeActive(globalCfg *config.Config) bool {
+	return globalCfg != nil && globalCfg.Sandbox.GodMode && godModeAvailable.Load()
+}
+
 func agentToolsCfgToPolicy(globalCfg *config.Config, cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
 	out := &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	// O14 god-mode: when the global switch is active, floor every tool's
+	// effective policy at "allow" (no prompts, no deny) and skip the admin-ask
+	// fence. Set the flag and return early — the per-agent and global policy
+	// maps are deliberately left unpopulated so the override is total and
+	// non-destructive (the on-disk policies are untouched and restored verbatim
+	// the moment god mode is switched off, because this snapshot is rebuilt from
+	// config on every TriggerReload).
+	if GodModeActive(globalCfg) {
+		out.GodMode = true
+		return out
+	}
 	if cfg != nil {
 		dp := string(cfg.Builtin.DefaultPolicy)
 		if dp == "" {

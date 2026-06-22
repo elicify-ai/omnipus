@@ -160,7 +160,6 @@ func (e AgentExecutorKind) Valid() bool {
 // Defines values for AgentSandboxProfile.
 const (
 	AgentSandboxProfileHost         AgentSandboxProfile = "host"
-	AgentSandboxProfileOff          AgentSandboxProfile = "off"
 	AgentSandboxProfileWorkspace    AgentSandboxProfile = "workspace"
 	AgentSandboxProfileWorkspaceNet AgentSandboxProfile = "workspace+net"
 )
@@ -169,8 +168,6 @@ const (
 func (e AgentSandboxProfile) Valid() bool {
 	switch e {
 	case AgentSandboxProfileHost:
-		return true
-	case AgentSandboxProfileOff:
 		return true
 	case AgentSandboxProfileWorkspace:
 		return true
@@ -394,7 +391,6 @@ func (e AgentCreateRequestExecutorKind) Valid() bool {
 // Defines values for AgentCreateRequestSandboxProfile.
 const (
 	AgentCreateRequestSandboxProfileHost         AgentCreateRequestSandboxProfile = "host"
-	AgentCreateRequestSandboxProfileOff          AgentCreateRequestSandboxProfile = "off"
 	AgentCreateRequestSandboxProfileWorkspace    AgentCreateRequestSandboxProfile = "workspace"
 	AgentCreateRequestSandboxProfileWorkspaceNet AgentCreateRequestSandboxProfile = "workspace+net"
 )
@@ -403,8 +399,6 @@ const (
 func (e AgentCreateRequestSandboxProfile) Valid() bool {
 	switch e {
 	case AgentCreateRequestSandboxProfileHost:
-		return true
-	case AgentCreateRequestSandboxProfileOff:
 		return true
 	case AgentCreateRequestSandboxProfileWorkspace:
 		return true
@@ -811,7 +805,6 @@ func (e AgentUpdateRequestExecutorKind) Valid() bool {
 // Defines values for AgentUpdateRequestSandboxProfile.
 const (
 	AgentUpdateRequestSandboxProfileHost         AgentUpdateRequestSandboxProfile = "host"
-	AgentUpdateRequestSandboxProfileOff          AgentUpdateRequestSandboxProfile = "off"
 	AgentUpdateRequestSandboxProfileWorkspace    AgentUpdateRequestSandboxProfile = "workspace"
 	AgentUpdateRequestSandboxProfileWorkspaceNet AgentUpdateRequestSandboxProfile = "workspace+net"
 )
@@ -820,8 +813,6 @@ const (
 func (e AgentUpdateRequestSandboxProfile) Valid() bool {
 	switch e {
 	case AgentUpdateRequestSandboxProfileHost:
-		return true
-	case AgentUpdateRequestSandboxProfileOff:
 		return true
 	case AgentUpdateRequestSandboxProfileWorkspace:
 		return true
@@ -2025,7 +2016,6 @@ const (
 	SandboxConfigDefaultProfileEmpty        SandboxConfigDefaultProfile = ""
 	SandboxConfigDefaultProfileHost         SandboxConfigDefaultProfile = "host"
 	SandboxConfigDefaultProfileNone         SandboxConfigDefaultProfile = "none"
-	SandboxConfigDefaultProfileOff          SandboxConfigDefaultProfile = "off"
 	SandboxConfigDefaultProfileWorkspace    SandboxConfigDefaultProfile = "workspace"
 	SandboxConfigDefaultProfileWorkspaceNet SandboxConfigDefaultProfile = "workspace+net"
 )
@@ -2038,8 +2028,6 @@ func (e SandboxConfigDefaultProfile) Valid() bool {
 	case SandboxConfigDefaultProfileHost:
 		return true
 	case SandboxConfigDefaultProfileNone:
-		return true
-	case SandboxConfigDefaultProfileOff:
 		return true
 	case SandboxConfigDefaultProfileWorkspace:
 		return true
@@ -3781,7 +3769,7 @@ type Agent struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot). Hidden for subagent_3p — CLI manages its own isolation.
+	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. Per-agent "off" is retired (O13) — "no sandbox" is reachable only via the global god-mode switch. Editable on ALL agents, including locked core agents. Hidden for subagent_3p — CLI manages its own isolation.
 	SandboxProfile *AgentSandboxProfile `json:"sandbox_profile,omitempty"`
 
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
@@ -3875,7 +3863,7 @@ type AgentExecutorCli string
 // AgentExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentExecutorKind string
 
-// AgentSandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot). Hidden for subagent_3p — CLI manages its own isolation.
+// AgentSandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. Per-agent "off" is retired (O13) — "no sandbox" is reachable only via the global god-mode switch. Editable on ALL agents, including locked core agents. Hidden for subagent_3p — CLI manages its own isolation.
 type AgentSandboxProfile string
 
 // AgentStatus Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
@@ -4022,7 +4010,7 @@ type AgentCreateRequest struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls. Hidden for Subagent (External) — the CLI manages its own isolation.
+	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
 	SandboxProfile *AgentCreateRequestSandboxProfile `json:"sandbox_profile,omitempty"`
 
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
@@ -4092,7 +4080,7 @@ type AgentCreateRequestExecutorCli string
 // AgentCreateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentCreateRequestExecutorKind string
 
-// AgentCreateRequestSandboxProfile Kernel sandbox profile applied to this agent's tool calls. Hidden for Subagent (External) — the CLI manages its own isolation.
+// AgentCreateRequestSandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
 type AgentCreateRequestSandboxProfile string
 
 // AgentCreateRequestSteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
@@ -4482,7 +4470,7 @@ type AgentUpdateRequest struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// SandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
+	// SandboxProfile New sandbox profile. Editable on ALL agents, including locked core agents (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch (POST /api/v1/gateway/god-mode). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
 	SandboxProfile *AgentUpdateRequestSandboxProfile `json:"sandbox_profile,omitempty"`
 
 	// ShellPolicy Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
@@ -4550,7 +4538,7 @@ type AgentUpdateRequestExecutorCli string
 // AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentUpdateRequestExecutorKind string
 
-// AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
+// AgentUpdateRequestSandboxProfile New sandbox profile. Editable on ALL agents, including locked core agents (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch (POST /api/v1/gateway/god-mode). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
 type AgentUpdateRequestSandboxProfile string
 
 // AgentUpdateRequestSteeringMode New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
@@ -5150,6 +5138,21 @@ type GlobalToolPoliciesDefaultPolicy string
 // GlobalToolPoliciesPolicies defines model for GlobalToolPolicies.Policies.
 type GlobalToolPoliciesPolicies string
 
+// GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode and as the body of a successful POST /api/v1/gateway/god-mode toggle. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
+type GodModeStatus struct {
+	// Available Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. When false, POST /api/v1/gateway/god-mode with enabled=true returns 403.
+	Available bool `json:"available"`
+
+	// Enabled Current runtime god-mode state. Always false when `available` is false (the switch is a no-op without availability).
+	Enabled bool `json:"enabled"`
+}
+
+// GodModeUpdateRequest Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change and requires a valid single-use re-auth consent token (password step-up) replayed in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns 403 when god mode is unavailable (nogodmode build or --allow-god-mode not passed at boot) and enabled=true.
+type GodModeUpdateRequest struct {
+	// Enabled Desired god-mode state. true turns god mode on, false turns it off.
+	Enabled bool `json:"enabled"`
+}
+
 // HealthResponse Response from GET /health. Returns HTTP 200 when the gateway is up. No authentication required.
 type HealthResponse struct {
 	// Status Always "ok" when the gateway is healthy.
@@ -5239,6 +5242,63 @@ type LoginResponse struct {
 
 // LoginResponseRole RBAC role of the authenticated user.
 type LoginResponseRole string
+
+// Mailbox An agent's email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox is owned by exactly one agent and surfaces in exactly one workspace (per-(agent, workspace), cap-1 in 0.1.0). The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
+type Mailbox struct {
+	// AgentId ID of the agent that owns this mailbox.
+	AgentId string `json:"agent_id"`
+
+	// Configured True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned.
+	Configured bool `json:"configured"`
+
+	// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
+	Enabled bool `json:"enabled"`
+
+	// ImapHost IMAP server hostname (implicit TLS / IMAPS).
+	ImapHost *string `json:"imap_host,omitempty"`
+
+	// ImapPort IMAP server port. Defaults to 993 when omitted.
+	ImapPort *int `json:"imap_port,omitempty"`
+
+	// SmtpHost SMTP server hostname.
+	SmtpHost *string `json:"smtp_host,omitempty"`
+
+	// SmtpPort SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
+	SmtpPort *int `json:"smtp_port,omitempty"`
+
+	// Username The email address / login used for IMAP and SMTP authentication.
+	Username *string `json:"username,omitempty"`
+
+	// WorkspaceId ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// MailboxConfigureRequest Request body to configure an agent's email mailbox account (M11). The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
+type MailboxConfigureRequest struct {
+	// Enabled Whether to register the email tools for the owning agent.
+	Enabled bool `json:"enabled"`
+
+	// ImapHost IMAP server hostname (implicit TLS / IMAPS).
+	ImapHost string `json:"imap_host"`
+
+	// ImapPort IMAP server port. Defaults to 993 when omitted.
+	ImapPort *int `json:"imap_port,omitempty"`
+
+	// Password Mailbox password (or app password). Routed to the encrypted credential store; never persisted inline. Omit to keep the existing stored password; send an empty string to clear it.
+	Password *string `json:"password,omitempty"`
+
+	// SmtpHost SMTP server hostname.
+	SmtpHost string `json:"smtp_host"`
+
+	// SmtpPort SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
+	SmtpPort *int `json:"smtp_port,omitempty"`
+
+	// Username The email address / login used for IMAP and SMTP authentication.
+	Username string `json:"username"`
+
+	// WorkspaceId ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
+	WorkspaceId string `json:"workspace_id"`
+}
 
 // McpServer An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
 type McpServer struct {
@@ -5976,6 +6036,12 @@ type SandboxConfig struct {
 
 	// DefaultProfile Global fallback sandbox profile applied to new custom agents that do not pick their own profile. Empty string means use hardcoded default.
 	DefaultProfile *SandboxConfigDefaultProfile `json:"default_profile,omitempty"`
+
+	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
+	GodMode *bool `json:"god_mode,omitempty"`
+
+	// GodModeAvailable Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. The runtime god_mode switch is a no-op when this is false.
+	GodModeAvailable *bool `json:"god_mode_available,omitempty"`
 
 	// Mode Configured sandbox enforcement mode.
 	Mode *SandboxConfigMode `json:"mode,omitempty"`
@@ -7931,6 +7997,9 @@ type PatchAgentOwnershipJSONRequestBody = AgentOwnershipUpdateRequest
 // UpdateAgentJSONRequestBody defines body for UpdateAgent for application/json ContentType.
 type UpdateAgentJSONRequestBody = AgentUpdateRequest
 
+// SetAgentMailboxJSONRequestBody defines body for SetAgentMailbox for application/json ContentType.
+type SetAgentMailboxJSONRequestBody = MailboxConfigureRequest
+
 // UpdateAgentToolsJSONRequestBody defines body for UpdateAgentTools for application/json ContentType.
 type UpdateAgentToolsJSONRequestBody = AgentToolsUpdateRequest
 
@@ -7957,6 +8026,9 @@ type PostChatJSONRequestBody = SseChatRequest
 
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest
+
+// SetGodModeJSONRequestBody defines body for SetGodMode for application/json ContentType.
+type SetGodModeJSONRequestBody = GodModeUpdateRequest
 
 // UpdateIntegrationProviderJSONRequestBody defines body for UpdateIntegrationProvider for application/json ContentType.
 type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest

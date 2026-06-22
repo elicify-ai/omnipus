@@ -932,6 +932,21 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GET/PUT/DELETE /api/v1/agents/{id}/mailbox — per-agent email mailbox account (M11)
+	if agentID != "" && subPath == "mailbox" {
+		switch r.Method {
+		case http.MethodGet:
+			a.getAgentMailbox(w, agentID)
+		case http.MethodPut:
+			a.setAgentMailbox(w, r, agentID)
+		case http.MethodDelete:
+			a.deleteAgentMailbox(w, agentID)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		if agentID == "" {
@@ -1464,6 +1479,17 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
+		return
+	}
+	// O13: per-agent sandbox_profile=off is retired. The generated validator
+	// already rejects "off" (removed from the enum); this is defense-in-depth
+	// for the non-validated path (ValidateInbound disabled).
+	if req.SandboxProfile != nil && config.SandboxProfile(*req.SandboxProfile) == config.SandboxProfileOff {
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			`sandbox_profile=off is retired — use the global god-mode switch (POST /api/v1/gateway/god-mode); per-agent profiles are "workspace", "workspace+net", or "host"`,
+		)
 		return
 	}
 	// Resolve the requested agent type. The wire enum (W1) is
@@ -2119,20 +2145,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	// Timestamp applied to the persisted agent on every successful save.
 	now := time.Now().UTC()
-	// Enforce god-mode latches (1) and (2) at the REST write gate.
-	// Reject sandbox_profile=off unless both sandbox.GodModeAvailable (build
-	// tag) and a.allowGodMode (--allow-god-mode boot flag) are true.
+	// O13: per-agent sandbox_profile=off is retired. "No sandbox" is reachable
+	// only via the global god-mode switch (POST /api/v1/gateway/god-mode). The
+	// generated validator already rejects "off" (removed from the enum); this is
+	// defense-in-depth for any non-validated path (ValidateInbound disabled).
 	if req.SandboxProfile != nil && config.SandboxProfile(*req.SandboxProfile) == config.SandboxProfileOff {
-		if !sandbox.GodModeAvailable {
-			jsonErr(w, http.StatusForbidden,
-				"sandbox_profile=off is not available in this build")
-			return
-		}
-		if !a.allowGodMode {
-			jsonErr(w, http.StatusForbidden,
-				"sandbox_profile=off requires --allow-god-mode at gateway boot")
-			return
-		}
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			`sandbox_profile=off is retired — use the global god-mode switch (POST /api/v1/gateway/god-mode); per-agent profiles are "workspace", "workspace+net", or "host"`,
+		)
+		return
 	}
 	// Validate any custom deny patterns in shell_policy — each must be a valid Go regexp.
 	if req.ShellPolicy != nil && req.ShellPolicy.CustomDenyPatterns != nil {
@@ -3975,6 +3998,10 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// O4-backend: UI-triggerable graceful self-restart. High blast radius —
 	// admin-only + RequireNotBypass (dev_mode_bypass → 503) via adminWrap.
 	cm.RegisterHTTPHandler("/api/v1/gateway/restart", a.adminWrap(a.HandleGatewayRestart))
+	// O14 god-mode toggle. High blast radius — admin-only + RequireNotBypass via
+	// adminWrap, and the POST additionally requires a password re-auth consent
+	// token (enforced inside the handler via requireReAuth).
+	cm.RegisterHTTPHandler("/api/v1/gateway/god-mode", a.adminWrap(a.HandleGodMode))
 	cm.RegisterHTTPHandler("/api/v1/security/audit-log", a.adminWrap(a.HandleSandboxAuditLog))
 	cm.RegisterHTTPHandler("/api/v1/security/skill-trust", a.adminWrap(a.HandleSkillTrust))
 	cm.RegisterHTTPHandler("/api/v1/security/prompt-guard", a.adminWrap(a.HandlePromptGuard))
@@ -5485,13 +5512,8 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			Enabled:     channelEnabledByType("google-chat"),
 			Description: "Google Chat (webhook or service account)",
 		},
-		{
-			Id:          "email",
-			Name:        "Email",
-			Transport:   "email",
-			Enabled:     channelEnabledByType("email"),
-			Description: "Email (IMAP inbound + SMTP outbound, TLS only)",
-		},
+		// M11: email is NOT listed here — it is a TOOL surface (per-agent mailbox,
+		// GET/PUT/DELETE /api/v1/agents/{id}/mailbox), not a conversational channel.
 	}
 
 	// Overlay per-instance surface (Spec-2 FR-2.5): instance_id and identity.

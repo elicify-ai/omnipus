@@ -128,6 +128,12 @@ type Config struct {
 	Schedules SchedulesConfig                  `json:"schedules,omitempty" yaml:"-"`
 	Devices   DevicesConfig                    `json:"devices"             yaml:"-"`
 	Voice     VoiceConfig                      `json:"voice"               yaml:"-"`
+	// Mailboxes holds per-agent email mailbox accounts (M11). Keyed by agent ID;
+	// email is a TOOL surface (not a conversational channel), so a mailbox is
+	// owned by exactly one agent and surfaces in exactly one workspace
+	// (per-(agent, workspace), cap-1 in 0.1.0). The mailbox password is stored in
+	// the encrypted credential store via PasswordRef — never inline here.
+	Mailboxes map[string]MailboxConfig `json:"mailboxes,omitempty" yaml:"-"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
 
@@ -1673,7 +1679,9 @@ var knownChannelTypes = map[string]struct{}{
 	"weixin":      {},
 	"irc":         {},
 	"google-chat": {},
-	"email":       {},
+	// M11: "email" is intentionally NOT a known channel type — email is a TOOL
+	// surface (pkg/email transport + per-agent email tools), not a conversational
+	// channel. A legacy channels.email config entry is dropped on load with a WARN.
 }
 
 // normalizeChannelMap fills in the Type field from the map key when absent
@@ -2261,6 +2269,59 @@ type EmailConfig struct {
 	SMTPPort    int    `json:"smtp_port,omitempty"`
 	Username    string `json:"username,omitempty"`
 	PasswordRef string `json:"password_ref,omitempty"`
+}
+
+// MailboxConfig is the per-agent email mailbox account (M11). Email is modeled as
+// a TOOL surface, not a conversational channel: an agent owns exactly one mailbox
+// (the connection, with its IMAP/SMTP credentials) and that mailbox surfaces in
+// exactly one workspace (per-(agent, workspace), cap-1 in 0.1.0). The password is
+// stored in the encrypted credential store and referenced here by PasswordRef
+// only — the secret is never written inline to config.json (SEC-23 pattern).
+//
+// The map key in Config.Mailboxes is the owning agent's ID, which structurally
+// enforces "one mailbox per agent". WorkspaceID binds the mailbox to its
+// surfacing workspace, and ValidateMailboxesCap1 enforces "one mailbox per
+// workspace" so an agent cannot accumulate a grid of mailboxes across workspaces.
+type MailboxConfig struct {
+	// Enabled gates whether the email tools are registered for the owning agent.
+	Enabled bool `json:"enabled"`
+	// WorkspaceID is the workspace the mailbox surfaces in (cap-1: unique).
+	WorkspaceID string `json:"workspace_id"`
+	IMAPHost    string `json:"imap_host,omitempty"`
+	IMAPPort    int    `json:"imap_port,omitempty"`
+	SMTPHost    string `json:"smtp_host,omitempty"`
+	SMTPPort    int    `json:"smtp_port,omitempty"`
+	// Username is the email address / login for IMAP and SMTP.
+	Username string `json:"username,omitempty"`
+	// PasswordRef is the credential-store key for the mailbox password. The
+	// plaintext password never appears in config.json.
+	PasswordRef string `json:"password_ref,omitempty"`
+}
+
+// ErrMailboxesCap1Violated is the sentinel wrapped by ValidateMailboxesCap1 when
+// more than one mailbox is bound to the same workspace (M11 per-(agent,workspace)
+// cap-1). The map key already guarantees one mailbox per agent; this guards the
+// orthogonal "one mailbox per workspace" half of the invariant.
+var ErrMailboxesCap1Violated = errors.New("mailboxes: at most one mailbox per workspace (cap-1) in 0.1.0")
+
+// ValidateMailboxesCap1 enforces the per-(agent, workspace) cap-1 rule (M11):
+// the Config.Mailboxes map key already pins one mailbox per agent, so this checks
+// that no two enabled mailboxes share a WorkspaceID. Disabled mailboxes are
+// ignored (they register no tools). Returns ErrMailboxesCap1Violated on a
+// collision so callers can surface a clean 422.
+func ValidateMailboxesCap1(mailboxes map[string]MailboxConfig) error {
+	seen := make(map[string]string, len(mailboxes)) // workspaceID → owning agentID
+	for agentID, mb := range mailboxes {
+		if !mb.Enabled || mb.WorkspaceID == "" {
+			continue
+		}
+		if other, dup := seen[mb.WorkspaceID]; dup {
+			return fmt.Errorf("%w: workspace %q is already used by agent %q (rejecting agent %q)",
+				ErrMailboxesCap1Violated, mb.WorkspaceID, other, agentID)
+		}
+		seen[mb.WorkspaceID] = agentID
+	}
+	return nil
 }
 
 type HeartbeatConfig struct {
@@ -3176,6 +3237,11 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// uses the explicit provider. Idempotent; runs after migrateProviderFields so
 	// the provider protocol set is consistent across model_list and agents.
 	migrateAgentPrimaryProvider(cfg)
+	// O13: per-agent sandbox_profile=off is retired. Migrate any persisted
+	// "off" to "host" so legacy configs load cleanly — "no sandbox" is now
+	// reachable only via the global god-mode switch (sandbox.god_mode).
+	// Idempotent; runs before any per-agent profile is consumed.
+	migrateAgentSandboxOff(cfg)
 	// Post-refactor: tools.<name>.enabled is deprecated. If the loaded config
 	// carries explicit false values, translate them idempotently into
 	// security.tool_policies deny entries so operator intent is enforced
@@ -3326,6 +3392,26 @@ func migrateAgentPrimaryProvider(cfg *Config) {
 		if found && rest != "" && knownProviderProtocols[protocol] {
 			mc.Provider = protocol
 			mc.Primary = rest
+		}
+	}
+}
+
+// migrateAgentSandboxOff migrates any per-agent SandboxProfile set to the
+// retired "off" value to "host" (O13). Per-agent "off" is dropped from the
+// wire contract — "no sandbox" is reachable ONLY via the global god-mode
+// switch (sandbox.god_mode). "host" is the most-permissive per-agent profile
+// that remains (full host filesystem + network), so it is the closest
+// non-breaking replacement for a config that previously requested "off".
+//
+// Idempotent: a no-op once no agent carries "off". Conservative: only the
+// exact "off" value is rewritten; every other profile is left untouched.
+func migrateAgentSandboxOff(cfg *Config) {
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].SandboxProfile == SandboxProfileOff {
+			logger.WarnF("agent sandbox_profile=off is retired; migrating to host", map[string]any{
+				"agent_id": cfg.Agents.List[i].ID,
+			})
+			cfg.Agents.List[i].SandboxProfile = SandboxProfileHost
 		}
 	}
 }

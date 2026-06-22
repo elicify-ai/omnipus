@@ -359,6 +359,27 @@ type OmnipusSandboxConfig struct {
 	// SandboxProfileWorkspace at enforcement time.
 	DefaultProfile SandboxProfile `json:"default_profile,omitempty"`
 
+	// GodMode is the runtime global "bypass-permissions" switch (O14). It is
+	// DISTINCT from the --allow-god-mode boot flag: the boot flag (and the
+	// nogodmode build tag) gate AVAILABILITY; this field is the live ON/OFF
+	// state. When true (and god mode is available), the override engine:
+	//   - floors every agent's effective tool policy at "allow" (no prompts);
+	//   - forces the kernel sandbox off (full host fs + syscalls), network
+	//     egress open, and shell guard / deny-patterns off, regardless of any
+	//     per-agent SandboxProfile.
+	// Audit logging, the prompt-injection guard, and rate limiting are NOT
+	// disabled — those defend against external threats, not agent freedom.
+	//
+	// The override is non-destructive: per-agent profiles and tool policies are
+	// NOT mutated on disk. The override is applied purely at resolution time
+	// (agentToolsCfgToPolicy / the loop's sandbox-profile resolution), so
+	// switching GodMode off restores the prior per-agent behavior exactly.
+	//
+	// Toggled at runtime via POST /api/v1/gateway/god-mode (password step-up)
+	// or set at boot for headless runs. Has no effect when god mode is not
+	// available (nogodmode build, or --allow-god-mode not passed).
+	GodMode bool `json:"god_mode,omitempty"`
+
 	// ShellDenyPatterns is the global operator-controlled list of shell command
 	// deny patterns (regular expressions). Per-agent AgentShellPolicy.CustomDenyPatterns
 	// are merged with this list at enforcement time. Patterns that fail to compile

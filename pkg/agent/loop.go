@@ -1230,11 +1230,24 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 					break
 				}
 			}
+			// O14 god-mode override: when the global switch is active, force the
+			// sandbox OFF for EVERY agent regardless of its per-agent profile —
+			// full host fs + syscalls, network egress open, shell guard /
+			// deny-patterns off. Non-destructive: agentProfile is a local copy;
+			// cfg.Agents.List[].SandboxProfile is never mutated, so the moment
+			// god mode is switched off the next rebuild restores the per-agent
+			// profile (and shell policy) verbatim.
+			if GodModeActive(cfg) {
+				agentProfile = config.SandboxProfileOff
+				agentShellPolicy = nil // drop per-agent deny patterns under god mode
+			}
 			// Coerce off → workspace when god mode is unavailable or not opted in.
 			// This is the runtime-side enforcement of latches (1) and (2). The REST
 			// handler enforces the same at write time so persisted config never has
-			// off without the latches; this is defense-in-depth.
-			if agentProfile == config.SandboxProfileOff {
+			// off without the latches; this is defense-in-depth. Skipped when god
+			// mode is active (the block above already forced off with availability
+			// verified via GodModeActive).
+			if agentProfile == config.SandboxProfileOff && !GodModeActive(cfg) {
 				al.mu.RLock()
 				godModeOptedIn := al.allowGodMode
 				al.mu.RUnlock()
@@ -1261,6 +1274,13 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 					agentProfile = config.SandboxProfileWorkspace
 				}
 			}
+			// O14 god-mode: shell guard / deny-patterns are off under the global
+			// switch. agentShellPolicy was already nilled above; also drop the
+			// operator-global deny list so no command is blocked at the guard.
+			globalShellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
+			if GodModeActive(cfg) {
+				globalShellDenyPatterns = nil
+			}
 			shellTool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
 				WorkspaceDir: ag.Workspace,
 				Profile:      agentProfile,
@@ -1270,7 +1290,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 					cfg.Sandbox.PathGuardAuditFailClosed,
 					cfg.Sandbox.AuditLog,
 				),
-				GlobalShellDenyPatterns: cfg.Sandbox.ShellDenyPatterns,
+				GlobalShellDenyPatterns: globalShellDenyPatterns,
 				AgentShellPolicy:        agentShellPolicy,
 			})
 			ag.Tools.Register(shellTool)
@@ -1293,7 +1313,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 					MaxConcurrent:           cfg.Sandbox.MaxConcurrentDevServers,
 					PortRange:               [2]int32{portRange[0], portRange[1]},
 					GatewayHost:             deps.GatewayPreviewBaseURL,
-					GlobalShellDenyPatterns: cfg.Sandbox.ShellDenyPatterns,
+					GlobalShellDenyPatterns: globalShellDenyPatterns,
 					AgentShellPolicy:        agentShellPolicy,
 				})
 				ag.Tools.Register(shellBgTool)
@@ -1468,6 +1488,13 @@ func registerSharedTools(
 			agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
 			agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
 		}
+
+		// Email tools (M11) — registered ONLY for the agent that owns a configured,
+		// enabled mailbox with a resolvable password. Email is a TOOL surface
+		// (read_inbox · search_email · read_message · send_email · reply) over the
+		// pure-Go IMAP/SMTP transport, not a conversational channel. The tools flow
+		// through the normal per-agent tool policy, so god-mode / O7 policy applies.
+		registerEmailToolsForAgent(cfg, agentID, agent)
 
 		// Spawn, spawn_status, and subagent share a SubagentManager. All three
 		// are registered unconditionally — the subagent→spawn coupling is a
@@ -3313,6 +3340,13 @@ func (al *AgentLoop) SetAllowGodMode(allow bool) {
 	al.mu.Lock()
 	al.allowGodMode = allow
 	al.mu.Unlock()
+	// Publish god-mode AVAILABILITY (boot flag AND build support) to the
+	// package-level gate so the resolution-time override engine
+	// (agentToolsCfgToPolicy / godModeActive) can decide whether the runtime
+	// sandbox.god_mode switch has any effect. Availability is fixed at boot;
+	// the on/off STATE lives in cfg.Sandbox.GodMode and is re-read on every
+	// agent rebuild (TriggerReload).
+	setGodModeAvailable(allow && sandbox.GodModeAvailable)
 }
 
 // WireSysagentDeps registers all 41 system.* tools on every agent in the
@@ -4304,7 +4338,7 @@ func isMessagingChannel(channel string) bool {
 	switch channel {
 	case "telegram", "discord", "slack", "whatsapp", "whatsapp_native", "matrix",
 		"irc", "google-chat", "line", "wecom", "weixin", "dingtalk", "qq",
-		"feishu", "email":
+		"feishu":
 		return true
 	}
 	return false

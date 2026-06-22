@@ -28,7 +28,8 @@ var validSandboxProfiles = map[string]bool{
 	"workspace":     true,
 	"workspace+net": true,
 	"host":          true,
-	"off":           true,
+	// O13: "off" is retired as a per-agent / default profile. "No sandbox" is
+	// reachable only via the global god-mode switch (sandbox.god_mode).
 }
 
 // SandboxConfigUpdate.Ssrf (nested) is inlined in the generated type;
@@ -99,6 +100,12 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	ssrfEnabled := cfg.Sandbox.SSRF.Enabled
 	defaultProfile := gen.SandboxConfigDefaultProfile(cfg.Sandbox.DefaultProfile)
 
+	// O14 god-mode state for the UI. enabled is reported false when god mode is
+	// unavailable (the switch is inert), so the UI never shows "on" for a setting
+	// that has no effect.
+	godModeAvail := a.godModeAvailable()
+	godModeOn := godModeAvail && cfg.Sandbox.GodMode
+
 	// Return both the flat-field shape and the nested ssrf object.
 	// The flat fields are the canonical wire format; the nested ssrf block is
 	// included for backward-compatible clients. Both are safe to include — JSON
@@ -112,6 +119,8 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		AppliedMode:          &applied,
 		DefaultProfile:       &defaultProfile,
 		ShellDenyPatterns:    &shellDenyPatterns,
+		GodMode:              &godModeOn,
+		GodModeAvailable:     &godModeAvail,
 		// Nested ssrf object for backward-compatible clients.
 		Ssrf: &struct {
 			AllowInternal *[]string `json:"allow_internal,omitempty"`
@@ -189,7 +198,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			jsonErr(
 				w,
 				http.StatusBadRequest,
-				`invalid default_profile — must be one of "", "none", "workspace", "workspace+net", "host", "off"`,
+				`invalid default_profile — must be one of "", "none", "workspace", "workspace+net", "host"`,
 			)
 			return
 		}

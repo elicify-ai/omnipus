@@ -191,6 +191,10 @@ components:
       $ref: ./components/schemas/PendingRestartEntry.yaml
     GatewayRestartResponse:
       $ref: ./components/schemas/GatewayRestartResponse.yaml
+    GodModeStatus:
+      $ref: ./components/schemas/GodModeStatus.yaml
+    GodModeUpdateRequest:
+      $ref: ./components/schemas/GodModeUpdateRequest.yaml
     AboutResponse:
       $ref: ./components/schemas/AboutResponse.yaml
     HealthResponse:
@@ -352,6 +356,10 @@ components:
       $ref: ./components/schemas/ChannelTestResponse.yaml
     ChannelRouting:
       $ref: ./components/schemas/ChannelRouting.yaml
+    Mailbox:
+      $ref: ./components/schemas/Mailbox.yaml
+    MailboxConfigureRequest:
+      $ref: ./components/schemas/MailboxConfigureRequest.yaml
     BackupCreateResponse:
       $ref: ./components/schemas/BackupCreateResponse.yaml
     OnboardingStatusResponse:
@@ -2820,6 +2828,133 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+  /agents/{id}/mailbox:
+    get:
+      operationId: getAgentMailbox
+      summary: Get an agent's email mailbox account (M11)
+      description: >
+        Returns the email mailbox account configured for the specified agent.
+        Email is a TOOL surface (read_inbox, search_email, read_message,
+        send_email, reply), not a conversational channel. The mailbox password is
+        never returned; the `configured` flag reports whether a password is on
+        file in the credential store.
+      tags:
+      - Agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Agent ID.
+        schema:
+          type: string
+        example: mia
+      responses:
+        '200':
+          description: The agent's mailbox account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mailbox'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Agent not found, or no mailbox configured for the agent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    put:
+      operationId: setAgentMailbox
+      summary: Configure an agent's email mailbox account (M11)
+      description: >
+        Configures the email mailbox account for the specified agent. The password,
+        when present, is routed into the encrypted credential store and persisted
+        only as a reference — it is never written to config.json. Per-(agent,
+        workspace) cap-1 applies: an agent owns one mailbox, and at most one
+        mailbox may be bound to a given workspace (returns 422 on violation).
+      tags:
+      - Agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Agent ID.
+        schema:
+          type: string
+        example: mia
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailboxConfigureRequest'
+      responses:
+        '200':
+          description: The updated mailbox account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mailbox'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Agent not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Cap-1 violation (a mailbox already exists for the workspace).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    delete:
+      operationId: deleteAgentMailbox
+      summary: Remove an agent's email mailbox account (M11)
+      description: >
+        Removes the agent's mailbox account from config and deletes the stored
+        mailbox password from the credential store. The email tools are
+        de-registered from the agent on the next reload.
+      tags:
+      - Agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Agent ID.
+        schema:
+          type: string
+        example: mia
+      responses:
+        '200':
+          description: Mailbox removed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Agent not found, or no mailbox configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /config/gateway/rotate-token:
     post:
       operationId: rotateGatewayToken
@@ -2920,6 +3055,84 @@ paths:
           $ref: '#/components/responses/500InternalServerError'
         '503':
           description: Restart unavailable (dev_mode_bypass active).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /gateway/god-mode:
+    get:
+      operationId: getGodMode
+      summary: Get the global god-mode runtime state (O14)
+      description: >
+        Returns whether god mode ("bypass-permissions") is currently enabled and
+        whether it is available in this build/boot. Admin-only.
+      tags:
+      - Config
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Current god-mode state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GodModeStatus'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '503':
+          description: Unavailable (dev_mode_bypass active).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: setGodMode
+      summary: Toggle the global god-mode switch (O14, password step-up)
+      description: >
+        Flips the global god-mode ("bypass-permissions") switch and applies or
+        reverts the override live (no restart). When enabled, every agent's tool
+        policy is floored at "allow", the kernel sandbox is off, network egress
+        is open, and the shell guard is off — regardless of per-agent profiles.
+        Audit logging, the prompt-injection guard, and rate limiting stay on.
+        High blast radius — admin-only, secured by RequireNotBypass
+        (dev_mode_bypass returns 503) AND a single-use password re-auth consent
+        token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403
+        otherwise). Returns 403 when enabling while god mode is unavailable
+        (nogodmode build or --allow-god-mode not passed). Every toggle is
+        audit-logged with the acting user.
+      tags:
+      - Config
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GodModeUpdateRequest'
+      responses:
+        '200':
+          description: Toggle applied. Returns the new state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GodModeStatus'
+        '400':
+          description: Invalid request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          description: Unavailable (dev_mode_bypass active).
           content:
             application/json:
               schema:

@@ -89,10 +89,11 @@ properties:
       - workspace
       - workspace+net
       - host
-      - off
     description: >
-      New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
-      Rejected 400 on subagent_3p agents (CLI manages its own isolation).
+      New sandbox profile. Editable on ALL agents, including locked core agents (O13).
+      Per-agent "off" is retired — "no sandbox" is reachable only via the global
+      god-mode switch (POST /api/v1/gateway/god-mode). Rejected 400 on subagent_3p
+      agents (CLI manages its own isolation).
     example: "workspace"
   shell_policy:
     type: object

@@ -1,20 +1,14 @@
 //go:build !cgo
 
-// REST god-mode gate tests for PUT /api/v1/agents/{id}.
+// REST sandbox-profile gate tests for PUT /api/v1/agents/{id} (O13).
 //
-// Verifies the three-case matrix:
-//  1. sandbox_profile=off with GodModeAvailable=false  → 403
-//  2. sandbox_profile=off with allowGodMode=false       → 403
-//  3. sandbox_profile=off with both true                → 200, persisted
-//  4. sandbox_profile=workspace always                  → 200
-//  5. invalid shell_policy.custom_deny_patterns regex   → 400
+// Verifies:
+//  1. sandbox_profile=off always rejected 400 (per-agent "off" is retired —
+//     "no sandbox" is reachable only via the global god-mode switch).
+//  2. sandbox_profile=workspace always                  → 200
+//  3. invalid shell_policy.custom_deny_patterns regex   → 400
 //
-// Note: GodModeAvailable is a build-time constant (true in the default build,
-// false with -tags=nogodmode). These tests run under the default build, so
-// GodModeAvailable=true. Case (1) is validated by the -tags=nogodmode build in
-// CI; we document the expected behavior here and skip the const assertion.
-//
-// Traces to: quizzical-marinating-frog.md PR 4 acceptance criteria.
+// Traces to: docs/internal/uat/remediation-decisions.md O13 / O14.
 
 package gateway
 
@@ -31,7 +25,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
 // buildGodModeTestAPI builds a minimal restAPI wired to a single custom agent
@@ -69,16 +62,13 @@ func buildGodModeTestAPI(t *testing.T, allowGodMode bool) *restAPI {
 	}
 }
 
-// TestUpdateAgent_SandboxOff_GodModeAvailableTrue_AllowGodModeTrue_Returns200
-// verifies that when GodModeAvailable=true AND allowGodMode=true, setting
-// sandbox_profile=off is accepted with 200 and persisted to config.json.
-//
-// GodModeAvailable is always true in the default (non-nogodmode) build.
-func TestUpdateAgent_SandboxOff_GodModeAvailableTrue_AllowGodModeTrue_Returns200(t *testing.T) {
-	if !sandbox.GodModeAvailable {
-		t.Skip("skipping: this test requires GodModeAvailable=true (default build)")
-	}
-
+// TestUpdateAgent_SandboxOff_Retired_Returns400 verifies the O13 behavior:
+// per-agent sandbox_profile=off is retired and now ALWAYS rejected with 400,
+// regardless of god-mode availability or the --allow-god-mode flag. "No sandbox"
+// is reachable only via the global god-mode switch (POST /api/v1/gateway/god-mode).
+func TestUpdateAgent_SandboxOff_Retired_Returns400(t *testing.T) {
+	// allowGodMode=true to prove off is rejected even when god mode is available —
+	// the per-agent route is gone entirely.
 	api := buildGodModeTestAPI(t, true /* allowGodMode */)
 
 	body := `{"sandbox_profile":"off"}`
@@ -89,43 +79,40 @@ func TestUpdateAgent_SandboxOff_GodModeAvailableTrue_AllowGodModeTrue_Returns200
 
 	assert.Equal(
 		t,
-		http.StatusOK,
+		http.StatusBadRequest,
 		w.Code,
-		"sandbox_profile=off with GodModeAvailable=true and allowGodMode=true must return 200; body: %s",
+		"per-agent sandbox_profile=off is retired and must return 400; body: %s",
 		w.Body.String(),
 	)
 
-	// Confirm the value was persisted to config.json.
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Contains(t, resp["error"], "god-mode",
+		"error must point the operator at the global god-mode switch")
+
+	// Confirm nothing was persisted (the off write must not have happened).
 	raw, err := os.ReadFile(api.homePath + "/config.json")
 	require.NoError(t, err)
 	var persisted map[string]any
 	require.NoError(t, json.Unmarshal(raw, &persisted))
 	agents, _ := persisted["agents"].(map[string]any)
 	list, _ := agents["list"].([]any)
-	var found bool
 	for _, item := range list {
 		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
 		if m["id"] == "test-agent" {
-			assert.Equal(t, "off", m["sandbox_profile"],
-				"sandbox_profile must be persisted as 'off'")
-			found = true
-			break
+			assert.NotEqual(t, "off", m["sandbox_profile"],
+				"sandbox_profile=off must never be persisted")
 		}
 	}
-	assert.True(t, found, "test-agent entry must exist in persisted config")
 }
 
-// TestUpdateAgent_SandboxOff_AllowGodModeFalse_Returns403 verifies that when
-// allowGodMode=false (flag not passed at boot), sandbox_profile=off is rejected
-// with 403 regardless of GodModeAvailable.
-func TestUpdateAgent_SandboxOff_AllowGodModeFalse_Returns403(t *testing.T) {
-	if !sandbox.GodModeAvailable {
-		t.Skip("skipping: GodModeAvailable=false build; the 403 fires earlier (build check)")
-	}
-
+// TestUpdateAgent_SandboxOff_AllowGodModeFalse_Returns400 verifies that with
+// allowGodMode=false, per-agent sandbox_profile=off is rejected with 400 (O13):
+// the per-agent route no longer differentiates on the boot flag — off is gone.
+func TestUpdateAgent_SandboxOff_AllowGodModeFalse_Returns400(t *testing.T) {
 	api := buildGodModeTestAPI(t, false /* allowGodMode */)
 
 	body := `{"sandbox_profile":"off"}`
@@ -134,13 +121,13 @@ func TestUpdateAgent_SandboxOff_AllowGodModeFalse_Returns403(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"sandbox_profile=off without --allow-god-mode must return 403; body: %s", w.Body.String())
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"per-agent sandbox_profile=off must return 400 (retired); body: %s", w.Body.String())
 
 	var resp map[string]string
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	assert.Contains(t, resp["error"], "--allow-god-mode",
-		"error message must mention --allow-god-mode")
+	assert.Contains(t, resp["error"], "god-mode",
+		"error message must point at the global god-mode switch")
 }
 
 // TestUpdateAgent_SandboxWorkspace_AlwaysAllowed verifies that sandbox_profile=workspace

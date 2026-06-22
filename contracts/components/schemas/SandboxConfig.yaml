@@ -66,8 +66,24 @@ properties:
       - workspace
       - workspace+net
       - host
-      - "off"
     example: workspace
+  god_mode:
+    type: boolean
+    description: >
+      O14 global god-mode ("bypass-permissions") runtime state. When true, every
+      agent's tool policy is floored at "allow", the kernel sandbox is off,
+      network egress is open, and the shell guard is off — regardless of
+      per-agent profiles. Audit logging, the prompt-injection guard, and rate
+      limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password
+      step-up). Always false when god mode is unavailable.
+    example: false
+  god_mode_available:
+    type: boolean
+    description: >
+      Whether god mode CAN be enabled in this gateway: the build supports it
+      (not compiled with the nogodmode tag) AND --allow-god-mode was passed at
+      boot. The runtime god_mode switch is a no-op when this is false.
+    example: false
   shell_deny_patterns:
     type: array
     items:
