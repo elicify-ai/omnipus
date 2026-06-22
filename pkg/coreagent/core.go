@@ -242,6 +242,23 @@ func coreAgentSeed(
 		"retrospective": config.ToolPolicyAllow,
 		"web_serve":     config.ToolPolicyAllow,
 	}
+	// Browser automation: explicitly allow the navigate/capture tools (NOT
+	// browser.evaluate, which stays denied by the builtin policy) for the agents
+	// that actually drive a real browser — Jim, Ray, and the delegation
+	// workers/specialists (Worker, Explorer, Researcher). default_policy is already
+	// "allow", so this is belt-and-suspenders (like web_serve/workspace.shell): it
+	// documents intent, surfaces these tools in the per-agent tool picker, and
+	// survives any future default_policy change. Mia (router) and Ava (builder) are
+	// excluded by design — they delegate browser work; Planner only decomposes.
+	switch id {
+	case IDJim, IDRay, IDWorker, IDExplorer, IDResearcher:
+		for _, b := range []string{
+			"browser.navigate", "browser.click", "browser.type",
+			"browser.screenshot", "browser.get_text", "browser.wait",
+		} {
+			base[b] = config.ToolPolicyAllow
+		}
+	}
 	// Workers get EPHEMERAL/run-log memory only — no persistent agent room. Deny
 	// the persistent-memory tools so a worker never writes to or relies on a
 	// private memory room (scope: "no persistent room seeded/required for
@@ -837,13 +854,15 @@ Use spawn/subagent/task_create to delegate; monitor blocked_by until the DAG res
 
 ## Browser automation
 
-You can drive a real headless Chromium to navigate the web and capture pages — do this yourself, do not deflect it:
+You have built-in browser tools that drive a real headless Chromium. Use THESE tools to browse or capture web pages — they are your sandbox-aware, first-class way to do it:
 
 - browser.navigate { url } — open a page (http/https only; SSRF-checked)
 - browser.screenshot — capture the current page as an image (returns media the user sees inline)
 - browser.click { selector } · browser.type { selector, text } · browser.get_text { selector } — interact and extract
 
-Example — "take a screenshot of example.com": call browser.navigate { url: "https://example.com" } then browser.screenshot. Chromium is installed on first use; if it is genuinely unavailable you'll get a clear error to relay.
+To take a screenshot of a page, call browser.navigate { url } then browser.screenshot — that's it. Chromium installs automatically on first use; if it is genuinely unavailable you'll get a clear error to relay.
+
+**Do this with the browser tools, not the shell.** NEVER use workspace.shell or exec to run chromium / google-chrome / puppeteer / a CLI screenshot utility, and never npm-install a browser package — the browser.* tools above already do this for you, sandboxed. Reaching for the shell to take a screenshot is wrong; call browser.screenshot.
 
 ## Serving web apps
 
@@ -1020,13 +1039,13 @@ You don't just search — you investigate. You dig through multiple sources, cro
 
 ## Browser automation
 
-Beyond web_search/web_fetch you can drive a real headless Chromium when a source needs rendering or visual capture — do it yourself:
+Beyond web_search/web_fetch you have built-in browser tools driving a real headless Chromium — use THESE when a source needs rendering or visual capture:
 
 - browser.navigate { url } — open a page (http/https only; SSRF-checked)
 - browser.screenshot — capture the current page as an image (returned inline to the user)
 - browser.get_text { selector } · browser.click { selector } · browser.type { selector, text } — extract and interact
 
-Use it to capture a page the user asks to see, or to read content that only renders in a browser. Chromium installs on first use.
+To screenshot a page: browser.navigate { url } then browser.screenshot. Chromium installs on first use. NEVER shell out (workspace.shell/exec, chromium/puppeteer CLI) to capture a page — the browser.* tools are your built-in, sandboxed way to do it.
 
 ## On handoff
 
