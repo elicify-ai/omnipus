@@ -20,7 +20,7 @@ vi.mock('@/components/chat/AttachmentCard', () => ({
 import * as api from '@/lib/api'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import { omnipusAttachmentAdapter, takeResolvedUpload } from './attachment-adapter'
+import { omnipusAttachmentAdapter, takeResolvedUpload, isAcceptedFile } from './attachment-adapter'
 
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
@@ -155,5 +155,94 @@ describe('omnipusAttachmentAdapter', () => {
     expect(takeResolvedUpload(pendings[0].id)).toBeUndefined()
     // The last entry should still be present.
     expect(takeResolvedUpload(pendings[CAP].id)?.ref).toBe(`media://r${CAP}`)
+  })
+})
+
+// ── B7: accept-list validation ────────────────────────────────────────────────
+
+describe('isAcceptedFile (B7)', () => {
+  it('accepts image/png via image/* wildcard MIME', () => {
+    expect(isAcceptedFile('photo.png', 'image/png')).toBe(true)
+  })
+
+  it('accepts image/jpeg via image/* wildcard MIME', () => {
+    expect(isAcceptedFile('shot.jpg', 'image/jpeg')).toBe(true)
+  })
+
+  it('accepts application/pdf via exact MIME', () => {
+    expect(isAcceptedFile('report.pdf', 'application/pdf')).toBe(true)
+  })
+
+  it('accepts .txt by extension even with octet-stream MIME', () => {
+    expect(isAcceptedFile('notes.txt', 'application/octet-stream')).toBe(true)
+  })
+
+  it('accepts .txt by extension with empty MIME', () => {
+    expect(isAcceptedFile('notes.txt', '')).toBe(true)
+  })
+
+  it('accepts .md extension regardless of MIME', () => {
+    expect(isAcceptedFile('README.md', 'application/octet-stream')).toBe(true)
+  })
+
+  it('accepts .csv extension', () => {
+    expect(isAcceptedFile('data.csv', 'text/csv')).toBe(true)
+  })
+
+  it('accepts .json extension with unknown MIME', () => {
+    expect(isAcceptedFile('config.json', 'application/octet-stream')).toBe(true)
+  })
+
+  it('rejects video/mp4 (not in ACCEPT_LIST)', () => {
+    expect(isAcceptedFile('clip.mp4', 'video/mp4')).toBe(false)
+  })
+
+  it('rejects .exe — unknown extension, non-matching MIME', () => {
+    expect(isAcceptedFile('setup.exe', 'application/x-msdownload')).toBe(false)
+  })
+
+  it('rejects application/zip (not in ACCEPT_LIST)', () => {
+    expect(isAcceptedFile('archive.zip', 'application/zip')).toBe(false)
+  })
+
+  it('is case-insensitive for extensions', () => {
+    expect(isAcceptedFile('NOTES.TXT', 'application/octet-stream')).toBe(true)
+    expect(isAcceptedFile('PHOTO.PNG', 'IMAGE/PNG')).toBe(true)
+  })
+})
+
+describe('add() accept-list gate (B7)', () => {
+  it('add() throws a clear error for an unsupported file type', async () => {
+    const file = mkFile('malware.exe', 'application/x-msdownload')
+    await expect(omnipusAttachmentAdapter.add({ file })).rejects.toThrow(
+      "Can't attach \"malware.exe\": file type not supported"
+    )
+    // Guard: no upload call should have escaped.
+    expect(api.uploadFiles).not.toHaveBeenCalled()
+  })
+
+  it('add() throws for video/mp4', async () => {
+    await expect(
+      omnipusAttachmentAdapter.add({ file: mkFile('clip.mp4', 'video/mp4') })
+    ).rejects.toThrow(/file type not supported/)
+  })
+
+  it('add() accepts image/png (wildcard MIME match)', async () => {
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('photo.png', 'image/png') })
+    expect(pending.status).toEqual({ type: 'requires-action', reason: 'composer-send' })
+    expect(pending.type).toBe('image')
+  })
+
+  it('add() accepts .txt by extension even with octet-stream MIME', async () => {
+    const pending = await omnipusAttachmentAdapter.add({
+      file: mkFile('log.txt', 'application/octet-stream'),
+    })
+    expect(pending.status).toEqual({ type: 'requires-action', reason: 'composer-send' })
+    expect(pending.name).toBe('log.txt')
+  })
+
+  it('add() accepts application/pdf (exact MIME match)', async () => {
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('doc.pdf', 'application/pdf') })
+    expect(pending.status).toEqual({ type: 'requires-action', reason: 'composer-send' })
   })
 })

@@ -154,6 +154,32 @@ describe('SubagentBlock_Expanded_FinalResult', () => {
   })
 })
 
+// ── Bug B5 regression tests ───────────────────────────────────────────────────
+
+describe('SubagentBlock_B5_Regression', () => {
+  it('success span: duration string appears exactly once in the header', () => {
+    const span = makeSpan({ status: 'success', durationMs: 14200 })
+    render(<SubagentBlock span={span} />)
+    const header = screen.getByTestId('subagent-collapsed')
+    const text = header.textContent ?? ''
+    // "14.2s" should appear exactly once — not twice
+    const matches = text.match(/14\.2s/g)
+    expect(matches).toHaveLength(1)
+  })
+
+  it('success span with steps=[] + finalResult set: "No steps recorded." is NOT shown and result renders when expanded', () => {
+    const span = makeSpan({ status: 'success', steps: [], finalResult: 'delegation complete' })
+    render(<SubagentBlock span={span} />)
+    fireEvent.click(screen.getByTestId('subagent-collapsed'))
+
+    const expanded = screen.getByTestId('subagent-expanded')
+    // "No steps recorded." must not appear when a finalResult is present
+    expect(within(expanded).queryByText('No steps recorded.')).toBeNull()
+    // The final result must be rendered
+    expect(within(expanded).getByText('delegation complete')).toBeInTheDocument()
+  })
+})
+
 // ── TDD row 16: SubagentBlock_TerminalStatuses ───────────────────────────────
 
 describe('SubagentBlock_TerminalStatuses', () => {

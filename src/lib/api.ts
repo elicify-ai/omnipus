@@ -1918,14 +1918,24 @@ export async function fetchCredentials(): Promise<CredentialKey[]> {
   return wire.map((key) => ({ key }))
 }
 
-export function addCredential(key: string, value: string): Promise<void> {
+// Credential add/delete are re-auth gated server-side (ADR-022 / Spec-6 FR-12.2):
+// the server rejects with 403 unless a single-use consent token (from reAuth) is
+// replayed in the X-Reauth-Token header. Pass reAuthToken via runGated().
+export function addCredential(key: string, value: string, reAuthToken?: string): Promise<void> {
   // no-schema: void response; POST body is a write-only operation.
-  return request<void>('/credentials', { method: 'POST', body: JSON.stringify({ key, value }) })
+  return request<void>('/credentials', {
+    method: 'POST',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
+    body: JSON.stringify({ key, value }),
+  })
 }
 
-export function deleteCredential(key: string): Promise<void> {
+export function deleteCredential(key: string, reAuthToken?: string): Promise<void> {
   // no-schema: void response; DELETE has no body.
-  return request<void>(`/credentials/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  return request<void>(`/credentials/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
+  })
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────────

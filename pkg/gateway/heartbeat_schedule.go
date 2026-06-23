@@ -170,7 +170,7 @@ func ReconcileHeartbeatSchedules(cs *cron.CronService, cfg *config.Config, agent
 		if cur, ok := existing[name]; ok {
 			// Update in place when interval, message, enabled, or agent drifted.
 			needsUpdate := !cur.Enabled ||
-				cur.Schedule.Kind != "recurring" ||
+				cur.Schedule.Kind != "every" ||
 				cur.Schedule.EveryMS == nil || *cur.Schedule.EveryMS != everyMS ||
 				cur.Payload.Message != d.message ||
 				cur.AgentID != d.agentID ||
@@ -179,7 +179,7 @@ func ReconcileHeartbeatSchedules(cs *cron.CronService, cfg *config.Config, agent
 				cur.Enabled = true
 				cur.AgentID = d.agentID
 				cur.SessionMode = cron.SessionModeContinue
-				cur.Schedule = cron.CronSchedule{Kind: "recurring", EveryMS: &everyMS}
+				cur.Schedule = cron.CronSchedule{Kind: "every", EveryMS: &everyMS}
 				cur.Payload = cron.CronPayload{Kind: heartbeatJobKind, Message: d.message, Deliver: false}
 				if err := cs.UpdateJob(&cur); err != nil {
 					recordErr(fmt.Errorf("heartbeat reconcile: update %s: %w", name, err))
@@ -191,7 +191,7 @@ func ReconcileHeartbeatSchedules(cs *cron.CronService, cfg *config.Config, agent
 		enabled := true
 		created, err := cs.AddJobFull(cron.JobSpec{
 			Name:        name,
-			Schedule:    cron.CronSchedule{Kind: "recurring", EveryMS: &everyMS},
+			Schedule:    cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
 			Message:     d.message,
 			AgentID:     d.agentID,
 			SessionMode: cron.SessionModeContinue,

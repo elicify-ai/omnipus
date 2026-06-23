@@ -36,6 +36,72 @@ export const EMOJI_MAP: Record<string, PhosphorIconName> = {
   '⚙️': 'Gear',
   '⚙': 'Gear',
   '🔧': 'Wrench',
+  // Faces
+  '😀': 'Smiley',
+  '😄': 'Smiley',
+  '😊': 'Smiley',
+  '🙂': 'Smiley',
+  '😉': 'SmileyWink',
+  '😢': 'SmileySad',
+  '😞': 'SmileySad',
+  '😐': 'SmileyMeh',
+  '😑': 'SmileyMeh',
+  '😡': 'SmileyAngry',
+  '😠': 'SmileyAngry',
+  '😵': 'SmileyXEyes',
+  // Hands / reactions
+  '👍': 'ThumbsUp',
+  '👎': 'ThumbsDown',
+  // Hearts
+  '❤️': 'Heart',
+  '❤': 'Heart',
+  '💕': 'Heart',
+  '💗': 'Heart',
+  // Time
+  '⏰': 'Clock',
+  '🕐': 'Clock',
+  '🕑': 'Clock',
+  // Writing / notes
+  '📝': 'NotePencil',
+  '📓': 'Note',
+  '✏️': 'Pencil',
+  '✏': 'Pencil',
+  // Goals / targets
+  '🎯': 'Target',
+  '🏆': 'Trophy',
+  // Sparkle / fire / light
+  '✨': 'Sparkle',
+  '🔥': 'Fire',
+  '💡': 'Lightbulb',
+  // Search
+  '🔍': 'MagnifyingGlass',
+  '🔎': 'MagnifyingGlass',
+  // People / bots
+  '👤': 'Person',
+  '👥': 'Users',
+  '🤖': 'Robot',
+  // Sharing / links
+  '🔗': 'Link',
+  '📤': 'Upload',
+  '📥': 'Download',
+  // Eyes / visibility
+  '👁️': 'Eye',
+  '👁': 'Eye',
+  // Notifications / labels / power / protection
+  '🔔': 'Bell',
+  '🏷️': 'Tag',
+  '🏷': 'Tag',
+  '⚡': 'Lightning',
+  '🛡️': 'Shield',
+  '🛡': 'Shield',
+  '👑': 'Crown',
+  // Misc UI
+  '📷': 'Camera',
+  '📸': 'Camera',
+  '🗑️': 'Trash',
+  '🗑': 'Trash',
+  '❓': 'Question',
+  '❔': 'Question',
 }
 
 // Build a regex that matches any of the keys (order matters — longer first)

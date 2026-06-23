@@ -263,8 +263,16 @@ export function SecuritySection() {
     { disabled: !config },
   )
 
+  // Credential add/delete are re-auth gated server-side (ADR-022). Route them
+  // through the re-auth dialog so the 403 surfaces as a password prompt instead
+  // of a confusing generic "no permission" toast.
+  const { runGated: runCredGated, dialog: credReAuthDialog } = useReAuthGate({
+    title: 'Confirm to manage credentials',
+    description: 'Re-type your password to change the encrypted credential vault.',
+  })
+
   const { mutate: doAddCred, isPending: isAddingCred } = useMutation({
-    mutationFn: () => addCredential(credKey.trim(), credValue),
+    mutationFn: () => runCredGated((token) => addCredential(credKey.trim(), credValue, token)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
       addToast({ message: `Credential "${credKey}" saved`, variant: 'success' })
@@ -276,7 +284,7 @@ export function SecuritySection() {
   })
 
   const { mutate: doDeleteCred } = useMutation({
-    mutationFn: (key: string) => deleteCredential(key),
+    mutationFn: (key: string) => runCredGated((token) => deleteCredential(key, token)),
     onSuccess: (_data, key) => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
       addToast({ message: `Credential "${key}" removed`, variant: 'success' })
@@ -638,6 +646,9 @@ export function SecuritySection() {
       </section>
 
       <AuditLogViewer open={auditLogOpen} onOpenChange={setAuditLogOpen} />
+
+      {/* Re-auth dialog for credential add/delete (B4). */}
+      {credReAuthDialog}
 
       {/* Add credential modal */}
       <Dialog open={credModalOpen} onOpenChange={setCredModalOpen}>

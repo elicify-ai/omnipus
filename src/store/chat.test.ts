@@ -2269,3 +2269,74 @@ describe('chat store — whatsapp_pairing routing (#283)', () => {
     })
   })
 })
+
+// B1 regression: placeholder agentId must be stamped at creation time, not read
+// at render time. Switching the active agent after a message is created must NOT
+// re-attribute that message to the new agent.
+describe('chat store — B1: placeholder agentId stamped at creation, not at render', () => {
+  it('token placeholder created with agent A retains agentId===A after switching to agent B', () => {
+    // BDD:
+    //   Given activeAgentId is 'agent-mia' and a token frame arrives (no prior assistant bubble)
+    //   When the active agent is switched to 'agent-jim'
+    //   Then the placeholder message still has agentId === 'agent-mia'
+    act(() => {
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'agent-mia', activeAgentType: null })
+      // Token frame with no prior assistant bubble — store must create a new placeholder.
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Hello', session_id: TEST_SESSION_ID })
+    })
+
+    // Placeholder created — agentId must be 'agent-mia'
+    const afterToken = useChatStore.getState()
+    const placeholder = afterToken.messages.find((m) => m.role === 'assistant')
+    expect(placeholder).toBeDefined()
+    expect(placeholder?.agentId).toBe('agent-mia')
+
+    // Switch to a different agent and mark the message done.
+    act(() => {
+      useSessionStore.setState({ activeAgentId: 'agent-jim' })
+      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 10, cost: 0, duration_ms: 0 }, session_id: TEST_SESSION_ID })
+    })
+
+    // The completed message must still carry the original authoring agent.
+    const afterSwitch = useChatStore.getState()
+    const completedMsg = afterSwitch.messages.find((m) => m.role === 'assistant')
+    expect(completedMsg).toBeDefined()
+    expect(completedMsg?.agentId).toBe('agent-mia')
+    expect(completedMsg?.status).toBe('done')
+  })
+
+  it('tool_call_start placeholder created with agent A retains agentId===A after switching to agent B', () => {
+    // BDD:
+    //   Given activeAgentId is 'agent-mia' and a tool_call_start frame arrives with no prior assistant bubble
+    //   When the active agent is switched to 'agent-jim'
+    //   Then the placeholder message still has agentId === 'agent-mia'
+    act(() => {
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'agent-mia', activeAgentType: null })
+      // tool_call_start with no prior assistant bubble — store must create a new placeholder.
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        session_id: TEST_SESSION_ID,
+        tool: 'web_search',
+        call_id: 'call-001',
+        params: { query: 'test' },
+      })
+    })
+
+    // Placeholder created — agentId must be 'agent-mia'
+    const afterToolCallStart = useChatStore.getState()
+    const placeholder = afterToolCallStart.messages.find((m) => m.role === 'assistant')
+    expect(placeholder).toBeDefined()
+    expect(placeholder?.agentId).toBe('agent-mia')
+
+    // Switch to a different agent.
+    act(() => {
+      useSessionStore.setState({ activeAgentId: 'agent-jim' })
+    })
+
+    // The placeholder must still carry the original authoring agent.
+    const afterSwitch = useChatStore.getState()
+    const msg = afterSwitch.messages.find((m) => m.role === 'assistant')
+    expect(msg).toBeDefined()
+    expect(msg?.agentId).toBe('agent-mia')
+  })
+})

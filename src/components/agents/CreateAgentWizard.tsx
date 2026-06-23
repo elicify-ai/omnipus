@@ -260,6 +260,24 @@ export function CreateAgentWizard({
   const step2Valid = payload.soul.trim().length > 0
   const canAdvance = step === 1 ? step1Valid : step === 2 ? step2Valid : true
 
+  // B3: when Next is disabled, name the missing required field(s) so the user
+  // isn't left staring at a greyed button with no explanation. Mirrors the
+  // gating logic above (does NOT change it).
+  function missingFieldLabels(): string[] {
+    const missing: string[] = []
+    if (step === 1) {
+      if (payload.name.trim().length === 0) missing.push('Name')
+      if (!modelInherited && payload.model.trim().length === 0) missing.push('Model')
+      if (isWorker && payload.description.trim().length === 0) missing.push('Description')
+      if (isExternal && !payload.cli) missing.push('CLI')
+      if (isExternal && (payload.executor_cli_path?.trim().length ?? 0) === 0) missing.push('CLI path')
+    } else if (step === 2) {
+      if (payload.soul.trim().length === 0) missing.push('Soul')
+    }
+    return missing
+  }
+  const missingLabels = canAdvance ? [] : missingFieldLabels()
+
   async function handleSubmit() {
     // External (subagent_3p) agents need a non-empty CLI path. The step-1
     // gate already prevents reaching the submit button with an empty path,
@@ -415,6 +433,15 @@ export function CreateAgentWizard({
 
         {/* Footer. flex-col-reverse on phone (primary CTA on top), sm+ side-by-side. */}
         <SheetFooter className="px-4 sm:px-8 py-4 border-t border-[var(--color-border)] flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
+          {missingLabels.length > 0 && (
+            <p
+              role="alert"
+              data-testid="wizard-advance-hint"
+              className="text-xs text-[var(--color-muted)] self-center sm:mr-auto sm:order-first"
+            >
+              Missing: {missingLabels.join(', ')}
+            </p>
+          )}
           <Button
             type="button"
             variant="ghost"
