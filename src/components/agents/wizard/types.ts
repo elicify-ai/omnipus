@@ -41,6 +41,12 @@ export interface StepProps {
   registryTools?: ReadonlyArray<import('@/lib/api').RegistryTool>
   /** Installed skills for the skills picker on Step 3. */
   skills?: ReadonlyArray<import('@/lib/api/generated/openapi-types').Skill>
+  /**
+   * Global (Settings → Security) tool policy. Fed to the Step 3 ToolPolicyEditor
+   * so per-agent controls that would contradict a global deny/ask are locked.
+   * Provided by the parent (CreateAgentModal) so the step stays query-client-free.
+   */
+  globalPolicies?: import('@/components/shared/ToolPolicyEditor').ToolPolicyValue
 }
 
 // ── Advanced disclosure payload ────────────────────────────────────────────

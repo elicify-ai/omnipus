@@ -24,6 +24,7 @@ import { resolvePolicy } from '@/lib/toolCategories'
 import {
   fetchRegistryTools,
   fetchAgentTools,
+  fetchGlobalToolPolicies,
   updateAgentTools,
   type AgentKind,
   type AgentToolsCfg,
@@ -97,6 +98,16 @@ export function ToolsAndPermissions({
     queryFn: () => fetchAgentTools(agentId!),
     enabled: !!agentId,
   })
+
+  // Global (Settings → Security) tool policy — locks per-agent controls that
+  // would contradict a global deny/ask (most-restrictive-wins; no contradictions).
+  const { data: globalPolicies } = useQuery({
+    queryKey: ['global-tool-policies'],
+    queryFn: fetchGlobalToolPolicies,
+  })
+  const globalPolicyValue: ToolPolicyValue | undefined = globalPolicies
+    ? { default_policy: globalPolicies.default_policy, policies: globalPolicies.policies ?? {} }
+    : undefined
 
   useEffect(() => {
     if (agentToolsData && agentId) {
@@ -224,6 +235,7 @@ export function ToolsAndPermissions({
         value={editorValue}
         onChange={handleEditorChange}
         disabled={isLocked}
+        globalPolicies={globalPolicyValue}
       />
     </div>
   )

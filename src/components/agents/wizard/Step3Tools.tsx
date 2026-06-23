@@ -40,6 +40,7 @@ export function Step3Tools({
   connectedProviders = [],
   registryTools = [],
   skills = [],
+  globalPolicies,
 }: StepProps) {
   const isExternal = initialType === 'subagent_3p'
   // Native subagents can inherit Tools / Skills from the caller (UAT 4a).
@@ -47,6 +48,11 @@ export function Step3Tools({
   const inheritTools = isNativeSubagent && payload.inherit_tools === true
   const inheritSkills = isNativeSubagent && payload.inherit_skills === true
   const tools: RegistryTool[] = [...registryTools]
+
+  // Global (Settings → Security) tool policy — used to lock per-agent controls
+  // that would contradict a global deny/ask (no contradicting configs). Provided
+  // by the parent (CreateAgentModal) via props so this step stays presentational.
+  const globalPolicyValue: ToolPolicyValue | undefined = globalPolicies
 
   return (
     <>
@@ -87,6 +93,7 @@ export function Step3Tools({
           <ToolPolicyEditor
             tools={tools}
             value={toolPolicyValue(payload.tools_cfg)}
+            globalPolicies={globalPolicyValue}
             onChange={(next) =>
               setField(
                 'tools_cfg',

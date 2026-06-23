@@ -127,6 +127,8 @@ interface WizardProps {
   registryTools?: ReadonlyArray<RegistryTool>
   /** Installed skills for the Step 3 skills picker. */
   skills?: ReadonlyArray<Skill>
+  /** Global (Settings → Security) tool policy — locks contradicting Step 3 controls. */
+  globalPolicies?: import('@/components/shared/ToolPolicyEditor').ToolPolicyValue
 }
 
 const TYPE_CHIP_LABEL: Record<WizardType, string> = {
@@ -198,6 +200,7 @@ export function CreateAgentWizard({
   connectedProviders = [],
   registryTools = [],
   skills = [],
+  globalPolicies,
 }: WizardProps) {
   const closeCreateAgentModal = useUiStore((s) => s.closeCreateAgentModal)
   // Resolve close handler: tests pass `onClose`; production falls back to
@@ -297,6 +300,7 @@ export function CreateAgentWizard({
     connectedProviders,
     registryTools,
     skills,
+    globalPolicies,
   }
 
   return (
