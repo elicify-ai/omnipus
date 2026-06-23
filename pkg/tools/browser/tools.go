@@ -29,8 +29,9 @@ type NavigateTool struct {
 	mgr *BrowserManager
 }
 
-func (t *NavigateTool) Name() string           { return "browser.navigate" }
-func (t *NavigateTool) Scope() tools.ToolScope { return tools.ScopeCore }
+func (t *NavigateTool) Name() string                 { return "browser.navigate" }
+func (t *NavigateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (t *NavigateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *NavigateTool) Description() string {
 	return "Navigate to a URL and return page metadata. Subject to SSRF protection."
 }
@@ -110,9 +111,10 @@ type ClickTool struct {
 	mgr *BrowserManager
 }
 
-func (t *ClickTool) Name() string           { return "browser.click" }
-func (t *ClickTool) Scope() tools.ToolScope { return tools.ScopeCore }
-func (t *ClickTool) Description() string    { return "Click an element matching a CSS selector." }
+func (t *ClickTool) Name() string                 { return "browser.click" }
+func (t *ClickTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (t *ClickTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
+func (t *ClickTool) Description() string          { return "Click an element matching a CSS selector." }
 func (t *ClickTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -155,8 +157,9 @@ type TypeTool struct {
 	mgr *BrowserManager
 }
 
-func (t *TypeTool) Name() string           { return "browser.type" }
-func (t *TypeTool) Scope() tools.ToolScope { return tools.ScopeCore }
+func (t *TypeTool) Name() string                 { return "browser.type" }
+func (t *TypeTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (t *TypeTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *TypeTool) Description() string {
 	return "Type text into an input element matching a CSS selector."
 }
@@ -206,8 +209,9 @@ type ScreenshotTool struct {
 	mgr *BrowserManager
 }
 
-func (t *ScreenshotTool) Name() string           { return "browser.screenshot" }
-func (t *ScreenshotTool) Scope() tools.ToolScope { return tools.ScopeCore }
+func (t *ScreenshotTool) Name() string                 { return "browser.screenshot" }
+func (t *ScreenshotTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (t *ScreenshotTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *ScreenshotTool) Description() string {
 	return "Capture a screenshot of the current page as a JPEG image."
 }
@@ -282,8 +286,9 @@ type GetTextTool struct {
 	mgr *BrowserManager
 }
 
-func (t *GetTextTool) Name() string           { return "browser.get_text" }
-func (t *GetTextTool) Scope() tools.ToolScope { return tools.ScopeCore }
+func (t *GetTextTool) Name() string                 { return "browser.get_text" }
+func (t *GetTextTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (t *GetTextTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *GetTextTool) Description() string {
 	return "Get the inner text of an element matching a CSS selector."
 }
@@ -335,8 +340,9 @@ type WaitTool struct {
 	mgr *BrowserManager
 }
 
-func (t *WaitTool) Name() string           { return "browser.wait" }
-func (t *WaitTool) Scope() tools.ToolScope { return tools.ScopeCore }
+func (t *WaitTool) Name() string                 { return "browser.wait" }
+func (t *WaitTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (t *WaitTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *WaitTool) Description() string {
 	return "Wait for an element matching a CSS selector to appear in the DOM."
 }
@@ -394,8 +400,9 @@ type EvaluateTool struct {
 	executeEnabled bool
 }
 
-func (t *EvaluateTool) Name() string           { return "browser.evaluate" }
-func (t *EvaluateTool) Scope() tools.ToolScope { return tools.ScopeCore }
+func (t *EvaluateTool) Name() string                 { return "browser.evaluate" }
+func (t *EvaluateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (t *EvaluateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *EvaluateTool) Description() string {
 	return "Execute JavaScript in the page context. Denied by default — must be explicitly allowed by policy."
 }
