@@ -302,4 +302,36 @@ describe('AttachmentCard', () => {
     const card = container.querySelector('[title="data.zip"]')
     expect(card).toBeInTheDocument()
   })
+
+  it('G14 — isImage=true renders <img> even when contentType is blank and filename has no image extension', () => {
+    // When the caller passes isImage=true, the internal isImageAttachment re-check is
+    // bypassed. Even with contentType='' and a filename like 'upload' (no extension),
+    // the thumbnail must render as an <img>.
+    render(
+      <AttachmentCard
+        filename="upload"
+        contentType=""
+        imageUrl="http://example.com/upload"
+        isImage={true}
+      />,
+    )
+    const img = screen.getByRole('img')
+    expect(img).toBeInTheDocument()
+    expect(img).toHaveAttribute('src', 'http://example.com/upload')
+  })
+
+  it('G14 — isImage=false skips the thumbnail even for an image filename', () => {
+    // When the caller explicitly passes isImage=false, the file-card renders even
+    // though the filename would otherwise classify as an image.
+    render(
+      <AttachmentCard
+        filename="photo.png"
+        contentType="image/png"
+        imageUrl="http://example.com/photo.png"
+        isImage={false}
+      />,
+    )
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(screen.getByText('photo.png')).toBeInTheDocument()
+  })
 })

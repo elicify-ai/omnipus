@@ -81,6 +81,14 @@ vi.mock('@assistant-ui/react', () => {
       status: { type: 'running' },
       content: [],
     }),
+    useAttachment: vi.fn(() => ({
+      id: 'att-default',
+      name: 'file.txt',
+      contentType: 'text/plain',
+      file: undefined,
+      status: { type: 'complete' },
+      content: [],
+    })),
     makeAssistantToolUI: () => () => null,
   }
 })
@@ -247,7 +255,7 @@ function contentWrapperOf(scrollEl: Element): Element | null {
   return scrollEl.querySelector('.max-w-4xl')
 }
 
-// ── Import the component under test ───────────────────────────────────────────
+// ── Import the components under test ──────────────────────────────────────────
 // Import after mocks are set up.
 import { ChatScreen } from './ChatScreen'
 
@@ -795,5 +803,48 @@ describe('VirtualUserMessageRow media rendering', () => {
     // With empty content the component conditionally skips it.
     const bubbles = container.querySelectorAll('.rounded-xl.px-4.py-3.text-sm')
     expect(bubbles.length).toBe(0)
+  })
+
+  it('G14 — renders <img> for image media with a non-image filename + blank contentType (regression)', async () => {
+    // BDD:
+    //   Given: a sent user message with media type='image', a blank contentType,
+    //          AND a filename with no image extension (e.g. a server-suffixed name)
+    //   When:  VirtualUserMessageRow renders via AttachmentCard
+    //   Then:  an <img> with the correct src is present (not the file-card fallback)
+    //
+    // Root cause: AttachmentCard's thumbnail gate re-ran isImageAttachment(filename, contentType)
+    // internally. With a blank contentType AND a filename the extension regex misses, that
+    // re-check returned false and silently fell back to the file-card — even though the caller
+    // already decided m.type==='image'. The fix passes isImage={m.type==='image'} so the gate
+    // trusts the caller. This fixture uses an extension-less filename so it FAILS pre-fix.
+    const msg: ChatMessage = {
+      id: 'msg_blank_ct',
+      role: 'user',
+      content: '',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      media: [
+        {
+          type: 'image',
+          url: '/api/v1/uploads/s/upload',
+          filename: 'upload',
+          contentType: '',
+        },
+      ],
+    }
+    seedSingleUserMessage(msg)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    warnSpy.mockRestore()
+
+    // Must render an <img> with the correct src — NOT fall back to the file-card.
+    const img = container.querySelector('img[alt="upload"]')
+    expect(img).toBeTruthy()
+    expect(img?.getAttribute('src')).toBe('/api/v1/uploads/s/upload')
   })
 })
