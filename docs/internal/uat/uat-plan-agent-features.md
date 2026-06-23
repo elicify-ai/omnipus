@@ -198,8 +198,11 @@ Route: `/skills` → **MCP Servers** tab.
   live MCP manager; (KI-12) **no connection-test** endpoint (bad configs fail
   silently at agent-loop start); (KI-13) **no edit/PATCH and no enable/disable** —
   must delete + re-add; (KI-14) **no UI for HTTP headers** (can't configure
-  header-auth remote servers), env-file, or per-tool admin-ask; (KI-15) **no
-  per-agent MCP-server scoping** (all agents see all MCP tools); (KI-16) tool
+  header-auth remote servers), env-file, or per-tool admin-ask; (KI-15)
+  per-agent MCP scoping is achievable via per-agent **deny** (deny removes the
+  tool from the LLM view — verified), but only **per-tool** (exact keys); there's
+  no one-action **per-server** scoping (compounded by KI-22's no-wildcard) — a
+  convenience gap, not a capability gap; (KI-16) tool
   namespace collision if a server name contains an underscore.
 - **Automated-test backing (validate + close):** the production path works, but the
   **MCP-specific unit coverage is thin** — see the "Unit-test coverage" appendix.
@@ -283,7 +286,7 @@ These are suspected bugs/gaps the UAT should confirm.
 12. **No MCP connection-test endpoint** — POST doesn't validate; bad configs fail silently.
 13. **No MCP edit/PATCH and no enable/disable** — delete + re-add only.
 14. **No UI for MCP HTTP headers / env-file / per-tool admin-ask.**
-15. **No per-agent MCP-server scoping** — all agents see all MCP tools.
+15. **Per-agent MCP scoping works via deny, but only per-tool** — a per-agent `deny` removes an MCP tool from that agent's LLM view (verified: `mcp_policy_test.go::TestFilterToolsByPolicy_DeniedMCPTool_ExcludedFromLLMView`), so scoping IS possible; the only limitation is there's no one-action **per-server** scoping (must deny each tool by exact name; no wildcard per KI-22). Convenience gap, not a capability gap.
 16. **MCP tool namespace collision** if a server name contains an underscore (`mcp_<server>_<tool>` parsing).
 22. **MCP tools can't be wildcard-denied** (MED) — runtime names are underscore single-segments (`mcp_<server>_<tool>`); the policy matcher only does dot-segment `.*` wildcards, so no `mcp_*`/`mcp.*` ever matches. Only exact-key deny works → no bulk-deny of a server's tools. Characterized by `compositor_mcp_policy_test.go::TestFilterToolsByPolicy_MCPTool_WildcardDoesNotMatch_ExactKeyRequired`.
 
