@@ -188,6 +188,9 @@ Route: `/skills` → **MCP Servers** tab.
     not run when asked).
   - Set it to **Ask** → confirm a permission prompt on use.
   - Set it back to **Allow** (per-agent, no global floor) → confirm the agent can use it.
+  - Use an **exact tool name** to deny — a `mcp_*`/`mcp.*` **wildcard will NOT work**
+    (KI-22): MCP names are underscore single-segments and the matcher only does
+    dot-segment wildcards, so there is no bulk-deny-by-server.
   - This exercises the deny>ask>allow resolution (`pkg/tools/compositor.go`) for an
     MCP-namespaced tool and the global-override lock for MCP rows.
 - **Assess / Known gaps to confirm:** (KI-11) list **status is always
@@ -282,6 +285,7 @@ These are suspected bugs/gaps the UAT should confirm.
 14. **No UI for MCP HTTP headers / env-file / per-tool admin-ask.**
 15. **No per-agent MCP-server scoping** — all agents see all MCP tools.
 16. **MCP tool namespace collision** if a server name contains an underscore (`mcp_<server>_<tool>` parsing).
+22. **MCP tools can't be wildcard-denied** (MED) — runtime names are underscore single-segments (`mcp_<server>_<tool>`); the policy matcher only does dot-segment `.*` wildcards, so no `mcp_*`/`mcp.*` ever matches. Only exact-key deny works → no bulk-deny of a server's tools. Characterized by `compositor_mcp_policy_test.go::TestFilterToolsByPolicy_MCPTool_WildcardDoesNotMatch_ExactKeyRequired`.
 
 *Upload (Journey 13):*
 17. **Video upload entirely unsupported** in chat (excluded from `accept`; no affordance) — intended vs. gap?
@@ -325,24 +329,30 @@ No parallel subagents for the Playwright journeys (one browser, one human).
 The production path works end-to-end: a configured MCP server's tools land in the
 tool registry with `source=mcp`, `GET /api/v1/tools` returns them (so they show in
 BOTH the per-agent editor and the global Settings→Security editor), and the
-source-agnostic compositor (`pkg/tools/compositor.go`, deny>ask>allow + wildcard)
-resolves allow/ask/deny for them and filters denied tools before the LLM. But the
-**MCP-specific unit coverage has gaps** — most existing tests prove the mechanism
-generically on *builtin* tools and only assume it extends to MCP.
+source-agnostic compositor (`pkg/tools/compositor.go`, deny>ask>allow) resolves
+allow/ask/deny for them and filters denied tools before the LLM. The MCP-specific
+unit coverage gaps below were **closed on 2026-06-23** (25 new tests).
 
-**Backend (Go):**
+**KI-22 (finding from writing these tests): MCP tools cannot be wildcard-denied.**
+Runtime MCP tool names are underscore-delimited single segments
+(`mcp_<server>_<tool>`, via `MCPTool.Name()` — `sanitizeIdentifierComponent` strips
+dots), but the policy matcher (`resolveFromMap`) only supports trailing `.*` keys
+matched on **dot** segments. So no `.*` wildcard can ever match an MCP tool — the
+**only** way to deny one (globally or per-agent) is an **exact key**. Consequence:
+you can't bulk-deny all of a server's MCP tools with a single wildcard; each tool
+must be denied individually. (Whether to make the matcher support `mcp_<server>_*`
+is a product decision — currently characterized, not "fixed".)
+
+**Backend (Go) — now COVERED:**
 - ✅ MCP registry add/remove/collision/rename/admin-ask — `pkg/tools/mcp_registry_test.go`.
-- ✅ Policy resolution deny>ask>allow + wildcards — `pkg/tools/compositor_test.go`, `compositor_wildcard_test.go` (generic; MCP tools implement the Tool interface).
-- ✅ Enforcement filters denied tools in the loop — `pkg/agent/tool_policy_deny_test.go`, `loop_dedup_test.go` (builtin/MCP collision tested).
-- ⚠️ **MISSING:** `Describe()` returns `source=mcp:<server>` (untested); `GET /api/v1/tools` and per-agent tools **include MCP entries** (no assertion — `pkg/gateway/rest_tool_registry_test.go`); an MCP-named tool denied → filtered/blocked end-to-end (no MCP-specific test); MCP wildcard policy (`mcp_*` / `mcp__server__*`).
+- ✅ MCP-tool policy resolution (exact deny, global-deny-over-agent-allow, admin-ask fence, allowed control, scope gate) + the **wildcard-does-not-match characterization** — `pkg/tools/compositor_mcp_policy_test.go` (7 tests).
+- ✅ MCP-tool deny enforcement at `FilterToolsByPolicy` (the loop's LLM-assembly gate) incl. a registry round-trip — `pkg/tools/mcp_policy_test.go` (2 tests).
+- ✅ `GET /api/v1/tools` includes MCP entries with `source=mcp`, and builtin-first dedup — `pkg/gateway/rest_tool_registry_mcp_test.go` (2 tests).
 
-**Frontend (vitest):**
-- ✅ MCP tools render in the "MCP server tools" section, grouped by server — `src/components/shared/ToolPolicyEditor.test.tsx:417-508`.
-- ⚠️ **MISSING:** clicking allow/ask/deny on an **MCP** row fires `onChange` with the MCP tool name (only builtin rows tested); the **global-override lock** applies to MCP rows / `mcp_*` wildcards (lock tests use builtin only); the **global** editor (`SecuritySection.test.tsx`) renders + policies MCP tools (its mock stubs builtin-only, so MCP-in-global is unverified).
+**Frontend (vitest) — now COVERED:**
+- ✅ MCP tools render grouped by server — `ToolPolicyEditor.test.tsx` (pre-existing).
+- ✅ allow/ask/deny on an MCP row fires `onChange` with the MCP tool name; **exact-key** global deny/ask **locks** the MCP row's controls; lock doesn't bleed to siblings — `ToolPolicyEditor.test.tsx` (new `describe('MCP tool policy controls')`, 8 tests).
+- ✅ The **global** Settings→Security editor renders MCP tools in the `mcp-tools-section` and changing one fires `updateGlobalToolPolicies` through the re-auth gate — `SecuritySection.test.tsx` (new `describe('MCP tools in GlobalToolPoliciesSection')`, 6 tests).
 
-**Tests to add (closes the gap the requirement implies):**
-1. `pkg/tools/compositor_test.go` — `TestFilterToolsByPolicy_MCPToolGlobalDeny`, `_MCPWildcardDeny`, `_MCPAdminAskFence`.
-2. `pkg/gateway/rest_tool_registry_test.go` — `TestREST_GetTools_IncludesMCPTools` (asserts `source=mcp`), and per-agent tools include MCP.
-3. `pkg/agent/...` — `TestAgentLoop_FiltersMCPToolWhenDenied` (denied MCP tool not sent to LLM + audited).
-4. `src/components/shared/ToolPolicyEditor.test.tsx` — allow/ask/deny on an MCP row → onChange; global `mcp_*`/exact MCP deny/ask locks the MCP row's controls.
-5. `src/components/settings/SecuritySection.test.tsx` — include MCP tools in the mock; assert they render in the global editor's MCP section and that changing one fires `updateGlobalToolPolicies` (re-auth-gated).
+All 25 added tests pass (backend scoped runs with `-tags goolm,stdjson`; frontend
+`vitest run` — 68 in the two files). No production code changed.
