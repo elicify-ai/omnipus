@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Mocks (must be hoisted before any import that uses them) ──────────────────
@@ -114,6 +114,16 @@ const BUILTIN_TOOLS: RegistryTool[] = [
   { name: 'exec', description: 'Execute shell commands', category: 'code', scope: 'core', source: 'builtin' },
   { name: 'read_file', description: 'Read file content', category: 'file', scope: 'core', source: 'builtin' },
   { name: 'system.status', description: 'System status', category: 'system', scope: 'core', source: 'builtin' },
+]
+
+/**
+ * Mixed payload: same builtin tools PLUS two MCP tools from 'testsvr'.
+ * Used in the MCP-tool-in-global-editor tests below.
+ */
+const BUILTIN_AND_MCP_TOOLS: RegistryTool[] = [
+  ...BUILTIN_TOOLS,
+  { name: 'mcp_testsvr_list', description: 'List resources', category: 'search', scope: 'general', source: 'mcp' },
+  { name: 'mcp_testsvr_read', description: 'Read a resource', category: 'web', scope: 'general', source: 'mcp' },
 ]
 
 const GLOBAL_POLICIES = {
@@ -497,6 +507,141 @@ describe('SecuritySection — global tool-policy re-auth gate', () => {
       expect(reAuth).toHaveBeenCalledWith('mypassword')
       expect(updateGlobalToolPolicies).toHaveBeenCalledTimes(2)
       expect(vi.mocked(updateGlobalToolPolicies).mock.calls[1][1]).toBe('reauth_tok')
+    })
+  })
+})
+
+// ── MCP tools in the global Settings → Security editor ───────────────────────
+
+describe('SecuritySection — MCP tools in GlobalToolPoliciesSection', () => {
+  /**
+   * Helper: render SecuritySection with MCP tools included in fetchBuiltinTools,
+   * expand the top-level Advanced disclosure, and wait for the ToolPolicyEditor.
+   */
+  async function renderWithMcpAndExpand() {
+    // Override the default stub so MCP tools are returned alongside builtins.
+    vi.mocked(fetchBuiltinTools).mockResolvedValue(BUILTIN_AND_MCP_TOOLS)
+
+    renderSection()
+
+    // Wait for the section to load and find the single top-level Advanced trigger.
+    await waitFor(() => {
+      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
+
+    // Wait for the ToolPolicyEditor to mount and its data to settle.
+    await waitFor(() => {
+      expect(screen.getByTestId('tool-policy-editor')).toBeInTheDocument()
+    })
+  }
+
+  it('MCP tools render in the mcp-tools-section inside the global editor', async () => {
+    await renderWithMcpAndExpand()
+
+    // The mcp-tools-section must be present inside the ToolPolicyEditor.
+    expect(screen.getByTestId('mcp-tools-section')).toBeInTheDocument()
+  })
+
+  it('MCP server disclosure is present for the testsvr MCP server', async () => {
+    await renderWithMcpAndExpand()
+
+    const mcpSection = screen.getByTestId('mcp-tools-section')
+    // 'mcp_testsvr_list' and 'mcp_testsvr_read' both belong to server 'testsvr' →
+    // exactly one server disclosure in the MCP section.
+    const triggers = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')
+    expect(triggers.length).toBe(1)
+  })
+
+  it('expanding the MCP server disclosure shows both MCP tool rows', async () => {
+    await renderWithMcpAndExpand()
+
+    const mcpSection = screen.getByTestId('mcp-tools-section')
+    const serverTrigger = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')[0]
+    fireEvent.click(serverTrigger)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tool-row-mcp_testsvr_list')).toBeInTheDocument()
+      expect(screen.getByTestId('tool-row-mcp_testsvr_read')).toBeInTheDocument()
+    })
+  })
+
+  it('MCP tools do NOT appear in the builtin category grid', async () => {
+    await renderWithMcpAndExpand()
+
+    const categoryGrid = screen.getByTestId('category-grid')
+    // MCP tool names must not appear as category-grid tool rows
+    expect(within(categoryGrid).queryByTestId('tool-row-mcp_testsvr_list')).not.toBeInTheDocument()
+    expect(within(categoryGrid).queryByTestId('tool-row-mcp_testsvr_read')).not.toBeInTheDocument()
+  })
+
+  it('changing an MCP tool policy fires updateGlobalToolPolicies through the re-auth gate', async () => {
+    // The auto-save is immediate on first success (no 403 on this path).
+    vi.mocked(updateGlobalToolPolicies).mockResolvedValue({
+      default_policy: 'ask',
+      policies: {},
+    } as never)
+
+    await renderWithMcpAndExpand()
+
+    // Expand the MCP server disclosure to access the tool rows.
+    const mcpSection = screen.getByTestId('mcp-tools-section')
+    const serverTrigger = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')[0]
+    fireEvent.click(serverTrigger)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tool-row-mcp_testsvr_list')).toBeInTheDocument()
+    })
+
+    // Click Deny on the MCP tool row.
+    const listRow = screen.getByTestId('tool-row-mcp_testsvr_list')
+    fireEvent.click(within(listRow).getByRole('button', { name: /deny/i }))
+
+    // The auto-save debounce fires updateGlobalToolPolicies with the MCP tool name.
+    await waitFor(
+      () => {
+        expect(vi.mocked(updateGlobalToolPolicies)).toHaveBeenCalled()
+        const [calledValue] = vi.mocked(updateGlobalToolPolicies).mock.calls[0]
+        expect(calledValue).toMatchObject({
+          policies: expect.objectContaining({ mcp_testsvr_list: 'deny' }),
+        })
+      },
+      { timeout: 3000 },
+    )
+  })
+
+  it('changing an MCP tool policy that triggers a re-auth 403 opens the consent dialog', async () => {
+    vi.mocked(updateGlobalToolPolicies)
+      .mockRejectedValueOnce(reAuth403())
+      .mockResolvedValueOnce({ default_policy: 'ask', policies: {} } as never)
+    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'tok_mcp', expires_in: 300 } as never)
+
+    await renderWithMcpAndExpand()
+
+    const mcpSection = screen.getByTestId('mcp-tools-section')
+    const serverTrigger = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')[0]
+    fireEvent.click(serverTrigger)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tool-row-mcp_testsvr_read')).toBeInTheDocument()
+    })
+
+    // Trigger an MCP policy change that will 403 on first attempt.
+    const readRow = screen.getByTestId('tool-row-mcp_testsvr_read')
+    fireEvent.click(within(readRow).getByRole('button', { name: /deny/i }))
+
+    // The re-auth dialog must appear.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+
+    // Complete re-auth; the PUT is replayed with the consent token.
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'secret' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(reAuth).toHaveBeenCalledWith('secret')
+      expect(vi.mocked(updateGlobalToolPolicies).mock.calls[1][1]).toBe('tok_mcp')
     })
   })
 })

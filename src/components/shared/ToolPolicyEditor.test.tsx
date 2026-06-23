@@ -630,3 +630,174 @@ describe('ToolPolicyEditor — global override locking', () => {
     expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
   })
 })
+
+// ── MCP tool policy controls (interaction + global-lock) ──────────────────────
+
+describe('ToolPolicyEditor — MCP tool policy controls', () => {
+  /**
+   * Helper: render with MCP_TOOLS only and expand the 'myserver' server disclosure.
+   * Returns the expanded tool container so callers can query within it.
+   */
+  async function renderAndExpandMcpServer(
+    value: ToolPolicyValue = SAFE_VALUE,
+    onChange = vi.fn(),
+    globalPolicies?: import('./ToolPolicyEditor').ToolPolicyEditorProps['globalPolicies'],
+  ) {
+    const user = userEvent.setup()
+    render(
+      <ToolPolicyEditor
+        tools={MCP_TOOLS}
+        value={value}
+        onChange={onChange}
+        globalPolicies={globalPolicies}
+      />,
+    )
+    const mcpSection = screen.getByTestId('mcp-tools-section')
+    // There is exactly one server disclosure for MCP_TOOLS (both are from 'myserver').
+    const trigger = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')[0]
+    await user.click(trigger)
+    // After expansion the mcp-server-myserver container holds the tool rows.
+    const serverContainer = screen.getByTestId('mcp-server-myserver')
+    return { user, serverContainer, mcpSection }
+  }
+
+  // ── 1. allow/ask/deny clicks on MCP tool row call onChange with correct payload ──
+
+  it('clicking deny on an MCP tool row calls onChange with the MCP tool name + deny', async () => {
+    const onChange = vi.fn()
+    const { user, serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, onChange)
+
+    const row = within(serverContainer).getByTestId('tool-row-mcp_myserver_search')
+    await user.click(within(row).getByRole('button', { name: /deny/i }))
+
+    expect(onChange).toHaveBeenCalledWith({
+      default_policy: 'allow',
+      policies: { mcp_myserver_search: 'deny' },
+    })
+  })
+
+  it('clicking ask on an MCP tool row calls onChange with the MCP tool name + ask', async () => {
+    const onChange = vi.fn()
+    const { user, serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, onChange)
+
+    const row = within(serverContainer).getByTestId('tool-row-mcp_myserver_fetch')
+    await user.click(within(row).getByRole('button', { name: /ask/i }))
+
+    expect(onChange).toHaveBeenCalledWith({
+      default_policy: 'allow',
+      policies: { mcp_myserver_fetch: 'ask' },
+    })
+  })
+
+  it('clicking allow on an already-overridden MCP tool removes the override (round-trip clean)', async () => {
+    // Start with mcp_myserver_search overridden to 'deny'
+    const startValue: ToolPolicyValue = {
+      default_policy: 'allow',
+      policies: { mcp_myserver_search: 'deny' },
+    }
+    const onChange = vi.fn()
+    const { user, serverContainer } = await renderAndExpandMcpServer(startValue, onChange)
+
+    const row = within(serverContainer).getByTestId('tool-row-mcp_myserver_search')
+    // Click Allow (= default_policy) — override should be removed
+    await user.click(within(row).getByRole('button', { name: /allow/i }))
+
+    expect(onChange).toHaveBeenCalledWith({
+      default_policy: 'allow',
+      policies: {},
+    })
+  })
+
+  // ── 2. Global exact-key deny locks less-restrictive controls on the MCP row ──
+
+  it('a global exact-key deny locks allow+ask and keeps deny enabled on the MCP row', async () => {
+    // globalPolicies uses an exact key matching the MCP tool name.
+    // (The glob pattern mcp_myserver.* would NOT work for MCP tool names because
+    // resolvePolicy's glob check tests prefix + '.', but MCP names use underscores.)
+    const globalPolicies: ToolPolicyValue = {
+      default_policy: 'allow',
+      policies: { mcp_myserver_search: 'deny' },
+    }
+    const { serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, vi.fn(), globalPolicies)
+
+    const row = within(serverContainer).getByTestId('tool-row-mcp_myserver_search')
+
+    // Global lock indicator must be present
+    const lockBadge = within(row).getByTestId('global-override-mcp_myserver_search')
+    expect(lockBadge).toHaveTextContent(/global:\s*deny/i)
+    expect(lockBadge).toHaveAttribute('href', '/#/settings')
+
+    // allow and ask are locked (less restrictive than deny); deny is still clickable
+    expect(within(row).getByRole('button', { name: /allow/i })).toBeDisabled()
+    expect(within(row).getByRole('button', { name: /ask/i })).toBeDisabled()
+    expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
+  })
+
+  it('a global deny lock does not bleed into a sibling MCP tool from the same server', async () => {
+    // Only mcp_myserver_search is locked; mcp_myserver_fetch must remain unlocked
+    const globalPolicies: ToolPolicyValue = {
+      default_policy: 'allow',
+      policies: { mcp_myserver_search: 'deny' },
+    }
+    const { serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, vi.fn(), globalPolicies)
+
+    // mcp_myserver_fetch — no global override → all controls enabled, no lock badge
+    const fetchRow = within(serverContainer).getByTestId('tool-row-mcp_myserver_fetch')
+    expect(within(fetchRow).queryByTestId('global-override-mcp_myserver_fetch')).toBeNull()
+    expect(within(fetchRow).getByRole('button', { name: /allow/i })).not.toBeDisabled()
+    expect(within(fetchRow).getByRole('button', { name: /ask/i })).not.toBeDisabled()
+    expect(within(fetchRow).getByRole('button', { name: /deny/i })).not.toBeDisabled()
+  })
+
+  // ── 3. Global exact-key ask locks only the allow control ──────────────────────
+
+  it('a global exact-key ask locks only allow (ask + deny remain enabled)', async () => {
+    const globalPolicies: ToolPolicyValue = {
+      default_policy: 'allow',
+      policies: { mcp_myserver_search: 'ask' },
+    }
+    const { serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, vi.fn(), globalPolicies)
+
+    const row = within(serverContainer).getByTestId('tool-row-mcp_myserver_search')
+
+    const lockBadge = within(row).getByTestId('global-override-mcp_myserver_search')
+    expect(lockBadge).toHaveTextContent(/global:\s*ask/i)
+
+    // allow is locked (less restrictive than ask); ask and deny are NOT locked
+    expect(within(row).getByRole('button', { name: /allow/i })).toBeDisabled()
+    expect(within(row).getByRole('button', { name: /ask/i })).not.toBeDisabled()
+    expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
+  })
+
+  // ── 4. Global default_policy deny (no per-tool overrides) locks all MCP rows ──
+
+  it('a global default_policy=deny (no exact overrides) locks allow+ask on all MCP rows', async () => {
+    // When the global default is 'deny', globalOverrideFor returns 'deny' for every
+    // tool that has no more-specific override, including MCP tools.
+    const globalPolicies: ToolPolicyValue = {
+      default_policy: 'deny',
+      policies: {},
+    }
+    const { serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, vi.fn(), globalPolicies)
+
+    // Both MCP tools from 'myserver' should be locked at deny
+    for (const toolName of ['mcp_myserver_search', 'mcp_myserver_fetch']) {
+      const row = within(serverContainer).getByTestId(`tool-row-${toolName}`)
+      expect(within(row).getByRole('button', { name: /allow/i })).toBeDisabled()
+      expect(within(row).getByRole('button', { name: /ask/i })).toBeDisabled()
+      expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
+    }
+  })
+
+  // ── 5. No global policies prop → no locks on MCP rows ──────────────────────
+
+  it('no globalPolicies prop leaves all MCP row controls enabled and shows no lock badge', async () => {
+    const { serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, vi.fn(), undefined)
+
+    const row = within(serverContainer).getByTestId('tool-row-mcp_myserver_search')
+    expect(within(row).queryByTestId('global-override-mcp_myserver_search')).toBeNull()
+    expect(within(row).getByRole('button', { name: /allow/i })).not.toBeDisabled()
+    expect(within(row).getByRole('button', { name: /ask/i })).not.toBeDisabled()
+    expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
+  })
+})
