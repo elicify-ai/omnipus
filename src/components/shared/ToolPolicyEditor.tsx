@@ -32,7 +32,7 @@
  */
 
 import { useMemo, useState } from 'react'
-import { CaretDown, CaretUp, Database } from '@phosphor-icons/react'
+import { CaretDown, CaretUp, Database, LockSimple } from '@phosphor-icons/react'
 import type { RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { PolicyBadge } from '@/components/shared/PolicyBadge'
@@ -60,11 +60,41 @@ export interface ToolPolicyEditorProps {
   onChange: (next: ToolPolicyValue) => void
   /** Whether the editor is read-only (e.g. during a save in flight). */
   disabled?: boolean
+  /**
+   * Global (Settings → Security) tool policy. When set, a per-tool control that
+   * would be LESS restrictive than the global floor is locked (the runtime merge
+   * is most-restrictive-wins: deny > ask > allow, so a global deny/ask cannot be
+   * relaxed at the agent level). Omit in the global editor itself — there is no
+   * self-override there. When the global value resolves to "allow" for a tool,
+   * nothing is locked.
+   */
+  globalPolicies?: ToolPolicyValue
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const ALL_POLICIES: ToolPolicy[] = ['allow', 'ask', 'deny']
+
+// Restrictiveness rank — the runtime merge keeps the MORE restrictive of
+// global×agent (deny > ask > allow). A per-agent policy strictly LESS restrictive
+// than the global floor is unreachable, so we lock it.
+const POLICY_RANK: Record<ToolPolicy, number> = { allow: 0, ask: 1, deny: 2 }
+
+/**
+ * Resolve the global override floor for a tool, or null when the global policy
+ * imposes no restriction (resolves to "allow", or no global policy provided).
+ */
+function globalOverrideFor(toolName: string, global?: ToolPolicyValue): ToolPolicy | null {
+  if (!global) return null
+  const g = resolvePolicy(toolName, global.policies, (global.default_policy || 'allow') as ToolPolicy)
+  return g === 'allow' ? null : g
+}
+
+/** A per-agent policy is locked when it is strictly less restrictive than the floor. */
+function isPolicyLocked(p: ToolPolicy, floor: ToolPolicy | null): boolean {
+  if (!floor) return false
+  return POLICY_RANK[p] < POLICY_RANK[floor]
+}
 
 /** Resolve the single summary policy for a category, or 'mixed' if heterogeneous. */
 function categorySummaryPolicy(
@@ -151,29 +181,56 @@ function CategoryToolRow({
   defaultPolicy,
   onChange,
   disabled,
+  globalPolicies,
 }: {
   tool: RegistryTool
   policies: Record<string, ToolPolicy>
   defaultPolicy: ToolPolicy
   onChange: (toolId: string, p: ToolPolicy) => void
   disabled?: boolean
+  globalPolicies?: ToolPolicyValue
 }) {
   const effective = resolvePolicy(tool.name, policies, defaultPolicy)
+  const floor = globalOverrideFor(tool.name, globalPolicies)
+  const floorLabel = floor === 'deny' ? 'Deny' : floor === 'ask' ? 'Ask' : ''
+  const lockTitle = floor
+    ? `Locked by a global "${floorLabel}" policy in Settings → Security. ` +
+      `The effective policy is the most restrictive of the global and per-agent values (deny > ask > allow), ` +
+      `so it cannot be relaxed here.`
+    : undefined
   return (
     <div className="flex items-center justify-between py-1 gap-2" data-testid={`tool-row-${tool.name}`}>
-      <span className="text-[11px] text-[var(--color-muted)] font-mono truncate flex-1" title={tool.name}>
-        {tool.name}
+      <span className="text-[11px] text-[var(--color-muted)] font-mono truncate flex-1 flex items-center gap-1.5" title={tool.name}>
+        <span className="truncate">{tool.name}</span>
+        {floor && (
+          // Hash link (no full reload) to Settings → Security where the global
+          // policy is managed. Plain anchor (not router Link) so the editor
+          // renders without a RouterProvider in any context/test.
+          <a
+            href="/#/settings"
+            title={lockTitle}
+            data-testid={`global-override-${tool.name}`}
+            className="inline-flex items-center gap-0.5 shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold border border-[var(--color-border)] text-[var(--color-warning)] hover:bg-[var(--color-surface-2)]"
+          >
+            <LockSimple size={9} weight="bold" />
+            Global: {floorLabel}
+          </a>
+        )}
       </span>
       <div className="flex gap-1 shrink-0">
-        {ALL_POLICIES.map((p) => (
-          <PolicyBadge
-            key={p}
-            policy={p}
-            active={effective === p}
-            disabled={disabled}
-            onClick={() => onChange(tool.name, p)}
-          />
-        ))}
+        {ALL_POLICIES.map((p) => {
+          const locked = isPolicyLocked(p, floor)
+          return (
+            <PolicyBadge
+              key={p}
+              policy={p}
+              active={effective === p}
+              disabled={disabled || locked}
+              title={locked ? lockTitle : undefined}
+              onClick={() => onChange(tool.name, p)}
+            />
+          )
+        })}
       </div>
     </div>
   )
@@ -193,6 +250,7 @@ function CategorySection({
   defaultPolicy,
   onToolChange,
   disabled,
+  globalPolicies,
 }: {
   categoryKey: string
   tools: RegistryTool[]
@@ -200,6 +258,7 @@ function CategorySection({
   defaultPolicy: ToolPolicy
   onToolChange: (toolId: string, p: ToolPolicy) => void
   disabled?: boolean
+  globalPolicies?: ToolPolicyValue
 }) {
   const [open, setOpen] = useState(false)
   const label = CATEGORY_LABELS[categoryKey] ?? categoryKey
@@ -256,6 +315,7 @@ function CategorySection({
                 defaultPolicy={defaultPolicy}
                 onChange={onToolChange}
                 disabled={disabled}
+                globalPolicies={globalPolicies}
               />
             ))}
           </div>
@@ -267,7 +327,7 @@ function CategorySection({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export function ToolPolicyEditor({ tools, value, onChange, disabled }: ToolPolicyEditorProps) {
+export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolicies }: ToolPolicyEditorProps) {
   const { default_policy: defaultPolicy, policies } = value
 
   // ── Partition tools into two buckets ─────────────────────────────────────────
@@ -380,6 +440,7 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled }: ToolPolic
                 defaultPolicy={defaultPolicy}
                 onToolChange={handleToolPolicy}
                 disabled={disabled}
+                globalPolicies={globalPolicies}
               />
             ))}
           </div>
@@ -417,6 +478,7 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled }: ToolPolic
                       defaultPolicy={defaultPolicy}
                       onChange={handleToolPolicy}
                       disabled={disabled}
+                      globalPolicies={globalPolicies}
                     />
                   ))}
                 </div>

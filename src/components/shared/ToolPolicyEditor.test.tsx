@@ -562,3 +562,71 @@ describe('ToolPolicyEditor — glob-keyed policies (Blocker 4)', () => {
     expect(within(writeRow).getByRole('button', { name: /deny/i })).toHaveAttribute('aria-pressed', 'true')
   })
 })
+
+// ── Global override locking (no contradicting configs) ──────────────────────────
+
+describe('ToolPolicyEditor — global override locking', () => {
+  it('locks less-restrictive per-agent controls when a global glob denies the tool', async () => {
+    const user = userEvent.setup()
+    render(
+      <ToolPolicyEditor
+        tools={BROWSER_TOOLS}
+        value={SAFE_VALUE}
+        onChange={vi.fn()}
+        globalPolicies={{ default_policy: 'allow', policies: { 'browser.*': 'deny' } }}
+      />,
+    )
+    const categoryGrid = screen.getByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /browser/i }))
+
+    const row = screen.getByTestId('tool-row-browser.navigate')
+    // A "Global: Deny" indicator links to Settings → Security.
+    const link = within(row).getByTestId('global-override-browser.navigate')
+    expect(link).toHaveTextContent(/global:\s*deny/i)
+    expect(link).toHaveAttribute('href', '/#/settings')
+    // allow + ask are locked (less restrictive than deny); deny stays enabled.
+    expect(within(row).getByRole('button', { name: /allow/i })).toBeDisabled()
+    expect(within(row).getByRole('button', { name: /ask/i })).toBeDisabled()
+    expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
+  })
+
+  it('a global "ask" floor locks only the allow control (ask/deny stay settable)', async () => {
+    const user = userEvent.setup()
+    render(
+      <ToolPolicyEditor
+        tools={FILE_TOOLS}
+        value={SAFE_VALUE}
+        onChange={vi.fn()}
+        globalPolicies={{ default_policy: 'allow', policies: { read_file: 'ask' } }}
+      />,
+    )
+    const categoryGrid = screen.getByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /file/i }))
+
+    const row = screen.getByTestId('tool-row-read_file')
+    expect(within(row).getByTestId('global-override-read_file')).toHaveTextContent(/global:\s*ask/i)
+    expect(within(row).getByRole('button', { name: /allow/i })).toBeDisabled()
+    expect(within(row).getByRole('button', { name: /ask/i })).not.toBeDisabled()
+    expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
+  })
+
+  it('no global override (allow) leaves every control enabled and shows no lock', async () => {
+    const user = userEvent.setup()
+    render(
+      <ToolPolicyEditor
+        tools={FILE_TOOLS}
+        value={SAFE_VALUE}
+        onChange={vi.fn()}
+        globalPolicies={{ default_policy: 'allow', policies: {} }}
+      />,
+    )
+    const categoryGrid = screen.getByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /file/i }))
+
+    const row = screen.getByTestId('tool-row-write_file')
+    expect(within(row).queryByTestId('global-override-write_file')).toBeNull()
+    expect(within(row).getByRole('button', { name: /allow/i })).not.toBeDisabled()
+    expect(within(row).getByRole('button', { name: /ask/i })).not.toBeDisabled()
+    expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
+  })
+})

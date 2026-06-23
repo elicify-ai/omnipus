@@ -23,6 +23,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import {
   createAgent,
+  fetchGlobalToolPolicies,
   fetchProviders,
   fetchRegistryTools,
   fetchSkills,
@@ -215,12 +216,18 @@ export function CreateAgentModal({
   const providersQuery = useQuery({ queryKey: ['providers'], queryFn: fetchProviders })
   const toolsQuery = useQuery({ queryKey: ['registry-tools'], queryFn: fetchRegistryTools })
   const skillsQuery = useQuery({ queryKey: ['skills'], queryFn: fetchSkills })
+  // Global tool policy — forwarded to Step 3 so it can lock per-agent controls
+  // that would contradict a global deny/ask (no contradicting configs).
+  const globalPoliciesQuery = useQuery({ queryKey: ['global-tool-policies'], queryFn: fetchGlobalToolPolicies })
 
   const connectedProviders = (providersQuery.data ?? []).filter(
     (p) => p.status === 'connected',
   )
   const registryTools = toolsQuery.data ?? []
   const skills = skillsQuery.data ?? []
+  const globalPolicies = globalPoliciesQuery.data
+    ? { default_policy: globalPoliciesQuery.data.default_policy, policies: globalPoliciesQuery.data.policies ?? {} }
+    : undefined
 
   if (!isOpen) return null
 
@@ -233,6 +240,7 @@ export function CreateAgentModal({
       connectedProviders={connectedProviders}
       registryTools={registryTools}
       skills={skills}
+      globalPolicies={globalPolicies}
     />
   )
 }

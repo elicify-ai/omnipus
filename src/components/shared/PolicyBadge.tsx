@@ -13,9 +13,11 @@ interface PolicyBadgeProps {
   onClick: () => void
   active: boolean
   disabled?: boolean
+  /** Native hover tooltip — e.g. why a control is locked by a global override. */
+  title?: string
 }
 
-export function PolicyBadge({ policy, onClick, active, disabled }: PolicyBadgeProps) {
+export function PolicyBadge({ policy, onClick, active, disabled, title }: PolicyBadgeProps) {
   const cfg = POLICY_CONFIGS[policy]
   const Icon = cfg.icon
   return (
@@ -23,6 +25,7 @@ export function PolicyBadge({ policy, onClick, active, disabled }: PolicyBadgePr
       type="button"
       onClick={onClick}
       disabled={disabled}
+      title={title}
       aria-pressed={active}
       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
         active ? cfg.activeColor : `border-transparent ${cfg.color} hover:bg-[var(--color-surface-2)]`
