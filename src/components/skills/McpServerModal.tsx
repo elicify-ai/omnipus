@@ -1,5 +1,5 @@
 /**
- * McpServerModal — Add MCP Server slide-out.
+ * McpServerModal — Add / Edit MCP Server slide-out.
  *
  * FR-110 / US-7: converted from Dialog to Sheet (slide-out), matching
  * ChannelConfigPanel. The Sheet uses Radix DialogPrimitive under the hood,
@@ -7,22 +7,31 @@
  * (a11y F-16 — all satisfied by the primitive; no hand-wiring needed).
  *
  * Replaces the raw transport dropdown with a two-mode picker:
- *   - "Local program" (stdio): requires Command; Args, Env, Command under
- *     AdvancedDisclosure. Follows the RiskySettingControl *pattern*
- *     (AlertDialog confirmation + standing badge) but hand-rolls it inline
- *     rather than reusing the shared component — the two-button mode picker
- *     needs a custom layout that the shared component's single-slot API
- *     cannot express without coupling.
+ *   - "Local program" (stdio): requires Command; Args, Env, Env file, and
+ *     Requires admin-ask under AdvancedDisclosure. Follows the
+ *     RiskySettingControl *pattern* (AlertDialog confirmation + standing badge)
+ *     but hand-rolls it inline rather than reusing the shared component — the
+ *     two-button mode picker needs a custom layout that the shared component's
+ *     single-slot API cannot express without coupling.
  *   - "Network address" (sse/http): requires a URL; rejects non-https on
  *     non-loopback hosts; shows an inline SSRF caution for RFC1918/link-local
- *     literal addresses (heuristic — the real guard is backend F-G07).
+ *     literal addresses (heuristic — the real guard is backend F-G07). Also
+ *     supports Headers key/value editor and Requires admin-ask under
+ *     AdvancedDisclosure.
+ *
+ * G8: edit mode — pass `initialServer` to pre-populate all fields; the modal
+ * title becomes "Edit MCP server" and the submit path calls patchMcpServer
+ * with only the changed fields.
+ *
+ * G9: new inputs — Headers (sse/http), Env file (stdio), Requires admin-ask
+ * (both).
  *
  * Issues #336, #356.
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Warning, Globe, Terminal } from '@phosphor-icons/react'
+import { Warning, Globe, Terminal, Plus, Trash } from '@phosphor-icons/react'
 import {
   Sheet,
   SheetContent,
@@ -44,12 +53,14 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
-import { addMcpServer, isApiError } from '@/lib/api'
+import { addMcpServer, patchMcpServer, isApiError, type McpServer, type McpServerUpdate } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 interface McpServerModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** When provided the modal opens in edit mode, pre-populated from this server. */
+  initialServer?: McpServer
 }
 
 type ConnectMode = 'local' | 'network'
@@ -120,9 +131,33 @@ function isValidUrlScheme(url: string): boolean {
   }
 }
 
-export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
+/** A single key/value row in the headers editor. */
+interface KVRow {
+  key: string
+  value: string
+}
+
+/** Converts KVRow[] to a Record<string,string>, dropping empty keys. */
+function rowsToRecord(rows: KVRow[]): Record<string, string> | undefined {
+  const result: Record<string, string> = {}
+  for (const row of rows) {
+    if (row.key.trim()) {
+      result[row.key.trim()] = row.value
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
+
+/** Infers the initial ConnectMode from a server's transport. */
+function transportToMode(transport: 'stdio' | 'sse' | 'http' | undefined): ConnectMode {
+  return transport === 'stdio' ? 'local' : 'network'
+}
+
+export function McpServerModal({ open, onOpenChange, initialServer }: McpServerModalProps) {
   const queryClient = useQueryClient()
   const { addToast } = useUiStore()
+
+  const editMode = initialServer !== undefined
 
   const [name, setName] = useState('')
   const [mode, setMode] = useState<ConnectMode>('network')
@@ -131,16 +166,46 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
   const [command, setCommand] = useState('')
   const [args, setArgs] = useState('')
   const [env, setEnv] = useState('')
+  const [envFile, setEnvFile] = useState('')
 
   // network-address fields
   const [url, setUrl] = useState('')
+  const [headerRows, setHeaderRows] = useState<KVRow[]>([{ key: '', value: '' }])
+
+  // shared field
+  const [requiresAdminAsk, setRequiresAdminAsk] = useState('')
 
   // stdio safety gate: pendingLocal means user clicked "local program" but hasn't confirmed
   const [pendingLocal, setPendingLocal] = useState(false)
   // confirmedLocal: user has confirmed they want stdio (standing badge shows while true)
   const [confirmedLocal, setConfirmedLocal] = useState(false)
 
-  const { mutate: doAdd, isPending } = useMutation({
+  // Populate fields when initialServer changes (edit mode open).
+  useEffect(() => {
+    if (open && initialServer) {
+      setName(initialServer.name)
+      const m = transportToMode(initialServer.transport)
+      setMode(m)
+      if (m === 'local') {
+        setConfirmedLocal(true)
+      }
+    } else if (!open) {
+      // Reset all state on close
+      setName('')
+      setMode('network')
+      setCommand('')
+      setArgs('')
+      setEnv('')
+      setEnvFile('')
+      setUrl('')
+      setHeaderRows([{ key: '', value: '' }])
+      setRequiresAdminAsk('')
+      setPendingLocal(false)
+      setConfirmedLocal(false)
+    }
+  }, [open, initialServer])
+
+  const { mutate: doAdd, isPending: isAdding } = useMutation({
     mutationFn: () => {
       const trimmedName = name.trim()
       if (mode === 'local') {
@@ -152,6 +217,10 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
             envObj[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
           }
         })
+        const adminAsk = requiresAdminAsk.trim()
+          ? requiresAdminAsk.split(',').map((s) => s.trim()).filter(Boolean)
+          : undefined
+        const envFileTrimmed = envFile.trim() || undefined
         return addMcpServer({
           name: trimmedName,
           command: command.trim(),
@@ -160,14 +229,22 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
             : undefined,
           transport: 'stdio',
           env: Object.keys(envObj).length > 0 ? envObj : undefined,
+          env_file: envFileTrimmed,
+          requires_admin_ask: adminAsk,
         })
       } else {
         // Network: send url field — backend stores it as cfg.URL so the MCP manager
         // (pkg/mcp/manager.go ConnectServer) can connect via StreamableClientTransport.Endpoint.
+        const headers = rowsToRecord(headerRows)
+        const adminAsk = requiresAdminAsk.trim()
+          ? requiresAdminAsk.split(',').map((s) => s.trim()).filter(Boolean)
+          : undefined
         return addMcpServer({
           name: trimmedName,
           url: url.trim(),
           transport: 'sse',
+          headers,
+          requires_admin_ask: adminAsk,
         })
       }
     },
@@ -187,23 +264,71 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
       }),
   })
 
+  const { mutate: doPatch, isPending: isPatching } = useMutation({
+    mutationFn: () => {
+      if (!initialServer) throw new Error('No server to edit')
+      const patch: McpServerUpdate = {}
+      if (name.trim() !== initialServer.name) {
+        // name is not in McpServerUpdate — send as-is; backend ignores unknown fields on PATCH.
+        // Since the generated McpServerUpdate has no name field, we skip it.
+      }
+      if (mode === 'local') {
+        const envObj: Record<string, string> = {}
+        env.split('\n').forEach((line) => {
+          const eq = line.indexOf('=')
+          if (eq > 0) {
+            envObj[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
+          }
+        })
+        if (command.trim()) patch.command = command.trim()
+        if (args.trim()) {
+          patch.args = args.split(',').map((a) => a.trim()).filter(Boolean)
+        }
+        if (Object.keys(envObj).length > 0) patch.env = envObj
+        const envFileTrimmed = envFile.trim()
+        if (envFileTrimmed) patch.env_file = envFileTrimmed
+      } else {
+        if (url.trim()) patch.url = url.trim()
+        const headers = rowsToRecord(headerRows)
+        if (headers) patch.headers = headers
+      }
+      const adminAsk = requiresAdminAsk.trim()
+        ? requiresAdminAsk.split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined
+      if (adminAsk) patch.requires_admin_ask = adminAsk
+      return patchMcpServer(initialServer.id, patch)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+      addToast({ message: 'MCP server updated', variant: 'success' })
+      handleClose()
+    },
+    onError: (err: unknown) =>
+      addToast({
+        message: isApiError(err)
+          ? err.userMessage
+          : err instanceof Error
+          ? err.message
+          : 'Failed to update MCP server',
+        variant: 'error',
+      }),
+  })
+
+  const isPending = isAdding || isPatching
+
   function handleClose() {
-    setName('')
-    setMode('network')
-    setCommand('')
-    setArgs('')
-    setEnv('')
-    setUrl('')
-    setPendingLocal(false)
-    setConfirmedLocal(false)
     onOpenChange(false)
   }
 
   function handleModeSelect(selected: ConnectMode) {
     if (selected === mode) return
     if (selected === 'local') {
-      // Opening stdio requires confirmation
-      setPendingLocal(true)
+      // Opening stdio requires confirmation (skip if already confirmed in edit mode)
+      if (confirmedLocal) {
+        setMode('local')
+      } else {
+        setPendingLocal(true)
+      }
     } else {
       setMode('network')
       setConfirmedLocal(false)
@@ -222,6 +347,18 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
     setMode('network')
   }
 
+  function handleAddHeaderRow() {
+    setHeaderRows((prev) => [...prev, { key: '', value: '' }])
+  }
+
+  function handleRemoveHeaderRow(idx: number) {
+    setHeaderRows((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  function handleHeaderRowChange(idx: number, field: 'key' | 'value', val: string) {
+    setHeaderRows((prev) => prev.map((row, i) => i === idx ? { ...row, [field]: val } : row))
+  }
+
   const networkUrlValid = url.trim().length > 0 && isValidUrlScheme(url.trim())
   const networkUrlIsInternal = url.trim().length > 0 && isInternalAddress(url.trim())
   const networkUrlBadScheme =
@@ -232,6 +369,13 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
     (mode === 'local'
       ? command.trim().length > 0
       : networkUrlValid)
+
+  // In edit mode, name is display-only (not editable via PATCH) but still
+  // required for the canSubmit check — so we allow submitting even if user
+  // hasn't touched name.
+  const canSubmitEdit = editMode
+    ? (mode === 'local' ? true : networkUrlValid || url.trim().length === 0)
+    : canSubmit
 
   return (
     <>
@@ -248,17 +392,20 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
           data-testid="mcp-sheet"
         >
           <SheetHeader className="pb-4 border-b border-[var(--color-border)]">
-            <SheetTitle>Add MCP Server</SheetTitle>
+            <SheetTitle>{editMode ? 'Edit MCP server' : 'Add MCP Server'}</SheetTitle>
             <SheetDescription>
-              Connect a Model Context Protocol server to extend agent capabilities.{' '}
-              <a
-                href="https://modelcontextprotocol.io/docs"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline text-[var(--color-accent)] hover:opacity-80"
-              >
-                Learn more
-              </a>
+              {editMode
+                ? 'Update the configuration for this MCP server.'
+                : <>Connect a Model Context Protocol server to extend agent capabilities.{' '}
+                  <a
+                    href="https://modelcontextprotocol.io/docs"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline text-[var(--color-accent)] hover:opacity-80"
+                  >
+                    Learn more
+                  </a></>
+              }
             </SheetDescription>
           </SheetHeader>
 
@@ -266,13 +413,17 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
             {/* Server name */}
             <div className="space-y-1">
               <label htmlFor="mcp-name" className="text-xs text-[var(--color-muted)]">Name</label>
-              <Input
-                id="mcp-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="my-mcp-server"
-                className="text-sm"
-              />
+              {editMode ? (
+                <p className="text-sm text-[var(--color-secondary)] px-1 py-2">{name}</p>
+              ) : (
+                <Input
+                  id="mcp-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="my-mcp-server"
+                  className="text-sm"
+                />
+              )}
             </div>
 
             {/* Connect mode */}
@@ -324,43 +475,109 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
               )}
             </div>
 
-            {/* Network mode: URL field */}
+            {/* Network mode: URL field + Headers (G9) */}
             {mode === 'network' && (
-              <div className="space-y-1">
-                <label htmlFor="mcp-url" className="text-xs text-[var(--color-muted)]">
-                  Server URL
-                </label>
-                <Input
-                  id="mcp-url"
-                  data-testid="network-url"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://mcp.example.com/sse"
-                  className="text-sm font-mono"
-                />
-                {networkUrlBadScheme && (
-                  <p className="text-[11px] text-[var(--color-error)]">
-                    Use https:// (or http:// for localhost only).
-                  </p>
-                )}
-                {networkUrlIsInternal && networkUrlValid && (
-                  <div
-                    className="flex items-start gap-1.5 text-[11px] text-amber-400"
-                    data-testid="ssrf-caution"
-                    role="status"
-                  >
-                    <Warning size={13} weight="fill" className="mt-0.5 shrink-0" />
-                    <span>
-                      This URL points to an internal or private address. Connecting to
-                      internal services may expose sensitive data (SSRF risk). The
-                      backend enforces the authoritative guard.
-                    </span>
+              <>
+                <div className="space-y-1">
+                  <label htmlFor="mcp-url" className="text-xs text-[var(--color-muted)]">
+                    Server URL
+                  </label>
+                  <Input
+                    id="mcp-url"
+                    data-testid="network-url"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="https://mcp.example.com/sse"
+                    className="text-sm font-mono"
+                  />
+                  {networkUrlBadScheme && (
+                    <p className="text-[11px] text-[var(--color-error)]">
+                      Use https:// (or http:// for localhost only).
+                    </p>
+                  )}
+                  {networkUrlIsInternal && networkUrlValid && (
+                    <div
+                      className="flex items-start gap-1.5 text-[11px] text-amber-400"
+                      data-testid="ssrf-caution"
+                      role="status"
+                    >
+                      <Warning size={13} weight="fill" className="mt-0.5 shrink-0" />
+                      <span>
+                        This URL points to an internal or private address. Connecting to
+                        internal services may expose sensitive data (SSRF risk). The
+                        backend enforces the authoritative guard.
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* G9: Headers key/value editor (sse/http only) */}
+                <AdvancedDisclosure
+                  title="Advanced"
+                  summary="headers, admin-ask"
+                >
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <span className="text-xs text-[var(--color-muted)]">HTTP headers (optional)</span>
+                      <div className="space-y-1.5">
+                        {headerRows.map((row, idx) => (
+                          <div key={idx} className="flex gap-1.5 items-center">
+                            <Input
+                              value={row.key}
+                              onChange={(e) => handleHeaderRowChange(idx, 'key', e.target.value)}
+                              placeholder="Header-Name"
+                              className="text-xs font-mono flex-1"
+                              data-testid={`header-key-${idx}`}
+                            />
+                            <Input
+                              value={row.value}
+                              onChange={(e) => handleHeaderRowChange(idx, 'value', e.target.value)}
+                              placeholder="value"
+                              className="text-xs font-mono flex-1"
+                              data-testid={`header-value-${idx}`}
+                            />
+                            {headerRows.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveHeaderRow(idx)}
+                                className="text-[var(--color-muted)] hover:text-[var(--color-error)] p-1 rounded shrink-0"
+                                aria-label="Remove header"
+                              >
+                                <Trash size={13} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={handleAddHeaderRow}
+                          className="flex items-center gap-1 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                          data-testid="add-header-row"
+                        >
+                          <Plus size={11} /> Add header
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label htmlFor="mcp-admin-ask" className="text-xs text-[var(--color-muted)]">
+                        Requires admin approval (comma-separated tool names, optional)
+                      </label>
+                      <Input
+                        id="mcp-admin-ask"
+                        data-testid="requires-admin-ask"
+                        value={requiresAdminAsk}
+                        onChange={(e) => setRequiresAdminAsk(e.target.value)}
+                        placeholder="delete_record, drop_table"
+                        className="text-xs font-mono"
+                      />
+                    </div>
                   </div>
-                )}
-              </div>
+                </AdvancedDisclosure>
+              </>
             )}
 
-            {/* Local program mode: command / args / env under AdvancedDisclosure */}
+            {/* Local program mode: command / args / env / env_file / admin-ask (G9) */}
             {mode === 'local' && (
               <AdvancedDisclosure
                 title="Command &amp; environment"
@@ -408,6 +625,36 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
                       className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-mono text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] resize-none"
                     />
                   </div>
+
+                  {/* G9: Env file (stdio only) */}
+                  <div className="space-y-1">
+                    <label htmlFor="mcp-env-file" className="text-xs text-[var(--color-muted)]">
+                      Env file path (optional)
+                    </label>
+                    <Input
+                      id="mcp-env-file"
+                      data-testid="env-file"
+                      value={envFile}
+                      onChange={(e) => setEnvFile(e.target.value)}
+                      placeholder="/etc/omnipus/mcp-server.env"
+                      className="text-xs font-mono"
+                    />
+                  </div>
+
+                  {/* G9: Requires admin-ask (both) */}
+                  <div className="space-y-1">
+                    <label htmlFor="mcp-admin-ask-stdio" className="text-xs text-[var(--color-muted)]">
+                      Requires admin approval (comma-separated tool names, optional)
+                    </label>
+                    <Input
+                      id="mcp-admin-ask-stdio"
+                      data-testid="requires-admin-ask"
+                      value={requiresAdminAsk}
+                      onChange={(e) => setRequiresAdminAsk(e.target.value)}
+                      placeholder="delete_record, drop_table"
+                      className="text-xs font-mono"
+                    />
+                  </div>
                 </div>
               </AdvancedDisclosure>
             )}
@@ -425,10 +672,13 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
             <Button
               size="sm"
               data-testid="submit-add"
-              onClick={() => doAdd()}
-              disabled={!canSubmit || isPending}
+              onClick={() => editMode ? doPatch() : doAdd()}
+              disabled={!(editMode ? canSubmitEdit : canSubmit) || isPending}
             >
-              {isPending ? 'Adding...' : 'Add server'}
+              {isPending
+                ? (editMode ? 'Saving...' : 'Adding...')
+                : (editMode ? 'Save changes' : 'Add server')
+              }
             </Button>
           </SheetFooter>
         </SheetContent>

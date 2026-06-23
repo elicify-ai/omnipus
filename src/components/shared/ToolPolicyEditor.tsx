@@ -128,6 +128,9 @@ function detectActivePreset(value: ToolPolicyValue): RolePreset | null {
 /**
  * Extract the MCP server name from a registered MCP tool name.
  *
+ * Fallback only — used when a tool has no server_id field (older payloads).
+ * Prefer grouping by tool.server_id (see groupMcpByServer).
+ *
  * The backend (pkg/tools/mcp_tool.go MCPTool.Name()) formats MCP tool names as:
  *   mcp_<sanitizedServer>_<sanitizedTool>
  * with an optional hash suffix when sanitization is lossy or the name exceeds
@@ -161,11 +164,44 @@ function mcpServerFromToolName(toolName: string): string {
   return withoutPrefix.slice(0, firstUnderscore)
 }
 
-/** Group MCP tools by server name derived from the tool's registered name. */
+/**
+ * Compute the longest common prefix of a list of tool names that ends with '_'.
+ *
+ * For a group of MCP tools like ['mcp_github_mcp_search', 'mcp_github_mcp_list'],
+ * this returns 'mcp_github_mcp_'. Appending '*' gives the wildcard policy key.
+ *
+ * Returns '' when no common underscore-terminated prefix exists (safe fallback —
+ * the caller should not write a wildcard in that case, but in practice every MCP
+ * group shares at least the 'mcp_<server>_' prefix).
+ */
+function longestCommonUnderscorePrefix(toolNames: string[]): string {
+  if (toolNames.length === 0) return ''
+  // Find the longest common character prefix of all names.
+  let prefix = toolNames[0]
+  for (let i = 1; i < toolNames.length; i++) {
+    const name = toolNames[i]
+    let j = 0
+    while (j < prefix.length && j < name.length && prefix[j] === name[j]) j++
+    prefix = prefix.slice(0, j)
+    if (prefix === '') return ''
+  }
+  // Trim to the last '_' (inclusive) so the prefix ends with '_'.
+  const lastUnderscore = prefix.lastIndexOf('_')
+  if (lastUnderscore === -1) return ''
+  return prefix.slice(0, lastUnderscore + 1)
+}
+
+/**
+ * Group MCP tools by server.
+ *
+ * Uses tool.server_id when present (unambiguous, even when the server name
+ * contains underscores). Falls back to mcpServerFromToolName for older
+ * payloads that pre-date the server_id field.
+ */
 function groupMcpByServer(mcpTools: RegistryTool[]): Record<string, RegistryTool[]> {
   const servers: Record<string, RegistryTool[]> = {}
   for (const tool of mcpTools) {
-    const serverName = mcpServerFromToolName(tool.name)
+    const serverName = tool.server_id != null ? tool.server_id : mcpServerFromToolName(tool.name)
     if (!servers[serverName]) servers[serverName] = []
     servers[serverName].push(tool)
   }
@@ -325,6 +361,146 @@ function CategorySection({
   )
 }
 
+/**
+ * McpServerSection — collapsible row for a single MCP server group.
+ *
+ * The header contains the server name + a per-server bulk allow/ask/deny control.
+ * Bulk controls write a single wildcard policy key (`<commonPrefix>*`) into the
+ * policies map. The common prefix is the longest prefix of all tool names in the
+ * group that ends with '_' (e.g. `mcp_github_mcp_` for tools from the server
+ * "github_mcp"). Allow removes the wildcard key; Ask/Deny sets it.
+ *
+ * The trigger button carries data-testid="advanced-disclosure-trigger" for
+ * compatibility with existing tests that look for that attribute.
+ */
+function McpServerSection({
+  server,
+  serverTools,
+  policies,
+  defaultPolicy,
+  onToolChange,
+  onWildcardPolicy,
+  disabled,
+  globalPolicies,
+}: {
+  server: string
+  serverTools: RegistryTool[]
+  policies: Record<string, ToolPolicy>
+  defaultPolicy: ToolPolicy
+  onToolChange: (toolId: string, p: ToolPolicy) => void
+  onWildcardPolicy: (wildcardKey: string, p: ToolPolicy | null) => void
+  disabled?: boolean
+  globalPolicies?: ToolPolicyValue
+}) {
+  const [open, setOpen] = useState(false)
+
+  // Compute the wildcard key from the common underscore-terminated prefix of
+  // all tool names. Never re-sanitize the server name — derive from actual names.
+  const wildcardKey = useMemo(() => {
+    const prefix = longestCommonUnderscorePrefix(serverTools.map((t) => t.name))
+    return prefix ? `${prefix}*` : null
+  }, [serverTools])
+
+  // Reflect current per-server state: look up the wildcard key in policies.
+  const currentWildcard: ToolPolicy | null = wildcardKey != null ? (policies[wildcardKey] ?? null) : null
+
+  const BULK_BUTTON_CLASS = (active: boolean, policy: ToolPolicy) => {
+    const baseInactive = 'border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
+    const activeAllow = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+    const activeAsk   = 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+    const activeDeny  = 'bg-red-500/20 text-red-400 border-red-500/40'
+    if (!active) return baseInactive
+    if (policy === 'allow') return activeAllow
+    if (policy === 'ask')   return activeAsk
+    return activeDeny
+  }
+
+  return (
+    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
+      {/* Header row: toggle + server name + bulk controls */}
+      <div className="flex items-center justify-between px-3 py-2">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-2 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors min-w-0 flex-1 text-left"
+          data-testid="advanced-disclosure-trigger"
+        >
+          <span className="truncate">{server}</span>
+          <span className="text-[11px] font-normal text-[var(--color-muted)] shrink-0">
+            {serverTools.length} tool{serverTools.length !== 1 ? 's' : ''}
+          </span>
+          {open ? <CaretUp size={13} className="shrink-0" /> : <CaretDown size={13} className="shrink-0" />}
+        </button>
+
+        {/* Per-server bulk allow/ask/deny — only shown when a wildcard key is derivable */}
+        {wildcardKey != null && (
+          <div
+            className="flex gap-1 shrink-0 ml-3"
+            data-testid={`mcp-server-bulk-${server}`}
+          >
+            {ALL_POLICIES.map((p) => {
+              // Allow = no wildcard override (remove the key)
+              const isActive = p === 'allow' ? currentWildcard === null : currentWildcard === p
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  disabled={disabled}
+                  aria-pressed={isActive}
+                  data-testid={`mcp-server-bulk-${server}-${p}`}
+                  title={`Set all ${server} tools to ${p}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (p === 'allow') {
+                      onWildcardPolicy(wildcardKey, null)
+                    } else {
+                      onWildcardPolicy(wildcardKey, p)
+                    }
+                  }}
+                  className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors capitalize disabled:opacity-40 disabled:cursor-not-allowed ${BULK_BUTTON_CLASS(isActive, p)}`}
+                >
+                  {p.charAt(0).toUpperCase() + p.slice(1)}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Expanded content */}
+      {open && (
+        <div className="px-3 pb-3 border-t border-[var(--color-border)] pt-3" data-testid="advanced-disclosure-content">
+          {/* Source badge */}
+          <div className="flex items-center gap-1.5 mb-2">
+            <Database size={11} className="text-[var(--color-muted)]" />
+            <span
+              className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/40"
+              data-testid={`mcp-source-badge-${server}`}
+            >
+              MCP
+            </span>
+            <span className="text-[10px] text-[var(--color-muted)]">{server}</span>
+          </div>
+          <div className="space-y-0.5" data-testid={`mcp-server-${server}`}>
+            {serverTools.map((tool) => (
+              <CategoryToolRow
+                key={tool.name}
+                tool={tool}
+                policies={policies}
+                defaultPolicy={defaultPolicy}
+                onChange={onToolChange}
+                disabled={disabled}
+                globalPolicies={globalPolicies}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolicies }: ToolPolicyEditorProps) {
@@ -392,6 +568,20 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
     onChange({ default_policy: p, policies: newPolicies })
   }
 
+  /**
+   * Bulk-set a per-server wildcard policy key (e.g. `mcp_github_mcp_*`).
+   * Pass null to remove the key (Allow = revert to default).
+   */
+  function handleWildcardPolicy(wildcardKey: string, p: ToolPolicy | null) {
+    const newPolicies = { ...policies }
+    if (p === null) {
+      delete newPolicies[wildcardKey]
+    } else {
+      newPolicies[wildcardKey] = p
+    }
+    onChange({ default_policy: defaultPolicy, policies: newPolicies })
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
@@ -453,36 +643,17 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
           <p className="text-xs font-medium text-[var(--color-muted)]">MCP server tools</p>
           <div className="space-y-1.5">
             {Object.entries(groupedMcp).map(([server, serverTools]) => (
-              <AdvancedDisclosure
+              <McpServerSection
                 key={server}
-                title={`${server}`}
-                summary={`${serverTools.length} tool${serverTools.length !== 1 ? 's' : ''} from MCP server`}
-              >
-                {/* Source badge in the expanded content */}
-                <div className="flex items-center gap-1.5 mb-2">
-                  <Database size={11} className="text-[var(--color-muted)]" />
-                  <span
-                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/40"
-                    data-testid={`mcp-source-badge-${server}`}
-                  >
-                    MCP
-                  </span>
-                  <span className="text-[10px] text-[var(--color-muted)]">{server}</span>
-                </div>
-                <div className="space-y-0.5" data-testid={`mcp-server-${server}`}>
-                  {serverTools.map((tool) => (
-                    <CategoryToolRow
-                      key={tool.name}
-                      tool={tool}
-                      policies={policies}
-                      defaultPolicy={defaultPolicy}
-                      onChange={handleToolPolicy}
-                      disabled={disabled}
-                      globalPolicies={globalPolicies}
-                    />
-                  ))}
-                </div>
-              </AdvancedDisclosure>
+                server={server}
+                serverTools={serverTools}
+                policies={policies}
+                defaultPolicy={defaultPolicy}
+                onToolChange={handleToolPolicy}
+                onWildcardPolicy={handleWildcardPolicy}
+                disabled={disabled}
+                globalPolicies={globalPolicies}
+              />
             ))}
           </div>
         </div>

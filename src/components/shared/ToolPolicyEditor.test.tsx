@@ -801,3 +801,170 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
     expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
   })
 })
+
+// ── G11: MCP grouping by server_id (not name-parse) ───────────────────────────
+
+describe('ToolPolicyEditor — G11: MCP grouping by server_id', () => {
+  /**
+   * (a) server_id "github_mcp" + tool name "mcp_github_mcp_search".
+   *
+   * The name-parse fallback would extract "github" (first segment after mcp_),
+   * producing group "github". With server_id present, grouping must use the
+   * server_id value "github_mcp" and produce ONE group, not "github".
+   */
+  it('(a) groups by server_id even when server name contains an underscore', async () => {
+    const user = userEvent.setup()
+    const tools: RegistryTool[] = [
+      makeTool({
+        name: 'mcp_github_mcp_search',
+        source: 'mcp',
+        scope: 'general',
+        category: 'search',
+        server_id: 'github_mcp',
+      }),
+      makeTool({
+        name: 'mcp_github_mcp_list',
+        source: 'mcp',
+        scope: 'general',
+        category: 'search',
+        server_id: 'github_mcp',
+      }),
+    ]
+    renderEditor(tools)
+    const mcpSection = screen.getByTestId('mcp-tools-section')
+    // Must produce exactly ONE disclosure for server "github_mcp", not "github".
+    const triggers = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')
+    expect(triggers.length).toBe(1)
+    // The trigger text must include the full server name "github_mcp".
+    expect(triggers[0]).toHaveTextContent('github_mcp')
+    // Expand and verify both tools are inside.
+    await user.click(triggers[0])
+    expect(screen.getByTestId('tool-row-mcp_github_mcp_search')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-row-mcp_github_mcp_list')).toBeInTheDocument()
+  })
+
+  /**
+   * (b) Fallback: no server_id → name-parse still works for older payloads.
+   *
+   * Two tools from "mysvr" without a server_id field → name-parse extracts
+   * "mysvr" → ONE group.
+   */
+  it('(b) fallback name-parse grouping works when server_id is absent', async () => {
+    const user = userEvent.setup()
+    const tools: RegistryTool[] = [
+      makeTool({ name: 'mcp_mysvr_tool_a', source: 'mcp', scope: 'general', category: 'web' }),
+      makeTool({ name: 'mcp_mysvr_tool_b', source: 'mcp', scope: 'general', category: 'web' }),
+    ]
+    renderEditor(tools)
+    const mcpSection = screen.getByTestId('mcp-tools-section')
+    const triggers = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')
+    expect(triggers.length).toBe(1)
+    await user.click(triggers[0])
+    expect(screen.getByTestId('tool-row-mcp_mysvr_tool_a')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-row-mcp_mysvr_tool_b')).toBeInTheDocument()
+  })
+})
+
+// ── G10: per-server bulk allow/ask/deny control ────────────────────────────────
+
+describe('ToolPolicyEditor — G10: per-server bulk policy control', () => {
+  /**
+   * The wildcard key for the "myserver" group is "mcp_myserver_*".
+   * MCP_TOOLS = [mcp_myserver_search, mcp_myserver_fetch] → common prefix = "mcp_myserver_".
+   */
+
+  it('per-server bulk control is present in the MCP server group header', () => {
+    renderEditor(MCP_TOOLS)
+    const bulkControls = screen.getByTestId('mcp-server-bulk-myserver')
+    expect(bulkControls).toBeInTheDocument()
+  })
+
+  it('clicking Deny all writes the mcp_<server>_* wildcard key via onChange', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    renderEditor(MCP_TOOLS, SAFE_VALUE, onChange)
+    const denyBtn = screen.getByTestId('mcp-server-bulk-myserver-deny')
+    await user.click(denyBtn)
+    expect(onChange).toHaveBeenCalledWith({
+      default_policy: 'allow',
+      policies: { 'mcp_myserver_*': 'deny' },
+    })
+  })
+
+  it('clicking Ask all writes the mcp_<server>_* wildcard key with ask', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    renderEditor(MCP_TOOLS, SAFE_VALUE, onChange)
+    const askBtn = screen.getByTestId('mcp-server-bulk-myserver-ask')
+    await user.click(askBtn)
+    expect(onChange).toHaveBeenCalledWith({
+      default_policy: 'allow',
+      policies: { 'mcp_myserver_*': 'ask' },
+    })
+  })
+
+  it('clicking Allow all removes the wildcard key from policies', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const startValue: ToolPolicyValue = {
+      default_policy: 'allow',
+      policies: { 'mcp_myserver_*': 'deny' },
+    }
+    renderEditor(MCP_TOOLS, startValue, onChange)
+    const allowBtn = screen.getByTestId('mcp-server-bulk-myserver-allow')
+    await user.click(allowBtn)
+    expect(onChange).toHaveBeenCalledWith({
+      default_policy: 'allow',
+      policies: {},
+    })
+  })
+
+  it('Deny bulk button is aria-pressed when the wildcard key is already set to deny', () => {
+    const valueWithWildcard: ToolPolicyValue = {
+      default_policy: 'allow',
+      policies: { 'mcp_myserver_*': 'deny' },
+    }
+    renderEditor(MCP_TOOLS, valueWithWildcard)
+    const denyBtn = screen.getByTestId('mcp-server-bulk-myserver-deny')
+    expect(denyBtn).toHaveAttribute('aria-pressed', 'true')
+    // Allow should NOT be active
+    expect(screen.getByTestId('mcp-server-bulk-myserver-allow')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('Allow bulk button is aria-pressed when no wildcard key exists (default state)', () => {
+    renderEditor(MCP_TOOLS, SAFE_VALUE)
+    const allowBtn = screen.getByTestId('mcp-server-bulk-myserver-allow')
+    expect(allowBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('mcp-server-bulk-myserver-deny')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('bulk Deny for server with underscore in server_id writes correct wildcard key', async () => {
+    // server_id = "github_mcp", tools: mcp_github_mcp_search, mcp_github_mcp_list
+    // common prefix = "mcp_github_mcp_" → wildcard key = "mcp_github_mcp_*"
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const tools: RegistryTool[] = [
+      makeTool({
+        name: 'mcp_github_mcp_search',
+        source: 'mcp',
+        scope: 'general',
+        category: 'search',
+        server_id: 'github_mcp',
+      }),
+      makeTool({
+        name: 'mcp_github_mcp_list',
+        source: 'mcp',
+        scope: 'general',
+        category: 'search',
+        server_id: 'github_mcp',
+      }),
+    ]
+    renderEditor(tools, SAFE_VALUE, onChange)
+    const denyBtn = screen.getByTestId('mcp-server-bulk-github_mcp-deny')
+    await user.click(denyBtn)
+    expect(onChange).toHaveBeenCalledWith({
+      default_policy: 'allow',
+      policies: { 'mcp_github_mcp_*': 'deny' },
+    })
+  })
+})

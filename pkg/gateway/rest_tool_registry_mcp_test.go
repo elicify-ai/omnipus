@@ -121,6 +121,107 @@ func TestREST_GetTools_IncludesMCPTools(t *testing.T) {
 	assert.Contains(t, mcpEntry, "category", "entry must contain category")
 }
 
+// TestREST_GetTools_MCPToolServerId verifies that GET /api/v1/tools populates the
+// server_id field for MCP tool entries (G11), enabling the SPA to group MCP tools
+// by server without parsing the tool name (which is lossy for servers with underscores
+// in their name).
+//
+// BDD: Given a gateway with an MCPRegistry containing server "my-server" and tool "mcp_myserver_echo",
+//
+//	When GET /api/v1/tools is called with a valid auth token,
+//	Then the response entry for "mcp_myserver_echo" has server_id == "my-server".
+//	And the source field remains "mcp" (unchanged).
+//
+// Traces to: G11 (server_id in GET /api/v1/tools), rest_tool_registry.go HandleToolsRegistry.
+func TestREST_GetTools_MCPToolServerId(t *testing.T) {
+	const mcpToolName = "mcp_myserver_echo"
+	const serverID = "my-server"
+
+	api := newTestRestAPIWithHome(t)
+	mcpReg := tools.NewMCPRegistry()
+	builtins := tools.NewBuiltinRegistry()
+	collisions := mcpReg.RegisterServerTools(serverID, []tools.Tool{
+		&registryMCPTestTool{name: mcpToolName},
+	}, builtins)
+	require.Empty(t, collisions, "test MCP tool registration must not produce collisions")
+	api.mcpRegistry = mcpReg
+	// Leave builtinRegistry nil so only the MCP path is exercised.
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
+	r = withAdminRole(r)
+	w := httptest.NewRecorder()
+	api.HandleToolsRegistry(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "GET /api/v1/tools must return 200: %s", w.Body)
+
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries), "response must unmarshal as array")
+
+	// Find the MCP tool entry.
+	var mcpEntry map[string]any
+	for _, e := range entries {
+		if e["name"] == mcpToolName {
+			mcpEntry = e
+			break
+		}
+	}
+	require.NotNil(t, mcpEntry,
+		"response must contain entry with name=%q; got %d entries", mcpToolName, len(entries))
+
+	// G11: server_id must equal the registered server ID.
+	gotServerID, hasServerID := mcpEntry["server_id"]
+	assert.True(t, hasServerID, "MCP tool entry must have server_id field")
+	assert.Equal(t, serverID, gotServerID,
+		"server_id must equal the server ID the tool was registered under; got %v", gotServerID)
+
+	// source must still be "mcp" (not "mcp:my-server" — SPA source==="mcp" partition).
+	assert.Equal(t, "mcp", mcpEntry["source"],
+		"source must remain 'mcp' even with server_id populated")
+}
+
+// TestREST_GetTools_BuiltinToolNoServerId verifies that builtin tools do NOT carry
+// a server_id field in the GET /api/v1/tools response.
+//
+// BDD: Given a gateway with a builtin registry containing a non-MCP tool,
+//
+//	When GET /api/v1/tools is called,
+//	Then the builtin tool entry does NOT have a server_id key in the JSON.
+//
+// Traces to: G11 (server_id is nil/absent for builtins, omitempty).
+func TestREST_GetTools_BuiltinToolNoServerId(t *testing.T) {
+	const builtinToolName = "my_builtin_tool"
+
+	api := newTestRestAPIWithHome(t)
+	builtinReg := tools.NewBuiltinRegistry()
+	err := builtinReg.RegisterBuiltin(&registryMCPTestTool{name: builtinToolName})
+	require.NoError(t, err, "must register builtin tool")
+	api.builtinRegistry = builtinReg
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
+	r = withAdminRole(r)
+	w := httptest.NewRecorder()
+	api.HandleToolsRegistry(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "GET /api/v1/tools must return 200: %s", w.Body)
+
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+
+	var builtinEntry map[string]any
+	for _, e := range entries {
+		if e["name"] == builtinToolName {
+			builtinEntry = e
+			break
+		}
+	}
+	require.NotNil(t, builtinEntry, "response must contain builtin tool entry")
+
+	// Builtin tool must NOT have a server_id key (omitempty on nil *string).
+	_, hasServerID := builtinEntry["server_id"]
+	assert.False(t, hasServerID, "builtin tool must NOT have server_id field")
+	assert.Equal(t, "builtin", builtinEntry["source"], "builtin tool must have source='builtin'")
+}
+
 // TestREST_GetTools_MCPToolDedup verifies the first-registration-wins deduplication
 // rule: when a tool name appears first as a builtin, the MCP registry's entry for
 // the same name is silently dropped from the GET /api/v1/tools response.

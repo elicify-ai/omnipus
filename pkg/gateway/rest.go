@@ -48,6 +48,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/dapicom-ai/omnipus/pkg/mcp"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/notifications"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
@@ -5038,6 +5039,12 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && serverID != "" && subSuffix == "tools":
 		a.listMCPServerTools(w, serverID)
 
+	case r.Method == http.MethodPost && serverID != "" && subSuffix == "test":
+		a.testMCPServer(w, r, serverID)
+
+	case r.Method == http.MethodPatch && serverID != "" && subSuffix == "":
+		a.patchMCPServer(w, r, serverID)
+
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -5058,12 +5065,14 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 		case "http":
 			transport = gen.McpServerTransportHttp
 		}
+		enabled := srv.Enabled
 		result = append(result, gen.McpServer{
 			Id:        name,
 			Name:      name,
 			Transport: transport,
 			Status:    gen.McpServerStatusDisconnected,
 			ToolCount: 0,
+			Enabled:   &enabled,
 		})
 	}
 	// Sort for deterministic response order.
@@ -5191,6 +5200,15 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		if req.Env != nil && len(*req.Env) > 0 {
 			entry["env"] = *req.Env
 		}
+		if req.EnvFile != nil && *req.EnvFile != "" {
+			entry["env_file"] = *req.EnvFile
+		}
+		if req.Headers != nil && len(*req.Headers) > 0 {
+			entry["headers"] = *req.Headers
+		}
+		if req.RequiresAdminAsk != nil && len(*req.RequiresAdminAsk) > 0 {
+			entry["requires_admin_ask"] = *req.RequiresAdminAsk
+		}
 		servers[req.Name] = entry
 		return nil
 	}); err != nil {
@@ -5286,6 +5304,193 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
 		return
 	}
 	jsonOK(w, map[string]string{"status": "removed", "id": id})
+}
+
+// testMCPServer handles POST /api/v1/mcp-servers/{id}/test (G7).
+// Opens a temporary MCP manager, attempts to connect to the configured server,
+// reports the result, then closes the manager. No persistent state is changed.
+// Returns McpServerTestResponse: success=true on live connection, success=false (HTTP 200)
+// when the server is unreachable or misconfigured.
+func (a *restAPI) testMCPServer(w http.ResponseWriter, _ *http.Request, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid server id")
+		return
+	}
+	cfg := a.agentLoop.GetConfig()
+	srv, exists := cfg.Tools.MCP.Servers[id]
+	if !exists {
+		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tmpMgr := mcp.NewManager()
+	defer func() {
+		if err := tmpMgr.Close(); err != nil {
+			slog.Warn("rest: test mcp server: close temp manager", "id", id, "error", err)
+		}
+	}()
+
+	if err := tmpMgr.ConnectServer(ctx, id, srv); err != nil {
+		resp := gen.McpServerTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("connection failed: %s", err.Error()),
+		}
+		jsonOK(w, resp)
+		return
+	}
+
+	conn, ok := tmpMgr.GetServer(id)
+	if !ok {
+		resp := gen.McpServerTestResponse{
+			Success: false,
+			Message: "connected but server entry missing",
+		}
+		jsonOK(w, resp)
+		return
+	}
+
+	toolCount := len(conn.Tools)
+	toolNames := make([]string, toolCount)
+	for i, t := range conn.Tools {
+		toolNames[i] = t.Name
+	}
+	sort.Strings(toolNames)
+
+	msg := fmt.Sprintf("connected successfully; %d tool(s) available", toolCount)
+	resp := gen.McpServerTestResponse{
+		Success:   true,
+		Message:   msg,
+		ToolCount: &toolCount,
+		Tools:     &toolNames,
+	}
+	jsonOK(w, resp)
+}
+
+// patchMCPServer handles PATCH /api/v1/mcp-servers/{id} (G8).
+// Merges the provided (non-nil) fields from McpServerUpdate into the stored config
+// entry; omitted fields are preserved. Validates transport-specific constraints
+// when URL is changed.
+func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid server id")
+		return
+	}
+	var req gen.McpServerUpdate
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "McpServerUpdate", &req, validateEnabled) {
+		return
+	}
+
+	// Validate new URL if provided.
+	if req.Url != nil && *req.Url != "" {
+		if !mcpURLSchemeValid(*req.Url) {
+			jsonErr(w, http.StatusUnprocessableEntity,
+				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)")
+			return
+		}
+	}
+
+	var updatedEntry config.MCPServerConfig
+	found := false
+
+	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		tools, _ := m["tools"].(map[string]any)
+		if tools == nil {
+			return fmt.Errorf("mcp server %q not found", id)
+		}
+		mcpSection, _ := tools["mcp"].(map[string]any)
+		if mcpSection == nil {
+			return fmt.Errorf("mcp server %q not found", id)
+		}
+		servers, _ := mcpSection["servers"].(map[string]any)
+		if servers == nil {
+			return fmt.Errorf("mcp server %q not found", id)
+		}
+		existing, ok := servers[id]
+		if !ok {
+			return fmt.Errorf("mcp server %q not found", id)
+		}
+		found = true
+
+		// Round-trip the existing entry through JSON to get a typed MCPServerConfig.
+		raw, err := json.Marshal(existing)
+		if err != nil {
+			return fmt.Errorf("marshal existing entry: %w", err)
+		}
+		var current config.MCPServerConfig
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return fmt.Errorf("unmarshal existing entry: %w", err)
+		}
+
+		// Merge only the fields that the caller provided (non-nil pointer).
+		if req.Enabled != nil {
+			current.Enabled = *req.Enabled
+		}
+		if req.Command != nil {
+			current.Command = *req.Command
+		}
+		if req.Url != nil {
+			current.URL = *req.Url
+		}
+		if req.Args != nil {
+			current.Args = *req.Args
+		}
+		if req.Env != nil {
+			current.Env = *req.Env
+		}
+		if req.EnvFile != nil {
+			current.EnvFile = *req.EnvFile
+		}
+		if req.Headers != nil {
+			current.Headers = *req.Headers
+		}
+		if req.RequiresAdminAsk != nil {
+			current.RequiresAdminAsk = *req.RequiresAdminAsk
+		}
+
+		// Rebuild the map entry from the updated struct so the JSON shape is
+		// consistent with what addMCPServer writes.
+		updated, err := json.Marshal(current)
+		if err != nil {
+			return fmt.Errorf("marshal updated entry: %w", err)
+		}
+		var updatedMap map[string]any
+		if err := json.Unmarshal(updated, &updatedMap); err != nil {
+			return fmt.Errorf("unmarshal updated entry: %w", err)
+		}
+		servers[id] = updatedMap
+		updatedEntry = current
+		return nil
+	}); err != nil {
+		if !found || strings.Contains(err.Error(), "not found") {
+			jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
+			return
+		}
+		slog.Error("rest: patch mcp server", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		return
+	}
+
+	transport := gen.McpServerTransportStdio
+	switch updatedEntry.Type {
+	case "sse":
+		transport = gen.McpServerTransportSse
+	case "http":
+		transport = gen.McpServerTransportHttp
+	}
+	enabled := updatedEntry.Enabled
+	resp := gen.McpServer{
+		Id:        id,
+		Name:      id,
+		Transport: transport,
+		Status:    gen.McpServerStatusDisconnected,
+		ToolCount: 0,
+		Enabled:   &enabled,
+	}
+	jsonOK(w, resp)
 }
 
 // --- Tools ---

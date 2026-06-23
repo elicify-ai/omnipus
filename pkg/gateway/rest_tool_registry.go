@@ -101,19 +101,26 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 	var entries []gen.ToolRegistryEntry
 	seen := make(map[string]struct{})
 
-	addTool := func(t tools.Tool, source string) {
+	addTool := func(t tools.Tool, source string, serverID string) {
 		name := t.Name()
 		if _, dup := seen[name]; dup {
 			return // dedup: first registration wins
 		}
 		seen[name] = struct{}{}
-		entries = append(entries, gen.ToolRegistryEntry{
+		entry := gen.ToolRegistryEntry{
 			Name:        name,
 			Description: t.Description(),
 			Scope:       gen.ToolRegistryEntryScope(t.Scope()),
 			Category:    toolCategoryFromTool(t),
 			Source:      gen.ToolRegistryEntrySource(source),
-		})
+		}
+		// G11: populate ServerId for MCP tools so the SPA can group by server
+		// unambiguously without parsing the tool name (which is lossy when a server
+		// name contains underscores). Builtin tools leave ServerId nil.
+		if serverID != "" {
+			entry.ServerId = &serverID
+		}
+		entries = append(entries, entry)
 	}
 
 	// M16: central BuiltinRegistry is the authoritative supply-side source when wired.
@@ -121,14 +128,17 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 	// Full migration to central-registry-only at LLM call assembly is tracked separately.
 	if a.builtinRegistry != nil {
 		for _, t := range a.builtinRegistry.All() {
-			addTool(t, string(toolSourceBuiltin))
+			addTool(t, string(toolSourceBuiltin), "")
 		}
 	}
 
 	// M16: central MCPRegistry provides MCP tools when wired.
+	// G11: look up the per-tool server ID from the registry so the response
+	// carries server_id for each MCP tool entry.
 	if a.mcpRegistry != nil {
 		for _, t := range a.mcpRegistry.All() {
-			addTool(t, "mcp")
+			sid, _ := a.mcpRegistry.GetServerID(t.Name())
+			addTool(t, "mcp", sid)
 		}
 	}
 
@@ -141,10 +151,15 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 			for _, t := range defaultAgent.Tools.GetAll() {
 				// FR-027: source discriminator.
 				source := string(toolSourceBuiltin)
+				var serverID string
 				if t.Category() == tools.CategoryMCP {
 					source = "mcp"
+					// G11: attempt server ID lookup via mcpRegistry if wired.
+					if a.mcpRegistry != nil {
+						serverID, _ = a.mcpRegistry.GetServerID(t.Name())
+					}
 				}
-				addTool(t, source)
+				addTool(t, source, serverID)
 			}
 		}
 	}

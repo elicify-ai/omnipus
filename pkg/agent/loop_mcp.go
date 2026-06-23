@@ -62,6 +62,22 @@ func (r *mcpRuntime) hasManager() bool {
 	return r.manager != nil
 }
 
+// getManager returns the current manager without consuming it.
+// Callers must not close or otherwise mutate the returned manager.
+func (r *mcpRuntime) getManager() *mcp.Manager {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.manager
+}
+
+// GetMCPManager returns the live MCP manager for read-only inspection (e.g. listing
+// connected servers and their tools in REST handlers). The returned pointer is valid
+// only for the duration of the call — the runtime may replace or nil it at any time.
+// Callers MUST NOT call Close on the returned manager.
+func (al *AgentLoop) GetMCPManager() *mcp.Manager {
+	return al.mcp.getManager()
+}
+
 // ensureMCPInitialized loads MCP servers/tools once so both Run() and direct
 // agent mode share the same initialization path. Returns early (without error)
 // when no MCP servers are configured — MCP is operator-configured by adding

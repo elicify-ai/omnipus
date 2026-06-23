@@ -12,11 +12,15 @@ import {
   CaretUp,
   ArrowRight,
   CaretRight,
+  PencilSimple,
+  CircleNotch,
+  FloppyDisk,
 } from '@phosphor-icons/react'
 import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,7 +37,10 @@ import {
   fetchTools,
   deleteSkill,
   deleteMcpServer,
+  testMcpServer,
+  patchMcpServer,
   isApiError,
+  type McpServer,
   type ToolRegistryEntry,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -46,9 +53,11 @@ export function SkillsScreen() {
 
   const [skillBrowserOpen, setSkillBrowserOpen] = useState(false)
   const [mcpModalOpen, setMcpModalOpen] = useState(false)
+  const [mcpEditTarget, setMcpEditTarget] = useState<McpServer | null>(null)
   const [confirmDeleteSkill, setConfirmDeleteSkill] = useState<string | null>(null)
   const [confirmDeleteMcp, setConfirmDeleteMcp] = useState<string | null>(null)
   const [expandedMcp, setExpandedMcp] = useState<string | null>(null)
+  const [testingMcp, setTestingMcp] = useState<string | null>(null)
 
   const { data: rawSkills = [], isLoading: skillsLoading, isError: skillsError } = useQuery({
     queryKey: ['skills'],
@@ -92,6 +101,40 @@ export function SkillsScreen() {
       setConfirmDeleteMcp(null)
     },
   })
+
+  const { mutate: doToggleEnabled } = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      patchMcpServer(id, { enabled }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+    },
+    onError: (err: Error) => {
+      addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
+    },
+  })
+
+  async function handleTestMcp(id: string) {
+    setTestingMcp(id)
+    try {
+      const result = await testMcpServer(id)
+      if (result.success) {
+        queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+        addToast({
+          message: `Connected — ${result.tool_count ?? 0} tool${(result.tool_count ?? 0) !== 1 ? 's' : ''}`,
+          variant: 'success',
+        })
+      } else {
+        addToast({ message: result.message, variant: 'error' })
+      }
+    } catch (err) {
+      addToast({
+        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Test failed',
+        variant: 'error',
+      })
+    } finally {
+      setTestingMcp(null)
+    }
+  }
 
   return (
     <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
@@ -202,7 +245,7 @@ export function SkillsScreen() {
         {/* MCP Servers */}
         <TabsContent value="mcp">
           <div className="flex justify-end mb-3">
-            <Button size="sm" className="gap-1.5" onClick={() => setMcpModalOpen(true)}>
+            <Button size="sm" className="gap-1.5" onClick={() => { setMcpEditTarget(null); setMcpModalOpen(true) }}>
               <Plus size={13} /> Add Server
             </Button>
           </div>
@@ -238,6 +281,37 @@ export function SkillsScreen() {
                         <span className="text-xs text-[var(--color-muted)]">
                           {server.tool_count} tools
                         </span>
+                        {/* Enable/disable toggle (G8) */}
+                        <Switch
+                          checked={server.enabled !== false}
+                          onCheckedChange={(checked) => doToggleEnabled({ id: server.id, enabled: checked })}
+                          aria-label={server.enabled !== false ? `Disable ${server.name}` : `Enable ${server.name}`}
+                          data-testid={`toggle-enabled-${server.id}`}
+                        />
+                        {/* Test button (G7) */}
+                        <button
+                          type="button"
+                          onClick={() => handleTestMcp(server.id)}
+                          disabled={testingMcp === server.id}
+                          className="text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors p-1 rounded disabled:opacity-50"
+                          aria-label={`Test ${server.name}`}
+                          data-testid={`test-mcp-${server.id}`}
+                        >
+                          {testingMcp === server.id
+                            ? <CircleNotch size={14} className="animate-spin" />
+                            : <FloppyDisk size={14} />
+                          }
+                        </button>
+                        {/* Edit button (G8) */}
+                        <button
+                          type="button"
+                          onClick={() => { setMcpEditTarget(server); setMcpModalOpen(true) }}
+                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-1 rounded"
+                          aria-label={`Edit ${server.name}`}
+                          data-testid={`edit-mcp-${server.id}`}
+                        >
+                          <PencilSimple size={14} />
+                        </button>
                         <button
                           type="button"
                           onClick={() => setExpandedMcp(isExpanded ? null : server.id)}
@@ -298,8 +372,15 @@ export function SkillsScreen() {
       {/* Skill browser modal */}
       <SkillBrowser open={skillBrowserOpen} onOpenChange={setSkillBrowserOpen} />
 
-      {/* MCP server add modal */}
-      <McpServerModal open={mcpModalOpen} onOpenChange={setMcpModalOpen} />
+      {/* MCP server add/edit modal */}
+      <McpServerModal
+        open={mcpModalOpen}
+        onOpenChange={(o) => {
+          setMcpModalOpen(o)
+          if (!o) setMcpEditTarget(null)
+        }}
+        initialServer={mcpEditTarget ?? undefined}
+      />
 
       {/* Skill delete confirmation */}
 
