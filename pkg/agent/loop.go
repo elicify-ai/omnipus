@@ -1703,7 +1703,9 @@ func registerSharedTools(
 		// Tools are always registered; whether an agent can actually invoke them
 		// is determined by the policy engine. Chromium presence is checked lazily
 		// at first use and produces a clear error if missing.
-		// browser.evaluate is denied by default via builtinToolPolicies in pkg/policy.
+		// browser.evaluate is denied by default via its executeEnabled gate
+		// (cfg.Sandbox.BrowserEvaluateEnabled); see pkg/tools/browser. (#438: the
+		// pkg/policy.builtinToolPolicies entry is advisory — that path is test-only.)
 		{
 			browserCfg, cfgErr := browser.DefaultConfig()
 			if cfgErr != nil {
@@ -1734,11 +1736,12 @@ func registerSharedTools(
 					browserSSRF = security.NewSSRFChecker(nil)
 				}
 				// browser.evaluate registration: always register the tool so the
-				// LLM sees it in its tool list. The safety floor (deny by default)
-				// is enforced at dispatch time by pkg/policy.builtinToolPolicies
-				// (SEC-04/SEC-06). BrowserEvaluateEnabled=true is still required
-				// as an explicit operator opt-in for the tool to actually execute;
-				// the policy gate provides a second, independent deny layer.
+				// LLM sees it in its tool list. The live safety floor (deny by
+				// default, SEC-04/SEC-06) is the tool's own executeEnabled gate —
+				// BrowserEvaluateEnabled=true is the required explicit operator
+				// opt-in for the tool to actually execute. (#438: the
+				// pkg/policy.builtinToolPolicies entry is advisory; that path is
+				// test-only, not a live dispatch gate.)
 				evaluateEnabled := cfg.Sandbox.BrowserEvaluateEnabled
 				mgr, regErr := browser.RegisterTools(agent.Tools, browserCfg, browserSSRF, evaluateEnabled)
 				if regErr != nil {
