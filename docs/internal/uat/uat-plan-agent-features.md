@@ -1,9 +1,14 @@
 # UAT Plan: Human-Impersonated Exploratory Testing via Playwright
 
-**Date:** 2026-06-20
-**Scope:** All agent-related features — agent CRUD, running/chat, delegation, task management, boards, scheduled tasks, automations
+**Date:** 2026-06-20 · **Revised:** 2026-06-23
+**Scope:** All agent-related features — agent CRUD, running/chat, delegation, task management, boards, scheduled tasks, automations — **plus (2026-06-23 revision):** Settings → Security (deep), MCP server configuration, and chat file/image/video upload.
 **Method:** LLM impersonates a human user; drives the SPA through Playwright MCP; takes screenshots at every step; reports bugs, UX issues, and coverage gaps
 **Provider:** OpenRouter (`z-ai/glm-5-turbo`) — real LLM responses for agent running/delegation tests
+
+> **2026-06-23 revision note.** Journeys 11–13 (Security, MCP, Upload) were added after a code-level validation pass + a live smoke against a booted gateway. Three things to keep in mind when running the *original* Journeys 1–10:
+> - **Roster re-cast:** the seed roster is now **4 base agents** (Mia · Assistant ⭐, Jim · **Planner & Orchestrator**, Ava · Builder, Ray · Scout) **+ 4 delegation-only workers** (Worker, Planner, Explorer, Researcher). **Max is retired.** (Journey 2 still says "5 agents incl. Worker" — stale.)
+> - **Workspaces IA:** chat/tasks/schedules are **workspace-scoped**. `/tasks`, `/command-center`, `/automations` now **redirect** into workspace tabs (Board/Calendar); there is **no global Tasks screen** and **no "Channels" screen** (it's **Connectors**). Journeys 7–8 describe a pre-Workspaces product and are largely obsolete — the board lives at `/workspaces/$id/board` with tabs Board/List/Graph/Calendar/Team (no "Execution"), and the "two task systems" + "automations dead-end" framings no longer apply (unified Task entity; schedules in Agent Profile → Schedules + workspace Calendar).
+> - The 5 original "Known Issues" (cli_path, GTD WS frame, heartbeat global, command-center dead-end, GTD `/start` 403) are all **fixed or superseded** — verify-and-close rather than reproduce.
 
 ---
 
@@ -118,32 +123,157 @@ I (the LLM) impersonate a human user. I boot the gateway, complete onboarding th
 
 ---
 
+## (2026-06-23 revision) New Journeys 11–13
+
+These cover surfaces the original plan never tested. Each lists the route, the
+exact controls to exercise, the **expected** behaviour, and the **known gaps to
+confirm** (from a code-level validation pass — cite `file:line` in the report).
+
+### Journey 11: Settings → Security (deep)
+
+Route: `/settings` → **Security** tab. (Sandbox / God-mode / Global tool policy /
+Credential vault live under the **Advanced / technical details** disclosure further
+down the tab.)
+
+- Screenshot the Security tab: **Security Health** score, **Agent tool access**
+  (Must ask first / Run freely), **Shell command approval**, **Daily spending
+  limit**, **Skill Trust**, **Prompt Guard** → screenshot each.
+- Expand **Advanced / technical details** → screenshot **Process Sandbox**
+  (mode enforce/permissive/off, default profile, allowed paths [read-only],
+  **SSRF / internal-CIDR** policy, shell deny-patterns), **Global tool policies**
+  (default + per-tool allow/ask/deny), **God-mode** toggle, **Credential vault**,
+  **Audit log** (View).
+- **Re-auth (password step-up) probe — the core of this journey.** Change each of
+  the following and record whether a password step-up dialog appears:
+  - God-mode toggle · Sandbox config · Global tool policies → **expect re-auth**.
+  - **Switch policy_mode (Deny → Allow)** → **expect re-auth, but currently NONE** (gap).
+  - **Disable audit logging** → **expect re-auth, but currently NONE** (gap).
+  - **Add / delete a credential** → **expect re-auth, but currently NONE** (gap).
+- Open the **Audit log** viewer → confirm events render; **note the absence of any
+  HMAC chain-integrity indicator** (gap).
+- **Global-override interaction (links to Journey 3/9):** set a tool to **Deny** (or
+  **Ask**) in Global tool policies, then open an agent's **Tools** (create wizard
+  Step 3 *and* edit slide-over) → confirm the contradicting **Allow** button is
+  **disabled** with a lock badge "Global: Deny/Ask" linking to Settings → Security.
+- **Assess / Known gaps to confirm:** (KI-6) policy_mode change not re-auth-gated;
+  (KI-7) audit-log disable not re-auth-gated; (KI-8) credential add/delete not
+  re-auth-gated; (KI-9) no audit chain-integrity surfaced; (KI-10) master-key /
+  credential **rotation is CLI-only**, not in the UI. God-mode requires the
+  `--allow-god-mode` server flag (toggle is disabled otherwise) — verify the
+  disabled-state copy is clear.
+
+### Journey 12: MCP Server Configuration
+
+Route: `/skills` → **MCP Servers** tab.
+
+- Screenshot the empty state ("No MCP servers connected") + **Add Server**.
+- **Add a local (stdio) server:** switch to "Local program", clear the **stdio
+  safety confirmation** dialog ("runs a program on your server"), fill name +
+  command (`npx`) + args + env → submit → screenshot. Confirm it appears in the list.
+- **Add a remote (http/sse) server:** name + **https** URL → submit. Confirm
+  **http non-localhost is rejected** and **RFC1918 addresses show an SSRF caution**.
+- **Duplicate name** → expect 409 conflict toast. **Delete** → confirm dialog →
+  removed.
+- **Per-agent MCP tool policy:** open an agent's Tools editor → confirm MCP tools
+  appear grouped under "MCP server tools" by server, each with allow/ask/deny.
+- **Assess / Known gaps to confirm:** (KI-11) list **status is always
+  "disconnected"** and **tool_count always 0** — the REST list never queries the
+  live MCP manager; (KI-12) **no connection-test** endpoint (bad configs fail
+  silently at agent-loop start); (KI-13) **no edit/PATCH and no enable/disable** —
+  must delete + re-add; (KI-14) **no UI for HTTP headers** (can't configure
+  header-auth remote servers), env-file, or per-tool admin-ask; (KI-15) **no
+  per-agent MCP-server scoping** (all agents see all MCP tools); (KI-16) tool
+  namespace collision if a server name contains an underscore.
+
+### Journey 13: Chat Upload — image / file / video
+
+Route: chat (`/` → default workspace Chat). Use the composer **Attach** button
+(`data-testid="add-attachment"`); the file chooser's `accept` list is
+`image/*, .pdf, .docx, .pptx, .xlsx, .txt, .md, .csv, .json, .log, .yaml, .yml`.
+
+- **Image (.png/.jpg):** attach → confirm thumbnail chip in composer → send →
+  confirm it uploads (`POST /api/v1/upload` → `uploads/<session>/…`) and **reaches
+  the model**. With a non-vision model (e.g. glm-5-turbo) the agent should reply
+  with a clear "I can't view images with the current model — switch to one that
+  supports image input" (verified live). **Also confirm the image renders as a
+  thumbnail in the *sent* user bubble** (a degenerate 2×2 test image did **not**
+  render visibly while a file card did — re-confirm with a normal image; possible
+  sent-message render gap, KI-19).
+- **File (.txt/.pdf):** attach → confirm **file card** ("name / TYPE") in composer
+  and in the sent message → send → confirm persisted to disk.
+- **Video (.mp4):** attempt to attach. **Expected (current): NOT supported** — the
+  `accept` list excludes all video, so a real user cannot pick one; forcing an mp4
+  through triggers an adapter rejection ("File type video/mp4 is not accepted") that
+  surfaces as an **uncaught error, not a user-facing toast** (verified live).
+- **Assess / Known gaps to confirm:** (KI-17) **video upload entirely unsupported**
+  in chat (no `accept` entry, no affordance) — decide intended vs. gap; (KI-18)
+  **disallowed/forced file types reject without a graceful toast** (drag-drop a
+  blocked type → no readable feedback); (KI-19) image thumbnail may not render in
+  the sent user bubble (file cards do); (KI-20) **audio** uploads + renders as a
+  file card but is **never passed to the model as audio**; (KI-21) **no client-side
+  upload progress / retry UI** (100 MB/file server limit only).
+
+---
+
 ## Key Questions to Answer (Explicitly in Report)
 
 1. **Does the UI cover all agent functionality?** — CRUD, running, delegation, tools, sandbox, heartbeat, external CLI. What's missing?
-2. **Is the delegation graph good?** — Does it render? Is it readable? Can I modify trust from the UI or only view it?
+2. **Is the delegation graph good?** — Does it render? Is it readable? Can I modify trust from the UI or only view it? (Note: there are now **two** delegation surfaces — `/agents/trust` and the per-workspace **Team** tab.)
 3. **Is delegation enforcement visible?** — When a delegation is denied, does the user understand why? Or is it a silent failure?
-4. **Two task systems** — GTD board tasks vs workflow tasks. Is this distinction clear? Which should a user use? Is it confusing?
-5. **Automations read-only dead-end** — The Automations screen says "manage from Command Center" but that redirects to /tasks. Can a user actually find where to create schedules?
-6. **Heartbeat is global** — The UI shows it per-agent but it's actually global. Is this misleading?
+4. ~~**Two task systems** (GTD vs workflow)~~ — **OBSOLETE**: unified into one Task entity. Instead ask: is the single 7-state lifecycle clear across Board/List/Graph/Calendar?
+5. ~~**Automations read-only dead-end**~~ — **OBSOLETE**: Automations redirects to the workspace Calendar; schedules live in Agent Profile → Schedules. Ask instead: is schedule creation discoverable now?
+6. ~~**Heartbeat is global**~~ — **OBSOLETE**: heartbeat is genuinely per-agent now. Ask instead: is the per-agent heartbeat clear, and correctly hidden for workers?
+
+**New key questions (2026-06-23):**
+
+7. **Is security re-auth gating consistent?** — Which sensitive changes prompt for a password and which don't? (Expect gaps on policy_mode, audit-disable, credential add/delete — KI-6/7/8.)
+8. **Can a user trust the MCP server list?** — Does it show *real* connection status and tool counts, or always "disconnected / 0"? Can they test/edit a server, or only add/delete? (KI-11–13.)
+9. **Does the global-override lock read clearly?** — When a tool is globally Deny/Ask, do the per-agent Allow controls visibly lock with an explanation + link?
+10. **Is chat upload complete?** — Image and file work; is **video** supported, and when a file type is rejected does the user get a clear, graceful message (not a silent error)? (KI-17/18.)
 
 ---
 
 ## Known Issues to Verify (from codebase analysis)
 
-These are suspected bugs/gaps the UAT should confirm:
+These are suspected bugs/gaps the UAT should confirm.
 
-1. **`cli_path`/`env_overrides`/`cli_args` not consumed by dispatch** — drivers hardcode binary names. Setting custom paths round-trips through the API but doesn't take effect at runtime.
-2. **GTD board tasks have no WS frame** — only workflow tasks emit `task_status_changed`. SPA uses polling for GTD. The WS handler invalidates `['tasks']` (workflow key), not `['board-tasks']`.
-3. **Heartbeat is global, not per-agent** — the wire fields `heartbeat_enabled`/`heartbeat_interval` surface on every agent but write to a single global config. Setting it on one agent changes it for all.
-4. **`/command-center` redirects to `/tasks`** — but the actual schedule creation UI is in Agent Profile → Schedules tab. The Automations screen says "manage rules from the Command Center" but Command Center no longer exists as a route.
-5. **GTD `active` status only via `/start`** — PUT with `status:"active"` returns 403. Is this discoverable in the UI?
+**Original set (1–5) — now FIXED or SUPERSEDED (2026-06-23). Verify-and-close, do not expect to reproduce:**
+
+1. ~~`cli_path`/`env_overrides`/`cli_args` not consumed by dispatch~~ — **FIXED**: consumed end-to-end (`pkg/agent/external_dispatch.go:169-171`).
+2. ~~GTD board tasks have no WS frame~~ — **FIXED**: unified Task store; `task_status_changed` invalidates `['tasks']`.
+3. ~~Heartbeat is global, not per-agent~~ — **FIXED**: genuinely per-agent (`AgentConfig.HeartbeatEnabled/Interval` + migration).
+4. ~~`/command-center` redirects to `/tasks` / Automations dead-end~~ — **SUPERSEDED**: redirects into workspace Board/Calendar; schedules in Agent Profile → Schedules.
+5. ~~GTD `active` only via `/start` (403)~~ — **FIXED**: 7-state lifecycle; `in_progress` set via PATCH/drag, no `/start` gate.
+
+**New set (6–21) — from the 2026-06-23 validation; confirm live and cite `file:line`:**
+
+*Security (Journey 11):*
+6. **policy_mode change not re-auth-gated** (HIGH) — `PUT /api/v1/config` for Deny→Allow needs no password step-up (`SecuritySection.tsx:334`).
+7. **Audit-log disable not re-auth-gated** (HIGH) — `PUT /api/v1/security/audit-log` has no `requireReAuth` (`rest_audit_log.go`).
+8. **Credential add/delete not re-auth-gated** (MED) — `POST/DELETE /api/v1/credentials`.
+9. **No audit chain-integrity indicator** in the viewer (HMAC chain not surfaced).
+10. **Master-key / credential rotation is CLI-only** (not exposed in the vault UI).
+
+*MCP (Journey 12):*
+11. **MCP list status always "disconnected" + tool_count always 0** (`rest.go:5065-66`) — live state never queried.
+12. **No MCP connection-test endpoint** — POST doesn't validate; bad configs fail silently.
+13. **No MCP edit/PATCH and no enable/disable** — delete + re-add only.
+14. **No UI for MCP HTTP headers / env-file / per-tool admin-ask.**
+15. **No per-agent MCP-server scoping** — all agents see all MCP tools.
+16. **MCP tool namespace collision** if a server name contains an underscore (`mcp_<server>_<tool>` parsing).
+
+*Upload (Journey 13):*
+17. **Video upload entirely unsupported** in chat (excluded from `accept`; no affordance) — intended vs. gap?
+18. **Disallowed/forced file types reject without a graceful toast** (uncaught error instead).
+19. **Image thumbnail may not render in the sent user bubble** (file cards do) — re-confirm with a normal image.
+20. **Audio uploads/renders as a file card but is never passed to the model as audio.**
+21. **No client-side upload progress / retry UI** (100 MB/file server limit only).
 
 ---
 
 ## Report Format
 
-Output: `docs/internal/uat/uat-report-agent-features-2026-06-20.md`
+Output: `docs/internal/uat/uat-report-agent-features-2026-06-23.md`
 
 Structure:
 - **Executive summary** — overall impression, key findings
@@ -151,7 +281,7 @@ Structure:
 - **Bug list** — severity, description, screenshot, steps to reproduce
 - **UX issues** — what's confusing/wired, with screenshots and recommendations
 - **Coverage gaps** — API functionality not exposed in UI
-- **Answers to the 6 key questions** above
+- **Answers to the key questions** above (note items 4–6 are now obsolete; cover 1–3 and the new 7–10)
 
 **Severity levels:** Critical (blocks core function), Major (feature broken but workaround exists), Minor (cosmetic/edge case), UX (usability concern).
 
@@ -160,7 +290,9 @@ Structure:
 ## Execution Approach
 
 1. **Phase 0 (bash):** Boot gateway, configure OpenRouter, confirm reachable — ~2 min
-2. **Journeys 1-10 (Playwright MCP):** Sequential — one human clicking through. Screenshots at every step. ~45-60 min total.
+2. **Journeys 1–13 (Playwright MCP):** Sequential — one human clicking through. Screenshots at every step. ~60–75 min total. Journeys 7–8 are largely obsolete (Workspaces re-cast) — run them only to confirm the redirects/IA, not the old flows.
 3. **Report:** Compile findings + screenshots into markdown — ~10 min
 
 No parallel subagents for the Playwright journeys (one browser, one human).
+
+**Harness note (2026-06-23):** for upload + cancel-style journeys, do **not** rely on the URL for the session id — the workspace-scoped chat IA keeps the page at `/#/workspaces/<id>/chat`. Discover the session by diffing `OMNIPUS_HOME/sessions/` before/after a turn (see `tests/e2e/cancel-cross-channel.spec.ts::listSessionDirs`). The composer's file input is opened via a `filechooser` event (AssistantUI `AddAttachment`), not a persistent `input[type=file]`.
