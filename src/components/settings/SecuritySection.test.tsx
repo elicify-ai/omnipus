@@ -60,6 +60,7 @@ import {
   fetchSkillTrust,
   reAuth,
   addCredential,
+  deleteCredential,
   ApiError,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -682,5 +683,53 @@ describe('SecuritySection — credential vault re-auth gate (B4)', () => {
       expect(addCredential).toHaveBeenCalledTimes(2)
       expect(vi.mocked(addCredential).mock.calls[1][2]).toBe('cred_tok')
     })
+  })
+
+  it('opens the re-auth dialog when delete-credential 403s, then replays the token with the key', async () => {
+    vi.mocked(fetchCredentials).mockResolvedValue([{ key: 'MY_KEY' }] as never)
+    vi.mocked(deleteCredential)
+      .mockRejectedValueOnce(reAuth403())
+      .mockResolvedValueOnce(undefined as never)
+    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'del_tok', expires_in: 300 } as never)
+
+    renderSection()
+
+    fireEvent.click(await screen.findByTestId('delete-cred-MY_KEY'))
+    fireEvent.click(await screen.findByText('Remove'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+    expect(vi.mocked(deleteCredential).mock.calls[0]).toEqual(['MY_KEY', ''])
+
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(deleteCredential).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(deleteCredential).mock.calls[1]).toEqual(['MY_KEY', 'del_tok'])
+    })
+  })
+
+  it('dismissing the re-auth dialog does NOT raise an error toast (B4 cancellation)', async () => {
+    vi.mocked(addCredential).mockRejectedValueOnce(reAuth403())
+
+    renderSection()
+
+    fireEvent.click(await screen.findByText('Add key'))
+    fireEvent.change(screen.getByPlaceholderText('e.g. OPENAI_API_KEY'), { target: { value: 'K' } })
+    fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: 'v' } })
+    fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+    })
+    // Dismiss instead of confirming → cancellation sentinel, swallowed by onError.
+    fireEvent.click(screen.getByTestId('reauth-cancel'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-confirm')).toBeNull()
+    })
+    expect(mockAddToast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
   })
 })

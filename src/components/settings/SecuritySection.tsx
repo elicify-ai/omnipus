@@ -65,7 +65,7 @@ import { SandboxSection } from './SandboxSection'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
-import { useReAuthGate } from './useReAuthGate'
+import { useReAuthGate, isReAuthCancelled } from './useReAuthGate'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -280,7 +280,10 @@ export function SecuritySection() {
       setCredKey('')
       setCredValue('')
     },
-    onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed', variant: 'error' }),
+    onError: (err: unknown) => {
+      if (isReAuthCancelled(err)) return // user dismissed the password prompt — no-op, not an error
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed', variant: 'error' })
+    },
   })
 
   const { mutate: doDeleteCred } = useMutation({
@@ -290,7 +293,10 @@ export function SecuritySection() {
       addToast({ message: `Credential "${key}" removed`, variant: 'success' })
       setDeletingKey(null)
     },
-    onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Delete failed', variant: 'error' }),
+    onError: (err: unknown) => {
+      if (isReAuthCancelled(err)) return // user dismissed the password prompt — no-op, not an error
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Delete failed', variant: 'error' })
+    },
   })
 
   if (isLoading) {
@@ -637,6 +643,8 @@ export function SecuritySection() {
                 size="sm"
                 className="h-7 w-7 p-0 text-[var(--color-muted)] hover:text-[var(--color-error)]"
                 onClick={() => setDeletingKey(cred.key)}
+                data-testid={`delete-cred-${cred.key}`}
+                aria-label={`Remove credential ${cred.key}`}
               >
                 <Trash size={13} />
               </Button>

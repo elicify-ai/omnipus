@@ -137,7 +137,7 @@ export function ReAuthDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => handleOpenChange(false)} disabled={submitting}>
+          <Button variant="outline" size="sm" onClick={() => handleOpenChange(false)} disabled={submitting} data-testid="reauth-cancel">
             Cancel
           </Button>
           <Button
