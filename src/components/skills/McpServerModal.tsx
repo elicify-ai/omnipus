@@ -190,8 +190,9 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
         setConfirmedLocal(true)
       }
       // Pre-fill non-secret config fields (#437). env/headers VALUES are never
-      // returned (secrets), so they stay blank — "leave blank to keep current"
-      // (env_keys/header_names indicate what's already set).
+      // returned (secrets), so the inputs stay blank — "leave blank to keep
+      // current". The set keys are surfaced read-only next to each editor below
+      // via initialServer.env_keys / header_names ("currently set: …").
       setCommand(initialServer.command ?? '')
       setUrl(initialServer.url ?? '')
       setArgs((initialServer.args ?? []).join(', '))
@@ -523,10 +524,20 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                 <AdvancedDisclosure
                   title="Advanced"
                   summary="headers, admin-ask"
+                  defaultOpen={(initialServer?.header_names?.length ?? 0) > 0}
                 >
                   <div className="space-y-3">
                     <div className="space-y-1">
                       <span className="text-xs text-[var(--color-muted)]">HTTP headers (optional)</span>
+                      {(initialServer?.header_names?.length ?? 0) > 0 && (
+                        <p
+                          className="text-[11px] text-[var(--color-muted)]"
+                          data-testid="header-names-set"
+                        >
+                          Currently set (values hidden — re-enter to replace):{' '}
+                          {initialServer!.header_names!.join(', ')}
+                        </p>
+                      )}
                       <div className="space-y-1.5">
                         {headerRows.map((row, idx) => (
                           <div key={idx} className="flex gap-1.5 items-center">
@@ -624,6 +635,15 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                     <label htmlFor="mcp-env" className="text-xs text-[var(--color-muted)]">
                       Environment variables (KEY=value, one per line, optional)
                     </label>
+                    {(initialServer?.env_keys?.length ?? 0) > 0 && (
+                      <p
+                        className="text-[11px] text-[var(--color-muted)]"
+                        data-testid="env-keys-set"
+                      >
+                        Currently set (values hidden — re-enter to replace):{' '}
+                        {initialServer!.env_keys!.join(', ')}
+                      </p>
+                    )}
                     <textarea
                       id="mcp-env"
                       value={env}

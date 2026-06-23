@@ -242,17 +242,20 @@ func TestBrowserToolsAlwaysRegisterRegardlessOfLegacyFlag(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, mgr)
 
-	// The tools are registered regardless of the legacy Enabled flag — policy
-	// (allow/ask/deny) is the single enablement mechanism under the refactor.
+	// The tools are registered regardless of the legacy Enabled flag — the live
+	// tool-name policy (pkg/tools.FilterToolsByPolicy, allow/ask/deny) governs
+	// access for ordinary browser tools; browser.evaluate additionally has its own
+	// executeEnabled gate (see below, #438).
 	tool, ok := registry.Get("browser.navigate")
 	assert.True(t, ok, "RegisterTools registers tools regardless of Enabled flag")
 	assert.NotNil(t, tool)
 
-	// browser.evaluate must also register when evaluateEnabled=true; policy
-	// denies it by default via pkg/policy.builtinToolPolicies. Operators opt in
-	// explicitly by setting security.tool_policies["browser.evaluate"]="allow".
+	// browser.evaluate is always registered (so the LLM sees it); invocation is
+	// gated solely by the tool's executeEnabled check (deny-by-default). The
+	// pkg/policy.builtinToolPolicies deny entry is a test-only declarative mirror,
+	// not a live dispatch gate (#438).
 	evalTool, ok := registry.Get("browser.evaluate")
-	assert.True(t, ok, "browser.evaluate stays registered when evaluateEnabled=true; policy controls invocation")
+	assert.True(t, ok, "browser.evaluate stays registered when evaluateEnabled=true; executeEnabled gates invocation")
 	assert.NotNil(t, evalTool)
 }
 

@@ -5050,6 +5050,11 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// errMCPNotFound is the sentinel a config-mutating closure returns when the
+// requested MCP server id is absent, letting callers map it to 404 via errors.Is
+// while leaving real config I/O / parse failures to surface as 500.
+var errMCPNotFound = errors.New("mcp server not found")
+
 // listMCPServers reads configured MCP servers from config and returns them as
 // McpServer[] (contracts/components/schemas/McpServer.yaml). G6: status reflects
 // the live MCP manager (a server present in the manager is "connected"), and
@@ -5452,27 +5457,29 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 	}
 
 	var updatedEntry config.MCPServerConfig
-	found := false
 	mcpPatchValidationMsg := ""
 
+	// errMCPNotFound is returned ONLY by the closure when the server id is absent,
+	// so the dispatch below can distinguish a genuine 404 from a config I/O/parse
+	// failure (e.g. unreadable or corrupt config.json) that aborts safeUpdateConfigJSON
+	// before the closure runs — those must surface as 500, not a misleading 404.
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
-			return fmt.Errorf("mcp server %q not found", id)
+			return errMCPNotFound
 		}
 		mcpSection, _ := tools["mcp"].(map[string]any)
 		if mcpSection == nil {
-			return fmt.Errorf("mcp server %q not found", id)
+			return errMCPNotFound
 		}
 		servers, _ := mcpSection["servers"].(map[string]any)
 		if servers == nil {
-			return fmt.Errorf("mcp server %q not found", id)
+			return errMCPNotFound
 		}
 		existing, ok := servers[id]
 		if !ok {
-			return fmt.Errorf("mcp server %q not found", id)
+			return errMCPNotFound
 		}
-		found = true
 
 		// Round-trip the existing entry through JSON to get a typed MCPServerConfig.
 		raw, err := json.Marshal(existing)
@@ -5539,7 +5546,7 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 			jsonErr(w, http.StatusUnprocessableEntity, mcpPatchValidationMsg)
 			return
 		}
-		if !found || strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, errMCPNotFound) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
 			return
 		}

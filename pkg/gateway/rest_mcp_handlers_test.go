@@ -452,3 +452,34 @@ func TestPatchMCPServer_RejectsTransportMismatch(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
 		"setting a url on a stdio server must be 422; body=%s", w.Body.String())
 }
+
+// TestPatchMCPServer_RejectsCommandOnRemote proves the symmetric transport-consistency
+// guard: setting a command on an sse/http server is 422 (the second, previously
+// untested guard direction).
+func TestPatchMCPServer_RejectsCommandOnRemote(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+		Tools: config.ToolsConfig{
+			MCP: config.MCPConfig{Servers: map[string]config.MCPServerConfig{
+				"remote": {Enabled: true, Type: "sse", URL: "https://mcp.example.com/sse"},
+			}},
+		},
+	}
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json",
+		[]byte(`{"version":1,"tools":{"mcp":{"servers":{"remote":{"type":"sse","url":"https://mcp.example.com/sse","enabled":true}}}},"agents":{"defaults":{},"list":[]},"providers":[]}`), 0o600))
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := &restAPI{agentLoop: al, allowedOrigin: "http://localhost:3000", homePath: tmpDir}
+
+	body := bytes.NewReader([]byte(`{"command":"evil"}`))
+	r := httptest.NewRequest(http.MethodPatch, "/api/v1/mcp-servers/remote", body)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleMCPServers(w, r)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
+		"setting a command on an sse server must be 422; body=%s", w.Body.String())
+}
