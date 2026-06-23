@@ -11,7 +11,7 @@
 </head><body>
 <header><div class="wrap navrow">
   <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
-  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html" class="active">Decisions</a></nav>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="tools-catalog.html">Tool Catalog</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html" class="active">Decisions</a></nav>
 </div></header>
 
 <div class="wrap"><div class="hero">
@@ -67,7 +67,7 @@
     <tr><td>Foundational split</td><td class="d"><b>Structure</b> (room topology + full file format + 3 tools + start the append-only logs) lands <span class="rel r1">v0.1.0</span> — tied to the Workspace key, refactor if deferred. <b>Behaviour</b> (ranking · graph/MOCs · the Dreamcatcher) is <span class="rel r2">v0.2.0</span> over <b>derived, rebuildable</b> data — no migration.</td></tr>
   </table>
 
-  <h3 style="margin-top:18px">Tools &amp; Multimodal · <a href="tools.html">Tools</a><a href="plugins.html">Plugins</a></h3>
+  <h3 style="margin-top:18px">Tools &amp; Multimodal · <a href="tools.html">Tools</a><a href="tools-catalog.html">Tool Catalog</a><a href="plugins.html">Plugins</a></h3>
   <table class="dec">
     <tr><td>Providers</td><td class="d"><b>Per-tool pluggable providers</b> — search (Brave · Tavily · Perplexity · SearXNG · GLM · Baidu) + voice-in/STT (Groq · ElevenLabs · audio-model) already multi-provider; add <span class="mono">Synthesizer</span> (TTS) + <span class="mono">ImageProvider</span> (image-gen). The provider-picker <i>is</i> the <b>Integrations</b> screen. <b>API default + optional local sidecar</b> (sovereignty).</td></tr>
     <tr><td>Agent voices</td><td class="d"><b>One voice per agent</b> — a <span class="mono">voice</span> field on the base agents (Mia · Jim · Ray · Ava), spoken via TTS.</td></tr>
