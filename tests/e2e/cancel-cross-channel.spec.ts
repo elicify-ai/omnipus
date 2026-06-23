@@ -321,146 +321,173 @@ test(
 
 // ── T24: Cancel cascades to subagent (US-4.1) ────────────────────────────────
 // Traces to: cancel-cross-channel-spec.md line 603 (T24)
-// BDD: Given a session with a parent turn that has spawned a subagent (spawn tool)
+// BDD: Given a session with a parent turn that has delegated to a subagent
 //      When the user clicks Stop while the subagent is running
 //      Then the parent message shows "(interrupted)" within 5s
 //      And transcript.jsonl contains a {type: "turn_canceled"} entry
-//      And that entry has a non-empty descendants_cancelled array.
+//      And that entry has a non-empty descendants_canceled array.
+//
+// Both delegation modes are covered:
+//   T24a — `spawn`    (background): the descendant streams in the background
+//                                   while the parent turn stays live.
+//   T24b — `subagent` (await):      the parent turn BLOCKS on the descendant's
+//                                   run until it returns (or is cancelled).
+// Both route through spawnSubTurn (pkg/agent/subturn.go:618), which registers the
+// child in activeTurnStates — so RequestCancel → InterruptSession cascades to the
+// descendant in BOTH cases (the Go-level proof is TestCancel_SubAgentCascade).
+// This pair is the e2e proof that the cascade holds for background AND await.
+
+/**
+ * Drive the cancel-cascade scenario for one delegation mode and assert the
+ * transcript records turn_canceled with a non-empty descendants_canceled.
+ *
+ * `mode.tool` selects the delegation tool (`spawn` background / `subagent`
+ * await); `mode.closer` is the final instruction line that nudges glm-5.2 to
+ * emit exactly that tool call and nothing else.
+ */
+async function assertCancelCascadesToSubagent(
+  page: Page,
+  mode: { tool: 'spawn' | 'subagent'; closer: string },
+) {
+  await page.goto('/')
+
+  const input = chatInput(page)
+  await expect(input).toBeEnabled({ timeout: 20_000 })
+
+  // Use the SPA's own "New Chat" button to create a fresh session and bind
+  // the page to it. Empirically createSession + page.goto(/#/sessions/<id>)
+  // does NOT bind the SPA — the input falls back to creating a new session
+  // on first message, leaving us reading the wrong transcript file.
+  //
+  // Route to Jim (Planner & Orchestrator), NOT the default agent Mia. CI
+  // investigation (run 27296266639) found Mia's "guide" persona makes the model
+  // REFUSE to delegate ("My role is to explain… not to spawn subagents"), so the
+  // parent never emits a delegation frame and the subagent-collapsed block never
+  // appears. Jim delegates on the explicit prompt below. The cancel window comes
+  // from the SUBAGENT running long enough (it streams a multi-hundred-word inline
+  // essay), so the parent agent's prose behaviour is irrelevant — only that it
+  // delegates.
+  // Clicking "New Chat" only nullifies activeSessionId — it does NOT mint a new
+  // session in the URL. The SPA creates the session lazily on the first sent
+  // message; we (a) trigger that flow, then (b) read the sessionId from the URL.
+  const newChatBtn = page.getByRole('banner').getByRole('button', { name: 'New Chat' })
+  await expect(newChatBtn).toBeVisible({ timeout: 10_000 })
+  await newChatBtn.click()
+  await expect(input).toBeEnabled({ timeout: 20_000 })
+
+  // Switch to Jim so the parent turn will actually delegate.
+  await selectAgent(page, /Jim/i)
+
+  // The subagent task must keep the descendant RUNNING for several seconds so a
+  // Stop click lands while it's live. A long inline essay streams for several
+  // seconds; an instant-rejected task (e.g. a sandbox-escaping read) finishes in
+  // ~0s before Stop can fire. Explicit single-tool instruction with a hard "no
+  // prose" guardrail so glm-5.2 reliably emits the delegation call.
+  await input.fill(
+    [
+      `Call the \`${mode.tool}\` tool exactly once, now, with these arguments:`,
+      '  label: "cancel cascade test"',
+      '  task: "You are a subagent. Do not use any tools. Write a detailed 800-word essay about renewable energy as continuous inline prose, writing without stopping until you reach 800 words."',
+      mode.closer,
+    ].join('\n'),
+  )
+  await input.press('Enter')
+
+  // Now the SPA mints the session and navigates — read the ID from the URL
+  // hash. TanStack Router hash history format: /#/sessions/<id>.
+  await page.waitForFunction(
+    () => /\/sessions\/[A-Za-z0-9_]+/.test(window.location.hash),
+    { timeout: 15_000 },
+  )
+  const sessionId = await page.evaluate(() => {
+    const match = window.location.hash.match(/\/sessions\/([A-Za-z0-9_]+)/)
+    return match ? match[1] : ''
+  })
+  if (!sessionId) throw new Error('cancel-cascade: no session ID in URL after first message')
+
+  // Wait for the subagent collapsed block to appear — confirms delegation fired.
+  // The block renders as soon as the child span exists (status "working"), so it
+  // marks the START of the descendant's run, not its end. 150s headroom matches
+  // the sibling delegation tests; the empirical CI tail is single-digit seconds.
+  const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]')
+  await expect(collapsedBlock).toBeVisible({ timeout: 150_000 })
+
+  // Click Stop while the subagent is running.
+  const stopBtn = page.locator('[data-testid="stop-btn"]')
+  await expect(stopBtn).toBeVisible({ timeout: 10_000 })
+  await stopBtn.click()
+
+  // Assert the parent message shows "(interrupted)" within 5s.
+  await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
+  await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
+  const interruptedLabels = page.locator('text=(interrupted)')
+  await expect(interruptedLabels.first()).toBeVisible({ timeout: 5_000 })
+
+  // Assert transcript.jsonl contains {type: "turn_canceled"} entry with a
+  // non-empty descendants_canceled array. Allow a short settling window (max 3s)
+  // for the transcript write to flush.
+  await page.waitForTimeout(3_000)
+
+  // Sessions are stored at OMNIPUS_HOME/sessions/<id>/<YYYY-MM-DD>.jsonl
+  // (day-partitioned JSONL).
+  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+  const transcriptDir = path.join(OMNIPUS_HOME, 'sessions', sessionId)
+  // Try both the day-partitioned name and the legacy transcript.jsonl name.
+  const candidates = [
+    path.join(transcriptDir, `${today}.jsonl`),
+    path.join(transcriptDir, 'transcript.jsonl'),
+  ]
+  let entries: TranscriptEntry[] = []
+  for (const candidate of candidates) {
+    const parsed = readJsonl<TranscriptEntry>(candidate)
+    if (parsed.length > 0) {
+      entries = parsed
+      break
+    }
+  }
+
+  const cancelledEntry = entries.find((e) => e.type === 'turn_canceled')
+  if (!cancelledEntry) {
+    throw new Error(
+      'BLOCKED or INCOMPLETE: transcript.jsonl does not contain a {type:"turn_canceled"} entry ' +
+        `after cancel (mode=${mode.tool}). Searched: ${candidates.join(', ')}. ` +
+        `Entries found: ${JSON.stringify(entries.map((e) => ({ type: e.type, role: e.role })))}. ` +
+        'Traces to: cancel-cross-channel-spec.md T24, US-4.1, FR-15.',
+    )
+  }
+
+  // descendants_canceled must be a non-empty array (cascade fired).
+  expect(
+    Array.isArray(cancelledEntry.descendants_canceled) &&
+      (cancelledEntry.descendants_canceled as string[]).length > 0,
+    `turn_canceled entry must have a non-empty descendants_canceled array (cascade wired per FR-6a, mode=${mode.tool})`,
+  ).toBe(true)
+}
 
 test(
-  'T24 — cancel cascades to subagent: transcript.jsonl records turn_canceled with descendants',
+  'T24a — cancel cascades to background subagent (spawn): transcript records turn_canceled with descendants',
   async ({ page }) => {
     // glm-5.2 (the standard e2e model) is reliable but slower than the old gemini
-    // pick — the spawn turn + the subagent's inline essay + cancel can exceed the
-    // 270s test.slow() ceiling under suite load. Use an explicit higher budget.
+    // pick — the delegation turn + the subagent's inline essay + cancel can exceed
+    // the 270s test.slow() ceiling under suite load. Use an explicit higher budget.
     test.setTimeout(360_000)
-
-    await page.goto('/')
-
-    const input = chatInput(page)
-    await expect(input).toBeEnabled({ timeout: 20_000 })
-
-    // Use the SPA's own "New Chat" button to create a fresh session and bind
-    // the page to it. Empirically createSession + page.goto(/#/sessions/<id>)
-    // does NOT bind the SPA — the input falls back to creating a new session
-    // on first message, leaving us reading the wrong transcript file.
-    //
-    // Route to Jim (general-purpose task agent), NOT the default agent Mia.
-    // CI investigation (run 27296266639) found Mia's "guide" persona makes the
-    // model REFUSE to spawn ("My role is to explain… not to spawn subagents"),
-    // so the parent never emits a spawn frame and the subagent-collapsed block
-    // never appears. Jim emits spawn on the explicit prompt below. The cancel
-    // window comes from the SUBAGENT running long enough (it streams a
-    // multi-hundred-word inline essay), so the parent agent's prose behaviour is
-    // irrelevant — only that it spawns.
-    // Clicking "New Chat" only nullifies activeSessionId — it does NOT mint
-    // a new session in the URL. The SPA creates the session lazily on the
-    // first sent message. We need to (a) trigger that flow, then (b) read the
-    // sessionId from the URL hash once the SPA navigates.
-    const newChatBtn = page.getByRole('banner').getByRole('button', { name: 'New Chat' })
-    await expect(newChatBtn).toBeVisible({ timeout: 10_000 })
-    await newChatBtn.click()
-    await expect(input).toBeEnabled({ timeout: 20_000 })
-
-    // Switch to Jim so the parent turn will actually emit `spawn`.
-    await selectAgent(page, /Jim/i)
-
-    // Use `spawn` (background), NOT `subagent` (await). This is the green,
-    // reliable shape for the cancel-cascade window: the parent emits the spawn
-    // frame and the DESCENDANT keeps streaming a long inline essay in the
-    // background, so the live turn (Stop button visible) stays cancellable while
-    // a running descendant exists — which is exactly what the cascade asserts
-    // (turn_canceled with a non-empty descendants_canceled). An await-mode
-    // (`subagent`) variant blocks the parent on the descendant's full run, which
-    // pushed the test past its time budget under glm-5.2's slower streaming.
-    //
-    // The subagent task must keep the descendant RUNNING for several seconds so a
-    // Stop click lands while it's live. A long inline essay streams for several
-    // seconds; an instant-rejected task (e.g. a sandbox-escaping read) finishes
-    // in ~0s before Stop can fire. Explicit single-tool instruction with a hard
-    // "no prose" guardrail so glm-5.2 reliably emits the `spawn` call.
-    await input.fill(
-      [
-        'Call the `spawn` tool exactly once, now, with these arguments:',
-        '  label: "cancel cascade test"',
-        '  task: "You are a subagent. Do not use any tools. Write a detailed 800-word essay about renewable energy as continuous inline prose, writing without stopping until you reach 800 words."',
-        'Do not reply in prose. Call the spawn tool immediately.',
-      ].join('\n'),
-    )
-    await input.press('Enter')
-
-    // Now the SPA mints the session and navigates — read the ID from the URL
-    // hash. TanStack Router hash history format: /#/sessions/<id>.
-    await page.waitForFunction(
-      () => /\/sessions\/[A-Za-z0-9_]+/.test(window.location.hash),
-      { timeout: 15_000 },
-    )
-    const sessionId = await page.evaluate(() => {
-      const match = window.location.hash.match(/\/sessions\/([A-Za-z0-9_]+)/)
-      return match ? match[1] : ''
+    await assertCancelCascadesToSubagent(page, {
+      tool: 'spawn',
+      closer: 'Do not reply in prose. Call the spawn tool immediately.',
     })
-    if (!sessionId) throw new Error('T24: no session ID in URL after first message')
+  },
+)
 
-    // Wait for the subagent collapsed block to appear — confirms spawn fired.
-    // 150s: matches the sibling spawn-based tests (subagent(a) uses 150s); the
-    // empirical CI tail for the explicit spawn prompt is single-digit seconds,
-    // so 150s is already comfortable headroom.
-    const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]')
-    await expect(collapsedBlock).toBeVisible({ timeout: 150_000 })
-
-    // Click Stop while the subagent is running.
-    const stopBtn = page.locator('[data-testid="stop-btn"]')
-    await expect(stopBtn).toBeVisible({ timeout: 10_000 })
-    await stopBtn.click()
-
-    // Assert the parent message shows "(interrupted)" within 5s.
-    await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
-    await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
-    const interruptedLabels = page.locator('text=(interrupted)')
-    await expect(interruptedLabels.first()).toBeVisible({ timeout: 5_000 })
-
-    // Assert transcript.jsonl contains {type: "turn_canceled"} entry with
-    // a non-empty descendants_canceled array. The backend uses single-L
-    // spelling for transcript entries (pkg/session/daypartition.go).
-    // Allow a short settling window (max 3s) for the transcript write to flush.
-    await page.waitForTimeout(3_000)
-
-    // Sessions are stored at OMNIPUS_HOME/sessions/<id>/<YYYY-MM-DD>.jsonl
-    // The transcript file path uses day-partitioned JSONL.
-    const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-    const transcriptDir = path.join(OMNIPUS_HOME, 'sessions', sessionId)
-    // Try both the day-partitioned name and the legacy transcript.jsonl name.
-    const candidates = [
-      path.join(transcriptDir, `${today}.jsonl`),
-      path.join(transcriptDir, 'transcript.jsonl'),
-    ]
-    let entries: TranscriptEntry[] = []
-    for (const candidate of candidates) {
-      const parsed = readJsonl<TranscriptEntry>(candidate)
-      if (parsed.length > 0) {
-        entries = parsed
-        break
-      }
-    }
-
-    const cancelledEntry = entries.find((e) => e.type === 'turn_canceled')
-    if (!cancelledEntry) {
-      // Allow the alternative: the feature may not yet be implemented —
-      // report as a test failure with clear context rather than a silent skip.
-      throw new Error(
-        'BLOCKED or INCOMPLETE: transcript.jsonl does not contain a {type:"turn_canceled"} entry ' +
-          `after cancel. Searched: ${candidates.join(', ')}. ` +
-          `Entries found: ${JSON.stringify(entries.map((e) => ({ type: e.type, role: e.role })))}. ` +
-          'Traces to: cancel-cross-channel-spec.md T24, US-4.1, FR-15.',
-      )
-    }
-
-    // descendants_canceled must be a non-empty array (cascade fired).
-    expect(
-      Array.isArray(cancelledEntry.descendants_canceled) &&
-        (cancelledEntry.descendants_canceled as string[]).length > 0,
-      'turn_canceled entry must have a non-empty descendants_canceled array (cascade wired per FR-6a)',
-    ).toBe(true)
+test(
+  'T24b — cancel cascades to awaited subagent (subagent): transcript records turn_canceled with descendants',
+  async ({ page }) => {
+    // Await mode blocks the parent turn on the descendant's full run, so under
+    // glm-5.2's slower streaming this needs more headroom than the spawn variant.
+    test.setTimeout(420_000)
+    await assertCancelCascadesToSubagent(page, {
+      tool: 'subagent',
+      closer: 'Do not reply in prose. Do not call any other tool. Call subagent now.',
+    })
   },
 )
 
