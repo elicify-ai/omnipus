@@ -5413,6 +5413,9 @@ type MailboxConfigureRequest struct {
 
 // McpServer An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
 type McpServer struct {
+	// Enabled Whether this server is enabled in config. A disabled server is not connected at agent-loop startup and exposes no tools.
+	Enabled *bool `json:"enabled,omitempty"`
+
 	// Id Unique MCP server identifier.
 	Id string `json:"id"`
 
@@ -5449,8 +5452,17 @@ type McpServerCreate struct {
 	// Env Environment variable overrides passed to the MCP server process. Only applicable for stdio transport. Each key-value pair is injected into the server process environment at startup.
 	Env *map[string]string `json:"env,omitempty"`
 
+	// EnvFile Path to a file of KEY=VALUE environment variables loaded for the server process (stdio only); useful for large or sensitive env sets.
+	EnvFile *string `json:"env_file,omitempty"`
+
+	// Headers HTTP headers sent with each request to a remote MCP server (sse/http only), e.g. an Authorization header for header-authenticated servers.
+	Headers *map[string]string `json:"headers,omitempty"`
+
 	// Name Human-readable server name.
 	Name string `json:"name"`
+
+	// RequiresAdminAsk Tool names from this server that require admin approval before execution (FR-064), regardless of the per-agent policy.
+	RequiresAdminAsk *[]string `json:"requires_admin_ask,omitempty"`
 
 	// Transport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 	Transport McpServerCreateTransport `json:"transport"`
@@ -5462,10 +5474,52 @@ type McpServerCreate struct {
 // McpServerCreateTransport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 type McpServerCreateTransport string
 
+// McpServerTestResponse Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that attempts to connect to the configured MCP server (without changing any state) and reports whether it succeeded and which tools it exposed.
+type McpServerTestResponse struct {
+	// Message Human-readable result (connection summary, or the failure reason).
+	Message string `json:"message"`
+
+	// Success True when the gateway connected and initialized the server.
+	Success bool `json:"success"`
+
+	// ToolCount Number of tools enumerated on success.
+	ToolCount *int `json:"tool_count,omitempty"`
+
+	// Tools Tool names enumerated on success.
+	Tools *[]string `json:"tools,omitempty"`
+}
+
 // McpServerToolsResponse Response from GET /mcp-servers/{id}/tools. Returns the list of tool names exposed by a specific MCP server.
 type McpServerToolsResponse struct {
 	// Tools List of tool names exposed by the MCP server.
 	Tools []string `json:"tools"`
+}
+
+// McpServerUpdate PATCH body for /mcp-servers/{id}. Partial update — only the provided fields are changed; omitted fields are preserved (merge, not replace). Use it to toggle `enabled`, change the endpoint/command, or adjust env/headers/admin-ask.
+type McpServerUpdate struct {
+	// Args Replacement command-line args (stdio only).
+	Args *[]string `json:"args,omitempty"`
+
+	// Command New command (stdio only).
+	Command *string `json:"command,omitempty"`
+
+	// Enabled Enable or disable the server (disabled servers are not connected).
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Env Replacement environment overrides (stdio only).
+	Env *map[string]string `json:"env,omitempty"`
+
+	// EnvFile Path to a KEY=VALUE env file (stdio only).
+	EnvFile *string `json:"env_file,omitempty"`
+
+	// Headers Replacement HTTP headers (sse/http only).
+	Headers *map[string]string `json:"headers,omitempty"`
+
+	// RequiresAdminAsk Replacement list of tools that require admin approval (FR-064).
+	RequiresAdminAsk *[]string `json:"requires_admin_ask,omitempty"`
+
+	// Url New endpoint URL (sse/http only; https or http-on-loopback).
+	Url *string `json:"url,omitempty"`
 }
 
 // McpToolCallRequest Request body for POST /api/v1/tools/mcp. Invokes a tool on a specific MCP server by name, passing optional arguments.
@@ -7611,6 +7665,9 @@ type ToolRegistryEntry struct {
 	// Scope Tool visibility scope.
 	Scope ToolRegistryEntryScope `json:"scope"`
 
+	// ServerId For MCP tools (source="mcp"), the originating MCP server id. Lets the SPA group MCP tools by server unambiguously instead of parsing the tool name (which is lossy when a server name contains underscores). Absent for builtin tools.
+	ServerId *string `json:"server_id,omitempty"`
+
 	// Source Origin of the tool registration. "builtin" = compiled-in Go tool; "mcp" = MCP server tool.
 	Source ToolRegistryEntrySource `json:"source"`
 }
@@ -8161,6 +8218,9 @@ type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest
 
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
+
+// PatchMcpServerJSONRequestBody defines body for PatchMcpServer for application/json ContentType.
+type PatchMcpServerJSONRequestBody = McpServerUpdate
 
 // CompleteOnboardingJSONRequestBody defines body for CompleteOnboarding for application/json ContentType.
 type CompleteOnboardingJSONRequestBody = OnboardingCompleteRequest

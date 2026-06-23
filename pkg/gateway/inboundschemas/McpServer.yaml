@@ -50,3 +50,9 @@ properties:
     example:
       - "search"
       - "fetch"
+  enabled:
+    type: boolean
+    description: >
+      Whether this server is enabled in config. A disabled server is not
+      connected at agent-loop startup and exposes no tools.
+    example: true

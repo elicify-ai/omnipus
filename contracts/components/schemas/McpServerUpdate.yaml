@@ -1,0 +1,43 @@
+title: McpServerUpdate
+description: >
+  PATCH body for /mcp-servers/{id}. Partial update — only the provided fields are
+  changed; omitted fields are preserved (merge, not replace). Use it to toggle
+  `enabled`, change the endpoint/command, or adjust env/headers/admin-ask.
+type: object
+additionalProperties: false
+properties:
+  enabled:
+    type: boolean
+    description: Enable or disable the server (disabled servers are not connected).
+    example: false
+  command:
+    type: string
+    description: New command (stdio only).
+    example: "npx @modelcontextprotocol/server-everything"
+  url:
+    type: string
+    description: New endpoint URL (sse/http only; https or http-on-loopback).
+    example: "https://mcp.example.com/sse"
+  args:
+    type: array
+    items:
+      type: string
+    description: Replacement command-line args (stdio only).
+  env:
+    type: object
+    additionalProperties:
+      type: string
+    description: Replacement environment overrides (stdio only).
+  headers:
+    type: object
+    additionalProperties:
+      type: string
+    description: Replacement HTTP headers (sse/http only).
+  env_file:
+    type: string
+    description: Path to a KEY=VALUE env file (stdio only).
+  requires_admin_ask:
+    type: array
+    items:
+      type: string
+    description: Replacement list of tools that require admin approval (FR-064).
