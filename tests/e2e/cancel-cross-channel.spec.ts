@@ -333,7 +333,7 @@ test(
     // glm-5.2 (the standard e2e model) is reliable but slower than the old gemini
     // pick — the spawn turn + the subagent's inline essay + cancel can exceed the
     // 270s test.slow() ceiling under suite load. Use an explicit higher budget.
-    test.setTimeout(480_000)
+    test.setTimeout(360_000)
 
     await page.goto('/')
 
@@ -362,27 +362,29 @@ test(
     await newChatBtn.click()
     await expect(input).toBeEnabled({ timeout: 20_000 })
 
-    // Switch to Jim — the Planner & Orchestrator. Jim has the `await` delegation
-    // mode seeded, so he can run a subagent SYNCHRONOUSLY.
+    // Switch to Jim so the parent turn will actually emit `spawn`.
     await selectAgent(page, /Jim/i)
 
-    // Use the `subagent` tool (AWAIT mode), NOT `spawn` (background). This is the
-    // key to a reliable cancel-cascade window: with `await`, the parent turn BLOCKS
-    // while the subagent runs, so the parent stays "running" (Stop button visible)
-    // for the whole duration of the subagent's work — clicking Stop then cancels
-    // the parent and cascades to the still-running descendant. `spawn` (background)
-    // finalizes the parent immediately, leaving no live turn to cancel.
+    // Use `spawn` (background), NOT `subagent` (await). This is the green,
+    // reliable shape for the cancel-cascade window: the parent emits the spawn
+    // frame and the DESCENDANT keeps streaming a long inline essay in the
+    // background, so the live turn (Stop button visible) stays cancellable while
+    // a running descendant exists — which is exactly what the cascade asserts
+    // (turn_canceled with a non-empty descendants_canceled). An await-mode
+    // (`subagent`) variant blocks the parent on the descendant's full run, which
+    // pushed the test past its time budget under glm-5.2's slower streaming.
     //
-    // The subagent writes a long inline essay so it (and the awaiting parent) stay
-    // live long enough for the Stop click to land mid-stream. Explicit single-tool
-    // instruction with a hard "no prose / no other tool" guardrail so glm-5.2
-    // reliably emits the `subagent` call.
+    // The subagent task must keep the descendant RUNNING for several seconds so a
+    // Stop click lands while it's live. A long inline essay streams for several
+    // seconds; an instant-rejected task (e.g. a sandbox-escaping read) finishes
+    // in ~0s before Stop can fire. Explicit single-tool instruction with a hard
+    // "no prose" guardrail so glm-5.2 reliably emits the `spawn` call.
     await input.fill(
       [
-        'Call the `subagent` tool exactly once, right now, with these arguments:',
+        'Call the `spawn` tool exactly once, now, with these arguments:',
         '  label: "cancel cascade test"',
-        '  task: "You are the subagent. Do not use any tools. Write a detailed 800-word essay about renewable energy as continuous inline prose, beginning immediately and writing without stopping until you reach 800 words."',
-        'Do not reply in prose. Do not call any other tool. Call subagent now.',
+        '  task: "You are a subagent. Do not use any tools. Write a detailed 800-word essay about renewable energy as continuous inline prose, writing without stopping until you reach 800 words."',
+        'Do not reply in prose. Call the spawn tool immediately.',
       ].join('\n'),
     )
     await input.press('Enter')
