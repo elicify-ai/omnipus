@@ -877,7 +877,7 @@ export interface paths {
         };
         /**
          * Get recent audit log entries
-         * @description Returns the last 100 audit log entries in reverse-chronological order, read from ~/.omnipus/system/audit.jsonl. Always returns an array — empty array when no entries exist.
+         * @description Returns the last 100 audit log entries in reverse-chronological order (read from ~/.omnipus/system/audit.jsonl) wrapped with the HMAC tamper-evident chain-verification result (chain_status). entries is an empty array when no entries exist.
          */
         get: operations["getAuditLog"];
         put?: never;
@@ -1315,6 +1315,26 @@ export interface paths {
          * @description Removes a credential by key. Returns 404 if not found.
          */
         delete: operations["deleteCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate the credential vault key via a new passphrase
+         * @description Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022). No restart is required; the in-memory key is updated in place.
+         */
+        post: operations["rotateCredentials"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4138,6 +4158,25 @@ export interface components {
             };
         };
         /**
+         * AuditLogResponse
+         * @description Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (v0.2 #155). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
+         */
+        AuditLogResponse: {
+            /** @description Recent audit entries, reverse-chronological, max 100. */
+            entries: components["schemas"]["AuditEntry"][];
+            /**
+             * @description valid = HMAC chain verified intact; broken = a break was detected (see chain_broken_index); unknown = verification was not performed.
+             * @example valid
+             * @enum {string}
+             */
+            chain_status: "valid" | "broken" | "unknown";
+            /**
+             * @description 1-based index of the first entry where the chain break was detected. Present only when chain_status is "broken".
+             * @example 42
+             */
+            chain_broken_index?: number;
+        };
+        /**
          * AuditLogToggle
          * @description Audit log enable/disable state returned by GET /api/v1/security/audit-log. Note: this endpoint controls whether audit logging is enabled at all. GET /api/v1/audit-log (distinct path) returns the actual audit entries.
          */
@@ -6342,6 +6381,17 @@ export interface components {
              * @example sk-abc123...
              */
             value: string;
+        };
+        /**
+         * CredentialRotateRequest
+         * @description Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022).
+         */
+        CredentialRotateRequest: {
+            /**
+             * @description New passphrase used to derive the new vault key. Must not be empty.
+             * @example correct-horse-battery-staple
+             */
+            new_passphrase: string;
         };
         /**
          * RestoreBackupRequest
@@ -8916,13 +8966,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Audit log entries (reverse-chronological, max 100). */
+            /** @description Audit log entries (reverse-chronological, max 100) plus HMAC chain-integrity status. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AuditEntry"][];
+                    "application/json": components["schemas"]["AuditLogResponse"];
                 };
             };
             /** @description Method not allowed. */
@@ -10067,6 +10117,63 @@ export interface operations {
             };
             /** @description Credential key not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Credential store locked. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    rotateCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description Vault re-encrypted under the new passphrase. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @example rotated
+                         * @enum {string}
+                         */
+                        status: "rotated";
+                    };
+                };
+            };
+            /** @description Invalid request (e.g. empty passphrase). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Re-auth required or invalid consent token. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12030,6 +12137,7 @@ export type RetentionSweepResult = components["schemas"]["RetentionSweepResult"]
 export type SandboxConfig = components["schemas"]["SandboxConfig"];
 export type SandboxStatus = components["schemas"]["SandboxStatus"];
 export type AuditEntry = components["schemas"]["AuditEntry"];
+export type AuditLogResponse = components["schemas"]["AuditLogResponse"];
 export type AuditLogToggle = components["schemas"]["AuditLogToggle"];
 export type RateLimitConfig = components["schemas"]["RateLimitConfig"];
 export type ExecAllowlist = components["schemas"]["ExecAllowlist"];
@@ -12111,6 +12219,7 @@ export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStat
 export type SseChatRequest = components["schemas"]["SseChatRequest"];
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];
+export type CredentialRotateRequest = components["schemas"]["CredentialRotateRequest"];
 export type RestoreBackupRequest = components["schemas"]["RestoreBackupRequest"];
 export type AgentOwnershipUpdateRequest = components["schemas"]["AgentOwnershipUpdateRequest"];
 export type BearerToken = components["schemas"]["BearerToken"];

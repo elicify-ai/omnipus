@@ -1,0 +1,34 @@
+title: AuditLogResponse
+description: >
+  Response from GET /api/v1/audit-log. Wraps the recent audit entries with the
+  result of verifying the HMAC tamper-evident chain (v0.2 #155). The chain is
+  recomputed server-side over the on-disk audit files; chain_status reports
+  whether it is intact, broken (tampered/reordered/truncated), or could not be
+  checked (e.g. audit logging disabled or no chain key).
+type: object
+required:
+  - entries
+  - chain_status
+additionalProperties: false
+properties:
+  entries:
+    type: array
+    description: Recent audit entries, reverse-chronological, max 100.
+    items:
+      $ref: ./AuditEntry.yaml
+  chain_status:
+    type: string
+    enum:
+      - valid
+      - broken
+      - unknown
+    description: >
+      valid = HMAC chain verified intact; broken = a break was detected (see
+      chain_broken_index); unknown = verification was not performed.
+    example: valid
+  chain_broken_index:
+    type: integer
+    description: >
+      1-based index of the first entry where the chain break was detected.
+      Present only when chain_status is "broken".
+    example: 42

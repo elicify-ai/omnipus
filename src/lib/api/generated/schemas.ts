@@ -312,6 +312,23 @@ type ChannelIdentity = {
   kind: "agent" | "user";
   id?: string | undefined;
 };
+type AuditLogResponse = {
+  entries: Array<AuditEntry>;
+  chain_status: "valid" | "broken" | "unknown";
+  chain_broken_index?: number | undefined;
+};
+type AuditEntry = {
+  timestamp: string;
+  event: string;
+  decision?: ("allow" | "deny" | "error") | undefined;
+  agent_id?: string | undefined;
+  session_id?: string | undefined;
+  tool?: string | undefined;
+  command?: string | undefined;
+  parameters?: {} | undefined;
+  policy_rule?: string | undefined;
+  details?: {} | undefined;
+};
 type IntegrationProvidersResponse = {
   search: Array<IntegrationProvider>;
   voice: Array<IntegrationProvider>;
@@ -1455,7 +1472,7 @@ export const SandboxStatus = z
     bind_ports_count: z.number().int().gte(0),
   })
   .passthrough();
-export const AuditEntry = z
+export const AuditEntry: z.ZodType<AuditEntry> = z
   .object({
     timestamp: z.string().datetime({ offset: true }),
     event: z.string().regex(/^[a-z_]+$/),
@@ -1469,6 +1486,11 @@ export const AuditEntry = z
     details: z.object({}).partial().passthrough().optional(),
   })
   .passthrough();
+export const AuditLogResponse: z.ZodType<AuditLogResponse> = z.object({
+  entries: z.array(AuditEntry),
+  chain_status: z.enum(["valid", "broken", "unknown"]),
+  chain_broken_index: z.number().int().optional(),
+});
 export const AuditLogToggle = z.object({ enabled: z.boolean() });
 export const AuditLogToggleRequest = z.object({ enabled: z.boolean() });
 export const AuditLogUpdateResponse = z.object({
@@ -1602,6 +1624,9 @@ export const GodModeUpdateRequest = z.object({ enabled: z.boolean() });
 export const CredentialSetRequest = z.object({
   key: z.string(),
   value: z.string(),
+});
+export const CredentialRotateRequest = z.object({
+  new_passphrase: z.string().min(1),
 });
 export const BackupCreateResponse = z.object({
   path: z.string(),
@@ -2710,10 +2735,10 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/audit-log",
     alias: "getAuditLog",
-    description: `Returns the last 100 audit log entries in reverse-chronological order, read from ~/.omnipus/system/audit.jsonl. Always returns an array — empty array when no entries exist.
+    description: `Returns the last 100 audit log entries in reverse-chronological order (read from ~/.omnipus/system/audit.jsonl) wrapped with the HMAC tamper-evident chain-verification result (chain_status). entries is an empty array when no entries exist.
 `,
     requestFormat: "json",
-    response: z.array(AuditEntry),
+    response: AuditLogResponse,
     errors: [
       {
         status: 405,
@@ -3322,6 +3347,39 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Credential key not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/credentials/rotate",
+    alias: "rotateCredentials",
+    description: `Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022). No restart is required; the in-memory key is updated in place.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ new_passphrase: z.string().min(1) }),
+      },
+    ],
+    response: z.object({ status: z.literal("rotated") }).passthrough(),
+    errors: [
+      {
+        status: 400,
+        description: `Invalid request (e.g. empty passphrase).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Re-auth required or invalid consent token.`,
         schema: ErrorResponse,
       },
       {

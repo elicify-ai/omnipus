@@ -928,6 +928,48 @@ func (e AuditEntryDecision) Valid() bool {
 	}
 }
 
+// Defines values for AuditLogResponseChainStatus.
+const (
+	Broken  AuditLogResponseChainStatus = "broken"
+	Unknown AuditLogResponseChainStatus = "unknown"
+	Valid   AuditLogResponseChainStatus = "valid"
+)
+
+// Valid indicates whether the value is a known member of the AuditLogResponseChainStatus enum.
+func (e AuditLogResponseChainStatus) Valid() bool {
+	switch e {
+	case Broken:
+		return true
+	case Unknown:
+		return true
+	case Valid:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditLogResponseEntriesDecision.
+const (
+	AuditLogResponseEntriesDecisionAllow AuditLogResponseEntriesDecision = "allow"
+	AuditLogResponseEntriesDecisionDeny  AuditLogResponseEntriesDecision = "deny"
+	AuditLogResponseEntriesDecisionError AuditLogResponseEntriesDecision = "error"
+)
+
+// Valid indicates whether the value is a known member of the AuditLogResponseEntriesDecision enum.
+func (e AuditLogResponseEntriesDecision) Valid() bool {
+	switch e {
+	case AuditLogResponseEntriesDecisionAllow:
+		return true
+	case AuditLogResponseEntriesDecisionDeny:
+		return true
+	case AuditLogResponseEntriesDecisionError:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelConfigureRequestIdentityKind.
 const (
 	ChannelConfigureRequestIdentityKindAgent ChannelConfigureRequestIdentityKind = "agent"
@@ -3120,19 +3162,19 @@ func (e ToolCallStatus) Valid() bool {
 
 // Defines values for ToolPolicy.
 const (
-	Allow ToolPolicy = "allow"
-	Ask   ToolPolicy = "ask"
-	Deny  ToolPolicy = "deny"
+	ToolPolicyAllow ToolPolicy = "allow"
+	ToolPolicyAsk   ToolPolicy = "ask"
+	ToolPolicyDeny  ToolPolicy = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolPolicy enum.
 func (e ToolPolicy) Valid() bool {
 	switch e {
-	case Allow:
+	case ToolPolicyAllow:
 		return true
-	case Ask:
+	case ToolPolicyAsk:
 		return true
-	case Deny:
+	case ToolPolicyDeny:
 		return true
 	default:
 		return false
@@ -3379,6 +3421,21 @@ func (e WorkspaceUpdateRequestStatus) Valid() bool {
 	case WorkspaceUpdateRequestStatusActive:
 		return true
 	case WorkspaceUpdateRequestStatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RotateCredentials200JSONResponseBodyStatus.
+const (
+	Rotated RotateCredentials200JSONResponseBodyStatus = "rotated"
+)
+
+// Valid indicates whether the value is a known member of the RotateCredentials200JSONResponseBodyStatus enum.
+func (e RotateCredentials200JSONResponseBodyStatus) Valid() bool {
+	switch e {
+	case Rotated:
 		return true
 	default:
 		return false
@@ -4631,6 +4688,54 @@ type AuditEntry struct {
 // AuditEntryDecision Outcome of the event evaluation. One of: allow, deny, error. May be absent for informational events.
 type AuditEntryDecision string
 
+// AuditLogResponse Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (v0.2 #155). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
+type AuditLogResponse struct {
+	// ChainBrokenIndex 1-based index of the first entry where the chain break was detected. Present only when chain_status is "broken".
+	ChainBrokenIndex *int `json:"chain_broken_index,omitempty"`
+
+	// ChainStatus valid = HMAC chain verified intact; broken = a break was detected (see chain_broken_index); unknown = verification was not performed.
+	ChainStatus AuditLogResponseChainStatus `json:"chain_status"`
+
+	// Entries Recent audit entries, reverse-chronological, max 100.
+	Entries []struct {
+		// AgentId ID of the agent that triggered the event. May be absent.
+		AgentId *string `json:"agent_id,omitempty"`
+
+		// Command Command string when the event is an exec event. May be absent.
+		Command *string `json:"command,omitempty"`
+
+		// Decision Outcome of the event evaluation. One of: allow, deny, error. May be absent for informational events.
+		Decision *AuditLogResponseEntriesDecision `json:"decision,omitempty"`
+
+		// Details Event-specific metadata. Structure varies by event type.
+		Details *map[string]interface{} `json:"details,omitempty"`
+
+		// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
+		Event string `json:"event"`
+
+		// Parameters Tool call parameters or other event-specific key-value pairs.
+		Parameters *map[string]interface{} `json:"parameters,omitempty"`
+
+		// PolicyRule Policy rule that produced this decision. May be absent.
+		PolicyRule *string `json:"policy_rule,omitempty"`
+
+		// SessionId Session ID associated with the event. May be absent.
+		SessionId *string `json:"session_id,omitempty"`
+
+		// Timestamp ISO 8601 UTC timestamp of when the event was recorded.
+		Timestamp time.Time `json:"timestamp"`
+
+		// Tool Tool name when the event is a tool call. May be absent.
+		Tool *string `json:"tool,omitempty"`
+	} `json:"entries"`
+}
+
+// AuditLogResponseChainStatus valid = HMAC chain verified intact; broken = a break was detected (see chain_broken_index); unknown = verification was not performed.
+type AuditLogResponseChainStatus string
+
+// AuditLogResponseEntriesDecision Outcome of the event evaluation. One of: allow, deny, error. May be absent for informational events.
+type AuditLogResponseEntriesDecision string
+
 // AuditLogToggle Audit log enable/disable state returned by GET /api/v1/security/audit-log. Note: this endpoint controls whether audit logging is enabled at all. GET /api/v1/audit-log (distinct path) returns the actual audit entries.
 type AuditLogToggle struct {
 	// Enabled Whether audit logging is currently enabled.
@@ -4843,6 +4948,12 @@ type CliDetect struct {
 
 	// HasOpencode Whether the `opencode` binary is on PATH.
 	HasOpencode bool `json:"hasOpencode"`
+}
+
+// CredentialRotateRequest Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022).
+type CredentialRotateRequest struct {
+	// NewPassphrase New passphrase used to derive the new vault key. Must not be empty.
+	NewPassphrase string `json:"new_passphrase"`
 }
 
 // CredentialSetRequest Request body for POST /api/v1/credentials. Stores an encrypted credential. The key must be non-empty; the value is stored AES-256-GCM encrypted.
@@ -7868,6 +7979,9 @@ type bearerAuthContextKey string
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
 type ConfigureChannelJSONBody map[string]interface{}
 
+// RotateCredentials200JSONResponseBodyStatus defines parameters for RotateCredentials.
+type RotateCredentials200JSONResponseBodyStatus string
+
 // DeleteCredential200JSONResponseBodyStatus defines parameters for DeleteCredential.
 type DeleteCredential200JSONResponseBodyStatus string
 
@@ -8035,6 +8149,9 @@ type PostChatJSONRequestBody = SseChatRequest
 
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest
+
+// RotateCredentialsJSONRequestBody defines body for RotateCredentials for application/json ContentType.
+type RotateCredentialsJSONRequestBody = CredentialRotateRequest
 
 // SetGodModeJSONRequestBody defines body for SetGodMode for application/json ContentType.
 type SetGodModeJSONRequestBody = GodModeUpdateRequest

@@ -175,6 +175,8 @@ components:
       $ref: ./components/schemas/SandboxStatus.yaml
     AuditEntry:
       $ref: ./components/schemas/AuditEntry.yaml
+    AuditLogResponse:
+      $ref: ./components/schemas/AuditLogResponse.yaml
     AuditLogToggle:
       $ref: ./components/schemas/AuditLogToggle.yaml
     RateLimitConfig:
@@ -418,6 +420,8 @@ components:
       $ref: ./components/schemas/ToolApprovalActionRequest.yaml
     CredentialSetRequest:
       $ref: ./components/schemas/CredentialSetRequest.yaml
+    CredentialRotateRequest:
+      $ref: ./components/schemas/CredentialRotateRequest.yaml
     RestoreBackupRequest:
       $ref: ./components/schemas/RestoreBackupRequest.yaml
     AgentOwnershipUpdateRequest:
@@ -2339,18 +2343,16 @@ paths:
     get:
       operationId: getAuditLog
       summary: Get recent audit log entries
-      description: "Returns the last 100 audit log entries in reverse-chronological order, read from ~/.omnipus/system/audit.jsonl. Always returns an array \u2014 empty array when no entries exist.\n"
+      description: "Returns the last 100 audit log entries in reverse-chronological order (read from ~/.omnipus/system/audit.jsonl) wrapped with the HMAC tamper-evident chain-verification result (chain_status). entries is an empty array when no entries exist.\n"
       tags:
       - Audit
       responses:
         '200':
-          description: Audit log entries (reverse-chronological, max 100).
+          description: Audit log entries (reverse-chronological, max 100) plus HMAC chain-integrity status.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/AuditEntry'
+                $ref: '#/components/schemas/AuditLogResponse'
         '405':
           description: Method not allowed.
           content:
@@ -3367,6 +3369,56 @@ paths:
                     example: OPENAI_API_KEY
         '404':
           description: Credential key not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Credential store locked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /credentials/rotate:
+    post:
+      operationId: rotateCredentials
+      summary: Rotate the credential vault key via a new passphrase
+      description: >
+        Re-encrypts the entire credential vault under a new Argon2id key derived
+        from new_passphrase (and a fresh salt). Sensitive change — requires a
+        re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 /
+        ADR-022). No restart is required; the in-memory key is updated in place.
+      tags:
+      - Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialRotateRequest'
+      responses:
+        '200':
+          description: Vault re-encrypted under the new passphrase.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - rotated
+                    example: rotated
+        '400':
+          description: Invalid request (e.g. empty passphrase).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Re-auth required or invalid consent token.
           content:
             application/json:
               schema:

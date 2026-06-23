@@ -25,6 +25,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchCredentials: vi.fn(),
     addCredential: vi.fn(),
     deleteCredential: vi.fn(),
+    rotateCredentials: vi.fn(),
     fetchBuiltinTools: vi.fn(),
     fetchRegistryTools: vi.fn(),
     fetchGlobalToolPolicies: vi.fn(),
@@ -61,6 +62,7 @@ import {
   reAuth,
   addCredential,
   deleteCredential,
+  rotateCredentials,
   ApiError,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -731,5 +733,31 @@ describe('SecuritySection — credential vault re-auth gate (B4)', () => {
       expect(screen.queryByTestId('reauth-confirm')).toBeNull()
     })
     expect(mockAddToast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
+  })
+
+  it('(G5) rotate master key goes through the re-auth gate then replays the token', async () => {
+    vi.mocked(rotateCredentials)
+      .mockRejectedValueOnce(reAuth403())
+      .mockResolvedValueOnce(undefined as never)
+    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'rot_tok', expires_in: 300 } as never)
+
+    renderSection()
+
+    fireEvent.click(await screen.findByTestId('rotate-master-key'))
+    fireEvent.change(await screen.findByTestId('rotate-passphrase-input'), { target: { value: 'new-pass-phrase' } })
+    fireEvent.click(screen.getByTestId('rotate-confirm'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+    expect(vi.mocked(rotateCredentials).mock.calls[0]).toEqual(['new-pass-phrase', ''])
+
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(rotateCredentials).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(rotateCredentials).mock.calls[1]).toEqual(['new-pass-phrase', 'rot_tok'])
+    })
   })
 })

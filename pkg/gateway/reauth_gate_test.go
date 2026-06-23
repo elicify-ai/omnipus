@@ -423,3 +423,44 @@ func TestDeleteCredential_WithReAuth_Succeeds(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, keys, "DOOMED_KEY", "the credential must have been deleted")
 }
+
+// TestRotateCredentials_RequiresReAuth (G5) proves POST /api/v1/credentials/rotate
+// carrying the admin user but no re-auth consent token is rejected (403). Rotation
+// re-encrypts the whole vault, so it is gated like set/delete.
+func TestRotateCredentials_RequiresReAuth(t *testing.T) {
+	api := newCredVaultReAuthTestAPI(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/credentials/rotate",
+		strings.NewReader(`{"new_passphrase":"new-pass"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdminNoToken(r)
+	w := httptest.NewRecorder()
+	api.HandleCredentials(w, r)
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"rotate without a re-auth token must be 403; body=%s", w.Body.String())
+	assert.Contains(t, strings.ToLower(w.Body.String()), "re-typing your password")
+}
+
+// TestRotateCredentials_WithReAuth_Succeeds (G5) proves rotation succeeds with a
+// valid consent token and that existing secrets remain retrievable afterward
+// (re-encrypted under the new key, not lost).
+func TestRotateCredentials_WithReAuth_Succeeds(t *testing.T) {
+	api := newCredVaultReAuthTestAPI(t)
+	require.NoError(t, api.credStore.Set("KEEP_KEY", "keep-me"))
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/credentials/rotate",
+		strings.NewReader(`{"new_passphrase":"a-brand-new-passphrase"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdmin(t, api, r)
+	w := httptest.NewRecorder()
+	api.HandleCredentials(w, r)
+	require.Equal(t, http.StatusOK, w.Code,
+		"valid re-auth must allow rotation; body=%s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "rotated", resp["status"])
+
+	// The pre-existing secret must survive rotation (re-encrypted, not dropped).
+	val, err := api.credStore.Get("KEEP_KEY")
+	require.NoError(t, err)
+	assert.Equal(t, "keep-me", val)
+}
