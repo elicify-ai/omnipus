@@ -304,6 +304,10 @@ components:
       $ref: ./components/schemas/McpServer.yaml
     McpServerCreate:
       $ref: ./components/schemas/McpServerCreate.yaml
+    McpServerUpdate:
+      $ref: ./components/schemas/McpServerUpdate.yaml
+    McpServerTestResponse:
+      $ref: ./components/schemas/McpServerTestResponse.yaml
     McpServerToolsResponse:
       $ref: ./components/schemas/McpServerToolsResponse.yaml
     AppState:
@@ -4578,6 +4582,72 @@ paths:
       responses:
         '204':
           description: MCP server deleted.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    patch:
+      operationId: patchMcpServer
+      summary: Update an MCP server
+      description: >
+        Partially updates an MCP server config (enable/disable toggle, endpoint,
+        env, headers, env_file, admin-ask). Omitted fields are preserved. Admin-only.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: MCP server ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpServerUpdate'
+      responses:
+        '200':
+          description: Updated MCP server entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpServer'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /mcp-servers/{id}/test:
+    post:
+      operationId: testMcpServer
+      summary: Test MCP server connectivity
+      description: >
+        Attempts an on-demand connection to the configured MCP server and reports
+        whether it succeeded and which tools it exposes. Does not change any state
+        (the probe connection is closed immediately). Admin-only.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: MCP server ID.
+      responses:
+        '200':
+          description: Connectivity probe result (success may be true or false).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpServerTestResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':

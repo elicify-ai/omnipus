@@ -1,0 +1,32 @@
+title: McpServerTestResponse
+description: >
+  Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that
+  attempts to connect to the configured MCP server (without changing any state)
+  and reports whether it succeeded and which tools it exposed.
+type: object
+required:
+  - success
+  - message
+additionalProperties: false
+properties:
+  success:
+    type: boolean
+    description: True when the gateway connected and initialized the server.
+    example: true
+  message:
+    type: string
+    description: Human-readable result (connection summary, or the failure reason).
+    example: "Connected to 'everything' (stdio); 5 tools."
+  tool_count:
+    type: integer
+    minimum: 0
+    description: Number of tools enumerated on success.
+    example: 5
+  tools:
+    type: array
+    items:
+      type: string
+    description: Tool names enumerated on success.
+    example:
+      - "search"
+      - "fetch"

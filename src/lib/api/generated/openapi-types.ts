@@ -1951,6 +1951,30 @@ export interface paths {
         delete: operations["deleteMcpServer"];
         options?: never;
         head?: never;
+        /**
+         * Update an MCP server
+         * @description Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file, admin-ask). Omitted fields are preserved. Admin-only.
+         */
+        patch: operations["patchMcpServer"];
+        trace?: never;
+    };
+    "/mcp-servers/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test MCP server connectivity
+         * @description Attempts an on-demand connection to the configured MCP server and reports whether it succeeded and which tools it exposes. Does not change any state (the probe connection is closed immediately). Admin-only.
+         */
+        post: operations["testMcpServer"];
+        delete?: never;
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -3790,6 +3814,11 @@ export interface components {
              * @enum {string}
              */
             source: "builtin" | "mcp";
+            /**
+             * @description For MCP tools (source="mcp"), the originating MCP server id. Lets the SPA group MCP tools by server unambiguously instead of parsing the tool name (which is lossy when a server name contains underscores). Absent for builtin tools.
+             * @example github-mcp
+             */
+            server_id?: string;
         };
         /**
          * AgentToolEntry
@@ -5062,6 +5091,11 @@ export interface components {
              *     ]
              */
             tools?: string[];
+            /**
+             * @description Whether this server is enabled in config. A disabled server is not connected at agent-loop startup and exposes no tools.
+             * @example true
+             */
+            enabled?: boolean;
         };
         /**
          * McpServerCreate
@@ -5106,6 +5140,91 @@ export interface components {
             env?: {
                 [key: string]: string;
             };
+            /**
+             * @description HTTP headers sent with each request to a remote MCP server (sse/http only), e.g. an Authorization header for header-authenticated servers.
+             * @example {
+             *       "Authorization": "Bearer sk-..."
+             *     }
+             */
+            headers?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Path to a file of KEY=VALUE environment variables loaded for the server process (stdio only); useful for large or sensitive env sets.
+             * @example /etc/omnipus/mcp-server.env
+             */
+            env_file?: string;
+            /**
+             * @description Tool names from this server that require admin approval before execution (FR-064), regardless of the per-agent policy.
+             * @example [
+             *       "delete_record"
+             *     ]
+             */
+            requires_admin_ask?: string[];
+        };
+        /**
+         * McpServerUpdate
+         * @description PATCH body for /mcp-servers/{id}. Partial update — only the provided fields are changed; omitted fields are preserved (merge, not replace). Use it to toggle `enabled`, change the endpoint/command, or adjust env/headers/admin-ask.
+         */
+        McpServerUpdate: {
+            /**
+             * @description Enable or disable the server (disabled servers are not connected).
+             * @example false
+             */
+            enabled?: boolean;
+            /**
+             * @description New command (stdio only).
+             * @example npx @modelcontextprotocol/server-everything
+             */
+            command?: string;
+            /**
+             * @description New endpoint URL (sse/http only; https or http-on-loopback).
+             * @example https://mcp.example.com/sse
+             */
+            url?: string;
+            /** @description Replacement command-line args (stdio only). */
+            args?: string[];
+            /** @description Replacement environment overrides (stdio only). */
+            env?: {
+                [key: string]: string;
+            };
+            /** @description Replacement HTTP headers (sse/http only). */
+            headers?: {
+                [key: string]: string;
+            };
+            /** @description Path to a KEY=VALUE env file (stdio only). */
+            env_file?: string;
+            /** @description Replacement list of tools that require admin approval (FR-064). */
+            requires_admin_ask?: string[];
+        };
+        /**
+         * McpServerTestResponse
+         * @description Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that attempts to connect to the configured MCP server (without changing any state) and reports whether it succeeded and which tools it exposed.
+         */
+        McpServerTestResponse: {
+            /**
+             * @description True when the gateway connected and initialized the server.
+             * @example true
+             */
+            success: boolean;
+            /**
+             * @description Human-readable result (connection summary, or the failure reason).
+             * @example Connected to 'everything' (stdio); 5 tools.
+             */
+            message: string;
+            /**
+             * @description Number of tools enumerated on success.
+             * @example 5
+             */
+            tool_count?: number;
+            /**
+             * @description Tool names enumerated on success.
+             * @example [
+             *       "search",
+             *       "fetch"
+             *     ]
+             */
+            tools?: string[];
         };
         /** @description Response from GET /mcp-servers/{id}/tools. Returns the list of tool names exposed by a specific MCP server. */
         McpServerToolsResponse: {
@@ -11268,6 +11387,61 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
+    patchMcpServer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description MCP server ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated MCP server entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServer"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    testMcpServer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description MCP server ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connectivity probe result (success may be true or false). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerTestResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
     listMcpServerTools: {
         parameters: {
             query?: never;
@@ -12167,6 +12341,8 @@ export type SandboxConfigUpdate = components["schemas"]["SandboxConfigUpdate"];
 export type Task = components["schemas"]["Task"];
 export type McpServer = components["schemas"]["McpServer"];
 export type McpServerCreate = components["schemas"]["McpServerCreate"];
+export type McpServerUpdate = components["schemas"]["McpServerUpdate"];
+export type McpServerTestResponse = components["schemas"]["McpServerTestResponse"];
 export type McpServerToolsResponse = components["schemas"]["McpServerToolsResponse"];
 export type AppState = components["schemas"]["AppState"];
 export type ValidateTokenResponse = components["schemas"]["ValidateTokenResponse"];

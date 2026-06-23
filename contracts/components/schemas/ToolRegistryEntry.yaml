@@ -41,3 +41,11 @@ properties:
       - builtin
       - mcp
     example: builtin
+  server_id:
+    type: string
+    description: >
+      For MCP tools (source="mcp"), the originating MCP server id. Lets the SPA
+      group MCP tools by server unambiguously instead of parsing the tool name
+      (which is lossy when a server name contains underscores). Absent for
+      builtin tools.
+    example: github-mcp

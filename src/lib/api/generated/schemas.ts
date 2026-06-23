@@ -1320,6 +1320,7 @@ export const ToolRegistryEntry = z
     scope: z.enum(["system", "core", "general"]),
     category: z.string(),
     source: z.enum(["builtin", "mcp"]),
+    server_id: z.string().optional(),
   })
   .passthrough();
 export const ToolApprovalActionRequest = z.object({
@@ -1900,6 +1901,7 @@ export const McpServer = z
     status: z.enum(["connected", "disconnected", "error"]),
     tool_count: z.number().int().gte(0),
     tools: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
   })
   .passthrough();
 export const McpServerCreate = z.object({
@@ -1909,6 +1911,27 @@ export const McpServerCreate = z.object({
   args: z.array(z.string()).optional(),
   transport: z.enum(["stdio", "sse", "http"]),
   env: z.record(z.string()).optional(),
+  headers: z.record(z.string()).optional(),
+  env_file: z.string().optional(),
+  requires_admin_ask: z.array(z.string()).optional(),
+});
+export const McpServerUpdate = z
+  .object({
+    enabled: z.boolean(),
+    command: z.string(),
+    url: z.string(),
+    args: z.array(z.string()),
+    env: z.record(z.string()),
+    headers: z.record(z.string()),
+    env_file: z.string(),
+    requires_admin_ask: z.array(z.string()),
+  })
+  .partial();
+export const McpServerTestResponse = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  tool_count: z.number().int().gte(0).optional(),
+  tools: z.array(z.string()).optional(),
 });
 export const McpServerToolsResponse = z.object({ tools: z.array(z.string()) });
 export const McpToolsListResponse = z.array(
@@ -3682,6 +3705,72 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
     ],
     response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "patch",
+    path: "/mcp-servers/:id",
+    alias: "patchMcpServer",
+    description: `Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file, admin-ask). Omitted fields are preserved. Admin-only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: McpServerUpdate,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: McpServer,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mcp-servers/:id/test",
+    alias: "testMcpServer",
+    description: `Attempts an on-demand connection to the configured MCP server and reports whether it succeeded and which tools it exposes. Does not change any state (the probe connection is closed immediately). Admin-only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: McpServerTestResponse,
     errors: [
       {
         status: 401,
