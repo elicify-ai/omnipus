@@ -79,6 +79,9 @@ func buildWildcardIndex(policies map[string]string) []wildcardEntry {
 		switch {
 		case strings.HasSuffix(k, ".*"):
 			prefix := k[:len(k)-2] // strip trailing ".*"
+			if prefix == "" {
+				continue // a bare ".*" would match (nearly) everything — ignore it
+			}
 			entries = append(entries, wildcardEntry{
 				prefix:    prefix,
 				segments:  strings.Count(prefix, ".") + 1,
@@ -87,6 +90,9 @@ func buildWildcardIndex(policies map[string]string) []wildcardEntry {
 			})
 		case strings.HasSuffix(k, "_*"):
 			prefix := k[:len(k)-2] // strip trailing "_*"
+			if prefix == "" {
+				continue // a bare "_*" would match every underscore-prefixed tool — ignore it
+			}
 			// For underscore wildcards, segment count is always 1 (single identifier).
 			// Use char count to rank among multiple "_*" entries (longer prefix = more specific).
 			entries = append(entries, wildcardEntry{

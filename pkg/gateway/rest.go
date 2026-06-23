@@ -5051,11 +5051,14 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 }
 
 // listMCPServers reads configured MCP servers from config and returns them as
-// McpServer[] (contracts/components/schemas/McpServer.yaml).
-// Status is always "disconnected" — live connection state is not tracked at
-// the config layer (the MCP manager reconnects at agent loop startup, not per-request).
+// McpServer[] (contracts/components/schemas/McpServer.yaml). G6: status reflects
+// the live MCP manager (a server present in the manager is "connected"), and
+// tool_count is the number of tools that server registered in the MCP registry
+// (matching GET /mcp-servers/{id}/tools). When MCP is disabled / not yet
+// connected, status is "disconnected" with tool_count 0.
 func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 	cfg := a.agentLoop.GetConfig()
+	mgr := a.agentLoop.GetMCPManager()
 	result := make([]gen.McpServer, 0, len(cfg.Tools.MCP.Servers))
 	for name, srv := range cfg.Tools.MCP.Servers {
 		transport := gen.McpServerTransportStdio
@@ -5066,12 +5069,28 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 			transport = gen.McpServerTransportHttp
 		}
 		enabled := srv.Enabled
+
+		status := gen.McpServerStatusDisconnected
+		if mgr != nil {
+			if _, ok := mgr.GetServer(name); ok {
+				status = gen.McpServerStatusConnected
+			}
+		}
+		toolCount := 0
+		if a.mcpRegistry != nil {
+			for _, e := range a.mcpRegistry.Describe() {
+				if e.ServerID == name {
+					toolCount++
+				}
+			}
+		}
+
 		result = append(result, gen.McpServer{
 			Id:        name,
 			Name:      name,
 			Transport: transport,
-			Status:    gen.McpServerStatusDisconnected,
-			ToolCount: 0,
+			Status:    status,
+			ToolCount: toolCount,
 			Enabled:   &enabled,
 		})
 	}

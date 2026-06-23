@@ -267,11 +267,11 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
   const { mutate: doPatch, isPending: isPatching } = useMutation({
     mutationFn: () => {
       if (!initialServer) throw new Error('No server to edit')
+      // Name is immutable on PATCH — McpServerUpdate has no `name` field
+      // (additionalProperties:false), so renaming requires delete + re-add.
+      // Fields left blank are NOT sent: the backend merges (omitted = preserved),
+      // so a blank input keeps the current value (it does not clear it).
       const patch: McpServerUpdate = {}
-      if (name.trim() !== initialServer.name) {
-        // name is not in McpServerUpdate — send as-is; backend ignores unknown fields on PATCH.
-        // Since the generated McpServerUpdate has no name field, we skip it.
-      }
       if (mode === 'local') {
         const envObj: Record<string, string> = {}
         env.split('\n').forEach((line) => {
@@ -370,9 +370,9 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
       ? command.trim().length > 0
       : networkUrlValid)
 
-  // In edit mode, name is display-only (not editable via PATCH) but still
-  // required for the canSubmit check — so we allow submitting even if user
-  // hasn't touched name.
+  // In edit mode, name is display-only (immutable via PATCH), so it does NOT
+  // gate submission — canSubmitEdit ignores it. A blank URL is allowed (means
+  // "keep the current URL"); a non-blank URL must still be valid.
   const canSubmitEdit = editMode
     ? (mode === 'local' ? true : networkUrlValid || url.trim().length === 0)
     : canSubmit

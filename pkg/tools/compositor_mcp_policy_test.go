@@ -411,3 +411,23 @@ func TestFilterToolsByPolicy_MCPTool_ScopeGeneral_PassesForAnyAgentType(t *testi
 		}
 	}
 }
+
+// TestFilterToolsByPolicy_BareWildcardKeysAreIgnored guards against the
+// empty-prefix wildcard pathology (G10 review): a bare "_*" or ".*" policy key
+// has an empty prefix and would otherwise match (nearly) every tool. The matcher
+// must ignore such keys, leaving tools at their default policy.
+func TestFilterToolsByPolicy_BareWildcardKeysAreIgnored(t *testing.T) {
+	for _, bare := range []string{"_*", ".*"} {
+		tools := makeMCPAdapters("any-server", "mcp_anysvr_alpha", "mcp_anysvr_beta")
+		cfg := &ToolPolicyCfg{
+			DefaultPolicy:       "allow",
+			GlobalPolicies:      map[string]string{bare: "deny"},
+			GlobalDefaultPolicy: "allow",
+		}
+		got, policyMap := FilterToolsByPolicy(tools, "custom", cfg)
+		assert.Len(t, got, 2,
+			"bare wildcard %q must be ignored — both tools survive at default allow", bare)
+		assert.Equal(t, "allow", policyMap["mcp_anysvr_alpha"],
+			"bare wildcard %q must not deny mcp_anysvr_alpha", bare)
+	}
+}
