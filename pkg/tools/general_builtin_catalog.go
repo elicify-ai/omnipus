@@ -16,8 +16,18 @@
 //   - Constructor errors are logged and skipped (never fatal). A tool whose
 //     constructor fails is simply absent from the metadata catalog.
 //   - The workspace_shell and workspace.shell_bg tools are omitted: they exist
-//     only when experimental.workspace_shell_enabled=true (config-gated), and
-//     the central catalog reflects the fixed set of tools that are always present.
+//     only when experimental.workspace_shell_enabled=true (config-gated, experimental).
+//
+// Conditional tools (cron, task_add_*, email.*, tool_search_tool_*): these are
+// included as metadata even though they only register per-agent under certain
+// conditions (cron = all agents; task_add_* = core agents; email.* = agents that
+// own a configured mailbox; tool_search_tool_* = when the MCP search cache is
+// enabled). The global catalog is a CAPABILITY REFERENCE — "everything the
+// platform can do" — while the per-agent view (GET /agents/{id}/tools, which
+// reads the real runtime registry) remains the authority for what a given agent
+// actually has. Listing a conditional tool here does not make it appear for an
+// agent that hasn't met its condition; that gating is unchanged at the per-agent
+// registration layer. Metadata instances are constructed with nil deps.
 
 package tools
 
@@ -35,7 +45,7 @@ import (
 // Constructor errors are logged at Warn level and the corresponding tool is
 // skipped. The caller must not treat a shorter-than-expected slice as fatal.
 func GeneralBuiltinMetadata() []Tool {
-	out := make([]Tool, 0, 28)
+	out := make([]Tool, 0, 38)
 
 	// --- exec (CategoryCode, ScopeCore) ---
 	execTool, err := NewExecToolWithConfig("", false, nil)
@@ -103,6 +113,32 @@ func GeneralBuiltinMetadata() []Tool {
 	// --- web_serve (CategoryCore — Tier 1 static + Tier 3 dev server) ---
 	// Constructed with nil ServedSubdirs (metadata only; never executed).
 	out = append(out, NewWebServeTool("", "", "", nil, nil, WebServeDevConfig{}, nil, nil, 0, 0))
+
+	// --- Conditional tools (metadata-only; see package doc) ---
+	// These register per-agent only under certain conditions, but are listed here
+	// so the global catalog is a complete capability reference. Nil deps — never
+	// executed; the per-agent registry supplies live instances.
+
+	// cron (CategoryCore): registered for all agents via agentLoop.RegisterTool.
+	// Nil cronService + nil config → safe (Description is static; config only
+	// toggles allowCommand/execEnabled flags, irrelevant for metadata).
+	out = append(out, NewCronTool(nil, nil))
+
+	// task_add_todo / task_add_dependency (CategoryCore): registered alongside the
+	// task tools for core agents. Nil store — metadata only.
+	out = append(out, NewTaskAddTodoTool(nil))
+	out = append(out, NewTaskAddDependencyTool(nil))
+
+	// Email tools (CategoryCommunication): registered only for agents that own a
+	// configured mailbox (pkg/agent/email_tools.go). EmailToolset(nil) returns
+	// all five; nil transport is safe (Execute guards tp==nil; Description static).
+	out = append(out, EmailToolset(nil)...)
+
+	// On-demand tool-discovery search (CategorySearch via inheritance): registered
+	// only when the MCP search cache is enabled (pkg/agent/loop_mcp.go). Nil
+	// registry — metadata only.
+	out = append(out, NewRegexSearchTool(nil, 0, 0))
+	out = append(out, NewBM25SearchTool(nil, 0, 0))
 
 	return out
 }
