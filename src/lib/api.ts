@@ -44,7 +44,7 @@ import {
   ProbeProviderResponse as ProbeProviderResponseSchema,
   Agent as AgentSchema,
   AgentSession as AgentSessionSchema,
-  AuditEntry as AuditEntrySchema,
+  AuditLogResponse as AuditLogResponseSchema,
   AuditLogToggle as AuditLogToggleSchema,
   ExecAllowlist as ExecAllowlistSchema,
   ExecProxyStatus as ExecProxyStatusSchema,
@@ -238,6 +238,7 @@ import type {
   SandboxConfigUpdate,
   SandboxStatus,
   AuditEntry,
+  AuditLogResponse,
   AuditLogToggle,
   RateLimitConfig,
   ExecAllowlist,
@@ -367,6 +368,7 @@ export type {
   SandboxConfig,
   SandboxStatus,
   AuditEntry,
+  AuditLogResponse,
   AuditLogToggle,
   RateLimitConfig,
   ExecAllowlist,
@@ -1938,6 +1940,17 @@ export function deleteCredential(key: string, reAuthToken?: string): Promise<voi
   })
 }
 
+// rotateCredentials re-encrypts the whole vault under a new passphrase (G5). Like
+// add/delete it is re-auth gated server-side (ADR-022): pass reAuthToken via runGated().
+export function rotateCredentials(newPassphrase: string, reAuthToken?: string): Promise<void> {
+  // no-schema: void/{status} response; POST body triggers re-encryption.
+  return request<void>('/credentials/rotate', {
+    method: 'POST',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
+    body: JSON.stringify({ new_passphrase: newPassphrase }),
+  })
+}
+
 // ── Devices ───────────────────────────────────────────────────────────────────
 
 // DevicePending — re-exported from generated openapi-types (contract-first #8).
@@ -2071,8 +2084,8 @@ export type AuditDecision = 'allow' | 'deny' | 'error'
 // AuditEntry — re-exported from generated openapi-types (no local body needed).
 // AuditEventType and AuditDecision remain as local type aliases for UI use.
 
-export function fetchAuditLog(): Promise<AuditEntry[]> {
-  return request<AuditEntry[]>('/audit-log', undefined, z.array(AuditEntrySchema))
+export function fetchAuditLog(): Promise<AuditLogResponse> {
+  return request<AuditLogResponse>('/audit-log', undefined, AuditLogResponseSchema as ZodType<AuditLogResponse>)
 }
 
 // ── User Context (USER.md) ────────────────────────────────────────────────────

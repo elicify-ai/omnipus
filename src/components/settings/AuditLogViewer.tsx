@@ -64,6 +64,22 @@ function DecisionBadge({ decision }: { decision?: string }) {
   return <span className={`${BADGE_BASE} ${style}`}>{decision}</span>
 }
 
+// ChainStatusBadge surfaces the HMAC tamper-evident chain verification result (G4)
+// so an operator can see at a glance whether the audit log is intact.
+function ChainStatusBadge({ status, brokenIndex }: { status?: string; brokenIndex?: number }) {
+  if (status === 'valid') {
+    return <span data-testid="audit-chain-status" className={`${BADGE_BASE} border-emerald-500/30 bg-emerald-500/10 text-emerald-400`}>Chain verified ✓</span>
+  }
+  if (status === 'broken') {
+    return (
+      <span data-testid="audit-chain-status" className={`${BADGE_BASE} border-red-500/30 bg-red-500/10 text-red-400`}>
+        Chain broken ✗{brokenIndex != null ? ` @ entry ${brokenIndex}` : ''}
+      </span>
+    )
+  }
+  return <span data-testid="audit-chain-status" className={`${BADGE_BASE} ${BADGE_FALLBACK}`}>Chain not checked</span>
+}
+
 function hasNonEmpty(obj?: Record<string, unknown>): boolean {
   return obj != null && Object.keys(obj).length > 0
 }
@@ -191,13 +207,15 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
   const [eventFilter, setEventFilter] = useState('all')
   const [decisionFilter, setDecisionFilter] = useState('all')
 
-  const { data: entries = [], isLoading, isError, error, refetch, isFetching } = useQuery({
+  const { data: auditLog, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['audit-log'],
     queryFn: fetchAuditLog,
     enabled: open,
     refetchInterval: 30_000,
     retry: false,
   })
+
+  const entries = useMemo(() => auditLog?.entries ?? [], [auditLog])
 
   const filtered = useMemo(() => {
     return entries.filter((e) => {
@@ -221,6 +239,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
           <div className="flex items-center gap-2">
             <ListBullets size={16} weight="bold" style={{ color: 'var(--color-accent)' }} />
             <DialogTitle className="font-headline text-base">Audit Log</DialogTitle>
+            <ChainStatusBadge status={auditLog?.chain_status} brokenIndex={auditLog?.chain_broken_index ?? undefined} />
             {isFetching && !isLoading && (
               <span className="text-xs text-[var(--color-muted)] ml-1">Refreshing...</span>
             )}

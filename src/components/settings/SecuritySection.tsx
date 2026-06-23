@@ -54,6 +54,7 @@ import {
   fetchCredentials,
   addCredential,
   deleteCredential,
+  rotateCredentials,
   fetchBuiltinTools,
   fetchGlobalToolPolicies,
   updateGlobalToolPolicies,
@@ -214,6 +215,8 @@ export function SecuritySection() {
   const [credKey, setCredKey] = useState('')
   const [credValue, setCredValue] = useState('')
   const [deletingKey, setDeletingKey] = useState<string | null>(null)
+  const [rotateModalOpen, setRotateModalOpen] = useState(false)
+  const [rotatePassphrase, setRotatePassphrase] = useState('')
 
   useEffect(() => {
     if (!config) return
@@ -296,6 +299,19 @@ export function SecuritySection() {
     onError: (err: unknown) => {
       if (isReAuthCancelled(err)) return // user dismissed the password prompt — no-op, not an error
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Delete failed', variant: 'error' })
+    },
+  })
+
+  const { mutate: doRotate, isPending: isRotating } = useMutation({
+    mutationFn: () => runCredGated((token) => rotateCredentials(rotatePassphrase, token)),
+    onSuccess: () => {
+      addToast({ message: 'Credential vault re-encrypted with the new passphrase', variant: 'success' })
+      setRotateModalOpen(false)
+      setRotatePassphrase('')
+    },
+    onError: (err: unknown) => {
+      if (isReAuthCancelled(err)) return
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Rotation failed', variant: 'error' })
     },
   })
 
@@ -611,15 +627,27 @@ export function SecuritySection() {
               Your keys are encrypted and stored only on this server — never sent anywhere.
             </p>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 gap-1 text-xs"
-            onClick={() => setCredModalOpen(true)}
-          >
-            <Plus size={11} weight="bold" />
-            Add key
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 gap-1 text-xs"
+              onClick={() => setRotateModalOpen(true)}
+              data-testid="rotate-master-key"
+            >
+              <Key size={11} weight="bold" />
+              Rotate master key
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 gap-1 text-xs"
+              onClick={() => setCredModalOpen(true)}
+            >
+              <Plus size={11} weight="bold" />
+              Add key
+            </Button>
+          </div>
         </div>
 
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
@@ -655,8 +683,46 @@ export function SecuritySection() {
 
       <AuditLogViewer open={auditLogOpen} onOpenChange={setAuditLogOpen} />
 
-      {/* Re-auth dialog for credential add/delete (B4). */}
+      {/* Re-auth dialog for credential add/delete/rotate (B4 + G5). */}
       {credReAuthDialog}
+
+      {/* Rotate master key modal (G5) */}
+      <Dialog open={rotateModalOpen} onOpenChange={setRotateModalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="font-headline text-base">Rotate master key</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-xs text-[var(--color-muted)]">
+              Re-encrypts the entire credential vault under a new passphrase. Back up the new
+              passphrase — it&apos;s required to unlock the vault next time.
+            </p>
+            <div className="space-y-1">
+              <p className="text-xs text-[var(--color-muted)]">New passphrase</p>
+              <Input
+                type="password"
+                value={rotatePassphrase}
+                onChange={(e) => setRotatePassphrase(e.target.value)}
+                placeholder="Enter a new passphrase"
+                className="h-8 text-xs font-mono"
+                data-testid="rotate-passphrase-input"
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRotateModalOpen(false)}>Cancel</Button>
+            <Button
+              size="sm"
+              onClick={() => doRotate()}
+              disabled={!rotatePassphrase.trim() || isRotating}
+              data-testid="rotate-confirm"
+            >
+              {isRotating ? 'Rotating...' : 'Rotate'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add credential modal */}
       <Dialog open={credModalOpen} onOpenChange={setCredModalOpen}>

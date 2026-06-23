@@ -10,6 +10,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,7 +43,8 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	auditPath := filepath.Join(a.homePath, "system", "audit.jsonl")
 	f, err := os.Open(auditPath)
 	if os.IsNotExist(err) {
-		jsonOK(w, []json.RawMessage{})
+		// AuditLogResponse envelope: no entries, chain not checkable.
+		jsonOK(w, map[string]any{"entries": []json.RawMessage{}, "chain_status": "unknown"})
 		return
 	}
 	if err != nil {
@@ -80,7 +82,36 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []json.RawMessage{}
 	}
-	jsonOK(w, entries)
+
+	// G4: verify the HMAC tamper-evident chain (v0.2 #155) so the UI can surface
+	// integrity. chain_status is "unknown" when there is no logger/chain key to
+	// verify with (e.g. audit logging disabled).
+	chainStatus := "unknown"
+	var chainBrokenIndex *int
+	if logger := a.agentLoop.AuditLogger(); logger != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if res, verr := logger.Verify(ctx); verr != nil {
+			slog.Warn("rest: audit chain verify failed", "error", verr)
+		} else if res != nil {
+			if res.Valid {
+				chainStatus = "valid"
+			} else {
+				chainStatus = "broken"
+				idx := res.BrokenAt
+				chainBrokenIndex = &idx
+			}
+		}
+	}
+
+	resp := map[string]any{
+		"entries":      entries,
+		"chain_status": chainStatus,
+	}
+	if chainBrokenIndex != nil {
+		resp["chain_broken_index"] = *chainBrokenIndex
+	}
+	jsonOK(w, resp)
 }
 
 // credentialsStorePath returns the path to the encrypted credentials file.
@@ -97,6 +128,8 @@ func (a *restAPI) HandleCredentials(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && sub == "":
 		a.listCredentials(w)
+	case r.Method == http.MethodPost && sub == "rotate":
+		a.rotateCredentials(w, r)
 	case r.Method == http.MethodPost && sub == "":
 		a.setCredential(w, r)
 	case r.Method == http.MethodDelete && sub != "":
@@ -208,6 +241,50 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 		return
 	}
 	jsonOK(w, map[string]string{"status": "removed", "key": key})
+}
+
+// rotateCredentials handles POST /api/v1/credentials/rotate (G5). It re-encrypts
+// the whole vault under a new passphrase-derived key. Like set/delete, it requires
+// a re-auth consent token (FR-12.2, ADR-022) — rotation is a high-blast-radius
+// security operation. No restart needed: the store updates its in-memory key.
+func (a *restAPI) rotateCredentials(w http.ResponseWriter, r *http.Request) {
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
+	var req gen.CredentialRotateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "CredentialRotateRequest", &req, validateEnabled) {
+		return
+	}
+	if strings.TrimSpace(req.NewPassphrase) == "" {
+		jsonErr(w, http.StatusBadRequest, "new_passphrase is required and must not be empty")
+		return
+	}
+	store := a.credStore
+	if store == nil || store.IsLocked() {
+		store = credentials.NewStore(a.credentialsStorePath())
+		if err := credentials.Unlock(store); err != nil {
+			slog.Warn("rest: credential store locked for rotate", "error", err)
+			jsonErr(
+				w,
+				http.StatusServiceUnavailable,
+				"credential store is locked — set OMNIPUS_MASTER_KEY or OMNIPUS_KEY_FILE",
+			)
+			return
+		}
+	}
+	if err := store.RotateWithPassphrase(req.NewPassphrase); err != nil {
+		slog.Error("rest: rotate credentials", "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("rotation failed: %v", err))
+		return
+	}
+	slog.Info("rest: credential vault rotated")
+	jsonOK(w, map[string]string{"status": "rotated"})
 }
 
 // HandleCreateBackup handles POST /api/v1/backup.

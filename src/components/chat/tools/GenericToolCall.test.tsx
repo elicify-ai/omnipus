@@ -180,6 +180,30 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
     expect(block).toHaveTextContent('Delegation mode')
     expect(block).not.toHaveTextContent('Target agent')
   })
+
+  it('(G17) collapsed header shows "Delegation denied · <axis>", not generic "Failed"', () => {
+    const delegationDenied = {
+      error: 'delegation_denied' as const,
+      reason: 'Scout is not in your trust set for delegation.',
+      policy: 'trust_set' as const,
+      tool: 'delegate',
+      target_agent_id: 'scout-01',
+    }
+
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        result={delegationDenied}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+
+    // WITHOUT expanding, the collapsed header names the denial + the policy axis.
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toHaveTextContent('Delegation denied · Trust set')
+    // The generic "Failed" label must not be used for a delegation denial.
+    expect(badge).not.toHaveTextContent(/\bFailed\b/)
+  })
 })
 
 // ── Baseline: non-sentinel result still renders normally ────────────────────

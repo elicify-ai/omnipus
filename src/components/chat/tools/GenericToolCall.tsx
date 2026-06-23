@@ -265,10 +265,18 @@ export function GenericToolCall({
   // public types, so we narrow with `'reason' in status` before casting to access it safely.
   const isCancelled = status.type === 'incomplete' && 'reason' in status && (status as { reason?: string }).reason === 'cancelled'
 
+  // G17: a delegation denial is an error-status result; surface it in the
+  // COLLAPSED header ("Delegation denied · <axis>") instead of a generic
+  // "Failed" so the user sees the policy block without expanding. The full
+  // reason stays in the expanded DelegationFailureDisplay.
+  const delegationFailure = isDelegationFailure(result) ? result : null
+
   const statusConfig = isRunning
     ? { icon: <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />, label: 'Running...', border: 'border-[var(--color-border)]' }
     : isCancelled
     ? { icon: <Prohibit size={12} weight="fill" className="text-[var(--color-muted)]" />, label: 'Cancelled', border: 'border-[var(--color-border)]' }
+    : delegationFailure
+    ? { icon: <Prohibit size={12} weight="fill" className="text-[var(--color-warning)]" />, label: `Delegation denied · ${policyAxisLabel(delegationFailure.policy)}`, border: 'border-[var(--color-warning)]/20' }
     : isError
     ? { icon: <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />, label: 'Failed', border: 'border-[var(--color-error)]/20' }
     : { icon: <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />, label: formatDuration(durationMs) || 'Done', border: 'border-[var(--color-success)]/20' }
@@ -280,7 +288,6 @@ export function GenericToolCall({
   const marshalErr = isMarshalErrorResult(result) ? result : null
   const clientTruncated = isClientTruncatedResult(result) ? result : null
   const toolRef = isToolResultRef(result) ? result : null
-  const delegationFailure = isDelegationFailure(result) ? result : null
   const plainResult =
     !truncated && !marshalErr && !clientTruncated && !toolRef && !delegationFailure
       ? result
