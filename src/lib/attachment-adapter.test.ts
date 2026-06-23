@@ -246,3 +246,75 @@ describe('add() accept-list gate (B7)', () => {
     expect(pending.status).toEqual({ type: 'requires-action', reason: 'composer-send' })
   })
 })
+
+// ── G15 + G16 new tests ──────────────────────────────────────────────────────
+
+import { MAX_UPLOAD_BYTES } from './attachment-adapter'
+
+describe('G15 — audio-specific rejection message', () => {
+  it('dropping an .mp3 toasts exactly "Audio files aren\'t supported yet." and does not call uploadFiles', async () => {
+    const file = mkFile('song.mp3', 'audio/mpeg')
+    await expect(omnipusAttachmentAdapter.add({ file })).rejects.toThrow("Audio files aren't supported yet.")
+    expect(getAddToast()).toHaveBeenCalledOnce()
+    expect(getAddToast()).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Audio files aren't supported yet.", variant: 'error' })
+    )
+    expect(api.uploadFiles).not.toHaveBeenCalled()
+  })
+
+  it('dropping a file with audio/ MIME toasts "Audio files aren\'t supported yet."', async () => {
+    const file = mkFile('track.wav', 'audio/wav')
+    await expect(omnipusAttachmentAdapter.add({ file })).rejects.toThrow("Audio files aren't supported yet.")
+    expect(getAddToast()).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Audio files aren't supported yet." })
+    )
+    expect(api.uploadFiles).not.toHaveBeenCalled()
+  })
+
+  it('dropping a file with .ogg extension and audio/ MIME toasts "Audio files aren\'t supported yet."', async () => {
+    const file = mkFile('podcast.ogg', 'audio/ogg')
+    await expect(omnipusAttachmentAdapter.add({ file })).rejects.toThrow("Audio files aren't supported yet.")
+    expect(getAddToast()).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Audio files aren't supported yet." })
+    )
+    expect(api.uploadFiles).not.toHaveBeenCalled()
+  })
+})
+
+describe('G16 — size pre-check', () => {
+  it('a file exceeding 100 MB toasts the too-large message and is not uploaded', async () => {
+    // Create a File whose .size property exceeds the limit.
+    const oversized = new File([new ArrayBuffer(MAX_UPLOAD_BYTES + 1)], 'huge.docx', { type: DOCX })
+    await expect(omnipusAttachmentAdapter.add({ file: oversized })).rejects.toThrow(/is too large/)
+    expect(getAddToast()).toHaveBeenCalledOnce()
+    expect(getAddToast()).toHaveBeenCalledWith(
+      expect.objectContaining({ message: '"huge.docx" is too large (max 100 MB).', variant: 'error' })
+    )
+    expect(api.uploadFiles).not.toHaveBeenCalled()
+  })
+
+  it('a file exactly at the limit (100 MB) is accepted', async () => {
+    const exactSize = new File([new ArrayBuffer(MAX_UPLOAD_BYTES)], 'exact.docx', { type: DOCX })
+    const pending = await omnipusAttachmentAdapter.add({ file: exactSize })
+    expect(pending.status).toEqual({ type: 'requires-action', reason: 'composer-send' })
+    expect(api.uploadFiles).not.toHaveBeenCalled()
+  })
+})
+
+describe('G16 — upload failure toast', () => {
+  it('on uploadFiles rejection, send() returns a failedComplete and toasts the error', async () => {
+    vi.mocked(api.uploadFiles).mockRejectedValue(new Error('network error'))
+
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('doc.docx', DOCX) })
+    const complete = await omnipusAttachmentAdapter.send(pending)
+
+    // send() must not throw — it returns a failedComplete so the typed text still sends.
+    expect(complete.status).toEqual({ type: 'complete' })
+    expect(getAddToast()).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant: 'error',
+        message: expect.stringMatching(/Upload failed for/),
+      })
+    )
+  })
+})

@@ -398,6 +398,7 @@ function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
                 filename={m.filename}
                 contentType={m.contentType}
                 imageUrl={m.type === 'image' ? m.url : undefined}
+                isImage={m.type === 'image'}
                 className={m.type === 'image' ? 'max-w-[200px] max-h-[200px]' : undefined}
               />
             ))}

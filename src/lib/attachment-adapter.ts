@@ -82,6 +82,19 @@ async function ensureSession(): Promise<string> {
   return sessionEnsure;
 }
 
+/** G16: Maximum file size accepted by the upload endpoint. */
+export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+
+/**
+ * G15: Returns true if the file looks like an audio file.
+ * Detects by MIME prefix ("audio/") or common audio extensions.
+ * Audio is NOT in the ACCEPT_LIST — this check gates the tailored toast message.
+ */
+function isAudioFile(filename: string, mimeType: string): boolean {
+  if (mimeType.toLowerCase().startsWith("audio/")) return true;
+  return /\.(mp3|wav|ogg|flac|m4a|aac)$/i.test(filename);
+}
+
 // Accept images plus the document formats the backend can extract (docextract)
 // or render natively (PDF). Roughly tracks docextract's supported set; note
 // `.log` relies on the browser sending a text/* MIME (docextract has no .log
@@ -132,9 +145,23 @@ export const omnipusAttachmentAdapter = {
   accept: ACCEPT,
 
   async add({ file }): Promise<PendingAttachment> {
+    // G16: Reject files that exceed the server-side size limit before any upload
+    // attempt, giving the user immediate feedback.
+    if (file.size > MAX_UPLOAD_BYTES) {
+      const tooLargeMsg = `"${file.name}" is too large (max 100 MB).`;
+      useUiStore.getState().addToast({ message: tooLargeMsg, variant: "error" });
+      throw new Error(tooLargeMsg);
+    }
+
     // Reject unsupported types immediately so the drag-drop / paste / commitFiles
     // paths surface a user-facing error instead of silently throwing later.
     if (!isAcceptedFile(file.name, file.type)) {
+      // G15: Audio files get a tailored message instead of the generic rejection.
+      if (isAudioFile(file.name, file.type)) {
+        const audioMsg = "Audio files aren't supported yet.";
+        useUiStore.getState().addToast({ message: audioMsg, variant: "error" });
+        throw new Error(audioMsg);
+      }
       throw new Error(`Can't attach "${file.name}": file type not supported`);
     }
 

@@ -92,6 +92,13 @@ interface AttachmentCardProps {
   contentType?: string
   /** Preview URL for images (object URL pre-send, or server URL once uploaded). */
   imageUrl?: string
+  /**
+   * When provided, overrides the internal `isImageAttachment()` re-check. Pass
+   * `true` when the caller already determined the attachment is an image (e.g.
+   * `m.type === 'image'` on a sent ChatMessage) so a blank/missing contentType
+   * cannot cause a silent fallback to the file-card.
+   */
+  isImage?: boolean
   /** Optional remove control rendered in the top-right corner (e.g. composer). */
   removeButton?: React.ReactNode
   /** Extra classes for the outer container. */
@@ -107,12 +114,16 @@ interface AttachmentCardProps {
  * If the image URL is broken or blocked, the component falls back to the
  * file-card rendering (icon + name + label) so there is never a blank box.
  */
-export function AttachmentCard({ filename, contentType, imageUrl, removeButton, className }: AttachmentCardProps) {
+export function AttachmentCard({ filename, contentType, imageUrl, isImage, removeButton, className }: AttachmentCardProps) {
   // Track whether the <img> load failed so we can fall back to the file card.
   const [imgError, setImgError] = useState(false)
   const handleImgError = useCallback(() => setImgError(true), [])
 
-  if (isImageAttachment(filename, contentType) && imageUrl && !imgError) {
+  // When `isImage` is explicitly provided, it overrides the internal re-check.
+  // This prevents a blank/missing contentType from silently falling back to the
+  // file-card when the caller (e.g. VirtualUserMessageRow) already knows the
+  // attachment is an image from m.type === 'image'.
+  if ((isImage ?? isImageAttachment(filename, contentType)) && imageUrl && !imgError) {
     return (
       <div
         className={cn(
