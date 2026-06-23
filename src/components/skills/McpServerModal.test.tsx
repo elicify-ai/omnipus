@@ -596,4 +596,28 @@ describe('MCPServerPicker — no raw transport string (US-E1)', () => {
     expect(screen.getByText(/local program/i)).toBeInTheDocument()
     expect(screen.getByText(/network/i)).toBeInTheDocument()
   })
+
+  it('(#437) pre-fills non-secret config fields from initialServer in edit mode', async () => {
+    const stdioWithConfig = {
+      id: 's2',
+      name: 'my-stdio-server',
+      transport: 'stdio' as const,
+      status: 'disconnected' as const,
+      tool_count: 0,
+      enabled: true,
+      command: 'npx',
+      args: ['server-everything', '--verbose'],
+      env_file: '/etc/mcp.env',
+      requires_admin_ask: ['danger'],
+      env_keys: ['API_KEY'],
+    }
+    renderModal(true, { initialServer: stdioWithConfig })
+    await waitFor(() => {
+      expect(screen.getByText('Edit MCP server')).toBeInTheDocument()
+    })
+    // Command + args + env_file pre-filled from the server (non-secret).
+    expect(screen.getByDisplayValue('npx')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('server-everything, --verbose')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('/etc/mcp.env')).toBeInTheDocument()
+  })
 })

@@ -189,6 +189,14 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
       if (m === 'local') {
         setConfirmedLocal(true)
       }
+      // Pre-fill non-secret config fields (#437). env/headers VALUES are never
+      // returned (secrets), so they stay blank — "leave blank to keep current"
+      // (env_keys/header_names indicate what's already set).
+      setCommand(initialServer.command ?? '')
+      setUrl(initialServer.url ?? '')
+      setArgs((initialServer.args ?? []).join(', '))
+      setEnvFile(initialServer.env_file ?? '')
+      setRequiresAdminAsk((initialServer.requires_admin_ask ?? []).join(', '))
     } else if (!open) {
       // Reset all state on close
       setName('')

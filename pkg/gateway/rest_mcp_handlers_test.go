@@ -366,3 +366,89 @@ func TestListMCPServers_ReportsToolCountFromRegistry(t *testing.T) {
 	assert.Equal(t, 2, found.ToolCount,
 		"tool_count must reflect the 2 tools registered for test-srv (G6 wiring)")
 }
+
+// TestListMCPServers_ReturnsNonSecretConfigForEdit proves #437: GET /mcp-servers
+// returns the non-secret config fields for edit pre-fill (command/args/env_file/
+// requires_admin_ask) and env/header KEYS — but never env/header VALUES (secrets).
+func TestListMCPServers_ReturnsNonSecretConfigForEdit(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+		Tools: config.ToolsConfig{
+			MCP: config.MCPConfig{
+				Servers: map[string]config.MCPServerConfig{
+					"srv": {
+						Enabled:          true,
+						Type:             "stdio",
+						Command:          "npx",
+						Args:             []string{"server-everything"},
+						EnvFile:          "/etc/mcp.env",
+						RequiresAdminAsk: []string{"danger"},
+						Env:              map[string]string{"API_KEY": "supersecretvalue"},
+						Headers:          map[string]string{"Authorization": "Bearer tok-secret"},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json",
+		[]byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`), 0o600))
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := &restAPI{agentLoop: al, allowedOrigin: "http://localhost:3000", homePath: tmpDir}
+
+	w := httptest.NewRecorder()
+	api.HandleMCPServers(w, httptest.NewRequest(http.MethodGet, "/api/v1/mcp-servers", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	// Secret VALUES must never appear in the response.
+	assert.NotContains(t, body, "supersecretvalue", "env values must not be returned")
+	assert.NotContains(t, body, "tok-secret", "header values must not be returned")
+
+	var servers []gen.McpServer
+	require.NoError(t, json.Unmarshal([]byte(body), &servers))
+	require.Len(t, servers, 1)
+	s := servers[0]
+	require.NotNil(t, s.Command)
+	assert.Equal(t, "npx", *s.Command)
+	require.NotNil(t, s.EnvFile)
+	assert.Equal(t, "/etc/mcp.env", *s.EnvFile)
+	require.NotNil(t, s.EnvKeys)
+	assert.Equal(t, []string{"API_KEY"}, *s.EnvKeys, "env keys returned, values hidden")
+	require.NotNil(t, s.HeaderNames)
+	assert.Equal(t, []string{"Authorization"}, *s.HeaderNames, "header names returned, values hidden")
+}
+
+// TestPatchMCPServer_RejectsTransportMismatch proves the PATCH transport-consistency
+// guard: setting a url on a stdio server is 422.
+func TestPatchMCPServer_RejectsTransportMismatch(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+		Tools: config.ToolsConfig{
+			MCP: config.MCPConfig{Servers: map[string]config.MCPServerConfig{
+				"srv": {Enabled: true, Type: "stdio", Command: "echo"},
+			}},
+		},
+	}
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json",
+		[]byte(`{"version":1,"tools":{"mcp":{"servers":{"srv":{"type":"stdio","command":"echo","enabled":true}}}},"agents":{"defaults":{},"list":[]},"providers":[]}`), 0o600))
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := &restAPI{agentLoop: al, allowedOrigin: "http://localhost:3000", homePath: tmpDir}
+
+	body := bytes.NewReader([]byte(`{"url":"https://mcp.example.com/sse"}`))
+	r := httptest.NewRequest(http.MethodPatch, "/api/v1/mcp-servers/srv", body)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleMCPServers(w, r)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
+		"setting a url on a stdio server must be 422; body=%s", w.Body.String())
+}

@@ -56,3 +56,44 @@ properties:
       Whether this server is enabled in config. A disabled server is not
       connected at agent-loop startup and exposes no tools.
     example: true
+  command:
+    type: string
+    description: Command to start the server (stdio). For edit pre-fill.
+    example: "npx @modelcontextprotocol/server-everything"
+  url:
+    type: string
+    description: Endpoint URL (sse/http). For edit pre-fill.
+    example: "https://mcp.example.com/sse"
+  args:
+    type: array
+    items:
+      type: string
+    description: Command-line args (stdio). For edit pre-fill.
+  env_file:
+    type: string
+    description: Env-file path (stdio). For edit pre-fill.
+    example: "/etc/omnipus/mcp.env"
+  requires_admin_ask:
+    type: array
+    items:
+      type: string
+    description: Tool names that require admin approval (FR-064). For edit pre-fill.
+  env_keys:
+    type: array
+    items:
+      type: string
+    description: >
+      Names (keys only) of configured env-var overrides — VALUES ARE NEVER
+      RETURNED (they may be secrets). The edit UI shows these as "set" and
+      re-entry replaces them.
+    example:
+      - "API_KEY"
+  header_names:
+    type: array
+    items:
+      type: string
+    description: >
+      Names (keys only) of configured HTTP headers (sse/http) — VALUES ARE NEVER
+      RETURNED (e.g. Authorization). The edit UI shows these as "set"; re-entry replaces.
+    example:
+      - "Authorization"

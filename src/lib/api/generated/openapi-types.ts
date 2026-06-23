@@ -5096,6 +5096,39 @@ export interface components {
              * @example true
              */
             enabled?: boolean;
+            /**
+             * @description Command to start the server (stdio). For edit pre-fill.
+             * @example npx @modelcontextprotocol/server-everything
+             */
+            command?: string;
+            /**
+             * @description Endpoint URL (sse/http). For edit pre-fill.
+             * @example https://mcp.example.com/sse
+             */
+            url?: string;
+            /** @description Command-line args (stdio). For edit pre-fill. */
+            args?: string[];
+            /**
+             * @description Env-file path (stdio). For edit pre-fill.
+             * @example /etc/omnipus/mcp.env
+             */
+            env_file?: string;
+            /** @description Tool names that require admin approval (FR-064). For edit pre-fill. */
+            requires_admin_ask?: string[];
+            /**
+             * @description Names (keys only) of configured env-var overrides — VALUES ARE NEVER RETURNED (they may be secrets). The edit UI shows these as "set" and re-entry replaces them.
+             * @example [
+             *       "API_KEY"
+             *     ]
+             */
+            env_keys?: string[];
+            /**
+             * @description Names (keys only) of configured HTTP headers (sse/http) — VALUES ARE NEVER RETURNED (e.g. Authorization). The edit UI shows these as "set"; re-entry replaces.
+             * @example [
+             *       "Authorization"
+             *     ]
+             */
+            header_names?: string[];
         };
         /**
          * McpServerCreate

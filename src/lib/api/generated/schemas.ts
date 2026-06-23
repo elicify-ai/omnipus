@@ -1902,6 +1902,13 @@ export const McpServer = z
     tool_count: z.number().int().gte(0),
     tools: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
+    command: z.string().optional(),
+    url: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    env_file: z.string().optional(),
+    requires_admin_ask: z.array(z.string()).optional(),
+    env_keys: z.array(z.string()).optional(),
+    header_names: z.array(z.string()).optional(),
   })
   .passthrough();
 export const McpServerCreate = z.object({
