@@ -112,20 +112,17 @@ Cross-references use the `KI-n` numbering from `uat-plan-agent-features.md`.
 - **Impact:** Drag-dropping a blocked type surfaces as an uncaught error, not a readable user message. (Verified live with an mp4.)
 - **Fix direction:** Catch unsupported-type rejections and show a toast.
 
-### 🟢 LOW — G14. Image thumbnail may not render in the sent user bubble
+### ✅ LOW — G14. Image thumbnail may not render in the sent user bubble — FIXED (2026-06-23, 395b81b2)
 - **Where:** `src/components/chat/ChatScreen.tsx` (`VirtualUserMessageRow` media render)
-- **Impact:** Observed: a sent image showed only text + a dot, while a file rendered a full card. **Caveat:** the test used a degenerate 2×2 px PNG — re-confirm with a normal image before treating as a confirmed bug.
-- **Fix direction:** Verify with a real image; fix the sent-message image render if it reproduces.
+- **Root cause:** `AttachmentCard` re-ran `isImageAttachment(filename, contentType)` internally; with a blank contentType AND a server filename lacking an image extension, it fell back to the file-card despite the caller's `m.type==='image'`.
+- **Fix:** added an `isImage` prop to `AttachmentCard`; `VirtualUserMessageRow` passes `isImage={m.type==='image'}` so the gate trusts the caller (onError→file-card fallback preserved). Regression test uses an extension-less filename.
 
-### 🟢 LOW — G15. Audio uploads but is never passed to the model as audio
-- **Where:** `src/lib/attachment-adapter.ts` (audio → file card), chat send path
-- **Impact:** Audio files upload and render as a download card but the agent gets only a file ref, not audio — no native audio understanding.
-- **Fix direction:** Decide whether to support audio passthrough to audio-capable models.
+### ✅ LOW — G15. Audio uploads but is never passed to the model as audio — RESOLVED (descoped, 2026-06-23, 395b81b2)
+- **Decision (operator):** descope like video. Audio stays out of the accept list; the composer now shows a clear "Audio files aren't supported yet." toast instead of the generic rejection. Native audio passthrough is not in 0.1.0 scope.
 
-### 🟢 LOW — G16. No client-side upload progress / retry UI
-- **Where:** upload flow (`uploadFiles` in `src/lib/api.ts`; composer)
-- **Impact:** Only a server-side 100 MB/file limit; failed uploads show a generic toast with no progress bar or retry.
-- **Fix direction:** Add progress + retry affordance.
+### 🟡 LOW — G16. No client-side upload progress / retry UI — PARTIAL (2026-06-23, 395b81b2); progress+retry → #439
+- **Shipped:** client-side 100 MB size pre-check rejects oversized files with a clear toast before any upload; honest upload-failure toast.
+- **Descoped (→ [#439](https://github.com/elicify-ai/omnipus/issues/439)):** the progress bar and retry. With defer-upload-at-send (#252), AssistantUI unmounts the composer chip before the upload begins (progress bar = dead UI) and retry-after-send can't re-attach (new attachment id per re-attach). A real progress UI needs an optimistic message row — tracked in #439.
 
 ---
 
