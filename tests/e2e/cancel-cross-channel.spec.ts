@@ -136,6 +136,36 @@ function readJsonl<T>(filePath: string): T[] {
   return results
 }
 
+/**
+ * List the session directory names under OMNIPUS_HOME/sessions. Used to discover
+ * the session a turn created WITHOUT relying on the URL — the workspace-scoped
+ * chat IA keeps the page at /#/workspaces/<id>/chat and never puts the session id
+ * in the hash, so the old `/sessions/<id>` URL extraction no longer matches.
+ */
+function listSessionDirs(home: string): string[] {
+  const dir = path.join(home, 'sessions')
+  try {
+    return fs.readdirSync(dir).filter((name: string) => {
+      try {
+        return fs.statSync(path.join(dir, name)).isDirectory()
+      } catch {
+        return false
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
+/** Best-effort mtime (ms) of a path; 0 if it cannot be stat'd. */
+function safeMtimeMs(p: string): number {
+  try {
+    return fs.statSync(p).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
 // ── Shared helper: switch to Jim and trigger a long-running turn ──────────────
 
 /**
@@ -368,8 +398,10 @@ async function assertCancelCascadesToSubagent(
   // essay), so the parent agent's prose behaviour is irrelevant — only that it
   // delegates.
   // Clicking "New Chat" only nullifies activeSessionId — it does NOT mint a new
-  // session in the URL. The SPA creates the session lazily on the first sent
-  // message; we (a) trigger that flow, then (b) read the sessionId from the URL.
+  // session. The SPA creates the session lazily on the first sent message. The
+  // workspace-scoped chat IA keeps the page at /#/workspaces/<id>/chat (no
+  // session id in the URL), so we discover the new session by diffing the
+  // OMNIPUS_HOME/sessions directory before vs. after the turn (below).
   const newChatBtn = page.getByRole('banner').getByRole('button', { name: 'New Chat' })
   await expect(newChatBtn).toBeVisible({ timeout: 10_000 })
   await newChatBtn.click()
@@ -377,6 +409,10 @@ async function assertCancelCascadesToSubagent(
 
   // Switch to Jim so the parent turn will actually delegate.
   await selectAgent(page, /Jim/i)
+
+  // Snapshot existing session dirs so we can identify the one THIS turn creates
+  // (earlier tests in the same gateway leave their own session dirs behind).
+  const sessionsBefore = new Set(listSessionDirs(OMNIPUS_HOME))
 
   // The subagent task must keep the descendant RUNNING for several seconds so a
   // Stop click lands while it's live. A long inline essay streams for several
@@ -393,19 +429,8 @@ async function assertCancelCascadesToSubagent(
   )
   await input.press('Enter')
 
-  // Now the SPA mints the session and navigates — read the ID from the URL
-  // hash. TanStack Router hash history format: /#/sessions/<id>.
-  await page.waitForFunction(
-    () => /\/sessions\/[A-Za-z0-9_]+/.test(window.location.hash),
-    { timeout: 15_000 },
-  )
-  const sessionId = await page.evaluate(() => {
-    const match = window.location.hash.match(/\/sessions\/([A-Za-z0-9_]+)/)
-    return match ? match[1] : ''
-  })
-  if (!sessionId) throw new Error('cancel-cascade: no session ID in URL after first message')
-
-  // Wait for the subagent collapsed block to appear — confirms delegation fired.
+  // Wait for the subagent collapsed block to appear — confirms delegation fired
+  // (and that the SPA has minted the session on disk).
   // The block renders as soon as the child span exists (status "working"), so it
   // marks the START of the descendant's run, not its end. 150s headroom matches
   // the sibling delegation tests; the empirical CI tail is single-digit seconds.
@@ -428,30 +453,55 @@ async function assertCancelCascadesToSubagent(
   // for the transcript write to flush.
   await page.waitForTimeout(3_000)
 
+  // Discover this turn's session by diffing the sessions dir. A delegated
+  // sub-turn can spawn its own ephemeral session dir, so there may be more than
+  // one new dir — scan them (newest first) for the one whose transcript actually
+  // recorded the cancel (the turn_canceled entry lives in the PARENT session).
   // Sessions are stored at OMNIPUS_HOME/sessions/<id>/<YYYY-MM-DD>.jsonl
-  // (day-partitioned JSONL).
+  // (day-partitioned JSONL); the legacy transcript.jsonl name is also tried.
   const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-  const transcriptDir = path.join(OMNIPUS_HOME, 'sessions', sessionId)
-  // Try both the day-partitioned name and the legacy transcript.jsonl name.
-  const candidates = [
-    path.join(transcriptDir, `${today}.jsonl`),
-    path.join(transcriptDir, 'transcript.jsonl'),
-  ]
+  const sessionsDir = path.join(OMNIPUS_HOME, 'sessions')
+  const sessionsAfter = listSessionDirs(OMNIPUS_HOME)
+  const newSessions = sessionsAfter.filter((s) => !sessionsBefore.has(s))
+  // Prefer newly-created dirs; fall back to all sessions if the diff is empty
+  // (e.g. the session dir already existed). Newest mtime first.
+  const scanList = (newSessions.length > 0 ? newSessions : sessionsAfter)
+    .map((s) => ({ s, m: safeMtimeMs(path.join(sessionsDir, s)) }))
+    .sort((a, b) => b.m - a.m)
+    .map((x) => x.s)
+
   let entries: TranscriptEntry[] = []
-  for (const candidate of candidates) {
-    const parsed = readJsonl<TranscriptEntry>(candidate)
-    if (parsed.length > 0) {
+  let chosenSession = ''
+  for (const sid of scanList) {
+    const dir = path.join(sessionsDir, sid)
+    const files = [path.join(dir, `${today}.jsonl`), path.join(dir, 'transcript.jsonl')]
+    let parsed: TranscriptEntry[] = []
+    for (const f of files) {
+      const p = readJsonl<TranscriptEntry>(f)
+      if (p.length > 0) {
+        parsed = p
+        break
+      }
+    }
+    if (parsed.some((e) => e.type === 'turn_canceled')) {
       entries = parsed
+      chosenSession = sid
       break
+    }
+    // Keep the first non-empty transcript as a fallback for the error message.
+    if (entries.length === 0 && parsed.length > 0) {
+      entries = parsed
+      chosenSession = sid
     }
   }
 
   const cancelledEntry = entries.find((e) => e.type === 'turn_canceled')
   if (!cancelledEntry) {
     throw new Error(
-      'BLOCKED or INCOMPLETE: transcript.jsonl does not contain a {type:"turn_canceled"} entry ' +
-        `after cancel (mode=${mode.tool}). Searched: ${candidates.join(', ')}. ` +
-        `Entries found: ${JSON.stringify(entries.map((e) => ({ type: e.type, role: e.role })))}. ` +
+      'BLOCKED or INCOMPLETE: no session transcript contains a {type:"turn_canceled"} entry ' +
+        `after cancel (mode=${mode.tool}). Scanned sessions: ${JSON.stringify(scanList)} ` +
+        `(new: ${JSON.stringify(newSessions)}). Chosen: ${chosenSession || '(none)'}. ` +
+        `Entries found in chosen: ${JSON.stringify(entries.map((e) => ({ type: e.type, role: e.role })))}. ` +
         'Traces to: cancel-cross-channel-spec.md T24, US-4.1, FR-15.',
     )
   }
