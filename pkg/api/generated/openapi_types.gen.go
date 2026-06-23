@@ -5413,14 +5413,32 @@ type MailboxConfigureRequest struct {
 
 // McpServer An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
 type McpServer struct {
+	// Args Command-line args (stdio). For edit pre-fill.
+	Args *[]string `json:"args,omitempty"`
+
+	// Command Command to start the server (stdio). For edit pre-fill.
+	Command *string `json:"command,omitempty"`
+
 	// Enabled Whether this server is enabled in config. A disabled server is not connected at agent-loop startup and exposes no tools.
 	Enabled *bool `json:"enabled,omitempty"`
+
+	// EnvFile Env-file path (stdio). For edit pre-fill.
+	EnvFile *string `json:"env_file,omitempty"`
+
+	// EnvKeys Names (keys only) of configured env-var overrides — VALUES ARE NEVER RETURNED (they may be secrets). The edit UI shows these as "set" and re-entry replaces them.
+	EnvKeys *[]string `json:"env_keys,omitempty"`
+
+	// HeaderNames Names (keys only) of configured HTTP headers (sse/http) — VALUES ARE NEVER RETURNED (e.g. Authorization). The edit UI shows these as "set"; re-entry replaces.
+	HeaderNames *[]string `json:"header_names,omitempty"`
 
 	// Id Unique MCP server identifier.
 	Id string `json:"id"`
 
 	// Name Human-readable server name.
 	Name string `json:"name"`
+
+	// RequiresAdminAsk Tool names that require admin approval (FR-064). For edit pre-fill.
+	RequiresAdminAsk *[]string `json:"requires_admin_ask,omitempty"`
 
 	// Status Current connection status of the MCP server.
 	Status McpServerStatus `json:"status"`
@@ -5433,6 +5451,9 @@ type McpServer struct {
 
 	// Transport Transport mechanism used by this MCP server. "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers.
 	Transport McpServerTransport `json:"transport"`
+
+	// Url Endpoint URL (sse/http). For edit pre-fill.
+	Url *string `json:"url,omitempty"`
 }
 
 // McpServerStatus Current connection status of the MCP server.

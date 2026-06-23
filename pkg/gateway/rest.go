@@ -5085,14 +5085,53 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 
-		result = append(result, gen.McpServer{
+		entry := gen.McpServer{
 			Id:        name,
 			Name:      name,
 			Transport: transport,
 			Status:    status,
 			ToolCount: toolCount,
 			Enabled:   &enabled,
-		})
+		}
+		// Non-secret config fields for edit pre-fill (#437).
+		if srv.Command != "" {
+			c := srv.Command
+			entry.Command = &c
+		}
+		if srv.URL != "" {
+			u := srv.URL
+			entry.Url = &u
+		}
+		if len(srv.Args) > 0 {
+			a := append([]string(nil), srv.Args...)
+			entry.Args = &a
+		}
+		if srv.EnvFile != "" {
+			ef := srv.EnvFile
+			entry.EnvFile = &ef
+		}
+		if len(srv.RequiresAdminAsk) > 0 {
+			ra := append([]string(nil), srv.RequiresAdminAsk...)
+			entry.RequiresAdminAsk = &ra
+		}
+		// env/headers: return KEYS ONLY — values may be secrets (Authorization, API keys).
+		if len(srv.Env) > 0 {
+			keys := make([]string, 0, len(srv.Env))
+			for k := range srv.Env {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			entry.EnvKeys = &keys
+		}
+		if len(srv.Headers) > 0 {
+			names := make([]string, 0, len(srv.Headers))
+			for k := range srv.Headers {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+			entry.HeaderNames = &names
+		}
+		result = append(result, entry)
 	}
 	// Sort for deterministic response order.
 	sort.Slice(result, func(i, j int) bool { return result[i].Id < result[j].Id })
@@ -5414,6 +5453,7 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 
 	var updatedEntry config.MCPServerConfig
 	found := false
+	mcpPatchValidationMsg := ""
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
@@ -5470,6 +5510,17 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 			current.RequiresAdminAsk = *req.RequiresAdminAsk
 		}
 
+		// Transport-consistency on the MERGED result (transport itself is immutable
+		// via PATCH): stdio uses command (no url); sse/http use url (no command).
+		if current.Type == "stdio" && strings.TrimSpace(current.URL) != "" {
+			mcpPatchValidationMsg = "stdio servers must not set a url"
+			return fmt.Errorf("validation: %s", mcpPatchValidationMsg)
+		}
+		if (current.Type == "sse" || current.Type == "http") && strings.TrimSpace(current.Command) != "" {
+			mcpPatchValidationMsg = "sse/http servers must not set a command"
+			return fmt.Errorf("validation: %s", mcpPatchValidationMsg)
+		}
+
 		// Rebuild the map entry from the updated struct so the JSON shape is
 		// consistent with what addMCPServer writes.
 		updated, err := json.Marshal(current)
@@ -5484,6 +5535,10 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		updatedEntry = current
 		return nil
 	}); err != nil {
+		if mcpPatchValidationMsg != "" {
+			jsonErr(w, http.StatusUnprocessableEntity, mcpPatchValidationMsg)
+			return
+		}
 		if !found || strings.Contains(err.Error(), "not found") {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
 			return
