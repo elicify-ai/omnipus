@@ -66,6 +66,7 @@ import (
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 	"github.com/dapicom-ai/omnipus/pkg/task"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/dapicom-ai/omnipus/pkg/tools/browser"
 	"github.com/dapicom-ai/omnipus/pkg/voice"
 )
 
@@ -711,6 +712,16 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 				"tool", t.Name(), "error", regErr)
 		}
 	}
+	// Register browser.* metadata (Issue #350 / catalog gap): browser tools register
+	// into the per-agent registry at agent-loop boot, so without this they were absent
+	// from GET /api/v1/tools. These metadata-only instances (nil *BrowserManager) are
+	// never Execute()d — they expose Name/Description/Category only (ADR-018 D-A1).
+	for _, t := range browser.BrowserBuiltinMetadata() {
+		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
+			slog.Warn("gateway: central builtin registry browser-builtin skipped",
+				"tool", t.Name(), "error", regErr)
+		}
+	}
 	centralMCPReg := tools.NewMCPRegistry()
 
 	runningServices, err := setupAndStartServices(
@@ -871,13 +882,25 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			generalBuiltinsRegistered++
 		}
 	}
+	// Re-register browser.* metadata (metadata-only, never executed; duplicates
+	// skipped) — same catalog-gap fix as the pre-deps block above.
+	browserBuiltinsRegistered := 0
+	for _, t := range browser.BrowserBuiltinMetadata() {
+		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
+			slog.Warn("gateway: central builtin registry browser-builtin re-population skipped",
+				"tool", t.Name(), "error", err)
+		} else {
+			browserBuiltinsRegistered++
+		}
+	}
 	// Propagate the updated registry to the already-constructed restAPI (SC-108 fix).
 	if runningServices.restAPIRef != nil {
 		runningServices.restAPIRef.builtinRegistry = centralBuiltinReg
 	}
 	slog.Info("gateway: central BuiltinRegistry re-populated with live deps",
-		"system_tools", centralBuiltinReg.Count()-generalBuiltinsRegistered,
+		"system_tools", centralBuiltinReg.Count()-generalBuiltinsRegistered-browserBuiltinsRegistered,
 		"general_builtins", generalBuiltinsRegistered,
+		"browser_builtins", browserBuiltinsRegistered,
 		"total", centralBuiltinReg.Count())
 
 	fmt.Printf("✓ Gateway started on %s:%d\n", cfg.Gateway.Host, cfg.Gateway.Port)
