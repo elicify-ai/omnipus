@@ -10,12 +10,17 @@ import (
 // Returns an error if ssrf is nil (SSRF protection is mandatory per SEC-24).
 //
 // evaluateEnabled is accepted for call-site compatibility but no longer controls
-// registration — browser.evaluate is ALWAYS registered. Its safety floor is
-// enforced at dispatch time by pkg/policy.builtinToolPolicies (deny by default,
-// SEC-04/SEC-06). Operators who want the tool to actually execute must both:
-//   - Set cfg.Sandbox.BrowserEvaluateEnabled=true (the EvaluateTool respects
-//     this at execution time), AND
-//   - Override the policy floor to "ask" or "allow" in sandbox.tool_policies.
+// registration — browser.evaluate is ALWAYS registered. Its live safety floor is
+// the per-tool executeEnabled gate inside EvaluateTool.Execute (deny-by-default
+// unless cfg.Sandbox.BrowserEvaluateEnabled=true), SEC-04/SEC-06. Operators who
+// want the tool to actually execute must set BrowserEvaluateEnabled=true.
+//
+// NOTE (#438): pkg/policy.builtinToolPolicies["browser.evaluate"] = deny is the
+// SAME intent expressed declaratively, but that map is consulted only by the
+// pkg/policy Evaluator.EvaluateTool path, which has no live tool-dispatch caller
+// (test-only). The executeEnabled gate below is therefore the one and only thing
+// stopping browser.evaluate at runtime — do not remove it on the assumption the
+// policy map covers it.
 //
 // All tools registered:
 //   - browser.navigate  — navigate to a URL (SSRF-checked)

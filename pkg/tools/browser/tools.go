@@ -377,17 +377,17 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 // Denied by default in deny-by-default policy mode (SEC-04/SEC-06).
 
 // EvaluateTool executes arbitrary JavaScript in the browser page context.
-// It is always registered in the tool catalog; two independent gates control
-// whether execution is permitted:
+// It is always registered in the tool catalog so the LLM always sees the tool.
 //
-//  1. executeEnabled (set at construction time from cfg.Sandbox.BrowserEvaluateEnabled)
-//     — the operator must explicitly opt in to JS execution.
-//  2. The policy engine (pkg/policy.builtinToolPolicies["browser.evaluate"] = deny)
-//     — the policy must be overridden to "ask"/"allow" in sandbox.tool_policies.
+// The LIVE enforcement gate is executeEnabled (set at construction from
+// cfg.Sandbox.BrowserEvaluateEnabled): Execute returns a deny error unless the
+// operator explicitly opted in. This single gate enforces SEC-04 / SEC-06.
 //
-// Registration is unconditional so the LLM always sees the tool. The deny-by-
-// default builtin policy and the executeEnabled execution gate together enforce
-// SEC-04 / SEC-06 without hiding the tool from the model.
+// NOTE (#438): pkg/policy.builtinToolPolicies["browser.evaluate"] = deny expresses
+// the same deny-by-default intent declaratively, but it is read only by the
+// pkg/policy Evaluator.EvaluateTool path, which has no live tool-dispatch caller
+// (test-only). It is therefore advisory, not a live gate — the executeEnabled
+// check below is what actually stops execution at runtime.
 type EvaluateTool struct {
 	tools.BaseTool
 	mgr            *BrowserManager

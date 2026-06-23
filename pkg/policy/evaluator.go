@@ -36,6 +36,15 @@ func NewEvaluator(cfg *SecurityConfig) *Evaluator {
 
 // EvaluateTool checks whether an agent is permitted to invoke a tool.
 //
+// SCOPE (#438): this is NOT the live tool-name authority. Live tool-name access is
+// resolved by pkg/tools.FilterToolsByPolicy (most-specific-wins). EvaluateTool and
+// its helpers (resolveGlobalToolPolicy, builtinToolPolicies) use strictest-wins and
+// have no live tool-dispatch caller — they back EvaluateExec's command checks and
+// remain for that path + tests. The two semantics diverge only on a specific-allow
+// carve-out from a broad wildcard deny; that divergence is pinned by
+// pkg/tools.TestCrossEngine_SpecificAllowCarveOut_EnginesDiverge. Do not reconcile
+// without an ADR.
+//
 // When called with 2 args (agentID, toolName), the agent policy is looked up
 // from the config provided at construction.
 // When called with 3 args (agentID, toolName, *AgentPolicy), the explicit
