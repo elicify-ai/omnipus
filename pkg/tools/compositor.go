@@ -48,27 +48,52 @@ func passesScopeGate(scope ToolScope, agentType string) bool {
 	}
 }
 
-// wildcardEntry is a parsed wildcard policy key (e.g., "system.*").
-// Only trailing ".*" wildcards are supported (FR-009).
+// wildcardEntry is a parsed wildcard policy key (e.g., "system.*" or "mcp_server_*").
+// Supports trailing ".*" (dot-delimited, FR-009) and trailing "_*" (underscore-delimited,
+// G10 — enables bulk-deny of a whole MCP server's tools whose names are single-segment
+// underscore-delimited identifiers like "mcp_<server>_<tool>").
 type wildcardEntry struct {
-	prefix   string // the part before ".*"
-	segments int    // number of dot-separated segments (primary sort key, FR-071)
-	policy   string
+	prefix    string // the part before ".*" or "_*"
+	segments  int    // number of dot-separated segments (primary sort key, FR-071)
+	delimiter byte   // '.' for ".*" wildcards, '_' for "_*" wildcards
+	policy    string
 }
 
 // buildWildcardIndex parses a policy map and returns a sorted slice of wildcard
 // entries. Sort order: most-specific (most segments) first; tie-break by char
 // count descending; final tie-break lexicographic ascending (FR-071).
 // Exact-name keys are NOT included here — they are resolved by direct map lookup.
+//
+// Supported wildcard forms (both may coexist in the same policy map):
+//   - Trailing ".*": e.g. "system.*" — matches tools whose name starts with "system."
+//     or equals "system". Used for dot-namespaced builtin tools (FR-009).
+//   - Trailing "_*": e.g. "mcp_server_*" — matches tools whose name starts with
+//     "mcp_server_" or equals "mcp_server". Used for underscore-delimited MCP
+//     tool names (G10 — "mcp_<server>_<tool>" format).
+//
+// Pre-existing "_*" keys were previously no-ops (the ".*" branch did not match them),
+// so enabling them is non-regressing for existing configs.
 func buildWildcardIndex(policies map[string]string) []wildcardEntry {
 	var entries []wildcardEntry
 	for k, v := range policies {
-		if strings.HasSuffix(k, ".*") {
+		switch {
+		case strings.HasSuffix(k, ".*"):
 			prefix := k[:len(k)-2] // strip trailing ".*"
 			entries = append(entries, wildcardEntry{
-				prefix:   prefix,
-				segments: strings.Count(prefix, ".") + 1,
-				policy:   v,
+				prefix:    prefix,
+				segments:  strings.Count(prefix, ".") + 1,
+				delimiter: '.',
+				policy:    v,
+			})
+		case strings.HasSuffix(k, "_*"):
+			prefix := k[:len(k)-2] // strip trailing "_*"
+			// For underscore wildcards, segment count is always 1 (single identifier).
+			// Use char count to rank among multiple "_*" entries (longer prefix = more specific).
+			entries = append(entries, wildcardEntry{
+				prefix:    prefix,
+				segments:  1,
+				delimiter: '_',
+				policy:    v,
 			})
 		}
 	}
@@ -88,7 +113,7 @@ func buildWildcardIndex(policies map[string]string) []wildcardEntry {
 }
 
 // resolveFromMap resolves the policy for toolName from a flat policies map
-// (supports exact-name and trailing-wildcard ".*" keys).
+// (supports exact-name, trailing ".*", and trailing "_*" wildcard keys).
 // Exact matches win over wildcards; among wildcards longest-prefix wins (FR-009, FR-071).
 // Returns "" if no entry matches (caller falls back to default policy).
 func resolveFromMap(toolName string, policies map[string]string, wildcards []wildcardEntry) string {
@@ -96,9 +121,16 @@ func resolveFromMap(toolName string, policies map[string]string, wildcards []wil
 	if p, ok := policies[toolName]; ok {
 		return p
 	}
-	// 2. Most-specific prefix wildcard match (wildcards already sorted).
+	// 2. Most-specific prefix wildcard match (wildcards already sorted by specificity).
 	for _, w := range wildcards {
-		if strings.HasPrefix(toolName, w.prefix+".") || toolName == w.prefix {
+		var matched bool
+		switch w.delimiter {
+		case '.':
+			matched = strings.HasPrefix(toolName, w.prefix+".") || toolName == w.prefix
+		case '_':
+			matched = strings.HasPrefix(toolName, w.prefix+"_") || toolName == w.prefix
+		}
+		if matched {
 			return w.policy
 		}
 	}
@@ -204,11 +236,12 @@ type ToolPolicyCfg struct {
 //  1. Global policy (GlobalPolicies / GlobalDefaultPolicy)
 //  2. Agent policy (Policies / DefaultPolicy)
 //
-// Wildcard support (FR-009): policy map keys ending in ".*" are treated as
-// prefix wildcards (e.g., "system.*" matches any tool whose name starts with
-// "system."). Exact-name matches always win over wildcards; among wildcards,
-// the most-specific match wins (most dot-separated segments first); ties broken
-// by char count then lexicographically (FR-071).
+// Wildcard support (FR-009, G10): policy map keys ending in ".*" are treated as
+// dot-segment prefix wildcards (e.g., "system.*" matches any tool whose name starts
+// with "system."). Keys ending in "_*" are treated as underscore prefix wildcards
+// (e.g., "mcp_server_*" matches all tools from that MCP server). Exact-name matches
+// always win over wildcards; among wildcards, the most-specific match wins (most
+// dot-separated segments first); ties broken by char count then lexicographically (FR-071).
 //
 // Admin-ask fence (FR-061): for custom agents (cfg.IsCoreAgent == false),
 // if the resolved effective policy is "allow" but the tool's RequiresAdminAsk()

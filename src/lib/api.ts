@@ -76,6 +76,7 @@ import {
   SkillSearchResult as SkillSearchResultSchema,
   SkillMarketplaceStatus as SkillMarketplaceStatusSchema,
   McpServer as McpServerSchema,
+  McpServerTestResponse as McpServerTestResponseSchema,
   ActivityEvent as ActivityEventSchema,
   // Wire-shape schemas used for raw-to-SPA transform validation:
   Message as WireMessageSchema,
@@ -265,6 +266,8 @@ import type {
   Task,
   McpServer,
   McpServerCreate,
+  McpServerUpdate,
+  McpServerTestResponse,
   AppState,
   ValidateTokenResponse,
   DoctorIssue,
@@ -394,6 +397,8 @@ export type {
   Task,
   McpServer,
   McpServerCreate,
+  McpServerUpdate,
+  McpServerTestResponse,
   AppState,
   ValidateTokenResponse,
   DoctorIssue,
@@ -1796,6 +1801,14 @@ export function deleteMcpServer(id: string): Promise<void> {
 export async function fetchMcpServerTools(id: string): Promise<string[]> {
   const resp = await request<McpServerToolsResponse>(`/mcp-servers/${encodeURIComponent(id)}/tools`, undefined, McpServerToolsResponseSchema as ZodType<McpServerToolsResponse>)
   return resp.tools
+}
+
+export function patchMcpServer(id: string, body: McpServerUpdate): Promise<McpServer> {
+  return request<McpServer>(`/mcp-servers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }, McpServerSchema as ZodType<McpServer>)
+}
+
+export function testMcpServer(id: string): Promise<McpServerTestResponse> {
+  return request<McpServerTestResponse>(`/mcp-servers/${encodeURIComponent(id)}/test`, { method: 'POST' }, McpServerTestResponseSchema as ZodType<McpServerTestResponse>)
 }
 
 // ── Storage Stats ─────────────────────────────────────────────────────────────

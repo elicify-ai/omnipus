@@ -292,6 +292,19 @@ func (r *MCPRegistry) Get(name string) (Tool, bool) {
 	return rec.tool, true
 }
 
+// GetServerID returns the server ID of the MCP tool registered under name,
+// or ("", false) if the tool is not registered. Used by the REST layer (G11)
+// to populate the server_id field in GET /api/v1/tools responses.
+func (r *MCPRegistry) GetServerID(name string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rec, ok := r.byName[name]
+	if !ok {
+		return "", false
+	}
+	return rec.serverID, true
+}
+
 // All returns all accepted MCP tools in sorted name order (snapshot).
 func (r *MCPRegistry) All() []Tool {
 	r.mu.RLock()

@@ -132,13 +132,12 @@ func TestFilterToolsByPolicy_MCPToolGlobalDeny_OverridesAgentAllow(t *testing.T)
 }
 
 // TestFilterToolsByPolicy_MCPTool_WildcardDoesNotMatch_ExactKeyRequired
-// characterizes a real limitation: because runtime MCP tool names are
-// underscore-delimited single segments ("mcp_<server>_<tool>") and the policy
-// matcher only supports trailing ".*" keys matched on DOT segments
-// (resolveFromMap / buildWildcardIndex, FR-009/FR-071), NO "*.*" wildcard can
-// catch an MCP tool. The ONLY way to deny an MCP tool is an exact key. A
-// consequence: you cannot bulk-deny all of a server's MCP tools with one
-// wildcard — see UAT plan KI-22.
+// characterizes that DOT-segment wildcards (".*") do NOT match underscore-delimited
+// MCP tool names. "mcp.*" and "mcp_search.*" use dot delimiters and therefore
+// never match "mcp_search_query" (a single-segment underscore name).
+//
+// Note: G10 added UNDERSCORE wildcard support ("_*") which DOES bulk-deny a server's
+// MCP tools — see TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_BulkDeny below.
 //
 // BDD:
 //
@@ -161,14 +160,14 @@ func TestFilterToolsByPolicy_MCPTool_WildcardDoesNotMatch_ExactKeyRequired(t *te
 		}
 		got, policyMap := FilterToolsByPolicy(mkTools(), "custom", cfg)
 		assert.Len(t, got, 2,
-			"wildcard %q must NOT match underscore MCP names — both tools survive", wildcard)
+			"dot-segment wildcard %q must NOT match underscore MCP names — both tools survive", wildcard)
 		assert.Equal(t, "allow", policyMap["mcp_search_query"],
-			"wildcard %q must leave mcp_search_query allowed (no dot-segment match)", wildcard)
+			"dot-segment wildcard %q must leave mcp_search_query allowed (no dot-segment match)", wildcard)
 		assert.Equal(t, "allow", policyMap["mcp_search_index"],
-			"wildcard %q must leave mcp_search_index allowed", wildcard)
+			"dot-segment wildcard %q must leave mcp_search_index allowed", wildcard)
 	}
 
-	// 2. An EXACT key is the working mechanism — denies just that one tool.
+	// 2. An EXACT key denies just that one tool.
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:       "allow",
 		GlobalPolicies:      map[string]string{"mcp_search_query": "deny"},
@@ -180,6 +179,117 @@ func TestFilterToolsByPolicy_MCPTool_WildcardDoesNotMatch_ExactKeyRequired(t *te
 		"only the non-denied sibling survives the exact-key deny")
 	_, denied := policyMap["mcp_search_query"]
 	assert.False(t, denied, "mcp_search_query must be denied by its exact key")
+}
+
+// TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_BulkDeny verifies G10: a
+// trailing "_*" wildcard (e.g., "mcp_search_*") bulk-denies all tools from a
+// server whose names start with "mcp_search_".
+//
+// BDD:
+//
+//	Given MCP tools ["mcp_search_query", "mcp_search_index"] from server "search-server",
+//	When GlobalPolicies{"mcp_search_*": "deny"} is applied,
+//	Then BOTH tools are denied and absent from the result.
+//	When GlobalPolicies{"mcp_search_*": "deny", "mcp_search_query": "allow"} is applied,
+//	Then "mcp_search_query" is allowed (exact wins) and "mcp_search_index" is denied.
+//
+// Traces to: G10 (underscore wildcard for MCP server bulk-deny).
+func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_BulkDeny(t *testing.T) {
+	mkTools := func() []Tool {
+		return makeMCPAdapters("search-server", "mcp_search_query", "mcp_search_index")
+	}
+
+	// 1. "_*" wildcard bulk-denies all tools from the server.
+	t.Run("bulk_deny_all_server_tools", func(t *testing.T) {
+		cfg := &ToolPolicyCfg{
+			DefaultPolicy:       "allow",
+			GlobalPolicies:      map[string]string{"mcp_search_*": "deny"},
+			GlobalDefaultPolicy: "allow",
+		}
+		got, policyMap := FilterToolsByPolicy(mkTools(), "custom", cfg)
+		assert.Empty(t, got,
+			"underscore wildcard mcp_search_* must deny all mcp_search_* tools")
+		_, q := policyMap["mcp_search_query"]
+		assert.False(t, q, "mcp_search_query must be denied by mcp_search_*")
+		_, idx := policyMap["mcp_search_index"]
+		assert.False(t, idx, "mcp_search_index must be denied by mcp_search_*")
+	})
+
+	// 2. Exact key beats the "_*" wildcard (exact-wins precedence).
+	t.Run("exact_beats_underscore_wildcard", func(t *testing.T) {
+		cfg := &ToolPolicyCfg{
+			DefaultPolicy: "allow",
+			GlobalPolicies: map[string]string{
+				"mcp_search_*":     "deny",
+				"mcp_search_query": "allow", // exact override
+			},
+			GlobalDefaultPolicy: "allow",
+		}
+		got, policyMap := FilterToolsByPolicy(mkTools(), "custom", cfg)
+		require.Len(t, got, 1, "exact allow must override the wildcard deny for mcp_search_query")
+		assert.Equal(t, "mcp_search_query", got[0].Name(),
+			"exact-key allow must win over underscore wildcard deny")
+		assert.Equal(t, "allow", policyMap["mcp_search_query"],
+			"mcp_search_query must have effective policy 'allow' (exact beats wildcard)")
+		_, idx := policyMap["mcp_search_index"]
+		assert.False(t, idx,
+			"mcp_search_index has no exact override, so the wildcard deny still applies")
+	})
+
+	// 3. Per-agent "_*" wildcard (not just global) also works.
+	t.Run("agent_level_underscore_wildcard", func(t *testing.T) {
+		cfg := &ToolPolicyCfg{
+			DefaultPolicy:       "allow",
+			Policies:            map[string]string{"mcp_search_*": "deny"},
+			GlobalDefaultPolicy: "allow",
+		}
+		got, _ := FilterToolsByPolicy(mkTools(), "custom", cfg)
+		assert.Empty(t, got,
+			"agent-level mcp_search_* wildcard must also bulk-deny server tools")
+	})
+}
+
+// TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_LongerPrefixWins verifies that
+// when two "_*" wildcards could both match, the longer (more specific) prefix wins.
+//
+// BDD:
+//
+//	Given policies {"mcp_*": "ask", "mcp_search_*": "deny"},
+//	When FilterToolsByPolicy resolves for "mcp_search_query",
+//	Then effective policy is "deny" (longer "mcp_search_*" wins over "mcp_*").
+//	When FilterToolsByPolicy resolves for "mcp_other_tool",
+//	Then effective policy is "ask" (only "mcp_*" matches).
+//
+// Traces to: G10, FR-071 (longest-prefix-wins among wildcards).
+func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_LongerPrefixWins(t *testing.T) {
+	allTools := append(
+		makeMCPAdapters("search-server", "mcp_search_query"),
+		makeMCPAdapters("other-server", "mcp_other_tool")...,
+	)
+
+	cfg := &ToolPolicyCfg{
+		DefaultPolicy: "allow",
+		GlobalPolicies: map[string]string{
+			"mcp_*":        "ask",
+			"mcp_search_*": "deny",
+		},
+		GlobalDefaultPolicy: "allow",
+	}
+
+	got, policyMap := FilterToolsByPolicy(allTools, "custom", cfg)
+
+	// mcp_search_query: "mcp_search_*" (longer) wins over "mcp_*" → deny.
+	for _, tool := range got {
+		assert.NotEqual(t, "mcp_search_query", tool.Name(),
+			"mcp_search_query must be denied by longer mcp_search_* wildcard")
+	}
+	_, searchDenied := policyMap["mcp_search_query"]
+	assert.False(t, searchDenied, "mcp_search_query must be absent (denied by mcp_search_*)")
+
+	// mcp_other_tool: only "mcp_*" matches → ask.
+	p, ok := policyMap["mcp_other_tool"]
+	assert.True(t, ok, "mcp_other_tool must survive (mcp_* = ask, not deny)")
+	assert.Equal(t, "ask", p, "mcp_other_tool must have effective policy 'ask' from mcp_*")
 }
 
 // TestFilterToolsByPolicy_MCPToolAdminAskFence verifies that for a custom agent,
