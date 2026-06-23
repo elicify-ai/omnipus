@@ -58,6 +58,10 @@ func TestReconcileHeartbeat_CreatesForEnabledMain(t *testing.T) {
 	assert.Equal(t, "mia", j.AgentID)
 	assert.Equal(t, heartbeatJobKind, j.Payload.Kind)
 	assert.True(t, j.Enabled)
+	// B2: heartbeat jobs are interval-based, so they MUST use the
+	// contract-valid trigger kind "every" (not "recurring", which fails
+	// ScheduleTrigger.yaml and gets dropped by the SPA's Zod validation).
+	assert.Equal(t, "every", j.Schedule.Kind, "heartbeat job must use contract-valid kind 'every'")
 	require.NotNil(t, j.Schedule.EveryMS)
 	assert.Equal(t, int64(15)*60_000, *j.Schedule.EveryMS)
 	assert.Equal(t, cron.SessionModeContinue, j.SessionMode)

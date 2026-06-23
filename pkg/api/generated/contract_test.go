@@ -3414,3 +3414,25 @@ func TestContract_ChannelRouting_Populated(t *testing.T) {
 func TestContract_CliDetect_Populated(t *testing.T) {
 	mustPassComponent(t, "CliDetect", FixtureCliDetect_Populated())
 }
+
+// ── ScheduleTrigger (B2 regression guards) ───────────────────────────────────
+// Traces to: contracts/components/schemas/ScheduleTrigger.yaml (kind enum at|every|cron).
+// Heartbeat schedules are interval-based and must emit kind="every"; the bug was
+// the reconciler emitting kind="recurring", which fails this schema and gets
+// dropped by the SPA's Zod validation.
+
+func TestContract_ScheduleTrigger_EveryKind_IsSchemaValid(t *testing.T) {
+	everyMS := int64(15 * 60_000)
+	mustPassComponent(t, "ScheduleTrigger", ScheduleTrigger{
+		Kind:    ScheduleTriggerKindEvery,
+		EveryMs: &everyMS,
+	})
+}
+
+func TestContract_ScheduleTrigger_RecurringKindRejected(t *testing.T) {
+	everyMS := int64(15 * 60_000)
+	mustFailComponent(t, "ScheduleTrigger", ScheduleTrigger{
+		Kind:    ScheduleTriggerKind("recurring"),
+		EveryMs: &everyMS,
+	}, "recurring is not a valid ScheduleTrigger.kind (only at|every|cron allowed)")
+}

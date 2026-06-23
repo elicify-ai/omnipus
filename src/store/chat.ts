@@ -1743,6 +1743,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     timestamp: new Date().toISOString(),
                     status: 'streaming',
                     isStreaming: true,
+                    agentId: useSessionStore.getState().activeAgentId ?? undefined,
                   }
                   draft.messagesById[placeholder.id] = placeholder
                   draft.messageOrder.push(placeholder.id)
@@ -2015,7 +2016,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                       const lastMsg = patchMsgs[patchMsgs.length - 1]
                       const textSnapshot = (lastMsg?.role === 'assistant' ? lastMsg.content : '') ?? ''
                       if (!lastMsg || lastMsg.role !== 'assistant') {
-                        const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true }
+                        const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true, agentId: bf.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined }
                         patchMsgs = [...patchMsgs, ph]
                       }
                       patchToolCalls[bf.call_id] = { id: bf.call_id, call_id: bf.call_id, tool: bf.tool, params: bf.params, status: 'running' }
@@ -2059,7 +2060,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const shouldMarkStreaming = !b.isReplaying
               return produce(b, (draft) => {
                 if (!lastMsg || lastMsg.role !== 'assistant') {
-                  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true }
+                  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true, agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined }
                   draft.messagesById[ph.id] = ph
                   draft.messageOrder.push(ph.id)
                 }

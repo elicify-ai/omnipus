@@ -50,7 +50,7 @@ interface StatusConfig {
   pill: string
 }
 
-function getStatusConfig(status: SpanStatus, durationMs?: number): StatusConfig {
+function getStatusConfig(status: SpanStatus): StatusConfig {
   switch (status) {
     case 'running':
       return {
@@ -62,14 +62,14 @@ function getStatusConfig(status: SpanStatus, durationMs?: number): StatusConfig 
     case 'success':
       return {
         icon: <CheckCircle size={13} className="text-[var(--color-success)]" weight="fill" aria-hidden="true" />,
-        label: durationMs ? formatDuration(durationMs) : 'done',
+        label: 'done',
         border: 'border-[var(--color-success)]/20',
         pill: 'bg-[var(--color-success)]/10 text-[var(--color-success)]',
       }
     case 'error':
       return {
         icon: <XCircle size={13} className="text-[var(--color-error)]" weight="fill" aria-hidden="true" />,
-        label: durationMs ? formatDuration(durationMs) : 'failed',
+        label: 'failed',
         border: 'border-[var(--color-error)]/20',
         pill: 'bg-[var(--color-error)]/10 text-[var(--color-error)]',
       }
@@ -143,7 +143,7 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
 
   // W4-4: narrow to terminal type before accessing durationMs/finalResult.
   const terminal = isTerminal ? (span as SubagentSpanTerminal) : null
-  const config = getStatusConfig(span.status, terminal?.durationMs)
+  const config = getStatusConfig(span.status)
   const label = truncateLabel(span.taskLabel ?? '')
   const stepCount = span.steps.length
   const hasFinalResult = Boolean(terminal?.finalResult)

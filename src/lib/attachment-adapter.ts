@@ -86,14 +86,42 @@ async function ensureSession(): Promise<string> {
 // or render natively (PDF). Roughly tracks docextract's supported set; note
 // `.log` relies on the browser sending a text/* MIME (docextract has no .log
 // extension rule), so a .log labelled application/octet-stream won't extract.
-const ACCEPT = [
+const ACCEPT_LIST = [
   "image/*",
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   ".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md", ".csv", ".json", ".log", ".yaml", ".yml",
-].join(",");
+];
+
+const ACCEPT = ACCEPT_LIST.join(",");
+
+/**
+ * Returns true if the file is allowed by the ACCEPT_LIST.
+ * Handles three token forms:
+ *   - `.ext`     → filename ends with that extension (case-insensitive)
+ *   - `type/*`   → MIME starts with the prefix (wildcard, e.g. "image/")
+ *   - exact MIME → MIME matches exactly (case-insensitive)
+ */
+export function isAcceptedFile(filename: string, mimeType: string): boolean {
+  const lowerName = filename.toLowerCase();
+  const lowerMime = mimeType.toLowerCase();
+  for (const token of ACCEPT_LIST) {
+    if (token.startsWith(".")) {
+      // Extension token — match suffix, allowing for no extension edge case.
+      if (lowerName.endsWith(token.toLowerCase())) return true;
+    } else if (token.endsWith("/*")) {
+      // Wildcard MIME — e.g. "image/*" matches "image/png", "image/jpeg".
+      const prefix = token.slice(0, -1); // "image/"
+      if (lowerMime.startsWith(prefix)) return true;
+    } else {
+      // Exact MIME match.
+      if (lowerMime === token.toLowerCase()) return true;
+    }
+  }
+  return false;
+}
 
 let counter = 0;
 
@@ -104,6 +132,12 @@ export const omnipusAttachmentAdapter = {
   accept: ACCEPT,
 
   async add({ file }): Promise<PendingAttachment> {
+    // Reject unsupported types immediately so the drag-drop / paste / commitFiles
+    // paths surface a user-facing error instead of silently throwing later.
+    if (!isAcceptedFile(file.name, file.type)) {
+      throw new Error(`Can't attach "${file.name}": file type not supported`);
+    }
+
     // Defer the upload to send() — registering here only tracks the pending file.
     return {
       id: `att-${Date.now()}-${counter++}-${file.name}`,

@@ -59,6 +59,7 @@ import {
   fetchDoctorResults,
   fetchSkillTrust,
   reAuth,
+  addCredential,
   ApiError,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -642,6 +643,44 @@ describe('SecuritySection — MCP tools in GlobalToolPoliciesSection', () => {
     await waitFor(() => {
       expect(reAuth).toHaveBeenCalledWith('secret')
       expect(vi.mocked(updateGlobalToolPolicies).mock.calls[1][1]).toBe('tok_mcp')
+    })
+  })
+})
+
+// ── Credential vault re-auth gate (B4) ───────────────────────────────────────
+
+describe('SecuritySection — credential vault re-auth gate (B4)', () => {
+  it('opens the re-auth dialog when add-credential 403s, then replays the consent token', async () => {
+    // First attempt (token '') is rejected by the server's re-auth gate; the
+    // replay (with the minted token) succeeds. Before B4 this 403 surfaced as a
+    // generic "You don't have permission" toast instead of a password prompt.
+    vi.mocked(addCredential)
+      .mockRejectedValueOnce(reAuth403())
+      .mockResolvedValueOnce(undefined as never)
+    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'cred_tok', expires_in: 300 } as never)
+
+    renderSection()
+
+    // Open the Add Credential modal and fill it.
+    fireEvent.click(await screen.findByText('Add key'))
+    fireEvent.change(screen.getByPlaceholderText('e.g. OPENAI_API_KEY'), { target: { value: 'MY_KEY' } })
+    fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: 'sk-secret' } })
+    fireEvent.click(screen.getByText('Save'))
+
+    // The first POST (token '') 403'd → consent dialog appears (not a toast).
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+    expect(vi.mocked(addCredential).mock.calls[0][2]).toBe('')
+
+    // Re-authenticate; the POST is replayed with the consent token.
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(reAuth).toHaveBeenCalledWith('mypassword')
+      expect(addCredential).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(addCredential).mock.calls[1][2]).toBe('cred_tok')
     })
   })
 })

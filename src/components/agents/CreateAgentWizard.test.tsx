@@ -333,3 +333,44 @@ describe('CreateAgentWizard — inherit-from-caller toggles (UAT 4a)', () => {
     expect(screen.getByTestId('wizard-tools-cfg')).toBeInTheDocument()
   })
 })
+
+describe('CreateAgentWizard — missing-field hint (B3 fix)', () => {
+  it('names the missing required fields when Next is disabled (Main: Name + Model)', () => {
+    renderWizard({ initialType: 'Main' })
+    const hint = screen.getByTestId('wizard-advance-hint')
+    expect(hint).toHaveTextContent(/Name/)
+    expect(hint).toHaveTextContent(/Model/)
+    expect(screen.getByTestId('wizard-next-1')).toBeDisabled()
+  })
+
+  it('hides the hint and enables Next once required fields are filled', async () => {
+    renderWizard({ initialType: 'Main' })
+    expect(screen.getByTestId('wizard-advance-hint')).toBeInTheDocument()
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'X' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
+    await waitFor(() => {
+      expect(screen.queryByTestId('wizard-advance-hint')).toBeNull()
+      expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled()
+    })
+  })
+
+  it('does not list Model as missing when a native Subagent inherits the model', () => {
+    renderWizard({ initialType: 'Subagent' })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'W' } })
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'handles X' } })
+    // Model still required (inherit OFF) → listed.
+    expect(screen.getByTestId('wizard-advance-hint')).toHaveTextContent(/Model/)
+    // Turn inherit ON → Model no longer required, Next enabled, hint gone.
+    fireEvent.click(screen.getByTestId('wizard-inherit-model'))
+    expect(screen.queryByTestId('wizard-advance-hint')).toBeNull()
+    expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled()
+  })
+
+  it('names Soul as missing on step 2', async () => {
+    renderWizard({ initialType: 'Main' })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'X' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    expect(await screen.findByTestId('wizard-advance-hint')).toHaveTextContent(/Soul/)
+  })
+})
