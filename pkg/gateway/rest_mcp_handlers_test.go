@@ -23,6 +23,7 @@ import (
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
 // TestListMCPServers_EnabledField verifies that GET /api/v1/mcp-servers populates
@@ -303,4 +304,65 @@ func TestAddMCPServer_PersistsHeaders(t *testing.T) {
 	require.True(t, ok, "requires_admin_ask must be persisted as array")
 	require.Len(t, rawAdminAsk, 1)
 	assert.Equal(t, "dangerous_tool", rawAdminAsk[0])
+}
+
+// TestListMCPServers_ReportsToolCountFromRegistry proves the G6 wiring: tool_count
+// in GET /api/v1/mcp-servers reflects the tools the server registered in the live
+// MCP registry (not the old hardcoded 0). Status remains "disconnected" here
+// because there is no live manager in a unit test (connected-status is covered by
+// the live smoke).
+func TestListMCPServers_ReportsToolCountFromRegistry(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+		Tools: config.ToolsConfig{
+			MCP: config.MCPConfig{
+				Servers: map[string]config.MCPServerConfig{
+					"test-srv": {Enabled: true, Command: "echo", Type: "stdio"},
+				},
+			},
+		},
+	}
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json",
+		[]byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`), 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+
+	// Seed the MCP registry with two tools owned by "test-srv".
+	mcpReg := tools.NewMCPRegistry()
+	builtins := tools.NewBuiltinRegistry()
+	require.Empty(t, mcpReg.RegisterServerTools("test-srv", []tools.Tool{
+		&registryMCPTestTool{name: "alpha"},
+		&registryMCPTestTool{name: "beta"},
+	}, builtins), "test MCP tool registration must not collide")
+
+	api := &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		homePath:      tmpDir,
+		mcpRegistry:   mcpReg,
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/mcp-servers", nil)
+	api.HandleMCPServers(w, r)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var servers []gen.McpServer
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &servers))
+	var found *gen.McpServer
+	for i := range servers {
+		if servers[i].Id == "test-srv" {
+			found = &servers[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "test-srv must appear in the response")
+	assert.Equal(t, 2, found.ToolCount,
+		"tool_count must reflect the 2 tools registered for test-srv (G6 wiring)")
 }
