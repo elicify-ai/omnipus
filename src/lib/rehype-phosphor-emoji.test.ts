@@ -149,4 +149,16 @@ describe('rehype-phosphor-emoji — meta: allow-list completeness', () => {
       ).toBe(true)
     }
   })
+
+  it('translates EVERY emoji in EMOJI_MAP with no raw leak (full-map sweep)', () => {
+    for (const [emoji, icon] of Object.entries(EMOJI_MAP)) {
+      const html = processMarkdown(`pre ${emoji} post`)
+      expect(html, `${emoji} should render data-phosphor-icon="${icon}"`).toContain(
+        `data-phosphor-icon="${icon}"`,
+      )
+      // After removing the icon spans, the raw emoji char must be gone.
+      const stripped = html.replace(/<span data-phosphor-icon="[^"]*"><\/span>/g, '')
+      expect(stripped.includes(emoji), `${emoji} leaked raw into output`).toBe(false)
+    }
+  })
 })

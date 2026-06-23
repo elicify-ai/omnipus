@@ -144,12 +144,13 @@ func TestReconcileHeartbeat_Idempotent(t *testing.T) {
 
 func TestReconcileHeartbeat_LeavesUserSchedulesAlone(t *testing.T) {
 	cs := newReconcileCron(t)
-	// A user schedule (not a heartbeat).
+	// A user schedule (not a heartbeat). Use a contract-valid kind ("every")
+	// so the fixture models a real schedule, not an impossible state.
 	everyMS := int64(60_000)
 	en := true
 	_, err := cs.AddJobFull(cron.JobSpec{
 		Name:     "my-daily-digest",
-		Schedule: cron.CronSchedule{Kind: "recurring", EveryMS: &everyMS},
+		Schedule: cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
 		Message:  "digest",
 		AgentID:  "mia",
 		Enabled:  &en,

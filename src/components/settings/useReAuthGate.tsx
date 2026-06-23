@@ -2,6 +2,15 @@ import { useCallback, useRef, useState } from 'react'
 import { isApiError } from '@/lib/api'
 import { ReAuthDialog } from './ReAuthDialog'
 
+// Sentinel rejection used when the user dismisses the re-auth dialog. Callers
+// should branch on isReAuthCancelled() to treat a dismissal as a no-op (no error
+// toast) rather than a failure.
+export const REAUTH_CANCELLED_MESSAGE = 'Re-authentication cancelled'
+
+export function isReAuthCancelled(err: unknown): boolean {
+  return err instanceof Error && err.message === REAUTH_CANCELLED_MESSAGE
+}
+
 // useReAuthGate wires the Spec-6 FR-12.2 re-auth consent flow into mutations
 // that hit a re-auth-gated PUT route (e.g. /security/sandbox-config,
 // /security/tool-policies). It mirrors IntegrationsSection's gated-save UX —
@@ -98,9 +107,11 @@ export function useReAuthGate(options?: ReAuthGateOptions): ReAuthGateResult {
     if (!next) {
       // Dialog dismissed without confirming — reject the pending retry so the
       // caller's error handling runs (and the change is not silently dropped).
+      // Callers should treat this as a no-op (not an error toast) via
+      // isReAuthCancelled().
       const r = resolverRef.current
       resolverRef.current = null
-      r?.reject(new Error('Re-authentication cancelled'))
+      r?.reject(new Error(REAUTH_CANCELLED_MESSAGE))
     }
   }, [])
 

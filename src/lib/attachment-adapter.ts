@@ -109,7 +109,7 @@ export function isAcceptedFile(filename: string, mimeType: string): boolean {
   const lowerMime = mimeType.toLowerCase();
   for (const token of ACCEPT_LIST) {
     if (token.startsWith(".")) {
-      // Extension token — match suffix, allowing for no extension edge case.
+      // Extension token — case-insensitive filename suffix match.
       if (lowerName.endsWith(token.toLowerCase())) return true;
     } else if (token.endsWith("/*")) {
       // Wildcard MIME — e.g. "image/*" matches "image/png", "image/jpeg".
