@@ -23,7 +23,9 @@
 //     dispatch — they are exercised only by tests. The single builtin safety
 //     default (browser.evaluate = deny) is independently enforced by the tool's own
 //     executeEnabled flag gate (pkg/tools/browser), so the vestigial path leaves no
-//     live safety gap.
+//     live safety gap TODAY. WARNING: a NEW entry added to builtinToolPolicies would
+//     NOT be enforced on the live path — it needs its own runtime gate (like
+//     executeEnabled) or a real entry in the live FilterToolsByPolicy config.
 //
 // These tests PIN the precedence difference so it cannot silently drift, and assert
 // that the compositor (the live tool authority) honors a specific-allow carve-out

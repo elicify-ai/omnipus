@@ -38,10 +38,12 @@ func NewEvaluator(cfg *SecurityConfig) *Evaluator {
 //
 // SCOPE (#438): this is NOT the live tool-name authority. Live tool-name access is
 // resolved by pkg/tools.FilterToolsByPolicy (most-specific-wins). EvaluateTool and
-// its helpers (resolveGlobalToolPolicy, builtinToolPolicies) use strictest-wins and
-// have no live tool-dispatch caller — they back EvaluateExec's command checks and
-// remain for that path + tests. The two semantics diverge only on a specific-allow
-// carve-out from a broad wildcard deny; that divergence is pinned by
+// its tool-name helpers (resolveGlobalToolPolicy, builtinToolPolicies) use
+// strictest-wins and have NO live caller — they are reachable only from tests.
+// (The live pkg/policy path is Evaluator.EvaluateExec for exec COMMANDS, which uses
+// its own execAllowedBins list and does not touch these tool-name helpers.) The two
+// tool-name semantics diverge only on a specific-allow carve-out from a broad
+// wildcard deny; that divergence is pinned by
 // pkg/tools.TestCrossEngine_SpecificAllowCarveOut_EnginesDiverge. Do not reconcile
 // without an ADR.
 //

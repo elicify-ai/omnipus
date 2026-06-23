@@ -47,10 +47,11 @@ func RegisterTools(
 	registry.Register(&ScreenshotTool{mgr: mgr})
 	registry.Register(&GetTextTool{mgr: mgr})
 	registry.Register(&WaitTool{mgr: mgr})
-	// browser.evaluate is always registered; deny is enforced at dispatch by the
-	// policy engine (pkg/policy.builtinToolPolicies). The evaluateEnabled flag
-	// is forwarded to the tool's Execute method which checks it at invocation
-	// time as a second gate (operators must opt in at both layers).
+	// browser.evaluate is always registered so the LLM sees it; the evaluateEnabled
+	// flag is forwarded to the tool's Execute method, which is the SOLE live gate
+	// (deny-by-default unless the operator opts in). The pkg/policy.builtinToolPolicies
+	// deny entry mirrors this intent declaratively but is test-only (no live
+	// tool-dispatch caller) — see the doc comment above and #438.
 	registry.Register(&EvaluateTool{mgr: mgr, executeEnabled: evaluateEnabled})
 
 	return mgr, nil

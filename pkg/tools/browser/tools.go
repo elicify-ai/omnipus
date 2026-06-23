@@ -412,11 +412,11 @@ func (t *EvaluateTool) Parameters() map[string]any {
 
 func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	// Execution gate: operator must opt in via cfg.Sandbox.BrowserEvaluateEnabled.
-	// This is separate from the policy gate (which operates at the dispatch layer).
+	// This is the SOLE live gate (the pkg/policy deny entry is test-only; see the
+	// type doc above and #438).
 	if !t.executeEnabled {
 		return tools.ErrorResult(
-			"browser.evaluate: disabled — set sandbox.browser_evaluate_enabled=true and " +
-				"sandbox.tool_policies[\"browser.evaluate\"]=\"allow\" in config to enable",
+			"browser.evaluate: disabled — set sandbox.browser_evaluate_enabled=true in config to enable",
 		)
 	}
 

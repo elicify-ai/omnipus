@@ -615,9 +615,35 @@ describe('MCPServerPicker — no raw transport string (US-E1)', () => {
     await waitFor(() => {
       expect(screen.getByText('Edit MCP server')).toBeInTheDocument()
     })
-    // Command + args + env_file pre-filled from the server (non-secret).
+    // Command + args + env_file + requires_admin_ask pre-filled (non-secret).
     expect(screen.getByDisplayValue('npx')).toBeInTheDocument()
     expect(screen.getByDisplayValue('server-everything, --verbose')).toBeInTheDocument()
     expect(screen.getByDisplayValue('/etc/mcp.env')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('danger')).toBeInTheDocument()
+    // Secret env VALUE never pre-fills, but the set KEY is surfaced read-only.
+    const envKeysNote = screen.getByTestId('env-keys-set')
+    expect(envKeysNote).toHaveTextContent('API_KEY')
+    expect(envKeysNote).toHaveTextContent(/values hidden/i)
+  })
+
+  it('(#437) surfaces header_names as "currently set" for a remote server in edit mode', async () => {
+    const sseWithHeaders = {
+      id: 's3',
+      name: 'my-remote-server',
+      transport: 'sse' as const,
+      status: 'disconnected' as const,
+      tool_count: 0,
+      enabled: true,
+      url: 'https://mcp.example.com/sse',
+      header_names: ['Authorization'],
+    }
+    renderModal(true, { initialServer: sseWithHeaders })
+    await waitFor(() => {
+      expect(screen.getByText('Edit MCP server')).toBeInTheDocument()
+    })
+    expect(screen.getByDisplayValue('https://mcp.example.com/sse')).toBeInTheDocument()
+    const headerNamesNote = screen.getByTestId('header-names-set')
+    expect(headerNamesNote).toHaveTextContent('Authorization')
+    expect(headerNamesNote).toHaveTextContent(/values hidden/i)
   })
 })
