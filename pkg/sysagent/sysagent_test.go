@@ -230,7 +230,6 @@ func TestRBACBypassSingleUser(t *testing.T) {
 		"system.task.delete",
 		"system.skill.remove",
 		"system.mcp.remove",
-		"system.pin.delete",
 	}
 
 	for _, tool := range destructiveTools {
@@ -475,7 +474,6 @@ func TestConfirmationRequired(t *testing.T) {
 		{"channel disable", "system.channel.disable"},
 		{"skill remove", "system.skill.remove"},
 		{"mcp remove", "system.mcp.remove"},
-		{"pin delete", "system.pin.delete"},
 	}
 
 	for _, tc := range destructiveTools {
@@ -662,22 +660,23 @@ func TestSystemPromptHardcoded(t *testing.T) {
 // Supplementary: 41 tools coverage check
 // =====================================================================
 
-// TestToolPermissionsMapCoversAll41Tools verifies that the RBAC permission map
-// covers exactly the 41 tools returned by AllTools() per BRD Appendix D §D.4.
+// TestToolPermissionsMapCoversAll40Tools verifies that the RBAC permission map
+// covers exactly the 40 tools returned by AllTools() per BRD Appendix D §D.4.
 //
 // Traces to: wave5b-system-agent-spec.md — FR-002 (system tools)
-func TestToolPermissionsMapCoversAll41Tools(t *testing.T) {
-	// The 41 tools in AllTools() as of the tool-registry redesign.
-	// Count: 8 agent + 4 project + 4 task + 5 channel + 4 skill + 3 mcp +
-	//        4 provider + 3 pin + 2 config + 4 diagnostics = 41.
+func TestToolPermissionsMapCoversAll40Tools(t *testing.T) {
+	// The 40 tools in AllTools() as of the tool-system refactor (§1/§5/§6:
+	// cron, pins, and backup retired; workspace.get RBAC gap fixed).
+	// Count: 8 agent + 5 workspace + 4 task + 5 channel + 6 skill + 3 mcp +
+	//        4 provider + 2 config + 3 diagnostics = 40.
 	expected41Tools := []string{
 		// Agent management (8: 6 original + 2 metadata accessors from issue #240)
 		"system.agent.create", "system.agent.update", "system.agent.delete",
 		"system.agent.list", "system.agent.activate", "system.agent.deactivate",
 		"system.agent.read_metadata", "system.agent.write_metadata",
-		// Project management (4)
+		// Workspace management (5)
 		"system.workspace.create", "system.workspace.update",
-		"system.workspace.delete", "system.workspace.list",
+		"system.workspace.delete", "system.workspace.list", "system.workspace.get",
 		// Task management (4)
 		"system.task.create", "system.task.update",
 		"system.task.delete", "system.task.list",
@@ -693,16 +692,14 @@ func TestToolPermissionsMapCoversAll41Tools(t *testing.T) {
 		// Provider management (4: configure + list + test + models.list)
 		"system.provider.configure", "system.provider.list", "system.provider.test",
 		"system.models.list",
-		// Pin management (3)
-		"system.pin.list", "system.pin.create", "system.pin.delete",
 		// Config (2)
 		"system.config.get", "system.config.set",
-		// Diagnostics / utility (4)
-		"system.doctor.run", "system.backup.create", "system.cost.query", "system.navigate",
+		// Diagnostics / utility (3)
+		"system.doctor.run", "system.cost.query", "system.navigate",
 	}
 
-	assert.Len(t, expected41Tools, 43,
-		"AllTools() returns 43 RBAC-mapped system tools — test dataset must reflect this")
+	assert.Len(t, expected41Tools, 40,
+		"AllTools() returns 40 RBAC-mapped system tools — test dataset must reflect this")
 
 	// Every expected tool must have an RBAC permission entry.
 	for _, tool := range expected41Tools {
@@ -728,7 +725,7 @@ func TestToolPermissionsMapCoversAll41Tools(t *testing.T) {
 			prev = s
 		}
 	}
-	assert.Len(t, unique, 43, "tool list must not contain duplicates")
+	assert.Len(t, unique, 40, "tool list must not contain duplicates")
 }
 
 // =====================================================================

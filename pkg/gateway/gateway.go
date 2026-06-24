@@ -2265,10 +2265,6 @@ func setupCronTool(
 
 	cronService := cron.NewCronService(cronStorePath)
 
-	// Cron tool — always registered. Policy controls whether an agent can invoke it.
-	cronTool := tools.NewCronTool(cronService, cfg)
-	agentLoop.RegisterTool(cronTool)
-
 	// Owner-aware autonomous fire path (#264). The runner wakes a fired
 	// schedule's OWNING agent (never the default), bounded by the per-run
 	// deadline, and raises a notification + channel alert on failure. It is the

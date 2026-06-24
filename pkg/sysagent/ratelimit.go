@@ -20,7 +20,6 @@ const (
 	rateCategoryConfig  rateLimitCategory = "config"
 	rateCategoryList    rateLimitCategory = "list"
 	rateCategoryChannel rateLimitCategory = "channel"
-	rateCategoryBackup  rateLimitCategory = "backup"
 )
 
 // toolCategory maps each system tool to its rate-limit category.
@@ -31,14 +30,12 @@ var toolCategory = map[string]rateLimitCategory{
 	"system.skill.install":    rateCategoryCreate,
 	"system.skill.create":     rateCategoryCreate,
 	"system.mcp.add":          rateCategoryCreate,
-	"system.pin.create":       rateCategoryCreate,
 
 	"system.agent.delete":     rateCategoryDelete,
 	"system.workspace.delete": rateCategoryDelete,
 	"system.task.delete":      rateCategoryDelete,
 	"system.skill.remove":     rateCategoryDelete,
 	"system.mcp.remove":       rateCategoryDelete,
-	"system.pin.delete":       rateCategoryDelete,
 
 	"system.config.set":         rateCategoryConfig,
 	"system.provider.configure": rateCategoryConfig,
@@ -51,13 +48,13 @@ var toolCategory = map[string]rateLimitCategory{
 	"system.agent.activate":   rateCategoryList,
 	"system.agent.deactivate": rateCategoryList,
 	"system.workspace.list":   rateCategoryList,
+	"system.workspace.get":    rateCategoryList,
 	"system.task.list":        rateCategoryList,
 	"system.skill.list":       rateCategoryList,
 	"system.skill.search":     rateCategoryList,
 	"system.mcp.list":         rateCategoryList,
 	"system.provider.list":    rateCategoryList,
 	"system.provider.test":    rateCategoryList,
-	"system.pin.list":         rateCategoryList,
 	"system.config.get":       rateCategoryList,
 	"system.doctor.run":       rateCategoryList,
 	"system.cost.query":       rateCategoryList,
@@ -68,8 +65,6 @@ var toolCategory = map[string]rateLimitCategory{
 	"system.channel.disable":   rateCategoryChannel,
 	"system.channel.list":      rateCategoryChannel,
 	"system.channel.test":      rateCategoryChannel,
-
-	"system.backup.create": rateCategoryBackup,
 }
 
 // categoryLimit defines the max calls and window per category.
@@ -85,7 +80,6 @@ var categoryLimits = map[rateLimitCategory]categoryLimit{
 	rateCategoryConfig:  {maxCalls: 10, window: time.Minute},
 	rateCategoryList:    {maxCalls: 60, window: time.Minute},
 	rateCategoryChannel: {maxCalls: 5, window: time.Minute},
-	rateCategoryBackup:  {maxCalls: 1, window: 5 * time.Minute},
 }
 
 // RateLimitedError is returned when a tool call is rate-limited.

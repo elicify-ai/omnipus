@@ -20,7 +20,7 @@ import (
 // config, managing channels). They must always require human approval before
 // execution — RequiresAdminAsk() == true is the machine-readable gate.
 //
-// BDD: Given all 42 tools returned by AllTools(),
+// BDD: Given all 40 tools returned by AllTools(),
 //
 //	When RequiresAdminAsk() is called on each,
 //	Then it returns true for every tool.
@@ -32,8 +32,8 @@ import (
 func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
 	all := AllTools(nil, nil)
 
-	if len(all) != 43 {
-		t.Errorf("expected exactly 43 system tools, got %d", len(all))
+	if len(all) != 40 {
+		t.Errorf("expected exactly 40 system tools, got %d", len(all))
 	}
 
 	for _, tool := range all {
@@ -135,8 +135,8 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk_CentralRegistry(t *testing.T) 
 	reg := BuildRegistry(nil, nil)
 	allTools := reg.GetAll()
 
-	if len(allTools) != 43 {
-		t.Errorf("central BuiltinRegistry has %d tools; want == 43 (FR-001)", len(allTools))
+	if len(allTools) != 40 {
+		t.Errorf("central BuiltinRegistry has %d tools; want == 40 (FR-001)", len(allTools))
 	}
 
 	for _, tool := range allTools {
