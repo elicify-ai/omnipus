@@ -72,28 +72,28 @@
 
 <section><div class="wrap">
   <div class="eyebrow">Working memory · v0.3</div>
-  <h2>The agent scratchpad <span class="muted">is also a task</span></h2>
-  <p class="sub">If scheduling dissolves into tasks, so does the agent's <b>in-session planning</b>. There is no separate "scratchpad" store — the agent's working todo list rides on the same task substrate, behind a one-tool facade.</p>
+  <h2>The agent scratchpad <span class="muted">is a visible board task</span></h2>
+  <p class="sub">If scheduling dissolves into tasks, so does the agent's <b>in-session planning</b>. There is no separate "scratchpad" store — the agent's working checklist rides on the same task substrate, behind one tool. The "scratchpad" is just a lightweight board task created through a friendlier facade.</p>
   <div class="grid g2" style="margin-top:6px">
-    <div class="card" style="border-color:var(--gold-dim)"><h3>One tool: <span class="mono">plan</span></h3>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>One tool: <span class="mono">todos(goal, [{text, status}])</span></h3>
       <ul class="clean">
-        <li>The agent sets its <b>full current</b> todo list <span class="mono">[{text, status}]</span> in one call — <b>replace, not append</b> (it rewrites the list, so no todo IDs are needed).</li>
-        <li><b>Agent-unaware task creation:</b> the first call auto-creates a <span class="mono">scratchpad</span>-flagged task for that agent and reuses it. The agent never sees a <span class="mono">task_id</span>, never calls <span class="mono">task_create</span> for its own planning — it just "sets its plan."</li>
-        <li><b>Read-on-write:</b> returns the updated list, so the agent always sees its plan (no separate read tool).</li>
-        <li>Replaces the append-only <span class="mono">task_add_todo</span> dead-end (you could add a todo but never tick it off, edit, or remove it).</li>
+        <li>The agent sets its <b>full current</b> checklist in one call — <b>replace, not append</b> (rewrites the list, so no todo IDs are needed). <span class="mono">status</span> ∈ pending / in_progress / completed.</li>
+        <li><b><span class="mono">goal</span> becomes the task title.</b> The call <b>creates-or-updates a board-visible task</b> titled <span class="mono">goal</span> with those todos as its checklist. The agent never calls <span class="mono">task_create</span> or sees a <span class="mono">task_id</span> — it sets its goal + steps, and a task appears on the board. <b>No hidden flag, no promotion step.</b></li>
+        <li><b>Read-on-write + re-injection:</b> returns the updated list, and the loop <b>re-injects the agent's current goal + todos at the start of each turn</b> — so the plan survives context compression and is always visible without a read tool.</li>
+        <li>Replaces the append-only <span class="mono">task_add_todo</span> dead-end (you could add a todo but never tick it off, edit, or read it back).</li>
       </ul>
     </div>
-    <div class="card"><h3>Promotion, not a second path</h3>
+    <div class="card"><h3>Flat checklist vs multi-wave plan</h3>
       <ul class="clean">
-        <li>A scratchpad task is <b>hidden</b> (not on the board), <b>session-scoped</b>, <b>agent-owned</b>.</li>
-        <li>When the work is <b>delegated or committed</b>, the same record is <b>promoted</b> to a real board task — the flag flips, no copy, no re-creation. It is then delegatable, schedulable (trigger), and visible.</li>
-        <li><b>Fleeting plans</b> stay hidden and clean up at session end; <b>durable work</b> persists.</li>
-        <li>Jim plans (scratchpad) → delegates (promote + assign to Ava) → Ava works it with her own scratchpad for sub-steps.</li>
+        <li><span class="mono">todos</span> = <b>one</b> task with a <b>flat</b> <span class="mono">[{text, status}]</span> list — no dependencies. For "read this, summarize, email it" (one goal, a few steps).</li>
+        <li>A multi-wave <b>plan</b> = <b>many</b> tasks linked by <span class="mono">blocked_by</span> (a DAG) via <span class="mono">task_create</span>. For "migrate the auth system" (waves of dependent work).</li>
+        <li>Both are <b>visible board tasks</b> — the distinction is flat-list vs DAG, not visibility. "plan" is reserved for the dependency-linked case.</li>
+        <li>Jim sets a <span class="mono">todos</span> goal → delegates it (assign to Ava) → Ava works it with her own <span class="mono">todos</span> for sub-steps.</li>
       </ul>
     </div>
   </div>
-  <div class="callout b">One record type (a task with todos), one store, one lifecycle. The agent's scratchpad, the board task, and the scheduled task are the <b>same thing</b> with different flags — not three parallel systems. <b>Retires</b> <span class="mono">task_add_todo</span> (→ <span class="mono">plan</span>), <span class="mono">task_add_dependency</span> (→ folded into <span class="mono">task_update</span>), and <span class="mono">cron</span> (→ scheduled tasks via <span class="mono">task.Trigger</span> + heartbeat).</div>
-  <p class="note" style="margin-top:8px"><b>Substrate:</b> <span class="mono">Todo {Text, Status}</span> (pending/in_progress/completed); <span class="mono">SetTodos(taskID, []Todo)</span> full-replace; a <span class="mono">scratchpad</span> task flag. <b>Open for the ADR:</b> promotion trigger (implicit-on-delegate vs explicit commit vs operator) and scratchpad retention (clean up vs retain-as-audit). See <span class="mono">docs/internal/design/tasks-system-refactor-2026-06.md</span> + the <a href="tools-catalog.html">Tool Catalog</a> tasks section.</p>
+  <div class="callout b">One record type (a task with todos), one store, one lifecycle. The agent's scratchpad, the board task, and the scheduled task are the <b>same thing</b> — not three parallel systems. <b>Retires</b> <span class="mono">task_add_todo</span> (→ <span class="mono">todos</span>), <span class="mono">task_add_dependency</span> (→ folded into <span class="mono">task_update</span>), and <span class="mono">cron</span> (→ scheduled tasks via <span class="mono">task.Trigger</span> + heartbeat). <i>Use <span class="mono">todos</span> for the throwaway checklist of this turn; use <span class="mono">task_create</span> + dependencies for a durable multi-wave plan.</i></div>
+  <p class="note" style="margin-top:8px"><b>Substrate (validated):</b> <span class="mono">Task.Todos</span> is already a real JSON array (<span class="mono">[]Todo</span>, not text) — <span class="mono">pkg/task/task.go:157</span>. Changes: <span class="mono">Todo {Text, Status}</span> (pending/in_progress/completed); <span class="mono">SetTodos(taskID, []Todo)</span> full-replace; <b>no</b> new task flag (visible from the start). <b>Open for the ADR:</b> lifecycle (one active goal-task per agent vs auto-archive vs accumulate), goal identity (goal-string vs explicit id), retention (clean up vs retain-as-audit). See <span class="mono">docs/internal/design/tasks-system-refactor-2026-06.md</span> + the <a href="tools-catalog.html">Tool Catalog</a> tasks section.</p>
 </div></section>
 
 <!-- INTEGRATION -->
