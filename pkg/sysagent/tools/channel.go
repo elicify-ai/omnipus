@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
@@ -49,8 +50,7 @@ func NewChannelEnableTool(d *Deps) *ChannelEnableTool { return &ChannelEnableToo
 func (t *ChannelEnableTool) Name() string             { return "system.channel.enable" }
 func (t *ChannelEnableTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *ChannelEnableTool) Description() string {
-	return "[NOT IMPLEMENTED] Enabling a channel from a tool is not yet wired to the channel manager. " +
-		"This tool always returns a NOT_IMPLEMENTED error. Use the Channels screen in the UI to enable a channel."
+	return "Enable a channel connection. The channel will start on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
 }
 
 func (t *ChannelEnableTool) Parameters() map[string]any {
@@ -61,10 +61,30 @@ func (t *ChannelEnableTool) Parameters() map[string]any {
 	}
 }
 
-func (t *ChannelEnableTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
-	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
-		"system.channel.enable is not implemented: there is no tool-side path into the channel manager.",
-		"Enable channels via the Channels screen in the UI."))
+func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+	id, _ := args["id"].(string)
+	if id == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
+	}
+	if _, ok := findChannel(id); !ok {
+		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
+	}
+	if err := t.deps.WithConfig(func(cfg *config.Config) error {
+		ch, ok := cfg.Channels[id]
+		if !ok {
+			ch = config.ChannelInstanceConfig{Type: id}
+		}
+		ch.Enabled = true
+		cfg.Channels[id] = ch
+		return nil
+	}); err != nil {
+		return tools.ErrorResult(errorJSON("ENABLE_FAILED", err.Error(), ""))
+	}
+	return tools.NewToolResult(successJSON(map[string]any{
+		"id":      id,
+		"enabled": true,
+		"message": "Channel enabled. It will connect on the next config reload.",
+	}))
 }
 
 // ---- system.channel.configure ----
@@ -130,8 +150,7 @@ func NewChannelDisableTool(d *Deps) *ChannelDisableTool { return &ChannelDisable
 func (t *ChannelDisableTool) Name() string              { return "system.channel.disable" }
 func (t *ChannelDisableTool) Scope() tools.ToolScope    { return tools.ScopeCore }
 func (t *ChannelDisableTool) Description() string {
-	return "[NOT IMPLEMENTED] Disabling a channel from a tool is not yet wired to the channel manager. " +
-		"This tool always returns a NOT_IMPLEMENTED error. Use the Channels screen in the UI to disable a channel."
+	return "Disable a channel connection. The channel will stop on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
 }
 
 func (t *ChannelDisableTool) Parameters() map[string]any {
@@ -142,10 +161,30 @@ func (t *ChannelDisableTool) Parameters() map[string]any {
 	}
 }
 
-func (t *ChannelDisableTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
-	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
-		"system.channel.disable is not implemented: there is no tool-side path into the channel manager.",
-		"Disable channels via the Channels screen in the UI."))
+func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+	id, _ := args["id"].(string)
+	if id == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
+	}
+	if _, ok := findChannel(id); !ok {
+		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
+	}
+	if err := t.deps.WithConfig(func(cfg *config.Config) error {
+		ch, ok := cfg.Channels[id]
+		if !ok {
+			return fmt.Errorf("channel %q is not configured", id)
+		}
+		ch.Enabled = false
+		cfg.Channels[id] = ch
+		return nil
+	}); err != nil {
+		return tools.ErrorResult(errorJSON("DISABLE_FAILED", err.Error(), ""))
+	}
+	return tools.NewToolResult(successJSON(map[string]any{
+		"id":      id,
+		"enabled": false,
+		"message": "Channel disabled. It will disconnect on the next config reload.",
+	}))
 }
 
 // ---- system.channel.list ----
@@ -175,8 +214,7 @@ func NewChannelTestTool(d *Deps) *ChannelTestTool { return &ChannelTestTool{deps
 func (t *ChannelTestTool) Name() string           { return "system.channel.test" }
 func (t *ChannelTestTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ChannelTestTool) Description() string {
-	return "[NOT IMPLEMENTED] Testing a channel connection from a tool is not yet wired to the channel manager. " +
-		"This tool always returns a NOT_IMPLEMENTED error. Use the Test button on the Channels screen in the UI."
+	return "Test a channel's configuration \u2014 checks the channel exists, is enabled, and has credentials configured.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
 }
 
 func (t *ChannelTestTool) Parameters() map[string]any {
@@ -187,8 +225,38 @@ func (t *ChannelTestTool) Parameters() map[string]any {
 	}
 }
 
-func (t *ChannelTestTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
-	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
-		"system.channel.test is not implemented: there is no tool-side path into the channel manager.",
-		"Test channel connections via the Test button on the Channels screen in the UI."))
+func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+	id, _ := args["id"].(string)
+	if id == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
+	}
+	if _, ok := findChannel(id); !ok {
+		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
+	}
+	cfg := t.deps.GetCfg()
+	if cfg == nil {
+		return tools.ErrorResult(errorJSON("CONFIG_UNAVAILABLE", "config not available", ""))
+	}
+	ch, ok := cfg.Channels[id]
+	if !ok {
+		return tools.NewToolResult(successJSON(map[string]any{
+			"id":      id,
+			"success": false,
+			"message": fmt.Sprintf("Channel %q is not configured. Use system.channel.configure to set it up.", id),
+		}))
+	}
+	hasCreds := ch.TokenRef != "" || (ch.Identity != nil && ch.Identity.ID != "")
+	if !hasCreds {
+		return tools.NewToolResult(successJSON(map[string]any{
+			"id":      id,
+			"success": false,
+			"message": fmt.Sprintf("Channel %q exists but has no credentials. Use system.channel.configure to set its token/credentials.", id),
+		}))
+	}
+	return tools.NewToolResult(successJSON(map[string]any{
+		"id":      id,
+		"success": true,
+		"enabled": ch.Enabled,
+		"message": fmt.Sprintf("Channel %q is configured (type=%s, enabled=%v, credentials=set).", id, ch.Type, ch.Enabled),
+	}))
 }
