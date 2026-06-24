@@ -70,6 +70,32 @@
   <p class="note" style="margin-top:8px">Scheduled tasks and heartbeats are <b>created by the user or by agents (Mia) from chat</b> (<i>"want me to do this every morning?"</i>) and <b>run by the platform's cron scheduler engine</b> — there is no separate automation agent (no Forge / Max persona). The Automations sidebar entry is removed; the Task Board + Calendar is the home.</p>
 </div></section>
 
+<section><div class="wrap">
+  <div class="eyebrow">Working memory · v0.3</div>
+  <h2>The agent scratchpad <span class="muted">is also a task</span></h2>
+  <p class="sub">If scheduling dissolves into tasks, so does the agent's <b>in-session planning</b>. There is no separate "scratchpad" store — the agent's working todo list rides on the same task substrate, behind a one-tool facade.</p>
+  <div class="grid g2" style="margin-top:6px">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>One tool: <span class="mono">plan</span></h3>
+      <ul class="clean">
+        <li>The agent sets its <b>full current</b> todo list <span class="mono">[{text, status}]</span> in one call — <b>replace, not append</b> (it rewrites the list, so no todo IDs are needed).</li>
+        <li><b>Agent-unaware task creation:</b> the first call auto-creates a <span class="mono">scratchpad</span>-flagged task for that agent and reuses it. The agent never sees a <span class="mono">task_id</span>, never calls <span class="mono">task_create</span> for its own planning — it just "sets its plan."</li>
+        <li><b>Read-on-write:</b> returns the updated list, so the agent always sees its plan (no separate read tool).</li>
+        <li>Replaces the append-only <span class="mono">task_add_todo</span> dead-end (you could add a todo but never tick it off, edit, or remove it).</li>
+      </ul>
+    </div>
+    <div class="card"><h3>Promotion, not a second path</h3>
+      <ul class="clean">
+        <li>A scratchpad task is <b>hidden</b> (not on the board), <b>session-scoped</b>, <b>agent-owned</b>.</li>
+        <li>When the work is <b>delegated or committed</b>, the same record is <b>promoted</b> to a real board task — the flag flips, no copy, no re-creation. It is then delegatable, schedulable (trigger), and visible.</li>
+        <li><b>Fleeting plans</b> stay hidden and clean up at session end; <b>durable work</b> persists.</li>
+        <li>Jim plans (scratchpad) → delegates (promote + assign to Ava) → Ava works it with her own scratchpad for sub-steps.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout b">One record type (a task with todos), one store, one lifecycle. The agent's scratchpad, the board task, and the scheduled task are the <b>same thing</b> with different flags — not three parallel systems. <b>Retires</b> <span class="mono">task_add_todo</span> (→ <span class="mono">plan</span>), <span class="mono">task_add_dependency</span> (→ folded into <span class="mono">task_update</span>), and <span class="mono">cron</span> (→ scheduled tasks via <span class="mono">task.Trigger</span> + heartbeat).</div>
+  <p class="note" style="margin-top:8px"><b>Substrate:</b> <span class="mono">Todo {Text, Status}</span> (pending/in_progress/completed); <span class="mono">SetTodos(taskID, []Todo)</span> full-replace; a <span class="mono">scratchpad</span> task flag. <b>Open for the ADR:</b> promotion trigger (implicit-on-delegate vs explicit commit vs operator) and scratchpad retention (clean up vs retain-as-audit). See <span class="mono">docs/internal/design/tasks-system-refactor-2026-06.md</span> + the <a href="tools-catalog.html">Tool Catalog</a> tasks section.</p>
+</div></section>
+
 <!-- INTEGRATION -->
 <section id="integration"><div class="wrap">
   <div class="eyebrow">Opening up</div>
