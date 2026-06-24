@@ -94,7 +94,7 @@ func TestTaskTodos_BareArrayBody_Accepted(t *testing.T) {
 	tsk := createTaskViaAPI(t, api, "TodoTask", wsID)
 
 	// PUT with a single-item array → 200.
-	w := putTaskTodos(t, api, tsk.Id, `[{"text":"a","done":false}]`)
+	w := putTaskTodos(t, api, tsk.Id, `[{"text":"a","status":"pending"}]`)
 	require.Equal(t, http.StatusOK, w.Code,
 		"PUT /tasks/{id}/todos with bare array must return 200; body=%s", w.Body.String())
 
@@ -103,7 +103,7 @@ func TestTaskTodos_BareArrayBody_Accepted(t *testing.T) {
 	require.NotNil(t, updated.Todos, "todos must be set after PUT")
 	require.Len(t, *updated.Todos, 1, "exactly one todo expected")
 	assert.Equal(t, "a", (*updated.Todos)[0].Text, "todo text must match")
-	assert.False(t, (*updated.Todos)[0].Done, "todo done must be false")
+	assert.Equal(t, gen.TaskTodosStatusPending, (*updated.Todos)[0].Status, "todo status must be pending")
 
 	// Differentiation: clear the checklist with empty array → 200, no todos.
 	wClear := putTaskTodos(t, api, tsk.Id, `[]`)

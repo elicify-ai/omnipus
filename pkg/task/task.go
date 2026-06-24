@@ -20,6 +20,7 @@
 package task
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -125,12 +126,58 @@ type Trigger struct {
 	Config TriggerConfig `json:"config"`
 }
 
-// Todo is a lightweight {text, done} checklist item embedded on a task
-// (remediation three-tier model, Tier 1). A todo is NOT a task: no agent, no
-// status, no trigger, no ID.
+// TodoStatus is the tri-state status of a checklist Todo.
+type TodoStatus string
+
+const (
+	TodoPending    TodoStatus = "pending"
+	TodoInProgress TodoStatus = "in_progress"
+	TodoCompleted  TodoStatus = "completed"
+)
+
+// validTodoStatuses is the set of allowed TodoStatus values.
+var validTodoStatuses = map[TodoStatus]bool{ //nolint:gochecknoglobals
+	TodoPending:    true,
+	TodoInProgress: true,
+	TodoCompleted:  true,
+}
+
+// IsValidTodoStatus reports whether s is one of the three canonical todo statuses.
+func IsValidTodoStatus(s TodoStatus) bool { return validTodoStatuses[s] }
+
+// Todo is a lightweight {text, status} checklist item embedded on a task.
+// A todo is NOT a task: no agent, no trigger, no ID.
 type Todo struct {
-	Text string `json:"text"`
-	Done bool   `json:"done"`
+	Text   string     `json:"text"`
+	Status TodoStatus `json:"status"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler for Todo.
+// It tolerates legacy on-disk JSON written before the tri-state migration
+// that has `"done": true|false` and no `"status"` field, upgrading those
+// records to the new Status vocabulary on read.
+func (td *Todo) UnmarshalJSON(data []byte) error {
+	// tolerant: accept legacy {"done":bool} and new {"status":"..."}.
+	var raw struct {
+		Text   string `json:"text"`
+		Status string `json:"status"`
+		Done   *bool  `json:"done"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	td.Text = raw.Text
+	switch {
+	case raw.Status != "":
+		td.Status = TodoStatus(raw.Status)
+	case raw.Done != nil && *raw.Done:
+		td.Status = TodoCompleted
+	case raw.Done != nil:
+		td.Status = TodoPending
+	default:
+		td.Status = TodoPending // empty -> pending
+	}
+	return nil
 }
 
 // Task is the unified on-disk task entity stored at ~/.omnipus/tasks/<id>.json.

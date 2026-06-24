@@ -1020,9 +1020,9 @@ func FixtureTask_Populated() Task {
 		CompletedAt:   &completedAt,
 	}
 	t.Todos = &[]struct {
-		Done bool   `json:"done"`
-		Text string `json:"text"`
-	}{{Text: "Draft the summary section", Done: false}}
+		Status TaskTodosStatus `json:"status"`
+		Text   string          `json:"text"`
+	}{{Text: "Draft the summary section", Status: TaskTodosStatusPending}}
 	t.Trigger = &struct {
 		Config Task_Trigger_Config `json:"config"`
 		Type   TaskTriggerType     `json:"type"`
@@ -1088,7 +1088,7 @@ func FixtureTaskTrigger_Edge() TaskTrigger {
 
 // FixtureTodo_Populated — a checklist item.
 func FixtureTodo_Populated() Todo {
-	return Todo{Text: "Draft the summary section", Done: false}
+	return Todo{Text: "Draft the summary section", Status: TodoStatusPending}
 }
 
 // FixtureTodo_ZeroValue — Go zero values. Expected: FAIL (text="" minLength 1).
@@ -1098,7 +1098,7 @@ func FixtureTodo_ZeroValue() Todo {
 
 // FixtureTodo_Edge — a completed checklist item with unicode text.
 func FixtureTodo_Edge() Todo {
-	return Todo{Text: "完了-done-✓", Done: true} //nolint:gosmopolitan // intentional non-ASCII test fixture
+	return Todo{Text: "完了-done-✓", Status: TodoStatusCompleted} //nolint:gosmopolitan // intentional non-ASCII test fixture
 }
 
 // ── McpServer ─────────────────────────────────────────────────────────────────

@@ -396,7 +396,7 @@ type Task = {
 };
 type Todo = {
   text: string;
-  done: boolean;
+  status: "pending" | "in_progress" | "completed";
 };
 type TaskTrigger = {
   type: "manual" | "once" | "every" | "recurring";
@@ -1776,7 +1776,7 @@ export const DevicesResponse: z.ZodType<DevicesResponse> = z.object({
 });
 export const Todo: z.ZodType<Todo> = z.object({
   text: z.string().min(1).max(500),
-  done: z.boolean(),
+  status: z.enum(["pending", "in_progress", "completed"]),
 });
 export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
   type: z.enum(["manual", "once", "every", "recurring"]),

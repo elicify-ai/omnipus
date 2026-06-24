@@ -34,7 +34,7 @@ func TestCreateGetRoundTrip(t *testing.T) {
 	in := mkTask("Analyze logs", "ws-1")
 	in.Prompt = "do it"
 	in.Priority = 2
-	in.Todos = []Todo{{Text: "step one", Done: false}}
+	in.Todos = []Todo{{Text: "step one", Status: TodoPending}}
 	if err := s.Create(in); err != nil {
 		t.Fatalf("Create: %v", err)
 	}

@@ -127,9 +127,11 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 // --- wire mapping -----------------------------------------------------------
 
 // wireTodo mirrors the gen.Task.Todos element inline type.
+// not-wire-format: this is a local alias for the generated inline struct; see
+// the gen.Task.Todos field for the authoritative shape.
 type wireTodo = struct {
-	Done bool   `json:"done"`
-	Text string `json:"text"`
+	Status gen.TaskTodosStatus `json:"status"`
+	Text   string              `json:"text"`
 }
 
 // toWireTask converts an internal task.Task to the generated wire type, filling
@@ -172,7 +174,7 @@ func (a *restAPI) toWireTask(t task.Task) gen.Task {
 	if len(t.Todos) > 0 {
 		todos := make([]wireTodo, 0, len(t.Todos))
 		for _, td := range t.Todos {
-			todos = append(todos, wireTodo{Text: td.Text, Done: td.Done})
+			todos = append(todos, wireTodo{Text: td.Text, Status: gen.TaskTodosStatus(td.Status)})
 		}
 		out.Todos = &todos
 	}
@@ -553,7 +555,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Todos != nil {
 		for _, td := range *req.Todos {
-			t.Todos = append(t.Todos, task.Todo{Text: td.Text, Done: td.Done})
+			t.Todos = append(t.Todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
 		}
 	}
 	if req.Trigger != nil {
@@ -665,7 +667,7 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	if req.Todos != nil {
 		todos := make([]task.Todo, 0, len(*req.Todos))
 		for _, td := range *req.Todos {
-			todos = append(todos, task.Todo{Text: td.Text, Done: td.Done})
+			todos = append(todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
 		}
 		patch.Todos = &todos
 	}
@@ -802,7 +804,7 @@ func (a *restAPI) handleTaskTodos(w http.ResponseWriter, r *http.Request, id str
 	}
 	todos := make([]task.Todo, 0, len(body))
 	for _, td := range body {
-		todos = append(todos, task.Todo{Text: td.Text, Done: td.Done})
+		todos = append(todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
 	}
 	a.applyTaskFieldUpdate(w, id, task.Patch{Todos: &todos}, "todos")
 }

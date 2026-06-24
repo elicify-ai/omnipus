@@ -141,7 +141,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       created_by: 'alice',
       created_at: '2026-06-20T10:00:00Z',
       updated_at: '2026-06-20T10:01:00Z',
-      todos: [{ text: 'Step 1', done: false }, { text: 'Step 2', done: true }],
+      todos: [{ text: 'Step 1', status: 'pending' as const }, { text: 'Step 2', status: 'completed' as const }],
     } satisfies Task
 
     expect(mock.status).toBe('in_progress')

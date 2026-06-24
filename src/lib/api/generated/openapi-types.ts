@@ -6316,7 +6316,7 @@ export interface components {
         };
         /**
          * Todo
-         * @description A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no status enum, no trigger, and no ID — it is a simple `{text, done}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need independent status/agent/trigger.
+         * @description A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).
          */
         Todo: {
             /**
@@ -6325,10 +6325,11 @@ export interface components {
              */
             text: string;
             /**
-             * @description Whether the checklist item is complete.
-             * @example false
+             * @description Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
+             * @example pending
+             * @enum {string}
              */
-            done: boolean;
+            status: "pending" | "in_progress" | "completed";
         };
         /**
          * TaskTrigger
