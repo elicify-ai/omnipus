@@ -1,9 +1,9 @@
 # Task System Refactor — Assessment & Plan
 
-**Status:** Pre-ADR assessment (discussion stage) · supersedes the task-tool-granularity &
+**Status:** IMPLEMENTED (§1–§7) on `feat/0.1.0-uat-fixes` · supersedes the task-tool-granularity &
 scheduling portions of `tasks-redesign-2026-05.md`
 **Date:** 2026-06-24
-**Phase:** v0.3 (tasks redesign — no back-compat, per the locked release strategy)
+**Phase:** v0.1.0 completion (tool-system refactor — NOT the v0.3 Workspaces redesign)
 **Branch context:** `feat/0.1.0-uat-fixes` (assessment done against the live tool registry + code)
 
 Six problems surfaced from a user-perspective review of the task + scheduling tools:
@@ -448,7 +448,7 @@ this is consistent.)
 
 ## Scope & next steps
 
-- **Phase:** v0.3 (tasks redesign). No back-compat (fresh-build per the release strategy).
+- **Phase:** v0.1.0 completion (tool-system refactor). NOT the v0.3 Workspaces redesign.
 - **Pre-requisite:** this assessment feeds the v0.3 tasks-redesign **ADR** (`/albert`), then a
   `/plan-spec`. Do not implement before the ADR ratifies the retire-cron + fold-dependency
   decisions.
