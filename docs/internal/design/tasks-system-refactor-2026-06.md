@@ -6,7 +6,7 @@ scheduling portions of `tasks-redesign-2026-05.md`
 **Phase:** v0.3 (tasks redesign — no back-compat, per the locked release strategy)
 **Branch context:** `feat/0.1.0-uat-fixes` (assessment done against the live tool registry + code)
 
-Five problems surfaced from a user-perspective review of the task + scheduling tools:
+Six problems surfaced from a user-perspective review of the task + scheduling tools:
 
 1. **The `cron` tool is redundant** — scheduled tasks + the per-agent heartbeat already cover
    scheduling; cron is a third, parallel, user-invisible system.
@@ -23,6 +23,10 @@ Five problems surfaced from a user-perspective review of the task + scheduling t
    (§4).
 5. **`pins` are a backend-only feature with no UI** — `system.pin.*` bookmark chat responses but
    nothing in the app shows them. Retire (§5).
+6. **The recategorization + rename touch real data-model fields** — `category` + `scope` already
+   exist on the `Tool` interface and the wire `ToolRegistryEntry`; the to-be category scheme
+   requires extending the `ToolCategory` enum (add 7 / drop 4 / rename 4), the rename is a
+   contract change, and `scope` stays as-is per ADR-018 (§7).
 
 ---
 
@@ -366,6 +370,81 @@ rather than failing silently:
       retire until built.
 
 ---
+
+## 7. Data-model impact — `category` + `scope` are already real fields
+
+### What already exists
+
+`category` and `scope` are **first-class fields on the data model**, on both sides:
+
+- **In-process (`pkg/tools/base.go`):** the `Tool` interface requires every tool to implement
+  `Scope() ToolScope` and `Category() ToolCategory`.
+  - `ToolScope` constants: `ScopeCore` ("core"), `ScopeGeneral` ("general").
+  - `ToolCategory` enum (14 values): `core, system, file, code, web, browser, communication, task,
+    automation, search, skills, hardware, workspace, mcp`.
+- **Wire (`contracts/components/schemas/ToolRegistryEntry.yaml`):** `scope` and `category` are both
+  **required** fields (with `name`, `description`, `source`, `server_id`). The gateway populates
+  them from `t.Scope()` / `t.Category()` (`toolCategoryFromTool` calls `Category()` first, falls
+  back to name-prefix).
+
+So the to-be renaming + recategorization map to **real fields**, not documentation.
+
+### Implication 1 — recategorization requires extending the `ToolCategory` enum
+
+The to-be domain categories (filesystem, shell, web, browser, communication, memory, tasks,
+delegation, skills, tool-discovery, agents, workspaces, channels, providers, mcp, platform) don't
+all exist in the enum yet. Mapping against the 14 current values:
+
+- **Already present:** `web, browser, communication, skills, mcp` ✓; `file`≈filesystem, `code`≈shell,
+  `task`≈tasks, `workspace`≈workspaces (rename).
+- **Missing — must add:** `memory, delegation, tool-discovery, agents, channels, providers, platform`.
+- **Unused — can drop:** `core, system, automation, hardware` (no tool returns these today; `core`/
+  `system` are the dumping-ground values the recategorization dissolves).
+
+So the category work is not just "set the field" — it requires **extending the enum** (add 7, drop 4,
+rename 4) and having each tool's `Category()` return the new value.
+
+### Implication 2 — renaming is a `Name()` + contract change
+
+Verb-first snake_case names (`create_task`, `system_create_agent`→`create_agent`, etc.) are edits to
+each tool's `Name()` return — and the `name` field crosses the gateway/SPA boundary, so it is a
+**contract change** (Constraint #8): regenerate `ToolRegistryEntry` artifacts, update the SPA
+tool-policy editor (keys on names) and the agent seed prompts. This is why the rename is v0.3 /
+ADR-gated, not a quick edit.
+
+### Implication 3 — `scope` stays as-is (behavior-bearing)
+
+`scope` drives `passesScopeGate` (`pkg/tools/compositor.go`) — the structural access gate, fail-closed
+on unknown values. ADR-018 keeps `scope` as a **non-rendered internal discriminator**. The catalog's
+`open` / `privileged` / `gated` dimensions are a **documentation illustration** mapped from the real
+`core`/`general` — *not* a code change to `scope`. Leave `ToolScope` (core/general) unchanged.
+
+**One drift to clean up:** the wire `scope` enum (`ToolRegistryEntry.yaml`) lists `system` as a value,
+but the code `ToolScope` only has `core`/`general` — `system` is vestigial (no tool returns it;
+`system.*` tools return `ScopeCore`). Drop `system` from the wire enum during the contract regen.
+
+### Implication 4 — category is display-only, except `CategoryMCP`
+
+Recategorization is safe for every category **except `mcp`**: `CategoryMCP` drives real behavior
+(`server_id` population in `rest_tool_registry.go` + MCP-specific handling in `pkg/agent/loop.go`).
+MCP tools must keep returning `CategoryMCP`. (`mcp` is one of the to-be categories, unchanged — so
+this is consistent.)
+
+### Todo
+
+- [ ] v0.3: extend `ToolCategory` enum — add `memory, delegation, tool-discovery, agents, channels,
+      providers, platform`; rename `file`→`filesystem`, `code`→`shell`, `task`→`tasks`,
+      `workspace`→`workspaces`; drop unused `core, system, automation, hardware`.
+- [ ] v0.3: set each tool's `Category()` to its to-be domain value (keep `CategoryMCP` for MCP tools).
+- [ ] v0.3: rename each tool's `Name()` to verb-first snake_case (drop `system.`/`browser.` dots;
+      `system_*`→domain prefix dropped per §4/§7; `system.task.*`→`*_task_in_workspace`).
+- [ ] v0.3 (contract): regenerate `ToolRegistryEntry` artifacts; drop the vestigial `system` value
+      from the `scope` enum; update the SPA tool-policy editor + agent seed prompts (key on names).
+- [ ] ADR: ratify that `scope` stays `core`/`general` (non-rendered) and the `open/privileged/gated`
+      catalog dimensions are documentation-only.
+
+---
+
 
 ## Scope & next steps
 
