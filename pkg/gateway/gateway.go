@@ -768,10 +768,10 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	runningServices.HealthServer.SetReloadFunc(reloadTrigger)
 	agentLoop.SetReloadFunc(reloadTrigger)
 
-	// Wire system.* tool dependencies into the agent loop (FR-001, FR-002).
+	// Wire management tool dependencies into the agent loop (FR-001, FR-002).
 	// Called after SetReloadFunc so the reload trigger is available to system
-	// tools that trigger hot-reload (e.g., system.agent.create).
-	// WireSysagentDeps immediately registers all 41 system.* tools on every agent
+	// tools that trigger hot-reload (e.g., create_agent).
+	// WireSysagentDeps immediately registers all 37 management tools on every agent
 	// in the current registry and stashes deps for re-application on hot-reload.
 
 	// Build skill engine components for the sysagent tool deps (Spec-6 U1).
@@ -849,6 +849,15 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		RegistryManager: sysRegistryManager,
 		SkillInstaller:  sysSkillInstaller,
 		SkillWriter:     sysSkillWriter,
+		// §4 behavioral-parity gap: the cross-workspace task tools
+		// (create/update/delete_task_in_workspace) must enforce the SAME FR-6.2
+		// delegation policy the same-workspace create_task/update_task tools
+		// enforce. The resolver loads the calling agent's config from the live
+		// config and builds the task-mode gate dynamically (the sysagent tools are
+		// registered once on a central registry, so a per-agent checker can't be
+		// bound at construction). MUST be wired in production — leaving it nil
+		// fails OPEN.
+		DelegationDeny: agentLoop.NewSysagentDelegationDeny(),
 	}
 	agentLoop.WireSysagentDeps(sysAgentDeps)
 

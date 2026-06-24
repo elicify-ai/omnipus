@@ -23,6 +23,8 @@ var toolConfirmation = map[string]ConfirmationLevel{
 	"update_agent":             ConfirmationNone,
 	"activate_agent":           ConfirmationNone,
 	"deactivate_agent":         ConfirmationNone,
+	"read_agent_metadata":      ConfirmationNone,
+	"write_agent_metadata":     ConfirmationNone,
 	"create_workspace":         ConfirmationNone,
 	"update_workspace":         ConfirmationNone,
 	"list_workspaces":          ConfirmationNone,
@@ -46,14 +48,17 @@ var toolConfirmation = map[string]ConfirmationLevel{
 	"query_cost":               ConfirmationNone,
 	"navigate":                 ConfirmationNone,
 
-	// UI confirmation required — destructive operations.
+	// UI confirmation required — destructive operations and consent-gated writes.
 	"delete_agent":             ConfirmationUI,
 	"delete_workspace":         ConfirmationUI,
 	"delete_task_in_workspace": ConfirmationUI,
 	"disable_channel":          ConfirmationUI,
 	"remove_skill":             ConfirmationUI,
 	"remove_mcp_server":        ConfirmationUI,
-	"set_config":               ConfirmationNone, // set is safe; security.* keys get UI confirmation at tool level
+	// Skill authoring mutates the skills tree — explicit consent gate (FR-9.2).
+	"create_skill": ConfirmationUI,
+	"edit_skill":   ConfirmationUI,
+	"set_config":   ConfirmationNone, // set is safe; security.* keys get UI confirmation at tool level
 }
 
 // RequiresConfirmation returns the confirmation level for a named tool.

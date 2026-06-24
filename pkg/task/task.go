@@ -169,7 +169,11 @@ func (td *Todo) UnmarshalJSON(data []byte) error {
 	td.Text = raw.Text
 	switch {
 	case raw.Status != "":
-		td.Status = TodoStatus(raw.Status)
+		if s := TodoStatus(raw.Status); IsValidTodoStatus(s) {
+			td.Status = s
+		} else {
+			td.Status = TodoPending
+		}
 	case raw.Done != nil && *raw.Done:
 		td.Status = TodoCompleted
 	case raw.Done != nil:
@@ -190,8 +194,15 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	Description string `json:"description,omitempty"`
 	// Prompt is the agent execution instruction for an `llm` action (max 10000).
 	Prompt string `json:"prompt,omitempty"`
-	Action Action `json:"action"`
-	Status Status `json:"status"`
+	// Scratchpad marks a task created exclusively by the set_todos facade. It is a
+	// DISK-ONLY discriminator: the REST mapper (toWireTask) does NOT copy it to the
+	// wire type, so it is invisible to the SPA. It lets set_todos distinguish its
+	// own ephemeral tracking cards from real create_task tasks even when they share
+	// the same Title, preventing the hijack bug where set_todos overwrites a real
+	// user task's checklist.
+	Scratchpad bool   `json:"scratchpad,omitempty"`
+	Action     Action `json:"action"`
+	Status     Status `json:"status"`
 	// AgentID is the assigned agent. Empty for human-only tasks.
 	AgentID string `json:"agent_id,omitempty"`
 	// Priority is 1 (highest) – 5 (lowest); 0 = unset (treated as 3 on read).

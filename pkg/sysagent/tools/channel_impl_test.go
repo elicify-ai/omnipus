@@ -10,13 +10,48 @@ package systools_test
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 )
+
+// newTestDepsWithCredStore creates a Deps backed by a real (unlocked) credential
+// store in t.TempDir(). Use this for configure_channel tests that write secrets.
+func newTestDepsWithCredStore(t *testing.T) (*systools.Deps, *config.Config) {
+	t.Helper()
+	dir := t.TempDir()
+	credPath := filepath.Join(dir, "credentials.json")
+	store := credentials.NewStore(credPath)
+	// Use a deterministic 32-byte key so the test is hermetic and fast (no
+	// Argon2id derivation overhead).
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("newTestDepsWithCredStore: rand.Read: %v", err)
+	}
+	if err := store.UnlockWithKey(key); err != nil {
+		t.Fatalf("newTestDepsWithCredStore: UnlockWithKey: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	var mu sync.Mutex
+	getCfg := func() *config.Config { return cfg }
+	deps := &systools.Deps{
+		Home:             dir,
+		ConfigPath:       filepath.Join(dir, "config.json"),
+		GetCfg:           getCfg,
+		MutateConfig:     testMutateConfig(&mu, getCfg),
+		SaveConfigLocked: func(cfg *config.Config) error { return nil },
+		CredStore:        store,
+	}
+	return deps, cfg
+}
 
 // parseToolJSON extracts the JSON object from a tool's ForLLM result.
 func parseToolJSON(t *testing.T, s string) map[string]any {
@@ -162,6 +197,121 @@ func TestChannelTest_ReportsConfigured(t *testing.T) {
 	}
 	if out["enabled"] != true {
 		t.Errorf("test should report enabled=true; got %v", out["enabled"])
+	}
+}
+
+// TestConfigure_SetsTokenRef is the end-to-end test that was missing and masked
+// the bug: configure_channel must (a) store the secret in the credential store
+// under the canonical key and (b) write the token_ref field on the channel's
+// ChannelInstanceConfig so that subsequent test_channel returns success=true
+// (i.e. hasCreds = ch.TokenRef != "").
+//
+// Before the fix, configure_channel stored the credential under the wrong key
+// ("channel.telegram.token") and never wrote TokenRef, so test_channel always
+// returned success=false with "no credentials" despite configure_channel
+// returning {"status":"connected"}.
+func TestConfigure_SetsTokenRef(t *testing.T) {
+	deps, cfg := newTestDepsWithCredStore(t)
+	if cfg.Channels == nil {
+		cfg.Channels = map[string]config.ChannelInstanceConfig{}
+	}
+	// First enable the channel (configure_channel doesn't require it, but
+	// test_channel reports enabled status — keep the flow realistic).
+	enableRes := systools.NewChannelEnableTool(deps).Execute(
+		context.Background(), map[string]any{"id": "telegram"},
+	)
+	if enableRes.IsError {
+		t.Fatalf("enable_channel: unexpected error: %s", enableRes.ForLLM)
+	}
+
+	// Call configure_channel with a token secret.
+	configureRes := systools.NewChannelConfigureTool(deps).Execute(
+		context.Background(), map[string]any{
+			"id":    "telegram",
+			"token": "bot123:AABBCCDD",
+		},
+	)
+	if configureRes.IsError {
+		t.Fatalf("configure_channel: unexpected error: %s", configureRes.ForLLM)
+	}
+
+	// (a) The config's TokenRef must be set to the canonical credential key.
+	// The expected key mirrors the gateway's channelCredKey: "channel_<id>_<field>".
+	const wantRef = "channel_telegram_token"
+	ch, ok := cfg.Channels["telegram"]
+	if !ok {
+		t.Fatalf("telegram channel missing from config after configure_channel")
+	}
+	if ch.TokenRef != wantRef {
+		t.Errorf("TokenRef = %q; want %q (configure_channel did not write the ref)", ch.TokenRef, wantRef)
+	}
+
+	// (b) A subsequent test_channel must return success=true (hasCreds satisfied
+	// by the TokenRef we just wrote). This is the consumer that was broken.
+	testRes := systools.NewChannelTestTool(deps).Execute(
+		context.Background(), map[string]any{"id": "telegram"},
+	)
+	if testRes.IsError {
+		t.Fatalf("test_channel: unexpected hard error: %s", testRes.ForLLM)
+	}
+	out := parseToolJSON(t, testRes.ForLLM)
+	if out["success"] != true {
+		t.Errorf("test_channel after configure: success = %v; want true (msg: %v)",
+			out["success"], out["message"])
+	}
+}
+
+// TestConfigure_AppSecretRef verifies the app_secret → AppSecretRef path (feishu/qq).
+func TestConfigure_AppSecretRef(t *testing.T) {
+	deps, cfg := newTestDepsWithCredStore(t)
+	if cfg.Channels == nil {
+		cfg.Channels = map[string]config.ChannelInstanceConfig{}
+	}
+	// feishu uses app_secret (→ AppSecretRef) not token.
+	res := systools.NewChannelConfigureTool(deps).Execute(
+		context.Background(), map[string]any{
+			"id":         "telegram", // tool accepts app_secret for any id
+			"app_secret": "supersecret",
+		},
+	)
+	if res.IsError {
+		t.Fatalf("configure_channel: unexpected error: %s", res.ForLLM)
+	}
+	ch := cfg.Channels["telegram"]
+	const wantRef = "channel_telegram_app_secret"
+	if ch.AppSecretRef != wantRef {
+		t.Errorf("AppSecretRef = %q; want %q", ch.AppSecretRef, wantRef)
+	}
+}
+
+// TestConfigure_PlainFields verifies non-secret fields (bot_id, app_id, mode)
+// are written directly into the ChannelInstanceConfig without going through the
+// credential store.
+func TestConfigure_PlainFields(t *testing.T) {
+	deps, cfg := newTestDepsWithCredStore(t)
+	if cfg.Channels == nil {
+		cfg.Channels = map[string]config.ChannelInstanceConfig{}
+	}
+	res := systools.NewChannelConfigureTool(deps).Execute(
+		context.Background(), map[string]any{
+			"id":     "telegram",
+			"bot_id": "my-bot",
+			"app_id": "12345",
+			"mode":   "webhook",
+		},
+	)
+	if res.IsError {
+		t.Fatalf("configure_channel: unexpected error: %s", res.ForLLM)
+	}
+	ch := cfg.Channels["telegram"]
+	if ch.BotID != "my-bot" {
+		t.Errorf("BotID = %q; want \"my-bot\"", ch.BotID)
+	}
+	if ch.AppID != "12345" {
+		t.Errorf("AppID = %q; want \"12345\"", ch.AppID)
+	}
+	if ch.Mode != "webhook" {
+		t.Errorf("Mode = %q; want \"webhook\"", ch.Mode)
 	}
 }
 

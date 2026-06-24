@@ -1899,6 +1899,49 @@ func buildDelegationDenyChecker(
 	}
 }
 
+// NewSysagentDelegationDeny returns a delegation-deny resolver suitable for the
+// systools.Deps.DelegationDeny hook. The sysagent task tools are registered ONCE
+// on a central registry (not per-agent), so they cannot bind a per-agent checker
+// at construction the way the plain task tools do in NewAgentLoop. Instead this
+// resolver loads the CALLING agent's config from the live in-memory config at
+// Execute time and builds the full FR-6.2 task-mode delegation gate (trust set +
+// mode("task") + depth) dynamically, then evaluates the requested target.
+//
+// This closes the §4 behavioral-parity gap: create_task_in_workspace /
+// update_task_in_workspace must enforce the SAME delegation policy the plain
+// create_task / update_task tools enforce. The cross-workspace surface is the
+// PRIVILEGED Orchestrator path, so it must be at least as restrictive — never
+// less — than the same-workspace path.
+//
+// If the caller's AgentConfig cannot be found in the live config, the gate falls
+// back to the registry allowlist (CanSpawnSubagent) via buildDelegationDenyChecker,
+// which fails closed (deny) when no trust relationship exists.
+func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
+	return func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
+		cfg := al.GetConfig()
+		registry := al.GetRegistry()
+		if cfg == nil || registry == nil {
+			// No live config/registry to resolve a policy from. Fail closed only
+			// when a cross-agent delegation is actually requested; self-assignment
+			// (target == caller or empty target) is not delegation and is allowed.
+			if targetAgentID == "" || targetAgentID == callerAgentID {
+				return nil
+			}
+			return &tools.DelegationDenial{
+				Reason:        "delegation policy unavailable (no live config) — denying cross-agent assignment",
+				Policy:        tools.DenyTrustSet,
+				TargetAgentID: targetAgentID,
+			}
+		}
+		agentCfg := findAgentConfig(cfg, callerAgentID)
+		gate := buildDelegationDenyChecker(
+			callerAgentID, agentCfg, cfg.Agents.Defaults,
+			config.DelegationModeTask, registry,
+		)
+		return gate(ctx, targetAgentID)
+	}
+}
+
 // buildSubagentDelegationDenyChecker returns the FR-6.2 gate for the synchronous
 // subagent tool (mode = "await"). The sync subagent tool has no explicit target,
 // so the trust check is "can this agent delegate at all" (at least one permitted
@@ -8271,12 +8314,20 @@ func (al *AgentLoop) buildScratchpadNote(agentID string) string {
 	}
 	tasks, err := al.taskStore.List(task.Filter{AgentID: agentID})
 	if err != nil {
+		logger.WarnCF("agent", "buildScratchpadNote: task list failed; dropping scratchpad note",
+			map[string]any{"agent_id": agentID, "error": err},
+		)
 		return ""
 	}
-	// Find the most-recent active goal-task that has at least one todo.
+	// Find the most-recent active SCRATCHPAD goal-task that has at least one todo.
+	// Restricting to Scratchpad==true ensures we never re-inject a real create_task
+	// card's checklist — which would diverge from the set_todos facade's selection.
 	var found *task.Task
 	for i := range tasks {
 		tk := &tasks[i]
+		if !tk.Scratchpad {
+			continue
+		}
 		if task.IsTerminal(tk.Status) {
 			continue
 		}
@@ -8284,7 +8335,7 @@ func (al *AgentLoop) buildScratchpadNote(agentID string) string {
 			continue
 		}
 		// List is sorted priority ASC then created_at ASC; last match is
-		// most-recently-created among equal-priority active goal-tasks.
+		// most-recently-created among equal-priority active scratchpad cards.
 		found = tk
 	}
 	if found == nil {

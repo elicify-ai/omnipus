@@ -12,7 +12,7 @@ const (
 	// and all system.* tools (which return this scope via Scope()).
 	ScopeCore ToolScope = "core"
 	// ScopeGeneral tools are available to all agent types by default.
-	// Examples: read_file, list_dir, web_search, web_fetch, message, task_*.
+	// Examples: read_file, list_directory, search_web, fetch_url, message, create_task, list_tasks.
 	ScopeGeneral ToolScope = "general"
 )
 

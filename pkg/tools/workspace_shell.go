@@ -1,6 +1,6 @@
-// Package tools — workspace.shell foreground tool (dark-launched).
+// Package tools — workspace_shell foreground tool (dark-launched).
 //
-// workspace.shell is a free-form foreground shell that runs inside the agent's
+// workspace_shell is a free-form foreground shell that runs inside the agent's
 // workspace directory under the kernel sandbox profile configured for the agent.
 // It replaces the brittle Tier-3 command allowlist pattern with a principled
 // sandbox-at-the-kernel-layer approach.
@@ -43,7 +43,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
-// WorkspaceShellTool implements the workspace.shell builtin tool.
+// WorkspaceShellTool implements the workspace_shell builtin tool.
 // One instance per agent; constructor dependencies are injected.
 type WorkspaceShellTool struct {
 	BaseTool
@@ -259,7 +259,7 @@ func (t *WorkspaceShellTool) Execute(ctx context.Context, args map[string]any) *
 
 	data, err := json.Marshal(result)
 	if err != nil {
-		slog.Warn("workspace.shell: failed to marshal result", "error", err)
+		slog.Warn("workspace_shell: failed to marshal result", "error", err)
 		return ErrorResult(fmt.Sprintf("failed to serialize result: %v", err))
 	}
 
@@ -319,7 +319,7 @@ func (t *WorkspaceShellTool) run(
 
 	// Build env: start from extra env, then let sandbox.Run's mergeEnv layer
 	// add proxy + npm-cache vars. Passing nil would inherit the parent env,
-	// which is correct for workspace.shell (agent inherits PATH, HOME, etc.).
+	// which is correct for workspace_shell (agent inherits PATH, HOME, etc.).
 	// We pass extraEnv so operator env additions are included; nil means
 	// "inherit + inject", which is what we want here.
 	env := extraEnv // nil or populated
@@ -455,15 +455,15 @@ func (t *WorkspaceShellTool) emitAuditOrDeny(agentID, command, cwd, decision str
 		return nil
 	}
 	if t.auditFailClosed {
-		slog.Error("workspace.shell: audit logger degraded; refusing to execute (audit_fail_closed=true)",
+		slog.Error("workspace_shell: audit logger degraded; refusing to execute (audit_fail_closed=true)",
 			"agent_id", agentID, "command", command, "error", logErr)
 		return &ToolResult{
 			IsError: true,
 			ForLLM:  "audit log write failed; refusing to execute (audit_fail_closed=true)",
-			ForUser: "workspace.shell requires audit logging; aborting",
+			ForUser: "workspace_shell requires audit logging; aborting",
 		}
 	}
-	slog.Warn("workspace.shell: audit write failed", "agent_id", agentID, "error", logErr)
+	slog.Warn("workspace_shell: audit write failed", "agent_id", agentID, "error", logErr)
 	return nil
 }
 
@@ -489,7 +489,7 @@ func (t *WorkspaceShellTool) emitAudit(agentID, command, cwd, decision string) {
 		Command:  command,
 		Details:  details,
 	}); err != nil {
-		slog.Warn("workspace.shell: audit write failed", "agent_id", agentID, "error", err)
+		slog.Warn("workspace_shell: audit write failed", "agent_id", agentID, "error", err)
 	}
 }
 
@@ -502,10 +502,10 @@ func buildSummary(command string, exitCode int, timedOut bool, dur time.Duration
 	}
 
 	if timedOut {
-		return fmt.Sprintf("workspace.shell: command timed out after %s: %s", dur.Round(time.Millisecond), display)
+		return fmt.Sprintf("workspace_shell: command timed out after %s: %s", dur.Round(time.Millisecond), display)
 	}
 	if exitCode == 0 {
-		return fmt.Sprintf("workspace.shell: exited 0 in %s: %s", dur.Round(time.Millisecond), display)
+		return fmt.Sprintf("workspace_shell: exited 0 in %s: %s", dur.Round(time.Millisecond), display)
 	}
-	return fmt.Sprintf("workspace.shell: exited %d in %s: %s", exitCode, dur.Round(time.Millisecond), display)
+	return fmt.Sprintf("workspace_shell: exited %d in %s: %s", exitCode, dur.Round(time.Millisecond), display)
 }

@@ -119,31 +119,6 @@ func (t *DoctorRunTool) Execute(_ context.Context, _ map[string]any) *tools.Tool
 	}))
 }
 
-// ---- system.backup.create ----
-
-type BackupCreateTool struct{ deps *Deps }
-
-func NewBackupCreateTool(d *Deps) *BackupCreateTool { return &BackupCreateTool{deps: d} }
-func (t *BackupCreateTool) Name() string            { return "system.backup.create" }
-func (t *BackupCreateTool) Scope() tools.ToolScope  { return tools.ScopeCore }
-func (t *BackupCreateTool) Description() string {
-	return "[NOT IMPLEMENTED] Creating a backup archive of the data directory is not yet built. " +
-		"This tool always returns a NOT_IMPLEMENTED error and does NOT create any file."
-}
-
-func (t *BackupCreateTool) Parameters() map[string]any {
-	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"encrypt": map[string]any{"type": "boolean"}},
-	}
-}
-
-func (t *BackupCreateTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
-	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
-		"system.backup.create is not implemented: no archive is produced.",
-		"Back up the data directory manually (copy ~/.omnipus/) until this tool is built."))
-}
-
 // ---- system.cost.query ----
 
 type CostQueryTool struct{ deps *Deps }

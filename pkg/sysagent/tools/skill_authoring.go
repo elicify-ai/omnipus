@@ -14,7 +14,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// Skill authoring tools — system.skill.create and system.skill.edit (Spec-6 U2,
+// Skill authoring tools — create_skill and edit_skill (Spec-6 U2,
 // FR-9.2). These are the self-improvement / procedural-memory verbs: an agent
 // (typically Ava) authors or refines a skill, and the resulting SKILL.md is
 // written, validated, and versioned.
@@ -33,7 +33,7 @@ import (
 // size), prior versions are snapshotted under .versions/ for rollback, and each
 // create/edit is audit-logged via structured logging.
 
-// ---- system.skill.create ----
+// ---- create_skill ----
 
 type SkillCreateTool struct{ deps *Deps }
 
@@ -85,7 +85,7 @@ func (t *SkillCreateTool) Execute(_ context.Context, args map[string]any) *tools
 
 	// Audit trail: a skill was authored. The consent decision itself is recorded
 	// by the agent loop's approval hook; this records the resulting write.
-	slog.Info("sysagent: system.skill.create wrote skill",
+	slog.Info("sysagent: create_skill wrote skill",
 		"event", "skill_authored", "action", "create", "name", name, "path", path)
 
 	return tools.NewToolResult(successJSON(map[string]any{
@@ -96,7 +96,7 @@ func (t *SkillCreateTool) Execute(_ context.Context, args map[string]any) *tools
 	}))
 }
 
-// ---- system.skill.edit ----
+// ---- edit_skill ----
 
 type SkillEditTool struct{ deps *Deps }
 
@@ -155,7 +155,7 @@ func (t *SkillEditTool) Execute(_ context.Context, args map[string]any) *tools.T
 		return skillAuthoringError("edit", name, err)
 	}
 
-	slog.Info("sysagent: system.skill.edit wrote skill",
+	slog.Info("sysagent: edit_skill wrote skill",
 		"event", "skill_authored", "action", "edit", "name", name,
 		"path", path, "created_override", createdOverride)
 

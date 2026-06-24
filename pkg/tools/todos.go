@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/dapicom-ai/omnipus/pkg/task"
@@ -14,7 +15,8 @@ import (
 // (no item IDs) and creates a board-visible tracking card on first use per goal.
 //
 // The agent never sees a task_id — this is a facade. The internal card is found
-// or created by (agentID, goal-title) matching.
+// or created by (agentID, goal-title) matching. Only tasks with Scratchpad==true
+// are managed by this facade; real create_task cards are never touched.
 type SetTodosTool struct {
 	BaseTool
 	store *task.Store
@@ -106,7 +108,7 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("could not resolve workspace: %v", wsErr))
 	}
 
-	// Find this agent's current active task whose Title == goal.
+	// Find this agent's current active SCRATCHPAD task whose Title == goal.
 	existing, findErr := t.findActiveGoalTask(agentID, goal)
 	if findErr != nil {
 		return ErrorResult(fmt.Sprintf("set_todos: list tasks: %v", findErr))
@@ -114,14 +116,29 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	var updated *task.Task
 	if existing != nil {
-		// Replace the checklist on the existing card.
+		// Replace the checklist on the existing scratchpad card.
 		var err error
 		updated, err = t.store.SetTodos(existing.ID, todos)
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("set_todos: update todos: %v", err))
 		}
 	} else {
-		// Create a new passive tracking card.
+		// No matching scratchpad card: archive any OTHER active scratchpad cards
+		// for this agent (different goal) so only one active scratchpad card exists
+		// per agent at a time (board-pollution guard). Real create_task cards
+		// (Scratchpad==false) are never touched.
+		if archErr := t.archiveOtherScratchpadCards(agentID, goal); archErr != nil {
+			slog.Warn("set_todos: could not archive prior scratchpad cards",
+				"agent_id", agentID,
+				"new_goal", goal,
+				"error", archErr,
+			)
+			// Non-fatal: proceed to create the new card even if archival partially fails.
+		}
+
+		// Atomic create: build the card with Scratchpad==true AND Todos set inline
+		// in one store.Create call. This eliminates the partial-failure orphan window
+		// that would occur with a separate SetTodos second write.
 		card := &task.Task{
 			Title:       goal,
 			Prompt:      goal,
@@ -131,22 +148,22 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			WorkspaceID: wsID,
 			Status:      task.StatusInProgress,
 			Priority:    3,
+			Scratchpad:  true,
+			Todos:       todos,
 		}
 		if err := t.store.Create(card); err != nil {
 			return ErrorResult(fmt.Sprintf("set_todos: create goal task: %v", err))
 		}
-		var err error
-		updated, err = t.store.SetTodos(card.ID, todos)
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("set_todos: set todos on new card: %v", err))
-		}
+		updated = card
 	}
 
 	return NewToolResult(renderChecklist(updated.Title, updated.Todos))
 }
 
-// findActiveGoalTask returns the most-recent active task for agentID whose
-// Title matches goal, or nil when no such task exists.
+// findActiveGoalTask returns the most-recent active SCRATCHPAD task for agentID
+// whose Title matches goal, or nil when no such task exists. Real create_task
+// cards (Scratchpad==false) are intentionally excluded — this prevents the hijack
+// bug where set_todos could overwrite a user task's checklist if the titles match.
 func (t *SetTodosTool) findActiveGoalTask(agentID, goal string) (*task.Task, error) {
 	tasks, err := t.store.List(task.Filter{AgentID: agentID})
 	if err != nil {
@@ -155,17 +172,55 @@ func (t *SetTodosTool) findActiveGoalTask(agentID, goal string) (*task.Task, err
 	var found *task.Task
 	for i := range tasks {
 		tk := &tasks[i]
+		if !tk.Scratchpad {
+			continue
+		}
 		if tk.Title != goal {
 			continue
 		}
 		if task.IsTerminal(tk.Status) {
 			continue
 		}
-		// Keep the most-recently-created match (List is sorted by priority then
-		// created_at ASC, so the last one in the slice is most recent).
+		// List is sorted priority ASC then created_at ASC; last match is
+		// most-recently-created among equal-priority active scratchpad cards.
 		found = tk
 	}
 	return found, nil
+}
+
+// archiveOtherScratchpadCards sets Status=done on every active scratchpad card
+// owned by agentID whose Title differs from the new goal. This enforces the
+// "at most one active scratchpad card per agent" invariant without touching real
+// create_task cards (Scratchpad==false).
+func (t *SetTodosTool) archiveOtherScratchpadCards(agentID, newGoal string) error {
+	tasks, err := t.store.List(task.Filter{AgentID: agentID})
+	if err != nil {
+		return fmt.Errorf("list tasks: %w", err)
+	}
+	done := task.StatusDone
+	for i := range tasks {
+		tk := &tasks[i]
+		if !tk.Scratchpad {
+			continue
+		}
+		if tk.Title == newGoal {
+			continue
+		}
+		if task.IsTerminal(tk.Status) {
+			continue
+		}
+		if _, updateErr := t.store.Update(tk.ID, task.Patch{Status: &done}); updateErr != nil {
+			slog.Warn("set_todos: could not archive scratchpad card",
+				"task_id", tk.ID,
+				"title", tk.Title,
+				"agent_id", agentID,
+				"error", updateErr,
+			)
+			// Return first error so callers can react, but we log each one.
+			return fmt.Errorf("archive %q: %w", tk.ID, updateErr)
+		}
+	}
+	return nil
 }
 
 // resolveWorkspaceID returns the workspace ID from the turn context or the
