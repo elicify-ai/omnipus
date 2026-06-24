@@ -43,7 +43,7 @@ var localProviders = map[string]bool{
 	"ollama": true, "llamacpp": true, "lmstudio": true,
 }
 
-// ---- system.provider.configure ----
+// ---- configure_provider ----
 
 type ProviderConfigureTool struct{ deps *Deps }
 
@@ -165,9 +165,9 @@ func providerNameOf(p *config.ModelConfig) string {
 	return providerFromModelRef(p.Model)
 }
 
-// ---- system.provider.list ----
+// ---- list_providers ----
 
-// ProviderListTool implements system.provider.list. API keys are NEVER returned.
+// ProviderListTool implements list_providers. API keys are NEVER returned.
 type ProviderListTool struct{ deps *Deps }
 
 func NewProviderListTool(d *Deps) *ProviderListTool { return &ProviderListTool{deps: d} }
@@ -210,7 +210,7 @@ func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.T
 	return tools.NewToolResult(successJSON(map[string]any{"providers": providers}))
 }
 
-// ---- system.provider.test ----
+// ---- test_provider ----
 
 type ProviderTestTool struct{ deps *Deps }
 
@@ -260,7 +260,7 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 	}))
 }
 
-// ---- system.models.list ----
+// ---- list_models ----
 
 // ModelsListTool lists available models from configured providers.
 // Used by Ava (Agent Builder) to help users select a model for new agents.
@@ -355,7 +355,7 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 		upstream, err := fetchProviderModels(baseURL, pi.apiKey)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: could not fetch model list", pi.name))
-			slog.Warn("system.models.list: failed to fetch models", "provider", pi.name, "error", err)
+			slog.Warn("list_models: failed to fetch models", "provider", pi.name, "error", err)
 			continue
 		}
 		for _, m := range upstream {

@@ -157,3 +157,45 @@ func TestGeneralBuiltinMetadata_NoPanic(t *testing.T) {
 			"every tool in GeneralBuiltinMetadata must have a non-empty Description")
 	}
 }
+
+// TestGeneralBuiltinMetadata_CategoryInvariant asserts that every tool in
+// GeneralBuiltinMetadata (and by extension the central BuiltinRegistry):
+//   - Name() contains NO dot and does NOT start with "system."
+//   - Category() is NEITHER CategoryCore NOR CategorySystem
+//
+// This locks the §7 invariant for the general builtins. CategoryCore and
+// CategorySystem are legacy dumping-ground values that must not appear on
+// any shipped general builtin — every tool must return a domain category.
+//
+// BDD: Given the general builtin catalog,
+//
+//	When Name() and Category() are called on every tool,
+//	Then Name() must not contain "." and must not start with "system.",
+//	And Category() must not be CategoryCore or CategorySystem.
+//
+// Traces to: §7 tool-rename-map-2026-06 invariant; FR-101.
+func TestGeneralBuiltinMetadata_CategoryInvariant(t *testing.T) {
+	catalog := GeneralBuiltinMetadata()
+	require.NotEmpty(t, catalog, "GeneralBuiltinMetadata must return at least one tool")
+
+	for _, tool := range catalog {
+		name := tool.Name()
+		cat := tool.Category()
+
+		t.Run("tool_"+name, func(t *testing.T) {
+			// Name must not contain a dot (dotted names are the old system.* convention).
+			assert.NotContains(t, name, ".",
+				"general builtin %q must not have a dot in its name (§7 invariant: verb-first, no namespace prefix)", name)
+
+			// Name must not start with "system." (legacy prefix, retired in §7).
+			assert.False(t, len(name) >= 7 && name[:7] == "system.",
+				"general builtin %q must not start with 'system.' (§7 invariant)", name)
+
+			// Category must not be the legacy dumping-ground values.
+			assert.NotEqual(t, CategoryCore, cat,
+				"general builtin %q has CategoryCore — assign a domain category (§7 invariant)", name)
+			assert.NotEqual(t, CategorySystem, cat,
+				"general builtin %q has CategorySystem — assign a domain category (§7 invariant)", name)
+		})
+	}
+}

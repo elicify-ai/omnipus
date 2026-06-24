@@ -72,7 +72,7 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	data, err := json.Marshal(tasks)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("task_list: marshal: %v", err))
+		return ErrorResult(fmt.Sprintf("list_tasks: marshal: %v", err))
 	}
 	return NewToolResult(string(data))
 }
@@ -248,7 +248,7 @@ func (t *TaskCreateTool) resolveWorkspaceID(ctx context.Context) (string, error)
 		if t.home == "" || workspace.Exists(t.home, ws) {
 			return ws, nil
 		}
-		slog.Warn("task_create: bound workspace_id does not exist — falling back to default",
+		slog.Warn("create_task: bound workspace_id does not exist — falling back to default",
 			"workspace_id", ws)
 	}
 	if t.home != "" {
@@ -622,11 +622,11 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		if advErr != nil {
 			// Storage fault advancing dependents — the update itself succeeded,
 			// so this stays a success, but the warning must reach the LLM/user.
-			slog.Error("task_update: advance dependents failed",
+			slog.Error("update_task: advance dependents failed",
 				"id", taskID, "error", advErr)
 			advanceWarning = advErr.Error()
 		} else if len(advanced) > 0 {
-			slog.Info("task_update: completed task advanced dependents",
+			slog.Info("update_task: completed task advanced dependents",
 				"completed_id", taskID, "advanced_ids", advanced)
 		}
 	}
@@ -718,7 +718,7 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 	for _, depID := range unblocked {
 		if _, uErr := t.store.AdvanceUnblocked(depID); uErr != nil {
 			slog.Warn(
-				"task_delete: advance unblocked dependent failed",
+				"delete_task: advance unblocked dependent failed",
 				"deleted_id",
 				taskID,
 				"dependent_id",
@@ -728,7 +728,7 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 			)
 			continue
 		}
-		slog.Info("task_delete: advanced unblocked dependent blocked→next", "deleted_id", taskID, "advanced_id", depID)
+		slog.Info("delete_task: advanced unblocked dependent blocked→next", "deleted_id", taskID, "advanced_id", depID)
 	}
 
 	return NewToolResult(fmt.Sprintf(`{"deleted":%q}`, taskID))

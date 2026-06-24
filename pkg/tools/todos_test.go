@@ -328,3 +328,232 @@ func TestSetTodos_DefaultStatusPending(t *testing.T) {
 		t.Errorf("expected default status 'pending', got %q", tasks[0].Todos[0].Status)
 	}
 }
+
+// TestSetTodos_DoesNotHijackRealTask proves that set_todos NEVER overwrites a
+// real create_task card (Scratchpad==false) even when its title matches the goal.
+// Fix 2: findActiveGoalTask must filter to Scratchpad==true only.
+func TestSetTodos_DoesNotHijackRealTask(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewSetTodosTool(store)
+
+	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	// Simulate a real create_task card: Scratchpad=false (default), same title.
+	realTask := &task.Task{
+		Title:       "implement feature X",
+		Action:      task.ActionLLM,
+		AgentID:     "agent-a",
+		CreatedBy:   "agent-a",
+		WorkspaceID: "ws-1",
+		Status:      task.StatusInProgress,
+		Priority:    3,
+		// Scratchpad is false by default — this is the discriminator.
+	}
+	if err := store.Create(realTask); err != nil {
+		t.Fatalf("pre-seed real task: %v", err)
+	}
+
+	// Now call set_todos with the same goal title.
+	result := tool.Execute(ctx, map[string]any{
+		"goal": "implement feature X",
+		"todos": []any{
+			map[string]any{"text": "scratchpad step", "status": "pending"},
+		},
+	})
+	if result.IsError {
+		t.Fatalf("set_todos failed: %s", result.ForLLM)
+	}
+
+	// Must NOT have modified the real task (it had no todos; it still must have none).
+	got, err := store.Get(realTask.ID)
+	if err != nil {
+		t.Fatalf("get real task: %v", err)
+	}
+	if len(got.Todos) != 0 {
+		t.Errorf("real task todos must be untouched, got %d todos", len(got.Todos))
+	}
+	if got.Scratchpad {
+		t.Errorf("real task Scratchpad flag must remain false")
+	}
+
+	// A SEPARATE scratchpad card must have been created.
+	tasks, err := store.List(task.Filter{AgentID: "agent-a"})
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks (real + scratchpad), got %d", len(tasks))
+	}
+	var scratchpadCount int
+	for _, tk := range tasks {
+		if tk.Scratchpad {
+			scratchpadCount++
+			if len(tk.Todos) != 1 {
+				t.Errorf("scratchpad card must have 1 todo, got %d", len(tk.Todos))
+			}
+		}
+	}
+	if scratchpadCount != 1 {
+		t.Errorf("expected exactly 1 scratchpad card, got %d", scratchpadCount)
+	}
+}
+
+// TestSetTodos_NewGoalArchivesPriorScratchpad proves that switching to a new goal
+// archives (Status=done) the previous scratchpad card, so only one active scratchpad
+// exists per agent at a time. Fix 3: archive-previous lifecycle.
+func TestSetTodos_NewGoalArchivesPriorScratchpad(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewSetTodosTool(store)
+
+	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	// Create first scratchpad card.
+	r1 := tool.Execute(ctx, map[string]any{
+		"goal":  "goal alpha",
+		"todos": []any{map[string]any{"text": "step A", "status": "pending"}},
+	})
+	if r1.IsError {
+		t.Fatalf("first set_todos: %s", r1.ForLLM)
+	}
+
+	// Capture the ID of the first card.
+	tasks1, _ := store.List(task.Filter{AgentID: "agent-a"})
+	if len(tasks1) != 1 {
+		t.Fatalf("expected 1 task after first goal, got %d", len(tasks1))
+	}
+	firstID := tasks1[0].ID
+
+	// Switch to a new goal — this must archive the first scratchpad card.
+	r2 := tool.Execute(ctx, map[string]any{
+		"goal":  "goal beta",
+		"todos": []any{map[string]any{"text": "step B", "status": "pending"}},
+	})
+	if r2.IsError {
+		t.Fatalf("second set_todos: %s", r2.ForLLM)
+	}
+
+	// The prior card must now be Status=done (archived).
+	prior, err := store.Get(firstID)
+	if err != nil {
+		t.Fatalf("get prior card: %v", err)
+	}
+	if prior.Status != task.StatusDone {
+		t.Errorf("prior scratchpad card must be archived (done), got %q", prior.Status)
+	}
+
+	// Only one ACTIVE scratchpad card must remain.
+	allTasks, _ := store.List(task.Filter{AgentID: "agent-a"})
+	var activeScratchpad int
+	for _, tk := range allTasks {
+		if tk.Scratchpad && !task.IsTerminal(tk.Status) {
+			activeScratchpad++
+		}
+	}
+	if activeScratchpad != 1 {
+		t.Errorf("expected exactly 1 active scratchpad card after goal switch, got %d", activeScratchpad)
+	}
+}
+
+// TestSetTodos_AtomicCreate proves that set_todos creates a card with Todos set
+// inline (no orphan window) and that the card's Scratchpad flag is true.
+// Fix 2: Scratchpad==true + atomic create (todos in the &task.Task{} literal).
+func TestSetTodos_AtomicCreate(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewSetTodosTool(store)
+
+	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	result := tool.Execute(ctx, map[string]any{
+		"goal": "atomic create goal",
+		"todos": []any{
+			map[string]any{"text": "step one", "status": "pending"},
+			map[string]any{"text": "step two", "status": "in_progress"},
+		},
+	})
+	if result.IsError {
+		t.Fatalf("set_todos failed: %s", result.ForLLM)
+	}
+
+	tasks, err := store.List(task.Filter{AgentID: "agent-a"})
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 scratchpad task, got %d", len(tasks))
+	}
+	tk := tasks[0]
+
+	// Discriminator flag must be set.
+	if !tk.Scratchpad {
+		t.Errorf("scratchpad card must have Scratchpad=true")
+	}
+	// Todos must be present from the initial create (no orphan window).
+	if len(tk.Todos) != 2 {
+		t.Fatalf("expected 2 todos on newly created card, got %d (atomic create must set todos inline)", len(tk.Todos))
+	}
+	if tk.Todos[0].Text != "step one" || tk.Todos[0].Status != task.TodoPending {
+		t.Errorf("todo[0] wrong: %+v", tk.Todos[0])
+	}
+	if tk.Todos[1].Text != "step two" || tk.Todos[1].Status != task.TodoInProgress {
+		t.Errorf("todo[1] wrong: %+v", tk.Todos[1])
+	}
+}
+
+// TestSetTodos_ArchiveDoesNotTouchRealTasks proves that the archive-previous pass
+// ignores real create_task cards (Scratchpad==false), even when they are active.
+// Fix 3: archiveOtherScratchpadCards must never touch Scratchpad==false tasks.
+func TestSetTodos_ArchiveDoesNotTouchRealTasks(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewSetTodosTool(store)
+
+	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	// Seed a real task (no Scratchpad flag).
+	realTask := &task.Task{
+		Title:       "real task alpha",
+		Action:      task.ActionLLM,
+		AgentID:     "agent-a",
+		CreatedBy:   "agent-a",
+		WorkspaceID: "ws-1",
+		Status:      task.StatusInProgress,
+		Priority:    3,
+	}
+	if err := store.Create(realTask); err != nil {
+		t.Fatalf("pre-seed real task: %v", err)
+	}
+
+	// Create first scratchpad goal.
+	r1 := tool.Execute(ctx, map[string]any{
+		"goal":  "scratchpad goal 1",
+		"todos": []any{map[string]any{"text": "x", "status": "pending"}},
+	})
+	if r1.IsError {
+		t.Fatalf("first scratchpad: %s", r1.ForLLM)
+	}
+
+	// Switch to a new scratchpad goal — archive-previous must fire.
+	r2 := tool.Execute(ctx, map[string]any{
+		"goal":  "scratchpad goal 2",
+		"todos": []any{map[string]any{"text": "y", "status": "pending"}},
+	})
+	if r2.IsError {
+		t.Fatalf("second scratchpad: %s", r2.ForLLM)
+	}
+
+	// The real task must still be in_progress (untouched by archive-previous).
+	got, err := store.Get(realTask.ID)
+	if err != nil {
+		t.Fatalf("get real task: %v", err)
+	}
+	if got.Status != task.StatusInProgress {
+		t.Errorf("real task status must remain in_progress, got %q", got.Status)
+	}
+}

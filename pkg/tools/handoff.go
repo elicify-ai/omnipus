@@ -147,7 +147,7 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	// Step 2: Reject a worker target. A worker is a delegation-only labor tier —
-	// it is invoked via task_create / sub-agent delegation, never as a live chat
+	// it is invoked via create_task / sub-agent delegation, never as a live chat
 	// persona. Handing off would pin the session to the worker (making it a chat
 	// target), so refuse before any switch occurs.
 	if reg.IsWorker(agentID) {

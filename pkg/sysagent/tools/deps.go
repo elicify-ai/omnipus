@@ -8,6 +8,7 @@ package systools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/skills"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
 // Deps bundles all shared dependencies for system tools.
@@ -115,6 +117,23 @@ type Deps struct {
 	// produces a user override rather than mutating the shipped built-in in
 	// place. Nil in tests or when not wired — callers must nil-check before use.
 	SkillWriter *skills.SkillWriter
+	// DelegationDeny, when non-nil, applies the full FR-6.2 delegation policy
+	// (trust set + mode("task") + depth) to a cross-workspace task assignment or
+	// reassignment. It is the SAME gate the plain create_task / update_task tools
+	// enforce (pkg/tools/task.go), resolved dynamically from the live config for
+	// the CALLING agent — because the sysagent in_workspace tools are registered
+	// once on a central registry and cannot bind a per-agent checker at
+	// construction time.
+	//
+	// callerAgentID is the acting agent (tools.ToolAgentID(ctx)); targetAgentID is
+	// the agent_id being assigned. A nil return ALLOWS; a non-nil *tools.DelegationDenial
+	// DENIES (carrying the structured reason + policy axis the SPA renders).
+	//
+	// When nil (tests / standalone), the gate is SKIPPED (fail-open ONLY when
+	// unwired — matching how the plain tools no-op when their checker is unset).
+	// The production gateway MUST wire this; see gateway.go where sysAgentDeps is
+	// constructed.
+	DelegationDeny func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial
 }
 
 // clearMaps recursively walks v and zeros every map field it finds. Called

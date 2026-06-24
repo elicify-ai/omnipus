@@ -276,13 +276,13 @@ func resolveEffectivePolicy(global, agent string) string {
 
 // autoApproveSafeTool returns true for tools that are pre-approved without interactive confirmation.
 // These are low-risk tools: read-only operations, workspace-scoped writes, web research,
-// agent orchestration (spawn/subagent), and scheduling (cron).
+// and agent orchestration (spawn/subagent).
 // Only exec (shell commands) requires explicit user approval.
 func autoApproveSafeTool(tool string) bool {
 	switch tool {
 	case "read_file", "list_directory", "write_file", "edit_file", "append_file",
 		"search_web", "fetch_url", "send_file", "send_message",
-		"find_skills", "spawn", "run_subagent", "check_spawn_status", "cron",
+		"find_skills", "spawn", "run_subagent", "check_spawn_status",
 		"list_tasks", "create_task", "update_task", "delete_task", "list_agents":
 		return true
 	default:

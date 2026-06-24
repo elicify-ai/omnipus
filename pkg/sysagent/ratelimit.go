@@ -43,6 +43,9 @@ var toolCategory = map[string]rateLimitCategory{
 	"update_task_in_workspace": rateCategoryConfig,
 	"edit_skill":               rateCategoryConfig,
 
+	"read_agent_metadata":  rateCategoryList,
+	"write_agent_metadata": rateCategoryConfig,
+
 	"activate_agent":          rateCategoryList,
 	"deactivate_agent":        rateCategoryList,
 	"list_workspaces":         rateCategoryList,
@@ -52,6 +55,7 @@ var toolCategory = map[string]rateLimitCategory{
 	"list_mcp_servers":        rateCategoryList,
 	"list_providers":          rateCategoryList,
 	"test_provider":           rateCategoryList,
+	"list_models":             rateCategoryList,
 	"get_config":              rateCategoryList,
 	"run_doctor":              rateCategoryList,
 	"query_cost":              rateCategoryList,

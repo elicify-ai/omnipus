@@ -71,7 +71,7 @@ func mockLLMHandoffThenToolCall(tb testing.TB) *httptest.Server {
 		case n == 1:
 			// First request (mia's turn): return handoff tool call to jim.
 			// The handoff tool requires {"agent_id": "jim", "context": "..."}.
-			writeMockToolCallStream(w, "handoff", `{"agent_id":"jim","context":"regression test handoff"}`)
+			writeMockToolCallStream(w, "hand_off", `{"agent_id":"jim","context":"regression test handoff"}`)
 		case n == 2:
 			// Second request (mia wrapping up after handoff executes): return plain
 			// text so the turn finishes.

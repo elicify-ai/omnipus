@@ -114,6 +114,32 @@ func (t *ChannelConfigureTool) Parameters() map[string]any {
 	}
 }
 
+// channelSensitiveParams is the ordered list of sensitive parameter names that
+// configure_channel accepts. These are stored in the encrypted credential store
+// (never in config.json) and referenced via <field>_ref on ChannelInstanceConfig.
+// The mapping from field name to the *_ref struct field is handled by
+// applyChannelRef below. Must stay in sync with the Parameters() schema.
+var channelSensitiveParams = []string{"token", "app_secret"}
+
+// channelCredKey returns the canonical credential-store key for a channel secret.
+// Format mirrors the gateway's channelCredKey: "channel_<id>_<field>".
+func channelCredKey(channelID, field string) string {
+	return "channel_" + channelID + "_" + field
+}
+
+// applyChannelRef sets the appropriate *_ref field on ch for the given secret
+// field name and credential reference key. This mirrors the gateway's
+// configureChannel, which writes updates[field+"_ref"] = refName into the raw
+// config map. Here we set the matching typed struct field instead.
+func applyChannelRef(ch *config.ChannelInstanceConfig, field, refName string) {
+	switch field {
+	case "token":
+		ch.TokenRef = refName
+	case "app_secret":
+		ch.AppSecretRef = refName
+	}
+}
+
 func (t *ChannelConfigureTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
 	id, _ := args["id"].(string)
 	if id == "" {
@@ -123,22 +149,83 @@ func (t *ChannelConfigureTool) Execute(_ context.Context, args map[string]any) *
 		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND",
 			fmt.Sprintf("Unknown channel %q", id), ""))
 	}
-	// Store credentials via the credential store for any sensitive params.
-	sensitiveKeys := []string{"token", "app_secret"}
-	for _, key := range sensitiveKeys {
-		if v, ok := args[key].(string); ok && v != "" {
-			credKey := fmt.Sprintf("channel.%s.%s", id, key)
-			if err := t.deps.CredStore.Set(credKey, v); err != nil {
-				return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
-					"Failed to store credential: "+err.Error(),
-					"Check that the credential store is unlocked",
-				))
-			}
-		}
+
+	// Phase 1: store each provided secret in the credential store BEFORE the
+	// config write. The gateway follows the same order so that a partial failure
+	// (cred stored, config not written) leaves no dangling _ref — the config is
+	// only updated after all secrets are safely persisted.
+	sensitive := make(map[string]bool, len(channelSensitiveParams))
+	for _, f := range channelSensitiveParams {
+		sensitive[f] = true
 	}
+	// credRefs tracks field → credKey for secrets that were successfully stored,
+	// so the WithConfig closure can write the _ref fields atomically.
+	credRefs := make(map[string]string)
+	for _, field := range channelSensitiveParams {
+		v, ok := args[field].(string)
+		if !ok || v == "" {
+			continue
+		}
+		if t.deps.CredStore == nil {
+			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
+				"credential store is not available",
+				"Ensure the credential store is unlocked before configuring channel secrets",
+			))
+		}
+		credKey := channelCredKey(id, field)
+		if err := t.deps.CredStore.Set(credKey, v); err != nil {
+			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
+				fmt.Sprintf("Failed to store %s credential: %s", field, err.Error()),
+				"Check that the credential store is unlocked",
+			))
+		}
+		credRefs[field] = credKey
+	}
+
+	// Phase 2: write the _ref fields and plain config values into the channel
+	// config inside a single WithConfig transaction. This is the mutation the
+	// original code was missing entirely: without it the ChannelInstanceConfig
+	// never had TokenRef / AppSecretRef set, so prerequisites.go always reported
+	// "no credentials" and test_channel returned success=false.
+	if err := t.deps.WithConfig(func(cfg *config.Config) error {
+		if cfg.Channels == nil {
+			cfg.Channels = map[string]config.ChannelInstanceConfig{}
+		}
+		ch, ok := cfg.Channels[id]
+		if !ok {
+			ch = config.ChannelInstanceConfig{Type: id}
+		}
+		// Apply credential refs for every secret field we stored above.
+		for field, credKey := range credRefs {
+			applyChannelRef(&ch, field, credKey)
+		}
+		// Apply non-sensitive plain fields supported by this tool.
+		if v, ok := args["phone_number"].(string); ok && v != "" {
+			// phone_number is not currently a typed field on ChannelInstanceConfig;
+			// it is accepted for forward-compatibility but has no storage path yet.
+			_ = v
+		}
+		if v, ok := args["bot_id"].(string); ok && v != "" {
+			ch.BotID = v
+		}
+		if v, ok := args["app_id"].(string); ok && v != "" {
+			ch.AppID = v
+		}
+		if v, ok := args["mode"].(string); ok && v != "" {
+			ch.Mode = v
+		}
+		cfg.Channels[id] = ch
+		return nil
+	}); err != nil {
+		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED",
+			"Failed to persist channel config: "+err.Error(),
+			"",
+		))
+	}
+
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id":     id,
-		"status": "connected",
+		"status": "configured",
 	}))
 }
 

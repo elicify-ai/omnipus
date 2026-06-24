@@ -1,6 +1,6 @@
-// Package tools — workspace.shell_bg background tool (dark-launched).
+// Package tools — workspace_shell_bg background tool (dark-launched).
 //
-// workspace.shell_bg starts a long-running process (typically a dev server)
+// workspace_shell_bg starts a long-running process (typically a dev server)
 // inside the agent's workspace directory, registers it with the gateway's
 // DevServerRegistry, and returns a /dev/<agent>/<token>/ URL that the
 // existing chat UI renders as a clickable iframe preview. The /dev/ path
@@ -11,7 +11,7 @@
 //   - No Tier-3 command prefix-allowlist (commandAllowed). The sandbox
 //     profile is the security boundary; the agent invokes any command.
 //   - No ensureNodeModules shim. The agent runs `npm install` itself via
-//     workspace.shell before calling workspace.shell_bg.
+//     workspace_shell before calling workspace_shell_bg.
 //   - No GHSA channel block. Per-agent ToolPolicyCfg governs access.
 //   - cwd arg (relative to workspace) is supported — fixes the subdir bug
 //     where `next dev` must run from inside `hello-world/` not the workspace
@@ -28,7 +28,7 @@
 //   - Deny-pattern mechanism (global + per-agent) is wired but inert by default.
 //   - Every invocation — allow and deny — is recorded in the audit log.
 //   - AuditFailClosed=true (default): if audit write fails, the server is NOT
-//     started. workspace.shell_bg is a TRUSTED-PROMPT FEATURE.
+//     started. workspace_shell_bg is a TRUSTED-PROMPT FEATURE.
 //   - cwd escaping the workspace returns an error.
 
 package tools
@@ -53,7 +53,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
-// WorkspaceShellBgTool implements the workspace.shell_bg builtin tool.
+// WorkspaceShellBgTool implements the workspace_shell_bg builtin tool.
 // One instance per agent; constructor dependencies are injected.
 type WorkspaceShellBgTool struct {
 	BaseTool
@@ -220,8 +220,8 @@ func (t *WorkspaceShellBgTool) Parameters() map[string]any {
 // and returning the URL. Mirrors web_serve dev mode's devServerStartupGrace.
 const devServerStartupGraceShellBg = 3 * time.Second
 
-// BackgroundShellLinuxOnlyMessage is the error returned when workspace.shell_bg
-// is called on a non-Linux platform. workspace.shell_bg requires Linux for
+// BackgroundShellLinuxOnlyMessage is the error returned when workspace_shell_bg
+// is called on a non-Linux platform. workspace_shell_bg requires Linux for
 // sandbox.ApplyChildHardening (Setpgid, Pdeathsig) and the /dev/ reverse-proxy.
 const BackgroundShellLinuxOnlyMessage = "background shell tools require Linux for sandboxing; not supported on this platform"
 
@@ -252,7 +252,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 	}
 
 	if t.registry == nil {
-		return ErrorResult("workspace.shell_bg: dev-server registry not configured")
+		return ErrorResult("workspace_shell_bg: dev-server registry not configured")
 	}
 
 	// Parse required args.
@@ -307,7 +307,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 
 	agentID := ToolAgentID(ctx)
 	if agentID == "" {
-		return ErrorResult("workspace.shell_bg: missing agent id in context")
+		return ErrorResult("workspace_shell_bg: missing agent id in context")
 	}
 
 	// Per-agent cap pre-check (same as web_serve dev mode).
@@ -331,7 +331,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 	// SpawnBackgroundChild detects zero-value Limits and skips hardening.
 	lim, limErr := sandbox.LimitsForProfile(t.profile, t.workspaceDir, t.proxy, 0)
 	if limErr != nil {
-		return ErrorResult(fmt.Sprintf("workspace.shell_bg: sandbox profile error: %v", limErr))
+		return ErrorResult(fmt.Sprintf("workspace_shell_bg: sandbox profile error: %v", limErr))
 	}
 	// Override WorkspaceDir in the Limits to the resolved cwd so the child
 	// starts in the right subdirectory and npm_config_cache is rooted there.
@@ -343,7 +343,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 	parts := strings.Fields(command)
 	cmd, spawnErr := sandbox.SpawnBackgroundChild(parts, cwd, envSlice, exposePort, lim)
 	if spawnErr != nil {
-		return ErrorResult(fmt.Sprintf("workspace.shell_bg: failed to start process: %v", spawnErr))
+		return ErrorResult(fmt.Sprintf("workspace_shell_bg: failed to start process: %v", spawnErr))
 	}
 
 	// Register with the DevServerRegistry.
@@ -361,7 +361,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 			} else if ee, ok := waitErr.(*exec.ExitError); ok {
 				exitCode = ee.ExitCode()
 			}
-			slog.Info("workspace.shell_bg: orphaned child exited (registration failed)",
+			slog.Info("workspace_shell_bg: orphaned child exited (registration failed)",
 				"agent_id", agentID, "pid", orphanPid, "exit_code", exitCode, "error", waitErr)
 		}()
 		var capErr sandbox.GatewayCapError
@@ -374,7 +374,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 		if errors.Is(regErr, sandbox.ErrPerAgentCap) {
 			return ErrorResult("server already running on this agent")
 		}
-		return ErrorResult(fmt.Sprintf("workspace.shell_bg: registration failed: %v", regErr))
+		return ErrorResult(fmt.Sprintf("workspace_shell_bg: registration failed: %v", regErr))
 	}
 
 	// Reap the child in a background goroutine to avoid zombies. We do NOT
@@ -393,7 +393,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 		} else if ee, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = ee.ExitCode()
 		}
-		slog.Info("workspace.shell_bg: launcher process exited (registration retained)",
+		slog.Info("workspace_shell_bg: launcher process exited (registration retained)",
 			"agent_id", agentID, "pid", bgPid, "token", reg.Token,
 			"exit_code", exitCode, "error", waitErr)
 	}()
@@ -409,7 +409,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 	url := sandbox.BuildDevURL(agentID, reg.Token, t.gatewayHost)
 	deadline := reg.CreatedAt.Add(sandbox.HardTimeout).UTC().Format(time.RFC3339)
 	summary := fmt.Sprintf(
-		"workspace.shell_bg: background process started. URL: %s. Command: %s. Port: %d. Token expires after 30 min idle / 4 h hard cap.",
+		"workspace_shell_bg: background process started. URL: %s. Command: %s. Port: %d. Token expires after 30 min idle / 4 h hard cap.",
 		url,
 		command,
 		exposePort,
@@ -425,7 +425,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 	}
 	data, marshalErr := json.Marshal(res)
 	if marshalErr != nil {
-		slog.Warn("workspace.shell_bg: failed to marshal result", "error", marshalErr)
+		slog.Warn("workspace_shell_bg: failed to marshal result", "error", marshalErr)
 		return ErrorResult(fmt.Sprintf("failed to serialize result: %v", marshalErr))
 	}
 
@@ -490,15 +490,15 @@ func (t *WorkspaceShellBgTool) auditStart(ctx context.Context, agentID, command 
 		return nil
 	}
 	if t.auditFailClosed {
-		slog.Error("workspace.shell_bg: audit logger degraded; refusing to run trusted-prompt feature",
+		slog.Error("workspace_shell_bg: audit logger degraded; refusing to run trusted-prompt feature",
 			"agent_id", agentID, "command", command, "error", logErr, "audit_fail_closed", true)
 		return &ToolResult{
 			IsError: true,
 			ForLLM:  "audit logger degraded; refusing to run trusted-prompt feature without compliance trail",
-			ForUser: "workspace.shell_bg requires audit logging; aborting",
+			ForUser: "workspace_shell_bg requires audit logging; aborting",
 		}
 	}
-	slog.Error("workspace.shell_bg: audit write failed (continuing — audit_fail_closed=false)",
+	slog.Error("workspace_shell_bg: audit write failed (continuing — audit_fail_closed=false)",
 		"agent_id", agentID, "command", command, "error", logErr)
 	return nil
 }
@@ -523,6 +523,6 @@ func (t *WorkspaceShellBgTool) emitAudit(agentID, command, cwd, decision string)
 		Command:  command,
 		Details:  details,
 	}); err != nil {
-		slog.Warn("workspace.shell_bg: audit write failed", "agent_id", agentID, "error", err)
+		slog.Warn("workspace_shell_bg: audit write failed", "agent_id", agentID, "error", err)
 	}
 }

@@ -512,6 +512,17 @@ func TestTodoUnmarshalJSON_NoFields_DefaultsPending(t *testing.T) {
 	assert.Equal(t, TodoPending, td.Status)
 }
 
+func TestTodoUnmarshalJSON_InvalidStatus_DefaultsPending(t *testing.T) {
+	// Fix 5: an unrecognized status value (e.g. "WIP" written by a corrupt writer)
+	// must default to TodoPending rather than producing an invalid in-memory status
+	// that escapes write-time validation and makes the SPA Zod schema drop the payload.
+	var td Todo
+	require.NoError(t, json.Unmarshal([]byte(`{"text":"corrupt","status":"WIP"}`), &td))
+	assert.Equal(t, "corrupt", td.Text)
+	assert.Equal(t, TodoPending, td.Status,
+		"invalid status %q must be clamped to pending on unmarshal", "WIP")
+}
+
 // ---- validateTodos status validation ---------------------------------------
 
 func TestValidateTodos_RejectsEmptyStatus(t *testing.T) {

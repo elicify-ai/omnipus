@@ -382,9 +382,7 @@ func isIdempotentTool(name string) bool {
 		"list_directory",
 		"find_skills",
 		"list_agents",
-		"list_tasks",
-		"skills",
-		"find":
+		"list_tasks":
 		return true
 	}
 	return false

@@ -60,7 +60,7 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 		// Web
 		"fetch_url",
 		// Communication
-		"message", "send_file",
+		"send_message", "send_file",
 		// Skills
 		"find_skills", "install_skill",
 		// Agent orchestration

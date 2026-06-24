@@ -32,7 +32,40 @@ func taskStoreFor(home string) *task.Store { return task.New(tasksDir(home)) }
 // isValidTaskStatus reports whether s is one of the 7 unified statuses.
 func isValidTaskStatus(s string) bool { return task.IsValidStatus(task.Status(s)) }
 
-// ---- system.task.create ----
+// validateBlockersSameWorkspace verifies every blocker task exists and lives in
+// dependentWorkspaceID. This mirrors validateBlockersWorkspace in pkg/tools so the
+// privileged cross-workspace task tools enforce the SAME same-workspace blocker
+// rule the plain create_task / update_task tools enforce. The store validates the
+// DAG (cycle/self-edge/missing/depth) under its per-task lock; it does NOT enforce
+// the same-workspace constraint, so the tool layer does. WorkspaceID is immutable
+// (set at create, never patched), so this pre-check is race-free.
+func validateBlockersSameWorkspace(store *task.Store, dependentWorkspaceID string, blockers []string) error {
+	for _, b := range blockers {
+		bt, err := store.Get(b)
+		if err != nil {
+			return fmt.Errorf("blocker task %q not found", b)
+		}
+		if bt.WorkspaceID != dependentWorkspaceID {
+			return fmt.Errorf("blocker task %q is in a different workspace", b)
+		}
+	}
+	return nil
+}
+
+// delegationDenied evaluates the FR-6.2 delegation gate for an update/delete
+// mutation that targets a task assigned to (or being reassigned to) targetAgentID.
+// It returns the structured denial to DENY, or nil to ALLOW. When the hook is
+// unwired (Deps.DelegationDeny == nil, i.e. tests/standalone) it ALLOWS — the
+// same fail-open-when-unwired behavior the plain tools have when their checker is
+// unset; the production gateway always wires it.
+func (d *Deps) delegationDenied(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
+	if d == nil || d.DelegationDeny == nil {
+		return nil
+	}
+	return d.DelegationDeny(ctx, callerAgentID, targetAgentID)
+}
+
+// ---- create_task_in_workspace ----
 
 type TaskCreateTool struct{ deps *Deps }
 
@@ -106,9 +139,21 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		tk.Owner = sessionOwner
 	}
 	tk.CreatedBy = sessionOwner
+
+	// FR-6.2 delegation gate (parity with the plain create_task tool). The
+	// cross-workspace surface is the PRIVILEGED Orchestrator path, so it must
+	// enforce the SAME trust-set + mode("task") + depth policy the same-workspace
+	// create_task enforces — assigning work to ANOTHER agent is delegation.
+	caller := tools.ToolAgentID(ctx)
 	if v, ok := args["agent_id"].(string); ok {
 		tk.AgentID = v
 	}
+	if t.deps.DelegationDeny != nil && tk.AgentID != "" && tk.AgentID != caller {
+		if denial := t.deps.DelegationDeny(ctx, caller, tk.AgentID); denial != nil {
+			return tools.DelegationDeniedResult(t.Name(), denial)
+		}
+	}
+
 	if v, ok := args["due"].(string); ok && v != "" {
 		tk.Due = v
 	}
@@ -124,6 +169,17 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 
 	// Create via the store so DAG validation + atomic write + locking apply.
 	store := taskStoreFor(t.deps.Home)
+
+	// Same-workspace blocker guard (parity with validateBlockersWorkspace in the
+	// plain tool): every blocked_by edge must point at a task in the SAME target
+	// workspace. The store validates the DAG (cycle/self-edge/missing/depth) but
+	// NOT this cross-workspace rule, so enforce it at the tool layer.
+	if len(tk.BlockedBy) > 0 {
+		if wErr := validateBlockersSameWorkspace(store, tk.WorkspaceID, tk.BlockedBy); wErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", wErr.Error(), "blocked_by"))
+		}
+	}
+
 	if err := store.Create(&tk); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
@@ -133,7 +189,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	}))
 }
 
-// ---- system.task.update ----
+// ---- update_task_in_workspace ----
 
 type TaskUpdateTool struct{ deps *Deps }
 
@@ -166,7 +222,7 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	id, _ := args["id"].(string)
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
@@ -177,6 +233,29 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	if err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use list_tasks_in_workspace to see available tasks"))
+	}
+
+	caller := tools.ToolAgentID(ctx)
+
+	// Ownership gate (parity with the plain update_task tool's "you can only
+	// update tasks assigned to you"). The privileged cross-workspace path is
+	// permitted to mutate ANOTHER agent's task ONLY when delegation policy allows
+	// the caller to delegate to that task's current assignee — otherwise an agent
+	// could rewrite work it has no authority over. Tasks the caller owns
+	// (assignee or creator) are always mutable by the caller. Unassigned tasks
+	// (no AgentID) carry no ownership constraint.
+	if existing.AgentID != "" && existing.AgentID != caller && existing.CreatedBy != caller {
+		if denied := t.deps.delegationDenied(ctx, caller, existing.AgentID); denied != nil {
+			return tools.DelegationDeniedResult(t.Name(), denied)
+		}
+	}
+
+	// Reassignment is re-delegation: when agent_id changes to a DIFFERENT agent,
+	// gate it through the SAME trust-set + mode("task") + depth policy as create.
+	if v, ok := args["agent_id"].(string); ok && v != "" && v != existing.AgentID && v != caller {
+		if denied := t.deps.delegationDenied(ctx, caller, v); denied != nil {
+			return tools.DelegationDeniedResult(t.Name(), denied)
+		}
 	}
 
 	patch := task.Patch{}
@@ -235,6 +314,15 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 				deps = append(deps, s)
 			}
 		}
+		// Same-workspace blocker guard (parity with validateBlockersWorkspace in
+		// the plain tool). Validate against the task's EFFECTIVE workspace —
+		// existing.WorkspaceID already reflects any workspace_id change applied
+		// above this point. CLEAR ([]) trivially passes.
+		if len(deps) > 0 {
+			if wErr := validateBlockersSameWorkspace(store, existing.WorkspaceID, deps); wErr != nil {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", wErr.Error(), "blocked_by"))
+			}
+		}
 		patch.BlockedBy = &deps
 		updated = append(updated, "blocked_by")
 	}
@@ -252,9 +340,9 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	// FR-6.5: when the task newly reaches terminal "done", advance dependents.
 	if result.Status == task.StatusDone {
 		if advanced, advErr := store.AdvanceBlockedDependents(id); advErr != nil {
-			slog.Warn("system.task.update: advance dependents failed", "id", id, "error", advErr)
+			slog.Warn("update_task_in_workspace: advance dependents failed", "id", id, "error", advErr)
 		} else if len(advanced) > 0 {
-			slog.Info("system.task.update: completed task advanced dependents",
+			slog.Info("update_task_in_workspace: completed task advanced dependents",
 				"completed_id", id, "advanced_ids", advanced)
 		}
 	}
@@ -266,7 +354,7 @@ func isTaskNotFound(err error) bool {
 	return err != nil && (err == task.ErrNotFound || fmt.Sprintf("%v", err) == task.ErrNotFound.Error())
 }
 
-// ---- system.task.delete ----
+// ---- delete_task_in_workspace ----
 
 type TaskDeleteTool struct{ deps *Deps }
 
@@ -288,7 +376,7 @@ func (t *TaskDeleteTool) Parameters() map[string]any {
 	}
 }
 
-func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	id, _ := args["id"].(string)
 	confirm, _ := args["confirm"].(bool)
 	if id == "" {
@@ -299,10 +387,24 @@ func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.
 			"confirm must be true to delete a task", ""))
 	}
 	store := taskStoreFor(t.deps.Home)
-	if _, err := store.Get(id); err != nil {
+	existing, err := store.Get(id)
+	if err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use list_tasks_in_workspace to see available tasks"))
 	}
+
+	// Ownership gate (parity with the plain delete_task tool's "you can only
+	// modify/delete tasks you own or are assigned"). The privileged cross-workspace
+	// path may delete ANOTHER agent's task ONLY when delegation policy permits the
+	// caller to delegate to that task's assignee. Tasks the caller owns (assignee
+	// or creator) are always deletable; unassigned tasks carry no ownership gate.
+	caller := tools.ToolAgentID(ctx)
+	if existing.AgentID != "" && existing.AgentID != caller && existing.CreatedBy != caller {
+		if denied := t.deps.delegationDenied(ctx, caller, existing.AgentID); denied != nil {
+			return tools.DelegationDeniedResult(t.Name(), denied)
+		}
+	}
+
 	unblocked, err := store.Delete(id)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("DELETE_FAILED", err.Error(),
@@ -314,7 +416,7 @@ func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.
 	return tools.NewToolResult(successJSON(map[string]any{"id": id, "deleted": true}))
 }
 
-// ---- system.task.list ----
+// ---- list_tasks_in_workspace ----
 
 type TaskListTool struct{ deps *Deps }
 
