@@ -51,12 +51,6 @@ func (*MCPListTool) Category() tools.ToolCategory   { return tools.CategorySyste
 
 func (*NavigateTool) Category() tools.ToolCategory { return tools.CategorySystem }
 
-// Pin tools
-
-func (*PinListTool) Category() tools.ToolCategory   { return tools.CategorySystem }
-func (*PinCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*PinDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
-
 // Workspace tools
 
 func (*WorkspaceCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }

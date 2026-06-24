@@ -58,6 +58,7 @@ var toolPermissions = map[string]ToolPermission{
 	"system.workspace.update": {MinRole: RoleOperator},
 	"system.workspace.delete": {MinRole: RoleAdmin},
 	"system.workspace.list":   {MinRole: RoleViewer},
+	"system.workspace.get":    {MinRole: RoleViewer},
 
 	// Task management.
 	"system.task.create": {MinRole: RoleOperator},
@@ -92,20 +93,14 @@ var toolPermissions = map[string]ToolPermission{
 	"system.provider.test":      {MinRole: RoleViewer},
 	"system.models.list":        {MinRole: RoleViewer},
 
-	// Pin management.
-	"system.pin.list":   {MinRole: RoleViewer},
-	"system.pin.create": {MinRole: RoleOperator},
-	"system.pin.delete": {MinRole: RoleAdmin},
-
 	// Config.
 	"system.config.get": {MinRole: RoleViewer},
 	"system.config.set": {MinRole: RoleOperator},
 
 	// Diagnostics / utility.
-	"system.doctor.run":    {MinRole: RoleViewer},
-	"system.backup.create": {MinRole: RoleOperator},
-	"system.cost.query":    {MinRole: RoleViewer},
-	"system.navigate":      {MinRole: RoleViewer},
+	"system.doctor.run": {MinRole: RoleViewer},
+	"system.cost.query": {MinRole: RoleViewer},
+	"system.navigate":   {MinRole: RoleViewer},
 }
 
 // roleWeight returns a numeric weight for ordering; higher = more privileged.

@@ -66,11 +66,6 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 		NewProviderTestTool(d),
 		NewModelsListTool(d),
 
-		// Pin management (3)
-		NewPinListTool(d),
-		NewPinCreateTool(d),
-		NewPinDeleteTool(d),
-
 		// Config (2)
 		NewConfigGetTool(d),
 		NewConfigSetTool(d),

@@ -18,9 +18,9 @@
 //   - The workspace_shell and workspace.shell_bg tools are omitted: they exist
 //     only when experimental.workspace_shell_enabled=true (config-gated, experimental).
 //
-// Conditional tools (cron, task_add_*, email.*, tool_search_tool_*): these are
+// Conditional tools (task_add_*, email.*, tool_search_tool_*): these are
 // included as metadata even though they only register per-agent under certain
-// conditions (cron = all agents; task_add_* = core agents; email.* = agents that
+// conditions (task_add_* = core agents; email.* = agents that
 // own a configured mailbox; tool_search_tool_* = when the MCP search cache is
 // enabled). The global catalog is a CAPABILITY REFERENCE — "everything the
 // platform can do" — while the per-agent view (GET /agents/{id}/tools, which
@@ -118,11 +118,6 @@ func GeneralBuiltinMetadata() []Tool {
 	// These register per-agent only under certain conditions, but are listed here
 	// so the global catalog is a complete capability reference. Nil deps — never
 	// executed; the per-agent registry supplies live instances.
-
-	// cron (CategoryCore): registered for all agents via agentLoop.RegisterTool.
-	// Nil cronService + nil config → safe (Description is static; config only
-	// toggles allowCommand/execEnabled flags, irrelevant for metadata).
-	out = append(out, NewCronTool(nil, nil))
 
 	// task_add_todo / task_add_dependency (CategoryCore): registered alongside the
 	// task tools for core agents. Nil store — metadata only.

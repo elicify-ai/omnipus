@@ -56,12 +56,6 @@ func (*MCPListTool) RequiresAdminAsk() bool   { return true }
 
 func (*NavigateTool) RequiresAdminAsk() bool { return true }
 
-// Pin tools
-
-func (*PinListTool) RequiresAdminAsk() bool   { return true }
-func (*PinCreateTool) RequiresAdminAsk() bool { return true }
-func (*PinDeleteTool) RequiresAdminAsk() bool { return true }
-
 // Workspace tools
 
 func (*WorkspaceCreateTool) RequiresAdminAsk() bool { return true }

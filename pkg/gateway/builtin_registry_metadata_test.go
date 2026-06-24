@@ -9,7 +9,7 @@
 //
 // These tests live in pkg/gateway because they must import both:
 //   - pkg/tools (GeneralBuiltinMetadata, BuiltinRegistry)
-//   - pkg/sysagent/tools (AllTools — the 41 system.* tools)
+//   - pkg/sysagent/tools (AllTools — the 40 system.* tools)
 //
 // pkg/tools cannot import pkg/sysagent/tools (import cycle), so the
 // combined registry test belongs in a package that can import both.
@@ -33,22 +33,22 @@ import (
 // BuiltinRegistry populated the same way as gateway boot (system tools first,
 // then general-builtin metadata) satisfies Spec-1 SC-101:
 //   - contains all general builtins (exec, read_file, web_search, web_fetch minimum)
-//   - contains all 41 system.* tools
-//   - total count > 41
+//   - contains all 40 system.* tools
+//   - total count > 40
 //   - no tool name appears twice (duplicate guard — prevents the double-count regression)
 //
 // BDD: Given the corrected gateway boot-time registry population,
 //
 //	When GET /api/v1/tools is backed by this registry,
 //	Then the response contains both general-builtin and system.* entries,
-//	And the total count is greater than 41.
+//	And the total count is greater than 40.
 //
 // Traces to: US-1/AC2, FR-101, SC-101, TDD T1/T3, Issue #350.
 func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 	// Mirror the gateway boot sequence: system tools first, then general.
 	reg := tools.NewBuiltinRegistry()
 
-	// Register all 41 system tools with nil deps (metadata-only mode, same as boot).
+	// Register all 40 system tools with nil deps (metadata-only mode, same as boot).
 	sysToolList := systools.AllTools(nil, nil)
 	for _, tool := range sysToolList {
 		err := reg.RegisterBuiltin(tool)
@@ -56,8 +56,8 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 			"system tool %q must register without error in metadata mode", tool.Name())
 	}
 	systemCount := reg.Count()
-	assert.Equal(t, 44, systemCount,
-		"systools.AllTools must produce exactly 44 system tools (see sysagent/tools/registry.go)")
+	assert.Equal(t, 40, systemCount,
+		"systools.AllTools must produce exactly 40 system tools (see sysagent/tools/registry.go)")
 
 	// Register general-builtin metadata (deps-free instances, never Execute()d).
 	generalToolList := tools.GeneralBuiltinMetadata()
@@ -74,8 +74,8 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 		"at least one general builtin must register successfully")
 
 	total := reg.Count()
-	assert.Greater(t, total, 44,
-		"central BuiltinRegistry must contain more than 44 tools after adding general builtins (SC-101)")
+	assert.Greater(t, total, 40,
+		"central BuiltinRegistry must contain more than 40 tools after adding general builtins (SC-101)")
 	assert.Equal(t, systemCount+generalRegistered, total,
 		"Count must equal systemCount + generalRegistered (no silent duplicates)")
 
@@ -101,13 +101,13 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 }
 
 // TestCentralBuiltinRegistry_NoDoubleCountSystemTools asserts that registering
-// system tools exactly once produces exactly 41 system entries — guards the
+// system tools exactly once produces exactly 40 system entries — guards the
 // double-count regression described in Issue #350.
 //
 // BDD: Given systools.AllTools registered exactly once,
 //
 //	When Count() is called,
-//	Then it returns 41 (not 82 or any other value).
+//	Then it returns 40 (not 80 or any other value).
 //
 // Traces to: Issue #350 double-count bug, FR-101, TDD T2.
 func TestCentralBuiltinRegistry_NoDoubleCountSystemTools(t *testing.T) {
@@ -117,8 +117,8 @@ func TestCentralBuiltinRegistry_NoDoubleCountSystemTools(t *testing.T) {
 			t.Logf("skipping system tool %q (err: %v)", tool.Name(), err)
 		}
 	}
-	assert.Equal(t, 44, reg.Count(),
-		"system tools registered once must produce exactly 44 entries — no double-count (Issue #350)")
+	assert.Equal(t, 40, reg.Count(),
+		"system tools registered once must produce exactly 40 entries — no double-count (Issue #350)")
 }
 
 // TestHandleToolsRegistry_WithCombinedRegistry verifies that HandleToolsRegistry

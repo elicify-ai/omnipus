@@ -27,6 +27,7 @@ var toolConfirmation = map[string]ConfirmationLevel{
 	"system.workspace.create":   ConfirmationNone,
 	"system.workspace.update":   ConfirmationNone,
 	"system.workspace.list":     ConfirmationNone,
+	"system.workspace.get":      ConfirmationNone,
 	"system.task.create":        ConfirmationNone,
 	"system.task.update":        ConfirmationNone,
 	"system.task.list":          ConfirmationNone,
@@ -43,13 +44,10 @@ var toolConfirmation = map[string]ConfirmationLevel{
 	"system.provider.list":      ConfirmationNone,
 	"system.provider.test":      ConfirmationNone,
 	"system.models.list":        ConfirmationNone,
-	"system.pin.list":           ConfirmationNone,
-	"system.pin.create":         ConfirmationNone,
 	"system.config.get":         ConfirmationNone,
 	"system.doctor.run":         ConfirmationNone,
 	"system.cost.query":         ConfirmationNone,
 	"system.navigate":           ConfirmationNone,
-	"system.backup.create":      ConfirmationNone,
 
 	// UI confirmation required — destructive operations.
 	"system.agent.delete":     ConfirmationUI,
@@ -58,7 +56,6 @@ var toolConfirmation = map[string]ConfirmationLevel{
 	"system.channel.disable":  ConfirmationUI,
 	"system.skill.remove":     ConfirmationUI,
 	"system.mcp.remove":       ConfirmationUI,
-	"system.pin.delete":       ConfirmationUI,
 	"system.config.set":       ConfirmationNone, // set is safe; security.* keys get UI confirmation at tool level
 }
 
