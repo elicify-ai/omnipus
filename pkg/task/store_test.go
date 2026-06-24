@@ -507,3 +507,83 @@ func mustUpdate(t *testing.T, s *Store, id string, p Patch) {
 		t.Fatalf("Update(%s): %v", id, err)
 	}
 }
+
+// TestUpdate_BlockedByRecompute_TransitionsNextToBlocked proves the recompute
+// fix: a `next` task that gains an unmet blocker via Update(patch.BlockedBy)
+// transitions to `blocked` (the store re-derives the side-state from the new
+// blocked_by set). Without the recompute call in updateLocked, the task would
+// stay `next` (dispatchable) with an unsatisfied dependency.
+func TestUpdate_BlockedByRecompute_TransitionsNextToBlocked(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+
+	blocker := mkTask("blocker", "ws")
+	mustCreate(t, s, blocker)
+	dependent := mkTask("dependent", "ws")
+	dependent.Status = StatusNext
+	mustCreate(t, s, dependent)
+
+	if dependent.Status != StatusNext {
+		t.Fatalf("dependent must start next, got %q", dependent.Status)
+	}
+
+	// Add an unmet blocker via Update → recompute must flip next→blocked.
+	updated, err := s.Update(dependent.ID, Patch{BlockedBy: &[]string{blocker.ID}})
+	if err != nil {
+		t.Fatalf("Update BlockedBy: %v", err)
+	}
+	if updated.Status != StatusBlocked {
+		t.Fatalf("expected dependent to transition to blocked, got %q", updated.Status)
+	}
+	if len(updated.BlockedBy) != 1 || updated.BlockedBy[0] != blocker.ID {
+		t.Errorf("expected blocked_by=[%s], got %v", blocker.ID, updated.BlockedBy)
+	}
+
+	// Persisted state must match.
+	got, err := s.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusBlocked {
+		t.Errorf("persisted status must be blocked, got %q", got.Status)
+	}
+}
+
+// TestUpdate_BlockedByClear_TransitionsBlockedToNext proves the inverse: a
+// `blocked` task whose blocked_by is CLEARED via Update(patch.BlockedBy: [])
+// transitions back to `next`. This is the recompute path that lets
+// task_update{blocked_by:[]} unblock a task at the store layer.
+func TestUpdate_BlockedByClear_TransitionsBlockedToNext(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+
+	blocker := mkTask("blocker", "ws")
+	mustCreate(t, s, blocker)
+	dependent := mkTask("dependent", "ws")
+	dependent.Status = StatusNext
+	mustCreate(t, s, dependent)
+
+	// Wire the dep via AddDependency so the task lands in `blocked`.
+	if _, _, err := s.AddDependency(dependent.ID, blocker.ID); err != nil {
+		t.Fatalf("AddDependency: %v", err)
+	}
+	got, err := s.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("Get after AddDependency: %v", err)
+	}
+	if got.Status != StatusBlocked {
+		t.Fatalf("expected dependent blocked after AddDependency, got %q", got.Status)
+	}
+
+	// Clear deps via Update → recompute must flip blocked→next.
+	updated, err := s.Update(dependent.ID, Patch{BlockedBy: &[]string{}})
+	if err != nil {
+		t.Fatalf("Update clear BlockedBy: %v", err)
+	}
+	if updated.Status != StatusNext {
+		t.Fatalf("expected dependent to transition back to next, got %q", updated.Status)
+	}
+	if len(updated.BlockedBy) != 0 {
+		t.Errorf("expected blocked_by cleared, got %v", updated.BlockedBy)
+	}
+}

@@ -1683,6 +1683,13 @@ func registerSharedTools(
 				// drops jobs for terminal tasks); a non-terminal update re-syncs it.
 				al.NotifyTaskUpserted(t)
 			})
+			// FR-6.2: reassignment is re-delegation — gate agent_id changes through
+			// the same trust-set + mode("task") + depth policy as task_create.
+			taskUpdate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
+			taskUpdate.SetDelegationDenyChecker(buildDelegationDenyChecker(
+				currentAgentID, agentCfg, cfg.Agents.Defaults,
+				config.DelegationModeTask, registry,
+			))
 			agent.Tools.Register(taskUpdate)
 
 			agent.Tools.Register(tools.NewTaskAddTodoTool(al.taskStore))

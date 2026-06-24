@@ -552,6 +552,13 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		if len(t.BlockedBy) == 0 {
 			t.BlockedBy = nil
 		}
+		// Recompute the derived `blocked` side-state from the new blocked_by set,
+		// mirroring AddDependency. Without this, a `next` task that gains an
+		// unmet blocker stays `next` (dispatchable), violating the store's own
+		// contract that `blocked` reflects an unmet dependency. recompute...Locked
+		// is a no-op for statuses other than `next`/`blocked`, so terminal and
+		// in_progress tasks are unaffected.
+		s.recomputeBlockedStateLocked(t)
 	}
 	if patch.Todos != nil {
 		if err := validateTodos(*patch.Todos); err != nil {

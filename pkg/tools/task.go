@@ -169,9 +169,68 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "ID of the parent task (optional) — set when this is a subtask of another task",
 			},
+			"blocked_by": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Task IDs this task is blocked by (optional). Each blocker must exist and be in the same workspace; a cycle is rejected.",
+			},
 		},
 		"required": []string{"title", "prompt", "agent_id"},
 	}
+}
+
+// resolveBlockedBy parses the optional "blocked_by" array arg into a slice of
+// non-empty task IDs. It distinguishes three cases so the caller can tell a
+// CLEAR (provided empty) from an unchanged (absent) request:
+//   - absent   → deps == nil, provided == false  (leave the field unchanged)
+//   - provided → deps == nil/empty, provided == true (CLEAR the list)
+//   - provided → deps non-empty, provided == true (REPLACE with deps)
+//
+// Empty-string and non-string entries are dropped (they are not valid task IDs).
+func resolveBlockedBy(args map[string]any) (deps []string, provided bool) {
+	rawDeps, ok := args["blocked_by"].([]any)
+	if !ok {
+		return nil, false
+	}
+	deps = make([]string, 0, len(rawDeps))
+	for _, d := range rawDeps {
+		if s, ok := d.(string); ok && s != "" {
+			deps = append(deps, s)
+		} else {
+			slog.Debug("task: dropped invalid blocked_by entry", "entry", d)
+		}
+	}
+	if len(deps) == 0 {
+		return nil, true // provided but empty → caller treats as CLEAR
+	}
+	return deps, true
+}
+
+// validateBlockersWorkspace loads each blocker task and verifies it is in the
+// same workspace as the dependent. This mirrors TaskAddDependencyTool's
+// cross-workspace guard; the store's validateBlockedByLocked handles
+// cycle/self-edge/missing/depth, but NOT the same-workspace constraint, so the
+// tool layer enforces it.
+//
+// TOCTOU note: WorkspaceID is immutable (set at create, never in task.Patch), so
+// the same-workspace check is race-free — a blocker's workspace cannot change
+// between this pre-check and the locked write. The store re-validates the DAG
+// invariants (cycle/self-edge/missing/depth) atomically under the per-task lock;
+// this tool-layer guard adds the same-workspace rule the store does not enforce.
+func validateBlockersWorkspace(store *task.Store, dependentWorkspaceID string, blockers []string) error {
+	for _, b := range blockers {
+		bt, err := store.Get(b)
+		if err != nil {
+			if errors.Is(err, task.ErrNotFound) {
+				return fmt.Errorf("blocker task %q not found", b)
+			}
+			return fmt.Errorf("could not load blocker task %q: %w", b, err)
+		}
+		if bt.WorkspaceID != dependentWorkspaceID {
+			return fmt.Errorf("blocker task %q is in a different workspace", b)
+		}
+	}
+	return nil
 }
 
 // resolveWorkspaceID returns the workspace ID for the current turn. It first
@@ -282,6 +341,21 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		entity.SourceChatID = ToolChatID(ctx)
 	}
 
+	// Optional blocked_by: mirror admin create. The store's Create validates the
+	// blocked_by DAG (cycle/self-edge/missing/depth); the tool layer additionally
+	// enforces the same-workspace constraint (the store does not), mirroring
+	// TaskAddDependencyTool's cross-workspace guard.
+	//
+	// For create, provided-empty (CLEAR) and absent are equivalent — a brand-new
+	// task starts with no deps either way — so only the populated path sets deps.
+	deps, depsProvided := resolveBlockedBy(args)
+	if depsProvided && len(deps) > 0 {
+		if wErr := validateBlockersWorkspace(t.store, wsID, deps); wErr != nil {
+			return ErrorResult(fmt.Sprintf("task_create failed: %v", wErr))
+		}
+		entity.BlockedBy = deps
+	}
+
 	if err := t.store.Create(entity); err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			return ErrorResult(fmt.Sprintf("task_create failed: %v", err))
@@ -299,8 +373,18 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 // TaskUpdateTool allows an agent to update status of its own task.
 type TaskUpdateTool struct {
 	BaseTool
-	store      *task.Store
-	onComplete func(*task.Task)
+	store *task.Store
+	// delegateCheck, when non-nil, gates reassignment to a different agent
+	// (reassignment is re-delegation). Returns false to DENY. Ignored when
+	// delegationDeny is non-nil (delegationDeny takes precedence).
+	delegateCheck func(targetAgentID string) bool
+	// delegationDeny, when non-nil, applies the full delegation policy (trust
+	// set + modes ("task") + depth — FR-6.2) to a reassignment. Returns a
+	// non-nil *DelegationDenial to DENY or nil to ALLOW. Takes precedence over
+	// delegateCheck. Reassignment is re-delegation, so it routes through the
+	// SAME gate task_create uses.
+	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
+	onComplete     func(*task.Task)
 }
 
 func NewTaskUpdateTool(store *task.Store) *TaskUpdateTool {
@@ -312,11 +396,26 @@ func (t *TaskUpdateTool) SetOnComplete(fn func(*task.Task)) {
 	t.onComplete = fn
 }
 
+// SetDelegateChecker sets the function that checks whether reassignment to a
+// target agent is allowed (reassignment is re-delegation).
+func (t *TaskUpdateTool) SetDelegateChecker(fn func(targetAgentID string) bool) {
+	t.delegateCheck = fn
+}
+
+// SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2)
+// for reassignment. Reassignment is re-delegation, so it routes through the
+// SAME gate task_create uses.
+func (t *TaskUpdateTool) SetDelegationDenyChecker(
+	fn func(ctx context.Context, targetAgentID string) *DelegationDenial,
+) {
+	t.delegationDeny = fn
+}
+
 func (t *TaskUpdateTool) Name() string     { return "task_update" }
 func (t *TaskUpdateTool) Scope() ToolScope { return ScopeGeneral }
 
 func (t *TaskUpdateTool) Description() string {
-	return "Update status of a task assigned to you. Mark as in_progress, done, or failed."
+	return "Update a task assigned to you. Mark status (in_progress/done/failed) and optionally edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -341,14 +440,36 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "File paths or URLs produced as artifacts",
 			},
+			"title": map[string]any{
+				"type":        "string",
+				"description": "New title for the task (1-200 chars)",
+			},
+			"priority": map[string]any{
+				"type":        "integer",
+				"minimum":     1,
+				"maximum":     5,
+				"description": "Priority 1 (highest) to 5 (lowest)",
+			},
+			"due": map[string]any{
+				"type":        "string",
+				"description": "Due date/time in RFC 3339 format",
+			},
+			"agent_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the agent to reassign the task to",
+			},
+			"blocked_by": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Array of task IDs this task is blocked by. Pass the full list to REPLACE the existing deps; pass [] to CLEAR; omit to leave unchanged. Each blocker must exist + be same-workspace; cycles rejected.",
+			},
 		},
-		"required": []string{"task_id", "status"},
+		"required": []string{"task_id"},
 	}
 }
 
 func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	taskID, _ := args["task_id"].(string)
-	status, _ := args["status"].(string)
 	callerID := ToolAgentID(ctx)
 	if callerID == "" {
 		return ErrorResult("agent ID not set in context; cannot verify task ownership")
@@ -356,13 +477,6 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	if taskID == "" {
 		return ErrorResult("task_id is required")
-	}
-	if status == "" {
-		return ErrorResult("status is required")
-	}
-	st := task.Status(status)
-	if !task.IsValidStatus(st) {
-		return ErrorResult(fmt.Sprintf("invalid status %q", status))
 	}
 
 	existing, err := t.store.Get(taskID)
@@ -377,9 +491,26 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("you can only update tasks assigned to you")
 	}
 
-	patch := task.Patch{Status: &st}
+	patch := task.Patch{}
+	updatedFields := []string{}
+
+	// Status (optional — was the only field historically; still the common path).
+	var newStatus task.Status
+	statusStr, _ := args["status"].(string)
+	if statusStr != "" {
+		st := task.Status(statusStr)
+		if !task.IsValidStatus(st) {
+			return ErrorResult(fmt.Sprintf("invalid status %q", statusStr))
+		}
+		patch.Status = &st
+		newStatus = st
+		updatedFields = append(updatedFields, "status")
+	}
+
+	// Result / artifacts — accepted with or without a status.
 	if result, ok := args["result"].(string); ok && result != "" {
 		patch.Result = &result
+		updatedFields = append(updatedFields, "result")
 	}
 	if rawArtifacts, ok := args["artifacts"].([]any); ok {
 		artifacts := make([]string, 0, len(rawArtifacts))
@@ -389,10 +520,83 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 			}
 		}
 		patch.Artifacts = &artifacts
+		updatedFields = append(updatedFields, "artifacts")
 	}
 
+	// Title.
+	if title, ok := args["title"].(string); ok && title != "" {
+		patch.Title = &title
+		updatedFields = append(updatedFields, "title")
+	}
+
+	// Priority (1-5).
+	if p, ok := args["priority"].(float64); ok {
+		pr := int(p)
+		if pr < 1 || pr > 5 {
+			return ErrorResult(fmt.Sprintf("priority must be between 1 and 5, got %d", pr))
+		}
+		patch.Priority = &pr
+		updatedFields = append(updatedFields, "priority")
+	}
+
+	// Due (RFC 3339 string).
+	if due, ok := args["due"].(string); ok && due != "" {
+		if _, pErr := time.Parse(time.RFC3339, due); pErr != nil {
+			return ErrorResult(fmt.Sprintf("invalid due date %q (must be RFC 3339): %v", due, pErr))
+		}
+		patch.Due = &due
+		updatedFields = append(updatedFields, "due")
+	}
+
+	// agent_id (reassign). Reassignment is re-delegation: when the new agent
+	// differs from the current assignee, route it through the SAME delegation-
+	// policy gate task_create uses (FR-6.2). A no-op reassign (same agent) needs
+	// no gate. Mirrors TaskCreateTool.Execute's denial shape.
+	if agentID, ok := args["agent_id"].(string); ok && agentID != "" && agentID != existing.AgentID {
+		if t.delegationDeny != nil {
+			if denial := t.delegationDeny(ctx, agentID); denial != nil {
+				return DelegationDeniedResult("task_update", denial)
+			}
+		} else if t.delegateCheck != nil && !t.delegateCheck(agentID) {
+			return DelegationDeniedResult("task_update", &DelegationDenial{
+				Reason:        fmt.Sprintf("delegation to %s not allowed", agentID),
+				Policy:        DenyTrustSet,
+				TargetAgentID: agentID,
+			})
+		}
+		patch.AgentID = &agentID
+		updatedFields = append(updatedFields, "agent_id")
+	}
+
+	// blocked_by (replaces the list). Cross-workspace guard at the tool layer
+	// (mirrors TaskAddDependencyTool's cross-workspace guard); the store's
+	// validateBlockedByLocked handles cycle/self-edge/missing/depth atomically
+	// under the per-task lock.
+	//
+	// Three-way: provided-empty CLEARs the list, populated REPLACEs it, absent
+	// leaves it unchanged.
+	deps, depsProvided := resolveBlockedBy(args)
+	if depsProvided {
+		if len(deps) == 0 {
+			// CLEAR — empty list trivially passes the cross-workspace guard.
+			patch.BlockedBy = &[]string{}
+			updatedFields = append(updatedFields, "blocked_by")
+		} else {
+			if wErr := validateBlockersWorkspace(t.store, existing.WorkspaceID, deps); wErr != nil {
+				return ErrorResult(fmt.Sprintf("task_update failed: %v", wErr))
+			}
+			patch.BlockedBy = &deps
+			updatedFields = append(updatedFields, "blocked_by")
+		}
+	}
+
+	if len(updatedFields) == 0 {
+		return ErrorResult("no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by)")
+	}
+
+	// Timestamps keyed off status (unchanged behaviour for the status path).
 	now := time.Now().UTC().Format(time.RFC3339)
-	switch st {
+	switch newStatus {
 	case task.StatusInProgress:
 		patch.StartedAt = &now
 	case task.StatusDone, task.StatusFailed:
@@ -404,11 +608,44 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult(fmt.Sprintf("task_update failed: %v", err))
 	}
 
-	if task.IsTerminal(st) && t.onComplete != nil {
+	// FR-6.5: when the task newly reaches "done", advance dependents (mirror
+	// admin: pkg/sysagent/tools/task.go:252-259). The primary update already
+	// persisted, so this is best-effort: a storage fault here is surfaced to the
+	// caller as an advance_warning rather than turning a successful update into a
+	// failure (which would orphan dependents with no signal either way).
+	var advanceWarning string
+	if newStatus == task.StatusDone {
+		advanced, advErr := t.store.AdvanceBlockedDependents(taskID)
+		if advErr != nil {
+			// Storage fault advancing dependents — the update itself succeeded,
+			// so this stays a success, but the warning must reach the LLM/user.
+			slog.Error("task_update: advance dependents failed",
+				"id", taskID, "error", advErr)
+			advanceWarning = advErr.Error()
+		} else if len(advanced) > 0 {
+			slog.Info("task_update: completed task advanced dependents",
+				"completed_id", taskID, "advanced_ids", advanced)
+		}
+	}
+
+	if task.IsTerminal(newStatus) && t.onComplete != nil {
 		t.onComplete(updated)
 	}
 
-	return NewToolResult(fmt.Sprintf(`{"task_id":%q,"status":%q}`, updated.ID, updated.Status))
+	// Marshal cannot fail on a []string (updatedFields is always a concrete
+	// slice of strings), so the error is impossible in practice — discard it.
+	updatedFieldsJSON, _ := json.Marshal(updatedFields)
+	result := fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s}`,
+		updated.ID, updated.Status, string(updatedFieldsJSON))
+	if advanceWarning != "" {
+		// Append the warning as an escaped string field so the LLM/user can see
+		// the dependents were not advanced. Built with json.Marshal so the error
+		// message is properly escaped into a JSON string literal.
+		warnJSON, _ := json.Marshal(advanceWarning)
+		result = fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s,"advance_warning":%s}`,
+			updated.ID, updated.Status, string(updatedFieldsJSON), string(warnJSON))
+	}
+	return NewToolResult(result)
 }
 
 // TaskAddTodoTool appends a checklist item to a task's embedded todos (Tier 1).
@@ -477,6 +714,9 @@ func (t *TaskAddTodoTool) Execute(ctx context.Context, args map[string]any) *Too
 }
 
 // TaskAddDependencyTool adds a blocked_by edge (this task depends on another).
+//
+// Deprecated: use task_update{blocked_by} — retires in v0.3 (see
+// tasks-system-refactor-2026-06.md §2).
 type TaskAddDependencyTool struct {
 	BaseTool
 	store *task.Store
