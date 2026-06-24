@@ -268,8 +268,8 @@ describe('TaskDetailPanel — renders todos checklist', () => {
   it('renders todo items when present', async () => {
     const task = makeTask({
       todos: [
-        { text: 'Step one', done: false },
-        { text: 'Step two', done: true },
+        { text: 'Step one', status: 'pending' as const },
+        { text: 'Step two', status: 'completed' as const },
       ],
     })
     renderPanel(task)
@@ -282,6 +282,22 @@ describe('TaskDetailPanel — renders todos checklist', () => {
     renderPanel(task)
     await act(async () => {})
     expect(screen.queryByText(/todos/i)).toBeNull()
+  })
+
+  it('renders in_progress todo distinctly and does not count it as completed', async () => {
+    const task = makeTask({
+      todos: [
+        { text: 'Working on this', status: 'in_progress' as const },
+        { text: 'All done', status: 'completed' as const },
+        { text: 'Not started', status: 'pending' as const },
+      ],
+    })
+    renderPanel(task)
+    expect(await screen.findByText(/working on this/i)).toBeInTheDocument()
+    expect(screen.getByText(/all done/i)).toBeInTheDocument()
+    expect(screen.getByText(/not started/i)).toBeInTheDocument()
+    // Progress count: only 1 completed out of 3
+    expect(screen.getByText(/\(1\/3\)/)).toBeInTheDocument()
   })
 })
 
@@ -416,7 +432,7 @@ describe('TaskDetailPanel — editable dependencies (blocked_by)', () => {
 describe('TaskDetailPanel — editable todos checklist', () => {
   it('adding a checklist item calls setTaskTodos with the appended item', async () => {
     const { setTaskTodos } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-todo', status: 'next', todos: [{ text: 'Existing', done: false }] }))
+    renderPanel(makeTask({ id: 'task-todo', status: 'next', todos: [{ text: 'Existing', status: 'pending' as const }] }))
 
     const input = await screen.findByLabelText(/new checklist item/i)
     fireEvent.change(input, { target: { value: 'Brand new' } })
@@ -424,29 +440,39 @@ describe('TaskDetailPanel — editable todos checklist', () => {
 
     await waitFor(() => expect(vi.mocked(setTaskTodos)).toHaveBeenCalled())
     expect(vi.mocked(setTaskTodos).mock.calls[0][1]).toEqual([
-      { text: 'Existing', done: false },
-      { text: 'Brand new', done: false },
+      { text: 'Existing', status: 'pending' },
+      { text: 'Brand new', status: 'pending' },
     ])
   })
 
-  it('toggling a checklist item calls setTaskTodos with the flipped done flag', async () => {
+  it('toggling a pending checklist item marks it completed', async () => {
     const { setTaskTodos } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-toggle', status: 'next', todos: [{ text: 'Flip me', done: false }] }))
+    renderPanel(makeTask({ id: 'task-toggle', status: 'next', todos: [{ text: 'Flip me', status: 'pending' as const }] }))
 
     fireEvent.click(await screen.findByLabelText(/toggle flip me/i))
 
     await waitFor(() => expect(vi.mocked(setTaskTodos)).toHaveBeenCalled())
-    expect(vi.mocked(setTaskTodos).mock.calls[0][1]).toEqual([{ text: 'Flip me', done: true }])
+    expect(vi.mocked(setTaskTodos).mock.calls[0][1]).toEqual([{ text: 'Flip me', status: 'completed' }])
+  })
+
+  it('toggling a completed checklist item marks it pending', async () => {
+    const { setTaskTodos } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-toggle-back', status: 'next', todos: [{ text: 'Done item', status: 'completed' as const }] }))
+
+    fireEvent.click(await screen.findByLabelText(/toggle done item/i))
+
+    await waitFor(() => expect(vi.mocked(setTaskTodos)).toHaveBeenCalled())
+    expect(vi.mocked(setTaskTodos).mock.calls[0][1]).toEqual([{ text: 'Done item', status: 'pending' }])
   })
 
   it('removing a checklist item calls setTaskTodos without it', async () => {
     const { setTaskTodos } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-rm', status: 'next', todos: [{ text: 'Keep', done: false }, { text: 'Drop', done: false }] }))
+    renderPanel(makeTask({ id: 'task-rm', status: 'next', todos: [{ text: 'Keep', status: 'pending' as const }, { text: 'Drop', status: 'pending' as const }] }))
 
     fireEvent.click(await screen.findByLabelText(/remove checklist item drop/i))
 
     await waitFor(() => expect(vi.mocked(setTaskTodos)).toHaveBeenCalled())
-    expect(vi.mocked(setTaskTodos).mock.calls[0][1]).toEqual([{ text: 'Keep', done: false }])
+    expect(vi.mocked(setTaskTodos).mock.calls[0][1]).toEqual([{ text: 'Keep', status: 'pending' }])
   })
 })
 

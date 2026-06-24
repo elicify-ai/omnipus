@@ -2917,6 +2917,27 @@ func (e TaskSurface) Valid() bool {
 	}
 }
 
+// Defines values for TaskTodosStatus.
+const (
+	TaskTodosStatusCompleted  TaskTodosStatus = "completed"
+	TaskTodosStatusInProgress TaskTodosStatus = "in_progress"
+	TaskTodosStatusPending    TaskTodosStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the TaskTodosStatus enum.
+func (e TaskTodosStatus) Valid() bool {
+	switch e {
+	case TaskTodosStatusCompleted:
+		return true
+	case TaskTodosStatusInProgress:
+		return true
+	case TaskTodosStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskTriggerType.
 const (
 	TaskTriggerTypeEvery     TaskTriggerType = "every"
@@ -2968,6 +2989,27 @@ func (e TaskCreateRequestSurface) Valid() bool {
 	case TaskCreateRequestSurfaceHeartbeat:
 		return true
 	case TaskCreateRequestSurfaceUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestTodosStatus.
+const (
+	TaskCreateRequestTodosStatusCompleted  TaskCreateRequestTodosStatus = "completed"
+	TaskCreateRequestTodosStatusInProgress TaskCreateRequestTodosStatus = "in_progress"
+	TaskCreateRequestTodosStatusPending    TaskCreateRequestTodosStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestTodosStatus enum.
+func (e TaskCreateRequestTodosStatus) Valid() bool {
+	switch e {
+	case TaskCreateRequestTodosStatusCompleted:
+		return true
+	case TaskCreateRequestTodosStatusInProgress:
+		return true
+	case TaskCreateRequestTodosStatusPending:
 		return true
 	default:
 		return false
@@ -3049,6 +3091,27 @@ func (e TaskUpdateRequestSurface) Valid() bool {
 	}
 }
 
+// Defines values for TaskUpdateRequestTodosStatus.
+const (
+	TaskUpdateRequestTodosStatusCompleted  TaskUpdateRequestTodosStatus = "completed"
+	TaskUpdateRequestTodosStatusInProgress TaskUpdateRequestTodosStatus = "in_progress"
+	TaskUpdateRequestTodosStatusPending    TaskUpdateRequestTodosStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestTodosStatus enum.
+func (e TaskUpdateRequestTodosStatus) Valid() bool {
+	switch e {
+	case TaskUpdateRequestTodosStatusCompleted:
+		return true
+	case TaskUpdateRequestTodosStatusInProgress:
+		return true
+	case TaskUpdateRequestTodosStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskUpdateRequestTriggerType.
 const (
 	Every     TaskUpdateRequestTriggerType = "every"
@@ -3067,6 +3130,27 @@ func (e TaskUpdateRequestTriggerType) Valid() bool {
 	case Once:
 		return true
 	case Recurring:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TodoStatus.
+const (
+	TodoStatusCompleted  TodoStatus = "completed"
+	TodoStatusInProgress TodoStatus = "in_progress"
+	TodoStatusPending    TodoStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the TodoStatus enum.
+func (e TodoStatus) Valid() bool {
+	switch e {
+	case TodoStatusCompleted:
+		return true
+	case TodoStatusInProgress:
+		return true
+	case TodoStatusPending:
 		return true
 	default:
 		return false
@@ -3132,28 +3216,28 @@ func (e ToolApprovalResponseStatus) Valid() bool {
 
 // Defines values for ToolCallStatus.
 const (
-	Cancelled ToolCallStatus = "cancelled"
-	Denied    ToolCallStatus = "denied"
-	Error     ToolCallStatus = "error"
-	Pending   ToolCallStatus = "pending"
-	Running   ToolCallStatus = "running"
-	Success   ToolCallStatus = "success"
+	ToolCallStatusCancelled ToolCallStatus = "cancelled"
+	ToolCallStatusDenied    ToolCallStatus = "denied"
+	ToolCallStatusError     ToolCallStatus = "error"
+	ToolCallStatusPending   ToolCallStatus = "pending"
+	ToolCallStatusRunning   ToolCallStatus = "running"
+	ToolCallStatusSuccess   ToolCallStatus = "success"
 )
 
 // Valid indicates whether the value is a known member of the ToolCallStatus enum.
 func (e ToolCallStatus) Valid() bool {
 	switch e {
-	case Cancelled:
+	case ToolCallStatusCancelled:
 		return true
-	case Denied:
+	case ToolCallStatusDenied:
 		return true
-	case Error:
+	case ToolCallStatusError:
 		return true
-	case Pending:
+	case ToolCallStatusPending:
 		return true
-	case Running:
+	case ToolCallStatusRunning:
 		return true
-	case Success:
+	case ToolCallStatusSuccess:
 		return true
 	default:
 		return false
@@ -3525,31 +3609,31 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
-	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
-	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
-	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
-	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
-	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
-	ListTasksParamsStatusPlanning   ListTasksParamsStatus = "planning"
+	Blocked    ListTasksParamsStatus = "blocked"
+	Done       ListTasksParamsStatus = "done"
+	Failed     ListTasksParamsStatus = "failed"
+	InProgress ListTasksParamsStatus = "in_progress"
+	Inbox      ListTasksParamsStatus = "inbox"
+	Next       ListTasksParamsStatus = "next"
+	Planning   ListTasksParamsStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case ListTasksParamsStatusBlocked:
+	case Blocked:
 		return true
-	case ListTasksParamsStatusDone:
+	case Done:
 		return true
-	case ListTasksParamsStatusFailed:
+	case Failed:
 		return true
-	case ListTasksParamsStatusInProgress:
+	case InProgress:
 		return true
-	case ListTasksParamsStatusInbox:
+	case Inbox:
 		return true
-	case ListTasksParamsStatusNext:
+	case Next:
 		return true
-	case ListTasksParamsStatusPlanning:
+	case Planning:
 		return true
 	default:
 		return false
@@ -7284,8 +7368,8 @@ type Task struct {
 
 	// Todos Lightweight `{text, done}` checklist items on this task (Tier 1 of the three-tier model). A todo is NOT a task — it has no agent, no status, no trigger. Distinct from a subtask (a full child Task with `parent_task_id`).
 	Todos *[]struct {
-		// Done Whether the checklist item is complete.
-		Done bool `json:"done"`
+		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
+		Status TaskTodosStatus `json:"status"`
 
 		// Text The checklist item text.
 		Text string `json:"text"`
@@ -7332,6 +7416,9 @@ type TaskStatus string
 
 // TaskSurface Which UI surface owns this task (Detail #5). `user` (default) → shows on all four general views (Board/List/Graph/Calendar). A non-`user` surface (first: `heartbeat`) → hidden from ALL general views and rendered only by its owning feature's dedicated UI (heartbeat → the agent profile). A reusable pattern: future system-ish features set their own surface, get the task+trigger engine for free, and never clutter the board/calendar.
 type TaskSurface string
+
+// TaskTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
+type TaskTodosStatus string
 
 // Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type Task_Trigger_Config struct {
@@ -7394,8 +7481,8 @@ type TaskCreateRequest struct {
 
 	// Todos Optional initial checklist items.
 	Todos *[]struct {
-		// Done Whether the checklist item is complete.
-		Done bool `json:"done"`
+		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
+		Status TaskCreateRequestTodosStatus `json:"status"`
 
 		// Text The checklist item text.
 		Text string `json:"text"`
@@ -7433,6 +7520,9 @@ type TaskCreateRequestAction string
 
 // TaskCreateRequestSurface UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features (e.g. heartbeat) set their own surface so the task is hidden from general views.
 type TaskCreateRequestSurface string
+
+// TaskCreateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
+type TaskCreateRequestTodosStatus string
 
 // TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type TaskCreateRequest_Trigger_Config struct {
@@ -7536,8 +7626,8 @@ type TaskUpdateRequest struct {
 
 	// Todos Replacement checklist (replaces the current `todos` atomically).
 	Todos *[]struct {
-		// Done Whether the checklist item is complete.
-		Done bool `json:"done"`
+		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
+		Status TaskUpdateRequestTodosStatus `json:"status"`
 
 		// Text The checklist item text.
 		Text string `json:"text"`
@@ -7573,6 +7663,9 @@ type TaskUpdateRequestStatus string
 // TaskUpdateRequestSurface New UI surface ownership (Detail
 type TaskUpdateRequestSurface string
 
+// TaskUpdateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
+type TaskUpdateRequestTodosStatus string
+
 // TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type TaskUpdateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
@@ -7589,14 +7682,17 @@ type TaskUpdateRequest_Trigger_Config struct {
 // TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskUpdateRequestTriggerType string
 
-// Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no status enum, no trigger, and no ID — it is a simple `{text, done}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need independent status/agent/trigger.
+// Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).
 type Todo struct {
-	// Done Whether the checklist item is complete.
-	Done bool `json:"done"`
+	// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
+	Status TodoStatus `json:"status"`
 
 	// Text The checklist item text.
 	Text string `json:"text"`
 }
+
+// TodoStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
+type TodoStatus string
 
 // TokenUsageSummary Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files.
 type TokenUsageSummary struct {

@@ -2,13 +2,15 @@ title: Todo
 description: >
   A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the
   three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent,
-  no status enum, no trigger, and no ID — it is a simple `{text, done}` pair. Use a
-  subtask (a full child Task with `parent_task_id`) when you need independent
-  status/agent/trigger.
+  no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full
+  child Task with `parent_task_id`) when you need an independent agent/trigger.
+  The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy
+  boolean `done` so a checklist can express work-in-progress (§3 tasks-system
+  refactor — the `set_todos` agent scratchpad rides this same array).
 type: object
 required:
   - text
-  - done
+  - status
 additionalProperties: false
 properties:
   text:
@@ -17,7 +19,13 @@ properties:
     maxLength: 500
     description: The checklist item text.
     example: "Draft the summary section"
-  done:
-    type: boolean
-    description: Whether the checklist item is complete.
-    example: false
+  status:
+    type: string
+    enum:
+      - pending
+      - in_progress
+      - completed
+    description: >
+      Tri-state checklist item status. `pending` = not started, `in_progress` =
+      currently being worked, `completed` = done.
+    example: pending

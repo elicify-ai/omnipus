@@ -43,7 +43,7 @@ export function TaskCard({
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
   const milestone = task.milestone_id ? milestones.find((m) => m.id === task.milestone_id) : null
   const todos = task.todos ?? []
-  const doneTodos = todos.filter((t) => t.done).length
+  const doneTodos = todos.filter((t) => t.status === 'completed').length
   const rollup = task.rollup ?? []
   const hasRollup = rollup.length > 0
   const showChildren = altitude === 'show-all'

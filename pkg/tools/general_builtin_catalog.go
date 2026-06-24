@@ -18,9 +18,9 @@
 //   - The workspace_shell and workspace.shell_bg tools are omitted: they exist
 //     only when experimental.workspace_shell_enabled=true (config-gated, experimental).
 //
-// Conditional tools (task_add_*, email.*, tool_search_tool_*): these are
+// Conditional tools (set_todos, email.*, tool_search_tool_*): these are
 // included as metadata even though they only register per-agent under certain
-// conditions (task_add_* = core agents; email.* = agents that
+// conditions (set_todos = core agents; email.* = agents that
 // own a configured mailbox; tool_search_tool_* = when the MCP search cache is
 // enabled). The global catalog is a CAPABILITY REFERENCE — "everything the
 // platform can do" — while the per-agent view (GET /agents/{id}/tools, which
@@ -119,10 +119,9 @@ func GeneralBuiltinMetadata() []Tool {
 	// so the global catalog is a complete capability reference. Nil deps — never
 	// executed; the per-agent registry supplies live instances.
 
-	// task_add_todo / task_add_dependency (CategoryCore): registered alongside the
-	// task tools for core agents. Nil store — metadata only.
-	out = append(out, NewTaskAddTodoTool(nil))
-	out = append(out, NewTaskAddDependencyTool(nil))
+	// set_todos (CategoryTask): the agent-facing scratchpad facade, registered
+	// alongside the task tools for core agents. Nil store — metadata only.
+	out = append(out, NewSetTodosTool(nil))
 
 	// Email tools (CategoryCommunication): registered only for agents that own a
 	// configured mailbox (pkg/agent/email_tools.go). EmailToolset(nil) returns

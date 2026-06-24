@@ -1692,8 +1692,9 @@ func registerSharedTools(
 			))
 			agent.Tools.Register(taskUpdate)
 
-			agent.Tools.Register(tools.NewTaskAddTodoTool(al.taskStore))
-			agent.Tools.Register(tools.NewTaskAddDependencyTool(al.taskStore))
+			setTodos := tools.NewSetTodosTool(al.taskStore)
+			setTodos.SetHome(filepath.Dir(cfg.WorkspacePath()))
+			agent.Tools.Register(setTodos)
 			agent.Tools.Register(tools.NewTaskDeleteTool(al.taskStore))
 			agent.Tools.Register(tools.NewAgentListTool(func() []tools.AgentInfo {
 				var infos []tools.AgentInfo
@@ -4861,6 +4862,21 @@ turnLoop:
 		}
 
 		callMessages := repairedHistory
+		// Re-inject the acting agent's current scratchpad as an ephemeral system
+		// message so the checklist survives context compression and the agent
+		// always sees its plan at the top of the turn. The note is NOT persisted
+		// to history — it is rebuilt fresh each turn from the task store.
+		if ts.agent != nil {
+			if note := al.buildScratchpadNote(ts.agent.ID); note != "" && len(callMessages) > 0 {
+				// Insert after callMessages[0] (the system prompt) so it immediately
+				// follows the agent's identity, before the conversation history.
+				injected := make([]providers.Message, 0, len(callMessages)+1)
+				injected = append(injected, callMessages[0])
+				injected = append(injected, providers.Message{Role: "system", Content: note})
+				injected = append(injected, callMessages[1:]...)
+				callMessages = injected
+			}
+		}
 		if gracefulTerminal {
 			callMessages = append(append([]providers.Message(nil), repairedHistory...), ts.interruptHintMessage())
 			providerToolDefs = nil
@@ -8241,4 +8257,49 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 			},
 		)
 	}
+}
+
+// buildScratchpadNote returns a short ephemeral system note for the agent's
+// current set_todos scratchpad. It queries the task store for the most-recent
+// active goal-task that has todos assigned to agentID, renders them, and
+// returns the note string. Returns "" when there is nothing to inject (no
+// store, no active goal-task with todos). This is rebuilt fresh every turn so
+// it survives context compression without polluting the persisted transcript.
+func (al *AgentLoop) buildScratchpadNote(agentID string) string {
+	if al.taskStore == nil || agentID == "" {
+		return ""
+	}
+	tasks, err := al.taskStore.List(task.Filter{AgentID: agentID})
+	if err != nil {
+		return ""
+	}
+	// Find the most-recent active goal-task that has at least one todo.
+	var found *task.Task
+	for i := range tasks {
+		tk := &tasks[i]
+		if task.IsTerminal(tk.Status) {
+			continue
+		}
+		if len(tk.Todos) == 0 {
+			continue
+		}
+		// List is sorted priority ASC then created_at ASC; last match is
+		// most-recently-created among equal-priority active goal-tasks.
+		found = tk
+	}
+	if found == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("# Current scratchpad\nGoal: ")
+	sb.WriteString(found.Title)
+	sb.WriteByte('\n')
+	for _, td := range found.Todos {
+		sb.WriteString("- [")
+		sb.WriteString(string(td.Status))
+		sb.WriteString("] ")
+		sb.WriteString(td.Text)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
 }

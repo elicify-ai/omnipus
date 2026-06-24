@@ -278,7 +278,9 @@ func (t *Task) normalize() error {
 	return nil
 }
 
-// validateTodos checks each todo's text length (1..500).
+// validateTodos checks each todo's text length (1..500) and that status is a
+// known tri-state value. The UnmarshalJSON default-to-pending is only for
+// legacy disk reads; tool/REST input must supply a valid status explicitly.
 func validateTodos(todos []Todo) error {
 	for i, td := range todos {
 		n := len([]rune(td.Text))
@@ -287,6 +289,9 @@ func validateTodos(todos []Todo) error {
 		}
 		if n > 500 {
 			return verr("todo[%d]: text must be 500 characters or fewer", i)
+		}
+		if !IsValidTodoStatus(td.Status) {
+			return verr("todo[%d]: status %q is not valid (must be pending, in_progress, or completed)", i, td.Status)
 		}
 	}
 	return nil
@@ -649,8 +654,9 @@ func (s *Store) Delete(id string) (unblockedIDs []string, err error) {
 // under the per-task lock taken ONCE internally (load + mutate + validate +
 // write). It must NOT be called while already holding the per-task lock — the
 // store mutex is non-reentrant. Returns the updated task. This is the atomic
-// mutator the task_add_todo tool uses to avoid the Lock()+Update() re-entrancy
-// deadlock.
+// append primitive (the full-replace counterpart is SetTodos, the primary path
+// for the set_todos scratchpad tool); both avoid the Lock()+Update()
+// re-entrancy deadlock.
 func (s *Store) AppendTodo(id string, td Todo) (*Task, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
@@ -673,6 +679,16 @@ func (s *Store) AppendTodo(id string, td Todo) (*Task, error) {
 		return nil, err
 	}
 	return t, nil
+}
+
+// SetTodos replaces the task's entire checklist (full-replace, idempotent).
+// It validates the todos, then atomically writes. This is the primary path
+// for the set_todos scratchpad tool (replaces append-only AppendTodo).
+func (s *Store) SetTodos(id string, todos []Todo) (*Task, error) {
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
+	return s.Update(id, Patch{Todos: &todos})
 }
 
 // AddDependency atomically adds a single blocked_by edge (id depends on

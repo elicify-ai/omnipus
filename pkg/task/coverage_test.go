@@ -39,6 +39,7 @@
 package task
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -383,16 +384,16 @@ func TestAppendTodo_AtomicAppend(t *testing.T) {
 	mustCreate(t, s, tk)
 
 	// Start empty — append two todos and verify both are persisted.
-	got1, err := s.AppendTodo(tk.ID, Todo{Text: "first item", Done: false})
+	got1, err := s.AppendTodo(tk.ID, Todo{Text: "first item", Status: TodoPending})
 	require.NoError(t, err)
 	assert.Len(t, got1.Todos, 1, "one todo after first append")
 	assert.Equal(t, "first item", got1.Todos[0].Text)
 
-	got2, err := s.AppendTodo(tk.ID, Todo{Text: "second item", Done: true})
+	got2, err := s.AppendTodo(tk.ID, Todo{Text: "second item", Status: TodoCompleted})
 	require.NoError(t, err)
 	assert.Len(t, got2.Todos, 2, "two todos after second append")
 	assert.Equal(t, "second item", got2.Todos[1].Text)
-	assert.True(t, got2.Todos[1].Done)
+	assert.Equal(t, TodoCompleted, got2.Todos[1].Status)
 
 	// Persistence: re-read from disk.
 	persisted, err := s.Get(tk.ID)
@@ -422,6 +423,117 @@ func TestAppendTodo_NotFound(t *testing.T) {
 	_, err := s.AppendTodo("nonexistent-task", Todo{Text: "x"})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNotFound))
+}
+
+// ---- SetTodos ---------------------------------------------------------------
+
+func TestSetTodos_FullReplace(t *testing.T) {
+	// SetTodos with 3 items, then replace with 2 → exactly 2 remain.
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	mustCreate(t, s, tk)
+
+	three := []Todo{
+		{Text: "step one", Status: TodoPending},
+		{Text: "step two", Status: TodoInProgress},
+		{Text: "step three", Status: TodoCompleted},
+	}
+	got, err := s.SetTodos(tk.ID, three)
+	require.NoError(t, err, "SetTodos with 3 items must succeed")
+	require.Len(t, got.Todos, 3, "3 todos after first SetTodos")
+
+	two := []Todo{
+		{Text: "only one", Status: TodoPending},
+		{Text: "only two", Status: TodoCompleted},
+	}
+	got, err = s.SetTodos(tk.ID, two)
+	require.NoError(t, err, "SetTodos with 2 items must succeed")
+	require.Len(t, got.Todos, 2, "exactly 2 todos after second SetTodos (full-replace)")
+	assert.Equal(t, "only one", got.Todos[0].Text)
+	assert.Equal(t, TodoPending, got.Todos[0].Status)
+	assert.Equal(t, "only two", got.Todos[1].Text)
+	assert.Equal(t, TodoCompleted, got.Todos[1].Status)
+
+	// Persistence: re-read from disk.
+	persisted, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	require.Len(t, persisted.Todos, 2, "exactly 2 todos must persist to disk")
+}
+
+func TestSetTodos_ClearsChecklist(t *testing.T) {
+	// SetTodos with an empty slice clears the checklist.
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Todos = []Todo{{Text: "existing", Status: TodoPending}}
+	mustCreate(t, s, tk)
+
+	got, err := s.SetTodos(tk.ID, []Todo{})
+	require.NoError(t, err)
+	assert.Empty(t, got.Todos, "checklist must be empty after SetTodos([])")
+}
+
+func TestSetTodos_NotFound(t *testing.T) {
+	s := newStore(t)
+	_, err := s.SetTodos("nonexistent-task", []Todo{{Text: "x", Status: TodoPending}})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNotFound))
+}
+
+// ---- UnmarshalJSON legacy compatibility ------------------------------------
+
+func TestTodoUnmarshalJSON_LegacyDoneTrue(t *testing.T) {
+	// Legacy disk format: {"text":"x","done":true} → Status == completed.
+	var td Todo
+	require.NoError(t, json.Unmarshal([]byte(`{"text":"x","done":true}`), &td))
+	assert.Equal(t, "x", td.Text)
+	assert.Equal(t, TodoCompleted, td.Status)
+}
+
+func TestTodoUnmarshalJSON_LegacyDoneFalse(t *testing.T) {
+	// Legacy disk format: {"text":"y","done":false} → Status == pending.
+	var td Todo
+	require.NoError(t, json.Unmarshal([]byte(`{"text":"y","done":false}`), &td))
+	assert.Equal(t, "y", td.Text)
+	assert.Equal(t, TodoPending, td.Status)
+}
+
+func TestTodoUnmarshalJSON_NewStatus(t *testing.T) {
+	// New format: {"text":"z","status":"in_progress"} → Status == in_progress.
+	var td Todo
+	require.NoError(t, json.Unmarshal([]byte(`{"text":"z","status":"in_progress"}`), &td))
+	assert.Equal(t, "z", td.Text)
+	assert.Equal(t, TodoInProgress, td.Status)
+}
+
+func TestTodoUnmarshalJSON_NoFields_DefaultsPending(t *testing.T) {
+	// Neither done nor status → defaults to pending.
+	var td Todo
+	require.NoError(t, json.Unmarshal([]byte(`{"text":"w"}`), &td))
+	assert.Equal(t, TodoPending, td.Status)
+}
+
+// ---- validateTodos status validation ---------------------------------------
+
+func TestValidateTodos_RejectsEmptyStatus(t *testing.T) {
+	// Empty status is invalid at tool/REST input time.
+	err := validateTodos([]Todo{{Text: "x", Status: ""}})
+	require.Error(t, err, "empty status must be rejected")
+	assert.True(t, errors.Is(err, ErrValidation))
+}
+
+func TestValidateTodos_RejectsUnknownStatus(t *testing.T) {
+	// Unknown status string is invalid.
+	err := validateTodos([]Todo{{Text: "x", Status: "done"}})
+	require.Error(t, err, `"done" is not a valid TodoStatus`)
+	assert.True(t, errors.Is(err, ErrValidation))
+}
+
+func TestValidateTodos_AcceptsAllValidStatuses(t *testing.T) {
+	// All three canonical statuses must be accepted.
+	for _, st := range []TodoStatus{TodoPending, TodoInProgress, TodoCompleted} {
+		err := validateTodos([]Todo{{Text: "x", Status: st}})
+		assert.NoError(t, err, "status %q must be valid", st)
+	}
 }
 
 // ---- AddDependency ---------------------------------------------------------
@@ -1161,7 +1273,7 @@ func TestCreatePersistsAllFields(t *testing.T) {
 		SourceChannel: "telegram",
 		SourceChatID:  "chat-1",
 		Trigger:       &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
-		Todos:         []Todo{{Text: "alpha todo", Done: false}},
+		Todos:         []Todo{{Text: "alpha todo", Status: TodoPending}},
 	}
 	require.NoError(t, s.Create(tk1))
 

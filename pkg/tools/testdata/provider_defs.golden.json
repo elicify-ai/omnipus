@@ -154,27 +154,6 @@
     "source": "builtin"
   },
   {
-    "name": "system.pin.create",
-    "description": "Pin a chat response.\nParameters: session_id (required), message_id (required), title, tags, workspace_id.",
-    "scope": "core",
-    "category": "system",
-    "source": "builtin"
-  },
-  {
-    "name": "system.pin.delete",
-    "description": "Delete a pin. Parameters: id (required), confirm (bool, must be true).",
-    "scope": "core",
-    "category": "system",
-    "source": "builtin"
-  },
-  {
-    "name": "system.pin.list",
-    "description": "List pinned artifacts with optional filters.\nParameters: agent_id, workspace_id, tags, search (all optional).",
-    "scope": "core",
-    "category": "system",
-    "source": "builtin"
-  },
-  {
     "name": "system.provider.configure",
     "description": "Add or update an LLM provider with its API key.\nParameters: name (required), api_key (for cloud), api_base (optional).",
     "scope": "core",

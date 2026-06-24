@@ -192,7 +192,7 @@ export function CreateTaskSlideOver({
     return form.todos
       .map((t) => t.trim())
       .filter((t) => t.length > 0)
-      .map((text) => ({ text, done: false }))
+      .map((text) => ({ text, status: 'pending' as const }))
   }
 
   /** Client-side validation of the chosen trigger; returns an error string or ''. */

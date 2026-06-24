@@ -779,11 +779,11 @@ describe('setTaskTodos', () => {
     // And the body is a bare JSON array (NOT a wrapped object like {todos:[...]}).
     // Traces to: unified-task-contract spec — setTaskTodos bare-array contract
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(
-      makeTaskResponse({ id: 'task-123', title: 'My task', todos: [{ text: 'Draft intro', done: false }] })
+      makeTaskResponse({ id: 'task-123', title: 'My task', todos: [{ text: 'Draft intro', status: 'pending' }] })
     ))
 
     const { setTaskTodos } = await import('./api')
-    const result = await setTaskTodos('task-123', [{ text: 'Draft intro', done: false }])
+    const result = await setTaskTodos('task-123', [{ text: 'Draft intro', status: 'pending' }])
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -796,7 +796,7 @@ describe('setTaskTodos', () => {
     const body = JSON.parse((init as RequestInit).body as string)
     expect(Array.isArray(body)).toBe(true)
     expect(body).toHaveLength(1)
-    expect(body[0]).toEqual({ text: 'Draft intro', done: false })
+    expect(body[0]).toEqual({ text: 'Draft intro', status: 'pending' })
 
     // Sanity: returned task has the updated todos.
     expect(result.id).toBe('task-123')
@@ -829,8 +829,8 @@ describe('setTaskTodos', () => {
       .mockResolvedValueOnce(makeJsonResponse(makeTaskResponse({ id: 'task-bbb', title: 'Task task-bbb' })))
 
     const { setTaskTodos } = await import('./api')
-    await setTaskTodos('task-aaa', [{ text: 'Step 1', done: true }])
-    await setTaskTodos('task-bbb', [{ text: 'Step 2', done: false }])
+    await setTaskTodos('task-aaa', [{ text: 'Step 1', status: 'completed' }])
+    await setTaskTodos('task-bbb', [{ text: 'Step 2', status: 'pending' }])
 
     const [url1] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const [url2] = fetchSpy.mock.calls[1] as [string, RequestInit]

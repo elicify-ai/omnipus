@@ -424,7 +424,7 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     expect(body.due).toBe(new Date('2026-08-01T09:00').toISOString())
   })
 
-  it('posts todos from the checklist as {text, done:false}', async () => {
+  it('posts todos from the checklist as {text, status:"pending"}', async () => {
     vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
     renderSlideOver()
 
@@ -441,8 +441,8 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
 
     const body = vi.mocked(createTask).mock.calls[0][0]
     expect(body.todos).toEqual([
-      { text: 'First item', done: false },
-      { text: 'Second item', done: false },
+      { text: 'First item', status: 'pending' },
+      { text: 'Second item', status: 'pending' },
     ])
   })
 
