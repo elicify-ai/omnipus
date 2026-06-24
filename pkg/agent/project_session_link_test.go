@@ -6,8 +6,8 @@
 //
 // These exercise the workspace-session linker AFTER-TOOL hook end-to-end through
 // runAgentLoop, driven by a scripted ScenarioProvider (no LLM call is made).
-// They verify the hook WIRING — that when a real system.task.create /
-// system.task.update tool call carries a non-empty workspace_id, a link entry is
+// They verify the hook WIRING — that when a real create_task_in_workspace /
+// update_task_in_workspace tool call carries a non-empty workspace_id, a link entry is
 // appended to ~/.omnipus/project_session_links.jsonl, and that no link is
 // written when workspace_id is absent.
 //
@@ -74,8 +74,8 @@ func newLinkTestEnv(t *testing.T, provider *testutil.ScenarioProvider) *linkTest
 
 	// Register the real GTD task tools with a Deps rooted at the same home the
 	// linker uses, so workspace validation in task.create/update reads the workspace
-	// files we write, and the resulting tool name (system.task.create /
-	// system.task.update) is exactly what the linker's AfterTool hook keys on.
+	// files we write, and the resulting tool name (create_task_in_workspace /
+	// update_task_in_workspace) is exactly what the linker's AfterTool hook keys on.
 	deps := &systools.Deps{Home: home}
 	al.RegisterTool(systools.NewTaskCreateTool(deps))
 	al.RegisterTool(systools.NewTaskUpdateTool(deps))
@@ -185,10 +185,10 @@ func TestAgentLoop_TaskCreate_WithWorkspaceID_LinksSession(t *testing.T) {
 	require.Empty(t, systools.ReadLinks(env.home, workspaceID),
 		"precondition: no link should exist before the tool call")
 
-	// Step 1: scripted tool call to system.task.create with a real workspace_id.
+	// Step 1: scripted tool call to create_task_in_workspace with a real workspace_id.
 	// Step 2: scripted text so the turn completes after the tool result.
 	provider.
-		WithToolCall("system.task.create", `{"name":"fix login","workspace_id":"`+workspaceID+`"}`).
+		WithToolCall("create_task_in_workspace", `{"name":"fix login","workspace_id":"`+workspaceID+`"}`).
 		WithText("Created the task.")
 
 	runOneToolTurn(t, env, sessionID)
@@ -196,10 +196,10 @@ func TestAgentLoop_TaskCreate_WithWorkspaceID_LinksSession(t *testing.T) {
 	// Assert: exactly one link entry for (workspaceID, sessionID) was written.
 	links := systools.ReadLinks(env.home, workspaceID)
 	require.Len(t, links, 1,
-		"CRITICAL: system.task.create with workspace_id must append exactly one link entry "+
+		"CRITICAL: create_task_in_workspace with workspace_id must append exactly one link entry "+
 			"(linker AfterTool hook did not fire or did not write)")
 	assert.Equal(t, workspaceID, links[0].WorkspaceID,
-		"link entry workspace_id must match the workspace_id passed to system.task.create")
+		"link entry workspace_id must match the workspace_id passed to create_task_in_workspace")
 	assert.Equal(t, sessionID, links[0].SessionID,
 		"link entry session_id must be the transcript session id of the turn")
 	assert.NotEmpty(t, links[0].CreatedAt,
@@ -237,10 +237,10 @@ func TestAgentLoop_TaskUpdate_WithWorkspaceID_LinksSession(t *testing.T) {
 	// Turn 2: task.update in workspace B — must ADD (B, S) without removing (A, S).
 	provider.
 		// turn 1 (create in A)
-		WithToolCall("system.task.create", `{"name":"seed","workspace_id":"`+workspaceA+`"}`).
+		WithToolCall("create_task_in_workspace", `{"name":"seed","workspace_id":"`+workspaceA+`"}`).
 		WithText("Linked to workspace A.").
 		// turn 2 (update in B)
-		WithToolCall("system.task.update", `{"id":"`+taskID+`","status":"active","workspace_id":"`+workspaceB+`"}`).
+		WithToolCall("update_task_in_workspace", `{"id":"`+taskID+`","status":"active","workspace_id":"`+workspaceB+`"}`).
 		WithText("Updated and linked to workspace B.")
 
 	runOneToolTurn(t, env, sessionID) // create in A
@@ -254,7 +254,7 @@ func TestAgentLoop_TaskUpdate_WithWorkspaceID_LinksSession(t *testing.T) {
 	// Assert (B, S) was added by the update.
 	linksB := systools.ReadLinks(env.home, workspaceB)
 	require.Len(t, linksB, 1,
-		"CRITICAL: system.task.update with workspace_id must append a (B, S) link entry")
+		"CRITICAL: update_task_in_workspace with workspace_id must append a (B, S) link entry")
 	assert.Equal(t, workspaceB, linksB[0].WorkspaceID, "new link workspace_id must be workspace B")
 	assert.Equal(t, sessionID, linksB[0].SessionID, "new link session must be the same session S")
 }
@@ -282,10 +282,10 @@ func TestAgentLoop_TaskCreate_NoWorkspaceID_NoLink(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr),
 		"precondition: link file must not exist before the tool call")
 
-	// Step 1: scripted task.create with NO workspace_id.
+	// Step 1: scripted create_task_in_workspace with NO workspace_id.
 	// Step 2: scripted text so the turn completes.
 	provider.
-		WithToolCall("system.task.create", `{"name":"write docs"}`).
+		WithToolCall("create_task_in_workspace", `{"name":"write docs"}`).
 		WithText("Created unassigned task.")
 
 	runOneToolTurn(t, env, sessionID)
@@ -293,7 +293,7 @@ func TestAgentLoop_TaskCreate_NoWorkspaceID_NoLink(t *testing.T) {
 	// Assert: no link file was created (nothing to write means no append).
 	_, statErr = os.Stat(linkFile)
 	assert.True(t, os.IsNotExist(statErr),
-		"CRITICAL: a task.create without workspace_id must NOT create the link file")
+		"CRITICAL: a create_task_in_workspace without workspace_id must NOT create the link file")
 
 	// Differentiation: prove the negative is meaningful — a real workspace that was
 	// never referenced has zero links even though the turn ran a real tool.

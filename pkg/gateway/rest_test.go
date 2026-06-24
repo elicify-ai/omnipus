@@ -702,7 +702,7 @@ func TestGetAgentTools_CustomAgent(t *testing.T) {
 							DefaultPolicy: config.ToolPolicyDeny,
 							Policies: map[string]config.ToolPolicy{
 								"read_file":  config.ToolPolicyAllow,
-								"web_search": config.ToolPolicyAllow,
+								"search_web": config.ToolPolicyAllow,
 							},
 						},
 					},
@@ -732,7 +732,7 @@ func TestGetAgentTools_CustomAgent(t *testing.T) {
 	policies, ok := builtin["policies"].(map[string]any)
 	require.True(t, ok, "policies must be a map")
 	assert.Equal(t, "allow", policies["read_file"])
-	assert.Equal(t, "allow", policies["web_search"])
+	assert.Equal(t, "allow", policies["search_web"])
 }
 
 // TestUpdateAgentTools_LockedAgentForbidden verifies PUT /api/v1/agents/omnipus-system/tools
@@ -892,8 +892,8 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 				"default_policy": "deny",
 				"policies": {
 					"read_file": "allow",
-					"web_search": "allow",
-					"web_fetch": "allow"
+					"search_web": "allow",
+					"fetch_url": "allow"
 				}
 			},
 			"mcp": {
@@ -934,7 +934,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	assert.Equal(t, "deny", builtinMap["default_policy"])
 	policies, _ := builtinMap["policies"].(map[string]any)
 	assert.Equal(t, "allow", policies["read_file"])
-	assert.Equal(t, "allow", policies["web_search"])
+	assert.Equal(t, "allow", policies["search_web"])
 }
 
 // TestCreateAgent_WithSkills verifies POST /api/v1/agents with skills persists and
@@ -1370,7 +1370,7 @@ func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
 //
 // BDD: Given a custom agent exists in config and a config.json is on disk,
 //
-//	When PUT /api/v1/agents/{id}/tools is called with mode=explicit and visible=["read_file","web_search"],
+//	When PUT /api/v1/agents/{id}/tools is called with mode=explicit and visible=["read_file","search_web"],
 //	Then the response is 200, agent_type is "custom", config.builtin.mode is "explicit",
 //	And config.json on disk reflects the persisted tools config.
 //
@@ -1401,7 +1401,7 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	body := `{"builtin":{"mode":"explicit","visible":["read_file","web_search"]}}`
+	body := `{"builtin":{"mode":"explicit","visible":["read_file","search_web"]}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/update-agent/tools", strings.NewReader(body))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
@@ -1447,7 +1447,7 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	policiesRaw, ok := persistedBuiltin["policies"].(map[string]any)
 	require.True(t, ok, "config.json must persist policies map")
 	assert.Equal(t, "allow", policiesRaw["read_file"])
-	assert.Equal(t, "allow", policiesRaw["web_search"])
+	assert.Equal(t, "allow", policiesRaw["search_web"])
 }
 
 // TestUpdateAgentTools_ReloadFailure_Returns503 verifies that if TriggerReload fails

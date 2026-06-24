@@ -121,8 +121,9 @@ func (t *RememberTool) SetMemoryRateLimiter(limiter *MemoryRateLimiter) {
 	t.rateLimiter = limiter
 }
 
-func (t *RememberTool) Name() string     { return "remember" }
-func (t *RememberTool) Scope() ToolScope { return ScopeGeneral }
+func (t *RememberTool) Name() string           { return "remember" }
+func (t *RememberTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *RememberTool) Category() ToolCategory { return CategoryMemory }
 func (t *RememberTool) Description() string {
 	return "Persist a fact, decision, reference, or lesson to long-term memory. " +
 		"Use category 'key_decision' for decisions made, 'reference' for reference information, " +
@@ -312,8 +313,9 @@ func NewRecallMemoryTool(store MemorySearcher) *RecallMemoryTool {
 	return &RecallMemoryTool{store: store}
 }
 
-func (t *RecallMemoryTool) Name() string     { return "recall_memory" }
-func (t *RecallMemoryTool) Scope() ToolScope { return ScopeGeneral }
+func (t *RecallMemoryTool) Name() string           { return "recall_memory" }
+func (t *RecallMemoryTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *RecallMemoryTool) Category() ToolCategory { return CategoryMemory }
 func (t *RecallMemoryTool) Description() string {
 	return "Search durable long-term memory. Returns matching entries newest-first. " +
 		"Use this when you need to recall a past decision, reference, or lesson. " +
@@ -454,8 +456,9 @@ func (t *RetrospectiveTool) SetMemoryRateLimiter(limiter *MemoryRateLimiter) {
 	t.rateLimiter = limiter
 }
 
-func (t *RetrospectiveTool) Name() string     { return "retrospective" }
-func (t *RetrospectiveTool) Scope() ToolScope { return ScopeGeneral }
+func (t *RetrospectiveTool) Name() string           { return "run_retrospective" }
+func (t *RetrospectiveTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *RetrospectiveTool) Category() ToolCategory { return CategoryMemory }
 func (t *RetrospectiveTool) Description() string {
 	return "Record a session retrospective after confirming its contents with the user. " +
 		"Captures what went well and what needs improvement for future reference. " +
@@ -517,7 +520,7 @@ func (t *RetrospectiveTool) Execute(ctx context.Context, args map[string]any) *T
 	// and retrospective calls.
 	if decision := t.rateLimiter.Allow(agentID, callerIdentity(ctx)); !decision.Allowed {
 		t.logRateLimited(agentID, sessionID, callerIdentity(ctx), r, decision)
-		return rateLimitedResult("retrospective", decision)
+		return rateLimitedResult("run_retrospective", decision)
 	}
 
 	if err := t.store.AppendRetro(sessionID, r); err != nil {
@@ -545,7 +548,7 @@ func (t *RetrospectiveTool) logRateLimited(
 		Decision:   "deny",
 		AgentID:    agentID,
 		SessionID:  sessionID,
-		Tool:       "retrospective",
+		Tool:       "run_retrospective",
 		PolicyRule: fmt.Sprintf("memory_rate_limit:%s", decision.Scope),
 		Details: map[string]any{
 			"outcome":             "rate_limited",
@@ -558,7 +561,7 @@ func (t *RetrospectiveTool) logRateLimited(
 	}
 	if err := t.auditLogger.Log(entry); err != nil {
 		slog.Warn("memory: retrospective rate-limit audit log failed",
-			"tool", "retrospective",
+			"tool", "run_retrospective",
 			"agent_id", agentID,
 			"session_id", sessionID,
 			"scope", decision.Scope,
@@ -577,7 +580,7 @@ func (t *RetrospectiveTool) logAudit(agentID, sessionID, outcome string, r Memor
 		Event:     "memory.retrospective",
 		AgentID:   agentID,
 		SessionID: sessionID,
-		Tool:      "retrospective",
+		Tool:      "run_retrospective",
 		Details: map[string]any{
 			"outcome":             outcome,
 			"went_well_count":     len(r.WentWell),
@@ -590,7 +593,7 @@ func (t *RetrospectiveTool) logAudit(agentID, sessionID, outcome string, r Memor
 		// still be visible — a silently-dropped audit write hides real
 		// logger regressions.
 		slog.Warn("memory: retrospective audit log failed",
-			"tool", "retrospective",
+			"tool", "run_retrospective",
 			"agent_id", agentID,
 			"session_id", sessionID,
 			"error", err,

@@ -58,7 +58,7 @@ func allPolicyTools() []Tool {
 	return []Tool{
 		makeScopedTool("system.agent.list", ScopeCore),
 		makeScopedTool("exec", ScopeCore),
-		makeScopedTool("web_search", ScopeGeneral),
+		makeScopedTool("search_web", ScopeGeneral),
 	}
 }
 
@@ -69,18 +69,18 @@ func allPolicyTools() []Tool {
 func TestFilterToolsByPolicy_GlobalDeny_RemovesTool(t *testing.T) {
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:       "allow",
-		GlobalPolicies:      map[string]string{"web_search": "deny"},
+		GlobalPolicies:      map[string]string{"search_web": "deny"},
 		GlobalDefaultPolicy: "allow",
 	}
 
 	got, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
 
 	for _, t := range got {
-		if t.Name() == "web_search" {
+		if t.Name() == "search_web" {
 			panic("web_search must be removed when globally denied")
 		}
 	}
-	if _, exists := policyMap["web_search"]; exists {
+	if _, exists := policyMap["search_web"]; exists {
 		panic("denied tool must not appear in policyMap")
 	}
 }
@@ -90,14 +90,14 @@ func TestFilterToolsByPolicy_GlobalDeny_RemovesTool(t *testing.T) {
 func TestFilterToolsByPolicy_GlobalAsk_AgentAllow_EffectiveAsk(t *testing.T) {
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"web_search": "allow"},
-		GlobalPolicies:      map[string]string{"web_search": "ask"},
+		Policies:            map[string]string{"search_web": "allow"},
+		GlobalPolicies:      map[string]string{"search_web": "ask"},
 		GlobalDefaultPolicy: "allow",
 	}
 
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
 
-	if p, ok := policyMap["web_search"]; !ok || p != "ask" {
+	if p, ok := policyMap["search_web"]; !ok || p != "ask" {
 		t.Errorf("expected effective policy 'ask' for web_search, got %q (ok=%v)", p, ok)
 	}
 }
@@ -107,7 +107,7 @@ func TestFilterToolsByPolicy_GlobalAsk_AgentAllow_EffectiveAsk(t *testing.T) {
 func TestFilterToolsByPolicy_GlobalAllow_AgentDeny_EffectiveDeny(t *testing.T) {
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"web_search": "deny"},
+		Policies:            map[string]string{"search_web": "deny"},
 		GlobalPolicies:      map[string]string{},
 		GlobalDefaultPolicy: "allow",
 	}
@@ -115,7 +115,7 @@ func TestFilterToolsByPolicy_GlobalAllow_AgentDeny_EffectiveDeny(t *testing.T) {
 	got, _ := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
 
 	for _, tool := range got {
-		if tool.Name() == "web_search" {
+		if tool.Name() == "search_web" {
 			t.Error("web_search must be absent when agent policy is deny")
 		}
 	}
@@ -126,14 +126,14 @@ func TestFilterToolsByPolicy_GlobalAllow_AgentDeny_EffectiveDeny(t *testing.T) {
 func TestFilterToolsByPolicy_GlobalAllow_AgentAsk_EffectiveAsk(t *testing.T) {
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"web_search": "ask"},
+		Policies:            map[string]string{"search_web": "ask"},
 		GlobalPolicies:      map[string]string{},
 		GlobalDefaultPolicy: "allow",
 	}
 
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
 
-	if p, ok := policyMap["web_search"]; !ok || p != "ask" {
+	if p, ok := policyMap["search_web"]; !ok || p != "ask" {
 		t.Errorf("expected effective policy 'ask' for web_search, got %q (ok=%v)", p, ok)
 	}
 }
@@ -143,14 +143,14 @@ func TestFilterToolsByPolicy_GlobalAllow_AgentAsk_EffectiveAsk(t *testing.T) {
 func TestFilterToolsByPolicy_AllAllow(t *testing.T) {
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"web_search": "allow"},
-		GlobalPolicies:      map[string]string{"web_search": "allow"},
+		Policies:            map[string]string{"search_web": "allow"},
+		GlobalPolicies:      map[string]string{"search_web": "allow"},
 		GlobalDefaultPolicy: "allow",
 	}
 
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
 
-	if p, ok := policyMap["web_search"]; !ok || p != "allow" {
+	if p, ok := policyMap["search_web"]; !ok || p != "allow" {
 		t.Errorf("expected effective policy 'allow' for web_search, got %q (ok=%v)", p, ok)
 	}
 }
@@ -207,7 +207,7 @@ func TestFilterToolsByPolicy_EmptyConfig_DefaultsToAllow(t *testing.T) {
 	if len(got) != 3 {
 		t.Errorf("expected 3 tools for core agent with nil config, got %d", len(got))
 	}
-	for _, name := range []string{"system.agent.list", "exec", "web_search"} {
+	for _, name := range []string{"system.agent.list", "exec", "search_web"} {
 		if p, ok := policyMap[name]; !ok || p != "allow" {
 			t.Errorf("expected policy 'allow' for %q, got %q (ok=%v)", name, p, ok)
 		}
@@ -218,7 +218,7 @@ func TestFilterToolsByPolicy_EmptyConfig_DefaultsToAllow(t *testing.T) {
 // unknown/zero-value scope is denied (fail-closed).
 func TestFilterToolsByPolicy_UnknownScope_Denied(t *testing.T) {
 	unknownScopeTool := makeScopedTool("mystery_tool", ToolScope("unknown"))
-	tools := []Tool{unknownScopeTool, makeScopedTool("web_search", ScopeGeneral)}
+	tools := []Tool{unknownScopeTool, makeScopedTool("search_web", ScopeGeneral)}
 
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:       "allow",
@@ -234,7 +234,7 @@ func TestFilterToolsByPolicy_UnknownScope_Denied(t *testing.T) {
 	}
 	found := false
 	for _, tool := range got {
-		if tool.Name() == "web_search" {
+		if tool.Name() == "search_web" {
 			found = true
 		}
 	}

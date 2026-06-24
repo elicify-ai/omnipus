@@ -376,13 +376,13 @@ func loadTranscriptToolCalls(store *session.UnifiedStore, sessionID string) map[
 func isIdempotentTool(name string) bool {
 	switch name {
 	case
-		"web_search",
-		"web_fetch",
+		"search_web",
+		"fetch_url",
 		"read_file",
-		"list_dir",
+		"list_directory",
 		"find_skills",
-		"agent_list",
-		"task_list",
+		"list_agents",
+		"list_tasks",
 		"skills",
 		"find":
 		return true

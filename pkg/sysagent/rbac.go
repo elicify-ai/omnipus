@@ -44,63 +44,60 @@ type ToolPermission struct {
 // Derived from BRD Appendix D §D.5.3 and §D.5.4.
 var toolPermissions = map[string]ToolPermission{
 	// Agent management — destructive require admin.
-	"system.agent.create":         {MinRole: RoleOperator},
-	"system.agent.update":         {MinRole: RoleOperator},
-	"system.agent.delete":         {MinRole: RoleAdmin},
-	"system.agent.list":           {MinRole: RoleViewer},
-	"system.agent.activate":       {MinRole: RoleOperator},
-	"system.agent.deactivate":     {MinRole: RoleOperator},
-	"system.agent.read_metadata":  {MinRole: RoleViewer},
-	"system.agent.write_metadata": {MinRole: RoleOperator},
+	"create_agent":         {MinRole: RoleOperator},
+	"update_agent":         {MinRole: RoleOperator},
+	"delete_agent":         {MinRole: RoleAdmin},
+	"activate_agent":       {MinRole: RoleOperator},
+	"deactivate_agent":     {MinRole: RoleOperator},
+	"read_agent_metadata":  {MinRole: RoleViewer},
+	"write_agent_metadata": {MinRole: RoleOperator},
 
 	// Workspace management.
-	"system.workspace.create": {MinRole: RoleOperator},
-	"system.workspace.update": {MinRole: RoleOperator},
-	"system.workspace.delete": {MinRole: RoleAdmin},
-	"system.workspace.list":   {MinRole: RoleViewer},
-	"system.workspace.get":    {MinRole: RoleViewer},
+	"create_workspace": {MinRole: RoleOperator},
+	"update_workspace": {MinRole: RoleOperator},
+	"delete_workspace": {MinRole: RoleAdmin},
+	"list_workspaces":  {MinRole: RoleViewer},
+	"get_workspace":    {MinRole: RoleViewer},
 
 	// Task management.
-	"system.task.create": {MinRole: RoleOperator},
-	"system.task.update": {MinRole: RoleOperator},
-	"system.task.delete": {MinRole: RoleAdmin},
-	"system.task.list":   {MinRole: RoleViewer},
+	"create_task_in_workspace": {MinRole: RoleOperator},
+	"update_task_in_workspace": {MinRole: RoleOperator},
+	"delete_task_in_workspace": {MinRole: RoleAdmin},
+	"list_tasks_in_workspace":  {MinRole: RoleViewer},
 
 	// Channel management.
-	"system.channel.enable":    {MinRole: RoleOperator},
-	"system.channel.configure": {MinRole: RoleOperator},
-	"system.channel.disable":   {MinRole: RoleOperator},
-	"system.channel.list":      {MinRole: RoleViewer},
-	"system.channel.test":      {MinRole: RoleViewer},
+	"enable_channel":    {MinRole: RoleOperator},
+	"configure_channel": {MinRole: RoleOperator},
+	"disable_channel":   {MinRole: RoleOperator},
+	"list_channels":     {MinRole: RoleViewer},
+	"test_channel":      {MinRole: RoleViewer},
 
 	// Skill management.
-	"system.skill.install": {MinRole: RoleOperator},
-	"system.skill.remove":  {MinRole: RoleAdmin},
-	"system.skill.search":  {MinRole: RoleViewer},
-	"system.skill.list":    {MinRole: RoleViewer},
+	"remove_skill": {MinRole: RoleAdmin},
+	"list_skills":  {MinRole: RoleViewer},
 	// Skill authoring (FR-9.2): consent-gated writes that mutate the skills tree.
-	"system.skill.create": {MinRole: RoleAdmin},
-	"system.skill.edit":   {MinRole: RoleAdmin},
+	"create_skill": {MinRole: RoleAdmin},
+	"edit_skill":   {MinRole: RoleAdmin},
 
 	// MCP server management.
-	"system.mcp.add":    {MinRole: RoleOperator},
-	"system.mcp.remove": {MinRole: RoleAdmin},
-	"system.mcp.list":   {MinRole: RoleViewer},
+	"add_mcp_server":    {MinRole: RoleOperator},
+	"remove_mcp_server": {MinRole: RoleAdmin},
+	"list_mcp_servers":  {MinRole: RoleViewer},
 
 	// Provider management.
-	"system.provider.configure": {MinRole: RoleOperator},
-	"system.provider.list":      {MinRole: RoleViewer},
-	"system.provider.test":      {MinRole: RoleViewer},
-	"system.models.list":        {MinRole: RoleViewer},
+	"configure_provider": {MinRole: RoleOperator},
+	"list_providers":     {MinRole: RoleViewer},
+	"test_provider":      {MinRole: RoleViewer},
+	"list_models":        {MinRole: RoleViewer},
 
 	// Config.
-	"system.config.get": {MinRole: RoleViewer},
-	"system.config.set": {MinRole: RoleOperator},
+	"get_config": {MinRole: RoleViewer},
+	"set_config": {MinRole: RoleOperator},
 
 	// Diagnostics / utility.
-	"system.doctor.run": {MinRole: RoleViewer},
-	"system.cost.query": {MinRole: RoleViewer},
-	"system.navigate":   {MinRole: RoleViewer},
+	"run_doctor": {MinRole: RoleViewer},
+	"query_cost": {MinRole: RoleViewer},
+	"navigate":   {MinRole: RoleViewer},
 }
 
 // roleWeight returns a numeric weight for ordering; higher = more privileged.

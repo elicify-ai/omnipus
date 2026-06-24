@@ -110,7 +110,7 @@ func TestConfigValidator_ValidAgentConfig(t *testing.T) {
 // TestConfigValidator_EmptyPolicyValue_RejectsConfig verifies that a policy map
 // with an empty string value fails validation (FR-085).
 //
-// BDD: Given an agent config with policies: {"web_search": ""},
+// BDD: Given an agent config with policies: {"search_web": ""},
 //
 //	When ValidateAgentConfigs is called,
 //	Then the agent's result has OK=false and Error is non-empty.
@@ -124,7 +124,7 @@ func TestConfigValidator_EmptyPolicyValue_RejectsConfig(t *testing.T) {
 			Builtin: AgentBuiltinToolsCfg{
 				DefaultPolicy: ToolPolicyAllow,
 				Policies: map[string]ToolPolicy{
-					"web_search": "", // empty policy value: invalid per FR-085
+					"search_web": "", // empty policy value: invalid per FR-085
 				},
 			},
 		},

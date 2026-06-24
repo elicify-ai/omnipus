@@ -19,7 +19,7 @@ import (
 type ConfigGetTool struct{ deps *Deps }
 
 func NewConfigGetTool(d *Deps) *ConfigGetTool   { return &ConfigGetTool{deps: d} }
-func (t *ConfigGetTool) Name() string           { return "system.config.get" }
+func (t *ConfigGetTool) Name() string           { return "get_config" }
 func (t *ConfigGetTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ConfigGetTool) Description() string {
 	return "Read a configuration value by dot-notation key.\nParameters: key (required, e.g. 'gateway.port')."
@@ -44,7 +44,7 @@ func (t *ConfigGetTool) Execute(_ context.Context, args map[string]any) *tools.T
 		strings.Contains(lower, "token") || strings.Contains(lower, "password") {
 		return tools.ErrorResult(errorJSON("FORBIDDEN",
 			"Credentials cannot be read via config.get — they are write-only",
-			"Use system.provider.list to see configured providers (without keys)",
+			"Use list_providers to see configured providers (without keys)",
 		))
 	}
 	value, err := dotGet(t.deps.GetCfg(), key)
@@ -66,7 +66,7 @@ func (t *ConfigGetTool) Execute(_ context.Context, args map[string]any) *tools.T
 type ConfigSetTool struct{ deps *Deps }
 
 func NewConfigSetTool(d *Deps) *ConfigSetTool   { return &ConfigSetTool{deps: d} }
-func (t *ConfigSetTool) Name() string           { return "system.config.set" }
+func (t *ConfigSetTool) Name() string           { return "set_config" }
 func (t *ConfigSetTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ConfigSetTool) Description() string {
 	return "Update a configuration value.\nParameters: key (required), value (required)."
@@ -96,14 +96,14 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	if strings.Contains(lower, "api_key") || strings.Contains(lower, "secret") ||
 		strings.Contains(lower, "token") || strings.Contains(lower, "password") {
 		return tools.ErrorResult(errorJSON("FORBIDDEN",
-			"Use system.provider.configure to set API keys",
+			"Use configure_provider to set API keys",
 			"Credentials are stored encrypted in credentials.json, not config.json",
 		))
 	}
 	// Validate that the key refers to a known config path to prevent arbitrary injection.
 	if err := validateConfigKey(key); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_KEY", err.Error(),
-			"Use system.config.get to inspect available config keys"))
+			"Use get_config to inspect available config keys"))
 	}
 	requiresRestart := isRestartRequired(key)
 

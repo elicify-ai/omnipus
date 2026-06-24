@@ -16,12 +16,12 @@ import { FileReadPreviewUI, FileReadAliasDotUI } from "./tools/FileReadPreview";
 import { FileWriteConfirmUI, FileWriteAliasDotUI, EditFileConfirmUI, AppendFileConfirmUI } from "./tools/FileWriteConfirm";
 import { FileTreeViewUI, FileListAliasDotUI } from "./tools/FileTreeView";
 import { WebSearchResultUI } from "./tools/WebSearchResult";
-import { WebFetchPreviewUI } from "./tools/WebFetchPreview";
+import { WebFetchPreviewUI, WebFetchLegacyUI } from "./tools/WebFetchPreview";
 import { BrowserNavigateUI, BrowserNavigateUnderscoreUI } from "./tools/BrowserNavigate";
 import { WebServeUI } from "./tools/WebServeUI";
 import { ServeWorkspaceUI } from "./tools/ServeWorkspaceUI";
 import { RunInWorkspaceUI } from "./tools/RunInWorkspaceUI";
-import { WorkspaceShellUI, WorkspaceShellBgUI } from "./tools/WorkspaceShellUI";
+import { WorkspaceShellUI, WorkspaceShellBgUI, WorkspaceShellLegacyUI, WorkspaceShellBgLegacyUI } from "./tools/WorkspaceShellUI";
 import {
   BrowserClickUI, BrowserClickUnderscoreUI,
   BrowserTypeUI, BrowserTypeUnderscoreUI,
@@ -223,29 +223,35 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        *   file.write        → FileWriteAliasDotUI       (BRD alias)
        *   edit_file         → EditFileConfirmUI         (targeted string replacement)
        *   append_file       → AppendFileConfirmUI       (append to file)
-       *   list_dir          → FileTreeViewUI            (directory listing)
+       *   list_dir          → FileTreeViewUI            (legacy alias, directory listing)
+       *   list_directory    → FileTreeViewUI            (canonical name)
        *   file.list         → FileListAliasDotUI        (BRD alias)
-       *   web_search        → WebSearchResultUI         (search the web)
-       *   web_fetch         → WebFetchPreviewUI         (fetch a URL)
-       *   web_serve         → WebServeUI                (new canonical: static or dev, kind field)
+       *   search_web        → WebSearchResultUI         (canonical, search the web)
+       *   web_search        → WebSearchResultUI         (legacy alias)
+       *   fetch_url         → WebFetchPreviewUI         (canonical, fetch a URL)
+       *   web_fetch         → WebFetchLegacyUI          (legacy alias)
+       *   serve_web         → WebServeUI                (canonical: static or dev, kind field)
+       *   web_serve         → WebServeUI                (legacy alias)
        *   serve_workspace   → ServeWorkspaceUI          (back-compat alias → WebServeUI)
        *   run_in_workspace  → RunInWorkspaceUI          (back-compat alias → WebServeUI)
-       *   workspace.shell   → WorkspaceShellUI          (foreground shell, captured output)
-       *   workspace.shell_bg → WorkspaceShellBgUI       (background shell, captured output)
-       *   browser.navigate  → BrowserNavigateUI         (browser navigation + screenshot)
-       *   browser_navigate  → BrowserNavigateUnderscoreUI (underscore variant)
-       *   browser.click     → BrowserClickUI             (click element by selector)
-       *   browser_click     → BrowserClickUnderscoreUI
-       *   browser.type      → BrowserTypeUI              (type text into input)
-       *   browser_type      → BrowserTypeUnderscoreUI
-       *   browser.screenshot → BrowserScreenshotUI       (capture full-page PNG)
-       *   browser_screenshot → BrowserScreenshotUnderscoreUI
-       *   browser.get_text  → BrowserGetTextUI           (extract inner text)
-       *   browser_get_text  → BrowserGetTextUnderscoreUI
-       *   browser.wait      → BrowserWaitUI              (wait for element)
-       *   browser_wait      → BrowserWaitUnderscoreUI
-       *   browser.evaluate  → BrowserEvaluateUI          (run JS, return result)
-       *   browser_evaluate  → BrowserEvaluateUnderscoreUI
+       *   workspace_shell   → WorkspaceShellUI          (canonical, foreground shell)
+       *   workspace.shell   → WorkspaceShellLegacyUI   (legacy alias)
+       *   workspace_shell_bg → WorkspaceShellBgUI      (canonical, background shell)
+       *   workspace.shell_bg → WorkspaceShellBgLegacyUI (legacy alias)
+       *   browser_navigate  → BrowserNavigateUI         (canonical, browser navigation)
+       *   browser.navigate  → BrowserNavigateUnderscoreUI (legacy dot alias)
+       *   browser_click     → BrowserClickUI            (canonical)
+       *   browser.click     → BrowserClickUnderscoreUI  (legacy dot alias)
+       *   browser_type      → BrowserTypeUI             (canonical)
+       *   browser.type      → BrowserTypeUnderscoreUI   (legacy dot alias)
+       *   browser_screenshot → BrowserScreenshotUI      (canonical)
+       *   browser.screenshot → BrowserScreenshotUnderscoreUI (legacy dot alias)
+       *   browser_get_text  → BrowserGetTextUI          (canonical)
+       *   browser.get_text  → BrowserGetTextUnderscoreUI (legacy dot alias)
+       *   browser_wait      → BrowserWaitUI             (canonical)
+       *   browser.wait      → BrowserWaitUnderscoreUI   (legacy dot alias)
+       *   browser_evaluate  → BrowserEvaluateUI         (canonical)
+       *   browser.evaluate  → BrowserEvaluateUnderscoreUI (legacy dot alias)
        */}
       <TerminalOutputUI />
       <FileReadPreviewUI />
@@ -258,11 +264,14 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <FileListAliasDotUI />
       <WebSearchResultUI />
       <WebFetchPreviewUI />
+      <WebFetchLegacyUI />
       <WebServeUI />
       <ServeWorkspaceUI />
       <RunInWorkspaceUI />
       <WorkspaceShellUI />
       <WorkspaceShellBgUI />
+      <WorkspaceShellLegacyUI />
+      <WorkspaceShellBgLegacyUI />
       <BrowserNavigateUI />
       <BrowserNavigateUnderscoreUI />
       <BrowserClickUI />

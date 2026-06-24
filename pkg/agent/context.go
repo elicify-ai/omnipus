@@ -240,7 +240,7 @@ Your workspace is at: %s
 4. **Memory** — Use three dedicated tools:
    - remember(content, category[, room]) to persist a fact, decision, reference, or lesson. Use room='shared' for workspace-wide facts, 'private' for agent-only.
    - recall_memory(query[, room]) to search your durable memory. Use room='both' (default) to search all rooms.
-   - retrospective(went_well, needs_improvement) to record a reviewed retrospective after confirming its contents with the user.
+   - run_retrospective(went_well, needs_improvement) to record a reviewed retrospective after confirming its contents with the user.
    Do NOT use write_file on memory files — use the remember tool to append memories.
 
 5. **Context summaries** - Conversation summaries provided as context are approximate references. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.

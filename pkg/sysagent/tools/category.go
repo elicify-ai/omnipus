@@ -1,8 +1,8 @@
 // Package systools — Category overrides for all system tools.
 //
-// Every tool in this package manages privileged platform infrastructure and
-// returns CategorySystem, which distinguishes them from core agent tools
-// (CategoryCore) in the tool registry and catalog.
+// Every tool in this package manages privileged platform infrastructure. The
+// Category() method returns a domain-specific category rather than the legacy
+// CategorySystem, so the tool registry and catalog can group tools by function.
 //
 // This file contains ONLY the Category overrides. All other Tool interface
 // methods live in their respective source files.
@@ -13,71 +13,68 @@ import "github.com/dapicom-ai/omnipus/pkg/tools"
 
 // Agent tools
 
-func (*AgentCreateTool) Category() tools.ToolCategory        { return tools.CategorySystem }
-func (*AgentUpdateTool) Category() tools.ToolCategory        { return tools.CategorySystem }
-func (*AgentDeleteTool) Category() tools.ToolCategory        { return tools.CategorySystem }
-func (*AgentListTool) Category() tools.ToolCategory          { return tools.CategorySystem }
-func (*AgentActivateTool) Category() tools.ToolCategory      { return tools.CategorySystem }
-func (*AgentDeactivateTool) Category() tools.ToolCategory    { return tools.CategorySystem }
-func (*AgentReadMetadataTool) Category() tools.ToolCategory  { return tools.CategorySystem }
-func (*AgentWriteMetadataTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*AgentCreateTool) Category() tools.ToolCategory        { return tools.CategoryAgents }
+func (*AgentUpdateTool) Category() tools.ToolCategory        { return tools.CategoryAgents }
+func (*AgentDeleteTool) Category() tools.ToolCategory        { return tools.CategoryAgents }
+func (*AgentActivateTool) Category() tools.ToolCategory      { return tools.CategoryAgents }
+func (*AgentDeactivateTool) Category() tools.ToolCategory    { return tools.CategoryAgents }
+func (*AgentReadMetadataTool) Category() tools.ToolCategory  { return tools.CategoryAgents }
+func (*AgentWriteMetadataTool) Category() tools.ToolCategory { return tools.CategoryAgents }
 
 // Channel tools
 
-func (*ChannelEnableTool) Category() tools.ToolCategory    { return tools.CategorySystem }
-func (*ChannelConfigureTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*ChannelDisableTool) Category() tools.ToolCategory   { return tools.CategorySystem }
-func (*ChannelListTool) Category() tools.ToolCategory      { return tools.CategorySystem }
-func (*ChannelTestTool) Category() tools.ToolCategory      { return tools.CategorySystem }
+func (*ChannelEnableTool) Category() tools.ToolCategory    { return tools.CategoryChannels }
+func (*ChannelConfigureTool) Category() tools.ToolCategory { return tools.CategoryChannels }
+func (*ChannelDisableTool) Category() tools.ToolCategory   { return tools.CategoryChannels }
+func (*ChannelListTool) Category() tools.ToolCategory      { return tools.CategoryChannels }
+func (*ChannelTestTool) Category() tools.ToolCategory      { return tools.CategoryChannels }
 
 // Config tools
 
-func (*ConfigGetTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*ConfigSetTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*ConfigGetTool) Category() tools.ToolCategory { return tools.CategoryPlatform }
+func (*ConfigSetTool) Category() tools.ToolCategory { return tools.CategoryPlatform }
 
 // Diagnostics tools
 
-func (*DoctorRunTool) Category() tools.ToolCategory    { return tools.CategorySystem }
-func (*BackupCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*CostQueryTool) Category() tools.ToolCategory    { return tools.CategorySystem }
+func (*DoctorRunTool) Category() tools.ToolCategory    { return tools.CategoryPlatform }
+func (*BackupCreateTool) Category() tools.ToolCategory { return tools.CategoryPlatform }
+func (*CostQueryTool) Category() tools.ToolCategory    { return tools.CategoryPlatform }
 
 // MCP tools
 
-func (*MCPAddTool) Category() tools.ToolCategory    { return tools.CategorySystem }
-func (*MCPRemoveTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*MCPListTool) Category() tools.ToolCategory   { return tools.CategorySystem }
+func (*MCPAddTool) Category() tools.ToolCategory    { return tools.CategoryMCP }
+func (*MCPRemoveTool) Category() tools.ToolCategory { return tools.CategoryMCP }
+func (*MCPListTool) Category() tools.ToolCategory   { return tools.CategoryMCP }
 
 // Navigate tool
 
-func (*NavigateTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*NavigateTool) Category() tools.ToolCategory { return tools.CategoryPlatform }
 
 // Workspace tools
 
-func (*WorkspaceCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*WorkspaceUpdateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*WorkspaceDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*WorkspaceListTool) Category() tools.ToolCategory   { return tools.CategorySystem }
-func (*WorkspaceGetTool) Category() tools.ToolCategory    { return tools.CategorySystem }
+func (*WorkspaceCreateTool) Category() tools.ToolCategory { return tools.CategoryWorkspaces }
+func (*WorkspaceUpdateTool) Category() tools.ToolCategory { return tools.CategoryWorkspaces }
+func (*WorkspaceDeleteTool) Category() tools.ToolCategory { return tools.CategoryWorkspaces }
+func (*WorkspaceListTool) Category() tools.ToolCategory   { return tools.CategoryWorkspaces }
+func (*WorkspaceGetTool) Category() tools.ToolCategory    { return tools.CategoryWorkspaces }
 
 // Provider tools
 
-func (*ProviderConfigureTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*ProviderListTool) Category() tools.ToolCategory      { return tools.CategorySystem }
-func (*ProviderTestTool) Category() tools.ToolCategory      { return tools.CategorySystem }
-func (*ModelsListTool) Category() tools.ToolCategory        { return tools.CategorySystem }
+func (*ProviderConfigureTool) Category() tools.ToolCategory { return tools.CategoryProviders }
+func (*ProviderListTool) Category() tools.ToolCategory      { return tools.CategoryProviders }
+func (*ProviderTestTool) Category() tools.ToolCategory      { return tools.CategoryProviders }
+func (*ModelsListTool) Category() tools.ToolCategory        { return tools.CategoryProviders }
 
 // Skill tools
 
-func (*SkillInstallTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*SkillRemoveTool) Category() tools.ToolCategory  { return tools.CategorySystem }
-func (*SkillSearchTool) Category() tools.ToolCategory  { return tools.CategorySystem }
-func (*SkillListTool) Category() tools.ToolCategory    { return tools.CategorySystem }
-func (*SkillCreateTool) Category() tools.ToolCategory  { return tools.CategorySystem }
-func (*SkillEditTool) Category() tools.ToolCategory    { return tools.CategorySystem }
+func (*SkillRemoveTool) Category() tools.ToolCategory { return tools.CategorySkills }
+func (*SkillListTool) Category() tools.ToolCategory   { return tools.CategorySkills }
+func (*SkillCreateTool) Category() tools.ToolCategory { return tools.CategorySkills }
+func (*SkillEditTool) Category() tools.ToolCategory   { return tools.CategorySkills }
 
 // System task tools
 
-func (*TaskCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*TaskUpdateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*TaskDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*TaskListTool) Category() tools.ToolCategory   { return tools.CategorySystem }
+func (*TaskCreateTool) Category() tools.ToolCategory { return tools.CategoryTasks }
+func (*TaskUpdateTool) Category() tools.ToolCategory { return tools.CategoryTasks }
+func (*TaskDeleteTool) Category() tools.ToolCategory { return tools.CategoryTasks }
+func (*TaskListTool) Category() tools.ToolCategory   { return tools.CategoryTasks }

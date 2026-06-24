@@ -48,7 +48,7 @@ func mcpURLSchemeValid(rawURL string) bool {
 type MCPAddTool struct{ deps *Deps }
 
 func NewMCPAddTool(d *Deps) *MCPAddTool      { return &MCPAddTool{deps: d} }
-func (t *MCPAddTool) Name() string           { return "system.mcp.add" }
+func (t *MCPAddTool) Name() string           { return "add_mcp_server" }
 func (t *MCPAddTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *MCPAddTool) Description() string {
 	return "Add an MCP server to the configuration (tools.mcp.servers). The server is persisted to config.json and connects on next reload.\n" +
@@ -136,7 +136,7 @@ func (t *MCPAddTool) Execute(_ context.Context, args map[string]any) *tools.Tool
 	}); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			return tools.ErrorResult(errorJSON("ALREADY_EXISTS", err.Error(),
-				"Use system.mcp.list to see existing servers, or remove it first with system.mcp.remove"))
+				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server"))
 		}
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
@@ -154,7 +154,7 @@ func (t *MCPAddTool) Execute(_ context.Context, args map[string]any) *tools.Tool
 type MCPRemoveTool struct{ deps *Deps }
 
 func NewMCPRemoveTool(d *Deps) *MCPRemoveTool   { return &MCPRemoveTool{deps: d} }
-func (t *MCPRemoveTool) Name() string           { return "system.mcp.remove" }
+func (t *MCPRemoveTool) Name() string           { return "remove_mcp_server" }
 func (t *MCPRemoveTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *MCPRemoveTool) Description() string {
 	return "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change.\n" +
@@ -199,7 +199,7 @@ func (t *MCPRemoveTool) Execute(_ context.Context, args map[string]any) *tools.T
 		if strings.Contains(err.Error(), "NOT_FOUND") {
 			return tools.ErrorResult(errorJSON("MCP_SERVER_NOT_FOUND",
 				fmt.Sprintf("No MCP server named %q", name),
-				"Use system.mcp.list to see configured servers"))
+				"Use list_mcp_servers to see configured servers"))
 		}
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
@@ -216,7 +216,7 @@ func (t *MCPRemoveTool) Execute(_ context.Context, args map[string]any) *tools.T
 type MCPListTool struct{ deps *Deps }
 
 func NewMCPListTool(d *Deps) *MCPListTool     { return &MCPListTool{deps: d} }
-func (t *MCPListTool) Name() string           { return "system.mcp.list" }
+func (t *MCPListTool) Name() string           { return "list_mcp_servers" }
 func (t *MCPListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *MCPListTool) Description() string {
 	return "List all MCP servers configured in tools.mcp.servers with their transport and enabled state. No parameters required."

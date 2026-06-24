@@ -72,7 +72,7 @@ func TestHealth_FlipsAuditDegraded_OnSkipCount(t *testing.T) {
 	t.Cleanup(audit.ResetSkippedForTest)
 
 	// Bump the counter.
-	audit.IncSkipped("web_serve", audit.DecisionDeny)
+	audit.IncSkipped("serve_web", audit.DecisionDeny)
 
 	s := health.NewServer("127.0.0.1", 0)
 	// Logger IS available — degraded must come from the skip count alone.

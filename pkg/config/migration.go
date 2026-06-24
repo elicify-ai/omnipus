@@ -657,22 +657,22 @@ var toolEnableToPolicy = []struct {
 	// policyGlob is the key written into cfg.Sandbox.ToolPolicies
 	policyGlob string
 }{
-	{"browser", "browser.*"},
+	{"browser", "browser_*"},
 	{"mcp", "mcp_*"},
-	{"web", "web_search"},
-	{"web_fetch", "web_fetch"},
+	{"web", "search_web"},
+	{"web_fetch", "fetch_url"},
 	{"exec", "exec"},
 	{"cron", "cron"},
 	{"spawn", "spawn"},
-	{"spawn_status", "spawn_status"},
-	{"subagent", "subagent"},
+	{"spawn_status", "check_spawn_status"},
+	{"subagent", "run_subagent"},
 	{"write_file", "write_file"},
 	{"edit_file", "edit_file"},
 	{"append_file", "append_file"},
 	{"send_file", "send_file"},
-	{"task_list", "task_list"},
-	{"task_create", "task_create"},
-	{"task_update", "task_update"},
+	{"task_list", "list_tasks"},
+	{"task_create", "create_task"},
+	{"task_update", "update_task"},
 }
 
 // migrateDeprecatedToolEnableFlags translates legacy tools.<name>.enabled=false

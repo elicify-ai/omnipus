@@ -145,7 +145,7 @@ func TestPolicyEngine_FullToolInvocation(t *testing.T) {
 		Agents: map[string]policy.AgentPolicy{
 			"researcher": {
 				Tools: policy.AgentToolsPolicy{
-					Allow: []string{"web_search"},
+					Allow: []string{"search_web"},
 				},
 			},
 		},
@@ -153,10 +153,10 @@ func TestPolicyEngine_FullToolInvocation(t *testing.T) {
 	evaluator := policy.NewEvaluator(cfg)
 
 	t.Run("allowed tool produces allow decision with policy_rule", func(t *testing.T) {
-		result := evaluator.EvaluateTool("researcher", "web_search")
+		result := evaluator.EvaluateTool("researcher", "search_web")
 		assert.True(t, result.Allowed)
 		assert.NotEmpty(t, result.PolicyRule)
-		assert.Contains(t, result.PolicyRule, "web_search")
+		assert.Contains(t, result.PolicyRule, "search_web")
 	})
 
 	t.Run("denied tool produces deny decision with policy_rule", func(t *testing.T) {

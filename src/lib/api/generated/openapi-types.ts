@@ -3788,8 +3788,8 @@ export interface components {
          */
         ToolRegistryEntry: {
             /**
-             * @description Canonical tool name (e.g. "workspace.shell", "browser.navigate").
-             * @example workspace.shell
+             * @description Canonical tool name (e.g. "workspace_shell", "browser_navigate").
+             * @example workspace_shell
              */
             name: string;
             /**
@@ -3802,10 +3802,10 @@ export interface components {
              * @example general
              * @enum {string}
              */
-            scope: "system" | "core" | "general";
+            scope: "core" | "general";
             /**
-             * @description Tool category prefix derived from the tool name (e.g. "workspace", "browser", "system") or "general".
-             * @example workspace
+             * @description Tool domain category (e.g. "filesystem", "shell", "web", "browser", "communication", "delegation", "memory", "tasks", "skills", "tool_discovery", "agents", "workspaces", "channels", "providers", "platform", "mcp"). Legacy values "core" and "system" may appear for un-recategorized tools.
+             * @example filesystem
              */
             category: string;
             /**

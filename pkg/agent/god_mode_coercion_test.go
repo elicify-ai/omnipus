@@ -4,7 +4,7 @@ package agent
 //
 // Verifies that when GodModeAvailable=false OR allowGodMode=false, an agent
 // configured with sandbox_profile=off has its profile silently coerced to
-// workspace before the workspace.shell / workspace.shell_bg tools are registered.
+// workspace before the workspace_shell / workspace_shell_bg tools are registered.
 //
 // Uses ProfileForTest() test accessors on WorkspaceShellTool / WorkspaceShellBgTool.
 //
@@ -55,7 +55,7 @@ func buildLoopWithOffProfile(t *testing.T) (*AgentLoop, string) {
 // TestGodModeCoercion_AllowGodModeFalse_CoercesToWorkspace verifies that
 // when allowGodMode=false and sandbox.GodModeAvailable=true (default build),
 // a sandbox_profile=off agent has its profile coerced to workspace before
-// the workspace.shell tool is registered.
+// the workspace_shell tool is registered.
 func TestGodModeCoercion_AllowGodModeFalse_CoercesToWorkspace(t *testing.T) {
 	if !sandbox.GodModeAvailable {
 		t.Skip("skipping: test targets the GodModeAvailable=true (default) build path")
@@ -75,13 +75,13 @@ func TestGodModeCoercion_AllowGodModeFalse_CoercesToWorkspace(t *testing.T) {
 		t.Fatal("shell-agent not found in registry")
 	}
 
-	rawTool, found := agent.Tools.Get("workspace.shell")
+	rawTool, found := agent.Tools.Get("workspace_shell")
 	if !found {
-		t.Fatal("workspace.shell tool not registered")
+		t.Fatal("workspace_shell tool not registered")
 	}
 	shellTool, ok := rawTool.(*tools.WorkspaceShellTool)
 	if !ok {
-		t.Fatalf("workspace.shell is not *WorkspaceShellTool; got %T", rawTool)
+		t.Fatalf("workspace_shell is not *WorkspaceShellTool; got %T", rawTool)
 	}
 
 	if shellTool.ProfileForTest() == config.SandboxProfileOff {
@@ -114,13 +114,13 @@ func TestGodModeCoercion_AllowGodModeTrue_PreservesOff(t *testing.T) {
 		t.Fatal("shell-agent not found in registry")
 	}
 
-	rawTool, found := agent.Tools.Get("workspace.shell")
+	rawTool, found := agent.Tools.Get("workspace_shell")
 	if !found {
-		t.Fatal("workspace.shell tool not registered")
+		t.Fatal("workspace_shell tool not registered")
 	}
 	shellTool, ok := rawTool.(*tools.WorkspaceShellTool)
 	if !ok {
-		t.Fatalf("workspace.shell is not *WorkspaceShellTool; got %T", rawTool)
+		t.Fatalf("workspace_shell is not *WorkspaceShellTool; got %T", rawTool)
 	}
 
 	if shellTool.ProfileForTest() != config.SandboxProfileOff {
@@ -129,13 +129,13 @@ func TestGodModeCoercion_AllowGodModeTrue_PreservesOff(t *testing.T) {
 }
 
 // TestGodModeCoercion_ShellBg_AllowGodModeFalse_CoercesToWorkspace verifies
-// that workspace.shell_bg has the same profile coercion as workspace.shell when
+// that workspace_shell_bg has the same profile coercion as workspace_shell when
 // allowGodMode=false and sandbox_profile=off.
 //
 // BDD: Given allowGodMode=false and sandbox_profile=off,
 //
 //	When WireTier13Deps is called with a DevServerRegistry,
-//	Then workspace.shell_bg.ProfileForTest() == workspace (coerced, not off).
+//	Then workspace_shell_bg.ProfileForTest() == workspace (coerced, not off).
 //
 // Traces to: quizzical-marinating-frog.md pr-test-analyzer Test-7.
 func TestGodModeCoercion_ShellBg_AllowGodModeFalse_CoercesToWorkspace(t *testing.T) {
@@ -143,7 +143,7 @@ func TestGodModeCoercion_ShellBg_AllowGodModeFalse_CoercesToWorkspace(t *testing
 		t.Skip("skipping: test targets the GodModeAvailable=true (default) build path")
 	}
 	if runtime.GOOS != "linux" {
-		t.Skip("workspace.shell_bg only registered on Linux")
+		t.Skip("workspace_shell_bg only registered on Linux")
 	}
 
 	al, _ := buildLoopWithOffProfile(t)
@@ -163,13 +163,13 @@ func TestGodModeCoercion_ShellBg_AllowGodModeFalse_CoercesToWorkspace(t *testing
 		t.Fatal("shell-agent not found in registry")
 	}
 
-	rawTool, found := agent.Tools.Get("workspace.shell_bg")
+	rawTool, found := agent.Tools.Get("workspace_shell_bg")
 	if !found {
-		t.Fatal("workspace.shell_bg tool not registered")
+		t.Fatal("workspace_shell_bg tool not registered")
 	}
 	bgTool, ok := rawTool.(*tools.WorkspaceShellBgTool)
 	if !ok {
-		t.Fatalf("workspace.shell_bg is not *WorkspaceShellBgTool; got %T", rawTool)
+		t.Fatalf("workspace_shell_bg is not *WorkspaceShellBgTool; got %T", rawTool)
 	}
 
 	if bgTool.ProfileForTest() == config.SandboxProfileOff {
@@ -181,7 +181,7 @@ func TestGodModeCoercion_ShellBg_AllowGodModeFalse_CoercesToWorkspace(t *testing
 }
 
 // TestGodModeCoercion_ShellBg_AllowGodModeTrue_PreservesOff verifies that
-// workspace.shell_bg's profile is preserved as off when both
+// workspace_shell_bg's profile is preserved as off when both
 // GodModeAvailable=true AND allowGodMode=true.
 //
 // Traces to: quizzical-marinating-frog.md pr-test-analyzer Test-7.
@@ -190,7 +190,7 @@ func TestGodModeCoercion_ShellBg_AllowGodModeTrue_PreservesOff(t *testing.T) {
 		t.Skip("skipping: test requires GodModeAvailable=true (default build)")
 	}
 	if runtime.GOOS != "linux" {
-		t.Skip("workspace.shell_bg only registered on Linux")
+		t.Skip("workspace_shell_bg only registered on Linux")
 	}
 
 	al, _ := buildLoopWithOffProfile(t)
@@ -210,13 +210,13 @@ func TestGodModeCoercion_ShellBg_AllowGodModeTrue_PreservesOff(t *testing.T) {
 		t.Fatal("shell-agent not found in registry")
 	}
 
-	rawTool, found := agent.Tools.Get("workspace.shell_bg")
+	rawTool, found := agent.Tools.Get("workspace_shell_bg")
 	if !found {
-		t.Fatal("workspace.shell_bg tool not registered")
+		t.Fatal("workspace_shell_bg tool not registered")
 	}
 	bgTool, ok := rawTool.(*tools.WorkspaceShellBgTool)
 	if !ok {
-		t.Fatalf("workspace.shell_bg is not *WorkspaceShellBgTool; got %T", rawTool)
+		t.Fatalf("workspace_shell_bg is not *WorkspaceShellBgTool; got %T", rawTool)
 	}
 
 	if bgTool.ProfileForTest() != config.SandboxProfileOff {
@@ -260,13 +260,13 @@ func TestGodModeCoercion_ProfileWorkspace_NeverCoerced(t *testing.T) {
 		t.Fatal("ws-agent not found in registry")
 	}
 
-	rawTool, found := agent.Tools.Get("workspace.shell")
+	rawTool, found := agent.Tools.Get("workspace_shell")
 	if !found {
-		t.Fatal("workspace.shell tool not registered")
+		t.Fatal("workspace_shell tool not registered")
 	}
 	shellTool, ok := rawTool.(*tools.WorkspaceShellTool)
 	if !ok {
-		t.Fatalf("workspace.shell is not *WorkspaceShellTool; got %T", rawTool)
+		t.Fatalf("workspace_shell is not *WorkspaceShellTool; got %T", rawTool)
 	}
 
 	if shellTool.ProfileForTest() != config.SandboxProfileWorkspace {
@@ -275,7 +275,7 @@ func TestGodModeCoercion_ProfileWorkspace_NeverCoerced(t *testing.T) {
 }
 
 // shellProfileForAgent rewires Tier13 deps and returns the resolved
-// workspace.shell profile for the given agent — the live sandbox profile after
+// workspace_shell profile for the given agent — the live sandbox profile after
 // the god-mode override is applied at tool-wiring time.
 func shellProfileForAgent(t *testing.T, al *AgentLoop, agentID string) config.SandboxProfile {
 	t.Helper()
@@ -288,13 +288,13 @@ func shellProfileForAgent(t *testing.T, al *AgentLoop, agentID string) config.Sa
 	if !ok || ag == nil {
 		t.Fatalf("%s not found in registry", agentID)
 	}
-	rawTool, found := ag.Tools.Get("workspace.shell")
+	rawTool, found := ag.Tools.Get("workspace_shell")
 	if !found {
-		t.Fatal("workspace.shell tool not registered")
+		t.Fatal("workspace_shell tool not registered")
 	}
 	shellTool, ok := rawTool.(*tools.WorkspaceShellTool)
 	if !ok {
-		t.Fatalf("workspace.shell is not *WorkspaceShellTool; got %T", rawTool)
+		t.Fatalf("workspace_shell is not *WorkspaceShellTool; got %T", rawTool)
 	}
 	return shellTool.ProfileForTest()
 }

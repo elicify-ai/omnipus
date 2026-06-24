@@ -339,7 +339,7 @@ func TestToolRegistry_Clone(t *testing.T) {
 	r := NewToolRegistry()
 	r.Register(newMockTool("read_file", "reads files"))
 	r.Register(newMockTool("exec", "runs commands"))
-	r.Register(newMockTool("web_search", "searches the web"))
+	r.Register(newMockTool("search_web", "searches the web"))
 
 	clone := r.Clone()
 
@@ -347,7 +347,7 @@ func TestToolRegistry_Clone(t *testing.T) {
 	if clone.Count() != 3 {
 		t.Errorf("expected clone to have 3 tools, got %d", clone.Count())
 	}
-	for _, name := range []string{"read_file", "exec", "web_search"} {
+	for _, name := range []string{"read_file", "exec", "search_web"} {
 		if _, ok := clone.Get(name); !ok {
 			t.Errorf("expected clone to have tool %q", name)
 		}

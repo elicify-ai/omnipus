@@ -56,7 +56,8 @@ func (t *SendFileTool) Name() string { return "send_file" }
 func (t *SendFileTool) Description() string {
 	return "Send a local file (image, document, etc.) to the user on the current chat channel."
 }
-func (t *SendFileTool) Scope() ToolScope { return ScopeCore }
+func (t *SendFileTool) Scope() ToolScope       { return ScopeCore }
+func (t *SendFileTool) Category() ToolCategory { return CategoryCommunication }
 
 func (t *SendFileTool) Parameters() map[string]any {
 	return map[string]any{

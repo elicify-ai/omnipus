@@ -527,7 +527,7 @@ func spawnSubTurn(
 		agent.Tools = baseAgent.Tools.CloneExcept(tools.ExcludedSpawn, tools.ExcludedSubagent, tools.ExcludedHandoff)
 		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
 		slog.Info("subturn: child registry constructed",
-			"excluded", []string{"spawn", "subagent", "handoff"},
+			"excluded", []string{"spawn", "run_subagent", "hand_off"},
 			"remaining_count", agent.Tools.Count(),
 			"child_id", childID,
 		)

@@ -33,7 +33,7 @@ func TestPolicyAuditor_EvaluateTool_LogsAllowDecision(t *testing.T) {
 		Agents: map[string]policy.AgentPolicy{
 			"researcher": {
 				Tools: policy.AgentToolsPolicy{
-					Allow: []string{"web_search"},
+					Allow: []string{"search_web"},
 				},
 			},
 		},
@@ -42,10 +42,10 @@ func TestPolicyAuditor_EvaluateTool_LogsAllowDecision(t *testing.T) {
 	logger := &mockAuditLogger{}
 	auditor := policy.NewPolicyAuditor(evaluator, logger, "sess-123")
 
-	decision := auditor.EvaluateTool("researcher", "web_search")
+	decision := auditor.EvaluateTool("researcher", "search_web")
 
 	assert.True(t, decision.Allowed)
-	assert.Contains(t, decision.PolicyRule, "web_search")
+	assert.Contains(t, decision.PolicyRule, "search_web")
 
 	require.Len(t, logger.entries, 1)
 	entry := logger.entries[0]
@@ -53,7 +53,7 @@ func TestPolicyAuditor_EvaluateTool_LogsAllowDecision(t *testing.T) {
 	assert.Equal(t, "allow", entry.Decision)
 	assert.Equal(t, "researcher", entry.AgentID)
 	assert.Equal(t, "sess-123", entry.SessionID)
-	assert.Equal(t, "web_search", entry.Tool)
+	assert.Equal(t, "search_web", entry.Tool)
 	assert.NotEmpty(t, entry.PolicyRule)
 }
 
@@ -66,7 +66,7 @@ func TestPolicyAuditor_EvaluateTool_LogsDenyDecision(t *testing.T) {
 		Agents: map[string]policy.AgentPolicy{
 			"researcher": {
 				Tools: policy.AgentToolsPolicy{
-					Allow: []string{"web_search"},
+					Allow: []string{"search_web"},
 				},
 			},
 		},

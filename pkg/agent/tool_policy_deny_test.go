@@ -3,7 +3,7 @@
 // Package agent — ToolPolicyCfg governance tests.
 //
 // Verifies that the central tool registry governance contract holds:
-// when ToolPolicyCfg maps workspace.shell or workspace.shell_bg to "deny",
+// when ToolPolicyCfg maps workspace_shell or workspace_shell_bg to "deny",
 // FilterToolsByPolicy excludes those tools from the set presented to the LLM.
 //
 // Note on architecture: tools are always registered in ag.Tools regardless of
@@ -27,13 +27,13 @@ import (
 )
 
 // TestToolPolicyCfg_DenyWorkspaceShell_ExcludedFromLLMView verifies that when
-// an agent's ToolPolicyCfg maps workspace.shell to "deny", FilterToolsByPolicy
+// an agent's ToolPolicyCfg maps workspace_shell to "deny", FilterToolsByPolicy
 // removes it from the set of tools visible to the LLM.
 //
-// BDD: Given an agent with ToolPolicyCfg{"workspace.shell": "deny"},
+// BDD: Given an agent with ToolPolicyCfg{"workspace_shell": "deny"},
 //
 //	When FilterToolsByPolicy is applied,
-//	Then workspace.shell is absent from the filtered tool list.
+//	Then workspace_shell is absent from the filtered tool list.
 func TestToolPolicyCfg_DenyWorkspaceShell_ExcludedFromLLMView(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -58,7 +58,7 @@ func TestToolPolicyCfg_DenyWorkspaceShell_ExcludedFromLLMView(t *testing.T) {
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	al.WireTier13Deps(Tier13Deps{}) // no registry — workspace.shell_bg not registered
+	al.WireTier13Deps(Tier13Deps{}) // no registry — workspace_shell_bg not registered
 
 	reg := al.GetRegistry()
 	if reg == nil {
@@ -69,16 +69,16 @@ func TestToolPolicyCfg_DenyWorkspaceShell_ExcludedFromLLMView(t *testing.T) {
 		t.Fatal("deny-shell-agent not found in registry")
 	}
 
-	// Confirm workspace.shell IS in the raw registry (governance is at filter time).
-	if _, found := ag.Tools.Get("workspace.shell"); !found {
-		t.Fatal("workspace.shell must be registered in ag.Tools — policy applies at filter time, not register time")
+	// Confirm workspace_shell IS in the raw registry (governance is at filter time).
+	if _, found := ag.Tools.Get("workspace_shell"); !found {
+		t.Fatal("workspace_shell must be registered in ag.Tools — policy applies at filter time, not register time")
 	}
 
-	// Apply a deny policy for workspace.shell and verify FilterToolsByPolicy excludes it.
+	// Apply a deny policy for workspace_shell and verify FilterToolsByPolicy excludes it.
 	policyCfg := &tools.ToolPolicyCfg{
 		DefaultPolicy: "allow",
 		Policies: map[string]string{
-			"workspace.shell": "deny",
+			"workspace_shell": "deny",
 		},
 	}
 
@@ -86,24 +86,24 @@ func TestToolPolicyCfg_DenyWorkspaceShell_ExcludedFromLLMView(t *testing.T) {
 	filtered, _ := tools.FilterToolsByPolicy(allTools, "custom", policyCfg)
 
 	for _, tool := range filtered {
-		if tool.Name() == "workspace.shell" {
-			t.Errorf("workspace.shell must be excluded from filtered tools when policy=deny; found in filtered list")
+		if tool.Name() == "workspace_shell" {
+			t.Errorf("workspace_shell must be excluded from filtered tools when policy=deny; found in filtered list")
 		}
 	}
 }
 
 // TestToolPolicyCfg_DenyWorkspaceShellBg_ExcludedFromLLMView verifies the same
-// governance contract for workspace.shell_bg.
+// governance contract for workspace_shell_bg.
 //
-// BDD: Given an agent with ToolPolicyCfg{"workspace.shell_bg": "deny"},
+// BDD: Given an agent with ToolPolicyCfg{"workspace_shell_bg": "deny"},
 //
 //	When FilterToolsByPolicy is applied,
-//	Then workspace.shell_bg is absent from the filtered tool list.
+//	Then workspace_shell_bg is absent from the filtered tool list.
 //
 // Traces to: quizzical-marinating-frog.md pr-test-analyzer Test-3.
 func TestToolPolicyCfg_DenyWorkspaceShellBg_ExcludedFromLLMView(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("workspace.shell_bg only registered on Linux")
+		t.Skip("workspace_shell_bg only registered on Linux")
 	}
 
 	tmpDir := t.TempDir()
@@ -130,7 +130,7 @@ func TestToolPolicyCfg_DenyWorkspaceShellBg_ExcludedFromLLMView(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 
-	// Wire with a DevServerRegistry so workspace.shell_bg is registered.
+	// Wire with a DevServerRegistry so workspace_shell_bg is registered.
 	devReg := sandbox.NewDevServerRegistry()
 	defer devReg.Close()
 
@@ -145,16 +145,16 @@ func TestToolPolicyCfg_DenyWorkspaceShellBg_ExcludedFromLLMView(t *testing.T) {
 		t.Fatal("deny-shellbg-agent not found in registry")
 	}
 
-	// Confirm workspace.shell_bg is in the raw registry.
-	if _, found := ag.Tools.Get("workspace.shell_bg"); !found {
-		t.Fatal("workspace.shell_bg must be registered when DevServerRegistry is wired")
+	// Confirm workspace_shell_bg is in the raw registry.
+	if _, found := ag.Tools.Get("workspace_shell_bg"); !found {
+		t.Fatal("workspace_shell_bg must be registered when DevServerRegistry is wired")
 	}
 
-	// Apply deny policy for workspace.shell_bg.
+	// Apply deny policy for workspace_shell_bg.
 	policyCfg := &tools.ToolPolicyCfg{
 		DefaultPolicy: "allow",
 		Policies: map[string]string{
-			"workspace.shell_bg": "deny",
+			"workspace_shell_bg": "deny",
 		},
 	}
 
@@ -162,8 +162,8 @@ func TestToolPolicyCfg_DenyWorkspaceShellBg_ExcludedFromLLMView(t *testing.T) {
 	filtered, _ := tools.FilterToolsByPolicy(allTools, "custom", policyCfg)
 
 	for _, tool := range filtered {
-		if tool.Name() == "workspace.shell_bg" {
-			t.Errorf("workspace.shell_bg must be excluded from filtered tools when policy=deny; found in filtered list")
+		if tool.Name() == "workspace_shell_bg" {
+			t.Errorf("workspace_shell_bg must be excluded from filtered tools when policy=deny; found in filtered list")
 		}
 	}
 }

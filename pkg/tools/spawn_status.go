@@ -22,7 +22,7 @@ func NewSpawnStatusTool(manager *SubagentManager) *SpawnStatusTool {
 }
 
 func (t *SpawnStatusTool) Name() string {
-	return "spawn_status"
+	return "check_spawn_status"
 }
 
 func (t *SpawnStatusTool) Description() string {
@@ -35,7 +35,8 @@ func (t *SpawnStatusTool) Description() string {
 		"(e.g. direct programmatic calls via Execute)."
 }
 
-func (t *SpawnStatusTool) Scope() ToolScope { return ScopeCore }
+func (t *SpawnStatusTool) Scope() ToolScope       { return ScopeCore }
+func (t *SpawnStatusTool) Category() ToolCategory { return CategoryDelegation }
 
 func (t *SpawnStatusTool) Parameters() map[string]any {
 	return map[string]any{

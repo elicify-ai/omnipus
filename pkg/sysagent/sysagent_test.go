@@ -76,8 +76,8 @@ func TestSystemToolErrorContract(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 438 (Scenario Outline: System tool error responses)
 
 	t.Run("RBAC denial message has required role and caller role", func(t *testing.T) {
-		// Dataset row 4: viewer + system.agent.create → PERMISSION_DENIED
-		err := sysagent.CheckRBAC(sysagent.RoleViewer, "system.agent.create")
+		// Dataset row 4: viewer + create_agent → PERMISSION_DENIED
+		err := sysagent.CheckRBAC(sysagent.RoleViewer, "create_agent")
 		require.Error(t, err, "viewer must be denied create operations")
 
 		var denied *sysagent.PermissionDeniedError
@@ -96,11 +96,11 @@ func TestSystemToolErrorContract(t *testing.T) {
 
 		// Exhaust the create category (30/min).
 		for i := 0; i < 30; i++ {
-			require.NoError(t, rl.Check("system.agent.create"),
+			require.NoError(t, rl.Check("create_agent"),
 				"first 30 create calls must succeed")
 		}
 
-		err := rl.Check("system.agent.create")
+		err := rl.Check("create_agent")
 		require.Error(t, err, "31st create call must be rate-limited")
 
 		var rlErr *sysagent.RateLimitedError
@@ -124,7 +124,7 @@ func TestSystemToolErrorContract(t *testing.T) {
 			context.Background(),
 			sysagent.RoleSingleUser,
 			"test-device",
-			"system.agent.delete",
+			"delete_agent",
 			map[string]any{"id": "my-agent", "confirm": false}, // confirm:false → denied
 		)
 		require.NotNil(t, result)
@@ -154,20 +154,20 @@ func TestRBACEnforcement(t *testing.T) {
 		description string
 	}{
 		// Dataset row 8: viewer + create → denied
-		{"viewer cannot create agents", sysagent.RoleViewer, "system.agent.create", true, "viewers read-only"},
+		{"viewer cannot create agents", sysagent.RoleViewer, "create_agent", true, "viewers read-only"},
 		// Dataset row 6: viewer + list → allowed
-		{"viewer can list agents", sysagent.RoleViewer, "system.agent.list", false, "viewers can read"},
+		{"viewer can list agents", sysagent.RoleViewer, "list_workspaces", false, "viewers can read"},
 		// Dataset row 7: viewer + doctor → allowed
-		{"viewer can run doctor", sysagent.RoleViewer, "system.doctor.run", false, "doctor is read-only"},
+		{"viewer can run doctor", sysagent.RoleViewer, "run_doctor", false, "doctor is read-only"},
 		// Dataset row 9: viewer + navigate → allowed
-		{"viewer can navigate", sysagent.RoleViewer, "system.navigate", false, "navigation is safe"},
+		{"viewer can navigate", sysagent.RoleViewer, "navigate", false, "navigation is safe"},
 		// Dataset row 3: operator + create → allowed
-		{"operator can create agents", sysagent.RoleOperator, "system.agent.create", false, "operators can create"},
+		{"operator can create agents", sysagent.RoleOperator, "create_agent", false, "operators can create"},
 		// Dataset row 4: operator + delete → denied
 		{
 			"operator cannot delete agents",
 			sysagent.RoleOperator,
-			"system.agent.delete",
+			"delete_agent",
 			true,
 			"operators cannot destroy",
 		},
@@ -175,19 +175,19 @@ func TestRBACEnforcement(t *testing.T) {
 		{
 			"operator cannot delete projects",
 			sysagent.RoleOperator,
-			"system.workspace.delete",
+			"delete_workspace",
 			true,
 			"operators cannot delete projects",
 		},
 		// Dataset row 1: admin + delete → allowed
-		{"admin can delete agents", sysagent.RoleAdmin, "system.agent.delete", false, "admins have full access"},
+		{"admin can delete agents", sysagent.RoleAdmin, "delete_agent", false, "admins have full access"},
 		// Dataset row 2: admin + config security → allowed
-		{"admin can set config", sysagent.RoleAdmin, "system.config.set", false, "admins can change config"},
+		{"admin can set config", sysagent.RoleAdmin, "set_config", false, "admins can change config"},
 		// Dataset row 10: agent + list → denied
 		{
 			"user agent has no system tool access",
 			sysagent.RoleAgent,
-			"system.agent.list",
+			"create_agent",
 			true,
 			"agents never get system access",
 		},
@@ -225,11 +225,11 @@ func TestRBACBypassSingleUser(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 498
 
 	destructiveTools := []string{
-		"system.agent.delete",
-		"system.workspace.delete",
-		"system.task.delete",
-		"system.skill.remove",
-		"system.mcp.remove",
+		"delete_agent",
+		"delete_workspace",
+		"delete_task_in_workspace",
+		"remove_skill",
+		"remove_mcp_server",
 	}
 
 	for _, tool := range destructiveTools {
@@ -242,7 +242,7 @@ func TestRBACBypassSingleUser(t *testing.T) {
 
 	// Even tools that require admin for multi-user setups must be allowed.
 	t.Run("single-user can change security config", func(t *testing.T) {
-		err := sysagent.CheckRBAC(sysagent.RoleSingleUser, "system.config.set")
+		err := sysagent.CheckRBAC(sysagent.RoleSingleUser, "set_config")
 		assert.NoError(t, err, "RoleSingleUser must be able to change any config")
 	})
 }
@@ -432,11 +432,11 @@ func TestSystemToolExclusivity(t *testing.T) {
 
 	t.Run("RoleAgent is denied all system tools", func(t *testing.T) {
 		systemTools := []string{
-			"system.agent.list",
-			"system.agent.create",
-			"system.agent.delete",
-			"system.doctor.run",
-			"system.navigate",
+			"list_workspaces",
+			"create_agent",
+			"delete_agent",
+			"run_doctor",
+			"navigate",
 		}
 		for _, tool := range systemTools {
 			err := sysagent.CheckRBAC(sysagent.RoleAgent, tool)
@@ -468,12 +468,12 @@ func TestConfirmationRequired(t *testing.T) {
 		name string
 		tool string
 	}{
-		{"agent delete", "system.agent.delete"},
-		{"project delete", "system.workspace.delete"},
-		{"task delete", "system.task.delete"},
-		{"channel disable", "system.channel.disable"},
-		{"skill remove", "system.skill.remove"},
-		{"mcp remove", "system.mcp.remove"},
+		{"agent delete", "delete_agent"},
+		{"project delete", "delete_workspace"},
+		{"task delete", "delete_task_in_workspace"},
+		{"channel disable", "disable_channel"},
+		{"skill remove", "remove_skill"},
+		{"mcp remove", "remove_mcp_server"},
 	}
 
 	for _, tc := range destructiveTools {
@@ -488,14 +488,12 @@ func TestConfirmationRequired(t *testing.T) {
 		name string
 		tool string
 	}{
-		{"agent create", "system.agent.create"},
-		{"task create", "system.task.create"},
-		{"agent list", "system.agent.list"},
-		{"project list", "system.workspace.list"},
-		{"provider list", "system.provider.list"},
-		{"doctor run", "system.doctor.run"},
-		{"navigate", "system.navigate"},
-		{"backup create", "system.backup.create"},
+		{"agent create", "create_agent"},
+		{"task create", "create_task_in_workspace"},
+		{"workspace list", "list_workspaces"},
+		{"provider list", "list_providers"},
+		{"doctor run", "run_doctor"},
+		{"navigate", "navigate"},
 	}
 
 	for _, tc := range additiveSafeTools {
@@ -524,7 +522,7 @@ func TestConfirmationRequired(t *testing.T) {
 			context.Background(),
 			sysagent.RoleSingleUser,
 			"test-device",
-			"system.agent.delete",
+			"delete_agent",
 			map[string]any{"id": "my-agent"},
 		)
 		require.NotNil(t, result)
@@ -576,17 +574,17 @@ func TestIsCloudProvider_EdgeCases(t *testing.T) {
 // TestSystemRateLimiter_CreateCategory verifies create category enforces 30/min.
 //
 // Traces to: wave5b-system-agent-spec.md line 762 (US-11 AC1)
-// BDD: "Given 30 system.agent.create calls in 60s, When 31st, Then RATE_LIMITED"
+// BDD: "Given 30 create_agent calls in 60s, When 31st, Then RATE_LIMITED"
 func TestSystemRateLimiter_CreateCategory(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 762 (Scenario: Rate limit hit on create operations)
 	rl := sysagent.NewSystemRateLimiter()
 
 	for i := 0; i < 30; i++ {
-		require.NoError(t, rl.Check("system.agent.create"),
+		require.NoError(t, rl.Check("create_agent"),
 			"create call %d/30 must be allowed", i+1)
 	}
 
-	err := rl.Check("system.agent.create")
+	err := rl.Check("create_agent")
 	require.Error(t, err, "31st create call must be RATE_LIMITED")
 
 	var rlErr *sysagent.RateLimitedError
@@ -603,23 +601,11 @@ func TestSystemRateLimiter_DeleteCategory(t *testing.T) {
 	rl := sysagent.NewSystemRateLimiter()
 
 	for i := 0; i < 10; i++ {
-		require.NoError(t, rl.Check("system.agent.delete"),
+		require.NoError(t, rl.Check("delete_agent"),
 			"delete call %d/10 must be allowed", i+1)
 	}
-	require.Error(t, rl.Check("system.agent.delete"),
+	require.Error(t, rl.Check("delete_agent"),
 		"11th delete call must be RATE_LIMITED")
-}
-
-// TestSystemRateLimiter_BackupCategory verifies backup allows only 1 per 5 minutes.
-//
-// Traces to: wave5b-system-agent-spec.md Dataset: Rate Limit Categories row 9
-func TestSystemRateLimiter_BackupCategory(t *testing.T) {
-	rl := sysagent.NewSystemRateLimiter()
-
-	require.NoError(t, rl.Check("system.backup.create"),
-		"first backup call must be allowed")
-	require.Error(t, rl.Check("system.backup.create"),
-		"second backup call within 5 minutes must be RATE_LIMITED")
 }
 
 // TestSystemRateLimiter_IndependentCategories verifies that rate limits are per-category.
@@ -630,12 +616,12 @@ func TestSystemRateLimiter_IndependentCategories(t *testing.T) {
 
 	// Exhaust the delete category (10/min).
 	for i := 0; i < 10; i++ {
-		require.NoError(t, rl.Check("system.agent.delete"))
+		require.NoError(t, rl.Check("delete_agent"))
 	}
-	require.Error(t, rl.Check("system.agent.delete"), "delete exhausted")
+	require.Error(t, rl.Check("delete_agent"), "delete exhausted")
 
 	// Create category must still be available (independent window).
-	assert.NoError(t, rl.Check("system.agent.create"),
+	assert.NoError(t, rl.Check("create_agent"),
 		"exhausting delete category must not affect create category")
 }
 
@@ -660,49 +646,48 @@ func TestSystemPromptHardcoded(t *testing.T) {
 // Supplementary: 41 tools coverage check
 // =====================================================================
 
-// TestToolPermissionsMapCoversAll40Tools verifies that the RBAC permission map
-// covers exactly the 40 tools returned by AllTools() per BRD Appendix D §D.4.
+// TestToolPermissionsMapCoversAll37Tools verifies that the RBAC permission map
+// covers exactly the 37 tools returned by AllTools() per BRD Appendix D §D.4.
 //
 // Traces to: wave5b-system-agent-spec.md — FR-002 (system tools)
-func TestToolPermissionsMapCoversAll40Tools(t *testing.T) {
-	// The 40 tools in AllTools() as of the tool-system refactor (§1/§5/§6:
-	// cron, pins, and backup retired; workspace.get RBAC gap fixed).
-	// Count: 8 agent + 5 workspace + 4 task + 5 channel + 6 skill + 3 mcp +
-	//        4 provider + 2 config + 3 diagnostics = 40.
-	expected41Tools := []string{
-		// Agent management (8: 6 original + 2 metadata accessors from issue #240)
-		"system.agent.create", "system.agent.update", "system.agent.delete",
-		"system.agent.list", "system.agent.activate", "system.agent.deactivate",
-		"system.agent.read_metadata", "system.agent.write_metadata",
+func TestToolPermissionsMapCoversAll37Tools(t *testing.T) {
+	// The 37 tools in AllTools() as of the §7 tool rename (system.* → verb-first;
+	// system.agent.list, system.skill.install, system.skill.search retired).
+	// Count: 7 agent + 5 workspace + 4 task + 5 channel + 4 skill + 3 mcp +
+	//        4 provider + 2 config + 3 diagnostics = 37.
+	expectedTools := []string{
+		// Agent management (7: list retired; 2 metadata accessors from issue #240)
+		"create_agent", "update_agent", "delete_agent",
+		"activate_agent", "deactivate_agent",
+		"read_agent_metadata", "write_agent_metadata",
 		// Workspace management (5)
-		"system.workspace.create", "system.workspace.update",
-		"system.workspace.delete", "system.workspace.list", "system.workspace.get",
+		"create_workspace", "update_workspace",
+		"delete_workspace", "list_workspaces", "get_workspace",
 		// Task management (4)
-		"system.task.create", "system.task.update",
-		"system.task.delete", "system.task.list",
+		"create_task_in_workspace", "update_task_in_workspace",
+		"delete_task_in_workspace", "list_tasks_in_workspace",
 		// Channel management (5)
-		"system.channel.enable", "system.channel.configure",
-		"system.channel.disable", "system.channel.list", "system.channel.test",
-		// Skill management (6: 4 + create/edit authoring)
-		"system.skill.install", "system.skill.remove",
-		"system.skill.search", "system.skill.list",
-		"system.skill.create", "system.skill.edit",
+		"enable_channel", "configure_channel",
+		"disable_channel", "list_channels", "test_channel",
+		// Skill management (4: install/search retired)
+		"remove_skill", "list_skills",
+		"create_skill", "edit_skill",
 		// MCP management (3)
-		"system.mcp.add", "system.mcp.remove", "system.mcp.list",
+		"add_mcp_server", "remove_mcp_server", "list_mcp_servers",
 		// Provider management (4: configure + list + test + models.list)
-		"system.provider.configure", "system.provider.list", "system.provider.test",
-		"system.models.list",
+		"configure_provider", "list_providers", "test_provider",
+		"list_models",
 		// Config (2)
-		"system.config.get", "system.config.set",
+		"get_config", "set_config",
 		// Diagnostics / utility (3)
-		"system.doctor.run", "system.cost.query", "system.navigate",
+		"run_doctor", "query_cost", "navigate",
 	}
 
-	assert.Len(t, expected41Tools, 40,
-		"AllTools() returns 40 RBAC-mapped system tools — test dataset must reflect this")
+	assert.Len(t, expectedTools, 37,
+		"AllTools() returns 37 RBAC-mapped system tools — test dataset must reflect this")
 
 	// Every expected tool must have an RBAC permission entry.
-	for _, tool := range expected41Tools {
+	for _, tool := range expectedTools {
 		t.Run("tool "+tool+" has RBAC entry", func(t *testing.T) {
 			// A tool without an entry is denied by default (deny-by-default posture).
 			// We check that the tool IS correctly defined in the permission map by
@@ -713,9 +698,9 @@ func TestToolPermissionsMapCoversAll40Tools(t *testing.T) {
 		})
 	}
 
-	// Verify all 41 tools have sort-stable ordering (no duplicates).
-	sorted := make([]string, len(expected41Tools))
-	copy(sorted, expected41Tools)
+	// Verify all 37 tools have sort-stable ordering (no duplicates).
+	sorted := make([]string, len(expectedTools))
+	copy(sorted, expectedTools)
 	sort.Strings(sorted)
 	unique := make([]string, 0, len(sorted))
 	prev := ""
@@ -725,7 +710,7 @@ func TestToolPermissionsMapCoversAll40Tools(t *testing.T) {
 			prev = s
 		}
 	}
-	assert.Len(t, unique, 40, "tool list must not contain duplicates")
+	assert.Len(t, unique, 37, "tool list must not contain duplicates")
 }
 
 // =====================================================================
@@ -762,8 +747,8 @@ func TestFriendlyDenialMessage(t *testing.T) {
 		caller   sysagent.PrincipalRole
 		required sysagent.PrincipalRole
 	}{
-		{"system.agent.create", sysagent.RoleViewer, sysagent.RoleOperator},
-		{"system.agent.delete", sysagent.RoleOperator, sysagent.RoleAdmin},
+		{"create_agent", sysagent.RoleViewer, sysagent.RoleOperator},
+		{"delete_agent", sysagent.RoleOperator, sysagent.RoleAdmin},
 	}
 	for _, tc := range tests {
 		err := &sysagent.PermissionDeniedError{Tool: tc.tool, Caller: tc.caller, Required: tc.required}
@@ -807,7 +792,7 @@ func TestConfirmationFlowIntegration(t *testing.T) {
 // TestDoctorRunIntegration is blocked pending pkg/sysagent/tools/ + state.json extension.
 // Traces to: wave5b-system-agent-spec.md line 730 (Scenario: Run doctor from Settings UI)
 func TestDoctorRunIntegration(t *testing.T) {
-	t.Skip("Blocked: system.doctor.run tool and state.json last_doctor_run/last_doctor_score fields pending task #2-3")
+	t.Skip("Blocked: run_doctor tool and state.json last_doctor_run/last_doctor_score fields pending task #2-3")
 }
 
 // =====================================================================
@@ -826,7 +811,7 @@ func TestDoctorRunIntegration(t *testing.T) {
 func TestSysagentGuardedTool_ConfirmationPaths(t *testing.T) {
 	newMockDelete := func() (*mockSystemTool, *tools.ToolRegistry) {
 		mock := &mockSystemTool{
-			name:        "system.agent.delete",
+			name:        "delete_agent",
 			description: "Delete an agent",
 			params:      map[string]any{"type": "object"},
 		}

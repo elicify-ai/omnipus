@@ -67,7 +67,7 @@ beforeEach(async () => {
 const SAMPLE_APPROVAL = {
   approvalId: 'appr-001',
   toolCallId: 'call-001',
-  toolName: 'web_fetch',
+  toolName: 'fetch_url',
   args: { url: 'https://example.com' },
   agentId: 'agent-main',
   sessionId: 'sess-001',
@@ -86,7 +86,7 @@ describe('ToolApprovalModal — rendering', () => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
     render(<ToolApprovalModal />)
-    expect(screen.getByText('web_fetch')).toBeInTheDocument()
+    expect(screen.getByText('fetch_url')).toBeInTheDocument()
     expect(screen.getByText('Tool Approval Required')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
@@ -319,7 +319,7 @@ describe('ToolApprovalModal — session_state reset handler (FR-052, FR-073, FR-
         {
           approval_id: 'appr-live',
           session_id: 'sess-001',
-          tool_name: 'web_fetch',
+          tool_name: 'fetch_url',
           agent_id: 'agent-main',
           expires_in_ms: 299_000,
         },
@@ -356,7 +356,7 @@ describe('ToolApprovalModal — session_state reset handler (FR-052, FR-073, FR-
           {
             approval_id: 'appr-live',
             session_id: 'sess-001',
-            tool_name: 'web_fetch',
+            tool_name: 'fetch_url',
             agent_id: 'agent-main',
             expires_in_ms: newExpiresInMs,
           },
@@ -410,7 +410,7 @@ const baseFrame: ToolApprovalRequiredFrame = {
   type: 'tool_approval_required',
   approval_id: 'appr-edge-001',
   tool_call_id: 'call-edge-001',
-  tool_name: 'web_fetch',
+  tool_name: 'fetch_url',
   args: { url: 'https://example.com' },
   agent_id: 'agent-main',
   session_id: 'sess-edge',

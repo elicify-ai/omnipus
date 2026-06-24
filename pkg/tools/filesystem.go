@@ -437,7 +437,7 @@ func (t *ReadFileTool) Description() string {
 }
 
 func (t *ReadFileTool) Scope() ToolScope       { return ScopeGeneral }
-func (t *ReadFileTool) Category() ToolCategory { return CategoryFile }
+func (t *ReadFileTool) Category() ToolCategory { return CategoryFilesystem }
 
 func (t *ReadFileTool) Parameters() map[string]any {
 	return map[string]any{
@@ -777,7 +777,7 @@ func (t *WriteFileTool) Description() string {
 }
 
 func (t *WriteFileTool) Scope() ToolScope       { return ScopeCore }
-func (t *WriteFileTool) Category() ToolCategory { return CategoryFile }
+func (t *WriteFileTool) Category() ToolCategory { return CategoryFilesystem }
 
 func (t *WriteFileTool) Parameters() map[string]any {
 	return map[string]any{
@@ -851,7 +851,7 @@ func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Reg
 }
 
 func (t *ListDirTool) Name() string {
-	return "list_dir"
+	return "list_directory"
 }
 
 func (t *ListDirTool) Description() string {
@@ -859,7 +859,7 @@ func (t *ListDirTool) Description() string {
 }
 
 func (t *ListDirTool) Scope() ToolScope       { return ScopeGeneral }
-func (t *ListDirTool) Category() ToolCategory { return CategoryFile }
+func (t *ListDirTool) Category() ToolCategory { return CategoryFilesystem }
 
 func (t *ListDirTool) Parameters() map[string]any {
 	return map[string]any{

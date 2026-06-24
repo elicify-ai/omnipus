@@ -71,13 +71,13 @@ func TestRepairHistory_OrphanToolResult_SynthesizesToolUse(t *testing.T) {
 	// declared. Repair must inject a matching tool_use into the preceding
 	// assistant so Anthropic's invariant holds.
 	store, sid := newTranscriptFixture(t, []session.TranscriptEntry{
-		toolCallEntry("t_orphan", "web_fetch", map[string]any{"url": "https://example.com"}),
+		toolCallEntry("t_orphan", "fetch_url", map[string]any{"url": "https://example.com"}),
 	})
 
 	messages := []providers.Message{
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{
-			{ID: "t_declared", Type: "function", Name: "web_search"},
+			{ID: "t_declared", Type: "function", Name: "search_web"},
 		}},
 		{Role: "tool", ToolCallID: "t_declared", Content: "some results"},
 		{Role: "tool", ToolCallID: "t_orphan", Content: "orphan result"},
@@ -106,8 +106,8 @@ func TestRepairHistory_OrphanToolResult_SynthesizesToolUse(t *testing.T) {
 	}
 	// The synthesized tool_use must carry the tool name + arguments from the transcript.
 	synth := assistant.ToolCalls[1]
-	if synth.Name != "web_fetch" {
-		t.Errorf("synth tool name = %q, want web_fetch", synth.Name)
+	if synth.Name != "fetch_url" {
+		t.Errorf("synth tool name = %q, want fetch_url", synth.Name)
 	}
 	if url, _ := synth.Arguments["url"].(string); url != "https://example.com" {
 		t.Errorf("synth url = %q, want https://example.com", url)
@@ -154,7 +154,7 @@ func TestRepairHistory_NoOrphans_NoOp(t *testing.T) {
 	messages := []providers.Message{
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{
-			{ID: "t1", Type: "function", Name: "web_search"},
+			{ID: "t1", Type: "function", Name: "search_web"},
 		}},
 		{Role: "tool", ToolCallID: "t1", Content: "result"},
 		{Role: "assistant", Content: "done"},
@@ -176,7 +176,7 @@ func TestRepairHistory_NoTranscript_FallsThrough(t *testing.T) {
 	// will drop the orphan results as a last-resort defense).
 	messages := []providers.Message{
 		{Role: "assistant", ToolCalls: []providers.ToolCall{
-			{ID: "t1", Type: "function", Name: "web_search"},
+			{ID: "t1", Type: "function", Name: "search_web"},
 		}},
 		{Role: "tool", ToolCallID: "t1", Content: "ok"},
 		{Role: "tool", ToolCallID: "t_unknown", Content: "orphan"},
@@ -196,14 +196,14 @@ func TestRepairHistory_MixedOrphansAcrossTwoTurns(t *testing.T) {
 	// Two turns of history: the first turn has an orphan result, the second
 	// has an orphan use. Both must be repaired independently.
 	store, sid := newTranscriptFixture(t, []session.TranscriptEntry{
-		toolCallEntry("t1_orphan", "web_fetch", map[string]any{"url": "a"}),
+		toolCallEntry("t1_orphan", "fetch_url", map[string]any{"url": "a"}),
 		toolCallEntry("t2_unresolved", "exec", map[string]any{"cmd": "ls"}),
 	})
 
 	messages := []providers.Message{
 		{Role: "user", Content: "turn 1"},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{
-			{ID: "t1_real", Type: "function", Name: "web_search"},
+			{ID: "t1_real", Type: "function", Name: "search_web"},
 		}},
 		{Role: "tool", ToolCallID: "t1_real", Content: "real result"},
 		{Role: "tool", ToolCallID: "t1_orphan", Content: "orphan result"},
@@ -241,19 +241,19 @@ func TestRepairHistory_MixedOrphansAcrossTwoTurns(t *testing.T) {
 // The orphan tool_use should get a synthetic error stub instead.
 func TestRepairHistory_PolicyDenyBlocksReinvocation(t *testing.T) {
 	store, sid := newTranscriptFixture(t, []session.TranscriptEntry{
-		toolCallEntry("t_idempotent", "web_search", map[string]any{"query": "test"}),
+		toolCallEntry("t_idempotent", "search_web", map[string]any{"query": "test"}),
 	})
 
 	messages := []providers.Message{
 		{Role: "assistant", ToolCalls: []providers.ToolCall{
-			{ID: "t_idempotent", Type: "function", Name: "web_search"},
+			{ID: "t_idempotent", Type: "function", Name: "search_web"},
 		}},
 	}
 
-	// Policy denies web_search — repair must NOT re-invoke it.
+	// Policy denies search_web — repair must NOT re-invoke it.
 	denyPolicy := &tools.ToolPolicyCfg{
 		DefaultPolicy: "allow",
-		Policies:      map[string]string{"web_search": "deny"},
+		Policies:      map[string]string{"search_web": "deny"},
 	}
 
 	out, stats := repairHistory(context.Background(), messages, store, sid, nil, "test-agent", denyPolicy)
@@ -276,12 +276,12 @@ func TestRepairHistory_PolicyDenyBlocksReinvocation(t *testing.T) {
 // still skips reinvocation (nil registry guard), not a policy deny.
 func TestRepairHistory_NilRegistrySkipsReinvocation(t *testing.T) {
 	store, sid := newTranscriptFixture(t, []session.TranscriptEntry{
-		toolCallEntry("t_idempotent", "web_search", map[string]any{"query": "test"}),
+		toolCallEntry("t_idempotent", "search_web", map[string]any{"query": "test"}),
 	})
 
 	messages := []providers.Message{
 		{Role: "assistant", ToolCalls: []providers.ToolCall{
-			{ID: "t_idempotent", Type: "function", Name: "web_search"},
+			{ID: "t_idempotent", Type: "function", Name: "search_web"},
 		}},
 	}
 
@@ -304,14 +304,14 @@ func TestIsIdempotentTool(t *testing.T) {
 		name string
 		want bool
 	}{
-		{"web_search", true},
-		{"web_fetch", true},
+		{"search_web", true},
+		{"fetch_url", true},
 		{"read_file", true},
-		{"list_dir", true},
+		{"list_directory", true},
 		{"write_file", false},
 		{"exec", false},
 		{"spawn", false},
-		{"task_create", false},
+		{"create_task", false},
 		{"unknown_tool", false},
 		{"", false},
 	}

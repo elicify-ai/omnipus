@@ -2,7 +2,7 @@ package agent
 
 // Smoke tests for PR 5 (quizzical-marinating-frog.md):
 //   - workspace_shell_enabled defaults to false (nil pointer → off, deny-by-default per Wave 1 B3)
-//   - workspace.shell and workspace.shell_bg are registered only when the flag is explicitly true
+//   - workspace_shell and workspace_shell_bg are registered only when the flag is explicitly true
 //   - Jim's seeded policy forces workspace_shell_enabled=true via SeedConfig (kernel sandbox is the guard)
 
 import (
@@ -15,7 +15,7 @@ import (
 )
 
 // TestPR5_WorkspaceShellNilDefaultsFalse verifies that when
-// experimental.workspace_shell_enabled is nil (absent in config), workspace.shell
+// experimental.workspace_shell_enabled is nil (absent in config), workspace_shell
 // is NOT registered for a generic agent (deny-by-default, Wave 1 B3).
 // Jim is the sole exception — SeedConfig forces WorkspaceShellEnabled=true for Jim
 // because the kernel sandbox is the protective layer (see TestPR5_JimSeedPolicyAppliedInLoop).
@@ -23,7 +23,7 @@ import (
 // BDD: Given a config where WorkspaceShellEnabled is nil (pointer is nil),
 //
 //	When WireTier13Deps is called on a non-Jim AgentLoop,
-//	Then workspace.shell is NOT registered for the agent.
+//	Then workspace_shell is NOT registered for the agent.
 //
 // Traces to: quizzical-marinating-frog.md Wave 1 B3 — deny-by-default for
 // experimental.workspace_shell_enabled; Hard Constraint #6.
@@ -45,7 +45,7 @@ func TestPR5_WorkspaceShellNilDefaultsFalse(t *testing.T) {
 			},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
-			// nil → resolveBoolWithDefault(..., false) → workspace.shell not registered.
+			// nil → resolveBoolWithDefault(..., false) → workspace_shell not registered.
 			Experimental: config.ExperimentalConfig{WorkspaceShellEnabled: nil},
 		},
 	}
@@ -63,8 +63,8 @@ func TestPR5_WorkspaceShellNilDefaultsFalse(t *testing.T) {
 		t.Fatal("test-agent not found in registry")
 	}
 
-	if _, found := ag.Tools.Get("workspace.shell"); found {
-		t.Error("workspace.shell must NOT be registered when WorkspaceShellEnabled is nil (deny-by-default)")
+	if _, found := ag.Tools.Get("workspace_shell"); found {
+		t.Error("workspace_shell must NOT be registered when WorkspaceShellEnabled is nil (deny-by-default)")
 	}
 }
 
@@ -74,7 +74,7 @@ func TestPR5_WorkspaceShellNilDefaultsFalse(t *testing.T) {
 // BDD: Given a config with WorkspaceShellEnabled=false,
 //
 //	When WireTier13Deps is called,
-//	Then workspace.shell is NOT registered.
+//	Then workspace_shell is NOT registered.
 func TestPR5_WorkspaceShellDisabledWhenFlagFalse(t *testing.T) {
 	tmpDir := t.TempDir()
 	disabled := false
@@ -111,22 +111,22 @@ func TestPR5_WorkspaceShellDisabledWhenFlagFalse(t *testing.T) {
 		t.Fatal("test-agent not found in registry")
 	}
 
-	if _, found := ag.Tools.Get("workspace.shell"); found {
-		t.Error("workspace.shell must NOT be registered when WorkspaceShellEnabled=false")
+	if _, found := ag.Tools.Get("workspace_shell"); found {
+		t.Error("workspace_shell must NOT be registered when WorkspaceShellEnabled=false")
 	}
 }
 
 // TestPR5_JimSeedPolicyAppliedInLoop verifies that when SeedConfig is called
-// before WireTier13Deps, Jim's seeded tool policy (workspace.shell=allow,
+// before WireTier13Deps, Jim's seeded tool policy (workspace_shell=allow,
 // run_in_workspace=deny) is correctly wired into the agent loop.
 //
 // BDD: Given a config seeded with SeedConfig (giving Jim workspace+net profile),
 //
 //	When the AgentLoop is set up and WireTier13Deps is called,
-//	Then Jim's registry entry has the workspace.shell tool registered
+//	Then Jim's registry entry has the workspace_shell tool registered
 //	(the tool policy allow is confirmed by the seed, registry wiring is confirmed here).
 //
-// Traces to: quizzical-marinating-frog.md PR 5 — "Jim's seed allows workspace.shell".
+// Traces to: quizzical-marinating-frog.md PR 5 — "Jim's seed allows workspace_shell".
 func TestPR5_JimSeedPolicyAppliedInLoop(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -160,20 +160,20 @@ func TestPR5_JimSeedPolicyAppliedInLoop(t *testing.T) {
 		t.Fatal("jim agent not found in registry after SeedConfig")
 	}
 
-	// workspace.shell must be registered for Jim.
-	rawTool, found := jimAgent.Tools.Get("workspace.shell")
+	// workspace_shell must be registered for Jim.
+	rawTool, found := jimAgent.Tools.Get("workspace_shell")
 	if !found {
-		t.Fatal("workspace.shell must be registered for Jim after PR 5 seed")
+		t.Fatal("workspace_shell must be registered for Jim after PR 5 seed")
 	}
 	_, isShellTool := rawTool.(*tools.WorkspaceShellTool)
 	if !isShellTool {
-		t.Fatalf("workspace.shell tool for Jim is not *WorkspaceShellTool; got %T", rawTool)
+		t.Fatalf("workspace_shell tool for Jim is not *WorkspaceShellTool; got %T", rawTool)
 	}
 
 	// Verify Jim's sandbox profile was applied to the shell tool.
 	shellTool := rawTool.(*tools.WorkspaceShellTool)
 	if shellTool.ProfileForTest() != config.SandboxProfileWorkspaceNet {
-		t.Errorf("Jim's workspace.shell profile must be workspace+net, got %q",
+		t.Errorf("Jim's workspace_shell profile must be workspace+net, got %q",
 			shellTool.ProfileForTest())
 	}
 }

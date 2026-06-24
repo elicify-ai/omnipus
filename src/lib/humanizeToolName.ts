@@ -1,10 +1,12 @@
 // Humanized, sentence-case labels for tool-call chips.
 //
-// Tool IDs mix conventions across the system: bare verbs (`remember`),
-// snake_case (`recall_memory`), dotted namespaces (`browser.navigate`,
-// `system.task.update`), and special verbs (`handoff`). The collapsed chip
+// Tool IDs use snake_case (`recall_memory`, `browser_navigate`,
+// `create_task`) and special verbs (`hand_off`). The collapsed chip
 // should show a readable label; the expanded chip still shows the raw ID so
 // power users see the real tool name.
+//
+// Legacy dotted-namespace aliases (browser.navigate etc.) are kept for
+// backward compatibility with old session transcripts.
 
 /**
  * Explicit overrides for tools whose generic transform would read awkwardly.
@@ -14,29 +16,79 @@ const EXPLICIT_LABELS: Record<string, string> = {
   remember: 'Remember',
   recall_memory: 'Recall memory',
   recall: 'Recall memory',
+  // New canonical names
+  run_retrospective: 'Retrospective',
+  hand_off: 'Hand off',
+  run_subagent: 'Run subagent',
+  check_spawn_status: 'Check spawn status',
+  // Legacy names (backward compat with old session transcripts)
   retrospective: 'Retrospective',
   handoff: 'Hand off',
+  spawn_status: 'Check spawn status',
+  subagent: 'Run subagent',
   spawn: 'Spawn subagent',
   exec: 'Run command',
-  'browser.navigate': 'Navigate browser',
+  // New canonical browser tool names
   browser_navigate: 'Navigate browser',
-  'browser.screenshot': 'Take screenshot',
   browser_screenshot: 'Take screenshot',
+  browser_click: 'Click element',
+  browser_type: 'Type text',
+  browser_get_text: 'Read page text',
+  browser_evaluate: 'Run script',
+  browser_wait: 'Wait for element',
+  // Legacy dotted names (backward compat with old transcripts)
+  'browser.navigate': 'Navigate browser',
+  'browser.screenshot': 'Take screenshot',
   'browser.click': 'Click element',
   'browser.type': 'Type text',
   'browser.get_text': 'Read page text',
   'browser.evaluate': 'Run script',
   'browser.wait': 'Wait for element',
+  // Web tools
+  search_web: 'Search the web',
+  fetch_url: 'Fetch URL',
+  serve_web: 'Serve site',
+  // Legacy web tool names (backward compat)
   web_search: 'Search the web',
   web_fetch: 'Fetch URL',
   web_serve: 'Serve site',
+  // Filesystem
   read_file: 'Read file',
   write_file: 'Write file',
   edit_file: 'Edit file',
   append_file: 'Append to file',
+  list_directory: 'List directory',
+  // Legacy filesystem names (backward compat)
   list_dir: 'List directory',
+  // Shell
+  workspace_shell: 'Run shell command',
+  workspace_shell_bg: 'Run shell (background)',
+  // Legacy shell names (backward compat)
   'workspace.shell': 'Run shell command',
   'workspace.shell_bg': 'Run shell (background)',
+  // Communication
+  send_message: 'Send message',
+  // Task tools
+  create_task: 'Create task',
+  update_task: 'Update task',
+  list_tasks: 'List tasks',
+  delete_task: 'Delete task',
+  create_task_in_workspace: 'Create task in workspace',
+  update_task_in_workspace: 'Update task in workspace',
+  list_tasks_in_workspace: 'List tasks in workspace',
+  delete_task_in_workspace: 'Delete task in workspace',
+  // Agent tools
+  list_agents: 'List agents',
+  create_agent: 'Create agent',
+  update_agent: 'Update agent',
+  delete_agent: 'Delete agent',
+  activate_agent: 'Activate agent',
+  deactivate_agent: 'Deactivate agent',
+  read_agent_metadata: 'Read agent metadata',
+  write_agent_metadata: 'Write agent metadata',
+  // Tool discovery
+  search_tools_bm25: 'Search tools (BM25)',
+  search_tools_regex: 'Search tools (regex)',
 }
 
 /**

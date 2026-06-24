@@ -2309,7 +2309,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			sendConnGenFrame(wc, string(generated.WsFrameTypeToolCallResult), resultF)
 			// When the handoff tool succeeds, notify the frontend to switch agents.
 			// Use evtSID (the session ID from the payload) to key the lookup, not chatID.
-			if p.Tool == "handoff" && status == "success" {
+			if p.Tool == "hand_off" && status == "success" {
 				if activeAgent, ok := h.agentLoop.GetSessionActiveAgent(evtSID); ok {
 					agentName, _ := h.agentLoop.GetRegistry().GetAgentName(activeAgent)
 					// Use generated.AgentSwitchedFrame (contract-first migration).

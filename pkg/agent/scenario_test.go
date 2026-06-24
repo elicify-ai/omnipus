@@ -394,13 +394,13 @@ func TestScenario10SpawnSubagentReturnsResult(t *testing.T) {
 		if !ok {
 			continue
 		}
-		// spawn and subagent must both be registered — they are semantically coupled.
+		// spawn and run_subagent must both be registered — they are semantically coupled.
 		_, hasSpawn := agent.Tools.Get("spawn")
-		_, hasSubagent := agent.Tools.Get("subagent")
+		_, hasSubagent := agent.Tools.Get("run_subagent")
 		assert.True(t, hasSpawn,
 			"agent %q must have 'spawn' tool registered (no pre-registration gate)", agentID)
 		assert.True(t, hasSubagent,
-			"agent %q must have 'subagent' tool registered (spawn requires subagent)", agentID)
+			"agent %q must have 'run_subagent' tool registered (spawn requires run_subagent)", agentID)
 	}
 
 	// Differentiation: two different agents both have spawn — proving it's not per-agent hardcoded.

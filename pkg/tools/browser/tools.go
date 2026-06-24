@@ -15,21 +15,21 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// maxGetTextBytes caps browser.get_text output to prevent enormous DOM dumps.
+// maxGetTextBytes caps browser_get_text output to prevent enormous DOM dumps.
 const maxGetTextBytes = 100 * 1024 // 100KB per spec edge case
 
 // defaultSessionID is the session used by all browser tools. Sequential tool
 // calls (navigate → click → get_text) operate on the same Chromium tab.
 const defaultSessionID = "default"
 
-// --- browser.navigate (US-5) ---
+// --- browser_navigate (US-5) ---
 
 type NavigateTool struct {
 	tools.BaseTool
 	mgr *BrowserManager
 }
 
-func (t *NavigateTool) Name() string                 { return "browser.navigate" }
+func (t *NavigateTool) Name() string                 { return "browser_navigate" }
 func (t *NavigateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *NavigateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *NavigateTool) Description() string {
@@ -49,7 +49,7 @@ func (t *NavigateTool) Parameters() map[string]any {
 func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	rawURL, _ := args["url"].(string)
 	if rawURL == "" {
-		return tools.ErrorResult("browser.navigate: 'url' parameter is required")
+		return tools.ErrorResult("browser_navigate: 'url' parameter is required")
 	}
 
 	if err := t.mgr.ValidateURL(ctx, rawURL); err != nil {
@@ -58,7 +58,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.navigate: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_navigate: %s", err))
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -70,7 +70,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		chromedp.Title(&title),
 	)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.navigate: page load failed: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_navigate: page load failed: %s", err))
 	}
 
 	var finalURL string
@@ -90,7 +90,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 			// Navigate away from the blocked page to prevent data exfiltration
 			_ = chromedp.Run(tabCtx, chromedp.Navigate("about:blank"))
 			return tools.ErrorResult(fmt.Sprintf(
-				"browser.navigate: redirect from %s landed on blocked URL: %s", rawURL, err))
+				"browser_navigate: redirect from %s landed on blocked URL: %s", rawURL, err))
 		}
 	}
 
@@ -104,14 +104,14 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	return jsonResult(result)
 }
 
-// --- browser.click (US-5) ---
+// --- browser_click (US-5) ---
 
 type ClickTool struct {
 	tools.BaseTool
 	mgr *BrowserManager
 }
 
-func (t *ClickTool) Name() string                 { return "browser.click" }
+func (t *ClickTool) Name() string                 { return "browser_click" }
 func (t *ClickTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *ClickTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *ClickTool) Description() string          { return "Click an element matching a CSS selector." }
@@ -128,12 +128,12 @@ func (t *ClickTool) Parameters() map[string]any {
 func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
 	if selector == "" {
-		return tools.ErrorResult("browser.click: 'selector' parameter is required")
+		return tools.ErrorResult("browser_click: 'selector' parameter is required")
 	}
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.click: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_click: %s", err))
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -144,20 +144,20 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		chromedp.Click(selector, chromedp.ByQuery),
 	)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.click: element not found or not clickable: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_click: element not found or not clickable: %s", err))
 	}
 
 	return jsonResult(map[string]any{"success": true, "selector": selector})
 }
 
-// --- browser.type (US-5) ---
+// --- browser_type (US-5) ---
 
 type TypeTool struct {
 	tools.BaseTool
 	mgr *BrowserManager
 }
 
-func (t *TypeTool) Name() string                 { return "browser.type" }
+func (t *TypeTool) Name() string                 { return "browser_type" }
 func (t *TypeTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *TypeTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *TypeTool) Description() string {
@@ -179,12 +179,12 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	selector, _ := args["selector"].(string)
 	text, _ := args["text"].(string)
 	if selector == "" {
-		return tools.ErrorResult("browser.type: 'selector' parameter is required")
+		return tools.ErrorResult("browser_type: 'selector' parameter is required")
 	}
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.type: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_type: %s", err))
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -195,13 +195,13 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		chromedp.SendKeys(selector, text, chromedp.ByQuery),
 	)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.type: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_type: %s", err))
 	}
 
 	return jsonResult(map[string]any{"success": true})
 }
 
-// --- browser.screenshot (US-5) ---
+// --- browser_screenshot (US-5) ---
 
 type ScreenshotTool struct {
 	tools.BaseTool
@@ -209,7 +209,7 @@ type ScreenshotTool struct {
 	mgr *BrowserManager
 }
 
-func (t *ScreenshotTool) Name() string                 { return "browser.screenshot" }
+func (t *ScreenshotTool) Name() string                 { return "browser_screenshot" }
 func (t *ScreenshotTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *ScreenshotTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *ScreenshotTool) Description() string {
@@ -226,7 +226,7 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.screenshot: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: %s", err))
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -259,14 +259,14 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 		chromedp.FullScreenshot(&buf, 90),
 	)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.screenshot: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: %s", err))
 	}
 
 	tmpDir := os.TempDir()
 	filename := fmt.Sprintf("omnipus-screenshot-%d.jpg", time.Now().UnixMilli())
 	path := filepath.Join(tmpDir, filename)
 	if err := os.WriteFile(path, buf, 0o600); err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.screenshot: failed to save: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to save: %s", err))
 	}
 
 	// FullScreenshot with quality>0 produces JPEG. Return as data URL so
@@ -279,14 +279,14 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 	}
 }
 
-// --- browser.get_text (US-5) ---
+// --- browser_get_text (US-5) ---
 
 type GetTextTool struct {
 	tools.BaseTool
 	mgr *BrowserManager
 }
 
-func (t *GetTextTool) Name() string                 { return "browser.get_text" }
+func (t *GetTextTool) Name() string                 { return "browser_get_text" }
 func (t *GetTextTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *GetTextTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *GetTextTool) Description() string {
@@ -306,12 +306,12 @@ func (t *GetTextTool) Parameters() map[string]any {
 func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
 	if selector == "" {
-		return tools.ErrorResult("browser.get_text: 'selector' parameter is required")
+		return tools.ErrorResult("browser_get_text: 'selector' parameter is required")
 	}
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.get_text: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_get_text: %s", err))
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -323,7 +323,7 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		chromedp.Text(selector, &text, chromedp.ByQuery),
 	)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.get_text: element not found: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element not found: %s", err))
 	}
 
 	if len(text) > maxGetTextBytes {
@@ -333,14 +333,14 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	return jsonResult(map[string]any{"text": text})
 }
 
-// --- browser.wait (US-5) ---
+// --- browser_wait (US-5) ---
 
 type WaitTool struct {
 	tools.BaseTool
 	mgr *BrowserManager
 }
 
-func (t *WaitTool) Name() string                 { return "browser.wait" }
+func (t *WaitTool) Name() string                 { return "browser_wait" }
 func (t *WaitTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *WaitTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *WaitTool) Description() string {
@@ -360,12 +360,12 @@ func (t *WaitTool) Parameters() map[string]any {
 func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
 	if selector == "" {
-		return tools.ErrorResult("browser.wait: 'selector' parameter is required")
+		return tools.ErrorResult("browser_wait: 'selector' parameter is required")
 	}
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.wait: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_wait: %s", err))
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -373,13 +373,13 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 
 	err = chromedp.Run(tabCtx, chromedp.WaitVisible(selector, chromedp.ByQuery))
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.wait: timeout waiting for %q: %s", selector, err))
+		return tools.ErrorResult(fmt.Sprintf("browser_wait: timeout waiting for %q: %s", selector, err))
 	}
 
 	return jsonResult(map[string]any{"found": true})
 }
 
-// --- browser.evaluate (US-5) ---
+// --- browser_evaluate (US-5) ---
 // Denied by default in deny-by-default policy mode (SEC-04/SEC-06).
 
 // EvaluateTool executes arbitrary JavaScript in the browser page context.
@@ -389,7 +389,7 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 // cfg.Sandbox.BrowserEvaluateEnabled): Execute returns a deny error unless the
 // operator explicitly opted in. This single gate enforces SEC-04 / SEC-06.
 //
-// NOTE (#438): pkg/policy.builtinToolPolicies["browser.evaluate"] = deny expresses
+// NOTE (#438): pkg/policy.builtinToolPolicies["browser_evaluate"] = deny expresses
 // the same deny-by-default intent declaratively, but it is read only by the
 // pkg/policy Evaluator.EvaluateTool path, which has no live tool-dispatch caller
 // (test-only). It is therefore advisory, not a live gate — the executeEnabled
@@ -400,7 +400,7 @@ type EvaluateTool struct {
 	executeEnabled bool
 }
 
-func (t *EvaluateTool) Name() string                 { return "browser.evaluate" }
+func (t *EvaluateTool) Name() string                 { return "browser_evaluate" }
 func (t *EvaluateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *EvaluateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *EvaluateTool) Description() string {
@@ -423,18 +423,18 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// type doc above and #438).
 	if !t.executeEnabled {
 		return tools.ErrorResult(
-			"browser.evaluate: disabled — set sandbox.browser_evaluate_enabled=true in config to enable",
+			"browser_evaluate: disabled — set sandbox.browser_evaluate_enabled=true in config to enable",
 		)
 	}
 
 	js, _ := args["js"].(string)
 	if js == "" {
-		return tools.ErrorResult("browser.evaluate: 'js' parameter is required")
+		return tools.ErrorResult("browser_evaluate: 'js' parameter is required")
 	}
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.evaluate: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_evaluate: %s", err))
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -443,7 +443,7 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	var result any
 	err = chromedp.Run(tabCtx, chromedp.Evaluate(js, &result))
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser.evaluate: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_evaluate: %s", err))
 	}
 
 	return jsonResult(map[string]any{"result": result})

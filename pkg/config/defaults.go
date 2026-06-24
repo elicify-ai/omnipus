@@ -358,9 +358,9 @@ func DefaultConfig() *Config {
 			// Browser automation is a standard built-in tool — enabled by default
 			// like exec/web/cron. Without this entry tools.browser.Enabled defaulted
 			// to the bool zero value (false), which migrateDeprecatedToolEnableFlags
-			// then translated into a global "browser.*: deny" policy — silently
-			// hiding browser.navigate/screenshot/etc. from EVERY agent's tool list.
-			// Headless on by default for server use; browser.evaluate stays opt-in
+			// then translated into a global "browser_*: deny" policy — silently
+			// hiding browser_navigate/browser_screenshot/etc. from EVERY agent's tool list.
+			// Headless on by default for server use; browser_evaluate stays opt-in
 			// (EvaluateEnabled=false) per SEC-04/SEC-06.
 			Browser: BrowserToolConfig{
 				ToolConfig: ToolConfig{

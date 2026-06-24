@@ -24,13 +24,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSkippedCounter_WebServeAllow verifies that IncSkipped("web_serve",
+// TestSkippedCounter_WebServeAllow verifies that IncSkipped("serve_web",
 // DecisionAllow) increments only the web_serve_allow bucket.
 func TestSkippedCounter_WebServeAllow(t *testing.T) {
 	ResetSkippedForTest()
 
-	IncSkipped("web_serve", DecisionAllow)
-	IncSkipped("web_serve", DecisionAllow)
+	IncSkipped("serve_web", DecisionAllow)
+	IncSkipped("serve_web", DecisionAllow)
 
 	snap := SnapshotSkipped()
 	assert.Equal(t, int64(2), snap.WebServeAllow, "web_serve_allow must be 2")
@@ -39,12 +39,12 @@ func TestSkippedCounter_WebServeAllow(t *testing.T) {
 	assert.Equal(t, int64(2), snap.Total, "total must equal sum of buckets")
 }
 
-// TestSkippedCounter_WebServeDeny verifies that IncSkipped("web_serve",
+// TestSkippedCounter_WebServeDeny verifies that IncSkipped("serve_web",
 // DecisionDeny) increments only the web_serve_deny bucket.
 func TestSkippedCounter_WebServeDeny(t *testing.T) {
 	ResetSkippedForTest()
 
-	IncSkipped("web_serve", DecisionDeny)
+	IncSkipped("serve_web", DecisionDeny)
 
 	snap := SnapshotSkipped()
 	assert.Equal(t, int64(0), snap.WebServeAllow, "web_serve_allow must be 0")
@@ -58,7 +58,7 @@ func TestSkippedCounter_WebServeDeny(t *testing.T) {
 func TestSkippedCounter_UnknownDecision(t *testing.T) {
 	ResetSkippedForTest()
 
-	IncSkipped("web_serve", "mystery_decision")
+	IncSkipped("serve_web", "mystery_decision")
 
 	snap := SnapshotSkipped()
 	assert.Equal(t, int64(0), snap.WebServeAllow)
@@ -87,10 +87,10 @@ func TestSkippedCounter_UnknownTool(t *testing.T) {
 func TestSkippedCounter_SnapshotSum(t *testing.T) {
 	ResetSkippedForTest()
 
-	IncSkipped("web_serve", DecisionAllow)    // +1 web_serve_allow
-	IncSkipped("web_serve", DecisionDeny)     // +1 web_serve_deny
+	IncSkipped("serve_web", DecisionAllow)    // +1 web_serve_allow
+	IncSkipped("serve_web", DecisionDeny)     // +1 web_serve_deny
 	IncSkipped("unknown_tool", DecisionAllow) // +1 other
-	IncSkipped("web_serve", "bad_decision")   // +1 other
+	IncSkipped("serve_web", "bad_decision")   // +1 other
 
 	snap := SnapshotSkipped()
 	require.Equal(t, snap.WebServeAllow+snap.WebServeDeny+snap.Other, snap.Total,
@@ -117,7 +117,7 @@ func TestSkippedCounter_ConcurrentIncSkipped(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < perGoroutine; j++ {
-				IncSkipped("web_serve", DecisionAllow)
+				IncSkipped("serve_web", DecisionAllow)
 			}
 		}()
 	}

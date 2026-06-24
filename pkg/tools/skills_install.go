@@ -44,7 +44,8 @@ func (t *InstallSkillTool) Description() string {
 	return "Install a skill from a registry by slug. Downloads and extracts the skill into the workspace. Use find_skills first to discover available skills."
 }
 
-func (t *InstallSkillTool) Scope() ToolScope { return ScopeGeneral }
+func (t *InstallSkillTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *InstallSkillTool) Category() ToolCategory { return CategorySkills }
 
 func (t *InstallSkillTool) Parameters() map[string]any {
 	return map[string]any{

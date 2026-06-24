@@ -237,13 +237,13 @@ type OmnipusSandboxConfig struct {
 	MaxConcurrentBuilds int32 `json:"max_concurrent_builds,omitempty"`
 
 	// DevServerPortRange is the [min, max] inclusive port range for Tier 3
-	// (web_serve dev mode and workspace.shell_bg). Default [18000, 18999]
+	// (web_serve dev mode and workspace_shell_bg). Default [18000, 18999]
 	// applied by the boot validator when the field is zero.
 	DevServerPortRange PortRange `json:"dev_server_port_range,omitempty"`
 
 	// EgressAllowList is the operator-controlled host allow-list for the
 	// egress proxy used by Tier 2 (build_static) and Tier 3 (web_serve dev
-	// mode and workspace.shell_bg) child processes. Entries may be exact
+	// mode and workspace_shell_bg) child processes. Entries may be exact
 	// hostnames or "*.x" wildcard patterns. Default: ["registry.npmjs.org",
 	// "github.com", "raw.githubusercontent.com"] applied by the boot
 	// validator when empty.
@@ -301,7 +301,7 @@ type OmnipusSandboxConfig struct {
 	//     skills installer). Entries here are merged into the SSRFChecker's
 	//     allow-list at boot.
 	//
-	// Documented gap: a compiled binary spawned via workspace.shell can still
+	// Documented gap: a compiled binary spawned via workspace_shell can still
 	// dial RFC1918 IPs on allowed ports (e.g. https://192.168.1.1/) because
 	// kernel enforcement is port-only. CIDR-level enforcement for compiled
 	// children would require eBPF cgroup CGROUP_INET4_CONNECT, deferred to a
@@ -394,7 +394,7 @@ type OmnipusSandboxConfig struct {
 // ExperimentalConfig holds feature flags for dark-launched tools and capabilities.
 // All flags default to false (deny-by-default per SEC hard constraint #6).
 type ExperimentalConfig struct {
-	// WorkspaceShellEnabled gates the workspace.shell and workspace.shell_bg
+	// WorkspaceShellEnabled gates the workspace_shell and workspace_shell_bg
 	// builtin tools. Defaults to false (deny-by-default). Operators must
 	// explicitly opt in by writing:
 	//   {"experimental": {"workspace_shell_enabled": true}}

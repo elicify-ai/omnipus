@@ -58,8 +58,8 @@ func TestApplyAdminAskFence_AdminAskFenceOnCustomAgents(t *testing.T) {
 
 	// Tools with RequiresAdminAsk = true (i.e. the system.* tools).
 	adminAskTools := []string{
-		"system.config.set",
-		"system.agent.create",
+		"set_config",
+		"create_agent",
 		"system.exec",
 	}
 	// Tool with RequiresAdminAsk = false (i.e. an ordinary builtin).
@@ -138,7 +138,7 @@ func TestApplyAdminAskFence_AdminAskFenceOnCustomAgents(t *testing.T) {
 // pre-fence state and the fence is purely a tightening pass.
 func TestApplyAdminAskFence_NilPredicates(t *testing.T) {
 	t.Parallel()
-	got, applied := ApplyAdminAskFence("allow", "system.config.set", "custom-agent",
+	got, applied := ApplyAdminAskFence("allow", "set_config", "custom-agent",
 		nil, nil)
 	if got != "allow" || applied {
 		t.Fatalf("nil predicates should not change effective: got=(%q,%v)", got, applied)

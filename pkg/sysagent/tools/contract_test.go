@@ -13,27 +13,31 @@ import (
 )
 
 // TestRegistry_AllSysagentToolsRequireAdminAsk verifies that every tool returned
-// by AllTools() implements RequiresAdminAsk() == true and Category() == CategorySystem.
-// This is the admin-ask fence (FR-061) and category-contract (FR-059).
+// by AllTools() implements RequiresAdminAsk() == true and returns a domain
+// category (NOT CategorySystem). This is the admin-ask fence (FR-061) and
+// category-contract (FR-059) after the §7 tool rename.
 //
-// Rationale: all system.* tools are privileged operations (creating agents, editing
-// config, managing channels). They must always require human approval before
-// execution — RequiresAdminAsk() == true is the machine-readable gate.
+// Rationale: all privileged management tools are privileged operations (creating
+// agents, editing config, managing channels). They must always require human
+// approval before execution — RequiresAdminAsk() == true is the machine-readable
+// gate.
 //
-// BDD: Given all 40 tools returned by AllTools(),
+// BDD: Given all 37 tools returned by AllTools(),
 //
 //	When RequiresAdminAsk() is called on each,
 //	Then it returns true for every tool.
 //	When Category() is called on each,
-//	Then it returns CategorySystem for every tool (FR-059).
+//	Then it returns a domain category (NOT CategorySystem) for every tool (FR-059).
+//	When Name() is called on each,
+//	Then the name does NOT start with "system." and does NOT contain a dot.
 //
 // Traces to: pkg/sysagent/tools/admin_ask.go — RequiresAdminAsk (FR-061).
 // Traces to: pkg/sysagent/tools/category.go — Category (FR-059).
 func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
 	all := AllTools(nil, nil)
 
-	if len(all) != 40 {
-		t.Errorf("expected exactly 40 system tools, got %d", len(all))
+	if len(all) != 37 {
+		t.Errorf("expected exactly 37 system tools, got %d", len(all))
 	}
 
 	for _, tool := range all {
@@ -51,10 +55,14 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
 			)
 		}
 
-		// Category contract (FR-059): system tools use CategorySystem.
+		// Category contract (FR-059): after §7 rename, system tools must NOT return
+		// CategorySystem. They must return a domain category.
 		if cat, ok := tool.(interface{ Category() tools.ToolCategory }); ok {
-			if cat.Category() != tools.CategorySystem {
-				t.Errorf("tool %q: Category() must return CategorySystem, got %q (FR-059)", name, cat.Category())
+			if cat.Category() == tools.CategorySystem {
+				t.Errorf("tool %q: Category() must NOT return CategorySystem after §7 rename (FR-059)", name)
+			}
+			if cat.Category() == tools.CategoryCore {
+				t.Errorf("tool %q: Category() must NOT return CategoryCore (legacy default) — use a domain category", name)
 			}
 		} else {
 			t.Errorf("tool %q: does not implement Category()", name)
@@ -69,9 +77,13 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
 			)
 		}
 
-		// Naming convention: all system tools must use the "system." prefix.
-		if !strings.HasPrefix(name, "system.") {
-			t.Errorf("tool %q: name must start with \"system.\" prefix (naming convention)", name)
+		// Naming convention (§7): tool names must not start with "system." and must not
+		// contain a dot (new verb-first naming convention).
+		if strings.HasPrefix(name, "system.") {
+			t.Errorf("tool %q: name must NOT start with \"system.\" prefix after §7 rename", name)
+		}
+		if strings.Contains(name, ".") {
+			t.Errorf("tool %q: name must NOT contain a dot after §7 rename (use underscores)", name)
 		}
 	}
 }
@@ -114,19 +126,15 @@ func TestRegistry_NoDuplicateSysagentToolNames(t *testing.T) {
 }
 
 // TestRegistry_AllSysagentToolsRequireAdminAsk_CentralRegistry is the M4-spec
-// variant of TestRegistry_AllSysagentToolsRequireAdminAsk: it populates the
-// central BuiltinRegistry the same way production does (BuildRegistry) and
-// asserts every registered builtin satisfies RequiresAdminAsk() and Category().
-//
-// This test walks the central registry rather than the package-local AllTools
-// slice, ensuring that any future tool added via BuiltinRegistry.RegisterBuiltin
-// (not AllTools) is also covered.
+// variant: it populates the central BuiltinRegistry the same way production does
+// (BuildRegistry) and asserts every registered builtin satisfies RequiresAdminAsk()
+// and returns a domain Category().
 //
 // BDD: Given a BuiltinRegistry populated via BuildRegistry,
 //
 //	When each tool is retrieved via All(),
-//	Then every system.* tool has RequiresAdminAsk() == true (FR-061)
-//	And every system.* tool has Category() == CategorySystem (FR-059).
+//	Then every tool has RequiresAdminAsk() == true (FR-061)
+//	And every tool has Category() != CategorySystem (FR-059).
 //
 // Traces to: pkg/tools/builtin_registry.go (central registry, FR-001).
 // Traces to: pkg/sysagent/tools/registry.go — BuildRegistry.
@@ -135,14 +143,14 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk_CentralRegistry(t *testing.T) 
 	reg := BuildRegistry(nil, nil)
 	allTools := reg.GetAll()
 
-	if len(allTools) != 40 {
-		t.Errorf("central BuiltinRegistry has %d tools; want == 40 (FR-001)", len(allTools))
+	if len(allTools) != 37 {
+		t.Errorf("central BuiltinRegistry has %d tools; want == 37 (FR-001)", len(allTools))
 	}
 
 	for _, tool := range allTools {
 		name := tool.Name()
 
-		// All tools in this registry are system.* builtins — they must all
+		// All tools in this registry are privileged builtins — they must all
 		// require admin-ask (FR-061).
 		if adm, ok := tool.(interface{ RequiresAdminAsk() bool }); ok {
 			if !adm.RequiresAdminAsk() {
@@ -152,13 +160,12 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk_CentralRegistry(t *testing.T) 
 			t.Errorf("central registry tool %q: does not implement RequiresAdminAsk()", name)
 		}
 
-		// Category must be CategorySystem (FR-059).
+		// Category must NOT be CategorySystem after §7 rename (FR-059).
 		if cat, ok := tool.(interface{ Category() tools.ToolCategory }); ok {
-			if cat.Category() != tools.CategorySystem {
+			if cat.Category() == tools.CategorySystem {
 				t.Errorf(
-					"central registry tool %q: Category() must be CategorySystem, got %q (FR-059)",
+					"central registry tool %q: Category() must NOT return CategorySystem after §7 rename (FR-059)",
 					name,
-					cat.Category(),
 				)
 			}
 		} else {

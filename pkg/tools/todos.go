@@ -36,13 +36,13 @@ func (t *SetTodosTool) SetHome(home string) {
 
 func (t *SetTodosTool) Name() string           { return "set_todos" }
 func (t *SetTodosTool) Scope() ToolScope       { return ScopeCore }
-func (t *SetTodosTool) Category() ToolCategory { return CategoryTask }
+func (t *SetTodosTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *SetTodosTool) Description() string {
 	return "Set your working scratchpad: a flat checklist of steps for the goal you're currently focused on. " +
 		"Pass the FULL list every call (replace-semantics — no item IDs). " +
 		"Use this for the throwaway checklist of what you're doing this turn; " +
-		"use task_create + dependencies for a durable multi-wave plan. " +
+		"use create_task + dependencies for a durable multi-wave plan. " +
 		"Your checklist is shown on the board and re-shown to you each turn."
 }
 

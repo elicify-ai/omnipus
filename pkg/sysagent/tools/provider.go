@@ -50,7 +50,7 @@ type ProviderConfigureTool struct{ deps *Deps }
 func NewProviderConfigureTool(d *Deps) *ProviderConfigureTool {
 	return &ProviderConfigureTool{deps: d}
 }
-func (t *ProviderConfigureTool) Name() string           { return "system.provider.configure" }
+func (t *ProviderConfigureTool) Name() string           { return "configure_provider" }
 func (t *ProviderConfigureTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ProviderConfigureTool) Description() string {
 	return "Add or update an LLM provider with its API key.\nParameters: name (required), api_key (for cloud), api_base (optional)."
@@ -171,7 +171,7 @@ func providerNameOf(p *config.ModelConfig) string {
 type ProviderListTool struct{ deps *Deps }
 
 func NewProviderListTool(d *Deps) *ProviderListTool { return &ProviderListTool{deps: d} }
-func (t *ProviderListTool) Name() string            { return "system.provider.list" }
+func (t *ProviderListTool) Name() string            { return "list_providers" }
 func (t *ProviderListTool) Scope() tools.ToolScope  { return tools.ScopeCore }
 func (t *ProviderListTool) Description() string {
 	return "List configured providers with connection status. API keys are never returned. No parameters required."
@@ -215,7 +215,7 @@ func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.T
 type ProviderTestTool struct{ deps *Deps }
 
 func NewProviderTestTool(d *Deps) *ProviderTestTool { return &ProviderTestTool{deps: d} }
-func (t *ProviderTestTool) Name() string            { return "system.provider.test" }
+func (t *ProviderTestTool) Name() string            { return "test_provider" }
 func (t *ProviderTestTool) Scope() tools.ToolScope  { return tools.ScopeCore }
 func (t *ProviderTestTool) Description() string {
 	return "Test a provider connection. Parameters: name (required)."
@@ -267,7 +267,7 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 type ModelsListTool struct{ deps *Deps }
 
 func NewModelsListTool(d *Deps) *ModelsListTool  { return &ModelsListTool{deps: d} }
-func (t *ModelsListTool) Name() string           { return "system.models.list" }
+func (t *ModelsListTool) Name() string           { return "list_models" }
 func (t *ModelsListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ModelsListTool) Description() string {
 	return "List available models from configured providers. " +

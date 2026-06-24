@@ -37,10 +37,10 @@ func isValidTaskStatus(s string) bool { return task.IsValidStatus(task.Status(s)
 type TaskCreateTool struct{ deps *Deps }
 
 func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: d} }
-func (t *TaskCreateTool) Name() string           { return "system.task.create" }
+func (t *TaskCreateTool) Name() string           { return "create_task_in_workspace" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, planning, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), blocked_by (optional, array of task IDs this task is blocked by)."
+	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, planning, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), blocked_by (optional, array of task IDs this task is blocked by)."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -138,10 +138,10 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 type TaskUpdateTool struct{ deps *Deps }
 
 func NewTaskUpdateTool(d *Deps) *TaskUpdateTool  { return &TaskUpdateTool{deps: d} }
-func (t *TaskUpdateTool) Name() string           { return "system.task.update" }
+func (t *TaskUpdateTool) Name() string           { return "update_task_in_workspace" }
 func (t *TaskUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskUpdateTool) Description() string {
-	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id.\nParameters: id (required, from system.task.list), name, description, prompt, workspace_id, agent_id, status (inbox/next/planning/in_progress/blocked/done/failed), due (RFC 3339), blocked_by (array of task IDs, replaces existing list). Only provided fields are updated."
+	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/planning/in_progress/blocked/done/failed), due (RFC 3339), blocked_by (array of task IDs, replaces existing list). Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -176,7 +176,7 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	existing, err := store.Get(id)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
-			"Use system.task.list to see available tasks"))
+			"Use list_tasks_in_workspace to see available tasks"))
 	}
 
 	patch := task.Patch{}
@@ -244,7 +244,7 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	if err != nil {
 		if isTaskNotFound(err) {
 			return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
-				"Use system.task.list to see available tasks"))
+				"Use list_tasks_in_workspace to see available tasks"))
 		}
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
 	}
@@ -271,7 +271,7 @@ func isTaskNotFound(err error) bool {
 type TaskDeleteTool struct{ deps *Deps }
 
 func NewTaskDeleteTool(d *Deps) *TaskDeleteTool  { return &TaskDeleteTool{deps: d} }
-func (t *TaskDeleteTool) Name() string           { return "system.task.delete" }
+func (t *TaskDeleteTool) Name() string           { return "delete_task_in_workspace" }
 func (t *TaskDeleteTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskDeleteTool) Description() string {
 	return "Delete a task. Parameters: id (required), confirm (bool, must be true)."
@@ -301,12 +301,12 @@ func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.
 	store := taskStoreFor(t.deps.Home)
 	if _, err := store.Get(id); err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
-			"Use system.task.list to see available tasks"))
+			"Use list_tasks_in_workspace to see available tasks"))
 	}
 	unblocked, err := store.Delete(id)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("DELETE_FAILED", err.Error(),
-			"Use system.task.list to see available tasks"))
+			"Use list_tasks_in_workspace to see available tasks"))
 	}
 	if len(unblocked) > 0 {
 		slog.Info("sysagent: task delete: unblocked dependents", "deleted_id", id, "unblocked", unblocked)
@@ -319,7 +319,7 @@ func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.
 type TaskListTool struct{ deps *Deps }
 
 func NewTaskListTool(d *Deps) *TaskListTool    { return &TaskListTool{deps: d} }
-func (t *TaskListTool) Name() string           { return "system.task.list" }
+func (t *TaskListTool) Name() string           { return "list_tasks_in_workspace" }
 func (t *TaskListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskListTool) Description() string {
 	return "List tasks with optional filters.\nParameters: workspace_id, agent_id, status (all optional)."

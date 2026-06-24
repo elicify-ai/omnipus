@@ -22,20 +22,34 @@ const (
 type ToolCategory string
 
 const (
-	CategoryCore          ToolCategory = "core"   // default for BaseTool
-	CategorySystem        ToolCategory = "system" // sysagent tools
-	CategoryFile          ToolCategory = "file"
-	CategoryCode          ToolCategory = "code"
+	// Dumping-ground values (legacy). BaseTool's default is CategoryCore, but no
+	// SHIPPED tool returns CategoryCore or CategorySystem after the §7 rename —
+	// every tool returns a domain category below. Kept only as the BaseTool
+	// fallback and for back-compat; not used by any shipped tool.
+	CategoryCore   ToolCategory = "core"   // default for BaseTool
+	CategorySystem ToolCategory = "system" // legacy sysagent dumping ground
+
+	// Domain categories (§7 tool-rename-map-2026-06). Every shipped builtin tool
+	// returns one of these.
+	CategoryFilesystem    ToolCategory = "filesystem"
+	CategoryShell         ToolCategory = "shell"
 	CategoryWeb           ToolCategory = "web"
 	CategoryBrowser       ToolCategory = "browser"
 	CategoryCommunication ToolCategory = "communication"
-	CategoryTask          ToolCategory = "task"
-	CategoryAutomation    ToolCategory = "automation"
-	CategorySearch        ToolCategory = "search"
+	CategoryDelegation    ToolCategory = "delegation"
+	CategoryMemory        ToolCategory = "memory"
+	CategoryTasks         ToolCategory = "tasks"
 	CategorySkills        ToolCategory = "skills"
-	CategoryHardware      ToolCategory = "hardware"
-	CategoryWorkspace     ToolCategory = "workspace"
-	CategoryMCP           ToolCategory = "mcp"
+	CategoryToolDiscovery ToolCategory = "tool_discovery"
+	CategoryAgents        ToolCategory = "agents"
+	CategoryWorkspaces    ToolCategory = "workspaces"
+	CategoryChannels      ToolCategory = "channels"
+	CategoryProviders     ToolCategory = "providers"
+	CategoryPlatform      ToolCategory = "platform"
+	// CategoryMCP is behavior-bearing: it drives server_id population in
+	// rest_tool_registry.go. Reserved for dynamic MCP-server tools and the
+	// mcp-management builtins (add/remove/list_mcp_servers).
+	CategoryMCP ToolCategory = "mcp"
 )
 
 // Tool is the interface that all tools must implement.

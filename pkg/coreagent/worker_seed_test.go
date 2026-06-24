@@ -171,7 +171,7 @@ func TestWorkerHasNoPersistentMemoryTools(t *testing.T) {
 
 	require.NotNil(t, worker.Tools)
 	pol := worker.Tools.Builtin.Policies
-	for _, tool := range []string{"remember", "recall_memory", "retrospective"} {
+	for _, tool := range []string{"remember", "recall_memory", "run_retrospective"} {
 		assert.Equal(t, config.ToolPolicyDeny, pol[tool],
 			"worker must deny persistent-memory tool %q (ephemeral memory only)", tool)
 	}

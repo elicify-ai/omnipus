@@ -53,7 +53,7 @@ func TestHandleToolPolicies_GET_EmptyState(t *testing.T) {
 func TestHandleToolPolicies_PUT_ReturnsPersistedValues(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	body := `{"default_policy":"ask","policies":{"exec":"deny","web_search":"allow"}}`
+	body := `{"default_policy":"ask","policies":{"exec":"deny","search_web":"allow"}}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	// withReAuthAdmin supplies the admin user/role AND the FR-3.3 re-auth token.
@@ -69,7 +69,7 @@ func TestHandleToolPolicies_PUT_ReturnsPersistedValues(t *testing.T) {
 	policies, ok := resp["policies"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "deny", policies["exec"])
-	assert.Equal(t, "allow", policies["web_search"])
+	assert.Equal(t, "allow", policies["search_web"])
 }
 
 // TestHandleToolPolicies_PUT_ReadBack verifies that the config.json is actually
@@ -78,7 +78,7 @@ func TestHandleToolPolicies_PUT_ReadBack(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// Write.
-	putBody := `{"default_policy":"deny","policies":{"browser.evaluate":"ask"}}`
+	putBody := `{"default_policy":"deny","policies":{"browser_evaluate":"ask"}}`
 	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(putBody))
 	putReq.Header.Set("Content-Type", "application/json")
 	putReq = withReAuthAdmin(t, api, putReq) // admin user/role + FR-3.3 re-auth token
@@ -96,7 +96,7 @@ func TestHandleToolPolicies_PUT_ReadBack(t *testing.T) {
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
 	assert.Equal(t, "deny", resp["default_policy"])
 	policies := resp["policies"].(map[string]any)
-	assert.Equal(t, "ask", policies["browser.evaluate"])
+	assert.Equal(t, "ask", policies["browser_evaluate"])
 }
 
 // TestHandleToolPolicies_PUT_InvalidDefaultPolicy verifies that an invalid

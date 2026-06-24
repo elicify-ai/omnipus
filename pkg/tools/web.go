@@ -1050,7 +1050,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 }
 
 func (t *WebSearchTool) Name() string {
-	return "web_search"
+	return "search_web"
 }
 
 func (t *WebSearchTool) Description() string {
@@ -1058,7 +1058,7 @@ func (t *WebSearchTool) Description() string {
 }
 
 func (t *WebSearchTool) Scope() ToolScope       { return ScopeGeneral }
-func (t *WebSearchTool) Category() ToolCategory { return CategorySearch }
+func (t *WebSearchTool) Category() ToolCategory { return CategoryWeb }
 
 func (t *WebSearchTool) Parameters() map[string]any {
 	return map[string]any{
@@ -1208,7 +1208,7 @@ func NewWebFetchToolWithConfig(
 }
 
 func (t *WebFetchTool) Name() string {
-	return "web_fetch"
+	return "fetch_url"
 }
 
 func (t *WebFetchTool) Description() string {

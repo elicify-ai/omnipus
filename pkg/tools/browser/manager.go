@@ -87,7 +87,7 @@ type sessionEntry struct {
 // Thread-safe — all methods may be called concurrently.
 //
 // Session model: tools operate on a persistent "default" session tab so that
-// browser.navigate, browser.click, browser.get_text, etc. act on the same page.
+// browser_navigate, browser_click, browser_get_text, etc. act on the same page.
 // Additional sessions can be created for parallel browsing up to MaxTabs.
 type BrowserManager struct {
 	cfg         BrowserConfig
@@ -181,7 +181,7 @@ func (m *BrowserManager) ensureStarted() error {
 	// stay behind in the profile dir. The next launch refuses to start with:
 	//   "Failed to create .../SingletonLock: File exists (17)
 	//    Failed to create a ProcessSingleton for your profile directory."
-	// and every subsequent browser.navigate fails. We always own this
+	// and every subsequent browser_navigate fails. We always own this
 	// profile directory exclusively (single chromedp allocator per gateway
 	// process; tabs share the same Chromium instance), so it is safe to
 	// remove these on each lazy-init. Symlinks (which is what Chrome uses
@@ -224,7 +224,7 @@ func (m *BrowserManager) ensureStarted() error {
 		chromedp.Flag("disable-breakpad", true),
 		// Pin the DevTools WebSocket to a fixed loopback port so the
 		// gateway's Landlock NET_CONNECT_TCP allow-list can include it
-		// (v0.1 fix for "browser.navigate: dial tcp 127.0.0.1:<random>:
+		// (v0.1 fix for "browser_navigate: dial tcp 127.0.0.1:<random>:
 		// connect: permission denied"). Without this, chromedp picks an
 		// ephemeral port and Landlock blocks the dial because only
 		// {53, 80, 443} + dev-server ports are allow-listed by default.

@@ -14,8 +14,8 @@ func TestSpawnStatusTool_Name(t *testing.T) {
 	manager := NewSubagentManager(provider, "test-model", workspace)
 	tool := NewSpawnStatusTool(manager)
 
-	if tool.Name() != "spawn_status" {
-		t.Errorf("Expected name 'spawn_status', got '%s'", tool.Name())
+	if tool.Name() != "check_spawn_status" {
+		t.Errorf("Expected name 'check_spawn_status', got '%s'", tool.Name())
 	}
 }
 

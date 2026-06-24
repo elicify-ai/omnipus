@@ -8,7 +8,7 @@
 // BDD Scenario (spec): "Tools[] dedup — duplicate name dropped deterministically
 // and call continues"
 //
-// Given the registry inadvertently contains two entries named "web_fetch"
+// Given the registry inadvertently contains two entries named "fetch_url"
 // (one builtin, one MCP from server srv-A that slipped past FR-034 due to a race),
 // When the agent loop assembles the next LLM call,
 // Then the duplicate is dropped using deterministic source-tag ordering
@@ -101,9 +101,9 @@ func TestLoopDedup_ToolsToProviderDefsNoDuplicateInNormalPath(t *testing.T) {
 //
 // Traces to: tool-registry-redesign-spec.md FR-066 / BDD "Tools[] dedup"
 func TestLoopDedup_DetectsBuiltinVsMCPCollision(t *testing.T) {
-	// Controlled duplicate: same tool name "web_fetch", two different sources.
-	builtinTool := &dupTool{name: "web_fetch", scopeVal: tools.ScopeGeneral, sourceTag: "builtin"}
-	mcpTool := &dupTool{name: "web_fetch", scopeVal: tools.ScopeGeneral, sourceTag: "mcp:srv-A"}
+	// Controlled duplicate: same tool name "fetch_url", two different sources.
+	builtinTool := &dupTool{name: "fetch_url", scopeVal: tools.ScopeGeneral, sourceTag: "builtin"}
+	mcpTool := &dupTool{name: "fetch_url", scopeVal: tools.ScopeGeneral, sourceTag: "mcp:srv-A"}
 
 	// Verify that the raw ToolsToProviderDefs output would contain a duplicate
 	// (proving the dedup pass is necessary).
@@ -112,7 +112,7 @@ func TestLoopDedup_DetectsBuiltinVsMCPCollision(t *testing.T) {
 	for _, def := range rawDefs {
 		nameCount[def.Function.Name]++
 	}
-	require.Greater(t, nameCount["web_fetch"], 1,
+	require.Greater(t, nameCount["fetch_url"], 1,
 		"raw ToolsToProviderDefs must produce duplicate names for duplicate input (pre-dedup collision)")
 
 	// Build a minimal AgentLoop with an audit logger wired in.
@@ -129,7 +129,7 @@ func TestLoopDedup_DetectsBuiltinVsMCPCollision(t *testing.T) {
 	// checkToolDedupInvariant must return a non-nil error on duplicate input.
 	err := al.checkToolDedupInvariant(ts, []tools.Tool{builtinTool, mcpTool})
 	require.Error(t, err, "checkToolDedupInvariant must return error on duplicate tool names")
-	assert.Contains(t, err.Error(), "web_fetch", "error must name the duplicated tool")
+	assert.Contains(t, err.Error(), "fetch_url", "error must name the duplicated tool")
 	assert.Contains(t, err.Error(), "dedup invariant violated", "error must describe the violation")
 
 	// Clean path: no duplicates must return nil.
@@ -189,7 +189,7 @@ func TestLoopDedup_AuditEmitterRoundTrip(t *testing.T) {
 	// Call the emitter.
 	audit.EmitToolAssemblyDuplicateName(
 		context.Background(), lg,
-		"web_fetch",
+		"fetch_url",
 		[]string{"builtin", "mcp:srv-A"},
 		"builtin",
 	)
@@ -205,8 +205,8 @@ func TestLoopDedup_AuditEmitterRoundTrip(t *testing.T) {
 //
 // Traces to: tool-registry-redesign-spec.md FR-066 / BDD "Tools[] dedup"
 func TestLoopDedup_ManualDedupProducesUniqueNames(t *testing.T) {
-	builtinWebFetch := &dupTool{name: "web_fetch", scopeVal: tools.ScopeGeneral, sourceTag: "builtin"}
-	mcpWebFetch := &dupTool{name: "web_fetch", scopeVal: tools.ScopeGeneral, sourceTag: "mcp:srv-A"}
+	builtinWebFetch := &dupTool{name: "fetch_url", scopeVal: tools.ScopeGeneral, sourceTag: "builtin"}
+	mcpWebFetch := &dupTool{name: "fetch_url", scopeVal: tools.ScopeGeneral, sourceTag: "mcp:srv-A"}
 	readFile := &dupTool{name: "read_file", scopeVal: tools.ScopeGeneral, sourceTag: "builtin"}
 
 	input := []tools.Tool{builtinWebFetch, mcpWebFetch, readFile}
@@ -236,6 +236,6 @@ func TestLoopDedup_ManualDedupProducesUniqueNames(t *testing.T) {
 		defNames[d.Function.Name] = true
 	}
 
-	assert.True(t, defNames["web_fetch"], "web_fetch must be present")
+	assert.True(t, defNames["fetch_url"], "web_fetch must be present")
 	assert.True(t, defNames["read_file"], "read_file must be present")
 }

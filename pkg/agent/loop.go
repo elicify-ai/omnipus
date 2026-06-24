@@ -570,12 +570,12 @@ func NewAgentLoop(
 								})
 						}
 					}
-					if t, ok := agent.Tools.Get("retrospective"); ok {
+					if t, ok := agent.Tools.Get("run_retrospective"); ok {
 						if rt, ok := t.(*tools.RetrospectiveTool); ok {
 							rt.SetAuditLogger(auditLogger)
 						} else {
 							logger.WarnCF("agent",
-								"'retrospective' tool is not a *tools.RetrospectiveTool; audit wiring skipped",
+								"'run_retrospective' tool is not a *tools.RetrospectiveTool; audit wiring skipped",
 								map[string]any{
 									"agent_id":  agentID,
 									"tool_type": fmt.Sprintf("%T", t),
@@ -2153,7 +2153,7 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInsta
 		ag = al.GetRegistry().GetDefaultAgent()
 	}
 	if ag != nil {
-		if tool, ok := ag.Tools.Get("message"); ok {
+		if tool, ok := ag.Tools.Get("send_message"); ok {
 			if mt, ok := tool.(*tools.MessageTool); ok {
 				alreadySent = mt.HasSentInRound()
 			}
@@ -3820,7 +3820,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	}
 
 	// Reset message-tool state for this round so we don't skip publishing due to a previous round.
-	if tool, ok := agent.Tools.Get("message"); ok {
+	if tool, ok := agent.Tools.Get("send_message"); ok {
 		if resetter, ok := tool.(interface{ ResetSentInRound() }); ok {
 			resetter.ResetSentInRound()
 		}
@@ -4828,7 +4828,7 @@ turnLoop:
 		providerToolDefs := tools.ToolsToProviderDefs(policyFilteredTools)
 
 		// Native web search support
-		_, hasWebSearch := ts.agent.Tools.Get("web_search")
+		_, hasWebSearch := ts.agent.Tools.Get("search_web")
 		useNativeSearch := cfg.Tools.Web.PreferNative &&
 			hasWebSearch &&
 			func() bool {
@@ -4840,10 +4840,10 @@ turnLoop:
 			}()
 
 		if useNativeSearch {
-			// Filter out client-side web_search tool
+			// Filter out client-side search_web tool
 			filtered := make([]providers.ToolDefinition, 0, len(providerToolDefs))
 			for _, td := range providerToolDefs {
-				if td.Function.Name != "web_search" {
+				if td.Function.Name != "search_web" {
 					filtered = append(filtered, td)
 				}
 			}
@@ -7894,11 +7894,11 @@ func isNativeSearchProvider(p providers.LLMProvider) bool {
 }
 
 // filterClientWebSearch returns a copy of tools with the client-side
-// web_search tool removed. Used when native provider search is preferred.
+// search_web tool removed. Used when native provider search is preferred.
 func filterClientWebSearch(tools []providers.ToolDefinition) []providers.ToolDefinition {
 	result := make([]providers.ToolDefinition, 0, len(tools))
 	for _, t := range tools {
-		if strings.EqualFold(t.Function.Name, "web_search") {
+		if strings.EqualFold(t.Function.Name, "search_web") {
 			continue
 		}
 		result = append(result, t)

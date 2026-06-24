@@ -1374,7 +1374,7 @@ func TestAgentToolsCfg_JSONRoundTrip(t *testing.T) {
 			DefaultPolicy: ToolPolicyDeny,
 			Policies: map[string]ToolPolicy{
 				"exec":       ToolPolicyAllow,
-				"web_search": ToolPolicyAllow,
+				"search_web": ToolPolicyAllow,
 				"read_file":  ToolPolicyAllow,
 			},
 		},

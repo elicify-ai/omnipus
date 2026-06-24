@@ -13,7 +13,7 @@ import (
 )
 
 // workspaceLinkerAdapter adapts ProjectSessionLinker to the ToolInterceptor interface.
-// It fires on system.task.create and system.task.update when a workspace_id argument
+// It fires on create_task_in_workspace and update_task_in_workspace when a workspace_id argument
 // is present, recording a session→workspace link in ~/.omnipus/project_session_links.jsonl.
 type workspaceLinkerAdapter struct {
 	linker *systools.ProjectSessionLinker
@@ -30,7 +30,7 @@ func (a *workspaceLinkerAdapter) AfterTool(
 	ctx context.Context,
 	result *ToolResultHookResponse,
 ) (*ToolResultHookResponse, HookDecision, error) {
-	if result.Tool == "system.task.create" || result.Tool == "system.task.update" {
+	if result.Tool == "create_task_in_workspace" || result.Tool == "update_task_in_workspace" {
 		if workspaceID, _ := result.Arguments["workspace_id"].(string); workspaceID != "" {
 			sessionID := tools.ToolTranscriptSessionID(ctx)
 			if sessionID == "" {

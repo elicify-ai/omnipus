@@ -577,10 +577,10 @@ const (
 	ExcludedSpawn ExcludedTool = "spawn"
 	// ExcludedSubagent is the sync delegation tool (SubagentTool). Also excluded
 	// from child registries — a subagent calling subagent would create a grandchild.
-	ExcludedSubagent ExcludedTool = "subagent"
+	ExcludedSubagent ExcludedTool = "run_subagent"
 	// ExcludedHandoff is the agent-switch tool. Excluded from child registries to
 	// prevent sub-turns from hijacking the active agent session (FR-H-006).
-	ExcludedHandoff ExcludedTool = "handoff"
+	ExcludedHandoff ExcludedTool = "hand_off"
 )
 
 // CloneExcept creates an independent copy of the registry omitting the named tools.

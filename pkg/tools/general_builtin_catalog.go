@@ -47,7 +47,7 @@ import (
 func GeneralBuiltinMetadata() []Tool {
 	out := make([]Tool, 0, 38)
 
-	// --- exec (CategoryCode, ScopeCore) ---
+	// --- exec (CategoryShell, ScopeCore) ---
 	execTool, err := NewExecToolWithConfig("", false, nil)
 	if err != nil {
 		slog.Warn("general-builtin-catalog: exec constructor failed; skipping", "error", err)
@@ -55,62 +55,62 @@ func GeneralBuiltinMetadata() []Tool {
 		out = append(out, execTool)
 	}
 
-	// --- File system tools (CategoryFile) ---
+	// --- File system tools (CategoryFilesystem) ---
 	out = append(out, NewReadFileTool("", false, 0))
 	out = append(out, NewWriteFileTool("", false))
 	out = append(out, NewListDirTool("", false))
 	out = append(out, NewEditFileTool("", false))
 	out = append(out, NewAppendFileTool("", false))
 
-	// --- Web tools (CategorySearch / CategoryWeb) ---
-	// web_search: use DuckDuckGoEnabled to satisfy the at-least-one-provider
+	// --- Web tools (CategoryWeb) ---
+	// search_web: use DuckDuckGoEnabled to satisfy the at-least-one-provider
 	// requirement without any API key. The DuckDuckGo provider only needs an
 	// HTTP client (no keys), so it succeeds unconditionally in metadata mode.
 	// The returned instance is NEVER Execute()d; it exists only to expose
 	// Name/Description/Category on the central registry.
 	webSearch, wsErr := NewWebSearchTool(WebSearchToolOptions{DuckDuckGoEnabled: true})
 	if wsErr != nil {
-		slog.Warn("general-builtin-catalog: web_search constructor failed; skipping", "error", wsErr)
+		slog.Warn("general-builtin-catalog: search_web constructor failed; skipping", "error", wsErr)
 	} else {
 		out = append(out, webSearch)
 	}
 
-	// web_fetch can be constructed with empty args (defaults to DuckDuckGo HTTP client).
+	// fetch_url can be constructed with empty args (defaults to DuckDuckGo HTTP client).
 	webFetch, wfErr := NewWebFetchTool(0, "", 0)
 	if wfErr != nil {
-		slog.Warn("general-builtin-catalog: web_fetch constructor failed; skipping", "error", wfErr)
+		slog.Warn("general-builtin-catalog: fetch_url constructor failed; skipping", "error", wfErr)
 	} else {
 		out = append(out, webFetch)
 	}
 
-	// --- Communication / delegation tools (CategoryCore) ---
+	// --- Communication / delegation tools (CategoryCommunication / CategoryDelegation) ---
 	out = append(out, NewMessageTool())
 	out = append(out, NewHandoffTool(nil, nil, nil, nil))
 	out = append(out, NewReturnToDefaultTool(nil, nil, nil))
 	out = append(out, NewSendFileTool("", false, 0, nil))
 
-	// --- Skill tools (CategorySkills / CategoryCore) ---
+	// --- Skill tools (CategorySkills) ---
 	out = append(out, NewFindSkillsTool(nil, nil))
 	out = append(out, NewInstallSkillTool(nil, ""))
 
-	// --- Spawn / subagent tools (CategoryCore) ---
+	// --- Spawn / subagent tools (CategoryDelegation) ---
 	out = append(out, NewSpawnTool(nil))
 	out = append(out, NewSubagentTool(nil))
 	out = append(out, NewSpawnStatusTool(nil))
 
-	// --- Task tools (CategoryTask) ---
+	// --- Task tools (CategoryTasks) ---
 	out = append(out, NewTaskListTool(nil))
 	out = append(out, NewTaskCreateTool(nil))
 	out = append(out, NewTaskUpdateTool(nil))
 	out = append(out, NewTaskDeleteTool(nil))
 	out = append(out, NewAgentListTool(nil))
 
-	// --- Memory tools (CategoryCore) ---
+	// --- Memory tools (CategoryMemory) ---
 	out = append(out, NewRememberTool(nil, nil))
 	out = append(out, NewRecallMemoryTool(nil))
 	out = append(out, NewRetrospectiveTool(nil, nil))
 
-	// --- web_serve (CategoryCore — Tier 1 static + Tier 3 dev server) ---
+	// --- serve_web (CategoryWeb — Tier 1 static + Tier 3 dev server) ---
 	// Constructed with nil ServedSubdirs (metadata only; never executed).
 	out = append(out, NewWebServeTool("", "", "", nil, nil, WebServeDevConfig{}, nil, nil, 0, 0))
 
@@ -119,7 +119,7 @@ func GeneralBuiltinMetadata() []Tool {
 	// so the global catalog is a complete capability reference. Nil deps — never
 	// executed; the per-agent registry supplies live instances.
 
-	// set_todos (CategoryTask): the agent-facing scratchpad facade, registered
+	// set_todos (CategoryTasks): the agent-facing scratchpad facade, registered
 	// alongside the task tools for core agents. Nil store — metadata only.
 	out = append(out, NewSetTodosTool(nil))
 
@@ -128,7 +128,7 @@ func GeneralBuiltinMetadata() []Tool {
 	// all five; nil transport is safe (Execute guards tp==nil; Description static).
 	out = append(out, EmailToolset(nil)...)
 
-	// On-demand tool-discovery search (CategorySearch via inheritance): registered
+	// On-demand tool-discovery search (CategoryToolDiscovery): registered
 	// only when the MCP search cache is enabled (pkg/agent/loop_mcp.go). Nil
 	// registry — metadata only.
 	out = append(out, NewRegexSearchTool(nil, 0, 0))

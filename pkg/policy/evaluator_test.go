@@ -33,7 +33,7 @@ func TestPolicyEvaluator_DenyByDefault(t *testing.T) {
 		agentID string
 		tool    string
 	}{
-		{name: "web_search denied without allow list", agentID: "researcher", tool: "web_search"},
+		{name: "search_web denied without allow list", agentID: "researcher", tool: "search_web"},
 		{name: "exec denied without allow list", agentID: "assistant", tool: "exec"},
 		{name: "file.write denied without allow list", agentID: "researcher", tool: "file.write"},
 	}
@@ -55,7 +55,7 @@ func TestPolicyEvaluator_DenyByDefault(t *testing.T) {
 func TestPolicyEvaluator_AllowByDefault(t *testing.T) {
 	t.Run("explicit allow default", func(t *testing.T) {
 		evaluator := makeEvaluator(policy.PolicyAllow, nil)
-		decision := evaluator.EvaluateTool("researcher", "web_search")
+		decision := evaluator.EvaluateTool("researcher", "search_web")
 		assert.True(t, decision.Allowed,
 			"tool should be allowed with explicit default_policy=allow")
 		assert.Contains(t, decision.PolicyRule, "allow",
@@ -65,7 +65,7 @@ func TestPolicyEvaluator_AllowByDefault(t *testing.T) {
 	t.Run("empty string defaults to deny", func(t *testing.T) {
 		// Deny-by-default per CLAUDE.md hard constraint #6
 		evaluator := makeEvaluator("", nil)
-		decision := evaluator.EvaluateTool("researcher", "web_search")
+		decision := evaluator.EvaluateTool("researcher", "search_web")
 		assert.False(t, decision.Allowed,
 			"tool should be denied with empty default_policy (deny-by-default)")
 		assert.Contains(t, decision.PolicyRule, "deny",
@@ -81,21 +81,21 @@ func TestPolicyEvaluator_ToolAllowList(t *testing.T) {
 	agents := map[string]policy.AgentPolicy{
 		"researcher": {
 			Tools: policy.AgentToolsPolicy{
-				Allow: []string{"web_search", "web_fetch"},
+				Allow: []string{"search_web", "fetch_url"},
 			},
 		},
 	}
 	evaluator := makeEvaluator(policy.PolicyAllow, agents)
 
-	t.Run("web_search in allow list passes", func(t *testing.T) {
-		decision := evaluator.EvaluateTool("researcher", "web_search")
+	t.Run("search_web in allow list passes", func(t *testing.T) {
+		decision := evaluator.EvaluateTool("researcher", "search_web")
 		assert.True(t, decision.Allowed)
-		assert.Contains(t, decision.PolicyRule, "web_search")
+		assert.Contains(t, decision.PolicyRule, "search_web")
 		assert.Contains(t, decision.PolicyRule, "researcher")
 	})
 
-	t.Run("web_fetch in allow list passes", func(t *testing.T) {
-		decision := evaluator.EvaluateTool("researcher", "web_fetch")
+	t.Run("fetch_url in allow list passes", func(t *testing.T) {
+		decision := evaluator.EvaluateTool("researcher", "fetch_url")
 		assert.True(t, decision.Allowed)
 	})
 
@@ -123,7 +123,7 @@ func TestPolicyEvaluator_ToolAllowList(t *testing.T) {
 			},
 		}
 		ev := makeEvaluator(policy.PolicyAllow, agentsEmpty)
-		decision := ev.EvaluateTool("researcher", "web_search")
+		decision := ev.EvaluateTool("researcher", "search_web")
 		assert.False(t, decision.Allowed,
 			"explicit empty tools.allow should deny all tools even if default is allow")
 	})
@@ -157,8 +157,8 @@ func TestPolicyEvaluator_ToolDenyList(t *testing.T) {
 		assert.Contains(t, decision.PolicyRule, "tools.deny")
 	})
 
-	t.Run("web_search not in deny list is allowed", func(t *testing.T) {
-		decision := evaluator.EvaluateTool("researcher", "web_search")
+	t.Run("search_web not in deny list is allowed", func(t *testing.T) {
+		decision := evaluator.EvaluateTool("researcher", "search_web")
 		assert.True(t, decision.Allowed)
 	})
 }
@@ -172,7 +172,7 @@ func TestPolicyEvaluator_DenyPrecedence(t *testing.T) {
 	agents := map[string]policy.AgentPolicy{
 		"researcher": {
 			Tools: policy.AgentToolsPolicy{
-				Allow: []string{"exec", "web_search"},
+				Allow: []string{"exec", "search_web"},
 				Deny:  []string{"exec"}, // exec in both → deny wins
 			},
 		},
@@ -186,8 +186,8 @@ func TestPolicyEvaluator_DenyPrecedence(t *testing.T) {
 		assert.Contains(t, decision.PolicyRule, "deny takes precedence")
 	})
 
-	t.Run("web_search only in allow is still permitted", func(t *testing.T) {
-		decision := evaluator.EvaluateTool("researcher", "web_search")
+	t.Run("search_web only in allow is still permitted", func(t *testing.T) {
+		decision := evaluator.EvaluateTool("researcher", "search_web")
 		assert.True(t, decision.Allowed)
 	})
 }
@@ -201,7 +201,7 @@ func TestPolicyEvaluator_ExplainableDecision(t *testing.T) {
 	agents := map[string]policy.AgentPolicy{
 		"researcher": {
 			Tools: policy.AgentToolsPolicy{
-				Allow: []string{"web_search"},
+				Allow: []string{"search_web"},
 			},
 		},
 	}
@@ -220,11 +220,11 @@ func TestPolicyEvaluator_ExplainableDecision(t *testing.T) {
 
 	t.Run("allow decision includes policy_rule string", func(t *testing.T) {
 		// Traces to: wave2-security-layer-spec.md line 633 (Scenario: Allow includes matching rule)
-		decision := evaluator.EvaluateTool("researcher", "web_search")
+		decision := evaluator.EvaluateTool("researcher", "search_web")
 		assert.True(t, decision.Allowed)
 		assert.NotEmpty(t, decision.PolicyRule,
 			"allowed decision must also include a policy_rule")
-		assert.Contains(t, decision.PolicyRule, "web_search")
+		assert.Contains(t, decision.PolicyRule, "search_web")
 	})
 
 	t.Run("deny by default includes policy_rule", func(t *testing.T) {
@@ -331,15 +331,15 @@ func TestPolicyEvaluator_GlobToolNames(t *testing.T) {
 		agents := map[string]policy.AgentPolicy{
 			"worker": {
 				Tools: policy.AgentToolsPolicy{
-					Allow: []string{"web_search"},
+					Allow: []string{"search_web"},
 				},
 			},
 		}
 		ev := makeEvaluator(policy.PolicyDeny, agents)
-		d := ev.EvaluateTool("worker", "web_search")
+		d := ev.EvaluateTool("worker", "search_web")
 		assert.True(t, d.Allowed, "exact literal 'web_search' in allow must still match")
 
-		d2 := ev.EvaluateTool("worker", "web_fetch")
+		d2 := ev.EvaluateTool("worker", "fetch_url")
 		assert.False(t, d2.Allowed, "web_fetch not in allow list")
 	})
 
@@ -360,7 +360,7 @@ func TestPolicyEvaluator_GlobToolNames(t *testing.T) {
 		assert.Equal(t, "ask", d2.Policy)
 
 		// Tool outside the glob is not affected by the fs.* policy.
-		d3 := ev.EvaluateTool("worker", "web_search")
+		d3 := ev.EvaluateTool("worker", "search_web")
 		assert.True(t, d3.Allowed, "web_search not matched by fs.* so not elevated to ask")
 		assert.NotEqual(t, "ask", d3.Policy)
 	})
@@ -377,7 +377,7 @@ func TestPolicyEvaluator_GlobToolNames(t *testing.T) {
 		assert.False(t, d.Allowed, "global deny via fs.* glob should block fs.write")
 
 		// Tool outside glob still allowed by default_policy.
-		d2 := ev.EvaluateTool("worker", "web_search")
+		d2 := ev.EvaluateTool("worker", "search_web")
 		assert.True(t, d2.Allowed)
 	})
 
@@ -411,13 +411,13 @@ func TestPolicyEvaluator_GlobToolNames(t *testing.T) {
 		agents := map[string]policy.AgentPolicy{
 			"worker": {
 				Tools: policy.AgentToolsPolicy{
-					Allow: []string{"web_search"},
+					Allow: []string{"search_web"},
 					Deny:  []string{""}, // empty pattern
 				},
 			},
 		}
 		ev := makeEvaluator(policy.PolicyDeny, agents)
-		d := ev.EvaluateTool("worker", "web_search")
+		d := ev.EvaluateTool("worker", "search_web")
 		// Empty pattern only matches empty string, so web_search should be allowed.
 		assert.True(t, d.Allowed, "empty deny pattern should not match non-empty tool names")
 	})
@@ -431,7 +431,7 @@ func TestPolicyEvaluator_GlobToolNames(t *testing.T) {
 			},
 		}
 		ev := makeEvaluator(policy.PolicyDeny, agents)
-		for _, tool := range []string{"web_search", "fs.read", "exec", "browser.navigate"} {
+		for _, tool := range []string{"search_web", "fs.read", "exec", "browser.navigate"} {
 			d := ev.EvaluateTool("worker", tool)
 			assert.True(t, d.Allowed, "* should match any tool name: %s", tool)
 		}
@@ -446,8 +446,8 @@ func TestPolicyEvaluator_GlobToolNames(t *testing.T) {
 		}
 		rows := []row{
 			// Exact match works.
-			{allow: []string{"web_search"}, tool: "web_search", want: true},
-			{allow: []string{"web_search"}, tool: "web_fetch", want: false},
+			{allow: []string{"search_web"}, tool: "search_web", want: true},
+			{allow: []string{"search_web"}, tool: "fetch_url", want: false},
 			// fs.* glob.
 			{allow: []string{"fs.*"}, tool: "fs.read", want: true},
 			{allow: []string{"fs.*"}, tool: "fs.write", want: true},
@@ -459,7 +459,7 @@ func TestPolicyEvaluator_GlobToolNames(t *testing.T) {
 			{allow: []string{"*"}, tool: "anything", want: true},
 			// Deny-only with glob.
 			{deny: []string{"exec.*"}, tool: "exec.shell", want: false},
-			{deny: []string{"exec.*"}, tool: "web_search", want: true},
+			{deny: []string{"exec.*"}, tool: "search_web", want: true},
 		}
 
 		for _, r := range rows {

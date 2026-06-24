@@ -83,27 +83,27 @@ func TestBuiltinRegistry_Describe_AllRegistered(t *testing.T) {
 // TestBuiltinRegistry_NameCollision_ReturnsError verifies that registering a tool
 // whose name is already in the registry returns an error (builtin-wins invariant).
 //
-// BDD: Given a tool "web_search" already registered,
+// BDD: Given a tool "search_web" already registered,
 //
-//	When a second tool with name "web_search" is registered,
+//	When a second tool with name "search_web" is registered,
 //	Then RegisterBuiltin returns a non-nil error containing the collision details.
 //
 // Traces to: pkg/tools/builtin_registry.go — RegisterBuiltin duplicate guard (FR-034).
 func TestBuiltinRegistry_NameCollision_ReturnsError(t *testing.T) {
 	reg := NewBuiltinRegistry()
 
-	first := &builtinTestTool{name: "web_search", scope: ScopeGeneral}
+	first := &builtinTestTool{name: "search_web", scope: ScopeGeneral}
 	require.NoError(t, reg.RegisterBuiltin(first), "first registration must succeed")
 
-	second := &builtinTestTool{name: "web_search", scope: ScopeGeneral}
+	second := &builtinTestTool{name: "search_web", scope: ScopeGeneral}
 	err := reg.RegisterBuiltin(second)
 	require.Error(t, err, "duplicate registration must return an error")
-	assert.Contains(t, err.Error(), "web_search", "error must name the colliding tool")
+	assert.Contains(t, err.Error(), "search_web", "error must name the colliding tool")
 
 	// The original tool must still be retrievable.
-	got, ok := reg.Get("web_search")
+	got, ok := reg.Get("search_web")
 	require.True(t, ok)
-	assert.Equal(t, "web_search", got.Name(), "original tool must survive the duplicate attempt")
+	assert.Equal(t, "search_web", got.Name(), "original tool must survive the duplicate attempt")
 }
 
 // TestBuiltinRegistry_ValidateMCPName_RejectsSystemPrefix verifies that MCP tool

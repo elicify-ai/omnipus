@@ -30,25 +30,25 @@ func TestFilterToolsByPolicy_GlobalDenyOverridesAgentAllow(t *testing.T) {
 	tools := []Tool{
 		makeScopedTool("system.config.set", ScopeCore),
 		makeScopedTool("exec", ScopeCore),
-		makeScopedTool("web_search", ScopeGeneral),
+		makeScopedTool("search_web", ScopeGeneral),
 	}
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy: "allow",
 		Policies: map[string]string{
-			"web_search": "allow", // agent says allow…
+			"search_web": "allow", // agent says allow…
 		},
 		GlobalPolicies: map[string]string{
-			"web_search": "deny", // …operator says deny.
+			"search_web": "deny", // …operator says deny.
 		},
 		GlobalDefaultPolicy: "allow",
 	}
 	got, policyMap := FilterToolsByPolicy(tools, "system", cfg)
 	for _, x := range got {
-		if x.Name() == "web_search" {
+		if x.Name() == "search_web" {
 			t.Fatalf("FR-005: global deny must remove tool; got %q in result", x.Name())
 		}
 	}
-	if _, ok := policyMap["web_search"]; ok {
+	if _, ok := policyMap["search_web"]; ok {
 		t.Fatalf("FR-005: global-denied tool must not appear in policyMap")
 	}
 }
@@ -62,7 +62,7 @@ func TestFilterToolsByPolicy_GlobalDefaultDenyStripsAll(t *testing.T) {
 
 	tools := []Tool{
 		makeScopedTool("exec", ScopeCore),
-		makeScopedTool("web_search", ScopeGeneral),
+		makeScopedTool("search_web", ScopeGeneral),
 	}
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:       "allow",
@@ -136,7 +136,7 @@ func TestFilterToolsByPolicy_AdminAskFenceOnCustomAgents(t *testing.T) {
 		{
 			name:        "custom_agent_allow_for_benign_tool_stays_allow",
 			effective:   "allow",
-			toolName:    "web_search",
+			toolName:    "search_web",
 			agentID:     "my-custom-agent",
 			wantPolicy:  "allow",
 			wantFenceOn: false,

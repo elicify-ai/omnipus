@@ -3767,21 +3767,21 @@ func (t *ToolsConfig) warnDeprecatedEnableFlags() {
 		enabled bool
 	}{
 		{"web", t.Web.Enabled},
-		{"web_fetch", t.WebFetch.Enabled},
+		{"fetch_url", t.WebFetch.Enabled},
 		{"browser", t.Browser.Enabled},
 		{"mcp", t.MCP.Enabled},
 		{"exec", t.Exec.Enabled},
 		{"cron", t.Cron.Enabled},
 		{"spawn", t.Spawn.Enabled},
-		{"spawn_status", t.SpawnStatus.Enabled},
-		{"subagent", t.Subagent.Enabled},
+		{"check_spawn_status", t.SpawnStatus.Enabled},
+		{"run_subagent", t.Subagent.Enabled},
 		{"write_file", t.WriteFile.Enabled},
 		{"edit_file", t.EditFile.Enabled},
 		{"append_file", t.AppendFile.Enabled},
 		{"send_file", t.SendFile.Enabled},
-		{"task_list", t.TaskList.Enabled},
-		{"task_create", t.TaskCreate.Enabled},
-		{"task_update", t.TaskUpdate.Enabled},
+		{"list_tasks", t.TaskList.Enabled},
+		{"create_task", t.TaskCreate.Enabled},
+		{"update_task", t.TaskUpdate.Enabled},
 	}
 	var disabled []string
 	for _, d := range deprecated {

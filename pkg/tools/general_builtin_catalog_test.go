@@ -37,7 +37,7 @@ func TestGeneralBuiltinMetadata_ContainsMandatoryTools(t *testing.T) {
 		byName[name] = tool
 	}
 
-	mandatory := []string{"exec", "read_file", "write_file", "web_search", "web_fetch"}
+	mandatory := []string{"exec", "read_file", "write_file", "search_web", "fetch_url"}
 	for _, name := range mandatory {
 		assert.Contains(t, byName, name,
 			"GeneralBuiltinMetadata must contain mandatory tool %q (Spec-1 SC-101)", name)
@@ -49,8 +49,8 @@ func TestGeneralBuiltinMetadata_ContainsMandatoryTools(t *testing.T) {
 //
 // BDD: Given the general builtin catalog,
 //
-//	When Category() is called on exec, read_file, web_search, and web_fetch,
-//	Then they return CategoryCode, CategoryFile, CategorySearch, CategoryWeb
+//	When Category() is called on exec, read_file, search_web, and fetch_url,
+//	Then they return CategoryShell, CategoryFilesystem, CategoryWeb, CategoryWeb
 //	respectively.
 //
 // Traces to: US-1/AC4, FR-101.
@@ -65,12 +65,12 @@ func TestGeneralBuiltinMetadata_CategoryOverrides(t *testing.T) {
 		name    string
 		wantCat ToolCategory
 	}{
-		{"exec", CategoryCode},
-		{"read_file", CategoryFile},
-		{"write_file", CategoryFile},
-		{"list_dir", CategoryFile},
-		{"web_search", CategorySearch},
-		{"web_fetch", CategoryWeb},
+		{"exec", CategoryShell},
+		{"read_file", CategoryFilesystem},
+		{"write_file", CategoryFilesystem},
+		{"list_directory", CategoryFilesystem},
+		{"search_web", CategoryWeb},
+		{"fetch_url", CategoryWeb},
 	}
 	for _, tc := range cases {
 		tool, ok := byName[tc.name]

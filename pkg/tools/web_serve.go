@@ -41,7 +41,7 @@ import (
 )
 
 // ToolNameWebServe is the canonical tool name for the unified web-serving tool.
-const ToolNameWebServe = "web_serve"
+const ToolNameWebServe = "serve_web"
 
 // Tier3UnsupportedMessage is the literal IsError content returned on
 // non-Linux platforms for dev mode. It MUST match the gateway's /dev/ 503 body
@@ -196,8 +196,9 @@ func (t *WebServeTool) SetAuditLogger(logger *audit.Logger) {
 	t.auditLogger = logger
 }
 
-func (t *WebServeTool) Name() string     { return ToolNameWebServe }
-func (t *WebServeTool) Scope() ToolScope { return ScopeGeneral }
+func (t *WebServeTool) Name() string           { return ToolNameWebServe }
+func (t *WebServeTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *WebServeTool) Category() ToolCategory { return CategoryWeb }
 
 func (t *WebServeTool) Description() string {
 	return "Serve a directory or run a dev server from the agent workspace. " +
@@ -216,7 +217,7 @@ func (t *WebServeTool) Parameters() map[string]any {
 			},
 			"command": map[string]any{
 				"type":        "string",
-				"description": "Optional dev-server command (e.g. 'vite dev'). When set, web_serve runs as a dev server; when omitted, serves static files.",
+				"description": "Optional dev-server command (e.g. 'vite dev'). When set, serve_web runs as a dev server; when omitted, serves static files.",
 			},
 			"port": map[string]any{
 				"type":        "integer",

@@ -21,7 +21,6 @@ package systools
 func (*AgentCreateTool) RequiresAdminAsk() bool        { return true }
 func (*AgentUpdateTool) RequiresAdminAsk() bool        { return true }
 func (*AgentDeleteTool) RequiresAdminAsk() bool        { return true }
-func (*AgentListTool) RequiresAdminAsk() bool          { return true }
 func (*AgentActivateTool) RequiresAdminAsk() bool      { return true }
 func (*AgentDeactivateTool) RequiresAdminAsk() bool    { return true }
 func (*AgentReadMetadataTool) RequiresAdminAsk() bool  { return true }
@@ -42,9 +41,8 @@ func (*ConfigSetTool) RequiresAdminAsk() bool { return true }
 
 // Diagnostics tools
 
-func (*DoctorRunTool) RequiresAdminAsk() bool    { return true }
-func (*BackupCreateTool) RequiresAdminAsk() bool { return true }
-func (*CostQueryTool) RequiresAdminAsk() bool    { return true }
+func (*DoctorRunTool) RequiresAdminAsk() bool { return true }
+func (*CostQueryTool) RequiresAdminAsk() bool { return true }
 
 // MCP tools
 
@@ -73,10 +71,8 @@ func (*ModelsListTool) RequiresAdminAsk() bool        { return true }
 
 // Skill tools
 
-func (*SkillInstallTool) RequiresAdminAsk() bool { return true }
-func (*SkillRemoveTool) RequiresAdminAsk() bool  { return true }
-func (*SkillSearchTool) RequiresAdminAsk() bool  { return true }
-func (*SkillListTool) RequiresAdminAsk() bool    { return true }
+func (*SkillRemoveTool) RequiresAdminAsk() bool { return true }
+func (*SkillListTool) RequiresAdminAsk() bool   { return true }
 
 // Skill authoring writes mutate the skills tree — they always require admin
 // approval when policy is "ask" (consent gate, FR-9.2).

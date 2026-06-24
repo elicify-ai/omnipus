@@ -366,14 +366,15 @@ func (t *SubagentTool) SetDelegationDenyChecker(check func(ctx context.Context) 
 }
 
 func (t *SubagentTool) Name() string {
-	return "subagent"
+	return "run_subagent"
 }
 
 func (t *SubagentTool) Description() string {
 	return "Execute a subagent task synchronously and return the result. Use this for delegating specific tasks to an independent agent instance. Returns execution summary to user and full details to LLM."
 }
 
-func (t *SubagentTool) Scope() ToolScope { return ScopeCore }
+func (t *SubagentTool) Scope() ToolScope       { return ScopeCore }
+func (t *SubagentTool) Category() ToolCategory { return CategoryDelegation }
 
 func (t *SubagentTool) Parameters() map[string]any {
 	return map[string]any{
@@ -397,7 +398,7 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// The full-policy checker takes precedence and surfaces a specific reason.
 	if t.delegationDeny != nil {
 		if denial := t.delegationDeny(ctx); denial != nil {
-			return DelegationDeniedResult("subagent", denial)
+			return DelegationDeniedResult("run_subagent", denial)
 		}
 	} else if t.delegateChecker != nil && !t.delegateChecker() {
 		// Backward-compat: legacy boolean trust-only gate.
