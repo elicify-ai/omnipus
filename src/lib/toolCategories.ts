@@ -2,24 +2,35 @@ import type { BuiltinTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 
 export const CATEGORY_LABELS: Record<string, string> = {
-  file: 'File & Code',
-  code: 'Code Execution',
+  // Domain categories (new, post-rename)
+  filesystem: 'Files',
+  shell: 'Shell',
   web: 'Web & Search',
-  browser: 'Browser Automation',
+  browser: 'Browser',
   communication: 'Communication',
-  task: 'Task Management',
+  delegation: 'Delegation',
+  memory: 'Memory',
+  tasks: 'Tasks',
+  skills: 'Skills',
+  tool_discovery: 'Tool Discovery',
+  agents: 'Agents',
+  workspaces: 'Workspaces',
+  channels: 'Channels',
+  providers: 'Providers',
+  platform: 'Platform',
+  mcp: 'MCP',
+  // Legacy category values kept for backward compatibility with older tool registries.
+  file: 'Files',
+  code: 'Code',
+  task: 'Tasks',
   automation: 'Automation',
   search: 'Search & Discovery',
-  skills: 'Skills',
-  hardware: 'Hardware (IoT)',
+  hardware: 'Hardware',
+  // 'system' is the legacy category for un-recategorized system.* tools.
   system: 'System',
   // 'core' is the legacy category emitted by un-recategorized general builtins;
   // render as "General" so no raw internal key leaks to users (AC4 / FR-103).
   core: 'General',
-  // Filesystem tools from the registry may carry 'filesystem' as the category.
-  filesystem: 'File & Code',
-  // Shell tools from the registry may carry 'shell' as the category.
-  shell: 'Shell',
   // Fallback for tools with no recognised category.
   other: 'Other',
 }

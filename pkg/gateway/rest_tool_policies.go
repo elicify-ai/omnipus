@@ -24,7 +24,7 @@ import (
 //
 //	{
 //	  "default_policy": "allow",
-//	  "policies": {"exec": "ask", "browser.evaluate": "deny"}
+//	  "policies": {"exec": "ask", "browser_evaluate": "deny"}
 //	}
 //
 // PUT accepts the same format, validates all policy values, and persists to

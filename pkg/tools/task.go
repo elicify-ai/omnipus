@@ -22,8 +22,9 @@ func NewTaskListTool(store *task.Store) *TaskListTool {
 	return &TaskListTool{store: store}
 }
 
-func (t *TaskListTool) Name() string     { return "task_list" }
-func (t *TaskListTool) Scope() ToolScope { return ScopeGeneral }
+func (t *TaskListTool) Name() string           { return "list_tasks" }
+func (t *TaskListTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *TaskListTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskListTool) Description() string {
 	return "List tasks. Use role='assignee' for tasks assigned to you, role='delegator' for tasks you created for other agents."
@@ -136,8 +137,9 @@ func (t *TaskCreateTool) SetOnCreate(fn func(*task.Task)) {
 	t.onCreate = fn
 }
 
-func (t *TaskCreateTool) Name() string     { return "task_create" }
-func (t *TaskCreateTool) Scope() ToolScope { return ScopeGeneral }
+func (t *TaskCreateTool) Name() string           { return "create_task" }
+func (t *TaskCreateTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *TaskCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskCreateTool) Description() string {
 	return "Create a task and assign it to an agent for execution. The task lands as a visible card on the workspace board."
@@ -278,10 +280,10 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
 	if t.delegationDeny != nil {
 		if denial := t.delegationDeny(ctx, agentID); denial != nil {
-			return DelegationDeniedResult("task_create", denial)
+			return DelegationDeniedResult("create_task", denial)
 		}
 	} else if t.delegateCheck != nil && !t.delegateCheck(agentID) {
-		return DelegationDeniedResult("task_create", &DelegationDenial{
+		return DelegationDeniedResult("create_task", &DelegationDenial{
 			Reason:        fmt.Sprintf("delegation to %s not allowed", agentID),
 			Policy:        DenyTrustSet,
 			TargetAgentID: agentID,
@@ -297,7 +299,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	parentDepth := ToolDelegationDepth(ctx)
 	childDepth := parentDepth + 1
 	if t.maxDelegationDepth > 0 && childDepth > t.maxDelegationDepth {
-		return DelegationDeniedResult("task_create", &DelegationDenial{
+		return DelegationDeniedResult("create_task", &DelegationDenial{
 			Reason: fmt.Sprintf(
 				"maximum task delegation depth (%d) reached — cannot create a further delegated task",
 				t.maxDelegationDepth,
@@ -411,8 +413,9 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 	t.delegationDeny = fn
 }
 
-func (t *TaskUpdateTool) Name() string     { return "task_update" }
-func (t *TaskUpdateTool) Scope() ToolScope { return ScopeGeneral }
+func (t *TaskUpdateTool) Name() string           { return "update_task" }
+func (t *TaskUpdateTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
 	return "Update a task assigned to you. Mark status (in_progress/done/failed) and optionally edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
@@ -555,10 +558,10 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if agentID, ok := args["agent_id"].(string); ok && agentID != "" && agentID != existing.AgentID {
 		if t.delegationDeny != nil {
 			if denial := t.delegationDeny(ctx, agentID); denial != nil {
-				return DelegationDeniedResult("task_update", denial)
+				return DelegationDeniedResult("update_task", denial)
 			}
 		} else if t.delegateCheck != nil && !t.delegateCheck(agentID) {
-			return DelegationDeniedResult("task_update", &DelegationDenial{
+			return DelegationDeniedResult("update_task", &DelegationDenial{
 				Reason:        fmt.Sprintf("delegation to %s not allowed", agentID),
 				Policy:        DenyTrustSet,
 				TargetAgentID: agentID,
@@ -659,8 +662,9 @@ func NewTaskDeleteTool(store *task.Store) *TaskDeleteTool {
 	return &TaskDeleteTool{store: store}
 }
 
-func (t *TaskDeleteTool) Name() string     { return "task_delete" }
-func (t *TaskDeleteTool) Scope() ToolScope { return ScopeGeneral }
+func (t *TaskDeleteTool) Name() string           { return "delete_task" }
+func (t *TaskDeleteTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *TaskDeleteTool) Category() ToolCategory { return CategoryTasks }
 func (t *TaskDeleteTool) Description() string {
 	return "Delete a task by ID. Only use when explicitly asked to remove a task."
 }
@@ -747,8 +751,9 @@ func NewAgentListTool(lister func() []AgentInfo) *AgentListTool {
 	return &AgentListTool{listAgents: lister}
 }
 
-func (t *AgentListTool) Name() string     { return "agent_list" }
-func (t *AgentListTool) Scope() ToolScope { return ScopeGeneral }
+func (t *AgentListTool) Name() string           { return "list_agents" }
+func (t *AgentListTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *AgentListTool) Category() ToolCategory { return CategoryAgents }
 func (t *AgentListTool) Description() string {
 	return "List all available agents with their IDs and names. Use this to resolve agent names to IDs before delegating tasks."
 }

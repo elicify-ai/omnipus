@@ -47,7 +47,7 @@ func findChannel(id string) (channelEntry, bool) {
 type ChannelEnableTool struct{ deps *Deps }
 
 func NewChannelEnableTool(d *Deps) *ChannelEnableTool { return &ChannelEnableTool{deps: d} }
-func (t *ChannelEnableTool) Name() string             { return "system.channel.enable" }
+func (t *ChannelEnableTool) Name() string             { return "enable_channel" }
 func (t *ChannelEnableTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *ChannelEnableTool) Description() string {
 	return "Enable a channel connection. The channel will start on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
@@ -92,7 +92,7 @@ func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) *too
 type ChannelConfigureTool struct{ deps *Deps }
 
 func NewChannelConfigureTool(d *Deps) *ChannelConfigureTool { return &ChannelConfigureTool{deps: d} }
-func (t *ChannelConfigureTool) Name() string                { return "system.channel.configure" }
+func (t *ChannelConfigureTool) Name() string                { return "configure_channel" }
 func (t *ChannelConfigureTool) Scope() tools.ToolScope      { return tools.ScopeCore }
 func (t *ChannelConfigureTool) Description() string {
 	return "Configure an enabled channel with its credentials (token, phone_number, etc).\nParameters: id (required), plus channel-specific credentials."
@@ -147,7 +147,7 @@ func (t *ChannelConfigureTool) Execute(_ context.Context, args map[string]any) *
 type ChannelDisableTool struct{ deps *Deps }
 
 func NewChannelDisableTool(d *Deps) *ChannelDisableTool { return &ChannelDisableTool{deps: d} }
-func (t *ChannelDisableTool) Name() string              { return "system.channel.disable" }
+func (t *ChannelDisableTool) Name() string              { return "disable_channel" }
 func (t *ChannelDisableTool) Scope() tools.ToolScope    { return tools.ScopeCore }
 func (t *ChannelDisableTool) Description() string {
 	return "Disable a channel connection. The channel will stop on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
@@ -192,7 +192,7 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) *to
 type ChannelListTool struct{ deps *Deps }
 
 func NewChannelListTool(d *Deps) *ChannelListTool { return &ChannelListTool{deps: d} }
-func (t *ChannelListTool) Name() string           { return "system.channel.list" }
+func (t *ChannelListTool) Name() string           { return "list_channels" }
 func (t *ChannelListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ChannelListTool) Description() string {
 	return "List all channels with status and implementation tier. No parameters required."
@@ -211,7 +211,7 @@ func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.To
 type ChannelTestTool struct{ deps *Deps }
 
 func NewChannelTestTool(d *Deps) *ChannelTestTool { return &ChannelTestTool{deps: d} }
-func (t *ChannelTestTool) Name() string           { return "system.channel.test" }
+func (t *ChannelTestTool) Name() string           { return "test_channel" }
 func (t *ChannelTestTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ChannelTestTool) Description() string {
 	return "Test a channel's configuration \u2014 checks the channel exists, is enabled, and has credentials configured.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
@@ -242,7 +242,7 @@ func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.NewToolResult(successJSON(map[string]any{
 			"id":      id,
 			"success": false,
-			"message": fmt.Sprintf("Channel %q is not configured. Use system.channel.configure to set it up.", id),
+			"message": fmt.Sprintf("Channel %q is not configured. Use configure_channel to set it up.", id),
 		}))
 	}
 	hasCreds := ch.TokenRef != "" || (ch.Identity != nil && ch.Identity.ID != "")
@@ -250,7 +250,7 @@ func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.NewToolResult(successJSON(map[string]any{
 			"id":      id,
 			"success": false,
-			"message": fmt.Sprintf("Channel %q exists but has no credentials. Use system.channel.configure to set its token/credentials.", id),
+			"message": fmt.Sprintf("Channel %q exists but has no credentials. Use configure_channel to set its token/credentials.", id),
 		}))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{

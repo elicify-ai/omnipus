@@ -28,7 +28,7 @@ func NewRegexSearchTool(r *ToolRegistry, ttl int, maxSearchResults int) *RegexSe
 }
 
 func (t *RegexSearchTool) Name() string {
-	return "tool_search_tool_regex"
+	return "search_tools_regex"
 }
 
 func (t *RegexSearchTool) Description() string {
@@ -36,7 +36,7 @@ func (t *RegexSearchTool) Description() string {
 }
 
 func (t *RegexSearchTool) Scope() ToolScope       { return ScopeGeneral }
-func (t *RegexSearchTool) Category() ToolCategory { return CategorySearch }
+func (t *RegexSearchTool) Category() ToolCategory { return CategoryToolDiscovery }
 
 func (t *RegexSearchTool) Parameters() map[string]any {
 	return map[string]any{
@@ -93,7 +93,7 @@ func NewBM25SearchTool(r *ToolRegistry, ttl int, maxSearchResults int) *BM25Sear
 }
 
 func (t *BM25SearchTool) Name() string {
-	return "tool_search_tool_bm25"
+	return "search_tools_bm25"
 }
 
 func (t *BM25SearchTool) Description() string {
@@ -101,7 +101,7 @@ func (t *BM25SearchTool) Description() string {
 }
 
 func (t *BM25SearchTool) Scope() ToolScope       { return ScopeGeneral }
-func (t *BM25SearchTool) Category() ToolCategory { return CategorySearch }
+func (t *BM25SearchTool) Category() ToolCategory { return CategoryToolDiscovery }
 
 func (t *BM25SearchTool) Parameters() map[string]any {
 	return map[string]any{

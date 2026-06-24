@@ -180,14 +180,14 @@ func (t *WorkspaceShellBgTool) SetAuditLogger(l *audit.Logger) {
 	t.auditLogger = l
 }
 
-func (t *WorkspaceShellBgTool) Name() string { return "workspace.shell_bg" }
+func (t *WorkspaceShellBgTool) Name() string { return "workspace_shell_bg" }
 
 func (t *WorkspaceShellBgTool) Scope() ToolScope { return ScopeCore }
 
-func (t *WorkspaceShellBgTool) Category() ToolCategory { return CategoryWorkspace }
+func (t *WorkspaceShellBgTool) Category() ToolCategory { return CategoryShell }
 
 func (t *WorkspaceShellBgTool) Description() string {
-	return `Start a long-running background process (dev server, proxy, etc.) in the agent's workspace directory under the configured sandbox profile. Unlike 'web_serve' dev mode, there is no command allow-list — any command may be run. The agent is responsible for running 'npm install' or equivalent setup before calling this tool. Returns a dev_url JSON payload with a clickable iframe preview URL.`
+	return `Start a long-running background process (dev server, proxy, etc.) in the agent's workspace directory under the configured sandbox profile. Unlike 'serve_web' dev mode, there is no command allow-list — any command may be run. The agent is responsible for running 'npm install' or equivalent setup before calling this tool. Returns a dev_url JSON payload with a clickable iframe preview URL.`
 }
 
 func (t *WorkspaceShellBgTool) Parameters() map[string]any {

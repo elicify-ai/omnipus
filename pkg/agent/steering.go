@@ -371,7 +371,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID s
 		return "", fmt.Errorf("no agent available for session %q", sessionKey)
 	}
 
-	if tool, ok := agent.Tools.Get("message"); ok {
+	if tool, ok := agent.Tools.Get("send_message"); ok {
 		if resetter, ok := tool.(interface{ ResetSentInRound() }); ok {
 			resetter.ResetSentInRound()
 		}

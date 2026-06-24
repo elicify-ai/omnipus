@@ -209,13 +209,13 @@ func TestBrowserToolRegistration_WithScope(t *testing.T) {
 	cfg, err := DefaultConfig()
 	require.NoError(t, err)
 	ssrf := security.NewSSRFChecker(nil)
-	// evaluateEnabled=true: include browser.evaluate in the expected tool set.
+	// evaluateEnabled=true: include browser_evaluate in the expected tool set.
 	_, err = RegisterTools(registry, cfg, ssrf, true)
 	require.NoError(t, err)
 
 	expectedTools := []string{
-		"browser.navigate", "browser.click", "browser.type",
-		"browser.screenshot", "browser.get_text", "browser.wait", "browser.evaluate",
+		"browser_navigate", "browser_click", "browser_type",
+		"browser_screenshot", "browser_get_text", "browser_wait", "browser_evaluate",
 	}
 	for _, name := range expectedTools {
 		tool, ok := registry.Get(name)
@@ -237,29 +237,29 @@ func TestBrowserToolsAlwaysRegisterRegardlessOfLegacyFlag(t *testing.T) {
 
 	// RegisterTools succeeds; the browser manager is created but Chromium is
 	// not launched until the first tool is invoked (lazy start).
-	// evaluateEnabled=true: explicitly opt in to browser.evaluate registration.
+	// evaluateEnabled=true: explicitly opt in to browser_evaluate registration.
 	mgr, err := RegisterTools(registry, cfg, ssrf, true)
 	require.NoError(t, err)
 	require.NotNil(t, mgr)
 
 	// The tools are registered regardless of the legacy Enabled flag — the live
 	// tool-name policy (pkg/tools.FilterToolsByPolicy, allow/ask/deny) governs
-	// access for ordinary browser tools; browser.evaluate additionally has its own
+	// access for ordinary browser tools; browser_evaluate additionally has its own
 	// executeEnabled gate (see below, #438).
-	tool, ok := registry.Get("browser.navigate")
+	tool, ok := registry.Get("browser_navigate")
 	assert.True(t, ok, "RegisterTools registers tools regardless of Enabled flag")
 	assert.NotNil(t, tool)
 
-	// browser.evaluate is always registered (so the LLM sees it); invocation is
+	// browser_evaluate is always registered (so the LLM sees it); invocation is
 	// gated solely by the tool's executeEnabled check (deny-by-default). The
 	// pkg/policy.builtinToolPolicies deny entry is a test-only declarative mirror,
 	// not a live dispatch gate (#438).
-	evalTool, ok := registry.Get("browser.evaluate")
-	assert.True(t, ok, "browser.evaluate stays registered when evaluateEnabled=true; executeEnabled gates invocation")
+	evalTool, ok := registry.Get("browser_evaluate")
+	assert.True(t, ok, "browser_evaluate stays registered when evaluateEnabled=true; executeEnabled gates invocation")
 	assert.NotNil(t, evalTool)
 }
 
-// TestSSRFBlocksPrivateNavigation verifies that browser.navigate rejects private IPs.
+// TestSSRFBlocksPrivateNavigation verifies that browser_navigate rejects private IPs.
 func TestSSRFBlocksPrivateNavigation(t *testing.T) {
 	skipIfNoBrowser(t)
 
@@ -274,13 +274,13 @@ func TestSSRFBlocksPrivateNavigation(t *testing.T) {
 	ssrf := security.NewSSRFChecker(nil)
 
 	registry := tools.NewToolRegistry()
-	// evaluateEnabled=false: this test only uses browser.navigate, so no need
-	// to register browser.evaluate.
+	// evaluateEnabled=false: this test only uses browser_navigate, so no need
+	// to register browser_evaluate.
 	mgr, err := RegisterTools(registry, cfg, ssrf, false)
 	require.NoError(t, err)
 	defer mgr.Shutdown()
 
-	tool, ok := registry.Get("browser.navigate")
+	tool, ok := registry.Get("browser_navigate")
 	require.True(t, ok)
 
 	result := tool.Execute(context.Background(), map[string]any{

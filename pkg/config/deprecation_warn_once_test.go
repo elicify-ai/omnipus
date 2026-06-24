@@ -3,7 +3,7 @@
 // silently ignored.
 //
 // BDD: Given a config.json with tools.browser.enabled=false and no pre-existing
-// browser policy, When LoadConfig runs, Then cfg.Sandbox.ToolPolicies["browser.*"]
+// browser policy, When LoadConfig runs, Then cfg.Sandbox.ToolPolicies["browser_*"]
 // equals "deny" (primary assertion). Companion cases verify no-clobber,
 // false-positive guard, and end-to-end policy resolution.
 //
@@ -28,10 +28,10 @@ import (
 
 // TestMigrateDeprecatedToolEnableFlags_BrowserDenied is the PRIMARY regression
 // test for issue #237. Before the fix the migration was a no-op warn; after the
-// fix browser.* receives a "deny" entry in cfg.Sandbox.ToolPolicies.
+// fix browser_* receives a "deny" entry in cfg.Sandbox.ToolPolicies.
 //
 // Fail-before / pass-after evidence: run with the old code (warnDeprecatedEnableFlags
-// path) — ToolPolicies is nil/empty. Run with the new code — ToolPolicies["browser.*"]="deny".
+// path) — ToolPolicies is nil/empty. Run with the new code — ToolPolicies["browser_*"]="deny".
 func TestMigrateDeprecatedToolEnableFlags_BrowserDenied(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.json")
@@ -64,13 +64,13 @@ func TestMigrateDeprecatedToolEnableFlags_BrowserDenied(t *testing.T) {
 	require.NotNil(t, cfg)
 
 	// PRIMARY ASSERTION (fails before fix, passes after):
-	// cfg.Sandbox.ToolPolicies must carry "browser.*" → "deny".
+	// cfg.Sandbox.ToolPolicies must carry "browser_*" → "deny".
 	require.NotNil(t, cfg.Sandbox.ToolPolicies,
 		"Sandbox.ToolPolicies must be non-nil after migration of browser.enabled=false")
-	policy, ok := cfg.Sandbox.ToolPolicies["browser.*"]
-	assert.True(t, ok, "ToolPolicies must contain key \"browser.*\"")
+	policy, ok := cfg.Sandbox.ToolPolicies["browser_*"]
+	assert.True(t, ok, "ToolPolicies must contain key \"browser_*\"")
 	assert.Equal(t, "deny", policy,
-		"browser.* policy must be \"deny\" after migrating tools.browser.enabled=false")
+		"browser_* policy must be \"deny\" after migrating tools.browser.enabled=false")
 }
 
 // TestMigrateDeprecatedToolEnableFlags_NoClobber verifies that an existing
@@ -80,7 +80,7 @@ func TestMigrateDeprecatedToolEnableFlags_NoClobber(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.json")
 
-	// Config has tools.browser.enabled=false but also sandbox.tool_policies["browser.*"]="ask".
+	// Config has tools.browser.enabled=false but also sandbox.tool_policies["browser_*"]="ask".
 	legacyCfg := map[string]any{
 		"version": CurrentVersion,
 		"agents": map[string]any{
@@ -97,7 +97,7 @@ func TestMigrateDeprecatedToolEnableFlags_NoClobber(t *testing.T) {
 		},
 		"sandbox": map[string]any{
 			"tool_policies": map[string]any{
-				"browser.*": "ask", // pre-existing operator entry — must not be downgraded
+				"browser_*": "ask", // pre-existing operator entry — must not be downgraded
 			},
 		},
 	}
@@ -112,9 +112,9 @@ func TestMigrateDeprecatedToolEnableFlags_NoClobber(t *testing.T) {
 	require.NotNil(t, cfg)
 
 	// Pre-existing "ask" policy must survive unchanged.
-	policy := cfg.Sandbox.ToolPolicies["browser.*"]
+	policy := cfg.Sandbox.ToolPolicies["browser_*"]
 	assert.Equal(t, "ask", policy,
-		"pre-existing browser.* policy \"ask\" must not be overwritten by migration")
+		"pre-existing browser_* policy \"ask\" must not be overwritten by migration")
 }
 
 // TestMigrateDeprecatedToolEnableFlags_FalsePositiveGuard verifies that tools
@@ -153,9 +153,9 @@ func TestMigrateDeprecatedToolEnableFlags_FalsePositiveGuard(t *testing.T) {
 		_, hasMCP := cfg.Sandbox.ToolPolicies["mcp_*"]
 		assert.False(t, hasMCP,
 			"mcp_* must NOT be denied: mcp.enabled=false is a default, not operator intent")
-		_, hasSpawnStatus := cfg.Sandbox.ToolPolicies["spawn_status"]
+		_, hasSpawnStatus := cfg.Sandbox.ToolPolicies["check_spawn_status"]
 		assert.False(t, hasSpawnStatus,
-			"spawn_status must NOT be denied: spawn_status.enabled=false is a default, not operator intent")
+			"check_spawn_status must NOT be denied: spawn_status.enabled=false is a default, not operator intent")
 	}
 }
 
@@ -193,9 +193,9 @@ func TestMigrateDeprecatedToolEnableFlags_PolicyEvaluatorDenies(t *testing.T) {
 
 	// The ToolPolicies map from sandbox config maps directly to the type used
 	// by the security config. Verify that the loaded tool policy value is "deny".
-	policyVal := cfg.Sandbox.ToolPolicies["browser.*"]
+	policyVal := cfg.Sandbox.ToolPolicies["browser_*"]
 	assert.Equal(t, "deny", policyVal,
-		"browser.navigate must resolve to deny via browser.* glob after migration")
+		"browser_navigate must resolve to deny via browser_* glob after migration")
 }
 
 // TestMigrateDeprecatedToolEnableFlags_MigrateOnce verifies that the migration
@@ -241,16 +241,18 @@ func TestMigrateDeprecatedToolEnableFlags_MigrateOnce(t *testing.T) {
 // policy-evaluation time.
 //
 // Implementation note: the resolveFromMap function in pkg/tools/compositor.go
-// supports two matching modes:
+// supports three matching modes:
 //   - Exact match: the key equals the tool name.
-//   - Trailing ".*" wildcard: e.g. "browser.*" matches "browser.navigate".
+//   - Trailing ".*" wildcard: e.g. "browser.*" matches "browser.navigate" (dot-delimited).
+//   - Trailing "_*" wildcard: e.g. "browser_*" matches "browser_navigate" (underscore-delimited).
 //
-// The "mcp_*" entry in toolEnableToPolicy uses underscore-wildcard rather than
-// ".*" style. MCP tool names are dynamically generated at runtime
-// ("mcp_<server>_<tool>") and cannot be statically enumerated here. The test
-// therefore skips the mcp_* glob and documents why — this is not a coverage
-// gap but a runtime-only pattern. Any future operator-facing documentation
-// should note that the mcp disable flag maps to a prefix filter.
+// Browser tools were renamed from "browser.navigate" etc. to "browser_navigate" etc.,
+// so the migration glob is now "browser_*" (underscore wildcard).
+//
+// The "mcp_*" entry in toolEnableToPolicy uses underscore-wildcard for MCP tool names
+// that are dynamically generated at runtime ("mcp_<server>_<tool>") and cannot be
+// statically enumerated here. The test therefore skips the mcp_* glob and documents
+// why — this is not a coverage gap but a runtime-only pattern.
 func TestToolEnableToPolicyGlobs_CoverageCheck(t *testing.T) {
 	// knownBuiltinTools is a representative subset of the static builtins that
 	// must be covered by toolEnableToPolicy globs. Derived from the Name()
@@ -258,27 +260,27 @@ func TestToolEnableToPolicyGlobs_CoverageCheck(t *testing.T) {
 	// Intentionally NOT exhaustive — the goal is to catch typos, not enumerate
 	// every tool.
 	knownBuiltinTools := []string{
-		"browser.navigate",
-		"browser.click",
-		"browser.type",
-		"browser.screenshot",
-		"browser.get_text",
-		"browser.wait",
-		"browser.evaluate",
-		"web_search",
-		"web_fetch",
+		"browser_navigate",
+		"browser_click",
+		"browser_type",
+		"browser_screenshot",
+		"browser_get_text",
+		"browser_wait",
+		"browser_evaluate",
+		"search_web",
+		"fetch_url",
 		"exec",
 		"cron",
 		"spawn",
-		"spawn_status",
-		"subagent",
+		"check_spawn_status",
+		"run_subagent",
 		"write_file",
 		"edit_file",
 		"append_file",
 		"send_file",
-		"task_list",
-		"task_create",
-		"task_update",
+		"list_tasks",
+		"create_task",
+		"update_task",
 	}
 
 	for _, entry := range toolEnableToPolicy {
@@ -313,6 +315,7 @@ func TestToolEnableToPolicyGlobs_CoverageCheck(t *testing.T) {
 // pkg/tools/compositor.go resolveFromMap:
 //   - Exact match: glob == toolName.
 //   - Trailing ".*" wildcard: strings.HasPrefix(toolName, prefix+".") or toolName == prefix.
+//   - Trailing "_*" wildcard: strings.HasPrefix(toolName, prefix+"_") or toolName == prefix.
 //
 // This ensures the test matches what the policy engine actually does at runtime.
 func globMatchesToolName(glob, toolName string) bool {
@@ -322,6 +325,10 @@ func globMatchesToolName(glob, toolName string) bool {
 	if strings.HasSuffix(glob, ".*") {
 		prefix := glob[:len(glob)-2]
 		return strings.HasPrefix(toolName, prefix+".") || toolName == prefix
+	}
+	if strings.HasSuffix(glob, "_*") {
+		prefix := glob[:len(glob)-2]
+		return strings.HasPrefix(toolName, prefix+"_") || toolName == prefix
 	}
 	return false
 }
@@ -394,7 +401,7 @@ func TestDeprecatedEnableFlagsWarnOnce(t *testing.T) {
 
 // TestLegacyConfigLoadsWithDeprecatedFlag verifies that a config.json file
 // containing tools.browser.enabled=false loads successfully (no parse error)
-// AND that the browser.* policy is now set to "deny" (the new contract).
+// AND that the browser_* policy is now set to "deny" (the new contract).
 func TestLegacyConfigLoadsWithDeprecatedFlag(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.json")
@@ -427,8 +434,8 @@ func TestLegacyConfigLoadsWithDeprecatedFlag(t *testing.T) {
 	// New contract: the browser flag is migrated to a deny policy (not silently ignored).
 	require.NotNil(t, cfg.Sandbox.ToolPolicies,
 		"ToolPolicies must be non-nil after migration")
-	assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["browser.*"],
-		"browser.* must be denied after migration of tools.browser.enabled=false")
+	assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["browser_*"],
+		"browser_* must be denied after migration of tools.browser.enabled=false")
 
 	// A clean config (no deprecated flags) must not gain any deny entries.
 	cfgPath2 := filepath.Join(tmpDir, "config2.json")
@@ -452,8 +459,8 @@ func TestLegacyConfigLoadsWithDeprecatedFlag(t *testing.T) {
 
 	// Clean config must have no tool_policies from the migration.
 	if cfg2.Sandbox.ToolPolicies != nil {
-		_, hasBrowser := cfg2.Sandbox.ToolPolicies["browser.*"]
+		_, hasBrowser := cfg2.Sandbox.ToolPolicies["browser_*"]
 		assert.False(t, hasBrowser,
-			"clean config must not gain a browser.* deny entry")
+			"clean config must not gain a browser_* deny entry")
 	}
 }

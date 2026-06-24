@@ -23,16 +23,16 @@ import (
 //	Then defaultPolicy is "allow" for all core agents;
 //	And the "system.*: deny" wildcard is present;
 //	And Ava additionally has explicit allows for 4 system.* tools;
-//	And Jim has workspace.shell + workspace.shell_bg + web_serve allowed;
+//	And Jim has workspace_shell + workspace_shell_bg + serve_web allowed;
 //	And Jim's seeded sandbox_profile is workspace+net.
 //
 // Traces to: pkg/coreagent/core.go — coreAgentSeed (FR-008, FR-010, FR-022).
 func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 	avaAllowedTools := []string{
-		"system.agent.create",
-		"system.agent.update",
-		"system.agent.delete",
-		"system.models.list",
+		"create_agent",
+		"update_agent",
+		"delete_agent",
+		"list_models",
 	}
 
 	tests := []struct {
@@ -50,8 +50,8 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 		{
 			id:               IDJim,
 			expectSystemDeny: true,
-			// Step 7: Jim uses web_serve (unified tool), workspace.shell, workspace.shell_bg.
-			expectExtraAllows:    []string{"workspace.shell", "workspace.shell_bg", "web_serve"},
+			// Step 7: Jim uses serve_web (unified tool), workspace_shell, workspace_shell_bg.
+			expectExtraAllows:    []string{"workspace_shell", "workspace_shell_bg", "serve_web"},
 			expectExplicitDenies: nil, // run_in_workspace removed; no explicit denies needed
 			expectSandboxProfile: config.SandboxProfileWorkspaceNet,
 		},
@@ -72,7 +72,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 					"'system.*' must be set to deny (FR-022)")
 			}
 
-			// Ava gets 4 extra allows; Jim gets workspace.shell + workspace.shell_bg.
+			// Ava gets 4 extra allows; Jim gets workspace_shell + workspace_shell_bg.
 			for _, toolName := range tc.expectExtraAllows {
 				p, ok := policies[toolName]
 				require.True(t, ok, "agent %q must have explicit allow for %q", tc.id, toolName)
@@ -171,7 +171,7 @@ func TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances(t *testing.T) {
 	require.True(t, ok, "Ava must have 'system.*' deny in seeded config")
 	assert.Equal(t, config.ToolPolicyDeny, p)
 
-	for _, allow := range []string{"system.agent.create", "system.agent.update", "system.agent.delete", "system.models.list"} {
+	for _, allow := range []string{"create_agent", "update_agent", "delete_agent", "list_models"} {
 		ap, aok := avaAgent.Tools.Builtin.Policies[allow]
 		require.True(t, aok, "Ava must have explicit allow for %q", allow)
 		assert.Equal(t, config.ToolPolicyAllow, ap)
@@ -194,19 +194,19 @@ func TestJimSeed_SandboxProfileIsWorkspacePlusNet(t *testing.T) {
 }
 
 // TestJimSeed_WebServeAndWorkspaceShellAllowed verifies that Jim's constructor
-// seed allows workspace.shell, workspace.shell_bg, and web_serve (step 7
-// migration from run_in_workspace to unified web_serve).
+// seed allows workspace_shell, workspace_shell_bg, and serve_web (step 7
+// migration from run_in_workspace to unified serve_web).
 //
 // BDD: Given coreAgentSeed(IDJim) is called,
 //
 //	When the policies map is inspected,
-//	Then workspace.shell, workspace.shell_bg, and web_serve are "allow".
+//	Then workspace_shell, workspace_shell_bg, and serve_web are "allow".
 //
 // Traces to: quizzical-marinating-frog.md Step 7.
 func TestJimSeed_WebServeAndWorkspaceShellAllowed(t *testing.T) {
 	_, policies, _ := coreAgentSeed(IDJim)
 
-	for _, toolName := range []string{"workspace.shell", "workspace.shell_bg", "web_serve"} {
+	for _, toolName := range []string{"workspace_shell", "workspace_shell_bg", "serve_web"} {
 		p, ok := policies[toolName]
 		require.True(t, ok, "Jim must have explicit policy for %q", toolName)
 		assert.Equal(t, config.ToolPolicyAllow, p,

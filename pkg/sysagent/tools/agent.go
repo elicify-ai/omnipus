@@ -92,7 +92,7 @@ func setAgentEnabled(deps *Deps, id string, enabled bool) *tools.ToolResult {
 	if !found {
 		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND",
 			fmt.Sprintf("No agent with ID %q", id),
-			"Use system.agent.list to see available agents",
+			"Use list_agents to see available agents",
 		))
 	}
 	slog.Info("sysagent: agent enabled state changed", "id", id, "enabled", enabled)
@@ -109,7 +109,7 @@ type AgentCreateTool struct{ deps *Deps }
 
 func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps: d} }
 
-func (t *AgentCreateTool) Name() string           { return "system.agent.create" }
+func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
 	return "Create a new custom agent with personality, model, tools, and configuration."
@@ -275,7 +275,7 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 			return tools.ErrorResult(errorJSON(
 				"AGENT_ALREADY_EXISTS",
 				fmt.Sprintf("An agent with ID %q already exists", id),
-				"Use system.agent.update to modify the existing agent or choose a different name",
+				"Use update_agent to modify the existing agent or choose a different name",
 			))
 		}
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", msg, "Check disk space and permissions"))
@@ -337,7 +337,7 @@ type AgentUpdateTool struct{ deps *Deps }
 
 func NewAgentUpdateTool(d *Deps) *AgentUpdateTool { return &AgentUpdateTool{deps: d} }
 
-func (t *AgentUpdateTool) Name() string           { return "system.agent.update" }
+func (t *AgentUpdateTool) Name() string           { return "update_agent" }
 func (t *AgentUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentUpdateTool) Description() string {
 	return "Update an existing agent's configuration. Only provided fields are changed; omitted fields are left as-is."
@@ -461,7 +461,7 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 	if !found {
 		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND",
 			fmt.Sprintf("No agent with ID %q", id),
-			"Use system.agent.list to see available agents",
+			"Use list_agents to see available agents",
 		))
 	}
 
@@ -505,7 +505,7 @@ type AgentDeleteTool struct{ deps *Deps }
 
 func NewAgentDeleteTool(d *Deps) *AgentDeleteTool { return &AgentDeleteTool{deps: d} }
 
-func (t *AgentDeleteTool) Name() string           { return "system.agent.delete" }
+func (t *AgentDeleteTool) Name() string           { return "delete_agent" }
 func (t *AgentDeleteTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentDeleteTool) Description() string {
 	return "Delete an agent and all its data (sessions, memory, workspace).\nParameters: id (required), confirm (bool, must be true)."
@@ -556,7 +556,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	if !found {
 		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND",
 			fmt.Sprintf("No agent with ID %q", id),
-			"Use system.agent.list to see available agents",
+			"Use list_agents to see available agents",
 		))
 	}
 	// Remove workspace directory (best-effort; failure is non-fatal but logged).
@@ -572,69 +572,6 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	}))
 }
 
-// ---- system.agent.list ----
-
-// AgentListTool implements system.agent.list per BRD §D.4.2.
-type AgentListTool struct{ deps *Deps }
-
-func NewAgentListTool(d *Deps) *AgentListTool { return &AgentListTool{deps: d} }
-
-func (t *AgentListTool) Name() string           { return "system.agent.list" }
-func (t *AgentListTool) Scope() tools.ToolScope { return tools.ScopeCore }
-func (t *AgentListTool) Description() string {
-	return "List all agents with their status, model, and task count.\nParameters: status (optional: active/inactive/all, default all)."
-}
-
-func (t *AgentListTool) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"status": map[string]any{"type": "string", "enum": []string{"active", "inactive", "all"}},
-		},
-	}
-}
-
-func (t *AgentListTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	filter, _ := args["status"].(string)
-	if filter == "" {
-		filter = "all"
-	}
-	type agentSummary struct {
-		ID     string `json:"id"`
-		Name   string `json:"name"`
-		Type   string `json:"type"`
-		Status string `json:"status"`
-		Model  string `json:"model,omitempty"`
-	}
-	cfg := t.deps.GetCfg()
-	var result []agentSummary
-	for _, a := range cfg.Agents.List {
-		status := "active"
-		if !a.IsActive() {
-			status = "inactive"
-		}
-		if filter != "all" && filter != status {
-			continue
-		}
-		model := ""
-		if a.Model != nil {
-			model = a.Model.Primary
-		}
-		result = append(result, agentSummary{
-			ID:   a.ID,
-			Name: a.Name,
-			Type: string(a.ResolveType(func(id string) bool {
-				// Check if agent has Type explicitly set to "core" in config.
-				// This avoids importing coreagent (would create import cycle).
-				return a.Type == config.AgentTypeCore
-			})),
-			Status: status,
-			Model:  model,
-		})
-	}
-	return tools.NewToolResult(successJSON(map[string]any{"agents": result}))
-}
-
 // ---- system.agent.activate ----
 
 // AgentActivateTool implements system.agent.activate per BRD §D.4.2.
@@ -643,7 +580,7 @@ type AgentActivateTool struct{ deps *Deps }
 
 func NewAgentActivateTool(d *Deps) *AgentActivateTool { return &AgentActivateTool{deps: d} }
 
-func (t *AgentActivateTool) Name() string           { return "system.agent.activate" }
+func (t *AgentActivateTool) Name() string           { return "activate_agent" }
 func (t *AgentActivateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentActivateTool) Description() string {
 	return "Activate a core or custom agent, persisting the enabled state.\nParameters: id (required)."
@@ -670,7 +607,7 @@ type AgentDeactivateTool struct{ deps *Deps }
 
 func NewAgentDeactivateTool(d *Deps) *AgentDeactivateTool { return &AgentDeactivateTool{deps: d} }
 
-func (t *AgentDeactivateTool) Name() string           { return "system.agent.deactivate" }
+func (t *AgentDeactivateTool) Name() string           { return "deactivate_agent" }
 func (t *AgentDeactivateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentDeactivateTool) Description() string {
 	return "Deactivate an agent (makes it unavailable for new sessions), persisting the disabled state.\nParameters: id (required)."

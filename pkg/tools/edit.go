@@ -38,7 +38,7 @@ func (t *EditFileTool) Description() string {
 }
 
 func (t *EditFileTool) Scope() ToolScope       { return ScopeCore }
-func (t *EditFileTool) Category() ToolCategory { return CategoryFile }
+func (t *EditFileTool) Category() ToolCategory { return CategoryFilesystem }
 
 func (t *EditFileTool) Parameters() map[string]any {
 	return map[string]any{
@@ -118,7 +118,7 @@ func (t *AppendFileTool) Description() string {
 }
 
 func (t *AppendFileTool) Scope() ToolScope       { return ScopeCore }
-func (t *AppendFileTool) Category() ToolCategory { return CategoryFile }
+func (t *AppendFileTool) Category() ToolCategory { return CategoryFilesystem }
 
 func (t *AppendFileTool) Parameters() map[string]any {
 	return map[string]any{

@@ -3,7 +3,7 @@
 //
 // BDD: Given any browser URL scheme other than http:// or https://,
 //
-//	When browser.navigate attempts to validate the URL,
+//	When browser_navigate attempts to validate the URL,
 //	Then it returns an error blocking navigation.
 //
 // Acceptance decision: Plan 3 §1 "Browser URL block: both layers enforced (hard-coded schemes + SSRF checker)"

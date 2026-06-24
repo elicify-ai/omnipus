@@ -14,7 +14,7 @@ import (
 
 // --- TestURLSchemeValidation ---
 // Traces to: wave4-whatsapp-browser-spec.md line 699 (Scenario Outline: Browser navigate URL schemes)
-// BDD: Given a managed Chromium instance, When browser.navigate(<url>) is called,
+// BDD: Given a managed Chromium instance, When browser_navigate(<url>) is called,
 // Then allowed URLs succeed and blocked schemes return an error.
 
 func TestURLSchemeValidation(t *testing.T) {
@@ -71,7 +71,7 @@ func TestURLSchemeValidation(t *testing.T) {
 // --- TestSSRFURLCheckByBrowserManager ---
 // Traces to: wave4-whatsapp-browser-spec.md line 565 (Scenario: SSRF protection blocks private IP navigation)
 // BDD: Given SSRF protection is active (SEC-24),
-// When browser.navigate("http://169.254.169.254/...") is called,
+// When browser_navigate("http://169.254.169.254/...") is called,
 // Then navigation is blocked before the request is sent with SSRF error.
 
 func TestSSRFURLCheckByBrowserManager(t *testing.T) {
@@ -155,7 +155,7 @@ func TestTabCounter_Limits(t *testing.T) {
 // --- TestMaxTabsExceeded_AcquireTabReturnsError ---
 // Traces to: wave4-whatsapp-browser-spec.md line 776 (Scenario: Maximum tabs exceeded)
 // BDD: Given max_tabs: 3 and 3 tabs open,
-// When a 4th browser.navigate with new_tab: true is called,
+// When a 4th browser_navigate with new_tab: true is called,
 // Then error: "maximum concurrent tabs (3) reached."
 
 func TestMaxTabsExceeded_SessionReturnsError(t *testing.T) {

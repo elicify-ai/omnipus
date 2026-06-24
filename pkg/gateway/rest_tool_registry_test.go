@@ -232,7 +232,7 @@ func TestREST_ApproveAuth_NonAdminSystemTool403(t *testing.T) {
 
 	// Register a pending approval with RequiresAdmin=true.
 	entry, accepted := reg.requestApproval(
-		"tc-001", "system.config.set",
+		"tc-001", "set_config",
 		map[string]any{"key": "x"},
 		"agent-1", "sess-1", "turn-1",
 		true, // requiresAdmin
@@ -316,7 +316,7 @@ func TestREST_LateApprove_Returns410(t *testing.T) {
 	api, reg := newTestRestAPIWithApprovalReg(t)
 
 	entry, accepted := reg.requestApproval(
-		"tc-late", "web_search",
+		"tc-late", "search_web",
 		map[string]any{"query": "golang"},
 		"agent-3", "sess-3", "turn-3",
 		false,
@@ -517,7 +517,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 	t.Run("pending→denied_timeout", func(t *testing.T) {
 		// Very short timeout so the test completes quickly.
 		reg := newApprovalRegistryV2(64, 50*time.Millisecond)
-		e, accepted := reg.requestApproval("tc-dt", "web_search", map[string]any{}, "a", "s", "t", false)
+		e, accepted := reg.requestApproval("tc-dt", "search_web", map[string]any{}, "a", "s", "t", false)
 		require.True(t, accepted)
 
 		// Wait for the outcome: must be denied_timeout.
@@ -835,9 +835,9 @@ func TestWS_ToolApprovalRequired_NilArgsBecomesEmptyObject(t *testing.T) {
 	reg := newApprovalRegistryV2(64, 300*time.Second)
 
 	// Request approval with nil args — mirrors what cloneStringAnyMap produces
-	// when the LLM invokes a tool with no parameters (e.g. system.agent.list).
+	// when the LLM invokes a tool with no parameters (e.g. list_agents).
 	entry, accepted := reg.requestApproval(
-		"tc-nil-args", "system.agent.list",
+		"tc-nil-args", "list_agents",
 		nil, // <-- nil args
 		"agent-na", "sess-na", "turn-na",
 		false,

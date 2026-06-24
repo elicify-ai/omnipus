@@ -132,10 +132,10 @@ func readWorkspaceFromDisk(home, id string) (workspace, error) {
 type WorkspaceCreateTool struct{ deps *Deps }
 
 func NewWorkspaceCreateTool(d *Deps) *WorkspaceCreateTool { return &WorkspaceCreateTool{deps: d} }
-func (t *WorkspaceCreateTool) Name() string               { return "system.workspace.create" }
+func (t *WorkspaceCreateTool) Name() string               { return "create_workspace" }
 func (t *WorkspaceCreateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceCreateTool) Description() string {
-	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to system.task.create when creating tasks for the workspace.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace), repository (optional, git URL)."
+	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace), repository (optional, git URL)."
 }
 
 func (t *WorkspaceCreateTool) Parameters() map[string]any {
@@ -211,17 +211,17 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 type WorkspaceUpdateTool struct{ deps *Deps }
 
 func NewWorkspaceUpdateTool(d *Deps) *WorkspaceUpdateTool { return &WorkspaceUpdateTool{deps: d} }
-func (t *WorkspaceUpdateTool) Name() string               { return "system.workspace.update" }
+func (t *WorkspaceUpdateTool) Name() string               { return "update_workspace" }
 func (t *WorkspaceUpdateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceUpdateTool) Description() string {
-	return "Update an existing workspace's name, description, status, pin state, core team, or repository. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use system.workspace.list first to find the workspace id.\nParameters: id (required, from system.workspace.list), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs), repository (git URL). Only provided fields are updated."
+	return "Update an existing workspace's name, description, status, pin state, core team, or repository. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs), repository (git URL). Only provided fields are updated."
 }
 
 func (t *WorkspaceUpdateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":          map[string]any{"type": "string", "description": "Workspace ID from system.workspace.list"},
+			"id":          map[string]any{"type": "string", "description": "Workspace ID from list_workspaces"},
 			"name":        map[string]any{"type": "string", "description": "New workspace title"},
 			"description": map[string]any{"type": "string", "description": "New description"},
 			"status": map[string]any{
@@ -250,7 +250,7 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	w, err := readWorkspaceFromDisk(t.deps.Home, id)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
-			"Use system.workspace.list to see available workspaces"))
+			"Use list_workspaces to see available workspaces"))
 	}
 
 	if v, ok := args["name"].(string); ok && v != "" {
@@ -310,17 +310,17 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 type WorkspaceDeleteTool struct{ deps *Deps }
 
 func NewWorkspaceDeleteTool(d *Deps) *WorkspaceDeleteTool { return &WorkspaceDeleteTool{deps: d} }
-func (t *WorkspaceDeleteTool) Name() string               { return "system.workspace.delete" }
+func (t *WorkspaceDeleteTool) Name() string               { return "delete_workspace" }
 func (t *WorkspaceDeleteTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceDeleteTool) Description() string {
-	return "Delete a workspace and all its tasks. This is irreversible — all GTD tasks belonging to the workspace are permanently deleted. Call system.workspace.list first to find the workspace id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion)."
+	return "Delete a workspace and all its tasks. This is irreversible — all GTD tasks belonging to the workspace are permanently deleted. Call list_workspaces first to find the workspace id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion)."
 }
 
 func (t *WorkspaceDeleteTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id": map[string]any{"type": "string", "description": "Workspace ID from system.workspace.list"},
+			"id": map[string]any{"type": "string", "description": "Workspace ID from list_workspaces"},
 			"confirm": map[string]any{
 				"type":        "boolean",
 				"description": "Must be true to confirm irreversible deletion",
@@ -347,7 +347,7 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 	// Guard: verify the workspace exists before any irreversible mutations.
 	if _, err := readWorkspaceFromDisk(t.deps.Home, id); err != nil {
 		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
-			"Use system.workspace.list to see available workspaces"))
+			"Use list_workspaces to see available workspaces"))
 	}
 
 	// Step 1: cascade-delete tasks
@@ -388,10 +388,10 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 type WorkspaceListTool struct{ deps *Deps }
 
 func NewWorkspaceListTool(d *Deps) *WorkspaceListTool { return &WorkspaceListTool{deps: d} }
-func (t *WorkspaceListTool) Name() string             { return "system.workspace.list" }
+func (t *WorkspaceListTool) Name() string             { return "list_workspaces" }
 func (t *WorkspaceListTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *WorkspaceListTool) Description() string {
-	return "List all active workspaces with their task counts. Call this to find workspace ids before calling system.task.create, system.task.list, or system.workspace.update. Returns newest workspaces first.\nParameters: status (optional: active/archived/all, defaults to active)."
+	return "List all active workspaces with their task counts. Call this to find workspace ids before calling create_task_in_workspace, list_tasks_in_workspace, or update_workspace. Returns newest workspaces first.\nParameters: status (optional: active/archived/all, defaults to active)."
 }
 
 func (t *WorkspaceListTool) Parameters() map[string]any {
@@ -505,17 +505,17 @@ func (t *WorkspaceListTool) Execute(_ context.Context, args map[string]any) *too
 type WorkspaceGetTool struct{ deps *Deps }
 
 func NewWorkspaceGetTool(d *Deps) *WorkspaceGetTool { return &WorkspaceGetTool{deps: d} }
-func (t *WorkspaceGetTool) Name() string            { return "system.workspace.get" }
+func (t *WorkspaceGetTool) Name() string            { return "get_workspace" }
 func (t *WorkspaceGetTool) Scope() tools.ToolScope  { return tools.ScopeCore }
 func (t *WorkspaceGetTool) Description() string {
-	return "Get a single workspace by ID including its live task count. Use this to refresh workspace data after creating tasks.\nParameters: id (required, from system.workspace.list)."
+	return "Get a single workspace by ID including its live task count. Use this to refresh workspace data after creating tasks.\nParameters: id (required, from list_workspaces)."
 }
 
 func (t *WorkspaceGetTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id": map[string]any{"type": "string", "description": "Workspace ID from system.workspace.list"},
+			"id": map[string]any{"type": "string", "description": "Workspace ID from list_workspaces"},
 		},
 		"required": []string{"id"},
 	}
@@ -529,7 +529,7 @@ func (t *WorkspaceGetTool) Execute(_ context.Context, args map[string]any) *tool
 	w, err := readWorkspaceFromDisk(t.deps.Home, id)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
-			"Use system.workspace.list to see available workspaces"))
+			"Use list_workspaces to see available workspaces"))
 	}
 	tc := computeWorkspaceTaskCount(t.deps.Home, id)
 	return tools.NewToolResult(successJSON(map[string]any{

@@ -55,7 +55,7 @@ type skippedCounters struct {
 // scrapes if they want a rate.
 func IncSkipped(tool, decision string) {
 	switch tool {
-	case "web_serve":
+	case "serve_web":
 		switch decision {
 		case DecisionAllow:
 			auditSkippedCounters.webServeAllow.Add(1)

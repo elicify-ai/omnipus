@@ -2,7 +2,7 @@
 //
 // FR-061 is the security invariant that closes the privilege-escalation
 // gap exposed by H-01 in the rev-5 grill: a custom agent with
-// `policies: {"system.config.set": "allow"}` MUST NOT receive an
+// `policies: {"set_config": "allow"}` MUST NOT receive an
 // unattended `allow` decision for that tool. The fence downgrades the
 // effective policy from `allow` to `ask` whenever:
 //

@@ -79,15 +79,15 @@ func newWave5bTestAPI(t *testing.T) *restAPI {
 func TestSystemToolErrorContract(t *testing.T) {
 	t.Skip("Blocked: pkg/sysagent.SystemToolHandler not yet implemented — error contract test requires Handle() method")
 	// When implemented, test the following dataset rows:
-	//   system.agent.delete {id:"nonexistent", confirm:true} → AGENT_NOT_FOUND
-	//   system.agent.create {name:"General Assistant"} → AGENT_ALREADY_EXISTS
-	//   system.channel.enable {id:"signal"} (no Java) → DEPENDENCY_MISSING
-	//   system.agent.delete {id:"omnipus-system", confirm:true} → PERMISSION_DENIED
-	//   system.agent.delete {id:"general-assistant", confirm:true} → PERMISSION_DENIED
-	//   system.provider.configure {api_key:"invalid"} → CONNECTION_FAILED
-	//   system.config.set {key:"invalid.key"} → INVALID_INPUT
-	//   system.agent.create {name:""} → INVALID_INPUT (name required)
-	//   system.agent.create {name:"a"*256} → INVALID_INPUT (max length exceeded)
+	//   delete_agent {id:"nonexistent", confirm:true} → AGENT_NOT_FOUND
+	//   create_agent {name:"General Assistant"} → AGENT_ALREADY_EXISTS
+	//   enable_channel {id:"signal"} (no Java) → DEPENDENCY_MISSING
+	//   delete_agent {id:"omnipus-system", confirm:true} → PERMISSION_DENIED
+	//   delete_agent {id:"general-assistant", confirm:true} → PERMISSION_DENIED
+	//   configure_provider {api_key:"invalid"} → CONNECTION_FAILED
+	//   set_config {key:"invalid.key"} → INVALID_INPUT
+	//   create_agent {name:""} → INVALID_INPUT (name required)
+	//   create_agent {name:"a"*256} → INVALID_INPUT (max length exceeded)
 }
 
 // --------------------------------------------------------------------------
@@ -101,16 +101,16 @@ func TestSystemToolErrorContract(t *testing.T) {
 func TestRBACEnforcement(t *testing.T) {
 	t.Skip("Blocked: pkg/sysagent RBAC gating not yet implemented — RBACChecker.Check() needed")
 	// Dataset rows (wave5b spec line 483):
-	//   viewer  + system.agent.create → PERMISSION_DENIED
-	//   viewer  + system.agent.list   → Success
-	//   viewer  + system.doctor.run   → Success (read-only)
+	//   viewer  + create_agent → PERMISSION_DENIED
+	//   viewer  + list_agents   → Success
+	//   viewer  + run_doctor   → Success (read-only)
 	//   viewer  + system.navigate     → Success (safe)
-	//   operator + system.agent.create → Success
-	//   operator + system.agent.delete → PERMISSION_DENIED
-	//   operator + system.config.set(security.*) → PERMISSION_DENIED
-	//   admin   + system.agent.delete → Success (with UI confirmation)
-	//   admin   + system.config.set(security.*) → Success (with UI confirmation)
-	//   agent   + system.agent.list   → PERMISSION_DENIED (agents have no system access)
+	//   operator + create_agent → Success
+	//   operator + delete_agent → PERMISSION_DENIED
+	//   operator + set_config(security.*) → PERMISSION_DENIED
+	//   admin   + delete_agent → Success (with UI confirmation)
+	//   admin   + set_config(security.*) → Success (with UI confirmation)
+	//   agent   + list_agents   → PERMISSION_DENIED (agents have no system access)
 }
 
 // --------------------------------------------------------------------------
@@ -121,7 +121,7 @@ func TestRBACEnforcement(t *testing.T) {
 // all operations proceed to UI confirmation rather than being RBAC-rejected.
 //
 // Traces to: wave5b-system-agent-spec.md line 498 (Scenario: Single-user mode bypasses RBAC)
-// BDD: "Given RBAC not configured, When system.agent.delete called, Then no RBAC rejection"
+// BDD: "Given RBAC not configured, When delete_agent called, Then no RBAC rejection"
 func TestRBACBypassSingleUser(t *testing.T) {
 	t.Skip("Blocked: pkg/sysagent RBAC gating not yet implemented — single-user bypass logic needed")
 }
@@ -174,10 +174,10 @@ func TestSchemaRedactionOverride(t *testing.T) {
 
 // TestProviderCredentialsWriteOnly verifies that credential values never appear
 // in API responses. Uses the existing config endpoint (which has redactSensitiveFields)
-// as a proxy for the write-only requirement until system.provider.list is implemented.
+// as a proxy for the write-only requirement until list_providers is implemented.
 //
 // Traces to: wave5b-system-agent-spec.md line 460 (Scenario: Provider credentials are write-only)
-// BDD: "When system.provider.list called, Then api_key NOT included in response"
+// BDD: "When list_providers called, Then api_key NOT included in response"
 func TestProviderCredentialsWriteOnly(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 460 (Provider credentials are write-only)
 	api := newWave5bTestAPI(t)
@@ -205,11 +205,11 @@ func TestProviderCredentialsWriteOnly(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &configMap),
 		"config response must be valid JSON even after redaction")
 
-	// TODO [INFERRED]: Once system.provider.list is implemented, add:
-	//   result := handler.Handle("system.provider.list", nil, callerRole="admin")
+	// TODO [INFERRED]: Once list_providers is implemented, add:
+	//   result := handler.Handle("list_providers", nil, callerRole="admin")
 	//   assert result["providers"] contains {name:"anthropic", status:"connected"}
 	//   assert result["providers"][0] does NOT contain "api_key" key
-	t.Log("NOTE: system.provider.list (system tool) not yet implemented — full test pending pkg/sysagent")
+	t.Log("NOTE: list_providers (system tool) not yet implemented — full test pending pkg/sysagent")
 }
 
 // --------------------------------------------------------------------------
@@ -219,7 +219,7 @@ func TestProviderCredentialsWriteOnly(t *testing.T) {
 // TestSystemToolExclusivity verifies that only omnipus-system can invoke system.* tools.
 //
 // Traces to: wave5b-system-agent-spec.md line 427 (Scenario: User agent cannot invoke system tools)
-// BDD: "Given General Assistant session, When agent invokes system.agent.list, Then rejected"
+// BDD: "Given General Assistant session, When agent invokes list_agents, Then rejected"
 func TestSystemToolExclusivity(t *testing.T) {
 	t.Skip("Blocked: pkg/sysagent.SystemToolHandler not yet implemented — exclusivity guard needed")
 	// When implemented: calling Handle() with callerAgentID = "general-assistant"
@@ -441,7 +441,7 @@ func TestCoreAgentDefaults(t *testing.T) {
 //
 // Traces to: wave5b-system-agent-spec.md line 679 (Scenario: Core agent cannot be deleted)
 func TestCoreAgentCannotDelete(t *testing.T) {
-	t.Skip("BLOCKED: Ava's system.agent.delete tool not yet wired — core agent delete protection " +
+	t.Skip("BLOCKED: Ava's delete_agent tool not yet wired — core agent delete protection " +
 		"will be enforced when Ava's CRUD tools are implemented. " +
 		"IDs to protect (Spec-3 4-base roster): mia, jim, ava, ray")
 }
@@ -456,16 +456,16 @@ func TestCoreAgentCannotDelete(t *testing.T) {
 // Traces to: wave5b-system-agent-spec.md line 509 (Scenario: Confirmation dialog for agent deletion)
 func TestConfirmationRequired(t *testing.T) {
 	t.Skip("Blocked: pkg/sysagent.ConfirmationGateway not yet implemented — confirmation mechanism needed")
-	// Without confirm=true from UI: system.agent.delete must return CONFIRMATION_REQUIRED.
+	// Without confirm=true from UI: delete_agent must return CONFIRMATION_REQUIRED.
 	// LLM text like "I confirm the deletion" must NOT satisfy the confirmation check.
-	// Non-destructive ops (system.agent.create, system.task.create) must NOT require confirmation.
+	// Non-destructive ops (create_agent, create_task_in_workspace) must NOT require confirmation.
 }
 
 // --------------------------------------------------------------------------
 // Test #18 — TestAgentCreateIntegration
 // --------------------------------------------------------------------------
 
-// TestAgentCreateIntegration verifies end-to-end system.agent.create:
+// TestAgentCreateIntegration verifies end-to-end create_agent:
 // config file updated, workspace directory created, audit entry written.
 //
 // Traces to: wave5b-system-agent-spec.md line 389 (Scenario: Create a custom agent via system tool)
@@ -477,7 +477,7 @@ func TestAgentCreateIntegration(t *testing.T) {
 // Test #19 — TestAgentDeleteIntegration
 // --------------------------------------------------------------------------
 
-// TestAgentDeleteIntegration verifies end-to-end system.agent.delete:
+// TestAgentDeleteIntegration verifies end-to-end delete_agent:
 // agent, sessions, memory, workspace all cleaned up, audit entry written.
 //
 // Traces to: wave5b-system-agent-spec.md line 401 (Scenario: Delete an agent with confirmation)
@@ -489,7 +489,7 @@ func TestAgentDeleteIntegration(t *testing.T) {
 // Test #21 — TestProviderConfigureIntegration
 // --------------------------------------------------------------------------
 
-// TestProviderConfigureIntegration verifies system.provider.configure encrypts and
+// TestProviderConfigureIntegration verifies configure_provider encrypts and
 // saves the API key to credentials.json and tests the connection.
 //
 // Traces to: wave5b-system-agent-spec.md line 600 (Scenario: Successful provider connection transitions to chat)
@@ -513,7 +513,7 @@ func TestConfirmationFlowIntegration(t *testing.T) {
 // Test #23 — TestDoctorRunIntegration
 // --------------------------------------------------------------------------
 
-// TestDoctorRunIntegration verifies system.doctor.run updates state.json with
+// TestDoctorRunIntegration verifies run_doctor updates state.json with
 // last_doctor_run and last_doctor_score.
 //
 // Traces to: wave5b-system-agent-spec.md line 730 (Scenario: Run doctor from Settings UI)

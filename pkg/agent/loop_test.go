@@ -3097,7 +3097,7 @@ func TestIsNativeSearchProvider_NoInterface(t *testing.T) {
 
 func TestFilterClientWebSearch_RemovesWebSearch(t *testing.T) {
 	defs := []providers.ToolDefinition{
-		{Type: "function", Function: providers.ToolFunctionDefinition{Name: "web_search"}},
+		{Type: "function", Function: providers.ToolFunctionDefinition{Name: "search_web"}},
 		{Type: "function", Function: providers.ToolFunctionDefinition{Name: "read_file"}},
 		{Type: "function", Function: providers.ToolFunctionDefinition{Name: "exec"}},
 	}
@@ -3106,8 +3106,8 @@ func TestFilterClientWebSearch_RemovesWebSearch(t *testing.T) {
 		t.Fatalf("len(result) = %d, want 2", len(result))
 	}
 	for _, td := range result {
-		if td.Function.Name == "web_search" {
-			t.Fatal("web_search should be filtered out")
+		if td.Function.Name == "search_web" {
+			t.Fatal("search_web should be filtered out")
 		}
 	}
 }

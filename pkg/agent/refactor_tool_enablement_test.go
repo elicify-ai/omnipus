@@ -54,22 +54,22 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 	// Every implemented tool must be present regardless of any cfg.Tools.*.Enabled flag.
 	expected := []string{
 		// File-system tools
-		"read_file", "write_file", "edit_file", "append_file", "list_dir",
+		"read_file", "write_file", "edit_file", "append_file", "list_directory",
 		// Execution
 		"exec",
 		// Web
-		"web_fetch",
+		"fetch_url",
 		// Communication
 		"message", "send_file",
 		// Skills
 		"find_skills", "install_skill",
 		// Agent orchestration
-		"spawn", "spawn_status", "subagent", "handoff", "return_to_default",
+		"spawn", "check_spawn_status", "run_subagent", "hand_off", "return_to_default",
 		// Browser automation — the headline bug being fixed
-		"browser.navigate", "browser.click", "browser.type",
-		"browser.screenshot", "browser.get_text", "browser.wait",
-		// browser.evaluate stays registered; policy denies it by default.
-		"browser.evaluate",
+		"browser_navigate", "browser_click", "browser_type",
+		"browser_screenshot", "browser_get_text", "browser_wait",
+		// browser_evaluate stays registered; policy denies it by default.
+		"browser_evaluate",
 	}
 
 	for _, name := range expected {
@@ -81,36 +81,36 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 }
 
 // TestBrowserEvaluateDeniedByDefaultPolicy locks in the safety contract that
-// replaced the old Browser.EvaluateEnabled flag. browser.evaluate executes
+// replaced the old Browser.EvaluateEnabled flag. browser_evaluate executes
 // arbitrary JavaScript and must stay denied without explicit operator opt-in.
 //
 // The contract lives in pkg/policy.builtinToolPolicies; this test catches
 // regressions that accidentally remove the entry or flip the default.
 func TestBrowserEvaluateDeniedByDefaultPolicy(t *testing.T) {
-	// Nil SecurityConfig should still deny browser.evaluate.
+	// Nil SecurityConfig should still deny browser_evaluate.
 	var sc *policy.SecurityConfig
-	assert.Equal(t, policy.ToolPolicyDeny, sc.ResolveToolPolicy("browser.evaluate"),
-		"browser.evaluate must be denied when no security config is loaded at all")
+	assert.Equal(t, policy.ToolPolicyDeny, sc.ResolveToolPolicy("browser_evaluate"),
+		"browser_evaluate must be denied when no security config is loaded at all")
 
 	// Empty SecurityConfig (no user-supplied overrides) must also deny.
 	sc2 := &policy.SecurityConfig{}
-	assert.Equal(t, policy.ToolPolicyDeny, sc2.ResolveToolPolicy("browser.evaluate"),
-		"browser.evaluate must be denied under default security config")
+	assert.Equal(t, policy.ToolPolicyDeny, sc2.ResolveToolPolicy("browser_evaluate"),
+		"browser_evaluate must be denied under default security config")
 
 	// User opt-in must be respected (a sensible operator may want "ask").
 	sc3 := &policy.SecurityConfig{
 		ToolPolicies: map[string]policy.ToolPolicy{
-			"browser.evaluate": policy.ToolPolicyAsk,
+			"browser_evaluate": policy.ToolPolicyAsk,
 		},
 	}
-	assert.Equal(t, policy.ToolPolicyAsk, sc3.ResolveToolPolicy("browser.evaluate"),
+	assert.Equal(t, policy.ToolPolicyAsk, sc3.ResolveToolPolicy("browser_evaluate"),
 		"explicit user override must win over the builtin default")
 
 	// A sibling tool without a builtin default falls through to allow (the
 	// system's default_policy). This proves the builtin map is not applied
 	// broadly — it only targets the specific dangerous tools we name.
-	assert.Equal(t, policy.ToolPolicyAllow, sc2.ResolveToolPolicy("browser.navigate"),
-		"browser.navigate has no builtin deny default")
+	assert.Equal(t, policy.ToolPolicyAllow, sc2.ResolveToolPolicy("browser_navigate"),
+		"browser_navigate has no builtin deny default")
 }
 
 // TestDeprecatedEnableFlagScanDoesNotPanic exercises the warn-once path on a

@@ -16,7 +16,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// shellBgResult mirrors the JSON shape workspace.shell_bg returns.
+// shellBgResult mirrors the JSON shape workspace_shell_bg returns.
 // Must match RunInWorkspaceResult in src/lib/api.ts (path, url, expires_at,
 // command, port) plus _summary.
 type shellBgResult struct {
@@ -603,7 +603,7 @@ func TestWorkspaceShellBgTool_ProfileOffSkipsHardening(t *testing.T) {
 //
 // BDD: Given AuditFailClosed=true and a degraded (closed) audit logger,
 //
-//	When Execute is called on workspace.shell_bg,
+//	When Execute is called on workspace_shell_bg,
 //	Then result.IsError=true and DevServerRegistry has zero entries.
 //
 // Traces to: quizzical-marinating-frog.md pr-test-analyzer Test-2.

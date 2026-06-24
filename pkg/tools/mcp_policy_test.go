@@ -65,7 +65,7 @@ func TestFilterToolsByPolicy_DeniedMCPTool_ExcludedFromLLMView(t *testing.T) {
 	allTools := []Tool{
 		&mcpCategoryTool{name: deniedTool},
 		&mcpCategoryTool{name: allowedTool},
-		makeScopedTool("web_search", ScopeGeneral), // builtin, unrelated
+		makeScopedTool("search_web", ScopeGeneral), // builtin, unrelated
 	}
 
 	policyCfg := &ToolPolicyCfg{

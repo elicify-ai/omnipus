@@ -529,14 +529,14 @@ func TestWorkspaceShellTool_NameAndScope(t *testing.T) {
 	dir := t.TempDir()
 	tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileWorkspace, nil, nil)
 
-	if tool.Name() != "workspace.shell" {
-		t.Errorf("expected name 'workspace.shell', got %q", tool.Name())
+	if tool.Name() != "workspace_shell" {
+		t.Errorf("expected name 'workspace_shell', got %q", tool.Name())
 	}
 	if tool.Scope() != tools.ScopeCore {
 		t.Errorf("expected ScopeCore, got %q", tool.Scope())
 	}
-	if tool.Category() != tools.CategoryWorkspace {
-		t.Errorf("expected CategoryWorkspace, got %q", tool.Category())
+	if tool.Category() != tools.CategoryShell {
+		t.Errorf("expected CategoryShell, got %q", tool.Category())
 	}
 }
 

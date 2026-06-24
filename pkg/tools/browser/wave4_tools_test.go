@@ -14,8 +14,8 @@ import (
 // Traces to: wave4-whatsapp-browser-spec.md line 1001 (Test #11: TestBrowserToolRegistration)
 // BDD: Given an empty ToolRegistry,
 // When RegisterTools(registry, DefaultConfig(), nil) is called,
-// Then 7 tools are registered: browser.navigate, browser.click, browser.type,
-// browser.screenshot, browser.get_text, browser.wait, browser.evaluate.
+// Then 7 tools are registered: browser_navigate, browser_click, browser_type,
+// browser_screenshot, browser_get_text, browser_wait, browser_evaluate.
 
 func TestBrowserToolRegistration(t *testing.T) {
 	// Traces to: wave4-whatsapp-browser-spec.md line 527 (Scenario: Launch managed Chromium)
@@ -25,19 +25,19 @@ func TestBrowserToolRegistration(t *testing.T) {
 	cfg, err := DefaultConfig()
 	require.NoError(t, err, "DefaultConfig must not error")
 	ssrf := security.NewSSRFChecker(nil)
-	// evaluateEnabled=true: verify browser.evaluate is included in the 7 registered tools.
+	// evaluateEnabled=true: verify browser_evaluate is included in the 7 registered tools.
 	mgr, err := RegisterTools(registry, cfg, ssrf, true)
 	require.NoError(t, err, "RegisterTools must not return an error with valid config")
 	require.NotNil(t, mgr, "RegisterTools must return a non-nil BrowserManager")
 
 	expectedTools := []string{
-		"browser.navigate",
-		"browser.click",
-		"browser.type",
-		"browser.screenshot",
-		"browser.get_text",
-		"browser.wait",
-		"browser.evaluate",
+		"browser_navigate",
+		"browser_click",
+		"browser_type",
+		"browser_screenshot",
+		"browser_get_text",
+		"browser_wait",
+		"browser_evaluate",
 	}
 
 	for _, name := range expectedTools {
@@ -65,13 +65,13 @@ func TestBrowserToolNames(t *testing.T) {
 	require.NoError(t, err)
 
 	toolNames := []string{
-		"browser.navigate",
-		"browser.click",
-		"browser.type",
-		"browser.screenshot",
-		"browser.get_text",
-		"browser.wait",
-		"browser.evaluate",
+		"browser_navigate",
+		"browser_click",
+		"browser_type",
+		"browser_screenshot",
+		"browser_get_text",
+		"browser_wait",
+		"browser_evaluate",
 	}
 
 	for _, name := range toolNames {

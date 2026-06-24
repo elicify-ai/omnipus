@@ -191,8 +191,8 @@ func TestMessageTool_Execute_NotConfigured(t *testing.T) {
 
 func TestMessageTool_Name(t *testing.T) {
 	tool := NewMessageTool()
-	if tool.Name() != "message" {
-		t.Errorf("Expected name 'message', got '%s'", tool.Name())
+	if tool.Name() != "send_message" {
+		t.Errorf("Expected name 'send_message', got '%s'", tool.Name())
 	}
 }
 

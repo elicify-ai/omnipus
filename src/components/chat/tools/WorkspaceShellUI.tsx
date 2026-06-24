@@ -116,7 +116,22 @@ function WorkspaceShellBlock({
 
 // ── Registrations ─────────────────────────────────────────────────────────────
 
+// New canonical name (post §7 rename: workspace.shell → workspace_shell)
 export const WorkspaceShellUI = makeAssistantToolUI<WorkspaceShellArgs, unknown>({
+  toolName: 'workspace_shell',
+  render: ({ args, result, status }) => (
+    <WorkspaceShellBlock
+      toolName="workspace_shell"
+      args={args ?? {}}
+      result={result}
+      isRunning={status.type === 'running'}
+      isError={status.type === 'incomplete'}
+    />
+  ),
+})
+
+// Legacy alias kept for backward compat with old session transcripts.
+export const WorkspaceShellLegacyUI = makeAssistantToolUI<WorkspaceShellArgs, unknown>({
   toolName: 'workspace.shell',
   render: ({ args, result, status }) => (
     <WorkspaceShellBlock
@@ -129,7 +144,22 @@ export const WorkspaceShellUI = makeAssistantToolUI<WorkspaceShellArgs, unknown>
   ),
 })
 
+// New canonical name (post §7 rename: workspace.shell_bg → workspace_shell_bg)
 export const WorkspaceShellBgUI = makeAssistantToolUI<WorkspaceShellArgs, unknown>({
+  toolName: 'workspace_shell_bg',
+  render: ({ args, result, status }) => (
+    <WorkspaceShellBlock
+      toolName="workspace_shell_bg"
+      args={args ?? {}}
+      result={result}
+      isRunning={status.type === 'running'}
+      isError={status.type === 'incomplete'}
+    />
+  ),
+})
+
+// Legacy alias kept for backward compat with old session transcripts.
+export const WorkspaceShellBgLegacyUI = makeAssistantToolUI<WorkspaceShellArgs, unknown>({
   toolName: 'workspace.shell_bg',
   render: ({ args, result, status }) => (
     <WorkspaceShellBlock

@@ -281,17 +281,17 @@ func TestCoreAgentByIDNotFound(t *testing.T) {
 }
 
 // TestAdminRBACAllowedToCallDelete verifies RBAC permits admin to reach
-// system.agent.delete — the tool itself enforces IsCoreAgent protection.
+// delete_agent — the tool itself enforces IsCoreAgent protection.
 //
 // Traces to: wave5b-system-agent-spec.md — Scenario: Core agent cannot be deleted (US-8 AC4)
-// BDD: "Given admin role, When system.agent.delete RBAC checked,
+// BDD: "Given admin role, When delete_agent RBAC checked,
 //
 //	Then RBAC allows it — core agent protection is enforced at the tool level"
 func TestAdminRBACAllowedToCallDelete(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 679
-	// Admin CAN reach system.agent.delete via RBAC; the tool implementation
+	// Admin CAN reach delete_agent via RBAC; the tool implementation
 	// must then check IsCoreAgent and return PERMISSION_DENIED for core IDs.
-	err := sysagent.CheckRBAC(sysagent.RoleAdmin, "system.agent.delete")
+	err := sysagent.CheckRBAC(sysagent.RoleAdmin, "delete_agent")
 	assert.NoError(t, err,
 		"admin RBAC check for delete must pass — core agent protection is at the tool level, not RBAC")
 }

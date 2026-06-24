@@ -128,14 +128,14 @@ func TestRedteam_PerToolAuditCoverage(t *testing.T) {
 			},
 		},
 		{
-			toolName: "list_dir",
+			toolName: "list_directory",
 			build: func(workspace string) Tool {
 				return NewListDirTool(workspace, true)
 			},
 			args: map[string]any{"path": "."},
 		},
 		{
-			toolName: "message",
+			toolName: "send_message",
 			build: func(_ string) Tool {
 				return NewMessageTool()
 			},

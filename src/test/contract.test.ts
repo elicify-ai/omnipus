@@ -193,14 +193,14 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
 
   it('Tool mock shape satisfies interface', () => {
     const mock = {
-      name: 'system.read_file',
-      scope: 'system' as const,
-      category: 'system',
-      description: 'Read a file',
+      name: 'read_agent_metadata',
+      scope: 'core' as const,
+      category: 'agents',
+      description: 'Read agent metadata',
       source: 'builtin' as const,
     } satisfies Tool
 
-    expect(mock.category).toBe('system')
+    expect(mock.category).toBe('agents')
   })
 
   // ── Channel ───────────────────────────────────────────────────────────────

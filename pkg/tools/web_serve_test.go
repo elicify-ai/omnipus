@@ -198,11 +198,11 @@ func TestWebServeTool_Tier3UnsupportedMessage(t *testing.T) {
 		"message must state the Linux requirement")
 }
 
-// TestWebServeTool_Name verifies the tool name constant is "web_serve".
+// TestWebServeTool_Name verifies the tool name constant is "serve_web".
 func TestWebServeTool_Name(t *testing.T) {
 	tool := newTestWebServeTool(t, "tok")
 	assert.Equal(t, ToolNameWebServe, tool.Name())
-	assert.Equal(t, "web_serve", tool.Name())
+	assert.Equal(t, "serve_web", tool.Name())
 }
 
 // TestValidateTier3Command_AllowList is the primary table-driven test for the

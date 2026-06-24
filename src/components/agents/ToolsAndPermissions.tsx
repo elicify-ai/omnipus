@@ -126,9 +126,9 @@ export function ToolsAndPermissions({
   const policies = (tools.builtin?.policies as Record<string, ToolPolicy>) ?? {}
 
   const shellFsConflict = useMemo(() => {
-    const shellPolicy = resolvePolicy('workspace.shell', policies, defaultPolicy)
+    const shellPolicy = resolvePolicy('workspace_shell', policies, defaultPolicy)
     if (shellPolicy === 'deny') return false
-    const fsTools = ['write_file', 'read_file', 'list_dir'] as const
+    const fsTools = ['write_file', 'read_file', 'list_directory'] as const
     return fsTools.some((t) => resolvePolicy(t, policies, defaultPolicy) === 'deny')
   }, [policies, defaultPolicy])
 
@@ -201,13 +201,13 @@ export function ToolsAndPermissions({
         >
           <Info size={13} className="text-[var(--color-secondary)] shrink-0 mt-0.5" />
           <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
-            <code className="font-mono text-[var(--color-secondary)]">workspace.shell</code>{' '}
+            <code className="font-mono text-[var(--color-secondary)]">workspace_shell</code>{' '}
             can perform filesystem operations directly. Denying{' '}
             <code className="font-mono text-[var(--color-secondary)]">write_file</code>/
             <code className="font-mono text-[var(--color-secondary)]">read_file</code>/
-            <code className="font-mono text-[var(--color-secondary)]">list_dir</code>{' '}
+            <code className="font-mono text-[var(--color-secondary)]">list_directory</code>{' '}
             won&apos;t stop the shell — to block filesystem access, deny{' '}
-            <code className="font-mono text-[var(--color-secondary)]">workspace.shell</code>{' '}
+            <code className="font-mono text-[var(--color-secondary)]">workspace_shell</code>{' '}
             instead.
           </p>
         </div>

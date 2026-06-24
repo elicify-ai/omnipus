@@ -434,9 +434,9 @@ func TestEstimateMessageTokens_ToolCallsContribute(t *testing.T) {
 			{
 				ID:   "call_1",
 				Type: "function",
-				Name: "web_search",
+				Name: "search_web",
 				Function: &providers.FunctionCall{
-					Name:      "web_search",
+					Name:      "search_web",
 					Arguments: `{"query":"omnipus agent framework","max_results":5}`,
 				},
 			},
@@ -548,7 +548,7 @@ func TestEstimateToolDefsTokens(t *testing.T) {
 				{
 					Type: "function",
 					Function: providers.ToolFunctionDefinition{
-						Name:        "web_search",
+						Name:        "search_web",
 						Description: "Search the web for information",
 						Parameters: map[string]any{
 							"type": "object",
@@ -568,7 +568,7 @@ func TestEstimateToolDefsTokens(t *testing.T) {
 				{
 					Type: "function",
 					Function: providers.ToolFunctionDefinition{
-						Name:        "list_dir",
+						Name:        "list_directory",
 						Description: "List directory contents",
 					},
 				},

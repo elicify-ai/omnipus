@@ -1353,8 +1353,8 @@ func TestTaskUpdate_AgentIDReassignment_RoutesThroughDelegationGate(t *testing.T
 		t.Fatalf("expected denied reassignment to return an error, got %+v", res)
 	}
 	failure := decodeDelegationFailure(t, res)
-	if failure.Tool != "task_update" {
-		t.Errorf("expected structured failure tool 'task_update', got %q", failure.Tool)
+	if failure.Tool != "update_task" {
+		t.Errorf("expected structured failure tool 'update_task', got %q", failure.Tool)
 	}
 	if failure.Policy != string(DenyTrustSet) {
 		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)

@@ -69,7 +69,7 @@ function renderScreen() {
 
 beforeEach(() => {
   vi.mocked(fetchTools).mockResolvedValue([
-    { name: 'system.config_get', scope: 'system', category: 'system', description: 'Get config', source: 'builtin' },
+    { name: 'get_config', scope: 'core', category: 'platform', description: 'Get config', source: 'builtin' },
     { name: 'web_search', scope: 'general', category: 'web', description: 'Search the web', source: 'builtin' },
     { name: 'file.read', scope: 'general', category: 'fs', description: 'Read a file', source: 'builtin' },
     { name: 'file.write', scope: 'general', category: 'fs', description: 'Write a file', source: 'builtin' },

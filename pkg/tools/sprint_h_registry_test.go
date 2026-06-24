@@ -2,7 +2,7 @@
 // Traces to: sprint-h-subagent-block-spec.md TDD rows 2 & 3, BDD Scenario 9.
 //
 // FR-H-006 specifies three delegation tools excluded from child sub-turn registries:
-// spawn, subagent, and handoff. The canonical call is:
+// spawn, run_subagent, and hand_off. The canonical call is:
 //   CloneExcept(ExcludedSpawn, ExcludedSubagent, ExcludedHandoff)
 
 package tools
@@ -21,7 +21,7 @@ import (
 func TestToolRegistry_CloneExcept_OmitsNamed(t *testing.T) {
 	r := NewToolRegistry()
 
-	// Register four tools: spawn, subagent, handoff, and a neutral one (read_file).
+	// Register four tools: spawn, run_subagent, hand_off, and a neutral one (read_file).
 	spawnTool := &SpawnTool{}
 	subagentTool := &SubagentTool{}
 	handoffTool := &HandoffTool{}
@@ -34,12 +34,12 @@ func TestToolRegistry_CloneExcept_OmitsNamed(t *testing.T) {
 
 	// Verify all four are in the parent before cloning.
 	_, hasSpawn := r.Get("spawn")
-	_, hasSubagent := r.Get("subagent")
-	_, hasHandoff := r.Get("handoff")
+	_, hasSubagent := r.Get("run_subagent")
+	_, hasHandoff := r.Get("hand_off")
 	_, hasReadFile := r.Get("read_file")
 	require.True(t, hasSpawn, "spawn must be in the parent registry")
-	require.True(t, hasSubagent, "subagent must be in the parent registry")
-	require.True(t, hasHandoff, "handoff must be in the parent registry")
+	require.True(t, hasSubagent, "run_subagent must be in the parent registry")
+	require.True(t, hasHandoff, "hand_off must be in the parent registry")
 	require.True(t, hasReadFile, "read_file must be in the parent registry")
 
 	// Construct the child registry as spawnSubTurn does (3-arg canonical call).
@@ -50,14 +50,14 @@ func TestToolRegistry_CloneExcept_OmitsNamed(t *testing.T) {
 	assert.False(t, childHasSpawn, "spawn must not be in the child registry after CloneExcept")
 	assert.Nil(t, childSpawn)
 
-	// FR-H-006: "subagent" must be absent.
-	childSubagent, childHasSubagent := child.Get("subagent")
-	assert.False(t, childHasSubagent, "subagent must not be in the child registry after CloneExcept")
+	// FR-H-006: "run_subagent" must be absent.
+	childSubagent, childHasSubagent := child.Get("run_subagent")
+	assert.False(t, childHasSubagent, "run_subagent must not be in the child registry after CloneExcept")
 	assert.Nil(t, childSubagent)
 
-	// FR-H-006: "handoff" must be absent.
-	childHandoff, childHasHandoff := child.Get("handoff")
-	assert.False(t, childHasHandoff, "handoff must not be in the child registry after CloneExcept")
+	// FR-H-006: "hand_off" must be absent.
+	childHandoff, childHasHandoff := child.Get("hand_off")
+	assert.False(t, childHasHandoff, "hand_off must not be in the child registry after CloneExcept")
 	assert.Nil(t, childHandoff)
 
 	// Non-excluded tools must be present.
@@ -67,8 +67,8 @@ func TestToolRegistry_CloneExcept_OmitsNamed(t *testing.T) {
 
 	// Verify clone is independent: registering a new tool on child does not affect parent.
 	child.Register(&MessageTool{})
-	_, parentHasMessage := r.Get("message")
-	assert.False(t, parentHasMessage,
+	_, parentHasSendMessage := r.Get("send_message")
+	assert.False(t, parentHasSendMessage,
 		"registering on child must not pollute parent registry (independent copy)")
 }
 
@@ -111,9 +111,9 @@ func TestSubTurn_ChildRegistry_OmitsThreeDelegationTools(t *testing.T) {
 		switch name {
 		case "spawn":
 			hasSpawnInList = true
-		case "subagent":
+		case "run_subagent":
 			hasSubagentInList = true
-		case "handoff":
+		case "hand_off":
 			hasHandoffInList = true
 		case "read_file":
 			hasReadFileInList = true
@@ -123,14 +123,14 @@ func TestSubTurn_ChildRegistry_OmitsThreeDelegationTools(t *testing.T) {
 	assert.False(t, hasSpawnInList,
 		"spawn must not appear in child.List() — grandchildren are forbidden")
 	assert.False(t, hasSubagentInList,
-		"subagent must not appear in child.List() — nested subagent-in-subagent is forbidden")
+		"run_subagent must not appear in child.List() — nested subagent-in-subagent is forbidden")
 	assert.False(t, hasHandoffInList,
-		"handoff must not appear in child.List()")
+		"hand_off must not appear in child.List()")
 	assert.True(t, hasReadFileInList,
 		"read_file must appear in child.List() — non-excluded tools are kept")
 
 	assert.Equal(t, r.Count()-3, child.Count(),
-		"child registry must have exactly 3 fewer tools than parent (spawn, subagent, handoff excluded)")
+		"child registry must have exactly 3 fewer tools than parent (spawn, run_subagent, hand_off excluded)")
 }
 
 // TestToolRegistry_CloneExcept_UnknownToolNameWarns verifies W4-3 behavior:

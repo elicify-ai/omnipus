@@ -38,7 +38,7 @@ import (
 type SkillCreateTool struct{ deps *Deps }
 
 func NewSkillCreateTool(d *Deps) *SkillCreateTool { return &SkillCreateTool{deps: d} }
-func (t *SkillCreateTool) Name() string           { return "system.skill.create" }
+func (t *SkillCreateTool) Name() string           { return "create_skill" }
 func (t *SkillCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillCreateTool) Description() string {
 	return "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills " +
@@ -101,7 +101,7 @@ func (t *SkillCreateTool) Execute(_ context.Context, args map[string]any) *tools
 type SkillEditTool struct{ deps *Deps }
 
 func NewSkillEditTool(d *Deps) *SkillEditTool   { return &SkillEditTool{deps: d} }
-func (t *SkillEditTool) Name() string           { return "system.skill.edit" }
+func (t *SkillEditTool) Name() string           { return "edit_skill" }
 func (t *SkillEditTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillEditTool) Description() string {
 	return "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version " +
@@ -204,10 +204,10 @@ func skillAuthoringError(op, name string, err error) *tools.ToolResult {
 			"trim the skill content"))
 	case errors.Is(err, skills.ErrAlreadyExists):
 		return tools.ErrorResult(errorJSON("ALREADY_EXISTS",
-			fmt.Sprintf("a skill named %q already exists", name), "use system.skill.edit to modify it"))
+			fmt.Sprintf("a skill named %q already exists", name), "use edit_skill to modify it"))
 	case errors.Is(err, skills.ErrNotFound):
 		return tools.ErrorResult(errorJSON("NOT_FOUND",
-			fmt.Sprintf("skill %q not found", name), "use system.skill.create to author a new skill"))
+			fmt.Sprintf("skill %q not found", name), "use create_skill to author a new skill"))
 	default:
 		// Validation failures (invalid frontmatter, missing name/description)
 		// and I/O errors land here. Surface the cause for the agent to correct.

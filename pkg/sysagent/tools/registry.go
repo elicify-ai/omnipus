@@ -15,11 +15,10 @@ import (
 // agent metadata files.
 func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 	return []tools.Tool{
-		// Agent management (8: 6 original + 2 metadata accessors from issue #240)
+		// Agent management (7: 5 original + 2 metadata accessors from issue #240; list retired)
 		NewAgentCreateTool(d),
 		NewAgentUpdateTool(d),
 		NewAgentDeleteTool(d),
-		NewAgentListTool(d),
 		NewAgentActivateTool(d),
 		NewAgentDeactivateTool(d),
 		NewAgentReadMetadataTool(d),
@@ -45,10 +44,8 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 		NewChannelListTool(d),
 		NewChannelTestTool(d),
 
-		// Skill management (6)
-		NewSkillInstallTool(d),
+		// Skill management (4: install and search retired)
 		NewSkillRemoveTool(d),
-		NewSkillSearchTool(d),
 		NewSkillListTool(d),
 		// Skill authoring / self-improvement (Spec-6 U2): consent-gated +
 		// versioned writes. Editing a built-in produces a user override.
@@ -77,7 +74,7 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 42 system tools.
+// BuildRegistry creates a ToolRegistry containing all 37 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps, navCb NavigateCallback) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()

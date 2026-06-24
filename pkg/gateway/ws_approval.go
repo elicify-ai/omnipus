@@ -280,10 +280,10 @@ func resolveEffectivePolicy(global, agent string) string {
 // Only exec (shell commands) requires explicit user approval.
 func autoApproveSafeTool(tool string) bool {
 	switch tool {
-	case "read_file", "list_dir", "write_file", "edit_file", "append_file",
-		"web_search", "web_fetch", "send_file", "message",
-		"find_skills", "spawn", "subagent", "spawn_status", "cron",
-		"task_list", "task_create", "task_update", "task_delete", "agent_list":
+	case "read_file", "list_directory", "write_file", "edit_file", "append_file",
+		"search_web", "fetch_url", "send_file", "send_message",
+		"find_skills", "spawn", "run_subagent", "check_spawn_status", "cron",
+		"list_tasks", "create_task", "update_task", "delete_task", "list_agents":
 		return true
 	default:
 		return false

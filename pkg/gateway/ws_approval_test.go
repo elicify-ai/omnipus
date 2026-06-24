@@ -442,18 +442,18 @@ func TestHandleApprovalResponse_Always(t *testing.T) {
 func TestAutoApproveSafeTool_AllSafeTools(t *testing.T) {
 	safeTools := []string{
 		"read_file",
-		"list_dir",
+		"list_directory",
 		"write_file",
 		"edit_file",
 		"append_file",
-		"web_search",
-		"web_fetch",
+		"search_web",
+		"fetch_url",
 		"send_file",
-		"message",
+		"send_message",
 		"find_skills",
 		"spawn",
-		"subagent",
-		"spawn_status",
+		"run_subagent",
+		"check_spawn_status",
 		"cron",
 	}
 

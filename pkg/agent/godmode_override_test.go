@@ -57,7 +57,7 @@ func TestAgentToolsCfgToPolicy_GodMode_FloorsAndIsNonDestructive(t *testing.T) {
 
 	agentCfg := &config.AgentToolsCfg{}
 	agentCfg.Builtin.DefaultPolicy = "deny"
-	agentCfg.Builtin.Policies = map[string]config.ToolPolicy{"web_fetch": "ask"}
+	agentCfg.Builtin.Policies = map[string]config.ToolPolicy{"fetch_url": "ask"}
 
 	withGodModeAvailable(t, true)
 	got := agentToolsCfgToPolicy(globalCfg, agentCfg)
@@ -75,9 +75,9 @@ func TestAgentToolsCfgToPolicy_GodMode_FloorsAndIsNonDestructive(t *testing.T) {
 	if got.GodMode {
 		t.Fatal("god mode off: ToolPolicyCfg.GodMode must be false")
 	}
-	if got.Policies["web_fetch"] != "ask" {
-		t.Fatalf("god mode off: per-agent web_fetch policy must be restored to ask, got %q",
-			got.Policies["web_fetch"])
+	if got.Policies["fetch_url"] != "ask" {
+		t.Fatalf("god mode off: per-agent fetch_url policy must be restored to ask, got %q",
+			got.Policies["fetch_url"])
 	}
 	if got.GlobalPolicies["system.exec"] != "deny" {
 		t.Fatalf("god mode off: global system.exec policy must be restored to deny, got %q",

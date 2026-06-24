@@ -446,25 +446,35 @@ export function SkillsScreen() {
 
 /**
  * Category display names for the by-category overview.
- * Raw `system.*` scope tools are excluded; the rest are grouped by category.
+ * All builtin tools are shown grouped by domain category.
  * Editing happens in Settings → Security.
  */
 const CATEGORY_DESCRIPTIONS: Record<string, string> = {
-  workspace: 'Read, write, and search files; run commands in agent workspaces',
+  filesystem: 'Read, write, and search files in the workspace',
+  shell: 'Run commands in agent workspaces',
   browser: 'Navigate, click, and screenshot web pages in a headless browser',
   web: 'Search the web and fetch content from URLs',
-  system: 'Access system-level information and gateway management',
+  platform: 'Access system-level information and gateway management',
   tasks: 'Create, update, and list tasks in the task board',
   memory: 'Store and recall information across sessions',
-  message: 'Send messages and notifications to users',
-  session: 'Manage and query agent sessions',
-  skill: 'Install and manage skills',
+  communication: 'Send messages and notifications to users',
+  delegation: 'Spawn subagents and hand off conversations',
+  agents: 'Create and manage agents',
+  workspaces: 'Create and manage workspaces',
+  channels: 'Enable and configure messaging channels',
+  providers: 'Configure AI model providers',
+  skills: 'Install and manage skills',
+  tool_discovery: 'Search and discover available tools',
+  mcp: 'Manage MCP servers',
   general: 'General-purpose tools',
+  // Legacy fallback values
+  workspace: 'Read, write, and search files; run commands in agent workspaces',
+  system: 'System management tools',
 }
 
 function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
-  // Exclude system-scope tools (not shown to end users)
-  const visible = tools.filter((t) => t.scope !== 'system')
+  // Show all tools (scope is now only 'core' or 'general')
+  const visible = tools
 
   // Group by category
   const grouped = visible.reduce<Record<string, ToolRegistryEntry[]>>((acc, tool) => {

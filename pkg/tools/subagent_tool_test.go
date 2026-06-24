@@ -70,8 +70,8 @@ func TestSubagentTool_Name(t *testing.T) {
 	manager := NewSubagentManager(provider, "test-model", "/tmp/test")
 	tool := NewSubagentTool(manager)
 
-	if tool.Name() != "subagent" {
-		t.Errorf("Expected name 'subagent', got '%s'", tool.Name())
+	if tool.Name() != "run_subagent" {
+		t.Errorf("Expected name 'run_subagent', got '%s'", tool.Name())
 	}
 }
 

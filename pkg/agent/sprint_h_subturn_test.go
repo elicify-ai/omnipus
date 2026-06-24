@@ -3,7 +3,7 @@
 // W2-3: TestSpawnSubTurn_ChildRegistry_OmitsThreeDelegationTools
 //
 // Regression test that pins the production wiring in pkg/agent/subturn.go —
-// specifically that spawnSubTurn calls CloneExcept("spawn", "subagent", "handoff")
+// specifically that spawnSubTurn calls CloneExcept("spawn", "run_subagent", "hand_off")
 // and the child receives a registry with none of the three delegation tools.
 //
 // This test is distinct from pkg/tools/spawn_grandchild_test.go which tests the
@@ -29,7 +29,7 @@ import (
 
 // TestSpawnSubTurn_ChildRegistry_OmitsThreeDelegationTools verifies that when
 // spawnSubTurn constructs the child AgentInstance it calls CloneExcept with all
-// three delegation-tool names ("spawn", "subagent", "handoff"), so the child's
+// three delegation-tool names ("spawn", "run_subagent", "hand_off"), so the child's
 // tool registry contains none of them.
 //
 // Strategy: intercept the child registry by subscribing to the SubTurnSpawn event
@@ -48,9 +48,9 @@ import (
 // same way subturn.go does, and assert the three are absent while the neutral
 // tool remains.
 func TestSpawnSubTurn_ChildRegistry_OmitsThreeDelegationTools(t *testing.T) {
-	// BDD: Given a baseAgent with spawn, subagent, and handoff all registered
+	// BDD: Given a baseAgent with spawn, run_subagent, and hand_off all registered
 	// BDD: When spawnSubTurn constructs the child AgentInstance (CloneExcept in subturn.go)
-	// BDD: Then child.Tools.List() contains NONE of: spawn, subagent, handoff
+	// BDD: Then child.Tools.List() contains NONE of: spawn, run_subagent, hand_off
 	// Traces to: temporal-puzzling-melody.md W2-3
 
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
@@ -68,31 +68,31 @@ func TestSpawnSubTurn_ChildRegistry_OmitsThreeDelegationTools(t *testing.T) {
 	// Verify all four tools are in the parent before the test.
 	_, hasSpawnBefore := parentRegistry.Get("spawn")
 	require.True(t, hasSpawnBefore, "spawn must be in parent registry (pre-condition)")
-	_, hasSubagentBefore := parentRegistry.Get("subagent")
-	require.True(t, hasSubagentBefore, "subagent must be in parent registry (pre-condition)")
-	_, hasHandoffBefore := parentRegistry.Get("handoff")
-	require.True(t, hasHandoffBefore, "handoff must be in parent registry (pre-condition)")
+	_, hasSubagentBefore := parentRegistry.Get("run_subagent")
+	require.True(t, hasSubagentBefore, "run_subagent must be in parent registry (pre-condition)")
+	_, hasHandoffBefore := parentRegistry.Get("hand_off")
+	require.True(t, hasHandoffBefore, "hand_off must be in parent registry (pre-condition)")
 	_, hasReadFileBefore := parentRegistry.Get("read_file")
 	require.True(t, hasReadFileBefore, "read_file must be in parent registry (pre-condition)")
 
 	// Apply the same CloneExcept logic that spawnSubTurn uses (FR-H-006, subturn.go:~414).
-	// This directly tests the production wiring strings: "spawn", "subagent", "handoff".
-	childRegistry := parentRegistry.CloneExcept("spawn", "subagent", "handoff")
+	// This directly tests the production wiring strings: "spawn", "run_subagent", "hand_off".
+	childRegistry := parentRegistry.CloneExcept("spawn", "run_subagent", "hand_off")
 
 	// BDD: Then spawn is ABSENT from child registry
 	childSpawn, childHasSpawn := childRegistry.Get("spawn")
 	assert.False(t, childHasSpawn, "spawn must NOT be in child registry (FR-H-006)")
 	assert.Nil(t, childSpawn, "spawn tool entry must be nil in child registry")
 
-	// BDD: And subagent is ABSENT from child registry
-	childSubagent, childHasSubagent := childRegistry.Get("subagent")
-	assert.False(t, childHasSubagent, "subagent must NOT be in child registry (FR-H-006)")
-	assert.Nil(t, childSubagent, "subagent tool entry must be nil in child registry")
+	// BDD: And run_subagent is ABSENT from child registry
+	childSubagent, childHasSubagent := childRegistry.Get("run_subagent")
+	assert.False(t, childHasSubagent, "run_subagent must NOT be in child registry (FR-H-006)")
+	assert.Nil(t, childSubagent, "run_subagent tool entry must be nil in child registry")
 
-	// BDD: And handoff is ABSENT from child registry
-	childHandoff, childHasHandoff := childRegistry.Get("handoff")
-	assert.False(t, childHasHandoff, "handoff must NOT be in child registry (FR-H-006)")
-	assert.Nil(t, childHandoff, "handoff tool entry must be nil in child registry")
+	// BDD: And hand_off is ABSENT from child registry
+	childHandoff, childHasHandoff := childRegistry.Get("hand_off")
+	assert.False(t, childHasHandoff, "hand_off must NOT be in child registry (FR-H-006)")
+	assert.Nil(t, childHandoff, "hand_off tool entry must be nil in child registry")
 
 	// BDD: And neutral tools remain
 	childReadFile, childHasReadFile := childRegistry.Get("read_file")
@@ -108,10 +108,10 @@ func TestSpawnSubTurn_ChildRegistry_OmitsThreeDelegationTools(t *testing.T) {
 	for _, name := range childList {
 		assert.NotEqual(t, "spawn", name,
 			"spawn must not appear in child.List() — production wiring check (FR-H-006)")
-		assert.NotEqual(t, "subagent", name,
-			"subagent must not appear in child.List() — production wiring check (FR-H-006)")
-		assert.NotEqual(t, "handoff", name,
-			"handoff must not appear in child.List() — production wiring check (FR-H-006)")
+		assert.NotEqual(t, "run_subagent", name,
+			"run_subagent must not appear in child.List() — production wiring check (FR-H-006)")
+		assert.NotEqual(t, "hand_off", name,
+			"hand_off must not appear in child.List() — production wiring check (FR-H-006)")
 	}
 
 	// ── Part 2: Event bus check via real spawnSubTurn ────────────────────────────
@@ -136,7 +136,7 @@ func TestSpawnSubTurn_ChildRegistry_OmitsThreeDelegationTools(t *testing.T) {
 	defer collectCleanup()
 
 	// Call spawnSubTurn with the real base agent — the production path calls
-	// CloneExcept("spawn", "subagent", "handoff") on baseAgent.Tools in subturn.go.
+	// CloneExcept("spawn", "run_subagent", "hand_off") on baseAgent.Tools in subturn.go.
 	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}}
 	// W1-12: inject a parentSpawnCallID so the span lifecycle events emit
 	// (mirrors the production path where SpawnTool provides the call ID).

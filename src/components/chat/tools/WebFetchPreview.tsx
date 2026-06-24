@@ -120,7 +120,21 @@ function WebFetchBlock({
   )
 }
 
+// New canonical name (post §7 rename: web_fetch → fetch_url)
 export const WebFetchPreviewUI = makeAssistantToolUI<WebFetchArgs, unknown>({
+  toolName: 'fetch_url',
+  render: ({ args, result, status }) => (
+    <WebFetchBlock
+      args={args ?? {}}
+      result={result}
+      isRunning={status.type === 'running'}
+      isError={status.type === 'incomplete'}
+    />
+  ),
+})
+
+// Legacy alias kept for backward compat with old session transcripts.
+export const WebFetchLegacyUI = makeAssistantToolUI<WebFetchArgs, unknown>({
   toolName: 'web_fetch',
   render: ({ args, result, status }) => (
     <WebFetchBlock

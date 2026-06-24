@@ -30,11 +30,11 @@ func TestResolveEffectivePolicy_GodMode_FloorsAtAllow(t *testing.T) {
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:       "deny",
 		GlobalDefaultPolicy: "deny",
-		Policies:            map[string]string{"system.exec": "deny", "web_fetch": "ask"},
+		Policies:            map[string]string{"system.exec": "deny", "fetch_url": "ask"},
 		GlobalPolicies:      map[string]string{"system.*": "deny"},
 		GodMode:             true,
 	}
-	for _, name := range []string{"system.exec", "web_fetch", "anything.else"} {
+	for _, name := range []string{"system.exec", "fetch_url", "anything.else"} {
 		if got := ResolveEffectivePolicy(cfg, name); got != "allow" {
 			t.Fatalf("god-mode: ResolveEffectivePolicy(%q) = %q, want allow", name, got)
 		}
@@ -46,14 +46,14 @@ func TestResolveEffectivePolicy_GodMode_FloorsAtAllow(t *testing.T) {
 func TestResolveEffectivePolicy_GodModeOff_RestoresDecisions(t *testing.T) {
 	cfg := &ToolPolicyCfg{
 		DefaultPolicy:  "allow",
-		Policies:       map[string]string{"system.exec": "deny", "web_fetch": "ask"},
+		Policies:       map[string]string{"system.exec": "deny", "fetch_url": "ask"},
 		GlobalPolicies: map[string]string{},
 		GodMode:        false,
 	}
 	if got := ResolveEffectivePolicy(cfg, "system.exec"); got != "deny" {
 		t.Fatalf("god-mode off: system.exec = %q, want deny", got)
 	}
-	if got := ResolveEffectivePolicy(cfg, "web_fetch"); got != "ask" {
+	if got := ResolveEffectivePolicy(cfg, "fetch_url"); got != "ask" {
 		t.Fatalf("god-mode off: web_fetch = %q, want ask", got)
 	}
 }

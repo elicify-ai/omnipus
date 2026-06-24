@@ -181,8 +181,8 @@ func TestTaskCreateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 		t.Fatalf("expected denied task_create to return an error, got %+v", result)
 	}
 	failure := decodeDelegationFailure(t, result)
-	if failure.Tool != "task_create" {
-		t.Errorf("expected structured failure tool 'task_create', got %q", failure.Tool)
+	if failure.Tool != "create_task" {
+		t.Errorf("expected structured failure tool 'create_task', got %q", failure.Tool)
 	}
 	if failure.Policy != string(DenyMode) {
 		t.Errorf("expected policy %q, got %q", DenyMode, failure.Policy)
@@ -229,8 +229,8 @@ func TestTaskCreateTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
 		t.Fatalf("expected legacy delegateCheck denial to return an error, got %+v", result)
 	}
 	failure := decodeDelegationFailure(t, result)
-	if failure.Tool != "task_create" || failure.Policy != string(DenyTrustSet) {
-		t.Errorf("expected structured task_create/trust_set failure, got %+v", failure)
+	if failure.Tool != "create_task" || failure.Policy != string(DenyTrustSet) {
+		t.Errorf("expected structured create_task/trust_set failure, got %+v", failure)
 	}
 	if !strings.Contains(failure.Reason, "delegation to blocked-agent not allowed") {
 		t.Errorf("expected legacy delegateCheck denial message, got: %s", failure.Reason)
@@ -250,7 +250,7 @@ func TestTaskCreateTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
 }
 
 // TestSubagentTool_DelegationDenyChecker_Aborts proves the deny-checker aborts a
-// subagent (await-mode) delegation: the structured failure carries Tool=="subagent"
+// subagent (await-mode) delegation: the structured failure carries Tool=="run_subagent"
 // and the spawner never runs (no sub-turn).
 func TestSubagentTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	tool := NewSubagentTool(NewSubagentManager(&MockLLMProvider{}, "test-model", "/tmp/test"))
@@ -278,8 +278,8 @@ func TestSubagentTool_DelegationDenyChecker_Aborts(t *testing.T) {
 		t.Fatalf("expected denied subagent delegation to return an error result, got %+v", result)
 	}
 	failure := decodeDelegationFailure(t, result)
-	if failure.Tool != "subagent" {
-		t.Errorf("expected structured failure tool 'subagent', got %q", failure.Tool)
+	if failure.Tool != "run_subagent" {
+		t.Errorf("expected structured failure tool 'run_subagent', got %q", failure.Tool)
 	}
 	if failure.Policy != string(DenyDepth) {
 		t.Errorf("expected policy %q, got %q", DenyDepth, failure.Policy)

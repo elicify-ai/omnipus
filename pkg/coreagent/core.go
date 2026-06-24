@@ -221,8 +221,8 @@ func GetPrompt(id string) string {
 //
 // All core agents share the rail: default_policy=allow plus system.*→deny.
 // Ava additionally has explicit system.* allows for her 4 agent-CRUD tools.
-// Jim gets sandbox_profile=workspace+net with workspace.shell,
-// workspace.shell_bg, and web_serve explicitly allowed.
+// Jim gets sandbox_profile=workspace+net with workspace_shell,
+// workspace_shell_bg, and serve_web explicitly allowed.
 //
 // The returned maps are independent allocations — callers may mutate them safely.
 func coreAgentSeed(
@@ -231,30 +231,30 @@ func coreAgentSeed(
 	// Every core agent starts with the same rail: allow-by-default + deny system.*.
 	// Memory tools are explicitly seeded as allow (FR-016/FR-017) so they survive
 	// any future default_policy change and appear prominently in the tool picker UI.
-	// web_serve is explicitly allowed for every core agent (MAJOR-4): hoisting it
+	// serve_web is explicitly allowed for every core agent (MAJOR-4): hoisting it
 	// here ensures that all agents have a traceable allow entry, not just Jim.
 	// Default_policy is allow, so this is belt-and-suspenders, but explicit entries
 	// make intent visible in the tool picker UI and survive any future policy change.
 	base := map[string]config.ToolPolicy{
-		"system.*":      config.ToolPolicyDeny,
-		"remember":      config.ToolPolicyAllow,
-		"recall_memory": config.ToolPolicyAllow,
-		"retrospective": config.ToolPolicyAllow,
-		"web_serve":     config.ToolPolicyAllow,
+		"system.*":          config.ToolPolicyDeny,
+		"remember":          config.ToolPolicyAllow,
+		"recall_memory":     config.ToolPolicyAllow,
+		"run_retrospective": config.ToolPolicyAllow,
+		"serve_web":         config.ToolPolicyAllow,
 	}
 	// Browser automation: explicitly allow the navigate/capture tools (NOT
-	// browser.evaluate, which stays denied by the builtin policy) for the agents
+	// browser_evaluate, which stays denied by the builtin policy) for the agents
 	// that actually drive a real browser — Jim, Ray, and the delegation
 	// workers/specialists (Worker, Explorer, Researcher). default_policy is already
-	// "allow", so this is belt-and-suspenders (like web_serve/workspace.shell): it
+	// "allow", so this is belt-and-suspenders (like serve_web/workspace_shell): it
 	// documents intent, surfaces these tools in the per-agent tool picker, and
 	// survives any future default_policy change. Mia (router) and Ava (builder) are
 	// excluded by design — they delegate browser work; Planner only decomposes.
 	switch id {
 	case IDJim, IDRay, IDWorker, IDExplorer, IDResearcher:
 		for _, b := range []string{
-			"browser.navigate", "browser.click", "browser.type",
-			"browser.screenshot", "browser.get_text", "browser.wait",
+			"browser_navigate", "browser_click", "browser_type",
+			"browser_screenshot", "browser_get_text", "browser_wait",
 		} {
 			base[b] = config.ToolPolicyAllow
 		}
@@ -262,43 +262,43 @@ func coreAgentSeed(
 	// Workers get EPHEMERAL/run-log memory only — no persistent agent room. Deny
 	// the persistent-memory tools so a worker never writes to or relies on a
 	// private memory room (scope: "no persistent room seeded/required for
-	// workers"; the shared memory registry is untouched). web_serve is also
+	// workers"; the shared memory registry is untouched). serve_web is also
 	// pointless for a delegation-only leaf, so drop it from the worker rail.
 	if IsWorkerID(id) {
 		base["remember"] = config.ToolPolicyDeny
 		base["recall_memory"] = config.ToolPolicyDeny
-		base["retrospective"] = config.ToolPolicyDeny
-		delete(base, "web_serve")
+		base["run_retrospective"] = config.ToolPolicyDeny
+		delete(base, "serve_web")
 		return config.ToolPolicyAllow, base, ""
 	}
 	// Specialist subagents (Planner/Explorer/Researcher) are delegation-only like
 	// the worker, but they DO get persistent memory (Explorer reads/writes memory;
-	// Planner records decompositions) — so the base memory allows stay. web_serve
+	// Planner records decompositions) — so the base memory allows stay. serve_web
 	// is dropped: a delegation-only specialist never serves an iframe preview.
 	if IsSpecialistID(id) {
-		delete(base, "web_serve")
+		delete(base, "serve_web")
 		return config.ToolPolicyAllow, base, ""
 	}
 	switch id {
 	case IDAva:
 		// Ava is the only core agent with explicit system.* allows (FR-010).
 		// Her four agent-CRUD tools must be allowed through the deny-wildcard rail.
-		base["system.agent.create"] = config.ToolPolicyAllow
-		base["system.agent.update"] = config.ToolPolicyAllow
-		base["system.agent.delete"] = config.ToolPolicyAllow
-		base["system.models.list"] = config.ToolPolicyAllow
+		base["create_agent"] = config.ToolPolicyAllow
+		base["update_agent"] = config.ToolPolicyAllow
+		base["delete_agent"] = config.ToolPolicyAllow
+		base["list_models"] = config.ToolPolicyAllow
 		// Ava is the skill-authoring agent (FR-9.2). Her create/edit skill tools
 		// are seeded as "ask" so every skill write routes through the tool-layer
 		// approval (ws_approval) consent gate before the SKILL.md is written.
-		base["system.skill.create"] = config.ToolPolicyAsk
-		base["system.skill.edit"] = config.ToolPolicyAsk
+		base["create_skill"] = config.ToolPolicyAsk
+		base["edit_skill"] = config.ToolPolicyAsk
 	case IDJim:
-		// Jim additionally uses workspace.shell and workspace.shell_bg (all
+		// Jim additionally uses workspace_shell and workspace_shell_bg (all
 		// explicitly allowed so the policy passes through even when
-		// default_policy is allow — belt-and-suspenders). web_serve is already
+		// default_policy is allow — belt-and-suspenders). serve_web is already
 		// in the base map above so it is not repeated here.
-		base["workspace.shell"] = config.ToolPolicyAllow
-		base["workspace.shell_bg"] = config.ToolPolicyAllow
+		base["workspace_shell"] = config.ToolPolicyAllow
+		base["workspace_shell_bg"] = config.ToolPolicyAllow
 		return config.ToolPolicyAllow, base, config.SandboxProfileWorkspaceNet
 	}
 	return config.ToolPolicyAllow, base, ""
@@ -541,7 +541,7 @@ func SeedConfig(cfg *config.Config) bool {
 			}
 		}
 
-		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
+		// Jim is the operator-blessed agent for workspace_shell / workspace_shell_bg.
 		// Default workspace_shell_enabled=true for Jim ONLY when it is unset (nil),
 		// so he gets the tools on a fresh install. An operator's EXPLICIT false MUST
 		// survive — SeedConfig runs on every boot, so re-enabling an explicit false
@@ -611,7 +611,7 @@ func SeedConfig(cfg *config.Config) bool {
 			}
 		}
 		cfg.Agents.List = append(cfg.Agents.List, newAgent)
-		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
+		// Jim is the operator-blessed agent for workspace_shell / workspace_shell_bg.
 		// Default workspace_shell_enabled=true when seeding Jim for the first time so
 		// he gets the tools out of the box. Fires ONLY when unset (nil): an operator's
 		// explicit false must survive (Hard-Constraint #6 — see the re-enforcement
@@ -633,7 +633,7 @@ func SeedConfig(cfg *config.Config) bool {
 //   - policies: {"system.*": "deny"}  (privilege rail — no system.* by default)
 //
 // Callers should embed this into config.AgentConfig.Tools when constructing a
-// new custom agent via the REST API or system.agent.create tool.
+// new custom agent via the REST API or create_agent tool.
 func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 	return &config.AgentToolsCfg{
 		Builtin: config.AgentBuiltinToolsCfg{
@@ -658,12 +658,12 @@ func Jim() *CoreAgent {
 		Color: "#22C55E",
 		Icon:  "graph",
 		DefaultTools: []string{
-			"read_file", "write_file", "edit_file", "list_dir",
-			"web_search", "web_fetch",
-			"message", "send_file",
-			"task_create", "task_update", "task_list",
-			"cron", "spawn", "subagent",
-			"handoff", "return_to_default",
+			"read_file", "write_file", "edit_file", "list_directory",
+			"search_web", "fetch_url",
+			"send_message", "send_file",
+			"create_task", "update_task", "list_tasks",
+			"cron", "spawn", "run_subagent",
+			"hand_off", "return_to_default",
 		},
 	}
 }
@@ -679,12 +679,12 @@ func Ava() *CoreAgent {
 		Color: "#D4AF37",
 		Icon:  "wrench",
 		DefaultTools: []string{
-			"read_file", "write_file", "edit_file", "list_dir",
-			"web_search", "web_fetch",
-			"message",
-			"system.agent.create", "system.agent.update", "system.agent.delete",
-			"system.models.list",
-			"handoff", "return_to_default",
+			"read_file", "write_file", "edit_file", "list_directory",
+			"search_web", "fetch_url",
+			"send_message",
+			"create_agent", "update_agent", "delete_agent",
+			"list_models",
+			"hand_off", "return_to_default",
 		},
 	}
 }
@@ -700,10 +700,10 @@ func Mia() *CoreAgent {
 		Color: "#3B82F6",
 		Icon:  "lightbulb",
 		DefaultTools: []string{
-			"read_file", "list_dir",
-			"web_search", "web_fetch",
-			"message",
-			"handoff", "return_to_default",
+			"read_file", "list_directory",
+			"search_web", "fetch_url",
+			"send_message",
+			"hand_off", "return_to_default",
 		},
 	}
 }
@@ -719,10 +719,10 @@ func Ray() *CoreAgent {
 		Color: "#A855F7",
 		Icon:  "magnifying-glass",
 		DefaultTools: []string{
-			"read_file", "write_file", "edit_file", "list_dir",
-			"web_search", "web_fetch",
-			"message", "send_file",
-			"handoff", "return_to_default",
+			"read_file", "write_file", "edit_file", "list_directory",
+			"search_web", "fetch_url",
+			"send_message", "send_file",
+			"hand_off", "return_to_default",
 		},
 	}
 }
@@ -743,9 +743,9 @@ func Worker() *CoreAgent {
 		Color: "#6B7280",
 		Icon:  "robot",
 		DefaultTools: []string{
-			"read_file", "write_file", "edit_file", "list_dir",
-			"web_search", "web_fetch",
-			"message",
+			"read_file", "write_file", "edit_file", "list_directory",
+			"search_web", "fetch_url",
+			"send_message",
 		},
 	}
 }
@@ -765,11 +765,11 @@ func Planner() *CoreAgent {
 		Color: "#0EA5E9",
 		Icon:  "tree-structure",
 		DefaultTools: []string{
-			"read_file", "list_dir",
-			"task_create", "task_update", "task_list",
-			"subagent", "spawn",
+			"read_file", "list_directory",
+			"create_task", "update_task", "list_tasks",
+			"run_subagent", "spawn",
 			"remember", "recall_memory",
-			"message",
+			"send_message",
 		},
 	}
 }
@@ -787,9 +787,9 @@ func Explorer() *CoreAgent {
 		Color: "#14B8A6",
 		Icon:  "compass",
 		DefaultTools: []string{
-			"read_file", "list_dir",
+			"read_file", "list_directory",
 			"recall_memory", "remember",
-			"message",
+			"send_message",
 		},
 	}
 }
@@ -806,10 +806,10 @@ func Researcher() *CoreAgent {
 		Color: "#8B5CF6",
 		Icon:  "books",
 		DefaultTools: []string{
-			"web_search", "web_fetch",
+			"search_web", "fetch_url",
 			"read_file",
 			"recall_memory", "remember",
-			"message",
+			"send_message",
 		},
 	}
 }
@@ -850,33 +850,33 @@ You can handle most things yourself. Decompose and delegate when the goal is mul
 - **Ava** — builds custom agents (you cannot create agents yourself).
 - **Ray** — the chat-facing Scout for research the user wants to follow interactively.
 
-Use spawn/subagent/task_create to delegate; monitor blocked_by until the DAG resolves. NEVER deflect a simple request to a specialist — if someone asks "what's the capital of France?" just answer it.
+Use spawn/run_subagent/create_task to delegate; monitor blocked_by until the DAG resolves. NEVER deflect a simple request to a specialist — if someone asks "what's the capital of France?" just answer it.
 
 ## Browser automation
 
 You have built-in browser tools that drive a real headless Chromium. Use THESE tools to browse or capture web pages — they are your sandbox-aware, first-class way to do it:
 
-- browser.navigate { url } — open a page (http/https only; SSRF-checked)
-- browser.screenshot — capture the current page as an image (returns media the user sees inline)
-- browser.click { selector } · browser.type { selector, text } · browser.get_text { selector } — interact and extract
+- browser_navigate { url } — open a page (http/https only; SSRF-checked)
+- browser_screenshot — capture the current page as an image (returns media the user sees inline)
+- browser_click { selector } · browser_type { selector, text } · browser_get_text { selector } — interact and extract
 
-To take a screenshot of a page, call browser.navigate { url } then browser.screenshot — that's it. Chromium installs automatically on first use; if it is genuinely unavailable you'll get a clear error to relay.
+To take a screenshot of a page, call browser_navigate { url } then browser_screenshot — that's it. Chromium installs automatically on first use; if it is genuinely unavailable you'll get a clear error to relay.
 
-**Do this with the browser tools, not the shell.** NEVER use workspace.shell or exec to run chromium / google-chrome / puppeteer / a CLI screenshot utility, and never npm-install a browser package — the browser.* tools above already do this for you, sandboxed. Reaching for the shell to take a screenshot is wrong; call browser.screenshot.
+**Do this with the browser tools, not the shell.** NEVER use workspace_shell or exec to run chromium / google-chrome / puppeteer / a CLI screenshot utility, and never npm-install a browser package — the browser_* tools above already do this for you, sandboxed. Reaching for the shell to take a screenshot is wrong; call browser_screenshot.
 
 ## Serving web apps
 
 You can scaffold and serve web applications inside your sandboxed workspace.
 
-Use workspace.shell to run any command (foreground, captures output):
+Use workspace_shell to run any command (foreground, captures output):
 
-  workspace.shell { command: "npm create next-app@latest hello-world --typescript --app --no-eslint --no-tailwind --no-src-dir", cwd: "" }
-  workspace.shell { command: "npm install", cwd: "hello-world" }
+  workspace_shell { command: "npm create next-app@latest hello-world --typescript --app --no-eslint --no-tailwind --no-src-dir", cwd: "" }
+  workspace_shell { command: "npm install", cwd: "hello-world" }
 
-Use workspace.shell_bg to start long-running processes like dev servers
+Use workspace_shell_bg to start long-running processes like dev servers
 (returns a clickable preview URL):
 
-  workspace.shell_bg { command: "npm run dev", cwd: "hello-world", expose_port: 18000 }
+  workspace_shell_bg { command: "npm run dev", cwd: "hello-world", expose_port: 18000 }
 
 The result includes a "url" field — share that URL with the user as a clickable link.
 The user can click "Open in new tab" in the rendered preview to view the running app.
@@ -885,7 +885,7 @@ Both tools run inside your kernel sandbox: filesystem writes are confined to you
 workspace, network access goes through an audited egress proxy. You can run any
 command — npm, pip, go, cargo — without further restrictions inside that boundary.
 
-Prefer workspace.shell over the generic exec tool — workspace.shell is
+Prefer workspace_shell over the generic exec tool — workspace_shell is
 sandbox-aware end-to-end and gives clearer error messages on policy denial.
 
 ## What you never do
@@ -906,7 +906,7 @@ Run a structured interview — one question at a time:
 1. **Purpose**: "What should this agent help you with?" — Listen for the core use case.
 2. **Name & Identity**: "What should we call this agent?" — Get a name, suggest a color and icon.
 3. **Personality**: "How should it communicate? Formal or casual? Concise or detailed?" — Get the voice right.
-4. **Model**: "Want to use the system default model, or pick a different one?" — Call system.models.list if the user wants to browse options. Default to the system default model.
+4. **Model**: "Want to use the system default model, or pick a different one?" — Call list_models if the user wants to browse options. Default to the system default model.
 5. **Tools**: Reference the "Available Resources" section injected into your context. Suggest tools that match the use case. Ask if they want all tools (inherit) or a specific set (explicit).
 6. **Advanced** (ask only if relevant): delegation targets, heartbeat scheduling, workspace restrictions, timeouts.
 7. **Review**: Present a complete summary card. Ask for confirmation or adjustments.
@@ -926,7 +926,7 @@ Run a structured interview — one question at a time:
 
 ## Creating the agent
 
-Once confirmed, call system.agent.create with ALL mandatory parameters:
+Once confirmed, call create_agent with ALL mandatory parameters:
 - **name**, **description**, **model**, **color**, **icon** — from the card
 - **soul** — the full personality prompt (10-30 lines covering: role, personality traits, how to work, what to avoid). This is the most important parameter.
 - **tools_mode** + **tools_visible** — if the user chose explicit tools
@@ -952,7 +952,7 @@ When a conversation is handed to you, your FIRST message greets the user in the 
 
 - NEVER handle tasks, research, or automation — suggest Jim or Ray for those
 - NEVER skip the interview — understand what the user wants first
-- NEVER call system.agent.create without a detailed soul prompt
+- NEVER call create_agent without a detailed soul prompt
 - NEVER write a one-line soul — craft 10-30 lines of behavioral instructions
 `,
 
@@ -1039,13 +1039,13 @@ You don't just search — you investigate. You dig through multiple sources, cro
 
 ## Browser automation
 
-Beyond web_search/web_fetch you have built-in browser tools driving a real headless Chromium — use THESE when a source needs rendering or visual capture:
+Beyond search_web/fetch_url you have built-in browser tools driving a real headless Chromium — use THESE when a source needs rendering or visual capture:
 
-- browser.navigate { url } — open a page (http/https only; SSRF-checked)
-- browser.screenshot — capture the current page as an image (returned inline to the user)
-- browser.get_text { selector } · browser.click { selector } · browser.type { selector, text } — extract and interact
+- browser_navigate { url } — open a page (http/https only; SSRF-checked)
+- browser_screenshot — capture the current page as an image (returned inline to the user)
+- browser_get_text { selector } · browser_click { selector } · browser_type { selector, text } — extract and interact
 
-To screenshot a page: browser.navigate { url } then browser.screenshot. Chromium installs on first use. NEVER shell out (workspace.shell/exec, chromium/puppeteer CLI) to capture a page — the browser.* tools are your built-in, sandboxed way to do it.
+To screenshot a page: browser_navigate { url } then browser_screenshot. Chromium installs on first use. NEVER shell out (workspace_shell/exec, chromium/puppeteer CLI) to capture a page — the browser_* tools are your built-in, sandboxed way to do it.
 
 ## On handoff
 
@@ -1075,7 +1075,7 @@ You are invoked via delegation, never via chat. Your job: take a goal and produc
 
 - **Decompose, don't do.** Break the goal into concrete, independently-checkable tasks. Capture dependencies between them (what blocks what).
 - **Gather context first.** Before planning, delegate to Explorer for internal context (files + memory) and to Researcher for external sources when the goal needs facts you don't have. Keep delegation shallow and purposeful — one hop, only when it changes the plan.
-- **Produce a DAG.** Emit tasks with explicit ordering and blocked_by dependencies via task_create/task_update. A good plan is legible: each task has a title, an owner-appropriate scope, and clear done criteria.
+- **Produce a DAG.** Emit tasks with explicit ordering and blocked_by dependencies via create_task/update_task. A good plan is legible: each task has a title, an owner-appropriate scope, and clear done criteria.
 - **Return a concise plan.** When done, summarize the plan (the tasks and their order) for the caller. Do not execute the tasks yourself.
 
 ## What you never do
@@ -1091,8 +1091,8 @@ You are invoked via delegation, never via chat. Your job: explore internal conte
 
 ## How you work
 
-- **Read and search.** Use read_file and list_dir to navigate the workspace; use recall_memory to surface prior learnings. Find what already exists before anyone builds something new.
-- **Browse when a task needs it.** Your focus is internal context, but you may use browser.navigate / browser.screenshot / browser.get_text when a delegated task explicitly requires inspecting or capturing a rendered page. Chromium installs on first use.
+- **Read and search.** Use read_file and list_directory to navigate the workspace; use recall_memory to surface prior learnings. Find what already exists before anyone builds something new.
+- **Browse when a task needs it.** Your focus is internal context, but you may use browser_navigate / browser_screenshot / browser_get_text when a delegated task explicitly requires inspecting or capturing a rendered page. Chromium installs on first use.
 - **Synthesize, don't dump.** Return a tight summary of the relevant findings — file paths, key facts, prior decisions — not raw file contents.
 - **Record durable findings.** When you discover something worth keeping, use remember so future runs benefit.
 
@@ -1108,8 +1108,8 @@ You are invoked via delegation, never via chat. Your job: research external sour
 
 ## How you work
 
-- **Search and fetch.** Use web_search to find sources and web_fetch to read them. Prefer primary sources; corroborate across more than one when a claim matters.
-- **Browse when needed.** When a source only renders in a browser or the task asks for a visual capture, use browser.navigate { url } and browser.screenshot (plus browser.get_text). Chromium installs on first use.
+- **Search and fetch.** Use search_web to find sources and fetch_url to read them. Prefer primary sources; corroborate across more than one when a claim matters.
+- **Browse when needed.** When a source only renders in a browser or the task asks for a visual capture, use browser_navigate { url } and browser_screenshot (plus browser_get_text). Chromium installs on first use.
 - **Cite everything.** Every factual claim in your result carries its source. Distinguish what you verified from what you inferred.
 - **Synthesize for the caller.** Return a concise, well-organized brief — not a wall of links. Record durable findings with remember when they have lasting value.
 

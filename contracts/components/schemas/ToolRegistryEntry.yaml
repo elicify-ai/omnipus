@@ -12,8 +12,8 @@ required:
 properties:
   name:
     type: string
-    description: Canonical tool name (e.g. "workspace.shell", "browser.navigate").
-    example: workspace.shell
+    description: Canonical tool name (e.g. "workspace_shell", "browser_navigate").
+    example: workspace_shell
   description:
     type: string
     description: Human-readable description of what the tool does.
@@ -22,16 +22,18 @@ properties:
     type: string
     description: Tool visibility scope.
     enum:
-      - system
       - core
       - general
     example: general
   category:
     type: string
     description: >
-      Tool category prefix derived from the tool name
-      (e.g. "workspace", "browser", "system") or "general".
-    example: workspace
+      Tool domain category (e.g. "filesystem", "shell", "web", "browser",
+      "communication", "delegation", "memory", "tasks", "skills",
+      "tool_discovery", "agents", "workspaces", "channels", "providers",
+      "platform", "mcp"). Legacy values "core" and "system" may appear
+      for un-recategorized tools.
+    example: filesystem
   source:
     type: string
     description: >

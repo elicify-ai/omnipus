@@ -109,16 +109,18 @@ describe('FR-076 canonical tool names', () => {
     expect(violations, `Legacy name "regex_search" found in: ${violations.join(', ')}`).toHaveLength(0)
   })
 
-  it('canonical name tool_search_tool_bm25 is declared in this regression test', () => {
+  it('canonical name search_tools_bm25 is declared in this regression test', () => {
     // The presence of this string in this file demonstrates that the canonical
-    // name is known and tracked. Backend tests (TestREST_GetTools_SearchToolNamesCanonical)
-    // assert the registry emits this name; this test guards the frontend boundary.
-    const canonical = 'tool_search_tool_bm25'
-    expect(canonical).toBe('tool_search_tool_bm25')
+    // name is known and tracked. Backend tests assert the registry emits this name;
+    // this test guards the frontend boundary.
+    // Note: renamed from tool_search_tool_bm25 → search_tools_bm25 (§7 rename).
+    const canonical = 'search_tools_bm25'
+    expect(canonical).toBe('search_tools_bm25')
   })
 
-  it('canonical name tool_search_tool_regex is declared in this regression test', () => {
-    const canonical = 'tool_search_tool_regex'
-    expect(canonical).toBe('tool_search_tool_regex')
+  it('canonical name search_tools_regex is declared in this regression test', () => {
+    // Note: renamed from tool_search_tool_regex → search_tools_regex (§7 rename).
+    const canonical = 'search_tools_regex'
+    expect(canonical).toBe('search_tools_regex')
   })
 })

@@ -1317,7 +1317,7 @@ export const ToolRegistryEntry = z
   .object({
     name: z.string(),
     description: z.string(),
-    scope: z.enum(["system", "core", "general"]),
+    scope: z.enum(["core", "general"]),
     category: z.string(),
     source: z.enum(["builtin", "mcp"]),
     server_id: z.string().optional(),

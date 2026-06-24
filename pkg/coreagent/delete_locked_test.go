@@ -1,6 +1,6 @@
 // Contract test: Plan 3 §1 acceptance decision — core agent deletion must be refused.
 //
-// BDD: Given a core agent (Mia, Jim, Ava, Ray, Max), When system.agent.delete is called,
+// BDD: Given a core agent (Mia, Jim, Ava, Ray, Max), When delete_agent is called,
 //
 //	Then the request is rejected with a locked-field error and the agent remains in config.
 //
@@ -33,7 +33,7 @@ func findAgent(cfg *config.Config, id string) *config.AgentConfig {
 // after SeedConfig, meaning any handler that checks Locked before deletion will block
 // the request.
 //
-// The system.agent.delete handler itself lives in the gateway (rest.go), but the
+// The delete_agent handler itself lives in the gateway (rest.go), but the
 // locked-identity contract is established here at the data layer. This test ensures
 // that the invariant SeedConfig guarantees — and that a re-seed after tampering
 // restores it — holds for every base core agent.
@@ -52,7 +52,7 @@ func TestDeleteLockedCoreAgentRejected(t *testing.T) {
 			found := findAgent(cfg, id)
 			require.NotNilf(t, found, "core agent %q must be in cfg.Agents.List after SeedConfig", id)
 
-			// BDD: When system.agent.delete reads the Locked field to decide whether to proceed.
+			// BDD: When delete_agent reads the Locked field to decide whether to proceed.
 			// BDD: Then it must find Locked=true and refuse.
 			assert.Truef(t, found.Locked,
 				"core agent %q must have Locked=true — delete handler checks this field before proceeding",
@@ -67,7 +67,7 @@ func TestDeleteLockedCoreAgentRejected(t *testing.T) {
 			refound := findAgent(cfg, id)
 			require.NotNilf(t, refound, "core agent %q must remain in list after re-seed", id)
 			assert.Truef(t, refound.Locked,
-				"SeedConfig must restore Locked=true on %q after tamper — delete will be refused", id)
+				"SeedConfig must restore Locked=true on %q after tamper — delete_agent will be refused", id)
 		})
 	}
 

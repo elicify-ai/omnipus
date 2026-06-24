@@ -79,7 +79,7 @@ func NewAgentReadMetadataTool(d *Deps) *AgentReadMetadataTool {
 	return &AgentReadMetadataTool{deps: d}
 }
 
-func (t *AgentReadMetadataTool) Name() string           { return "system.agent.read_metadata" }
+func (t *AgentReadMetadataTool) Name() string           { return "read_agent_metadata" }
 func (t *AgentReadMetadataTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentReadMetadataTool) Description() string {
 	return "Read one of the calling agent's metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, or AGENT.md). Pass agent_id to read another agent's metadata (subject to per-agent policy)."
@@ -159,7 +159,7 @@ func NewAgentWriteMetadataTool(d *Deps) *AgentWriteMetadataTool {
 	return &AgentWriteMetadataTool{deps: d}
 }
 
-func (t *AgentWriteMetadataTool) Name() string           { return "system.agent.write_metadata" }
+func (t *AgentWriteMetadataTool) Name() string           { return "write_agent_metadata" }
 func (t *AgentWriteMetadataTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentWriteMetadataTool) Description() string {
 	return "Write one of the calling agent's metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, or AGENT.md) atomically. AGENT.md content is validated for well-formed frontmatter before writing. Pass agent_id to write another agent's metadata (subject to per-agent policy)."

@@ -24,7 +24,7 @@ func (t *mcpTestTool) Description() string        { return "mcp test tool: " + t
 func (t *mcpTestTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (t *mcpTestTool) Scope() ToolScope           { return ScopeGeneral }
 func (t *mcpTestTool) RequiresAdminAsk() bool     { return false }
-func (t *mcpTestTool) Category() ToolCategory     { return CategoryCode }
+func (t *mcpTestTool) Category() ToolCategory     { return CategoryShell }
 func (t *mcpTestTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	return SilentResult("ok")
 }

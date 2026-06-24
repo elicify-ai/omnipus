@@ -103,8 +103,9 @@ func NewHandoffTool(
 	}
 }
 
-func (t *HandoffTool) Name() string     { return "handoff" }
-func (t *HandoffTool) Scope() ToolScope { return ScopeCore }
+func (t *HandoffTool) Name() string           { return "hand_off" }
+func (t *HandoffTool) Scope() ToolScope       { return ScopeCore }
+func (t *HandoffTool) Category() ToolCategory { return CategoryDelegation }
 
 func (t *HandoffTool) Description() string {
 	return "Hand off the conversation to a specialist agent. The user's subsequent messages will go to the target agent."
@@ -330,8 +331,9 @@ func NewReturnToDefaultTool(
 	}
 }
 
-func (t *ReturnToDefaultTool) Name() string     { return "return_to_default" }
-func (t *ReturnToDefaultTool) Scope() ToolScope { return ScopeCore }
+func (t *ReturnToDefaultTool) Name() string           { return "return_to_default" }
+func (t *ReturnToDefaultTool) Scope() ToolScope       { return ScopeCore }
+func (t *ReturnToDefaultTool) Category() ToolCategory { return CategoryDelegation }
 
 func (t *ReturnToDefaultTool) Description() string {
 	return "Return the conversation to the default agent. Clears any active handoff override for this session."

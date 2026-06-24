@@ -3267,19 +3267,16 @@ func (e ToolPolicy) Valid() bool {
 
 // Defines values for ToolRegistryEntryScope.
 const (
-	ToolRegistryEntryScopeCore    ToolRegistryEntryScope = "core"
-	ToolRegistryEntryScopeGeneral ToolRegistryEntryScope = "general"
-	ToolRegistryEntryScopeSystem  ToolRegistryEntryScope = "system"
+	Core    ToolRegistryEntryScope = "core"
+	General ToolRegistryEntryScope = "general"
 )
 
 // Valid indicates whether the value is a known member of the ToolRegistryEntryScope enum.
 func (e ToolRegistryEntryScope) Valid() bool {
 	switch e {
-	case ToolRegistryEntryScopeCore:
+	case Core:
 		return true
-	case ToolRegistryEntryScopeGeneral:
-		return true
-	case ToolRegistryEntryScopeSystem:
+	case General:
 		return true
 	default:
 		return false
@@ -7770,13 +7767,13 @@ type ToolPolicy string
 
 // ToolRegistryEntry A single entry in the central tool registry snapshot returned by GET /api/v1/tools (FR-027).
 type ToolRegistryEntry struct {
-	// Category Tool category prefix derived from the tool name (e.g. "workspace", "browser", "system") or "general".
+	// Category Tool domain category (e.g. "filesystem", "shell", "web", "browser", "communication", "delegation", "memory", "tasks", "skills", "tool_discovery", "agents", "workspaces", "channels", "providers", "platform", "mcp"). Legacy values "core" and "system" may appear for un-recategorized tools.
 	Category string `json:"category"`
 
 	// Description Human-readable description of what the tool does.
 	Description string `json:"description"`
 
-	// Name Canonical tool name (e.g. "workspace.shell", "browser.navigate").
+	// Name Canonical tool name (e.g. "workspace_shell", "browser_navigate").
 	Name string `json:"name"`
 
 	// Scope Tool visibility scope.

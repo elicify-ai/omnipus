@@ -118,17 +118,17 @@ func TestPromptGuard_DoesNotTouchTrustedOutput(t *testing.T) {
 // external-world tool addition MUST update.
 func TestIsUntrustedToolResult(t *testing.T) {
 	untrusted := []string{
-		"web_search",
-		"web_fetch",
-		"browser.navigate",
-		"browser.click",
-		"browser.type",
-		// browser.screenshot is trusted — its output is base64 PNG image data,
+		"search_web",
+		"fetch_url",
+		"browser_navigate",
+		"browser_click",
+		"browser_type",
+		// browser_screenshot is trusted — its output is base64 PNG image data,
 		// not attacker-controlled text. Sanitizing corrupts the data URL format
 		// needed for the media pipeline to extract and register it.
-		"browser.get_text",
-		"browser.wait",
-		"browser.evaluate",
+		"browser_get_text",
+		"browser_wait",
+		"browser_evaluate",
 		"read_file",
 	}
 	for _, name := range untrusted {
@@ -142,18 +142,18 @@ func TestIsUntrustedToolResult(t *testing.T) {
 	trusted := []string{
 		"exec",
 		"write_file",
-		"list_dir",
+		"list_directory",
 		"send_file",
 		"message",
 		"spawn",
 		"task_add",
-		"task_update",
-		"task_list",
+		"update_task",
+		"list_tasks",
 		"find_skills",
-		"browser.screenshot", // base64 PNG — not attacker text
+		"browser_screenshot", // base64 PNG — not attacker text
 		"",                   // empty string must not match
-		"web_search2",        // typo-squatting must not match
-		"WEB_SEARCH",         // case-sensitive
+		"search_web2",        // typo-squatting must not match
+		"SEARCH_WEB",         // case-sensitive
 	}
 	for _, name := range trusted {
 		t.Run("trusted/"+name, func(t *testing.T) {

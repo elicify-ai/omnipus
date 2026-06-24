@@ -76,7 +76,7 @@ func TestApprovalRegistry_BatchShortCircuitDeletesEntry(t *testing.T) {
 	reg.terminalRetention = 0
 
 	e, accepted := reg.requestApproval(
-		"tc-bsc-cleanup", "web_search",
+		"tc-bsc-cleanup", "search_web",
 		map[string]any{"q": "x"},
 		"agent-C", "sess-C", "turn-C",
 		false,
@@ -160,7 +160,7 @@ func TestApprovalRegistry_TimeoutDeletesEntry(t *testing.T) {
 	reg.terminalRetention = 0
 
 	e, accepted := reg.requestApproval(
-		"tc-timeout-cleanup", "web_search",
+		"tc-timeout-cleanup", "search_web",
 		map[string]any{"q": "x"},
 		"agent-B", "sess-B", "turn-B",
 		false,
@@ -215,7 +215,7 @@ func TestPendingApproval_AutoDeniedOnCancel(t *testing.T) {
 	require.True(t, accepted, "target approval must be accepted")
 
 	otherEntry, accepted := reg.requestApproval(
-		"tc-other-T19", "web_search",
+		"tc-other-T19", "search_web",
 		map[string]any{"q": "hello"},
 		"agent-T19", otherSession, "turn-other-T19",
 		false,

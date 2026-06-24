@@ -137,11 +137,11 @@ func (t *WorkspaceShellTool) SetAuditLogger(l *audit.Logger) {
 	t.auditLogger = l
 }
 
-func (t *WorkspaceShellTool) Name() string { return "workspace.shell" }
+func (t *WorkspaceShellTool) Name() string { return "workspace_shell" }
 
 func (t *WorkspaceShellTool) Scope() ToolScope { return ScopeCore }
 
-func (t *WorkspaceShellTool) Category() ToolCategory { return CategoryWorkspace }
+func (t *WorkspaceShellTool) Category() ToolCategory { return CategoryShell }
 
 func (t *WorkspaceShellTool) Description() string {
 	return `Run a shell command inside the agent's workspace directory under the configured sandbox profile. Unlike 'exec', this tool is not restricted to internal channels — the sandbox profile enforces the security boundary at the kernel level. Returns exit_code, stdout, stderr, and duration_ms.`

@@ -25,10 +25,10 @@ vi.mock('@assistant-ui/react', async (importOriginal) => {
   return {
     ...original,
     makeAssistantToolUI: (config: Record<string, unknown>) => {
-      if (config.toolName === 'workspace.shell') {
+      if (config.toolName === 'workspace_shell') {
         captured.shellRender = config.render as RenderFn
       }
-      if (config.toolName === 'workspace.shell_bg') {
+      if (config.toolName === 'workspace_shell_bg') {
         captured.shellBgRender = config.render as RenderFn
       }
       return config
@@ -139,7 +139,7 @@ describe.each([
     {
       type: 'tool_call_start' as const,
       session_id: 'sess-1',
-      tool: 'workspace.shell',
+      tool: 'workspace_shell',
       call_id: 'call-1',
       params: { command: 'ls /workspace', cwd: '/workspace' },
     } satisfies ToolCallStartFrame,
@@ -152,7 +152,7 @@ describe.each([
     {
       type: 'tool_call_start' as const,
       session_id: 'sess-1',
-      tool: 'workspace.shell_bg',
+      tool: 'workspace_shell_bg',
       call_id: 'call-2',
       params: { command: 'npm run dev', description: 'dev server' },
     } satisfies ToolCallStartFrame,
@@ -165,7 +165,7 @@ describe.each([
     {
       type: 'tool_call_start' as const,
       session_id: 'sess-1',
-      tool: 'workspace.shell',
+      tool: 'workspace_shell',
       call_id: 'call-3',
       params: {},
     } satisfies ToolCallStartFrame,
@@ -197,7 +197,7 @@ describe.each([
     {
       type: 'tool_call_result' as const,
       session_id: 'sess-1',
-      tool: 'workspace.shell',
+      tool: 'workspace_shell',
       call_id: 'call-1',
       result: 'file1.txt\nfile2.txt\n',
       status: 'success' as const,
@@ -209,7 +209,7 @@ describe.each([
     {
       type: 'tool_call_result' as const,
       session_id: 'sess-1',
-      tool: 'workspace.shell',
+      tool: 'workspace_shell',
       call_id: 'call-2',
       result: null,
       status: 'error' as const,

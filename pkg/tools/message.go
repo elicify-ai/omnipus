@@ -19,14 +19,15 @@ func NewMessageTool() *MessageTool {
 }
 
 func (t *MessageTool) Name() string {
-	return "message"
+	return "send_message"
 }
 
 func (t *MessageTool) Description() string {
 	return "Send a message to user on a chat channel. Use this when you want to communicate something."
 }
 
-func (t *MessageTool) Scope() ToolScope { return ScopeGeneral }
+func (t *MessageTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *MessageTool) Category() ToolCategory { return CategoryCommunication }
 
 func (t *MessageTool) Parameters() map[string]any {
 	return map[string]any{

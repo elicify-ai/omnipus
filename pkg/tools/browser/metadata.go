@@ -15,7 +15,7 @@
 //   - Instances are constructed with a nil *BrowserManager. This is safe because
 //     every browser tool's Name()/Description()/Category() is a static string
 //     (no mgr dereference). Execute() is never called on these instances.
-//   - browser.evaluate is constructed with executeEnabled=false (the metadata
+//   - browser_evaluate is constructed with executeEnabled=false (the metadata
 //     instance reports existence only, never runs; the live gate is the
 //     per-agent instance's executeEnabled flag, see #438).
 //

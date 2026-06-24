@@ -156,12 +156,12 @@ type SecurityConfig struct {
 // security config. Operators override by adding an entry under
 // security.tool_policies in config.json.
 //
-// browser.evaluate executes arbitrary JavaScript in a real browser context —
+// browser_evaluate executes arbitrary JavaScript in a real browser context —
 // a capability too dangerous to default to "allow" (SEC-04/SEC-06). An
-// operator who needs it can explicitly set security.tool_policies["browser.evaluate"]
+// operator who needs it can explicitly set security.tool_policies["browser_evaluate"]
 // to "ask" or "allow".
 var builtinToolPolicies = map[string]ToolPolicy{
-	"browser.evaluate": ToolPolicyDeny,
+	"browser_evaluate": ToolPolicyDeny,
 }
 
 // ResolveToolPolicy returns the effective global policy for a tool name.

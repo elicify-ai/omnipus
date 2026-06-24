@@ -462,16 +462,16 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 		t.Fatalf("read_file output missing media content: %s", readResult.ForLLM)
 	}
 
-	listTool, ok := agent.Tools.Get("list_dir")
+	listTool, ok := agent.Tools.Get("list_directory")
 	if !ok {
-		t.Fatal("list_dir tool not registered")
+		t.Fatal("list_directory tool not registered")
 	}
 	listResult := listTool.Execute(context.Background(), map[string]any{"path": mediaDir})
 	if listResult.IsError {
-		t.Fatalf("list_dir should allow media temp dir, got: %s", listResult.ForLLM)
+		t.Fatalf("list_directory should allow media temp dir, got: %s", listResult.ForLLM)
 	}
 	if !strings.Contains(listResult.ForLLM, filepath.Base(mediaPath)) {
-		t.Fatalf("list_dir output missing media file: %s", listResult.ForLLM)
+		t.Fatalf("list_directory output missing media file: %s", listResult.ForLLM)
 	}
 
 	execTool, ok := agent.Tools.Get("exec")

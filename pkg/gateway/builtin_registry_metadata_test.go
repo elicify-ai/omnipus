@@ -56,8 +56,8 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 			"system tool %q must register without error in metadata mode", tool.Name())
 	}
 	systemCount := reg.Count()
-	assert.Equal(t, 40, systemCount,
-		"systools.AllTools must produce exactly 40 system tools (see sysagent/tools/registry.go)")
+	assert.Equal(t, 37, systemCount,
+		"systools.AllTools must produce exactly 37 system tools (see sysagent/tools/registry.go)")
 
 	// Register general-builtin metadata (deps-free instances, never Execute()d).
 	generalToolList := tools.GeneralBuiltinMetadata()
@@ -80,7 +80,7 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 		"Count must equal systemCount + generalRegistered (no silent duplicates)")
 
 	// Assert the five mandatory general builtin names are present.
-	for _, name := range []string{"exec", "read_file", "write_file", "web_search", "web_fetch"} {
+	for _, name := range []string{"exec", "read_file", "write_file", "search_web", "fetch_url"} {
 		_, ok := reg.Get(name)
 		assert.True(t, ok,
 			"central registry must contain general builtin %q after population (SC-101)", name)
@@ -117,8 +117,8 @@ func TestCentralBuiltinRegistry_NoDoubleCountSystemTools(t *testing.T) {
 			t.Logf("skipping system tool %q (err: %v)", tool.Name(), err)
 		}
 	}
-	assert.Equal(t, 40, reg.Count(),
-		"system tools registered once must produce exactly 40 entries — no double-count (Issue #350)")
+	assert.Equal(t, 37, reg.Count(),
+		"system tools registered once must produce exactly 37 entries — no double-count (Issue #350)")
 }
 
 // TestHandleToolsRegistry_WithCombinedRegistry verifies that HandleToolsRegistry
@@ -172,7 +172,7 @@ func TestHandleToolsRegistry_WithCombinedRegistry(t *testing.T) {
 			nameSet[name] = struct{}{}
 		}
 	}
-	for _, expected := range []string{"exec", "read_file", "web_search", "system.agent.list"} {
+	for _, expected := range []string{"exec", "read_file", "search_web", "list_agents"} {
 		assert.Contains(t, nameSet, expected,
 			"response must include tool %q (system + general combined registry check)", expected)
 	}

@@ -20,7 +20,7 @@ import (
 type DoctorRunTool struct{ deps *Deps }
 
 func NewDoctorRunTool(d *Deps) *DoctorRunTool   { return &DoctorRunTool{deps: d} }
-func (t *DoctorRunTool) Name() string           { return "system.doctor.run" }
+func (t *DoctorRunTool) Name() string           { return "run_doctor" }
 func (t *DoctorRunTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *DoctorRunTool) Description() string {
 	return "Run security diagnostics and return a risk score (0-100) with actionable recommendations. No parameters required."
@@ -149,7 +149,7 @@ func (t *BackupCreateTool) Execute(_ context.Context, _ map[string]any) *tools.T
 type CostQueryTool struct{ deps *Deps }
 
 func NewCostQueryTool(d *Deps) *CostQueryTool   { return &CostQueryTool{deps: d} }
-func (t *CostQueryTool) Name() string           { return "system.cost.query" }
+func (t *CostQueryTool) Name() string           { return "query_cost" }
 func (t *CostQueryTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *CostQueryTool) Description() string {
 	return "[NOT IMPLEMENTED] Querying LLM cost data by period/agent is not yet built. " +
@@ -172,7 +172,7 @@ func (t *CostQueryTool) Parameters() map[string]any {
 
 func (t *CostQueryTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
-		"system.cost.query is not implemented: no per-period cost store exists. "+
+		"query_cost is not implemented: no per-period cost store exists. "+
 			"Omnipus persists only a single running total for the current UTC day.",
 		"View today's spend in the UI; a queryable cost-history store is not yet built."))
 }
