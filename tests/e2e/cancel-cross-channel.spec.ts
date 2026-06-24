@@ -377,7 +377,7 @@ test(
  */
 async function assertCancelCascadesToSubagent(
   page: Page,
-  mode: { tool: 'spawn' | 'subagent'; closer: string },
+  mode: { tool: 'spawn' | 'run_subagent'; closer: string },
 ) {
   await page.goto('/')
 
@@ -535,8 +535,8 @@ test(
     // glm-5.2's slower streaming this needs more headroom than the spawn variant.
     test.setTimeout(420_000)
     await assertCancelCascadesToSubagent(page, {
-      tool: 'subagent',
-      closer: 'Do not reply in prose. Do not call any other tool. Call subagent now.',
+      tool: 'run_subagent',
+      closer: 'Do not reply in prose. Do not call any other tool. Call run_subagent now.',
     })
   },
 )
