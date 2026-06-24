@@ -1,14 +1,20 @@
 # Comprehensive Tool-System UAT Plan (Edge-Case Driven) — v0.1.0
 
 **Date:** 2026-06-24 · Supersedes the smoke-test plan `uat-plan-tools-2026-06.md`.
-**Scope:** all 86 live builtin tools. **Principle:** every scenario is **outcome-verified**
-(assert the real side-effect, not "tool fired") and the suite **stress-tests** each tool —
-boundaries, every error/deny guard, malformed input — not just the happy path.
+**Scope:** ~78 live builtin tools across 16 domain categories (filesystem, shell, web,
+browser, communication, delegation, memory, tasks, skills, tool_discovery, agents,
+workspaces, channels, providers, platform, mcp — no `system` category). **Principle:**
+every scenario is **outcome-verified** (assert the real side-effect, not "tool fired")
+and the suite **stress-tests** each tool — boundaries, every error/deny guard, malformed
+input — not just the happy path.
 
 Grounded in the actual code (file:line cited). Model: `z-ai/glm-5.2`. Gateway config:
 `sandbox.mode=enforce`, `browser_evaluate_enabled=false` (default — to test the deny gate;
 a 2nd gateway with `=true` tests the allow path), DuckDuckGo search, cron enabled,
 `workspace_shell_enabled=true`, `dev_mode_bypass=true`.
+
+**Tool name authority:** `docs/internal/design/tool-rename-map-2026-06.md` (§7 rename).
+All names below are the post-rename verb-first snake_case names.
 
 ## Coverage rule (per tool)
 
@@ -20,7 +26,7 @@ cycle, cross-workspace) are MANDATORY — a tool with an untested guard is NOT d
 
 ---
 
-## FAMILY A — Filesystem (read_file, write_file, list_dir, edit_file, append_file)
+## FAMILY A — Filesystem (read_file, write_file, list_directory, edit_file, append_file)
 
 ### write_file (`pkg/tools/filesystem.go`; guard: overwrite flag, workspace confinement)
 - **H** — "Write 'OUTCOME-42' to uat.txt" → verify file CONTENTS == "OUTCOME-42" (read the workspace file).
@@ -37,7 +43,7 @@ cycle, cross-workspace) are MANDATORY — a tool with an untested guard is NOT d
 - **G-confinement** — "Read /etc/passwd" → REJECT (outside workspace) OR agent falls back to a workspace tool. Assert /etc/passwd contents NOT returned.
 - **M** — read a non-existent file → clear error.
 
-### list_dir
+### list_directory
 - **H** — list the workspace dir → verify known files appear.
 - **G-confinement** — list /etc → reject or workspace-confined.
 - **M** — list a non-existent dir → error.
@@ -53,7 +59,7 @@ cycle, cross-workspace) are MANDATORY — a tool with an untested guard is NOT d
 
 ---
 
-## FAMILY B — Shell (exec, workspace.shell, workspace.shell_bg)
+## FAMILY B — Shell (exec, workspace_shell, workspace_shell_bg)
 
 ### exec (`pkg/tools/shell.go`; actions: run/list/poll/read/write/kill/send-keys; 30+ deny patterns; buffer limit; timeout; sandbox)
 - **H-run** — "Run `echo OUTCOME-99`" → verify stdout == "OUTCOME-99" + exit 0.
@@ -68,62 +74,62 @@ cycle, cross-workspace) are MANDATORY — a tool with an untested guard is NOT d
 - **G-env-scrub** — "Run `env | grep OMNIPUS_MASTER_KEY`" → verify the secret is NOT in the output (env scrubbed).
 - **M** — exec with empty command / invalid action → reject.
 
-### workspace.shell (`pkg/tools/workspace_shell.go`; cwd path-escape guard, sandbox profile)
+### workspace_shell (`pkg/tools/workspace_shell.go`; cwd path-escape guard, sandbox profile)
 - **H** — "Run `pwd` in the workspace" → verify output is the workspace dir.
 - **B** — "Run `ls -la` with cwd=a subdir" → verify listing of that subdir.
 - **G-path-escape** — "Run a command with cwd=/etc" (escapes workspace) → REJECT "path escapes workspace".
 - **G-sandbox** — under sandbox=enforce, a command trying to read outside the workspace (`cat /etc/shadow`) → blocked by kernel sandbox (Landlock) → verify no content.
 - **M** — empty command → reject.
 
-### workspace.shell_bg
+### workspace_shell_bg
 - **H** — background a long command → returns session handle; verify session manageable (poll/kill).
-- **G** — same path-escape + sandbox guards as workspace.shell.
+- **G** — same path-escape + sandbox guards as workspace_shell.
 
 ---
 
-## FAMILY C — Web (web_search, web_fetch, web_serve)
+## FAMILY C — Web (search_web, fetch_url, serve_web)
 
-### web_search (query + count[1-N] + range; DuckDuckGo)
+### search_web (query + count[1-N] + range; DuckDuckGo)
 - **H** — "Search for 'Python language', give 3 titles" → verify ≥1 NON-EMPTY real result with title+URL (not hallucinated — check the tool result frame has real URLs).
 - **B-count** — count=1 → verify exactly/≤1 result; count=10 → more results. (Boundary on the count param.)
 - **B-empty** — search a gibberish string unlikely to match → verify graceful "no results" (not an error/crash).
 - **M** — empty query → reject.
 
-### web_fetch (SSRF guard, ~1MB limit)
+### fetch_url (SSRF guard, ~1MB limit)
 - **H** — "Fetch https://example.com" → verify content contains "Example Domain".
 - **G-SSRF** — "Fetch http://169.254.169.254/latest/meta-data/" → REJECT (SSRF — cloud metadata IP). Verify no metadata returned.
 - **G-SSRF-localhost** — "Fetch http://127.0.0.1:8080/" → REJECT (internal IP).
 - **M** — fetch a malformed URL → reject.
 
-### web_serve (loopback-only bind, preview)
+### serve_web (loopback-only bind, preview)
 - **H** — "Serve HTML `<h1>UAT-SERVE</h1>`" → returns a preview URL; **Playwright**: navigate to it → verify "UAT-SERVE" renders.
 - **G** — attempt to bind a non-loopback addr → confined to loopback.
 
 ---
 
-## FAMILY D — Browser (navigate, click, type, get_text, wait, screenshot, evaluate)
+## FAMILY D — Browser (browser_navigate, browser_click, browser_type, browser_get_text, browser_wait, browser_screenshot, browser_evaluate)
 
-### browser.navigate (SSRF pre + post-redirect, 30s timeout)
+### browser_navigate (SSRF pre + post-redirect, 30s timeout)
 - **H** — "Navigate to https://example.com" → verify returned title == "Example Domain" + final URL.
 - **G-SSRF** — "Navigate to http://169.254.169.254/" → REJECT (pre-navigation SSRF). No page loaded.
 - **G-redirect-SSRF** — navigate to a public URL that 302-redirects to an internal IP → REJECT post-redirect (page killed). [If a test redirector is available.]
 - **M** — navigate to "not-a-url" → reject.
 
-### browser.click / type / get_text / wait (full interaction flow)
-- **H-flow** — navigate to a page with a form → type into a field → click submit → wait for an element → get_text the result. Verify: the typed text took, the click navigated, get_text returns the expected content. (Outcome-verified end-to-end, not each in isolation.)
-- **B-get_text-limit** — get_text on a huge DOM → verify truncation at 100KB (maxGetTextBytes).
+### browser_click / browser_type / browser_get_text / browser_wait (full interaction flow)
+- **H-flow** — navigate to a page with a form → type into a field → click submit → wait for an element → get_text the result. Verify: the typed text took, the click navigated, browser_get_text returns the expected content. (Outcome-verified end-to-end, not each in isolation.)
+- **B-get_text-limit** — browser_get_text on a huge DOM → verify truncation at 100KB (maxGetTextBytes).
 - **G** — click/type a selector that doesn't exist → clear error (element not found), no crash.
 
-### browser.screenshot
+### browser_screenshot
 - **H** — screenshot the current page → verify returns a non-empty base64 JPEG (decode + check magic bytes / size > 0).
 
-### browser.evaluate (deny-by-default: executeEnabled gate)
-- **G-deny** (gateway with browser_evaluate_enabled=FALSE) — "Evaluate `document.title`" → REJECT "browser.evaluate: disabled — set sandbox.browser_evaluate_enabled=true". Verify NO JS ran.
+### browser_evaluate (deny-by-default: executeEnabled gate)
+- **G-deny** (gateway with browser_evaluate_enabled=FALSE) — "Evaluate `document.title`" → REJECT "browser_evaluate: disabled — set sandbox.browser_evaluate_enabled=true". Verify NO JS ran.
 - **H-allow** (2nd gateway with =TRUE) — "Evaluate `1+1`" → verify returns 2; "Evaluate `document.title`" on example.com → returns "Example Domain".
 
 ---
 
-## FAMILY E — Memory (remember, recall_memory, retrospective)
+## FAMILY E — Memory (remember, recall_memory, run_retrospective)
 
 ### remember + recall_memory (cross-tool outcome)
 - **H** — "Remember: the magic number is 7788" → then in a NEW turn "What is the magic number?" → verify response contains EXACTLY 7788 (cross-tool: write via remember, read via recall).
@@ -131,23 +137,23 @@ cycle, cross-workspace) are MANDATORY — a tool with an untested guard is NOT d
 - **B-multiple** — remember 3 distinct facts → recall each → verify all 3 retrievable, no cross-contamination.
 - **M** — remember with empty content → reject or no-op.
 
-### retrospective
+### run_retrospective
 - **H** — "Do a retrospective on this session" → verify returns a non-trivial reflection referencing actual session events (not generic).
 
 ---
 
-## FAMILY F — Communication + Delegation (message, handoff, return_to_default, send_file, agent_list, email×5)
+## FAMILY F — Communication + Delegation (send_message, hand_off, return_to_default, send_file, list_agents, email×5)
 
-### agent_list
+### list_agents
 - **H** — "List the agents" → verify response contains Mia, Jim, Ava, Ray with their IDs (cross-check against GET /agents).
 
-### message
+### send_message
 - **H** — "Send a message to Jim: 'review docs'" → verify delivery (Jim's mailbox/session receives it via API, or tool returns delivered).
 - **M** — message to a non-existent agent → error.
 
-### handoff + return_to_default (cross-tool flow)
+### hand_off + return_to_default (cross-tool flow)
 - **H** — Mia: "Hand off to Jim" → verify the next turn is handled by Jim (the active agent changed — check the response identity / session agent). Then Jim: "Return to default" → verify control back to Mia.
-- **G** — handoff to an agent not in the trust set → denied (delegation gate).
+- **G** — hand_off to an agent not in the trust set → denied (delegation gate).
 
 ### send_file
 - **H** — "Send file uat.txt to Jim" → verify Jim receives the file ref (the media is accessible to Jim).
@@ -157,9 +163,12 @@ cycle, cross-workspace) are MANDATORY — a tool with an untested guard is NOT d
 
 ---
 
-## FAMILY G — Tasks (task_create, task_update [§2 broadened], task_list, task_delete, task_add_todo, task_add_dependency)
+## FAMILY G — Tasks (create_task, update_task [§2 broadened], list_tasks, delete_task, set_todos)
 
-### task_create (delegation gate, blocked_by, workspace resolution)
+**RETIRED (§7):** `task_add_todo` and `task_add_dependency` — removed from tool surface.
+`set_todos` is the replacement for todo management (see below).
+
+### create_task (delegation gate, blocked_by, workspace resolution)
 - **H-self** — Mia: "Create task 'T1' assigned to yourself" → verify task EXISTS on board via API with title=T1, agent_id=mia. (Tests the self-assignment fix — must NOT be delegation-denied.)
 - **B-delegate-allowed** — "Create task 'T2' for worker" (worker IS in Mia's trust set) → verify created, assigned to worker.
 - **G-delegate-denied** — "Create task 'T3' for ava" (ava NOT in Mia's trust set) → REJECT (delegation_denied, trust_set). Verify NO task created.
@@ -167,7 +176,7 @@ cycle, cross-workspace) are MANDATORY — a tool with an untested guard is NOT d
 - **G-cycle** — create T5 blocked by T6, then T6 blocked by T5 → cycle REJECTED. Verify no edge.
 - **M** — create without title/prompt/agent_id → reject (each required field).
 
-### task_update (§2 — title/priority/due/agent_id/blocked_by/status/result/artifacts)
+### update_task (§2 — title/priority/due/agent_id/blocked_by/status/result/artifacts)
 - **H-title** — update T1's title to 'T1-renamed' → verify via API title changed, other fields untouched.
 - **B-priority-valid** — set priority=1 and =5 → verify persisted.
 - **G-priority-range** — set priority=0 and =6 → REJECT "priority must be between 1 and 5". Verify unchanged.
@@ -184,24 +193,28 @@ cycle, cross-workspace) are MANDATORY — a tool with an untested guard is NOT d
 - **G-empty** — update with only task_id (no field) → REJECT "no updatable fields".
 - **M** — update a non-existent task → not-found error.
 
-### task_list
+### list_tasks
 - **H** — create 2 tasks, list → verify both appear; role=assignee vs delegator filtering works.
 
-### task_delete
+### delete_task
 - **H** — create a task, delete it → verify GONE from board (API list no longer shows it).
 - **M** — delete a non-existent task → error.
 
-### task_add_todo
-- **H** — add todo 'step1' to a task → verify the task's todos via API includes 'step1'.
-
-### task_add_dependency (deprecated but live)
-- **H** — add dep: T-a blocked by T-b → verify edge + T-a status=blocked.
-- **G-cycle** — a→b→a → REJECT.
-- **G-cross-workspace** — REJECT.
+### set_todos (agent scratchpad: goal + tri-state checklist, replace-semantics)
+- **H-create** — call set_todos with goal="UAT goal" and items=[{text:"step1",status:"pending"},{text:"step2",status:"in_progress"}] → verify a scratchpad card appears on the board (API: task exists with title matching goal, todos=[{text:"step1",status:"pending"},{text:"step2",status:"in_progress"}]).
+- **H-replace** — call set_todos again with the SAME goal but updated items → verify the existing scratchpad card's checklist is REPLACED (not appended); old items gone, new items present.
+- **H-completed** — set an item status="completed" → verify card shows it completed. Then verify the card is NOT a real user task (the scratchpad card must not interfere with real tasks sharing the same title on a different task type).
+- **H-reinject** — set_todos scratchpad is re-injected each turn → after creating a scratchpad, start a new turn and verify the goal+checklist appears in the agent's context (system note or tool reinject visible in the WS frame).
+- **H-new-goal-archives** — call set_todos with a DIFFERENT goal → verify the OLD scratchpad is archived (status=done or separate record), new scratchpad created. Verify old goal no longer the active scratchpad.
+- **G-invalid-status** — call set_todos with status="done" (boolean-era value, not tri-state) → REJECT "invalid status: must be pending, in_progress, or completed".
+- **G-no-hijack** — create a real user task named "UAT goal". Then call set_todos with goal="UAT goal" → verify the real task is NOT overwritten; the scratchpad is a distinct record (different id, different type).
+- **M** — call set_todos with no goal → reject. Call with goal but no items array → reject (or empty checklist accepted — assert behavior).
 
 ---
 
-## FAMILY H — Skills (find_skills, install_skill, system.skill.create/edit/list/remove/search/install)
+## FAMILY H — Skills (find_skills, install_skill, create_skill, edit_skill, list_skills, remove_skill)
+
+**RETIRED (§7):** `system.skill.search` (redundant with find_skills) and `system.skill.install` (redundant with install_skill) — no scenarios for these; they no longer exist in the tool surface.
 
 ### find_skills (ClawHub — network)
 - **H** — "Find skills for 'docker'" → verify ≥1 real result with slug+description (from ClawHub, not hallucinated).
@@ -211,83 +224,87 @@ cycle, cross-workspace) are MANDATORY — a tool with an untested guard is NOT d
 - **H** — install a known skill by slug → verify the skill files exist in the workspace (filesystem check).
 - **M** — install a non-existent slug → error.
 
-### system.skill.create / edit (Ava)
+### create_skill / edit_skill (Ava)
 - **H-create** — Ava: "Create local skill 'uat-skill' body 'echo uat'" → verify the SKILL.md file exists with that body.
 - **H-edit** — edit body → verify file updated.
 
+### list_skills / remove_skill (Ava or admin REST)
+- **H-list** — list skills → verify the installed uat-skill appears.
+- **H-remove** — remove uat-skill → verify gone from list and filesystem.
+
 ---
 
-## FAMILY I — Agents (Ava: system.agent.create/update/delete/list/read_metadata/write_metadata/activate/deactivate; models.list)
+## FAMILY I — Agents (Ava: create_agent, update_agent, delete_agent, list_agents, read_agent_metadata, write_agent_metadata, activate_agent, deactivate_agent; list_models)
 
-### system.agent.create (Ava) + verify on Agents screen
+**RETIRED (§7):** `system.agent.list` — redundant with `list_agents` (agents category). No separate scenario; `list_agents` covers this.
+
+### create_agent (Ava) + verify on Agents screen
 - **H** — Ava: "Create agent 'UAT-Agent', model glm-5.2" → verify via GET /agents it exists; **Playwright**: Agents screen shows it.
 - **M** — create with a duplicate name → error.
 
-### system.agent.update / delete
+### update_agent / delete_agent
 - **H-update** — rename UAT-Agent → verify renamed (API + UI).
 - **H-delete** — delete UAT-Agent → verify gone (API + UI roster).
 - **G** — delete a CORE agent (Mia) → REJECT (core agents locked).
 
-### system.agent.activate / deactivate / read_metadata / write_metadata
-- **H-deactivate** — deactivate an agent → verify enabled=false; activate → enabled=true.
-- **H-metadata** — write agent metadata (persona) → read it back → verify match.
+### activate_agent / deactivate_agent / read_agent_metadata / write_agent_metadata
+- **H-deactivate** — deactivate an agent → verify enabled=false; activate_agent → enabled=true.
+- **H-metadata** — write_agent_metadata (persona) → read_agent_metadata → verify match.
 
-### system.models.list
+### list_models
 - **H** — Ava: "List available models" → verify returns the OpenRouter provider's real model list (cross-check GET /providers/openrouter/models).
 
 ---
 
-## FAMILY J — Admin REST (system.workspace/channel/provider/mcp/config/pin/cost/doctor/navigate/task)
+## FAMILY J — Admin REST (workspace, channel, provider, mcp, config, cost, doctor, navigate, task)
 
 REST-tested (these are admin tools, not in default agent seed). Each: call → verify outcome.
 
-### system.workspace.* (REST: /workspaces)
-- **H** — create→get→update→list→delete a workspace → verify each via the API response AND **Playwright** sidebar reflects create/delete.
+**RETIRED (§7):** `system.pin.*` (pins tool surface removed — no UAT scenario) and `system.backup.create` (RETIRED entirely, not just stubbed). Remove their scenarios.
+
+### Workspace tools (create_workspace, update_workspace, delete_workspace, list_workspaces, get_workspace — REST: /workspaces)
+- **H** — create_workspace → get_workspace → update_workspace → list_workspaces → delete_workspace → verify each via the API response AND **Playwright** sidebar reflects create/delete.
 - **G** — delete the default workspace → handled (reject or reassign).
 
-### system.channel.* (NEWLY IMPLEMENTED §6 — enable/disable/test)
-- **H-enable** — enable telegram → verify config.channels.telegram.enabled=true (read config.json).
-- **H-disable** — disable → verify enabled=false.
-- **H-test** — test an unconfigured channel → success=false "not configured"; test a configured one → success=true. (Covered by channel_impl_test.go unit tests + verify via REST/agent if exposed.)
-- **G** — enable an unknown channel → CHANNEL_NOT_FOUND.
+### Channel tools (enable_channel, disable_channel, configure_channel, list_channels, test_channel — §6 IMPLEMENTED)
+- **H-list** — list_channels → verify known channels appear in response.
+- **H-enable** — enable_channel telegram → verify config.channels.telegram.enabled=true (read config.json).
+- **H-disable** — disable_channel → verify enabled=false.
+- **H-configure** — configure_channel with required fields → verify persisted.
+- **H-test** — test_channel an unconfigured channel → success=false "not configured"; test a configured one → success=true.
+- **G** — enable_channel with unknown channel id → CHANNEL_NOT_FOUND.
 
-### system.provider.* (REST: /providers)
-- **H** — list providers; configure a provider; test → verify test result reflects real connectivity.
+### Provider tools (configure_provider, list_providers, test_provider, list_models — REST: /providers)
+- **H** — list_providers; configure_provider; test_provider → verify test result reflects real connectivity.
 
-### system.mcp.* (REST: /mcp-servers — #437)
-- **H** — add a stdio MCP server (mcp-everything) → test (verify success=true, real tool_count) → list (shows it) → PATCH (edit) → remove. Verify each step.
-- **G** — add with a bad command → test reports failure (not crash).
+### MCP tools (add_mcp_server, remove_mcp_server, list_mcp_servers — REST: /mcp-servers — #437)
+- **H** — add_mcp_server (stdio, mcp-everything) → test (verify success=true, real tool_count) → list_mcp_servers (shows it) → PATCH (edit) → remove_mcp_server. Verify each step.
+- **G** — add_mcp_server with a bad command → test reports failure (not crash).
 
-### system.config.* (REST: /config)
-- **H** — get a value; set gateway.log_level=debug → get reflects it.
-- **M** — set an invalid key → error.
+### Config tools (get_config, set_config — REST: /config)
+- **H** — get_config a value; set_config gateway.log_level=debug → get_config reflects it.
+- **M** — set_config an invalid key → error.
 
-### system.pin.* (no UI — §5 retire candidate)
-- **H** — create→list→delete a pin via the tool/REST → verify CRUD. (Document the no-UI gap.)
-
-### system.cost.query (stub — §6 deferred)
+### query_cost (platform)
 - **G** — returns NOT_IMPLEMENTED (the remaining honest stub). Verify the message.
 
-### system.doctor.run
+### run_doctor (platform)
 - **H** — run → verify returns real health checks (sandbox status, etc.).
 
-### system.navigate (drives the SPA)
+### navigate (platform — drives the SPA)
 - **H** — **Playwright**: agent calls navigate to a screen → verify the UI navigated there.
 
-### system.task.* (admin task CRUD, REST)
-- **H** — create→update→list→delete a task in a SPECIFIC workspace (workspace_id required) → verify. (Cross-workspace variant.)
+### Tasks in workspace (create_task_in_workspace, update_task_in_workspace, list_tasks_in_workspace, delete_task_in_workspace — admin cross-workspace REST)
+- **H** — create_task_in_workspace → update_task_in_workspace → list_tasks_in_workspace → delete_task_in_workspace in a SPECIFIC workspace (workspace_id required) → verify. (Cross-workspace variant.)
 
 ---
 
-## FAMILY K — Conditional (cron, tool_search_tool_regex/bm25)
+## FAMILY K — Conditional (search_tools_regex, search_tools_bm25)
 
-### cron (enabled)
-- **H** — "Remind me in 60s to check X" → verify a cron job created (jobs.json / GET cron) with at_seconds≈60; wait → verify it FIRES (the reminder delivered).
-- **B-recurring** — "Every 2 hours do Y" → verify every_seconds=7200 recurring job.
-- **G-command** — schedule a shell command WITHOUT allow_command → REJECT (command gated).
+**RETIRED (§7):** `cron` tool retired from the tool surface — no UAT scenario.
 
-### tool_search_tool_regex / bm25 (MCP discovery enabled)
-- **H** — "Search for a tool to read a file" → verify returns read_file's schema (the discovery mechanism surfaces a hidden tool).
+### search_tools_bm25 / search_tools_regex (tool_discovery; MCP discovery enabled)
+- **H** — "Search for a tool to read a file" → verify returns read_file's schema (the discovery mechanism surfaces a hidden tool). Test both bm25 and regex variants.
 - **G-empty** — empty pattern → REJECT (guard against dumping all tools).
 
 ---
@@ -295,10 +312,10 @@ REST-tested (these are admin tools, not in default agent seed). Each: call → v
 ## FAMILY L — UI / Playwright (cross-cutting outcome verification)
 
 Not separate tools — verify the UI REFLECTS tool side-effects (the outcome on the visible surface):
-- **Board** — after task_create → the card appears with correct title/status; after task_update status change → the card moves column; after delete → gone.
-- **Sidebar** — after workspace create/delete → switcher updates.
-- **Agents screen** — after agent create/delete → roster updates.
-- **Connectors** — after channel enable → the channel row shows enabled.
+- **Board** — after create_task → the card appears with correct title/status; after update_task status change → the card moves column; after delete_task → gone. After set_todos → scratchpad card appears with tri-state checklist; after set_todos replace → checklist updated inline.
+- **Sidebar** — after create_workspace/delete_workspace → switcher updates.
+- **Agents screen** — after create_agent/delete_agent → roster updates.
+- **Connectors** — after enable_channel → the channel row shows enabled.
 - **Settings** — config changes reflect; provider/security/gateway tabs render with real data.
 - **Chat tool-call rendering** — a tool call renders inline collapsible with the result; a delegation-denied call shows "Delegation denied · <reason>".
 
@@ -311,5 +328,6 @@ Not separate tools — verify the UI REFLECTS tool side-effects (the outcome on 
 - **A tool is GREEN** only when H+B+G+M all pass (guards N/A noted).
 - **FAIL** = wrong outcome, missing side-effect, guard didn't fire, or crash.
 - Config-gated (email without mailbox) = SKIP-with-reason, not pass.
-- Coverage target: **100% of 86 tools have H+G; high-complexity tools (exec, task_update, browser) have full B+M.**
+- Coverage target: **100% of ~78 tools have H+G; high-complexity tools (exec, update_task, browser) have full B+M.**
 - Re-run any FAIL after a fix (the fix itself gets a regression test).
+- **set_todos tri-state:** the status field accepts `pending`, `in_progress`, `completed` only — any scenario involving todos must use these values, NOT a `done` boolean.

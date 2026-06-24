@@ -454,7 +454,6 @@ func TestAutoApproveSafeTool_AllSafeTools(t *testing.T) {
 		"spawn",
 		"run_subagent",
 		"check_spawn_status",
-		"cron",
 	}
 
 	for _, tool := range safeTools {
