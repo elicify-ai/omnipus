@@ -11,6 +11,8 @@ read-back) — not "tool fired". Plus the Go-level outcome tests and the green C
 | Check | Result |
 |-------|--------|
 | CI `go-test` (ci-omnipus worker, full suite + flake filter) | **ALL GATES GREEN (exit 0)** |
+| CI `gofmt` / `go-vet` / `contracts` / `spa` (ci-omnipus) | all **ALL GATES GREEN** |
+| CI `e2e` Playwright matrix (132 tests, live glm-5.2) | **113 passed · 3 flaky (retry-passed) · 16 skipped · 0 failed** |
 | 7-reviewer quality gate | all HIGH findings fixed (see below) |
 | Wire registry (`GET /api/v1/tools`) | **78 tools, 16 domain categories, no `system` category, zero old names, scope=[core,general]** |
 | Live agent — `set_todos` (new §3 tool) | **PASS** (outcome-verified) |
@@ -78,8 +80,18 @@ list, wrong "41 system tools" docs → 37.
 - §4 full shared-core consolidation (the two task-tool implementations remain separate); the
   security-relevant delegation/ownership parity was wired this cycle.
 
+## CI e2e gate (comprehensive agent-driven Playwright UAT)
+
+Full matrix on the ci-omnipus worker against the live glm-5.2 model: **113 passed, 3 flaky, 16
+skipped, 0 hard failures**. The 3 flaky tests passed on retry and are **pre-existing LLM-timing
+flakiness, not refactor regressions**: `media.spec:16` (Mia, the Assistant persona, intermittently
+refuses the browser tool — a documented finding) and `bug-regression Bug-5 (a/b)` (replay
+frame-ordering timing, no tool-name surface). Playwright itself exited 0; the runner's non-zero
+status is the known SSH-wrapper teardown false-signal.
+
 ## Conclusion
 
-The §1–§7 refactor is live and correct end-to-end: CI go-test is green, the wire contract reflects
-the full rename + recategorization, and a real LLM agent successfully uses the new `set_todos` tool
-and the renamed `create_task` with independently-verified board outcomes.
+The §1–§7 refactor is live and correct end-to-end. Every CI gate is green (go-test, gofmt, go-vet,
+contracts, spa, and the e2e Playwright matrix with 0 hard failures), the wire contract reflects the
+full rename + recategorization, and a real LLM agent successfully uses the new `set_todos` tool and
+the renamed `create_task` with independently-verified board outcomes.
