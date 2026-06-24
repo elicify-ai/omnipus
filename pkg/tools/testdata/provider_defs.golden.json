@@ -56,13 +56,6 @@
     "source": "builtin"
   },
   {
-    "name": "system.backup.create",
-    "description": "[NOT IMPLEMENTED] Creating a backup archive of the data directory is not yet built. This tool always returns a NOT_IMPLEMENTED error and does NOT create any file.",
-    "scope": "core",
-    "category": "system",
-    "source": "builtin"
-  },
-  {
     "name": "system.channel.configure",
     "description": "Configure an enabled channel with its credentials (token, phone_number, etc).\nParameters: id (required), plus channel-specific credentials.",
     "scope": "core",
@@ -71,14 +64,14 @@
   },
   {
     "name": "system.channel.disable",
-    "description": "[NOT IMPLEMENTED] Disabling a channel from a tool is not yet wired to the channel manager. This tool always returns a NOT_IMPLEMENTED error. Use the Channels screen in the UI to disable a channel.",
+    "description": "Disable a channel connection. The channel will stop on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
     "scope": "core",
     "category": "system",
     "source": "builtin"
   },
   {
     "name": "system.channel.enable",
-    "description": "[NOT IMPLEMENTED] Enabling a channel from a tool is not yet wired to the channel manager. This tool always returns a NOT_IMPLEMENTED error. Use the Channels screen in the UI to enable a channel.",
+    "description": "Enable a channel connection. The channel will start on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -92,7 +85,7 @@
   },
   {
     "name": "system.channel.test",
-    "description": "[NOT IMPLEMENTED] Testing a channel connection from a tool is not yet wired to the channel manager. This tool always returns a NOT_IMPLEMENTED error. Use the Test button on the Channels screen in the UI.",
+    "description": "Test a channel's configuration — checks the channel exists, is enabled, and has credentials configured.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
     "scope": "core",
     "category": "system",
     "source": "builtin"
