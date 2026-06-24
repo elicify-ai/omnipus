@@ -1,3 +1,5 @@
+> **HISTORICAL RECORD** — tool names in this report predate the §7 rename; old names (`system.*`, `task_create`, `web_search`, `list_dir`, `message`, `browser.X`, etc.) do not match the current tool surface. See the updated plan for current names.
+
 # Comprehensive Tool-System UAT Report (Outcome-Verified) — v0.1.0
 
 **Date:** 2026-06-24 · **Plan:** `uat-plan-tools-comprehensive-2026-06.md`
