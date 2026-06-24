@@ -6,13 +6,17 @@ scheduling portions of `tasks-redesign-2026-05.md`
 **Phase:** v0.3 (tasks redesign — no back-compat, per the locked release strategy)
 **Branch context:** `feat/0.1.0-uat-fixes` (assessment done against the live tool registry + code)
 
-Two problems surfaced from a user-perspective review of the task + scheduling tools:
+Three problems surfaced from a user-perspective review of the task + scheduling tools:
 
 1. **The `cron` tool is redundant** — scheduled tasks + the per-agent heartbeat already cover
    scheduling; cron is a third, parallel, user-invisible system.
 2. **The general task tools are over-granular** — `task_update` is misnamed (status-only, not
    edit), `task_add_dependency` is a standalone tool that should be part of edit, and there is no
    general "edit a task's fields" tool for agents.
+3. **`task_add_todo` is an append-only dead-end and there is no agent scratchpad** — agents need an
+   in-session scratchpad for lightweight planning, but the current todo tool can only *add* (no
+   update/toggle/read) and is the wrong primitive. Replaced by a `todos` tool that rides the task
+   substrate (§3).
 
 ---
 
@@ -100,12 +104,15 @@ scheduling shape cron offered.
    cross-workspace guard (`pkg/tools/task.go:533-548`) move into the update path cleanly.
 3. **`task_create` (general) can't set `blocked_by` at creation** — a parity gap with the admin
    tool. Setting a dependency today requires create + a second `task_add_dependency` call.
-4. **`task_add_todo` vs subtasks.** This is a *deliberate* three-tier model (`Todo` < `Task` <
-   `Subtask`; `pkg/task/task.go`: "A todo is NOT a task: no agent, no status, no trigger, no ID").
-   Todos (lightweight checklist lines) vs subtasks (nested real tasks) is intentional, not
-   accidental redundancy — so this is a product call, not a clear cut.
+4. **`task_add_todo` is an append-only dead-end and is the wrong primitive for an in-session
+   scratchpad.** It only *adds* (`task_id` + `text` → `AppendTodo`, `pkg/task/store.go:647`); there
+   is no toggle/update/remove, `Todo` has no ID (`{Text, Done}`, `pkg/task/task.go`), and there is
+   no read path (no `task_get`/`task_read`; `task_list` returns summaries). So even as a task
+   checklist it can't track progress — and it can't serve as the agent's in-session scratchpad (you
+   can add a plan but never tick it off, edit it, or read it back). Retire it → replaced by `todos`
+   (see §3).
 
-### Decision (proposed, v0.3) — simplify the general side 6 → 4
+### Decision (proposed, v0.3) — simplify the general side 6 → 5
 
 1. **Fold `task_add_dependency` into `task_update`.** `task_update` accepts `blocked_by`
    (add/remove edges); the cycle-detection + cross-workspace guard move into the update path.
@@ -115,14 +122,97 @@ scheduling shape cron offered.
    status-reporting becomes a subset. Closes the no-general-edit gap.
 3. **Let `task_create` accept `blocked_by` at creation** — parity with the admin tool (set
    dependencies when you create, not as a second call).
-4. **`task_add_todo`: keep** (recommendation). The three-tier model is deliberate and todos are
-   cheaper than spawning sub-agent subtasks. Open to revisiting, but no strong reason to remove.
+4. **Retire `task_add_todo` → replaced by `todos`** (§3). Not kept — append-only with no update/read
+   is a dead-end; the `todos` tool (replace-semantics, read-on-write, re-injected) supersedes it
+   entirely.
 
-**Result:** `task_list`, `task_create` (+`blocked_by`), `task_update` (real edit, incl. deps),
-`task_delete`. Drops `task_add_dependency` (folded). `task_add_todo` retained.
+**Result:** `todos` (§3), `task_create` (+`blocked_by`), `task_update` (real edit, incl. deps),
+`task_list`, `task_delete`. Drops `task_add_dependency` (folded) and `task_add_todo` (→ `todos`).
 
 The admin `system.task.*` set is already correctly consolidated — no change needed there beyond
 keeping parity with the broadened general `task_update`.
+
+---
+
+## 3. The `todos` tool — agent scratchpad as a visible board task
+
+### Goal
+
+Every agent gets an in-session **scratchpad** for lightweight planning ("read this, summarize it,
+email it" — a goal with a few steps). It must be editable (not append-only), readable across turns,
+and — critically — **ride the task substrate, not a parallel store**. One record type, one store,
+one lifecycle.
+
+### The tool: `todos(goal, [{text, status}])`
+
+- **`goal`** — the title of the task these todos serve (the unit of work the agent is currently
+  focused on).
+- **`[{text, status}]`** — the **full** checklist, **replace-semantics** (the agent rewrites the
+  whole list, so no todo IDs are needed — this is the fix for append-only). `status` ∈
+  `pending` / `in_progress` / `completed`.
+- **Read-on-write:** returns the full updated list, so the agent sees its plan after every write
+  (no separate read tool for the happy path).
+- **Agent-unaware task creation (facade):** behind the tool, the call **creates-or-updates a
+  board-visible task titled `goal`** with those todos as its checklist. The agent never calls
+  `task_create`, never sees a `task_id` — it sets its goal + steps, and a task appears on the board.
+  There is **no hidden `scratchpad` flag and no promotion step** — the "scratchpad" is just a
+  lightweight board task created through a friendlier facade. It is visible from the start, which is
+  the intent (the operator sees what each agent is working on and its progress).
+
+### Re-injection (important)
+
+At the start of each turn, the agent loop **re-injects the acting agent's current `goal` + todos**
+into the turn preamble. This means:
+
+- The agent always has its list, every turn, **without calling a read tool**.
+- It **survives context compression** (single-layer compression drops ~50% oldest turns + a
+  summary; the scratchpad is re-injected from the backing task, not from turn history — so the
+  agent doesn't lose its plan when older turns compress away).
+- The scratchpad becomes ambient working memory — which is what a scratchpad should be.
+
+(If re-injection is ever deemed too much loop coupling, the fallback is a separate `todo_read`
+tool — but re-injection is preferred: it keeps the surface to one tool and doesn't rely on the
+agent remembering to re-read post-compression.)
+
+### The scratchpad-vs-plan boundary is structural, not just naming
+
+Both `todos` and multi-wave planning create **visible board tasks**, but of different *shapes*:
+
+| | `todos` (flat checklist) | multi-wave plan (`task_create` + deps) |
+|---|---|---|
+| Shape | **one** task with a flat `[{text, status}]` checklist | **many** tasks linked by `blocked_by` (a DAG) |
+| Dependencies | none (flat list) | yes (the DAG) |
+| Use | "read this, summarize, email it" — one goal, a few steps | "migrate the auth system" — waves of dependent work |
+
+The name **`todos`** (not `plan`) is deliberate: **"plan" is reserved for the dependency-linked
+multi-wave case** (the task DAG). `todos` is the flat-checklist case. Boundary statement for the
+seed prompt: *"Use `todos` for the throwaway checklist of what you're doing this turn; use
+`task_create` + dependencies for a durable multi-wave plan."*
+
+### Substrate changes
+
+Validated against current code (`pkg/task/task.go:157`, `pkg/task/store.go:647`): `Task.Todos` is
+already a **real JSON array** (`[]Todo`, `json:"todos,omitempty"`), not a text blob; `AppendTodo`
+does array-append + `validateTodos` + atomic write. So the storage is correct; the changes are:
+
+1. **`Todo {Text, Status}`** — upgrade `Done bool` → `Status` (`pending`/`in_progress`/`completed`).
+2. **`SetTodos(taskID, []Todo)`** — full-replace, idempotent (the operation `todos` calls under the
+   hood; replaces the append-only `AppendTodo` as the primary path).
+3. **No new task flag** — the `scratchpad`/promotion machinery is **not** needed (dissolved by
+   making the task visible from the start).
+
+### Open choices for the ADR
+
+1. **Board pollution / lifecycle.** Since every `todos` call makes a visible board task, what
+   happens to completed/abandoned ones? Lean: **one active goal-task per agent** — calling `todos`
+   with a new `goal` archives the previous, keeping the board to "what each agent is doing right
+   now" + history. (Alternatives: auto-archive completed; or accumulate with board filtering.)
+2. **Goal identity.** Does calling `todos` with the same `goal` update that task (replace), and a
+   new `goal` create a new one? Lean: **goal-string identity within the session** (the agent just
+   re-states its goal; the facade tracks the goal→task mapping). Alternative: an explicit id once
+   created.
+3. **Retention.** Clean up the (archived) goal-tasks at session end, or retain-as-audit (replay
+   value: see how the agent planned). Lean: retain-as-audit behind a flag.
 
 ---
 
@@ -132,13 +222,16 @@ keeping parity with the broadened general `task_update`.
 - **Pre-requisite:** this assessment feeds the v0.3 tasks-redesign **ADR** (`/albert`), then a
   `/plan-spec`. Do not implement before the ADR ratifies the retire-cron + fold-dependency
   decisions.
-- **Concept doc:** the `.preview-doc/tools-catalog.html` Tool Catalog page is updated to reflect
-  the intended end-state — `cron` and `task_add_dependency` removed, `task_update` shown as the
-  broadened edit tool — with a note pointing here.
+- **Concept doc:** the `.preview-doc/tools-catalog.html` Tool Catalog page and `.preview-doc/time.html`
+  are updated to reflect the intended end-state — `cron`, `task_add_dependency`, and `task_add_todo`
+  retired; `task_update` shown as the broadened edit tool; the new `todos` tool (scratchpad-as-board-task)
+  added — with notes pointing here.
 - **Open questions for the ADR:**
   - Migration of existing `cron/jobs.json` → scheduled tasks (auto-convert at boot vs. document +
     drop).
-  - Whether `task_add_todo` stays (recommendation: yes) or the three-tier model collapses to
-    tasks/subtasks only.
+  - `todos` lifecycle: one active goal-task per agent (lean) vs. auto-archive-completed vs.
+    accumulate-with-filtering (§3 open choice 1).
+  - `todos` goal identity: goal-string-within-session (lean) vs. explicit id (§3 open choice 2).
+  - `todos` retention: clean-up-at-session-end vs. retain-as-audit (§3 open choice 3).
   - Whether the broadened `task_update` should be `privileged` (mutating) or stay `open` for
     status-only with `privileged` for field edits — i.e. split the risk within one tool.
