@@ -75,9 +75,8 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 		NewConfigGetTool(d),
 		NewConfigSetTool(d),
 
-		// Diagnostics / utility (4)
+		// Diagnostics / utility (3) — backup.create retired (§6: no infra, ops/CLI concern)
 		NewDoctorRunTool(d),
-		NewBackupCreateTool(d),
 		NewCostQueryTool(d),
 		NewNavigateTool(d, navCb),
 	}

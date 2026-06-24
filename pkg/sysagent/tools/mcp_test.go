@@ -142,29 +142,9 @@ func TestHonestStubTools_ReturnNotImplemented(t *testing.T) {
 		exec func() string
 		desc string
 	}
-	chEnable := systools.NewChannelEnableTool(deps)
-	chDisable := systools.NewChannelDisableTool(deps)
-	chTest := systools.NewChannelTestTool(deps)
-	backup := systools.NewBackupCreateTool(deps)
 	cost := systools.NewCostQueryTool(deps)
 
 	tools := []honest{
-		{
-			"channel.enable",
-			func() string { return chEnable.Execute(ctx, map[string]any{"id": "telegram"}).ForLLM },
-			chEnable.Description(),
-		},
-		{
-			"channel.disable",
-			func() string { return chDisable.Execute(ctx, map[string]any{"id": "telegram"}).ForLLM },
-			chDisable.Description(),
-		},
-		{
-			"channel.test",
-			func() string { return chTest.Execute(ctx, map[string]any{"id": "telegram"}).ForLLM },
-			chTest.Description(),
-		},
-		{"backup.create", func() string { return backup.Execute(ctx, map[string]any{}).ForLLM }, backup.Description()},
 		{
 			"cost.query",
 			func() string { return cost.Execute(ctx, map[string]any{"period": "today"}).ForLLM },
