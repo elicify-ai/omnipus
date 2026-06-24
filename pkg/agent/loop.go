@@ -1834,8 +1834,11 @@ func buildDelegationDenyChecker(
 	policyDepth := config.ResolveDelegationDepth(policy)
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-		// 1. Trust set (only when an explicit target is named).
-		if targetAgentID != "" {
+		// 1. Trust set (only when an explicit target is named AND it is not the
+		// caller itself). Self-assignment (target == caller) is NOT delegation —
+		// an agent creating/reassigning a task to itself does not consult the
+		// trust set; the 'to' allowlist governs delegation to OTHER agents only.
+		if targetAgentID != "" && targetAgentID != currentAgentID {
 			var allowed bool
 			if toList != nil {
 				allowed = config.IsDelegationAllowed(toList, targetAgentID)
