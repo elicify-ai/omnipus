@@ -6,17 +6,21 @@ scheduling portions of `tasks-redesign-2026-05.md`
 **Phase:** v0.3 (tasks redesign — no back-compat, per the locked release strategy)
 **Branch context:** `feat/0.1.0-uat-fixes` (assessment done against the live tool registry + code)
 
-Three problems surfaced from a user-perspective review of the task + scheduling tools:
+Four problems surfaced from a user-perspective review of the task + scheduling tools:
 
 1. **The `cron` tool is redundant** — scheduled tasks + the per-agent heartbeat already cover
    scheduling; cron is a third, parallel, user-invisible system.
 2. **The general task tools are over-granular** — `task_update` is misnamed (status-only, not
    edit), `task_add_dependency` is a standalone tool that should be part of edit, and there is no
-   general "edit a task's fields" tool for agents.
+   general "edit a task's fields' tool for agents.
 3. **`task_add_todo` is an append-only dead-end and there is no agent scratchpad** — agents need an
    in-session scratchpad for lightweight planning, but the current todo tool can only *add* (no
    update/toggle/read) and is the wrong primitive. Replaced by a `todos` tool that rides the task
    substrate (§3).
+4. **The `system.task.*` surface is mis-prefixed and divergent** — it overlaps the general `task_*`
+   on create/update/list/delete, but the real distinction is workspace scope (current vs explicit /
+   cross-workspace), not admin-vs-agent. Renamed to `task_*_in_workspace` and unified in behavior
+   (§4).
 
 ---
 
@@ -216,16 +220,85 @@ does array-append + `validateTodos` + atomic write. So the storage is correct; t
 
 ---
 
+## 4. Cross-workspace task tools — rename + unify (keep both surfaces)
+
+### Finding
+
+The general `task_*` and the `system.task.*` surfaces overlap on create/update/list/delete, which
+looked like pure redundancy (§2). It is not — there is one real, distinct capability: **creating
+tasks in *other* workspaces** (the Orchestrator/Jim operating across workspaces). The two tools
+differ in **workspace source**:
+
+| Tool | Workspace | Scope |
+|------|-----------|-------|
+| `task_create` etc. | **auto-resolved from context** (current workspace; `resolveWorkspaceID`, `pkg/tools/task.go:182`) | open (any agent) |
+| `system.task.create` etc. | **explicit `workspace_id`, required** (`"workspace_id is required"`, `pkg/sysagent/tools/task.go:92`) — can target *other* workspaces | privileged (core/admin) |
+
+So both are needed: the plain tool works in the agent's current workspace; the explicit-workspace
+tool lets the Orchestrator target other workspaces. The earlier "collapse `system.task.*`" idea
+(once floated in discussion) is **rejected** — the cross-workspace capability justifies keeping a
+second surface.
+
+### Decision (proposed, v0.3)
+
+1. **Rename** `system.task.*` → `task_create_in_workspace` / `task_update_in_workspace` /
+   `task_list_in_workspace` / `task_delete_in_workspace`. Drop the misleading `system.` prefix:
+   tasks are **agent-work**, not platform-administration (see the prefix rule below).
+2. **Behavioral parity** — the cross-workspace variant is **identical to the plain `task_*` tool
+   except for the workspace parameter**: same fields (incl. `blocked_by` — the §2 broadening
+   applies to both), same validation, and the **same delegation checks** (`delegationDeny` /
+   `delegateCheck`) the plain tool has today. Shared core implementation with a workspace-resolution
+   seam: plain auto-resolves from context; `_in_workspace` uses the explicit `workspace_id`
+   (required). Two thin wrappers, one behavior.
+3. **Scope stays split** — `task_*` open (current workspace, any agent); `task_*_in_workspace`
+   privileged (Orchestrator / explicit allow). Cross-workspace task creation is a distinct
+   privilege worth gating independently — which is **why two tools beats one tool with an optional
+   `workspace_id`**: policy can allow `task_create` (current workspace, default) while denying
+   `task_create_in_workspace` (cross-workspace) for most agents, granting both only to the
+   Orchestrator. Gating a parameter inside one tool is messier than gating a separate tool.
+
+### The `system.` prefix rule (now consistent)
+
+- **No prefix** = agent working tools (`task_create`, `task_create_in_workspace`, `read_file`,
+  `browser.*`, `message`, `todos`, …).
+- **`system.` prefix** = platform-admin only — operations with no agent parallel
+  (`system.workspace.*`, `system.agent.*`, `system.channel.*`, `system.provider.*`,
+  `system.mcp.*`, `system.config.*`, `system.skill.*`, `system.pin.*`, `system.cost.*`,
+  `system.backup.*`, `system.doctor.*`, `system.navigate.*`, `system.models.*`). Genuinely
+  operator/system-agent surface.
+
+Tasks were the one family that broke the rule (a working op misfiled under `system.`); the rename
+fixes it. The line is "manage the platform" (`system.`) vs "do work, possibly across workspaces"
+(no prefix). Note: `system.workspace.*` (create/delete a workspace itself) stays admin-only;
+targeting a workspace *for a task* (`task_create_in_workspace`) is working-tool territory — no
+conflict.
+
+### Net task tool surface (v0.3 end-state)
+
+- **Current-workspace (open):** `todos`, `task_create`, `task_update`, `task_list`, `task_delete`.
+- **Cross-workspace (privileged):** `task_create_in_workspace`, `task_update_in_workspace`,
+  `task_list_in_workspace`, `task_delete_in_workspace`.
+
+Was 6 general + 4 `system.task.*` = 10; becomes 5 + 4 = 9 (retire `task_add_todo` +
+`task_add_dependency` = −2; add `todos` = +1; rename `system.task.*` → `task_*_in_workspace` = net
+0).
+
+---
+
 ## Scope & next steps
 
 - **Phase:** v0.3 (tasks redesign). No back-compat (fresh-build per the release strategy).
 - **Pre-requisite:** this assessment feeds the v0.3 tasks-redesign **ADR** (`/albert`), then a
   `/plan-spec`. Do not implement before the ADR ratifies the retire-cron + fold-dependency
   decisions.
+- **Decided (this assessment):** retire `cron` (§1); fold `task_add_dependency` into `task_update`
+  + broaden `task_update` to a real edit + `task_create` accepts `blocked_by` (§2); retire
+  `task_add_todo` → `todos` scratchpad-as-board-task with re-injection (§3); rename
+  `system.task.*` → `task_*_in_workspace` with behavioral parity (§4).
 - **Concept doc:** the `.preview-doc/tools-catalog.html` Tool Catalog page and `.preview-doc/time.html`
   are updated to reflect the intended end-state — `cron`, `task_add_dependency`, and `task_add_todo`
   retired; `task_update` shown as the broadened edit tool; the new `todos` tool (scratchpad-as-board-task)
-  added — with notes pointing here.
+  added; `system.task.*` renamed to `task_*_in_workspace` — with notes pointing here.
 - **Open questions for the ADR:**
   - Migration of existing `cron/jobs.json` → scheduled tasks (auto-convert at boot vs. document +
     drop).
@@ -235,3 +308,6 @@ does array-append + `validateTodos` + atomic write. So the storage is correct; t
   - `todos` retention: clean-up-at-session-end vs. retain-as-audit (§3 open choice 3).
   - Whether the broadened `task_update` should be `privileged` (mutating) or stay `open` for
     status-only with `privileged` for field edits — i.e. split the risk within one tool.
+  - Cross-workspace parity detail: confirm the `task_*_in_workspace` variants gain the full
+    delegation-policy checks (`delegationDeny`/`delegateCheck`) the plain `task_*` has today, so an
+    Orchestrator creating a task in another workspace still goes through delegation policy (§4).
