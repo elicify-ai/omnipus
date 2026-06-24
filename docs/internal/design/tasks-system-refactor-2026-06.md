@@ -6,7 +6,7 @@ scheduling portions of `tasks-redesign-2026-05.md`
 **Phase:** v0.3 (tasks redesign — no back-compat, per the locked release strategy)
 **Branch context:** `feat/0.1.0-uat-fixes` (assessment done against the live tool registry + code)
 
-Four problems surfaced from a user-perspective review of the task + scheduling tools:
+Five problems surfaced from a user-perspective review of the task + scheduling tools:
 
 1. **The `cron` tool is redundant** — scheduled tasks + the per-agent heartbeat already cover
    scheduling; cron is a third, parallel, user-invisible system.
@@ -21,6 +21,8 @@ Four problems surfaced from a user-perspective review of the task + scheduling t
    on create/update/list/delete, but the real distinction is workspace scope (current vs explicit /
    cross-workspace), not admin-vs-agent. Renamed to `task_*_in_workspace` and unified in behavior
    (§4).
+5. **`pins` are a backend-only feature with no UI** — `system.pin.*` bookmark chat responses but
+   nothing in the app shows them. Retire (§5).
 
 ---
 
@@ -285,6 +287,42 @@ Was 6 general + 4 `system.task.*` = 10; becomes 5 + 4 = 9 (retire `task_add_todo
 
 ---
 
+## 5. Retire `pins` — backend-only, no UI
+
+### Finding
+
+`system.pin.create` / `system.pin.list` / `system.pin.delete` (`pkg/sysagent/tools/pin.go`) are a
+**message-bookmarking** feature: a `pin` is a saved reference to a chat response (`{ID, Title,
+AgentName, SessionID, MessageID, WorkspaceID, Tags, ContentPreview, CreatedAt}`), persisted as JSON
+under `~/.omnipus/pins/`. An agent can pin one of its chat responses with a title + tags and later
+list/search them.
+
+**There is no UI for pins.** Verified in `src/`: zero pin components (no PinCard / PinList / `/pins`
+route / create-pin control). The only "pin" in the UI is the `pinned` / `pin_order` field on
+**workspaces** (pin a workspace to the sidebar top) — a different concept entirely. So `system.pin.*`
+is a **half-built feature**: tools + store exist, but nothing in the app reads or shows them. A user
+cannot see, create, browse, or manage pins.
+
+### Decision (proposed, v0.3)
+
+**Retire the 3 pin tools** (`system.pin.create/list/delete`) and remove the `~/.omnipus/pins/` store.
+Same profile as the other dead-end / no-surface retirements this assessment makes (`cron`,
+`task_add_todo`, `task_add_dependency`) — tool surface with no user-facing view.
+
+**Reversal clause:** if v0.3 commits to a saved-messages / bookmarks feature, pins could be revived
+behind a real UI (a Pins panel + a create-pin control on chat messages). Until then they are a
+phantom and should go.
+
+### Todo
+
+- [ ] v0.3: remove `pkg/sysagent/tools/pin.go` (PinCreate/PinList/PinDelete) + their registration in
+  `pkg/sysagent/tools/registry.go`; remove the `pins/` dir handling. Confirm no references in seed
+  prompts or the SPA.
+- [ ] Decide (ADR): saved-messages/bookmarks feature in v0.3? If yes → keep pins behind a new UI;
+  if no → full removal as above.
+
+---
+
 ## Scope & next steps
 
 - **Phase:** v0.3 (tasks redesign). No back-compat (fresh-build per the release strategy).
@@ -294,7 +332,8 @@ Was 6 general + 4 `system.task.*` = 10; becomes 5 + 4 = 9 (retire `task_add_todo
 - **Decided (this assessment):** retire `cron` (§1); fold `task_add_dependency` into `task_update`
   + broaden `task_update` to a real edit + `task_create` accepts `blocked_by` (§2); retire
   `task_add_todo` → `todos` scratchpad-as-board-task with re-injection (§3); rename
-  `system.task.*` → `task_*_in_workspace` with behavioral parity (§4).
+  `system.task.*` → `task_*_in_workspace` with behavioral parity (§4); retire `pins`
+  (create/list/delete — backend-only, no UI) (§5).
 - **Concept doc:** the `.preview-doc/tools-catalog.html` Tool Catalog page and `.preview-doc/time.html`
   are updated to reflect the intended end-state — `cron`, `task_add_dependency`, and `task_add_todo`
   retired; `task_update` shown as the broadened edit tool; the new `todos` tool (scratchpad-as-board-task)
