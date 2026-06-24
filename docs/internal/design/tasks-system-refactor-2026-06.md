@@ -323,6 +323,50 @@ phantom and should go.
 
 ---
 
+## 6. Stubs — implement 3 channel tools, retire `backup`, defer `cost`
+
+### Finding
+
+Five `system.*` tools are honest stubs — each returns `[NOT IMPLEMENTED]` and points to the UI
+rather than failing silently:
+
+| Tool (to-be name) | Stub reason | v0.3 decision |
+|--------------------|-------------|---------------|
+| `enable_channel` | "no tool-side path into the channel manager" (wired to REST/UI only) | **Implement** |
+| `disable_channel` | same wiring gap | **Implement** |
+| `test_channel` | same → "Use the Test button on the Channels screen" | **Implement** |
+| `create_backup` | "no archive is produced" — **no backup infrastructure at all** | **Retire** |
+| `query_cost` | "no per-period cost store exists" (per-turn cost *is* tracked in the `done` frame, but no aggregate store) | **Defer** (open) |
+
+### Decisions
+
+- **Implement the 3 channel tools** (`enable_channel` / `disable_channel` / `test_channel`): the
+  channel manager (`pkg/channels/manager.go`) already has enable/disable/test wired to the REST API
+  — this is a wiring gap, not a missing primitive. Expose them to the systools. These stay
+  `privileged` (admin) — toggling a live channel from chat is powerful; restrict to the system agent
+  / admin-ask-gated, not delegatable.
+- **Retire `create_backup`**: no infrastructure, and a chat-driven backup is the wrong abstraction
+  (backups are an ops / scheduled / CLI concern, not an agent turn). Same call as `pins`/`cron`.
+
+### Open (deferred)
+
+- **`query_cost`**: the per-turn cost data exists (`cost_usd` on the `done` frame), so aggregating it
+  into a per-period store is feasible and "how much have I spent this month?" is real operator
+  demand. **Deferred** pending a decision: implement (build the aggregate cost store) or retire
+  until built. Needs a retention/granularity design (how long to keep per-turn cost data).
+
+### Todo
+
+- [ ] v0.3: implement `enable_channel` / `disable_channel` / `test_channel` — wire
+  `pkg/sysagent/tools/channel.go` into the channel manager's enable/disable/test (the REST handlers
+  already call these). Remove the `[NOT IMPLEMENTED]` returns.
+- [ ] v0.3: retire `create_backup` — remove `BackupCreateTool` + its registration; confirm no seed
+    prompt / SPA references.
+- [ ] ADR: decide `query_cost` — implement (aggregate per-turn cost into a per-period store) vs
+      retire until built.
+
+---
+
 ## Scope & next steps
 
 - **Phase:** v0.3 (tasks redesign). No back-compat (fresh-build per the release strategy).
