@@ -190,6 +190,7 @@ func (s *Store) AdvanceBlockedDependents(completedID string) (advancedIDs []stri
 	}
 
 	statusCache := make(map[string]Status)
+	var failedIDs []string // per-dependent write failures (surfaced as a non-nil err)
 	readStatus := func(depID string) (Status, bool) {
 		if st, ok := statusCache[depID]; ok {
 			return st, true
@@ -247,11 +248,19 @@ func (s *Store) AdvanceBlockedDependents(completedID string) (advancedIDs []stri
 		writeErr := s.write(fresh)
 		mu.Unlock()
 		if writeErr != nil {
+			// A per-dependent write fault orphans this dependent in `blocked`
+			// with no auto-retry. Surface it (not just log) so callers can warn
+			// the agent/operator — the advancedIDs still holds the ones that DID
+			// advance. All callers already handle a non-nil error.
 			slog.Warn("task: AdvanceBlockedDependents: write failed", "id", id, "error", writeErr)
+			failedIDs = append(failedIDs, id)
 			continue
 		}
 		slog.Info("task: advanced blocked dependent blocked→next", "task_id", id, "completed_dep", completedID)
 		advancedIDs = append(advancedIDs, id)
+	}
+	if len(failedIDs) > 0 {
+		return advancedIDs, fmt.Errorf("task: AdvanceBlockedDependents: write failed for %d dependent(s): %v", len(failedIDs), failedIDs)
 	}
 	return advancedIDs, nil
 }

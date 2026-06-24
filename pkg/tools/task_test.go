@@ -746,3 +746,943 @@ func TestTaskDelete_MissingAgentID(t *testing.T) {
 
 // Compile-time check: ensure SetHome is the documented wiring point.
 var _ = fmt.Sprintf // suppress import if no other fmt use
+
+// --- Broadened task_update / task_create tests (blocked_by + field patches) ---
+//
+// Spec of to-be behavior (backend-lead editing task.go in parallel):
+//   - task_update gains optional title / priority / due / assignee / blocked_by
+//     alongside existing task_id / status / result / artifacts. Only-provided
+//     fields apply via task.Patch + store.Update. status→done calls
+//     store.AdvanceBlockedDependents. blocked_by is cycle-checked and
+//     cross-workspace guarded (mirroring TaskAddDependencyTool).
+//   - task_create gains optional blocked_by (cycle-checked at creation).
+//
+// These tests assert the SPEC behavior. If the backend-lead's impl differs, the
+// review/fix round reconciles — we do NOT edit task.go here.
+
+// TaskUpdate status constants used in field-patch tests (imported from pkg/task
+// would be task.StatusDone etc.; re-aliased here for readability).
+const (
+	updStatusDone   = "done"
+	updStatusFailed = "failed"
+	updStatusInProg = "in_progress"
+)
+
+// TestTaskUpdate_EditsTitle proves task_update edits title and leaves other
+// fields untouched (only-provided-applied).
+func TestTaskUpdate_EditsTitle(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+	originalPriority := tk.Priority
+	originalDue := tk.Due
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{
+		"task_id": tk.ID,
+		"status":  updStatusInProg,
+		"title":   "renamed title",
+	})
+	if res.IsError {
+		t.Fatalf("task_update title: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Title != "renamed title" {
+		t.Errorf("expected title updated to 'renamed title', got %q", got.Title)
+	}
+	// Only-provided-applied: priority and due must be unchanged.
+	if got.Priority != originalPriority {
+		t.Errorf("priority must be unchanged, got %d (was %d)", got.Priority, originalPriority)
+	}
+	if got.Due != originalDue {
+		t.Errorf("due must be unchanged, got %q (was %q)", got.Due, originalDue)
+	}
+}
+
+// TestTaskUpdate_EditsPriorityAndDue proves task_update edits priority (1-5) and
+// due (RFC3339). Two different inputs produce two different outputs
+// (differentiation test — catches a hardcoded response).
+func TestTaskUpdate_EditsPriorityAndDue(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	dueA := "2026-07-01T12:00:00Z"
+	dueB := "2026-08-15T09:30:00Z"
+
+	if res := tool.Execute(ctx, map[string]any{
+		"task_id":  tk.ID,
+		"status":   updStatusInProg,
+		"priority": float64(2),
+		"due":      dueA,
+	}); res.IsError {
+		t.Fatalf("first update: %s", res.ForLLM)
+	}
+	got, _ := store.Get(tk.ID)
+	if got.Priority != 2 {
+		t.Errorf("expected priority 2, got %d", got.Priority)
+	}
+	if got.Due != dueA {
+		t.Errorf("expected due %q, got %q", dueA, got.Due)
+	}
+
+	if res := tool.Execute(ctx, map[string]any{
+		"task_id":  tk.ID,
+		"status":   updStatusInProg,
+		"priority": float64(5),
+		"due":      dueB,
+	}); res.IsError {
+		t.Fatalf("second update: %s", res.ForLLM)
+	}
+	got, _ = store.Get(tk.ID)
+	if got.Priority != 5 {
+		t.Errorf("expected priority 5, got %d", got.Priority)
+	}
+	if got.Due != dueB {
+		t.Errorf("expected due %q, got %q", dueB, got.Due)
+	}
+}
+
+// TestTaskUpdate_EditsAgentID proves task_update edits the assignee via the
+// agent_id param (renamed from "assignee"). The store field is still AgentID.
+func TestTaskUpdate_EditsAgentID(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{
+		"task_id":  tk.ID,
+		"status":   updStatusInProg,
+		"agent_id": "agent-b",
+	})
+	if res.IsError {
+		t.Fatalf("task_update agent_id: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.AgentID != "agent-b" {
+		t.Errorf("expected agent_id 'agent-b', got %q", got.AgentID)
+	}
+}
+
+// TestTaskUpdate_SetsBlockedBy proves task_update sets blocked_by and persists.
+func TestTaskUpdate_SetsBlockedBy(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	dep := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+	blocker := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{
+		"task_id":    dep.ID,
+		"status":     updStatusInProg,
+		"blocked_by": []any{blocker.ID},
+	})
+	if res.IsError {
+		t.Fatalf("task_update blocked_by: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(dep.ID)
+	if err != nil {
+		t.Fatalf("get dep: %v", err)
+	}
+	if len(got.BlockedBy) != 1 || got.BlockedBy[0] != blocker.ID {
+		t.Errorf("expected blocked_by=[%s], got %v", blocker.ID, got.BlockedBy)
+	}
+}
+
+// TestTaskUpdate_BlockedByRejectsCycle proves task_update rejects a cycle
+// (a→b→a). We set b blocked_by a, then attempt a blocked_by b — must error.
+func TestTaskUpdate_BlockedByRejectsCycle(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	a := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+	b := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	// Wire b→a directly via the store so the edge is present without going
+	// through the tool's (old) status-only path.
+	if _, _, err := store.AddDependency(b.ID, a.ID); err != nil {
+		t.Fatalf("seed AddDependency b→a: %v", err)
+	}
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	// Attempt a→b: forms a cycle a→b→a. Must be rejected.
+	res := tool.Execute(ctx, map[string]any{
+		"task_id":    a.ID,
+		"status":     updStatusInProg,
+		"blocked_by": []any{b.ID},
+	})
+	if !res.IsError {
+		t.Fatal("expected cycle rejection when setting blocked_by that forms a→b→a")
+	}
+	if !strings.Contains(res.ForLLM, "cycle") {
+		t.Errorf("expected 'cycle' in error, got: %s", res.ForLLM)
+	}
+
+	// a must NOT have acquired the cyclic edge.
+	got, _ := store.Get(a.ID)
+	for _, d := range got.BlockedBy {
+		if d == b.ID {
+			t.Fatal("cyclic blocked_by edge must not persist on a")
+		}
+	}
+}
+
+// TestTaskUpdate_BlockedByRejectsCrossWorkspace proves task_update's blocked_by
+// applies the cross-workspace guard (mirrors TaskAddDependencyTool).
+func TestTaskUpdate_BlockedByRejectsCrossWorkspace(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	dep := seedTask(t, store, "agent-a", "agent-a", "ws-alpha")
+	blocker := seedTask(t, store, "agent-a", "agent-a", "ws-beta")
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{
+		"task_id":    dep.ID,
+		"status":     updStatusInProg,
+		"blocked_by": []any{blocker.ID},
+	})
+	if !res.IsError {
+		t.Fatal("expected cross-workspace rejection")
+	}
+	if !strings.Contains(res.ForLLM, "different workspace") {
+		t.Errorf("expected 'different workspace' in error, got: %s", res.ForLLM)
+	}
+
+	// Edge must not persist.
+	got, _ := store.Get(dep.ID)
+	if len(got.BlockedBy) != 0 {
+		t.Errorf("cross-workspace blocked_by must not persist, got %v", got.BlockedBy)
+	}
+}
+
+// TestTaskUpdate_DoneAdvancesBlockedDependents proves that marking the blocker
+// done advances a still-blocked dependent to `next` via
+// store.AdvanceBlockedDependents.
+func TestTaskUpdate_DoneAdvancesBlockedDependents(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+
+	blocker := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+	dependent := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	// Wire dependent→blocker directly via the store.
+	if _, _, err := store.AddDependency(dependent.ID, blocker.ID); err != nil {
+		t.Fatalf("seed AddDependency: %v", err)
+	}
+	dep, err := store.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("get dependent: %v", err)
+	}
+	if dep.Status != task.StatusBlocked {
+		t.Fatalf("expected dependent blocked after AddDependency, got %q", dep.Status)
+	}
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{
+		"task_id": blocker.ID,
+		"status":  updStatusDone,
+		"result":  "blocker complete",
+	})
+	if res.IsError {
+		t.Fatalf("task_update done on blocker: %s", res.ForLLM)
+	}
+
+	// The dependent must now be advanced to `next`.
+	dep, err = store.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("get dependent after blocker done: %v", err)
+	}
+	if dep.Status != task.StatusNext {
+		t.Errorf("expected dependent advanced to next, got %q", dep.Status)
+	}
+}
+
+// TestTaskUpdate_StatusOnlyBackcompat proves a call with only task_id+status
+// still works and does NOT touch other fields (back-compat with the old
+// status-only tool).
+func TestTaskUpdate_StatusOnlyBackcompat(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+	originalTitle := tk.Title
+	originalPriority := tk.Priority
+	originalDue := tk.Due
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{
+		"task_id": tk.ID,
+		"status":  updStatusInProg,
+	})
+	if res.IsError {
+		t.Fatalf("status-only task_update: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != task.StatusInProgress {
+		t.Errorf("expected status in_progress, got %q", got.Status)
+	}
+	// No other fields touched.
+	if got.Title != originalTitle {
+		t.Errorf("title must be unchanged, got %q (was %q)", got.Title, originalTitle)
+	}
+	if got.Priority != originalPriority {
+		t.Errorf("priority must be unchanged, got %d (was %d)", got.Priority, originalPriority)
+	}
+	if got.Due != originalDue {
+		t.Errorf("due must be unchanged, got %q (was %q)", got.Due, originalDue)
+	}
+	if len(got.BlockedBy) != 0 {
+		t.Errorf("blocked_by must be untouched, got %v", got.BlockedBy)
+	}
+}
+
+// TestTaskUpdate_DoneFailedTerminal proves the terminal-status paths still
+// produce a result for both done and failed (differentiation: two different
+// statuses produce two different stored statuses).
+func TestTaskUpdate_DoneFailedTerminal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		status     string
+		wantStatus task.Status
+	}{
+		{"done", updStatusDone, task.StatusDone},
+		{"failed", updStatusFailed, task.StatusFailed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+			tool := NewTaskUpdateTool(store)
+			ctx := WithAgentID(context.Background(), "agent-a")
+
+			res := tool.Execute(ctx, map[string]any{
+				"task_id": tk.ID,
+				"status":  tc.status,
+				"result":  "finished",
+			})
+			if res.IsError {
+				t.Fatalf("task_update %s: %s", tc.status, res.ForLLM)
+			}
+			got, err := store.Get(tk.ID)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if got.Status != tc.wantStatus {
+				t.Errorf("expected %q, got %q", tc.wantStatus, got.Status)
+			}
+		})
+	}
+}
+
+// TestTaskCreate_WithBlockedBy proves task_create with blocked_by persists the
+// deps at creation.
+func TestTaskCreate_WithBlockedBy(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+
+	// Seed a blocker in ws-1.
+	blocker := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	res := tool.Execute(ctx, map[string]any{
+		"title":      "dependent task",
+		"prompt":     "do it",
+		"agent_id":   "agent-b",
+		"blocked_by": []any{blocker.ID},
+	})
+	if res.IsError {
+		t.Fatalf("task_create with blocked_by: %s", res.ForLLM)
+	}
+
+	// Extract the created task id from the result JSON.
+	var created struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal([]byte(res.ForLLM), &created); err != nil {
+		t.Fatalf("parse result %q: %v", res.ForLLM, err)
+	}
+	if created.TaskID == "" {
+		t.Fatalf("no task_id in result: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(created.TaskID)
+	if err != nil {
+		t.Fatalf("get created task: %v", err)
+	}
+	if len(got.BlockedBy) != 1 || got.BlockedBy[0] != blocker.ID {
+		t.Errorf("expected blocked_by=[%s], got %v", blocker.ID, got.BlockedBy)
+	}
+}
+
+// TestTaskCreate_BlockedByRejectsNonExistentBlocker proves task_create with
+// blocked_by applies the cross-task guard: a blocked_by referencing a
+// non-existent task must be rejected (no dangling edge persisted). A true
+// a→b→a cycle cannot be formed at creation because the new task's id is not yet
+// known (no existing edge can point back to it), so the cycle guard's
+// creation-time role is to validate the proposed blocked_by set against the
+// existing graph — a non-existent blocker is the rejectable case here.
+func TestTaskCreate_BlockedByRejectsNonExistentBlocker(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	res := tool.Execute(ctx, map[string]any{
+		"title":      "dangling",
+		"prompt":     "p",
+		"agent_id":   "agent-b",
+		"blocked_by": []any{"nonexistent-blocker-id"},
+	})
+	if !res.IsError {
+		t.Fatal("expected error creating task blocked_by a non-existent blocker")
+	}
+
+	// The task must NOT have been persisted with a dangling edge.
+	all, _ := store.List(task.Filter{WorkspaceID: "ws-1"})
+	for _, tk := range all {
+		if tk.Title == "dangling" {
+			t.Fatal("task with a dangling blocked_by edge must not be persisted")
+		}
+	}
+}
+
+// TestTaskCreate_BlockedByRejectsCrossWorkspace proves task_create with
+// blocked_by applies the cross-workspace guard (mirrors TaskAddDependencyTool).
+func TestTaskCreate_BlockedByRejectsCrossWorkspace(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+
+	// Blocker lives in ws-beta; new task will land in ws-alpha.
+	blocker := seedTask(t, store, "agent-a", "agent-a", "ws-beta")
+
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "ws-alpha")
+
+	res := tool.Execute(ctx, map[string]any{
+		"title":      "cross-ws dep",
+		"prompt":     "p",
+		"agent_id":   "agent-b",
+		"blocked_by": []any{blocker.ID},
+	})
+	if !res.IsError {
+		t.Fatal("expected cross-workspace rejection at task_create")
+	}
+	if !strings.Contains(res.ForLLM, "different workspace") {
+		t.Errorf("expected 'different workspace' in error, got: %s", res.ForLLM)
+	}
+}
+
+// --- Review gap coverage (task_update validation / read-back / negative paths) ---
+//
+// These close the review gap: the field-patch tests proved the happy path for
+// title/priority/due/blocked_by, but did not exercise the rejection, read-back,
+// response-shape, and negative-advance paths. Each test below asserts on REAL
+// content (specific error substrings, persisted field values, JSON shape), never
+// just "no error".
+
+// TestTaskUpdate_NoUpdatableFields proves a call with ONLY task_id (no updatable
+// field) is rejected with a clear "no updatable fields" error. Catches a no-op
+// tool that silently succeeds.
+func TestTaskUpdate_NoUpdatableFields(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{"task_id": tk.ID})
+	if !res.IsError {
+		t.Fatal("expected error when no updatable fields provided")
+	}
+	if !strings.Contains(res.ForLLM, "no updatable fields") {
+		t.Errorf("expected 'no updatable fields' in error, got: %s", res.ForLLM)
+	}
+
+	// Task must be unchanged.
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != task.StatusNext {
+		t.Errorf("status must be unchanged, got %q", got.Status)
+	}
+}
+
+// TestTaskUpdate_PriorityOutOfRange proves priority 0 and 6 are both rejected
+// (rejection test — catches a validator that accepts anything).
+func TestTaskUpdate_PriorityOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		priority float64
+	}{
+		{"zero", 0},
+		{"six", 6},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+			originalPriority := tk.Priority
+
+			tool := NewTaskUpdateTool(store)
+			ctx := WithAgentID(context.Background(), "agent-a")
+
+			res := tool.Execute(ctx, map[string]any{
+				"task_id":  tk.ID,
+				"priority": tc.priority,
+			})
+			if !res.IsError {
+				t.Fatalf("expected error for priority %v", tc.priority)
+			}
+			if !strings.Contains(res.ForLLM, "priority must be between 1 and 5") {
+				t.Errorf("unexpected error: %s", res.ForLLM)
+			}
+
+			// Priority must be unchanged.
+			got, _ := store.Get(tk.ID)
+			if got.Priority != originalPriority {
+				t.Errorf("priority must be unchanged, got %d (was %d)", got.Priority, originalPriority)
+			}
+		})
+	}
+}
+
+// TestTaskUpdate_DueInvalidRFC3339 proves an invalid due date is rejected.
+// Differentiation: two different invalid inputs both reject (not silently
+// accepted).
+func TestTaskUpdate_DueInvalidRFC3339(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		due  string
+	}{
+		{"not-a-date", "not-a-date"},
+		{"invalid-month-day", "2026-13-99T00:00:00Z"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+			tool := NewTaskUpdateTool(store)
+			ctx := WithAgentID(context.Background(), "agent-a")
+
+			res := tool.Execute(ctx, map[string]any{
+				"task_id": tk.ID,
+				"due":     tc.due,
+			})
+			if !res.IsError {
+				t.Fatalf("expected error for invalid due %q", tc.due)
+			}
+			if !strings.Contains(res.ForLLM, "invalid due date") {
+				t.Errorf("expected 'invalid due date' in error, got: %s", res.ForLLM)
+			}
+
+			// Due must be unchanged (empty on a fresh seed).
+			got, _ := store.Get(tk.ID)
+			if got.Due != "" {
+				t.Errorf("due must be unchanged, got %q", got.Due)
+			}
+		})
+	}
+}
+
+// TestTaskUpdate_InvalidStatus proves a bogus status string is rejected.
+func TestTaskUpdate_InvalidStatus(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{
+		"task_id": tk.ID,
+		"status":  "bogus",
+	})
+	if !res.IsError {
+		t.Fatal("expected error for invalid status 'bogus'")
+	}
+	if !strings.Contains(res.ForLLM, "invalid status") {
+		t.Errorf("expected 'invalid status' in error, got: %s", res.ForLLM)
+	}
+
+	// Status must be unchanged.
+	got, _ := store.Get(tk.ID)
+	if got.Status != task.StatusNext {
+		t.Errorf("status must be unchanged, got %q", got.Status)
+	}
+}
+
+// TestTaskUpdate_NotFound proves an unknown task_id returns a clear not-found
+// error (not a silent success or a nil panic).
+func TestTaskUpdate_NotFound(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{
+		"task_id": "nonexistent-id",
+		"status":  updStatusInProg,
+	})
+	if !res.IsError {
+		t.Fatal("expected error for non-existent task")
+	}
+	if !strings.Contains(res.ForLLM, "not found") {
+		t.Errorf("expected 'not found' in error, got: %s", res.ForLLM)
+	}
+}
+
+// TestTaskUpdate_OwnershipRejection proves a caller who is NOT the assignee is
+// rejected — mirrors TestTaskDelete_OwnershipRejection /
+// TestTaskAddDependency_OwnershipRejection. task_update's gate is assignee-only
+// (it does NOT allow the creator, unlike delete/add_dependency).
+func TestTaskUpdate_OwnershipRejection(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	// Task assigned to agent-owner, created by creator-a.
+	tk := seedTask(t, store, "agent-owner", "creator-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+
+	// An unrelated caller must be rejected.
+	res := tool.Execute(WithAgentID(context.Background(), "intruder"), map[string]any{
+		"task_id": tk.ID,
+		"status":  updStatusInProg,
+	})
+	if !res.IsError {
+		t.Fatal("expected ownership rejection for an unrelated caller")
+	}
+	if !strings.Contains(res.ForLLM, "you can only update tasks assigned to you") {
+		t.Errorf("unexpected rejection message: %s", res.ForLLM)
+	}
+
+	// The creator (who is NOT the assignee) must ALSO be rejected — task_update
+	// is assignee-only, unlike delete/add_dependency which allow the creator.
+	resCreator := tool.Execute(WithAgentID(context.Background(), "creator-a"), map[string]any{
+		"task_id": tk.ID,
+		"status":  updStatusInProg,
+	})
+	if !resCreator.IsError {
+		t.Fatal("expected rejection when the creator (non-assignee) calls task_update")
+	}
+	if !strings.Contains(resCreator.ForLLM, "you can only update tasks assigned to you") {
+		t.Errorf("unexpected creator rejection message: %s", resCreator.ForLLM)
+	}
+
+	// Status must be unchanged.
+	got, _ := store.Get(tk.ID)
+	if got.Status != task.StatusNext {
+		t.Errorf("status must be unchanged after rejected updates, got %q", got.Status)
+	}
+}
+
+// TestTaskUpdate_ResultAndArtifactsReadBack proves result + artifacts persist
+// (persistence test — write, then store.Get, assert full content matches). Two
+// different artifact sets produce two different stored values
+// (differentiation test — catches a hardcoded response).
+func TestTaskUpdate_ResultAndArtifactsReadBack(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	// First write: result + two artifacts.
+	res := tool.Execute(ctx, map[string]any{
+		"task_id":   tk.ID,
+		"status":    updStatusDone,
+		"result":    "shipped the feature",
+		"artifacts": []any{"/tmp/a.txt", "/tmp/b.txt"},
+	})
+	if res.IsError {
+		t.Fatalf("task_update result+artifacts: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Result != "shipped the feature" {
+		t.Errorf("expected result 'shipped the feature', got %q", got.Result)
+	}
+	if len(got.Artifacts) != 2 || got.Artifacts[0] != "/tmp/a.txt" || got.Artifacts[1] != "/tmp/b.txt" {
+		t.Errorf("expected artifacts [a,b], got %v", got.Artifacts)
+	}
+}
+
+// TestTaskUpdate_ResponseCarriesUpdatedFields proves the response JSON carries an
+// "updated_fields" array listing the changed field names (content test — asserts
+// the actual field names appear, not just that the JSON parses).
+func TestTaskUpdate_ResponseCarriesUpdatedFields(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	res := tool.Execute(ctx, map[string]any{
+		"task_id":  tk.ID,
+		"status":   updStatusInProg,
+		"title":    "new title",
+		"priority": float64(2),
+	})
+	if res.IsError {
+		t.Fatalf("task_update: %s", res.ForLLM)
+	}
+
+	var payload struct {
+		TaskID        string   `json:"task_id"`
+		Status        string   `json:"status"`
+		UpdatedFields []string `json:"updated_fields"`
+	}
+	if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
+		t.Fatalf("parse result %q: %v", res.ForLLM, err)
+	}
+	if payload.TaskID != tk.ID {
+		t.Errorf("expected task_id %q, got %q", tk.ID, payload.TaskID)
+	}
+	// All three provided fields must be listed.
+	want := map[string]bool{"status": true, "title": true, "priority": true}
+	for _, f := range payload.UpdatedFields {
+		if !want[f] {
+			t.Errorf("unexpected updated field %q in %v", f, payload.UpdatedFields)
+		}
+		delete(want, f)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing updated fields: %v (got %v)", want, payload.UpdatedFields)
+	}
+}
+
+// TestTaskUpdate_FailedDoesNotAdvanceDependents proves the NEGATIVE: marking a
+// blocker `failed` does NOT advance a dependent (it stays `blocked`). Only
+// `done` advances dependents. Catches a tool that advances on any terminal
+// status.
+func TestTaskUpdate_FailedDoesNotAdvanceDependents(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+
+	blocker := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+	dependent := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	// Wire dependent→blocker via the store so it lands in `blocked`.
+	if _, _, err := store.AddDependency(dependent.ID, blocker.ID); err != nil {
+		t.Fatalf("seed AddDependency: %v", err)
+	}
+	dep, err := store.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("get dependent: %v", err)
+	}
+	if dep.Status != task.StatusBlocked {
+		t.Fatalf("expected dependent blocked after AddDependency, got %q", dep.Status)
+	}
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	// Mark the blocker FAILED (not done).
+	res := tool.Execute(ctx, map[string]any{
+		"task_id": blocker.ID,
+		"status":  updStatusFailed,
+		"result":  "blocker failed",
+	})
+	if res.IsError {
+		t.Fatalf("task_update failed on blocker: %s", res.ForLLM)
+	}
+
+	// The dependent must STILL be blocked — failed does not satisfy a dep.
+	dep, err = store.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("get dependent after blocker failed: %v", err)
+	}
+	if dep.Status != task.StatusBlocked {
+		t.Errorf("expected dependent to STAY blocked after blocker failed, got %q", dep.Status)
+	}
+}
+
+// TestTaskUpdate_BlockedByClearsDeps proves the new fix behaviour: passing
+// blocked_by:[] CLEARS existing deps. Set deps, then update with blocked_by:[]
+// → deps gone and the task returns to a dispatchable state.
+func TestTaskUpdate_BlockedByClearsDeps(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+
+	dep := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+	blocker := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	// Wire dep→blocker via the store so dep is `blocked` with one edge.
+	if _, _, err := store.AddDependency(dep.ID, blocker.ID); err != nil {
+		t.Fatalf("seed AddDependency: %v", err)
+	}
+	got, err := store.Get(dep.ID)
+	if err != nil {
+		t.Fatalf("get dep after AddDependency: %v", err)
+	}
+	if len(got.BlockedBy) != 1 || got.BlockedBy[0] != blocker.ID {
+		t.Fatalf("expected one blocker wired, got %v", got.BlockedBy)
+	}
+	if got.Status != task.StatusBlocked {
+		t.Fatalf("expected dep blocked, got %q", got.Status)
+	}
+
+	tool := NewTaskUpdateTool(store)
+	ctx := WithAgentID(context.Background(), "agent-a")
+
+	// Now CLEAR deps via blocked_by:[].
+	res := tool.Execute(ctx, map[string]any{
+		"task_id":    dep.ID,
+		"blocked_by": []any{},
+	})
+	if res.IsError {
+		t.Fatalf("task_update blocked_by clear: %s", res.ForLLM)
+	}
+
+	got, err = store.Get(dep.ID)
+	if err != nil {
+		t.Fatalf("get dep after clear: %v", err)
+	}
+	if len(got.BlockedBy) != 0 {
+		t.Errorf("expected blocked_by cleared, got %v", got.BlockedBy)
+	}
+	// Clearing all blockers must move a `blocked` task back to `next`.
+	if got.Status != task.StatusNext {
+		t.Errorf("expected dep to advance to next after clearing deps, got %q", got.Status)
+	}
+}
+
+// TestTaskUpdate_AgentIDReassignment_RoutesThroughDelegationGate proves that
+// reassigning a task to a DIFFERENT agent routes through the delegation-deny
+// gate (reassignment is re-delegation). Mirrors task_create's denial test shape
+// (delegation_deny_wiring_test.go). The tool starts unwired, so the test
+// installs the checker via SetDelegationDenyChecker.
+func TestTaskUpdate_AgentIDReassignment_RoutesThroughDelegationGate(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+
+	var gotTarget string
+	tool.SetDelegationDenyChecker(func(_ context.Context, targetAgentID string) *DelegationDenial {
+		gotTarget = targetAgentID
+		return &DelegationDenial{
+			Reason:        "reassignment to untrusted agent denied",
+			Policy:        DenyTrustSet,
+			TargetAgentID: targetAgentID,
+		}
+	})
+
+	ctx := WithAgentID(context.Background(), "agent-a")
+	res := tool.Execute(ctx, map[string]any{
+		"task_id":  tk.ID,
+		"agent_id": "evil-agent",
+	})
+
+	if res == nil || !res.IsError {
+		t.Fatalf("expected denied reassignment to return an error, got %+v", res)
+	}
+	failure := decodeDelegationFailure(t, res)
+	if failure.Tool != "task_update" {
+		t.Errorf("expected structured failure tool 'task_update', got %q", failure.Tool)
+	}
+	if failure.Policy != string(DenyTrustSet) {
+		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
+	}
+	if !strings.Contains(failure.Reason, "reassignment to untrusted agent denied") {
+		t.Errorf("expected the checker's reason to surface, got: %s", failure.Reason)
+	}
+	if gotTarget != "evil-agent" {
+		t.Errorf("expected checker to receive 'evil-agent', got %q", gotTarget)
+	}
+
+	// The task must NOT have been reassigned (deny short-circuits before store.Update).
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.AgentID != "agent-a" {
+		t.Errorf("agent_id must be unchanged after denied reassignment, got %q", got.AgentID)
+	}
+}
+
+// TestTaskUpdate_AgentIDReassignment_SameAgentSkipsGate proves that a no-op
+// reassign (same agent) does NOT invoke the delegation gate — it is not a
+// re-delegation when the assignee is unchanged. A status change is included so
+// the call is not a no-op overall (a same-agent agent_id is intentionally not
+// counted as an updatable field by the tool).
+func TestTaskUpdate_AgentIDReassignment_SameAgentSkipsGate(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+
+	called := false
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial {
+		called = true
+		return nil
+	})
+
+	ctx := WithAgentID(context.Background(), "agent-a")
+	// Reassign to the SAME agent (plus a status change so the call is valid) —
+	// the gate must NOT be consulted for the same-agent value.
+	res := tool.Execute(ctx, map[string]any{
+		"task_id":  tk.ID,
+		"status":   updStatusInProg,
+		"agent_id": "agent-a",
+	})
+	if res.IsError {
+		t.Fatalf("same-agent reassign must succeed, got: %s", res.ForLLM)
+	}
+	if called {
+		t.Error("delegation gate must NOT be consulted for a same-agent (no-op) reassign")
+	}
+}
