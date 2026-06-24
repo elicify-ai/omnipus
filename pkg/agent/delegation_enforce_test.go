@@ -112,6 +112,28 @@ func TestDelegationDenyChecker_UntargetedSkipsTrustButEnforcesMode(t *testing.T)
 	}
 }
 
+func TestDelegationDenyChecker_SelfAssignmentSkipsTrustSet(t *testing.T) {
+	// Self-assignment (target == caller) is NOT delegation: Mia creating/reassigning
+	// a task to Mia must NOT be denied even though Mia is not in her own 'to'
+	// allowlist (which governs delegation to OTHER agents). Regression test for the
+	// UAT-found bug where task_create to self was denied with trust_set.
+	cfg := agentWithPolicy("mia", &config.DelegationPolicy{
+		To:    []config.AgentRef{{Kind: "local", ID: "worker"}}, // mia NOT in her own To
+		Modes: []config.DelegationMode{config.DelegationModeTask},
+	})
+	check := buildDelegationDenyChecker("mia", cfg, config.AgentDefaults{},
+		config.DelegationModeTask, nil)
+
+	// Target == caller ("mia") → trust set skipped, mode (task) allowed → no denial.
+	if denial := check(ctxAtDepth(0), "mia"); denial != nil {
+		t.Fatalf("self-assignment must be allowed (not delegation), got deny: %+v", denial)
+	}
+	// Sanity: a DIFFERENT untrusted target is still denied.
+	if denial := check(ctxAtDepth(0), "ava"); denial == nil {
+		t.Fatal("delegation to an untrusted OTHER agent must still be denied")
+	}
+}
+
 // --- FR-6.2: synchronous subagent gate (mode = "await") ---
 
 func TestSubagentDelegationDenyChecker_AllowedWhenPermitted(t *testing.T) {
