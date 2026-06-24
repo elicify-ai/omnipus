@@ -44,7 +44,7 @@ test(
     // narrating or delegating.
     await input.fill(
       'Use the browser tools to take a screenshot of https://example.com and show it to me. ' +
-        'Call browser.navigate then browser.screenshot yourself — do not delegate this.',
+        'Call browser_navigate then browser_screenshot yourself — do not delegate this.',
     );
     await input.press('Enter');
 

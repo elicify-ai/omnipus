@@ -85,7 +85,10 @@ test(
         tool_calls: [
           {
             id: 'tc-t119-malformed',
-            // Use the canonical `web_serve` tool name (registered in ChatScreen.tsx).
+            // Use `web_serve` (the SPA legacy alias kept for session replay).
+            // The canonical backend name is now `serve_web` (§7 rename), but
+            // WebServeUI is registered under 'web_serve' for backward-compat
+            // transcript replay until the SPA adds a ServeWebUI registration.
             tool: 'web_serve',
             status: 'success',
             duration_ms: 50,

@@ -7,7 +7,7 @@
  *   1. GET /api/v1/tools returns > 41 entries (SC-101 / AC2).
  *   2. The Tool Access category grid is NON-EMPTY (SC-102 / AC1).
  *   3. The grid contains a tool row for "exec" (SC-101 / AC1).
- *   4. The grid contains a tool row for "web_search" (SC-101 / AC1).
+ *   4. The grid contains a tool row for "search_web" (SC-101 / AC1).
  *   5. No tool is listed twice — no duplicate data-testid="tool-row-*" (AC1).
  *   6. No user-facing category label equals the raw key "core" or "system" (AC4).
  *      Raw keys must map to human labels: core → "General", system → "System".
@@ -22,7 +22,7 @@
  *
  * Individual tool rows are also collapsed (per CategorySection); we must expand
  * each category to see its tool-row-* testids. For the non-duplicate check we
- * expand all categories sequentially. For the exec/web_search presence check
+ * expand all categories sequentially. For the exec/search_web presence check
  * we use the API directly (SC-101 mandates API returns > 41 entries including
  * those two tools) and also verify the tool rows appear after expansion.
  *
@@ -78,14 +78,14 @@ function readStorageStateToken(): string {
 
 // ── AC2: API-level assertion (SC-101) ─────────────────────────────────────────
 // Independent test against the real /api/v1/tools — not a mock.
-// Verifies: count > 41, exec present, web_search present.
+// Verifies: count > 41, exec present, search_web present.
 //
 // BDD:
 //   Given a default install
 //   When GET /api/v1/tools is called
-//   Then it returns > 41 entries including exec and web_search
+//   Then it returns > 41 entries including exec and search_web
 
-test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including exec and web_search', async ({
+test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including exec and search_web', async ({
   request,
 }) => {
   // Read the bearer token from the storageState file written by global-setup.
@@ -108,8 +108,8 @@ test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including exec and web
   const toolNames = tools.map((t) => t.name)
   expect(toolNames, 'exec must be in /api/v1/tools response').toContain('exec')
 
-  // SC-101: web_search must be present.
-  expect(toolNames, 'web_search must be in /api/v1/tools response').toContain('web_search')
+  // SC-101: search_web must be present (renamed from web_search in §7).
+  expect(toolNames, 'search_web must be in /api/v1/tools response').toContain('search_web')
 })
 
 // ── AC1 + AC4 + SC-102: UI-level assertions (real embedded SPA) ───────────────
@@ -121,12 +121,12 @@ test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including exec and web
 //   When the Tool Access editor renders
 //   Then the category grid is non-empty
 //   And it contains a tool row for exec (after expanding its category)
-//   And it contains a tool row for web_search (after expanding its category)
+//   And it contains a tool row for search_web (after expanding its category)
 //   And no tool is listed twice
 //   And no user-facing category label equals the raw key "core" or "system"
 
 test(
-  '(AC1/AC4/SC-102) Tool Access grid is non-empty, exec+web_search present, no duplicates, no raw category labels',
+  '(AC1/AC4/SC-102) Tool Access grid is non-empty, exec+search_web present, no duplicates, no raw category labels',
   async ({ page }) => {
     // Navigate to Settings. HashRouter: route is /#/settings.
     await page.goto(`${BASE_URL}/#/settings`)
@@ -226,11 +226,11 @@ test(
       'exec tool row must exist in the category grid after expansion',
     ).toBeVisible({ timeout: 10_000 })
 
-    // ── AC1: web_search tool row must be present ───────────────────────────────
-    const webSearchRow = page.getByTestId('tool-row-web_search')
+    // ── AC1: search_web tool row must be present (renamed from web_search in §7) ─
+    const webSearchRow = page.getByTestId('tool-row-search_web')
     await expect(
       webSearchRow,
-      'web_search tool row must exist in the category grid after expansion',
+      'search_web tool row must exist in the category grid after expansion',
     ).toBeVisible({ timeout: 10_000 })
 
     // ── AC1: no tool listed twice (no duplicate tool-row-* testids) ────────────

@@ -77,7 +77,7 @@ test(
         type: 'tool_call_result',
         session_id: 'burst-test-session',
         call_id: `burst-call-${i}`,
-        tool: 'system.echo',
+        tool: 'exec',
         result: { output: `burst output ${i}` },
         status: 'success',
         duration_ms: 1,
