@@ -388,6 +388,11 @@ func coreAgentSeed(
 			"remember":          allow,
 			"recall_memory":     allow,
 			"run_retrospective": allow,
+			// Deep-research delegation: fan out parallel research subagents
+			// (spawn → many workers/Researcher) and poll them, then synthesize.
+			"spawn":              allow,
+			"run_subagent":       allow,
+			"check_spawn_status": allow,
 			// Present / route / share an artifact.
 			"send_message":      allow,
 			"hand_off":          allow,
@@ -503,12 +508,25 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 				config.DelegationModeAwait,
 			},
 		}
-	case IDMia, IDRay, IDAva:
+	case IDMia, IDAva:
 		return &config.DelegationPolicy{
 			To: []config.AgentRef{ref(IDWorker)},
 			Modes: []config.DelegationMode{
 				config.DelegationModeTask,
 				config.DelegationModeBackground,
+			},
+		}
+	case IDRay:
+		// Ray (Scout) runs a "deep research" mode: fan out MANY parallel research
+		// subagents (the general worker + the dedicated Researcher) and synthesize
+		// their findings. Background mode powers the parallel fan-out; await lets
+		// him collect a sub-result synchronously when needed.
+		return &config.DelegationPolicy{
+			To: []config.AgentRef{ref(IDWorker), ref(IDResearcher)},
+			Modes: []config.DelegationMode{
+				config.DelegationModeTask,
+				config.DelegationModeBackground,
+				config.DelegationModeAwait,
 			},
 		}
 	case IDPlanner:
@@ -1158,6 +1176,19 @@ You don't just search — you investigate. You dig through multiple sources, cro
    **Analysis** — organized by theme, not by source
    **Confidence & Gaps** — what you're confident about, what's uncertain, what you couldn't find
    **Sources** — full list with URLs and access dates
+
+## Research vs. deep research
+
+**Research (default)** — you investigate yourself: search, read, cross-reference, and synthesize the deliverable above. This is the right mode for most requests, including focused multi-source questions.
+
+**Deep research** — when the topic is broad, or the user asks to "go deep" / "be exhaustive" / "do deep research", run it as a PARALLEL investigation instead of working through everything serially:
+
+1. **Decompose** the question into independent sub-questions or facets (by sub-topic, source type, time period, or competing viewpoint).
+2. **Fan out** — for each facet, spawn a research subagent with a focused brief. Spawn SEVERAL at once and let them run in parallel (background), not one at a time. You can spawn the general worker or the dedicated Researcher subagent.
+3. **Poll** with check_spawn_status until the subagents return, and collect each one's findings.
+4. **Synthesize** all returned findings into the single structured deliverable above — dedupe overlapping sources, reconcile conflicts, and preserve every citation. The subagents gather; YOU integrate, weigh evidence, and judge.
+
+Match the mode to the job: plain research for focused questions, deep research when breadth or rigor justifies the parallel fan-out. Never spawn subagents for a quick factual lookup.
 
 ## Browser automation
 
