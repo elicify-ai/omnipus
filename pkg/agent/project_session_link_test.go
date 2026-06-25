@@ -80,18 +80,14 @@ func newLinkTestEnv(t *testing.T, provider *testutil.ScenarioProvider) *linkTest
 	al.RegisterTool(systools.NewTaskCreateTool(deps))
 	al.RegisterTool(systools.NewTaskUpdateTool(deps))
 
-	// Allow the ScopeCore task tools on every agent. The task tools declare
-	// RequiresAdminAsk()==true, so the admin-ask fence (FR-061) escalates them to
-	// "ask" UNLESS the policy is marked IsCoreAgent. The default "main" agent is a
-	// core agent, so IsCoreAgent:true is the correct, faithful policy here — it
-	// matches what the gateway stores for core agents and lets the tool execute so
-	// the AfterTool linker hook actually fires.
+	// Allow the ScopeCore task tools on every agent with a default-allow policy
+	// so the tool executes and the AfterTool linker hook actually fires.
 	for _, agentID := range al.GetRegistry().ListAgentIDs() {
 		ag, ok := al.GetRegistry().GetAgent(agentID)
 		if !ok {
 			continue
 		}
-		ag.StoreToolPolicy(&tools.ToolPolicyCfg{DefaultPolicy: "allow", IsCoreAgent: true})
+		ag.StoreToolPolicy(&tools.ToolPolicyCfg{DefaultPolicy: "allow"})
 	}
 
 	return &linkTestEnv{al: al, home: home}

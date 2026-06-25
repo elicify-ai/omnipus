@@ -53,7 +53,6 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		req.AgentID,
 		req.SessionID,
 		req.TurnID,
-		req.RequiresAdmin,
 	)
 	if entry == nil {
 		// Defensive: should never happen (requestApproval always returns non-nil).

@@ -24,7 +24,6 @@ func (t *builtinTestTool) Name() string               { return t.name }
 func (t *builtinTestTool) Description() string        { return "builtin test tool: " + t.name }
 func (t *builtinTestTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (t *builtinTestTool) Scope() ToolScope           { return t.scope }
-func (t *builtinTestTool) RequiresAdminAsk() bool     { return false }
 func (t *builtinTestTool) Category() ToolCategory     { return CategoryCore }
 func (t *builtinTestTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	return SilentResult("ok")

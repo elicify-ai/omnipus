@@ -603,9 +603,6 @@ func (c *policyApproverConsent) RequestConsent(ctx context.Context, req runner.C
 		AgentID:    c.agentID,
 		SessionID:  c.sessionID,
 		TurnID:     c.turnID,
-		// External CLI tool calls do not carry Omnipus admin flags; treat as
-		// non-admin (the CLI's own sandbox is the real boundary).
-		RequiresAdmin: false,
 	})
 	if !approved {
 		c.mu.Lock()

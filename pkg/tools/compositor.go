@@ -1,12 +1,8 @@
 // Package tools — per-agent tool policy filter (central tool registry redesign).
 //
 // FilterToolsByPolicy is the primary runtime filter: it resolves effective
-// policy (global × agent, deny>ask>allow) and applies the admin-ask fence
-// (FR-061) before the agent loop assembles the LLM tool list.
-//
-// M8 — fence consolidation: the admin-ask fence is applied via a single call to
-// policy.ApplyAdminAskFence. The previous inline version (lines 215-219 in the
-// pre-M8 code) has been removed; policy.ApplyAdminAskFence is the sole path.
+// policy (global × agent, deny>ask>allow) before the agent loop assembles the
+// LLM tool list.
 
 package tools
 
@@ -18,8 +14,6 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/dapicom-ai/omnipus/pkg/policy"
 )
 
 // MCPCaller is the interface used by mcpToolAdapter for execution.
@@ -219,17 +213,12 @@ type ToolPolicyCfg struct {
 	GlobalPolicies      map[string]string // per-tool global overrides (supports wildcards)
 	GlobalDefaultPolicy string            // fallback global policy when tool not in GlobalPolicies
 
-	// IsCoreAgent, when true, skips the RequiresAdminAsk fence (FR-061).
-	// Set to true for agents identified by coreagent.GetPrompt(id) != "".
-	IsCoreAgent bool
-
 	// GodMode, when true, activates the O14 global "bypass-permissions"
-	// override: every tool's effective policy is floored at "allow" and the
-	// admin-ask fence is skipped — no tool can remain "ask" or "deny". Set by
-	// agentToolsCfgToPolicy when sandbox.god_mode is on AND god mode is
-	// available (build supports it + --allow-god-mode passed). Non-destructive:
-	// the underlying policy maps are untouched, so clearing this restores the
-	// prior decisions exactly.
+	// override: every tool's effective policy is floored at "allow" — no tool
+	// can remain "ask" or "deny". Set by agentToolsCfgToPolicy when
+	// sandbox.god_mode is on AND god mode is available (build supports it +
+	// --allow-god-mode passed). Non-destructive: the underlying policy maps are
+	// untouched, so clearing this restores the prior decisions exactly.
 	GodMode bool
 }
 
@@ -248,10 +237,6 @@ type ToolPolicyCfg struct {
 // (e.g., "mcp_server_*" matches all tools from that MCP server). Exact-name matches
 // always win over wildcards; among wildcards, the most-specific match wins (most
 // dot-separated segments first); ties broken by char count then lexicographically (FR-071).
-//
-// Admin-ask fence (FR-061): for custom agents (cfg.IsCoreAgent == false),
-// if the resolved effective policy is "allow" but the tool's RequiresAdminAsk()
-// returns true, the effective policy is downgraded to "ask".
 //
 // Metrics (FR-039): emits IncFilterTotal once per tool decision.
 func FilterToolsByPolicy(allTools []Tool, agentType string, cfg *ToolPolicyCfg) ([]Tool, map[string]string) {
@@ -310,33 +295,6 @@ func FilterToolsByPolicy(allTools []Tool, agentType string, cfg *ToolPolicyCfg) 
 			continue
 		}
 
-		// Layer 3: admin-ask fence (FR-061) — single path via policy.ApplyAdminAskFence.
-		// M8: the former inline implementation is removed; all admin-ask fence logic
-		// lives exclusively in pkg/policy/admin_ask_fence.go. The predicate-injection
-		// seam avoids the pkg/tools ↔ pkg/policy import cycle.
-		//
-		// isCoreAgent predicate: the agentID param passed to ApplyAdminAskFence is
-		// unused here because cfg.IsCoreAgent already captured the determination at
-		// FilterToolsByPolicy call time. We capture it in the closure instead.
-		// God-mode (O14) skips the admin-ask fence entirely: the whole point of
-		// bypass-permissions is that no tool prompts. Without this guard the
-		// fence would re-downgrade an allow back to "ask" for RequiresAdminAsk
-		// tools on custom agents, leaving a path where a tool stays "ask".
-		if !cfg.GodMode {
-			effectivePolicy, _ = policy.ApplyAdminAskFence(
-				effectivePolicy,
-				t.Name(),
-				agentType,
-				func(name string) bool {
-					if asker, ok := t.(interface{ RequiresAdminAsk() bool }); ok {
-						return asker.RequiresAdminAsk()
-					}
-					return false
-				},
-				func(_ string) bool { return cfg.IsCoreAgent },
-			)
-		}
-
 		activeToolMetricsRecorder.IncFilterTotal(agentType, effectivePolicy)
 		out = append(out, t)
 		policyMap[t.Name()] = effectivePolicy
@@ -372,7 +330,6 @@ func (a *mcpToolAdapter) Name() string               { return a.toolDef.Name }
 func (a *mcpToolAdapter) Description() string        { return a.toolDef.Description }
 func (a *mcpToolAdapter) Parameters() map[string]any { return a.params }
 func (a *mcpToolAdapter) Scope() ToolScope           { return ScopeGeneral }
-func (a *mcpToolAdapter) RequiresAdminAsk() bool     { return false }
 func (a *mcpToolAdapter) Category() ToolCategory     { return CategoryMCP }
 
 func (a *mcpToolAdapter) Execute(ctx context.Context, args map[string]any) *ToolResult {

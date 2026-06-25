@@ -11,7 +11,6 @@
 //   - TestREST_GetAgentTools_FilteredView
 //   - TestREST_GetBuiltinTools_Returns404
 //   - TestREST_ApproveAuth_Unauthenticated401
-//   - TestREST_ApproveAuth_NonAdminSystemTool403
 //   - TestREST_ApproveDenyCancel_StateTransitions
 //   - TestREST_LateApprove_Returns410
 //   - TestApprovalRegistry_SaturationDefault64
@@ -129,11 +128,11 @@ func TestREST_GetTools_MethodNotAllowed(t *testing.T) {
 // --- REST: GET /api/v1/agents/{id}/tools ---
 
 // TestREST_GetAgentTools_FilteredView verifies GET /api/v1/agents/{id}/tools returns
-// the per-agent filtered view with the fence fields required by FR-086.
+// the per-agent filtered view required by FR-086.
 // BDD: Given a registered agent ID,
 // When GET /api/v1/agents/{id}/tools is called,
 // Then 200 with {agent_type, config, effective_tools} where every effective tool has
-// {name, configured_policy, effective_policy, fence_applied, requires_admin_ask}.
+// {name, configured_policy, effective_policy}.
 // Traces to: tool-registry-redesign-spec.md FR-028, FR-086
 func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
@@ -164,8 +163,6 @@ func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 		assert.Contains(t, entry, "name", "entry %d missing 'name'", i)
 		assert.Contains(t, entry, "configured_policy", "entry %d missing 'configured_policy'", i)
 		assert.Contains(t, entry, "effective_policy", "entry %d missing 'effective_policy'", i)
-		assert.Contains(t, entry, "fence_applied", "entry %d missing 'fence_applied'", i)
-		assert.Contains(t, entry, "requires_admin_ask", "entry %d missing 'requires_admin_ask'", i)
 	}
 }
 
@@ -221,30 +218,6 @@ func TestREST_ApproveAuth_Unauthenticated401(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code, "missing auth must return 401")
 }
 
-// TestREST_ApproveAuth_NonAdminSystemTool403 verifies that a non-admin caller
-// receives 403 Forbidden when attempting to approve a RequiresAdmin tool.
-// BDD: Given a pending approval with RequiresAdmin=true and a caller with user role,
-// When POST /api/v1/tool-approvals/{id} with action="approve" is called,
-// Then 403 Forbidden.
-// Traces to: tool-registry-redesign-spec.md FR-015
-func TestREST_ApproveAuth_NonAdminSystemTool403(t *testing.T) {
-	api, reg := newTestRestAPIWithApprovalReg(t)
-
-	// Register a pending approval with RequiresAdmin=true.
-	entry, accepted := reg.requestApproval(
-		"tc-001", "set_config",
-		map[string]any{"key": "x"},
-		"agent-1", "sess-1", "turn-1",
-		true, // requiresAdmin
-	)
-	require.True(t, accepted, "approval must be accepted (not saturated)")
-
-	// Non-admin caller attempts to approve.
-	w := postToolApproval(t, api, entry.ApprovalID, "approve", false /* non-admin */)
-
-	assert.Equal(t, http.StatusForbidden, w.Code, "non-admin on RequiresAdmin tool must get 403: %s", w.Body)
-}
-
 // --- REST: state transitions ---
 
 // TestREST_ApproveDenyCancel_StateTransitions verifies that approve, deny, and cancel
@@ -271,7 +244,6 @@ func TestREST_ApproveDenyCancel_StateTransitions(t *testing.T) {
 				"tc-"+tc.action, "read_file",
 				map[string]any{"path": "/tmp/test"},
 				"agent-2", "sess-2", "turn-2",
-				false, // no admin required
 			)
 			require.True(t, accepted)
 
@@ -319,7 +291,6 @@ func TestREST_LateApprove_Returns410(t *testing.T) {
 		"tc-late", "search_web",
 		map[string]any{"query": "golang"},
 		"agent-3", "sess-3", "turn-3",
-		false,
 	)
 	require.True(t, accepted)
 
@@ -359,7 +330,6 @@ func TestApprovalRegistry_SaturationDefault64(t *testing.T) {
 			"tc-sat-"+string(rune('A'+i%26)), "read_file",
 			map[string]any{},
 			"agent-sat", "sess-sat", "turn-sat",
-			false,
 		)
 		require.True(t, accepted, "request %d (of %d) must be accepted", i+1, wantCap)
 		require.NotNil(t, e)
@@ -371,7 +341,6 @@ func TestApprovalRegistry_SaturationDefault64(t *testing.T) {
 		"tc-sat-overflow", "read_file",
 		map[string]any{},
 		"agent-sat", "sess-sat", "turn-sat",
-		false,
 	)
 	assert.False(t, accepted, "65th request must be rejected (saturated)")
 	require.NotNil(t, saturated)
@@ -414,7 +383,6 @@ func TestApprovalRegistry_BatchShortCircuit_MixedPolicy(t *testing.T) {
 			"tc-"+id, "exec",
 			map[string]any{"cmd": "ls"},
 			"agent-batch", "sess-batch", "turn-batch",
-			false,
 		)
 		require.True(t, accepted, "entry %s must be accepted", id)
 		return e
@@ -483,7 +451,7 @@ func TestApprovalRegistry_BatchShortCircuit_MixedPolicy(t *testing.T) {
 func TestApprovalRegistry_AllTransitions(t *testing.T) {
 	t.Run("pending→approved", func(t *testing.T) {
 		reg := newApprovalRegistryV2(64, 300*time.Second)
-		e, accepted := reg.requestApproval("tc-ap", "read_file", map[string]any{}, "a", "s", "t", false)
+		e, accepted := reg.requestApproval("tc-ap", "read_file", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 		go func() { <-e.resultCh }()
 		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionApprove)
@@ -494,7 +462,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 
 	t.Run("pending→denied_user", func(t *testing.T) {
 		reg := newApprovalRegistryV2(64, 300*time.Second)
-		e, accepted := reg.requestApproval("tc-du", "read_file", map[string]any{}, "a", "s", "t", false)
+		e, accepted := reg.requestApproval("tc-du", "read_file", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 		go func() { <-e.resultCh }()
 		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny)
@@ -505,7 +473,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 
 	t.Run("pending→denied_cancel", func(t *testing.T) {
 		reg := newApprovalRegistryV2(64, 300*time.Second)
-		e, accepted := reg.requestApproval("tc-dc", "exec", map[string]any{}, "a", "s", "t", false)
+		e, accepted := reg.requestApproval("tc-dc", "exec", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 		go func() { <-e.resultCh }()
 		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionCancel)
@@ -517,7 +485,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 	t.Run("pending→denied_timeout", func(t *testing.T) {
 		// Very short timeout so the test completes quickly.
 		reg := newApprovalRegistryV2(64, 50*time.Millisecond)
-		e, accepted := reg.requestApproval("tc-dt", "search_web", map[string]any{}, "a", "s", "t", false)
+		e, accepted := reg.requestApproval("tc-dt", "search_web", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 
 		// Wait for the outcome: must be denied_timeout.
@@ -537,8 +505,8 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 
 	t.Run("pending→denied_restart", func(t *testing.T) {
 		reg := newApprovalRegistryV2(64, 300*time.Second)
-		e1, _ := reg.requestApproval("tc-dr-1", "exec", map[string]any{}, "a", "s", "t", false)
-		e2, _ := reg.requestApproval("tc-dr-2", "read_file", map[string]any{}, "a", "s", "t", false)
+		e1, _ := reg.requestApproval("tc-dr-1", "exec", map[string]any{}, "a", "s", "t")
+		e2, _ := reg.requestApproval("tc-dr-2", "read_file", map[string]any{}, "a", "s", "t")
 
 		canceled := reg.cancelAllPendingForRestart()
 		require.Len(t, canceled, 2)
@@ -557,11 +525,11 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 
 	t.Run("pending→denied_saturated", func(t *testing.T) {
 		reg := newApprovalRegistryV2(1, 300*time.Second)
-		e1, accepted1 := reg.requestApproval("tc-sat-1", "exec", map[string]any{}, "a", "s", "t", false)
+		e1, accepted1 := reg.requestApproval("tc-sat-1", "exec", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted1, "first entry must be accepted with cap=1")
 
 		// Second request exceeds cap → saturated.
-		e2, accepted2 := reg.requestApproval("tc-sat-2", "exec", map[string]any{}, "a", "s", "t", false)
+		e2, accepted2 := reg.requestApproval("tc-sat-2", "exec", map[string]any{}, "a", "s", "t")
 		require.False(t, accepted2, "second entry must be rejected (saturated)")
 		require.Equal(t, ApprovalStateDeniedSaturated, e2.state)
 
@@ -578,7 +546,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 
 	t.Run("pending→denied_batch_short_circuit", func(t *testing.T) {
 		reg := newApprovalRegistryV2(64, 300*time.Second)
-		e, accepted := reg.requestApproval("tc-bsc", "exec", map[string]any{}, "a", "s", "t", false)
+		e, accepted := reg.requestApproval("tc-bsc", "exec", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 
 		ok := reg.cancelBatchShortCircuit(e.ApprovalID)
@@ -596,7 +564,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 
 	t.Run("terminal→410_Gone", func(t *testing.T) {
 		reg := newApprovalRegistryV2(64, 300*time.Second)
-		e, accepted := reg.requestApproval("tc-term", "read_file", map[string]any{}, "a", "s", "t", false)
+		e, accepted := reg.requestApproval("tc-term", "read_file", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 
 		// Approve it to put it in a terminal state.
@@ -692,7 +660,6 @@ func TestWS_SessionState_PerUserScoping(t *testing.T) {
 		"tc-scope", "read_file",
 		map[string]any{"path": "/etc/passwd"},
 		"agent-scope", "sess-scope", "turn-scope",
-		false,
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() {
@@ -768,7 +735,6 @@ func TestWS_ToolApprovalRequired_ExpiresInMs(t *testing.T) {
 		"tc-broadcast", "exec",
 		map[string]any{"cmd": "whoami"},
 		"agent-br", "sess-br", "turn-br",
-		false,
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() {
@@ -840,7 +806,6 @@ func TestWS_ToolApprovalRequired_NilArgsBecomesEmptyObject(t *testing.T) {
 		"tc-nil-args", "list_agents",
 		nil, // <-- nil args
 		"agent-na", "sess-na", "turn-na",
-		false,
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() {
@@ -891,7 +856,6 @@ func TestApprovalRegistry_TimeoutTransition(t *testing.T) {
 		"tc-timeout", "exec",
 		map[string]any{},
 		"agent-t", "sess-t", "turn-t",
-		false,
 	)
 	require.True(t, accepted)
 
@@ -922,7 +886,6 @@ func TestApprovalRegistry_CancelAllPendingForRestart(t *testing.T) {
 			"tc-restart-"+string(rune('0'+i)), "exec",
 			map[string]any{},
 			"agent-r", "sess-r", "turn-r",
-			false,
 		)
 		require.True(t, accepted)
 		entries = append(entries, e)
@@ -953,7 +916,6 @@ func TestREST_HandleToolApprovals_UnknownAction(t *testing.T) {
 		"tc-unk", "read_file",
 		map[string]any{},
 		"agent-u", "sess-u", "turn-u",
-		false,
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() { go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel) }() })

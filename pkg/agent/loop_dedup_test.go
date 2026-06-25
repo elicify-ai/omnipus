@@ -44,7 +44,6 @@ func (d *dupTool) Description() string          { return "dup test: " + d.source
 func (d *dupTool) Parameters() map[string]any   { return map[string]any{} }
 func (d *dupTool) Scope() tools.ToolScope       { return d.scopeVal }
 func (d *dupTool) Category() tools.ToolCategory { return tools.CategoryCore }
-func (d *dupTool) RequiresAdminAsk() bool       { return false }
 func (d *dupTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	return &tools.ToolResult{ForLLM: "ok from " + d.sourceTag}
 }

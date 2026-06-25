@@ -2,7 +2,7 @@ title: McpServerUpdate
 description: >
   PATCH body for /mcp-servers/{id}. Partial update — only the provided fields are
   changed; omitted fields are preserved (merge, not replace). Use it to toggle
-  `enabled`, change the endpoint/command, or adjust env/headers/admin-ask.
+  `enabled`, change the endpoint/command, or adjust env/headers.
 type: object
 additionalProperties: false
 properties:
@@ -36,8 +36,3 @@ properties:
   env_file:
     type: string
     description: Path to a KEY=VALUE env file (stdio only).
-  requires_admin_ask:
-    type: array
-    items:
-      type: string
-    description: Replacement list of tools that require admin approval (FR-064).

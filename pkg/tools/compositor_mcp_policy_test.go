@@ -23,10 +23,9 @@
 //
 // Construction pattern: the makeMCPAdapter helper builds a Tool whose Name() is
 // the supplied (already runtime-formatted) name and whose Category() is
-// CategoryMCP — what FilterToolsByPolicy keys on. For RequiresAdminAsk, the tool
-// is round-tripped through MCPRegistry.RegisterServerToolsWithOpts.
+// CategoryMCP — what FilterToolsByPolicy keys on.
 //
-// Traces to: FR-009, FR-034, FR-061, FR-064, FR-071 (tool-registry-redesign-spec.md)
+// Traces to: FR-009, FR-034, FR-071 (tool-registry-redesign-spec.md)
 
 package tools
 
@@ -290,63 +289,6 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_LongerPrefixWins(t *test
 	p, ok := policyMap["mcp_other_tool"]
 	assert.True(t, ok, "mcp_other_tool must survive (mcp_* = ask, not deny)")
 	assert.Equal(t, "ask", p, "mcp_other_tool must have effective policy 'ask' from mcp_*")
-}
-
-// TestFilterToolsByPolicy_MCPToolAdminAskFence verifies that for a custom agent,
-// when an MCP tool has RequiresAdminAsk()==true and its effective policy resolves
-// to "allow", FilterToolsByPolicy downgrades the effective policy to "ask"
-// (FR-061 admin-ask fence).
-//
-// Construction: we use MCPRegistry.RegisterServerToolsWithOpts with
-// RequiresAdminAsk: ["dangerous_mcp_tool"] to obtain a real mcpAdminAskTool
-// from the registry, then pass it directly to FilterToolsByPolicy.
-//
-// Traces to: FR-061 (admin-ask fence), FR-064 (RequiresAdminAsk opt-in).
-func TestFilterToolsByPolicy_MCPToolAdminAskFence(t *testing.T) {
-	// Build an MCP tool that has RequiresAdminAsk()==true via the registry path.
-	builtins := NewBuiltinRegistry()
-	reg := NewMCPRegistry()
-
-	collisions := reg.RegisterServerToolsWithOpts("secure-server", []Tool{
-		makeMCPAdapter("secure-server", "mcp_secure_dangerous"),
-		makeMCPAdapter("secure-server", "mcp_secure_safe"),
-	}, builtins, MCPServerOpts{
-		RequiresAdminAsk: []string{"mcp_secure_dangerous"},
-	})
-	require.Empty(t, collisions, "registration must not produce collisions")
-
-	// Retrieve from registry — mcp_secure_dangerous is now wrapped by mcpAdminAskTool.
-	dangerousTool, ok := reg.Get("mcp_secure_dangerous")
-	require.True(t, ok, "mcp_secure_dangerous must be registered")
-	require.True(t, dangerousTool.RequiresAdminAsk(),
-		"mcp_secure_dangerous must have RequiresAdminAsk()==true (FR-064)")
-
-	safeTool, ok2 := reg.Get("mcp_secure_safe")
-	require.True(t, ok2, "mcp_secure_safe must be registered")
-	require.False(t, safeTool.RequiresAdminAsk(),
-		"mcp_secure_safe must have RequiresAdminAsk()==false")
-
-	// Both tools have effective policy "allow" — no global/agent deny.
-	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		GlobalDefaultPolicy: "allow",
-		IsCoreAgent:         false, // custom agent: admin-ask fence applies
-	}
-
-	_, policyMap := FilterToolsByPolicy([]Tool{dangerousTool, safeTool}, "custom", cfg)
-
-	// mcp_secure_dangerous must be present but fenced to "ask".
-	p, inMap := policyMap["mcp_secure_dangerous"]
-	assert.True(t, inMap,
-		"mcp_secure_dangerous must pass the deny gate (effective policy is not deny)")
-	assert.Equal(t, "ask", p,
-		"mcp_secure_dangerous effective policy must be fenced to 'ask' by FR-061 for custom agent")
-
-	// mcp_secure_safe has RequiresAdminAsk()==false: stays "allow".
-	p2, inMap2 := policyMap["mcp_secure_safe"]
-	assert.True(t, inMap2, "mcp_secure_safe must be in policyMap")
-	assert.Equal(t, "allow", p2,
-		"mcp_secure_safe with RequiresAdminAsk()==false must remain 'allow'")
 }
 
 // TestFilterToolsByPolicy_MCPToolAllowed_WhenNoDeny is the control case: an MCP

@@ -5115,10 +5115,6 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 			ef := srv.EnvFile
 			entry.EnvFile = &ef
 		}
-		if len(srv.RequiresAdminAsk) > 0 {
-			ra := append([]string(nil), srv.RequiresAdminAsk...)
-			entry.RequiresAdminAsk = &ra
-		}
 		// env/headers: return KEYS ONLY — values may be secrets (Authorization, API keys).
 		if len(srv.Env) > 0 {
 			keys := make([]string, 0, len(srv.Env))
@@ -5268,9 +5264,6 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Headers != nil && len(*req.Headers) > 0 {
 			entry["headers"] = *req.Headers
-		}
-		if req.RequiresAdminAsk != nil && len(*req.RequiresAdminAsk) > 0 {
-			entry["requires_admin_ask"] = *req.RequiresAdminAsk
 		}
 		servers[req.Name] = entry
 		return nil
@@ -5512,9 +5505,6 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		}
 		if req.Headers != nil {
 			current.Headers = *req.Headers
-		}
-		if req.RequiresAdminAsk != nil {
-			current.RequiresAdminAsk = *req.RequiresAdminAsk
 		}
 
 		// Transport-consistency on the MERGED result (transport itself is immutable

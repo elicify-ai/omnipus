@@ -4326,28 +4326,22 @@ type AgentTokenEntry struct {
 	TokensTotal int    `json:"tokens_total"`
 }
 
-// AgentToolEntry Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective (post-fence) policy so the SPA can display policy downgrades.
+// AgentToolEntry Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective policy so the SPA can display policy downgrades.
 type AgentToolEntry struct {
-	// ConfiguredPolicy The policy as written in the agent's config (before fence application).
+	// ConfiguredPolicy The policy as written in the agent's config.
 	ConfiguredPolicy AgentToolEntryConfiguredPolicy `json:"configured_policy"`
 
-	// EffectivePolicy The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
+	// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 	EffectivePolicy AgentToolEntryEffectivePolicy `json:"effective_policy"`
-
-	// FenceApplied True when the tool requires admin approval (RequiresAdminAsk=true), the agent type is "custom", and the configured policy was "allow" but was downgraded to "ask" by the admin-ask fence (FR-061).
-	FenceApplied bool `json:"fence_applied"`
 
 	// Name Canonical tool name.
 	Name string `json:"name"`
-
-	// RequiresAdminAsk True when the tool's RequiresAdminAsk() returns true — the tool always needs an admin to approve its use.
-	RequiresAdminAsk bool `json:"requires_admin_ask"`
 }
 
-// AgentToolEntryConfiguredPolicy The policy as written in the agent's config (before fence application).
+// AgentToolEntryConfiguredPolicy The policy as written in the agent's config.
 type AgentToolEntryConfiguredPolicy string
 
-// AgentToolEntryEffectivePolicy The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
+// AgentToolEntryEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 type AgentToolEntryEffectivePolicy string
 
 // AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
@@ -4405,20 +4399,14 @@ type AgentToolsResponse struct {
 
 	// Tools Per-tool effective policy entries.
 	Tools []struct {
-		// ConfiguredPolicy The policy as written in the agent's config (before fence application).
+		// ConfiguredPolicy The policy as written in the agent's config.
 		ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
 
-		// EffectivePolicy The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
+		// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 		EffectivePolicy AgentToolsResponseToolsEffectivePolicy `json:"effective_policy"`
-
-		// FenceApplied True when the tool requires admin approval (RequiresAdminAsk=true), the agent type is "custom", and the configured policy was "allow" but was downgraded to "ask" by the admin-ask fence (FR-061).
-		FenceApplied bool `json:"fence_applied"`
 
 		// Name Canonical tool name.
 		Name string `json:"name"`
-
-		// RequiresAdminAsk True when the tool's RequiresAdminAsk() returns true — the tool always needs an admin to approve its use.
-		RequiresAdminAsk bool `json:"requires_admin_ask"`
 	} `json:"tools"`
 }
 
@@ -4431,10 +4419,10 @@ type AgentToolsResponseConfigBuiltinDefaultPolicy string
 // AgentToolsResponseConfigBuiltinPolicies defines model for AgentToolsResponse.Config.Builtin.Policies.
 type AgentToolsResponseConfigBuiltinPolicies string
 
-// AgentToolsResponseToolsConfiguredPolicy The policy as written in the agent's config (before fence application).
+// AgentToolsResponseToolsConfiguredPolicy The policy as written in the agent's config.
 type AgentToolsResponseToolsConfiguredPolicy string
 
-// AgentToolsResponseToolsEffectivePolicy The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
+// AgentToolsResponseToolsEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 type AgentToolsResponseToolsEffectivePolicy string
 
 // AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.default_policy + builtin.policies) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
@@ -5518,9 +5506,6 @@ type McpServer struct {
 	// Name Human-readable server name.
 	Name string `json:"name"`
 
-	// RequiresAdminAsk Tool names that require admin approval (FR-064). For edit pre-fill.
-	RequiresAdminAsk *[]string `json:"requires_admin_ask,omitempty"`
-
 	// Status Current connection status of the MCP server.
 	Status McpServerStatus `json:"status"`
 
@@ -5563,9 +5548,6 @@ type McpServerCreate struct {
 	// Name Human-readable server name.
 	Name string `json:"name"`
 
-	// RequiresAdminAsk Tool names from this server that require admin approval before execution (FR-064), regardless of the per-agent policy.
-	RequiresAdminAsk *[]string `json:"requires_admin_ask,omitempty"`
-
 	// Transport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 	Transport McpServerCreateTransport `json:"transport"`
 
@@ -5597,7 +5579,7 @@ type McpServerToolsResponse struct {
 	Tools []string `json:"tools"`
 }
 
-// McpServerUpdate PATCH body for /mcp-servers/{id}. Partial update — only the provided fields are changed; omitted fields are preserved (merge, not replace). Use it to toggle `enabled`, change the endpoint/command, or adjust env/headers/admin-ask.
+// McpServerUpdate PATCH body for /mcp-servers/{id}. Partial update — only the provided fields are changed; omitted fields are preserved (merge, not replace). Use it to toggle `enabled`, change the endpoint/command, or adjust env/headers.
 type McpServerUpdate struct {
 	// Args Replacement command-line args (stdio only).
 	Args *[]string `json:"args,omitempty"`
@@ -5616,9 +5598,6 @@ type McpServerUpdate struct {
 
 	// Headers Replacement HTTP headers (sse/http only).
 	Headers *map[string]string `json:"headers,omitempty"`
-
-	// RequiresAdminAsk Replacement list of tools that require admin approval (FR-064).
-	RequiresAdminAsk *[]string `json:"requires_admin_ask,omitempty"`
 
 	// Url New endpoint URL (sse/http only; https or http-on-loopback).
 	Url *string `json:"url,omitempty"`
@@ -7708,7 +7687,7 @@ type TokenUsageSummary struct {
 	PeriodStart time.Time `json:"period_start"`
 }
 
-// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it. For tools with RequiresAdminAsk=true the caller must hold the admin role (FR-015).
+// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it.
 type ToolApprovalActionRequest struct {
 	// Action Action to take on this approval.
 	Action ToolApprovalActionRequestAction `json:"action"`

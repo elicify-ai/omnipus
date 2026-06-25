@@ -30,7 +30,6 @@ func (w *wildTestTool) Description() string        { return "wildcard test tool"
 func (w *wildTestTool) Parameters() map[string]any { return map[string]any{} }
 func (w *wildTestTool) Scope() ToolScope           { return w.scope }
 func (w *wildTestTool) Category() ToolCategory     { return CategoryCore }
-func (w *wildTestTool) RequiresAdminAsk() bool     { return false }
 func (w *wildTestTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	return &ToolResult{ForLLM: "ok"}
 }
@@ -262,7 +261,6 @@ func TestFilterToolsByPolicy_PrefixWildcard_DeniesSystemTools(t *testing.T) {
 		DefaultPolicy:       "allow",
 		Policies:            map[string]string{"system.*": "deny"},
 		GlobalDefaultPolicy: "allow",
-		IsCoreAgent:         true, // skip scope gate for simplicity
 	}
 
 	got, policyMap := FilterToolsByPolicy(allTools, "core", cfg)
@@ -300,7 +298,6 @@ func TestFilterToolsByPolicy_ExactBeatsWildcard(t *testing.T) {
 			"system.*":          "deny",
 		},
 		GlobalDefaultPolicy: "allow",
-		IsCoreAgent:         true,
 	}
 
 	got, policyMap := FilterToolsByPolicy(allTools, "core", cfg)
@@ -342,7 +339,6 @@ func TestFilterToolsByPolicy_LongestWildcard_FourSegment(t *testing.T) {
 			"system.agent.subagent.*":    "ask",
 		},
 		GlobalDefaultPolicy: "allow",
-		IsCoreAgent:         true,
 	}
 
 	_, policyMap := FilterToolsByPolicy(allTools, "core", cfg)
@@ -429,7 +425,6 @@ func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 				Policies:            tc.policies,
 				GlobalDefaultPolicy: tc.globalDefault,
 				GlobalPolicies:      tc.globalPolicies,
-				IsCoreAgent:         true, // bypass scope gate for dataset tests
 			}
 
 			_, policyMap := FilterToolsByPolicy(allTools, "core", cfg)
@@ -469,7 +464,6 @@ func TestFilterToolsByPolicy_DeterministicOrdering(t *testing.T) {
 			"system.*":       "deny",
 		},
 		GlobalDefaultPolicy: "allow",
-		IsCoreAgent:         true,
 	}
 
 	firstRun, _ := FilterToolsByPolicy(allTools, "core", cfg)

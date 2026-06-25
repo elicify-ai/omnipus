@@ -425,7 +425,6 @@ type slowTool struct {
 func (t *slowTool) Name() string                 { return t.name }
 func (t *slowTool) Description() string          { return "slow tool for testing" }
 func (t *slowTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
-func (t *slowTool) RequiresAdminAsk() bool       { return false }
 func (t *slowTool) Category() tools.ToolCategory { return tools.CategoryCore }
 func (t *slowTool) Parameters() map[string]any {
 	return map[string]any{
@@ -608,7 +607,6 @@ type interruptibleTool struct {
 func (t *interruptibleTool) Name() string                 { return t.name }
 func (t *interruptibleTool) Description() string          { return "interruptible tool for testing" }
 func (t *interruptibleTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
-func (t *interruptibleTool) RequiresAdminAsk() bool       { return false }
 func (t *interruptibleTool) Category() tools.ToolCategory { return tools.CategoryCore }
 func (t *interruptibleTool) Parameters() map[string]any {
 	return map[string]any{

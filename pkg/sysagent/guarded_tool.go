@@ -71,15 +71,6 @@ func (g *GuardedTool) WithScopeOverride(scope tools.ToolScope) *GuardedTool {
 	return g
 }
 
-// RequiresAdminAsk delegates to the inner tool so the admin-ask fence (FR-061)
-// is correctly applied when the wrapper is used in policy filtering.
-func (g *GuardedTool) RequiresAdminAsk() bool {
-	if asker, ok := g.inner.(interface{ RequiresAdminAsk() bool }); ok {
-		return asker.RequiresAdminAsk()
-	}
-	return false
-}
-
 // Category delegates to the inner tool.
 func (g *GuardedTool) Category() tools.ToolCategory {
 	if cat, ok := g.inner.(interface{ Category() tools.ToolCategory }); ok {

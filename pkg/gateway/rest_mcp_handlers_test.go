@@ -5,7 +5,7 @@
 //   - G6: listMCPServers reflects live manager status + tool_count + enabled.
 //   - G7: testMCPServer returns success=false gracefully for an unreachable server.
 //   - G8: patchMCPServer merges partial update (omitted fields preserved, enabled toggled).
-//   - G9: addMCPServer persists headers, env_file, requires_admin_ask.
+//   - G9: addMCPServer persists headers, env_file.
 
 package gateway
 
@@ -246,14 +246,14 @@ func TestPatchMCPServer_NotFound(t *testing.T) {
 }
 
 // TestAddMCPServer_PersistsHeaders verifies that POST /api/v1/mcp-servers
-// persists headers, env_file, and requires_admin_ask into config (G9).
+// persists headers and env_file into config (G9).
 //
 // BDD:
 //
 //	Given a new sse server with headers={"Authorization": "Bearer tok"},
-//	       env_file="/etc/mcp.env", requires_admin_ask=["dangerous_tool"],
+//	       env_file="/etc/mcp.env",
 //	When POST /api/v1/mcp-servers is called,
-//	Then the persisted config entry contains all three fields.
+//	Then the persisted config entry contains both fields.
 func TestAddMCPServer_PersistsHeaders(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
@@ -261,14 +261,12 @@ func TestAddMCPServer_PersistsHeaders(t *testing.T) {
 	transport := gen.McpServerCreateTransportSse
 	headers := map[string]string{"Authorization": "Bearer tok"}
 	envFile := "/etc/mcp.env"
-	adminAsk := []string{"dangerous_tool"}
 	body := gen.McpServerCreate{
-		Name:             "headed-srv",
-		Transport:        transport,
-		Url:              &mcpURL,
-		Headers:          &headers,
-		EnvFile:          &envFile,
-		RequiresAdminAsk: &adminAsk,
+		Name:      "headed-srv",
+		Transport: transport,
+		Url:       &mcpURL,
+		Headers:   &headers,
+		EnvFile:   &envFile,
 	}
 	bodyBytes, err := json.Marshal(body)
 	require.NoError(t, err)
@@ -298,12 +296,6 @@ func TestAddMCPServer_PersistsHeaders(t *testing.T) {
 
 	// env_file
 	assert.Equal(t, "/etc/mcp.env", entry["env_file"], "env_file must be persisted")
-
-	// requires_admin_ask
-	rawAdminAsk, ok := entry["requires_admin_ask"].([]any)
-	require.True(t, ok, "requires_admin_ask must be persisted as array")
-	require.Len(t, rawAdminAsk, 1)
-	assert.Equal(t, "dangerous_tool", rawAdminAsk[0])
 }
 
 // TestListMCPServers_ReportsToolCountFromRegistry proves the G6 wiring: tool_count
@@ -368,8 +360,8 @@ func TestListMCPServers_ReportsToolCountFromRegistry(t *testing.T) {
 }
 
 // TestListMCPServers_ReturnsNonSecretConfigForEdit proves #437: GET /mcp-servers
-// returns the non-secret config fields for edit pre-fill (command/args/env_file/
-// requires_admin_ask) and env/header KEYS — but never env/header VALUES (secrets).
+// returns the non-secret config fields for edit pre-fill (command/args/env_file)
+// and env/header KEYS — but never env/header VALUES (secrets).
 func TestListMCPServers_ReturnsNonSecretConfigForEdit(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
@@ -382,14 +374,13 @@ func TestListMCPServers_ReturnsNonSecretConfigForEdit(t *testing.T) {
 			MCP: config.MCPConfig{
 				Servers: map[string]config.MCPServerConfig{
 					"srv": {
-						Enabled:          true,
-						Type:             "stdio",
-						Command:          "npx",
-						Args:             []string{"server-everything"},
-						EnvFile:          "/etc/mcp.env",
-						RequiresAdminAsk: []string{"danger"},
-						Env:              map[string]string{"API_KEY": "supersecretvalue"},
-						Headers:          map[string]string{"Authorization": "Bearer tok-secret"},
+						Enabled: true,
+						Type:    "stdio",
+						Command: "npx",
+						Args:    []string{"server-everything"},
+						EnvFile: "/etc/mcp.env",
+						Env:     map[string]string{"API_KEY": "supersecretvalue"},
+						Headers: map[string]string{"Authorization": "Bearer tok-secret"},
 					},
 				},
 			},

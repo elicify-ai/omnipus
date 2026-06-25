@@ -1901,7 +1901,7 @@ paths:
     post:
       operationId: postToolApproval
       summary: Resolve a pending tool approval (FR-011, FR-082)
-      description: 'Approve, deny, or cancel a pending tool call approval. For tools with RequiresAdminAsk=true, the caller must hold the admin role (FR-015).
+      description: 'Approve, deny, or cancel a pending tool call approval.
 
         '
       tags:
@@ -1935,12 +1935,6 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Missing or invalid bearer token.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Admin role required (RequiresAdminAsk tool).
           content:
             application/json:
               schema:
@@ -4591,7 +4585,7 @@ paths:
       summary: Update an MCP server
       description: >
         Partially updates an MCP server config (enable/disable toggle, endpoint,
-        env, headers, env_file, admin-ask). Omitted fields are preserved. Admin-only.
+        env, headers, env_file). Omitted fields are preserved. Admin-only.
       tags:
       - Tools
       security:

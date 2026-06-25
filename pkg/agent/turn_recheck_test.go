@@ -43,7 +43,6 @@ func (t *trackingTool) Description() string          { return "tracking: " + t.n
 func (t *trackingTool) Parameters() map[string]any   { return map[string]any{} }
 func (t *trackingTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *trackingTool) Category() tools.ToolCategory { return tools.CategoryCore }
-func (t *trackingTool) RequiresAdminAsk() bool       { return false }
 func (t *trackingTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	t.executed.Store(true)
 	return &tools.ToolResult{ForLLM: "executed"}

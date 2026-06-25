@@ -26,7 +26,6 @@ func (m *mockRegistryTool) Name() string               { return m.name }
 func (m *mockRegistryTool) Description() string        { return m.desc }
 func (m *mockRegistryTool) Parameters() map[string]any { return m.params }
 func (m *mockRegistryTool) Scope() ToolScope           { return ScopeGeneral }
-func (m *mockRegistryTool) RequiresAdminAsk() bool     { return false }
 func (m *mockRegistryTool) Category() ToolCategory     { return CategoryCore }
 func (m *mockRegistryTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	return m.result
@@ -461,7 +460,6 @@ func (m *mockPanicTool) Name() string               { return m.name }
 func (m *mockPanicTool) Description() string        { return "a tool that panics" }
 func (m *mockPanicTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (m *mockPanicTool) Scope() ToolScope           { return ScopeGeneral }
-func (m *mockPanicTool) RequiresAdminAsk() bool     { return false }
 func (m *mockPanicTool) Category() ToolCategory     { return CategoryCore }
 func (m *mockPanicTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	panic(m.panicValue)
@@ -476,7 +474,6 @@ func (m *mockNilResultTool) Name() string               { return m.name }
 func (m *mockNilResultTool) Description() string        { return "a tool that returns nil" }
 func (m *mockNilResultTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (m *mockNilResultTool) Scope() ToolScope           { return ScopeGeneral }
-func (m *mockNilResultTool) RequiresAdminAsk() bool     { return false }
 func (m *mockNilResultTool) Category() ToolCategory     { return CategoryCore }
 func (m *mockNilResultTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	return nil

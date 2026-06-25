@@ -675,7 +675,7 @@ export interface paths {
         put?: never;
         /**
          * Resolve a pending tool approval (FR-011, FR-082)
-         * @description Approve, deny, or cancel a pending tool call approval. For tools with RequiresAdminAsk=true, the caller must hold the admin role (FR-015).
+         * @description Approve, deny, or cancel a pending tool call approval.
          */
         post: operations["postToolApproval"];
         delete?: never;
@@ -1953,7 +1953,7 @@ export interface paths {
         head?: never;
         /**
          * Update an MCP server
-         * @description Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file, admin-ask). Omitted fields are preserved. Admin-only.
+         * @description Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file). Omitted fields are preserved. Admin-only.
          */
         patch: operations["patchMcpServer"];
         trace?: never;
@@ -3822,7 +3822,7 @@ export interface components {
         };
         /**
          * AgentToolEntry
-         * @description Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective (post-fence) policy so the SPA can display policy downgrades.
+         * @description Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective policy so the SPA can display policy downgrades.
          */
         AgentToolEntry: {
             /**
@@ -3831,27 +3831,17 @@ export interface components {
              */
             name: string;
             /**
-             * @description The policy as written in the agent's config (before fence application).
+             * @description The policy as written in the agent's config.
              * @example allow
              * @enum {string}
              */
             configured_policy: "allow" | "ask" | "deny";
             /**
-             * @description The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
+             * @description The policy actually enforced at LLM-call time after global policy overrides are applied.
              * @example ask
              * @enum {string}
              */
             effective_policy: "allow" | "ask" | "deny";
-            /**
-             * @description True when the tool requires admin approval (RequiresAdminAsk=true), the agent type is "custom", and the configured policy was "allow" but was downgraded to "ask" by the admin-ask fence (FR-061).
-             * @example true
-             */
-            fence_applied: boolean;
-            /**
-             * @description True when the tool's RequiresAdminAsk() returns true — the tool always needs an admin to approve its use.
-             * @example true
-             */
-            requires_admin_ask: boolean;
         };
         /**
          * ToolPolicy
@@ -5113,8 +5103,6 @@ export interface components {
              * @example /etc/omnipus/mcp.env
              */
             env_file?: string;
-            /** @description Tool names that require admin approval (FR-064). For edit pre-fill. */
-            requires_admin_ask?: string[];
             /**
              * @description Names (keys only) of configured env-var overrides — VALUES ARE NEVER RETURNED (they may be secrets). The edit UI shows these as "set" and re-entry replaces them.
              * @example [
@@ -5187,17 +5175,10 @@ export interface components {
              * @example /etc/omnipus/mcp-server.env
              */
             env_file?: string;
-            /**
-             * @description Tool names from this server that require admin approval before execution (FR-064), regardless of the per-agent policy.
-             * @example [
-             *       "delete_record"
-             *     ]
-             */
-            requires_admin_ask?: string[];
         };
         /**
          * McpServerUpdate
-         * @description PATCH body for /mcp-servers/{id}. Partial update — only the provided fields are changed; omitted fields are preserved (merge, not replace). Use it to toggle `enabled`, change the endpoint/command, or adjust env/headers/admin-ask.
+         * @description PATCH body for /mcp-servers/{id}. Partial update — only the provided fields are changed; omitted fields are preserved (merge, not replace). Use it to toggle `enabled`, change the endpoint/command, or adjust env/headers.
          */
         McpServerUpdate: {
             /**
@@ -5227,8 +5208,6 @@ export interface components {
             };
             /** @description Path to a KEY=VALUE env file (stdio only). */
             env_file?: string;
-            /** @description Replacement list of tools that require admin approval (FR-064). */
-            requires_admin_ask?: string[];
         };
         /**
          * McpServerTestResponse
@@ -6509,7 +6488,7 @@ export interface components {
         };
         /**
          * ToolApprovalActionRequest
-         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it. For tools with RequiresAdminAsk=true the caller must hold the admin role (FR-015).
+         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it.
          */
         ToolApprovalActionRequest: {
             /**
@@ -8569,15 +8548,6 @@ export interface operations {
             };
             /** @description Missing or invalid bearer token. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Admin role required (RequiresAdminAsk tool). */
-            403: {
                 headers: {
                     [name: string]: unknown;
                 };

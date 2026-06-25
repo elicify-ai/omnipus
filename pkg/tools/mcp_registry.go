@@ -95,21 +95,10 @@ type MCPServerOpts struct {
 	TransportType string
 	// Endpoint is the URL (sse/http) or command path (stdio). Used for rename detection fingerprint.
 	Endpoint string
-	// RequiresAdminAsk lists tool names within this server that must have
-	// RequiresAdminAsk() return true (FR-064). Names not in this list return false.
-	RequiresAdminAsk []string
 	// PolicyUpdater is called when a rename is detected to propagate the new
 	// serverID into per-agent policy maps. Nil = skip policy update.
 	PolicyUpdater MCPPolicyUpdater
 }
-
-// mcpAdminAskTool wraps a Tool and overrides RequiresAdminAsk() (FR-064).
-type mcpAdminAskTool struct {
-	Tool
-	requiresAdminAsk bool
-}
-
-func (a *mcpAdminAskTool) RequiresAdminAsk() bool { return a.requiresAdminAsk }
 
 // RegisterServerTools registers all tools from a single MCP server.
 // Rules (FR-034, FR-060, FR-083):
@@ -121,8 +110,6 @@ func (a *mcpAdminAskTool) RequiresAdminAsk() bool { return a.requiresAdminAsk }
 //   - If opts.TransportType and opts.Endpoint identify a known fingerprint
 //     under a different serverID, the old server is atomically evicted and
 //     the new serverID takes over (rename detection, FR-083).
-//   - opts.RequiresAdminAsk lists tool names that return true from
-//     RequiresAdminAsk() (FR-064).
 //
 // Returns a slice of (name, reason) pairs for each rejected registration.
 // The caller should emit audit events for each rejected entry.
@@ -131,8 +118,7 @@ func (r *MCPRegistry) RegisterServerTools(serverID string, tools []Tool, builtin
 }
 
 // RegisterServerToolsWithOpts is the extended form of RegisterServerTools.
-// Use this when transport metadata (for rename detection) or per-tool
-// RequiresAdminAsk overrides (FR-064) are available.
+// Use this when transport metadata (for rename detection) is available.
 func (r *MCPRegistry) RegisterServerToolsWithOpts(
 	serverID string,
 	toolList []Tool,
@@ -172,12 +158,6 @@ func (r *MCPRegistry) RegisterServerToolsWithOpts(
 		r.byFingerprint[fp] = serverID
 	}
 
-	// --- FR-064: build admin-ask lookup set ---
-	adminAskSet := make(map[string]struct{}, len(opts.RequiresAdminAsk))
-	for _, name := range opts.RequiresAdminAsk {
-		adminAskSet[name] = struct{}{}
-	}
-
 	var collisions []MCPCollision
 	var accepted []string
 
@@ -213,14 +193,8 @@ func (r *MCPRegistry) RegisterServerToolsWithOpts(
 			continue
 		}
 
-		// FR-064: wrap tool with admin-ask override if listed.
-		registered := t
-		if _, needsAsk := adminAskSet[name]; needsAsk {
-			registered = &mcpAdminAskTool{Tool: t, requiresAdminAsk: true}
-		}
-
 		// Accept: overwrite if same server (reconnect), add if new.
-		r.byName[name] = &mcpToolRecord{serverID: serverID, tool: registered}
+		r.byName[name] = &mcpToolRecord{serverID: serverID, tool: t}
 		accepted = append(accepted, name)
 	}
 

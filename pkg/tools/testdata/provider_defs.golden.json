@@ -29,7 +29,7 @@
   },
   {
     "name": "create_agent",
-    "description": "Create a new custom agent with personality, model, tools, and configuration.",
+    "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path).",
     "scope": "core",
     "category": "agents",
     "source": "builtin"

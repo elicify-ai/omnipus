@@ -73,12 +73,3 @@ properties:
       Path to a file of KEY=VALUE environment variables loaded for the server
       process (stdio only); useful for large or sensitive env sets.
     example: "/etc/omnipus/mcp-server.env"
-  requires_admin_ask:
-    type: array
-    items:
-      type: string
-    description: >
-      Tool names from this server that require admin approval before execution
-      (FR-064), regardless of the per-agent policy.
-    example:
-      - "delete_record"
