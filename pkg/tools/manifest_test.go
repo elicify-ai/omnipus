@@ -320,3 +320,43 @@ func TestBuildCompressedManifest_AllLoadedReturnsEmpty(t *testing.T) {
 		t.Errorf("all tools loaded: expected empty manifest, got %q", got)
 	}
 }
+
+// TestManifestNamesResolveInCatalog guards against the silent-rename class of
+// regression (the §7 tool-rename bug): if a full- or infra-tier tool is renamed
+// without updating the manifest name maps, ToolManifestTier silently demotes it
+// to lazy (full tools) or breaks force-include (infra tools). This test fails
+// loudly when a manifest name no longer corresponds to a registered builtin.
+func TestManifestNamesResolveInCatalog(t *testing.T) {
+	present := make(map[string]bool)
+	for _, tool := range GeneralBuiltinMetadata() {
+		present[tool.Name()] = true
+	}
+	for _, name := range FullManifestToolNames() {
+		if !present[name] {
+			t.Errorf("full-tier manifest tool %q is not a registered builtin (renamed or removed?) — update fullManifestToolNames", name)
+		}
+	}
+	for _, name := range InfraManifestToolNames() {
+		if !present[name] {
+			t.Errorf("infra-tier manifest tool %q is not a registered builtin (renamed or removed?) — update infraManifestToolNames", name)
+		}
+	}
+}
+
+// TestInfraManifestToolNames_Set asserts the infra accessor returns the expected
+// sorted set (single source of truth consumed by the loop's force-include).
+func TestInfraManifestToolNames_Set(t *testing.T) {
+	got := InfraManifestToolNames()
+	want := []string{"load_tool", "search_tools_bm25", "search_tools_regex"}
+	if len(got) != len(want) {
+		t.Fatalf("InfraManifestToolNames() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("InfraManifestToolNames()[%d] = %q, want %q", i, got[i], want[i])
+		}
+		if ToolManifestTier(got[i]) != ManifestInfra {
+			t.Errorf("ToolManifestTier(%q) != ManifestInfra", got[i])
+		}
+	}
+}

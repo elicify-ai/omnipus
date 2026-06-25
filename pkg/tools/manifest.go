@@ -95,6 +95,19 @@ func FullManifestToolNames() []string {
 	return names
 }
 
+// InfraManifestToolNames returns a sorted copy of the infrastructure tool name
+// set (load_tool, search_tools_*). These are always callable when registered and
+// never appear in the manifest block. Exported as the single source of truth so
+// the agent loop's force-include logic does not re-list the names.
+func InfraManifestToolNames() []string {
+	names := make([]string, 0, len(infraManifestToolNames))
+	for n := range infraManifestToolNames {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // maxManifestLineLen is the soft cap on each entry's description text
 // (not including the "  - <name> — " prefix). Keeps the manifest cheap.
 const maxManifestLineLen = 140
