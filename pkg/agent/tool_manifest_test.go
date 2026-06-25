@@ -1022,3 +1022,81 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 	assert.True(t, defNamesAfter[lazyName],
 		"load→callable round-trip: lazy tool %q must be in compressed defs after load_tool.Execute", lazyName)
 }
+
+// TestInfraToolsExecutable_DenyDefaultAgent is the regression test for the bug
+// found by live validation: a deny-by-default agent (Ava/Mia) was SHOWN load_tool
+// in its provider defs (force-included) but the EXECUTION gate denied it, so every
+// lazy tool was unreachable in practice. This asserts the full authorization chain
+// now allows infra-tool execution.
+func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	// Ava and Mia are deny-by-default; load_tool is not in their allow-list.
+	for _, agentID := range []string{"ava", "mia"} {
+		t.Run(agentID, func(t *testing.T) {
+			agentInst, ok := al.registry.GetAgent(agentID)
+			require.True(t, ok)
+
+			allTools := agentInst.Tools.GetAll()
+			policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, agentInst.AgentType, agentInst.LoadToolPolicy())
+
+			// Precondition (the bug): raw policy does NOT authorize load_tool for a
+			// deny-default agent. (If a future seed adds it explicitly this just
+			// makes the test trivially pass — still correct.)
+			_, rawAllowed := policyMap["load_tool"]
+
+			// Apply the fix: force infra tools into the exec snapshot.
+			policyFiltered = ensureInfraToolsExecutable(true, agentInst.Tools, policyFiltered, policyMap)
+
+			// After the fix: load_tool is in the snapshot as "allow".
+			require.Equal(t, "allow", policyMap["load_tool"],
+				"agent %q: load_tool must be allow in the exec policy snapshot (was rawAllowed=%v)", agentID, rawAllowed)
+			require.Contains(t, toolNameSet(policyFiltered), "load_tool",
+				"agent %q: load_tool must be in the sent defs surface", agentID)
+
+			// The execution gate itself must authorize load_tool end-to-end.
+			ts := fakeTurnState(agentInst, "sess-exec-"+agentID)
+			require.Equal(t, "allow", al.resolveToolPolicyAtExec(ts, "load_tool", policyMap),
+				"agent %q: resolveToolPolicyAtExec must allow load_tool", agentID)
+			require.Equal(t, "allow", al.resolveSingleToolPolicy(ts, "load_tool"),
+				"agent %q: resolveSingleToolPolicy must allow registered infra tool", agentID)
+
+			// And every infra tool, for completeness.
+			for _, infra := range tools.InfraManifestToolNames() {
+				if _, registered := agentInst.Tools.Get(infra); !registered {
+					continue
+				}
+				require.Equal(t, "allow", al.resolveToolPolicyAtExec(ts, infra, policyMap),
+					"agent %q: infra tool %q must be executable", agentID, infra)
+			}
+		})
+	}
+}
+
+// TestEnsureInfraToolsExecutable_NoopWhenCompressedOff verifies the legacy path
+// is untouched: with compressed=false, infra tools are NOT force-allowed.
+func TestEnsureInfraToolsExecutable_NoopWhenCompressedOff(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+	ava, ok := al.registry.GetAgent("ava")
+	require.True(t, ok)
+	allTools := ava.Tools.GetAll()
+	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, ava.LoadToolPolicy())
+	before := len(policyFiltered)
+	out := ensureInfraToolsExecutable(false, ava.Tools, policyFiltered, policyMap)
+	require.Len(t, out, before, "compressed=false must not add infra tools")
+	_, ok = policyMap["load_tool"]
+	require.False(t, ok, "compressed=false must not allow load_tool")
+}
+
+// toolNameSet is a tiny helper for membership assertions.
+func toolNameSet(ts []tools.Tool) map[string]bool {
+	m := make(map[string]bool, len(ts))
+	for _, t := range ts {
+		m[t.Name()] = true
+	}
+	return m
+}

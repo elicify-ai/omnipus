@@ -4970,6 +4970,19 @@ turnLoop:
 		allAgentTools := ts.agent.Tools.GetAll()
 		policyFilteredTools, filterTimePolicyMap := tools.FilterToolsByPolicy(allAgentTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 
+		// Manifest infra tools (load_tool, search_tools_*) are registration-gated,
+		// NOT policy-gated: when compressed mode is on they must be callable by
+		// EVERY agent — including deny-by-default agents (Ava/Mia/Ray) — or the
+		// model is shown load_tool in its defs but its EXECUTION is denied, leaving
+		// every lazy tool permanently unreachable. Force them into both the sent
+		// defs (policyFilteredTools) and the execution-time policy snapshot
+		// (filterTimePolicyMap, consulted by resolveToolPolicyAtExec) as "allow".
+		// This mirrors the defs force-include in buildCompressedToolDefs at the
+		// authorization layer. (Found by live validation: a deny-default agent
+		// called load_tool and the exec gate denied it — reachability broke.)
+		policyFilteredTools = ensureInfraToolsExecutable(
+			cfg.Tools.Manifest.Compressed, ts.agent.Tools, policyFilteredTools, filterTimePolicyMap)
+
 		// FR-066: dedup invariant — tools[] must be name-unique after filter+assembly.
 		// If a duplicate is detected, emit HIGH audit and return an error turn result
 		// so the loop does not feed a malformed tool list to the LLM.
@@ -8274,6 +8287,18 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 // effective policy for toolName using FilterToolsByPolicy. Returns "" if the
 // tool is not found in the agent's registered tools.
 func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) string {
+	// Manifest infra tools (load_tool, search_tools_*) are registration-gated,
+	// not policy-gated: they only exist on the agent when compressed mode is on,
+	// and when present they MUST always be executable — they drive the manifest
+	// mechanism itself, so denying them makes every lazy tool unreachable. Treat a
+	// registered infra tool as "allow" regardless of the agent's default policy.
+	// (Without this, resolveToolPolicyAtExec re-derives livePolicy="deny" for a
+	// deny-by-default agent and overrides the filter-time allow — the live bug.)
+	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
+		if _, ok := ts.agent.Tools.Get(toolName); ok {
+			return "allow"
+		}
+	}
 	allTools := ts.agent.Tools.GetAll()
 	_, pmap := tools.FilterToolsByPolicy(allTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 	p, ok := pmap[toolName]

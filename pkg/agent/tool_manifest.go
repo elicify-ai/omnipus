@@ -24,6 +24,37 @@ func manifestSessionID(transcriptID, sessionKey string) string {
 	return sessionKey
 }
 
+// infraToolGetter is the minimal surface ensureInfraToolsExecutable needs from
+// an agent's tool registry (decoupled for testability).
+type infraToolGetter interface {
+	Get(name string) (tools.Tool, bool)
+}
+
+// ensureInfraToolsExecutable force-allows the manifest infra tools (load_tool,
+// search_tools_*) for execution when compressed mode is on. Infra tools are
+// registration-gated, not policy-gated: a deny-by-default agent never lists them
+// in its allow-set, so FilterToolsByPolicy omits them from policyMap and the
+// execution gate (resolveToolPolicyAtExec) would deny load_tool even though the
+// model was shown it — making every lazy tool unreachable. This appends each
+// registered infra tool to policyFiltered and marks it "allow" in policyMap.
+// No-op when compressed is false or the tool is already present. Returns the
+// (possibly extended) policyFiltered slice.
+func ensureInfraToolsExecutable(compressed bool, agentTools infraToolGetter, policyFiltered []tools.Tool, policyMap map[string]string) []tools.Tool {
+	if !compressed || agentTools == nil {
+		return policyFiltered
+	}
+	for _, infraName := range tools.InfraManifestToolNames() {
+		if _, ok := policyMap[infraName]; ok {
+			continue // already allowed by the agent's policy
+		}
+		if t, ok := agentTools.Get(infraName); ok {
+			policyFiltered = append(policyFiltered, t)
+			policyMap[infraName] = "allow"
+		}
+	}
+	return policyFiltered
+}
+
 // buildCompressedToolDefs partitions policyFilteredTools into full/lazy/infra
 // tiers and returns provider defs for only the always-callable tools plus any
 // lazy tools that have already been loaded for this session.
