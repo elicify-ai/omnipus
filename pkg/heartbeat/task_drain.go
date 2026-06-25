@@ -84,6 +84,19 @@ func (ds *TaskDrainService) IsRunning() bool {
 	return ds.stopChan != nil
 }
 
+// FireOnce is a TEST SEAM. It synchronously executes exactly one drain tick
+// (calls checker.CheckQueuedTasks(ctx)) without waiting for the real ticker to
+// fire. This lets tests verify checker invocation deterministically, in
+// milliseconds, with no timing dependency. Production code never calls this
+// method; the runtime drain path remains solely in runLoop. A nil checker is
+// a safe no-op, matching Start's behaviour.
+func (ds *TaskDrainService) FireOnce(ctx context.Context) {
+	if ds.checker == nil {
+		return
+	}
+	ds.checker.CheckQueuedTasks(ctx)
+}
+
 func (ds *TaskDrainService) runLoop(stopChan chan struct{}) {
 	ticker := time.NewTicker(ds.interval)
 	defer ticker.Stop()

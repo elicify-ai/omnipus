@@ -877,6 +877,20 @@ func (al *AgentLoop) resetIdleTicker(sessionID string) {
 	}()
 }
 
+// fireIdleTimeout is a TEST SEAM. It triggers the same CloseSession("idle")
+// code path that the timer in resetIdleTicker would trigger on expiry, without
+// waiting for the real timer to fire. Calling this in production code is wrong
+// — it exists solely to let tests exercise the idle→close pipeline in
+// milliseconds rather than waiting a whole idle-timeout period (≥1 min).
+// Production timing is completely unaffected: this function is never called by
+// the runtime path, and adding it introduces no new goroutine or scheduling.
+func (al *AgentLoop) fireIdleTimeout(sessionID string) {
+	// Cancel the outstanding idle ticker first, mirroring what the timer goroutine
+	// does implicitly when its context is the only reference to cancel.
+	al.cancelIdleTicker(sessionID)
+	al.CloseSession(sessionID, "idle")
+}
+
 // AuditLogger returns the audit logger, or nil if audit logging is disabled.
 // Used by gateway handlers that need to log policy changes.
 func (al *AgentLoop) AuditLogger() *audit.Logger {
