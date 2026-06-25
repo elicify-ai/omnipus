@@ -103,3 +103,8 @@ policy + re-auth + delete-confirm); relabel the manifest model as the v0.1.0 opt
   concurrency-safe.
 - **Panel endpoint:** returns full + lazy + dynamic tools with correct manifest_tier.
 - **Search:** registered under compressed mode; finds a lazy tool by keyword.
+- **Exec-authorization (live-found, critical):** infra tools (load_tool/search_*) must be *executable*, not merely *visible*. Putting a tool in the provider defs (force-include) controls what the LLM sees; authorization is a SEPARATE gate (`resolveToolPolicyAtExec` → `filterTimePolicyMap` + `resolveSingleToolPolicy`). A deny-by-default agent never allow-lists load_tool, so it was shown the tool, called it, and the exec gate DENIED it → lazy tools unreachable. Both gates must force-allow registered `ManifestInfra` tools when compressed is on. Tests: `TestInfraToolsExecutable_DenyDefaultAgent` (ava/mia).
+
+## Validation outcome (2026-06-25)
+
+Built ON-by-default and validated live against the standard model **z-ai/glm-5.2** (Mia, deny-by-default): asked to create a task (lazy `create_task`). Audit recorded `load_tool → allow` then `create_task → allow`, and a real task ("manifest-check") was created — the full lazy-tool **load → call** round-trip works end-to-end. This answers the default-ON safety question with evidence: the standard model reliably emits `load_tool` then uses the loaded tool. The live run is what surfaced the exec-authorization bug above (unit tests + 4 reviewers all passed defs-visibility but missed exec-auth). Kill-switch (`compressed: false`) remains for fallback.
