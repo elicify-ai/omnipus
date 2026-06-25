@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/utils"
@@ -82,10 +83,12 @@ type BM25SearchTool struct {
 	ttl              int
 	maxSearchResults int
 
-	// Cache: rebuilt only when the registry version changes.
-	cacheMu      sync.Mutex
-	cachedEngine *bm25CachedEngine
-	cacheVersion uint64
+	// Cache: rebuilt only when the registry version changes. The cached value is
+	// an immutable {engine, version} snapshot published via an atomic pointer so
+	// the lock-free fast path in getOrBuildEngine is race-free; cacheMu serializes
+	// only the (potentially expensive) rebuild.
+	cacheMu sync.Mutex
+	cached  atomic.Pointer[bm25CachedEngine]
 }
 
 func NewBM25SearchTool(r *ToolRegistry, ttl int, maxSearchResults int) *BM25SearchTool {
@@ -228,9 +231,13 @@ type searchDoc struct {
 	Description string
 }
 
-// bm25CachedEngine wraps a BM25Engine with its corpus snapshot.
+// bm25CachedEngine wraps a BM25Engine with the registry version it was built
+// from. Instances are immutable once published to BM25SearchTool.cached, so they
+// can be read lock-free. A nil engine means "no hidden tools at this version"
+// (cached so an empty registry isn't re-snapshotted every call).
 type bm25CachedEngine struct {
-	engine *utils.BM25Engine[searchDoc]
+	engine  *utils.BM25Engine[searchDoc]
+	version uint64
 }
 
 // snapshotToSearchDocs converts a HiddenToolSnapshot to BM25 searchDoc slice.
@@ -255,9 +262,9 @@ func buildBM25Engine(docs []searchDoc) *utils.BM25Engine[searchDoc] {
 // getOrBuildEngine returns a cached BM25 engine, rebuilding it only when
 // the registry version has changed (new tools registered).
 func (t *BM25SearchTool) getOrBuildEngine() *bm25CachedEngine {
-	// Fast path: optimistic check without locking.
-	if t.cachedEngine != nil && t.cacheVersion == t.registry.Version() {
-		return t.cachedEngine
+	// Fast path: atomic load, no lock. The cached value is immutable once stored.
+	if c := t.cached.Load(); c != nil && c.version == t.registry.Version() {
+		return cachedEngineOrNil(c)
 	}
 
 	t.cacheMu.Lock()
@@ -268,22 +275,30 @@ func (t *BM25SearchTool) getOrBuildEngine() *bm25CachedEngine {
 	snap := t.registry.SnapshotHiddenTools()
 
 	// Re-check: another goroutine may have rebuilt while we waited for cacheMu.
-	if t.cachedEngine != nil && t.cacheVersion == snap.Version {
-		return t.cachedEngine
+	if c := t.cached.Load(); c != nil && c.version == snap.Version {
+		return cachedEngineOrNil(c)
 	}
 
 	docs := snapshotToSearchDocs(snap)
+	var cached *bm25CachedEngine
 	if len(docs) == 0 {
-		t.cachedEngine = nil
-		t.cacheVersion = snap.Version
+		cached = &bm25CachedEngine{engine: nil, version: snap.Version}
+	} else {
+		cached = &bm25CachedEngine{engine: buildBM25Engine(docs), version: snap.Version}
+		logger.DebugCF("discovery", "BM25 engine rebuilt", map[string]any{"docs": len(docs), "version": snap.Version})
+	}
+	t.cached.Store(cached)
+	return cachedEngineOrNil(cached)
+}
+
+// cachedEngineOrNil returns c only when it holds a usable engine; a cached entry
+// with a nil engine (empty registry at that version) yields nil so the caller's
+// "no tools" path fires without dereferencing a nil engine.
+func cachedEngineOrNil(c *bm25CachedEngine) *bm25CachedEngine {
+	if c == nil || c.engine == nil {
 		return nil
 	}
-
-	cached := &bm25CachedEngine{engine: buildBM25Engine(docs)}
-	t.cachedEngine = cached
-	t.cacheVersion = snap.Version
-	logger.DebugCF("discovery", "BM25 engine rebuilt", map[string]any{"docs": len(docs), "version": snap.Version})
-	return cached
+	return c
 }
 
 // SearchBM25 ranks hidden tools against query using BM25 via utils.BM25Engine.

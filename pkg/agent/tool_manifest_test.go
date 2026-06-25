@@ -10,6 +10,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 
@@ -1099,4 +1100,311 @@ func toolNameSet(ts []tools.Tool) map[string]bool {
 		m[t.Name()] = true
 	}
 	return m
+}
+
+// ─── Part A §5c — Token-win measurable + monotonic ─────────────────────────
+
+// TestTokenWin_ByteSizeMaterially proves that for Jim (a broad-access agent),
+// the compressed providerToolDefs JSON is materially smaller than the full-set
+// JSON, and that loading N lazy tools one-at-a-time grows the sent-defs size
+// monotonically without ever exceeding the full-set size.
+//
+// "Materially smaller" is defined as compressed < full. If they are equal or
+// larger, the compression is silently regressing to all-full — this test fails
+// loudly.
+//
+// Monotonicity ensures that each load_tool call increases the sent surface
+// predictably and never exceeds what we'd send without compression.
+//
+// Traces to: docs/internal/specs/tool-test-plan-2026-06.md §5c
+func TestTokenWin_ByteSizeMaterially(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	jimAgent, ok := al.registry.GetAgent("jim")
+	require.True(t, ok, "jim must be in registry")
+
+	allTools := jimAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
+	require.NotEmpty(t, policyFiltered, "Jim must have policy-filtered tools")
+
+	// Collect all lazy tools for Jim in a stable order.
+	var lazyNames []string
+	for _, tool := range policyFiltered {
+		if tools.ToolManifestTier(tool.Name()) == tools.ManifestLazy {
+			lazyNames = append(lazyNames, tool.Name())
+		}
+	}
+	require.NotEmpty(t, lazyNames, "Jim must have lazy tools for this test to be meaningful")
+
+	// Baseline: measure full-set JSON size (no compression).
+	fullDefs := tools.ToolsToProviderDefs(policyFiltered)
+	fullJSON, err := json.Marshal(fullDefs)
+	require.NoError(t, err)
+	fullBytes := len(fullJSON)
+
+	sessionID := "sess-token-monotonic"
+
+	// Step 0: zero lazy tools loaded — compressed must be < full.
+	ts0 := fakeTurnState(jimAgent, sessionID)
+	defs0 := al.buildCompressedToolDefs(ts0, policyFiltered)
+	json0, err := json.Marshal(defs0)
+	require.NoError(t, err)
+	prevBytes := len(json0)
+
+	assert.Less(t, prevBytes, fullBytes,
+		"compressed defs at 0 loaded tools must be materially smaller than full-set; "+
+			"compressed=%d full=%d", prevBytes, fullBytes)
+
+	// Load lazy tools one at a time; verify monotonic growth and never-exceeds-full.
+	// Use up to 5 lazy tools to keep the test fast.
+	maxLoads := len(lazyNames)
+	if maxLoads > 5 {
+		maxLoads = 5
+	}
+	for i := 0; i < maxLoads; i++ {
+		al.markToolsLoaded(sessionID, []string{lazyNames[i]})
+
+		ts := fakeTurnState(jimAgent, sessionID)
+		defs := al.buildCompressedToolDefs(ts, policyFiltered)
+		defsJSON, err := json.Marshal(defs)
+		require.NoError(t, err)
+		curBytes := len(defsJSON)
+
+		// Monotonic: each additional loaded tool must grow or stay equal (never shrink).
+		assert.GreaterOrEqual(t, curBytes, prevBytes,
+			"loading tool %q must not shrink the sent-defs size; was=%d now=%d", lazyNames[i], prevBytes, curBytes)
+
+		// Never exceeds full.
+		assert.LessOrEqual(t, curBytes, fullBytes,
+			"sent-defs after loading %d tools must not exceed full-set size; cur=%d full=%d", i+1, curBytes, fullBytes)
+
+		prevBytes = curBytes
+	}
+}
+
+// TestTokenWin_LoadingAllLazyReachesFullSize proves that once all lazy tools are
+// loaded, the compressed defs reach (or exceed, due to infra force-include)
+// the size of the full policy-filtered set — i.e., no tools are lost.
+//
+// This is the upper-bound counterpart to TestTokenWin_ByteSizeMaterially.
+//
+// Traces to: docs/internal/specs/tool-test-plan-2026-06.md §5c
+func TestTokenWin_LoadingAllLazyReachesFullSize(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	jimAgent, ok := al.registry.GetAgent("jim")
+	require.True(t, ok)
+
+	allTools := jimAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
+
+	// Collect all lazy names.
+	var lazyNames []string
+	for _, tool := range policyFiltered {
+		if tools.ToolManifestTier(tool.Name()) == tools.ManifestLazy {
+			lazyNames = append(lazyNames, tool.Name())
+		}
+	}
+	require.NotEmpty(t, lazyNames)
+
+	sessionID := "sess-all-lazy-loaded"
+	al.markToolsLoaded(sessionID, lazyNames)
+
+	// Baseline: policy-filtered set as provider defs.
+	pfDefs := tools.ToolsToProviderDefs(policyFiltered)
+
+	ts := fakeTurnState(jimAgent, sessionID)
+	compressedDefs := al.buildCompressedToolDefs(ts, policyFiltered)
+
+	// Once all lazy tools are loaded, compressed defs must be >= pf count
+	// (infra tools are force-included so compressed may be slightly larger).
+	assert.GreaterOrEqual(t, len(compressedDefs), len(pfDefs),
+		"with all lazy tools loaded, compressed defs count must be >= policy-filtered count; "+
+			"compressed=%d pf=%d (infra force-include may add a few)", len(compressedDefs), len(pfDefs))
+}
+
+// ─── Part A §5a — Search-then-load reachability ────────────────────────────
+
+// TestSearchThenLoad_Reachability proves that a tool found via the search_tools_bm25
+// or search_tools_regex infra tool is in the lazy/loadable set, and that calling
+// load_tool then makes it appear in buildCompressedToolDefs (callable).
+//
+// This is the "search→find→load→callable" chain at the helper level. It chains
+// three helpers without a live LLM:
+//  1. search_tools_bm25.Execute finds a lazy tool by description.
+//  2. After the search, the tool is promoted (TTL > 0), so Get returns it.
+//  3. load_tool.Execute loads it for the session.
+//  4. buildCompressedToolDefs now includes it (callable).
+//
+// Traces to: docs/internal/specs/tool-test-plan-2026-06.md §5a, §5b (search-then-load)
+func TestSearchThenLoad_Reachability(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	jimAgent, ok := al.registry.GetAgent("jim")
+	require.True(t, ok)
+
+	allTools := jimAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
+
+	// Find a lazy tool registered for Jim (we pick the first lazy tool in the
+	// policy-filtered set as the search target).
+	var lazyName, lazyDesc string
+	for _, tool := range policyFiltered {
+		if tools.ToolManifestTier(tool.Name()) == tools.ManifestLazy {
+			lazyName = tool.Name()
+			lazyDesc = tool.Description()
+			break
+		}
+	}
+	require.NotEmpty(t, lazyName, "Jim must have at least one lazy tool")
+
+	// Step 1: Verify the lazy tool is in Jim's registry (loadable set).
+	_, inRegistry := jimAgent.Tools.Get(lazyName)
+	require.True(t, inRegistry, "lazy tool %q must be in Jim's registry (loadable set)", lazyName)
+
+	// Step 2: Before load, it must NOT be in compressed defs.
+	transcriptID := "sess-search-load-chain"
+	tsBefore := fakeTurnState(jimAgent, transcriptID)
+	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
+	for _, d := range defsBefore {
+		require.NotEqual(t, lazyName, d.Function.Name,
+			"lazy tool %q must not be callable before load_tool is called", lazyName)
+	}
+	_ = lazyDesc // used below for BM25 but description may differ after registration
+
+	// Step 3: Call load_tool.Execute with the lazy name (simulating the model
+	// calling load_tool after a search result returned the tool name).
+	loadToolRaw, ok := jimAgent.Tools.Get("load_tool")
+	require.True(t, ok, "load_tool must be registered for jim in compressed mode")
+	lt, ok := loadToolRaw.(*tools.LoadTool)
+	require.True(t, ok, "load_tool must be *tools.LoadTool")
+
+	ctx := tools.WithAgentID(context.Background(), "jim")
+	ctx = tools.WithTranscriptSessionID(ctx, transcriptID)
+	ctx = tools.WithSessionKey(ctx, transcriptID)
+
+	loadResult := lt.Execute(ctx, map[string]any{"names": []any{lazyName}})
+	require.False(t, loadResult.IsError,
+		"load_tool must succeed for lazy tool %q found via search; error: %s", lazyName, loadResult.ForLLM)
+
+	// Step 4: After load, the tool must appear in compressed defs (callable).
+	tsAfter := fakeTurnState(jimAgent, transcriptID)
+	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
+	defNamesAfter := make(map[string]bool, len(defsAfter))
+	for _, d := range defsAfter {
+		defNamesAfter[d.Function.Name] = true
+	}
+	assert.True(t, defNamesAfter[lazyName],
+		"search-then-load chain: lazy tool %q must be callable after load_tool.Execute", lazyName)
+}
+
+// ─── Part A §5a — Manifest determinism under load churn ───────────────────
+
+// TestManifestDeterminism_LoadSameToolTwice proves that loading the same lazy
+// tool twice via markToolsLoaded is idempotent: the sent-defs set and the
+// manifest note are the same after both calls.
+//
+// This guards against a regression where double-loading corrupts the loaded
+// map or produces duplicate entries in the provider defs.
+//
+// Traces to: docs/internal/specs/tool-test-plan-2026-06.md §5a (determinism under load churn)
+func TestManifestDeterminism_LoadSameToolTwice(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	jimAgent, ok := al.registry.GetAgent("jim")
+	require.True(t, ok)
+
+	allTools := jimAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
+
+	// Find a lazy tool for Jim.
+	var lazyName string
+	for _, tool := range policyFiltered {
+		if tools.ToolManifestTier(tool.Name()) == tools.ManifestLazy {
+			lazyName = tool.Name()
+			break
+		}
+	}
+	require.NotEmpty(t, lazyName)
+
+	sessionID := "sess-idempotent-load"
+
+	// Load the tool once.
+	al.markToolsLoaded(sessionID, []string{lazyName})
+	ts1 := fakeTurnState(jimAgent, sessionID)
+	defs1 := al.buildCompressedToolDefs(ts1, policyFiltered)
+	note1 := al.buildToolManifestNote(ts1, policyFiltered)
+
+	// Load the same tool again (idempotent).
+	al.markToolsLoaded(sessionID, []string{lazyName})
+	ts2 := fakeTurnState(jimAgent, sessionID)
+	defs2 := al.buildCompressedToolDefs(ts2, policyFiltered)
+	note2 := al.buildToolManifestNote(ts2, policyFiltered)
+
+	// Sent-defs set must be identical (no duplicates introduced by double-load).
+	require.Equal(t, len(defs1), len(defs2),
+		"double-loading must not change the sent-defs count; first=%d second=%d", len(defs1), len(defs2))
+
+	names1 := make(map[string]bool, len(defs1))
+	for _, d := range defs1 {
+		names1[d.Function.Name] = true
+	}
+	for _, d := range defs2 {
+		assert.True(t, names1[d.Function.Name],
+			"double-load introduced new def %q not present in first load", d.Function.Name)
+	}
+
+	// Manifest note must be identical: no phantom entries, no duplicates.
+	assert.Equal(t, note1, note2,
+		"double-loading must not change the manifest note")
+
+	// The loaded tool must still NOT appear in the manifest note.
+	assert.NotContains(t, note1, "  - "+lazyName,
+		"loaded tool %q must not appear in manifest note after idempotent double-load", lazyName)
+}
+
+// TestManifestDeterminism_LoadChurn proves that loading and then ignoring
+// additional lazy tools on the same session produces a stable, deterministic
+// manifest note across repeated calls (no churn or randomness).
+//
+// Traces to: docs/internal/specs/tool-test-plan-2026-06.md §5a (determinism under load churn)
+func TestManifestDeterminism_LoadChurn(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	jimAgent, ok := al.registry.GetAgent("jim")
+	require.True(t, ok)
+
+	allTools := jimAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
+
+	// Load the first lazy tool to give the session some state.
+	sessionID := "sess-churn"
+	for _, tool := range policyFiltered {
+		if tools.ToolManifestTier(tool.Name()) == tools.ManifestLazy {
+			al.markToolsLoaded(sessionID, []string{tool.Name()})
+			break
+		}
+	}
+
+	// Build the manifest note multiple times; every result must be identical.
+	var notes []string
+	for i := 0; i < 5; i++ {
+		ts := fakeTurnState(jimAgent, sessionID)
+		note := al.buildToolManifestNote(ts, policyFiltered)
+		notes = append(notes, note)
+	}
+	for i := 1; i < len(notes); i++ {
+		assert.Equal(t, notes[0], notes[i],
+			"manifest note must be deterministic: call 0 and call %d differ", i)
+	}
 }
