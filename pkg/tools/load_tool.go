@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -166,8 +167,8 @@ func (t *LoadTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 
 	// Sort for determinism.
-	sortStrings(loadedNames)
-	sortStrings(allRejected)
+	sort.Strings(loadedNames)
+	sort.Strings(allRejected)
 
 	result := map[string]any{
 		"loaded":   loadedNames,
@@ -180,16 +181,4 @@ func (t *LoadTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 
 	return SilentResult(string(encoded))
-}
-
-// sortStrings sorts s in place. Inline helper to avoid importing sort in
-// every caller — sort is already imported by manifest.go in this package but
-// this file is compiled separately.
-func sortStrings(s []string) {
-	n := len(s)
-	for i := 1; i < n; i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }
