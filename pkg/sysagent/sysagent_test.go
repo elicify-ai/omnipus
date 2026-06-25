@@ -13,15 +13,21 @@ package sysagent_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/sysagent"
+	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
@@ -761,37 +767,436 @@ func TestFriendlyDenialMessage(t *testing.T) {
 }
 
 // =====================================================================
-// Integration Test stubs (pending pkg/sysagent/tools/ completion)
+// Integration test helpers (sysagent_test package scope)
 // =====================================================================
 
-// TestAgentCreateIntegration is blocked pending pkg/sysagent/tools/ completion.
+// newIntegrationDeps creates a minimal Deps backed by a real temp-dir.
+// It mirrors the pattern from pkg/sysagent/tools/agent_test.go::newTestDeps.
+// CredStore is wired with a real unlocked store (OMNIPUS_MASTER_KEY env var).
+func newIntegrationDeps(t *testing.T) (*systools.Deps, *config.Config, string) {
+	t.Helper()
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "config.json")
+	cfg := config.DefaultConfig()
+	// Seed config.json on disk so doctor's os.Stat checks can find it.
+	require.NoError(t, config.SaveConfig(cfgPath, cfg), "seed config.json")
+	var mu sync.Mutex
+	getCfg := func() *config.Config { return cfg }
+	// Wire a real CredStore so configure_provider can set/get credentials.
+	t.Setenv("OMNIPUS_MASTER_KEY", strings.Repeat("a", 64))
+	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
+	require.NoError(t, credentials.Unlock(store), "unlock credential store")
+	deps := &systools.Deps{
+		Home:       home,
+		ConfigPath: cfgPath,
+		GetCfg:     getCfg,
+		MutateConfig: func(fn func(*config.Config) error) error {
+			mu.Lock()
+			defer mu.Unlock()
+			return fn(getCfg())
+		},
+		SaveConfigLocked: func(cfg *config.Config) error {
+			return config.SaveConfig(cfgPath, cfg)
+		},
+		CredStore: store,
+	}
+	return deps, cfg, home
+}
+
+// newIntegrationRegistry builds a real ToolRegistry populated with all system
+// tools from AllTools (the production registry) using the provided deps.
+func newIntegrationRegistry(deps *systools.Deps) *tools.ToolRegistry {
+	reg := systools.BuildRegistry(deps, nil /* navCb */)
+	return reg
+}
+
+// =====================================================================
+// Integration Tests (tools now implemented — un-skip these)
+// =====================================================================
+
+// TestAgentCreateIntegration exercises the create_agent tool through its real
+// Execute path and verifies the agent persists in the in-memory config with the
+// expected fields.
+//
 // Traces to: wave5b-system-agent-spec.md line 389 (Scenario: Create a custom agent via system tool)
+// BDD: Given a system agent registry with create_agent,
+//
+//	When Execute is called with name/description/soul/model/color/icon,
+//	Then the agent appears in cfg.Agents.List with those exact field values.
 func TestAgentCreateIntegration(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent/tools/ (systools) not yet fully compiled into registry — pending task #2")
+	// Traces to: wave5b-system-agent-spec.md line 389
+
+	deps, cfg, _ := newIntegrationDeps(t)
+	tool := systools.NewAgentCreateTool(deps)
+
+	// Happy path: create two distinct agents to prove the result is not hardcoded.
+	agents := []struct {
+		name        string
+		description string
+		color       string
+		icon        string
+		expectedID  string
+	}{
+		{"Alpha Bot", "First research agent", "#22C55E", "robot", "alpha-bot"},
+		{"Beta Scout", "Second scout agent", "#3B82F6", "star", "beta-scout"},
+	}
+
+	for _, a := range agents {
+		result := tool.Execute(context.Background(), map[string]any{
+			"name":        a.name,
+			"description": a.description,
+			"soul":        "You are " + a.name + ".",
+			"model":       "test/model",
+			"color":       a.color,
+			"icon":        a.icon,
+		})
+		require.False(t, result.IsError,
+			"create_agent(%q) must succeed, got: %s", a.name, result.ForLLM)
+	}
+
+	// Differentiation test: two different names produce two distinct agents.
+	require.Len(t, cfg.Agents.List, 2,
+		"both agents must be persisted in cfg.Agents.List; hardcoded response would produce 1")
+
+	// Content test: assert exact field values, not just presence.
+	alpha := cfg.Agents.List[0]
+	assert.Equal(t, "alpha-bot", alpha.ID, "agent ID must be slugified from name")
+	assert.Equal(t, "Alpha Bot", alpha.Name)
+	assert.Equal(t, "#22C55E", alpha.Color)
+	assert.Equal(t, "robot", alpha.Icon)
+
+	beta := cfg.Agents.List[1]
+	assert.Equal(t, "beta-scout", beta.ID)
+	assert.Equal(t, "#3B82F6", beta.Color)
+	assert.Equal(t, "star", beta.Icon)
+
+	// Rejection test: invalid color must be caught.
+	badResult := tool.Execute(context.Background(), map[string]any{
+		"name":        "Bad Bot",
+		"description": "test",
+		"soul":        "You are bad.",
+		"model":       "test/model",
+		"color":       "not-a-color",
+	})
+	require.True(t, badResult.IsError,
+		"create_agent with invalid color must return an error")
+	var errBody map[string]any
+	require.NoError(t, json.Unmarshal([]byte(badResult.ForLLM), &errBody))
+	errBlock, _ := errBody["error"].(map[string]any)
+	assert.Equal(t, "INVALID_COLOR", errBlock["code"],
+		"must return INVALID_COLOR error code, not a generic error")
 }
 
-// TestAgentDeleteIntegration is blocked pending pkg/sysagent/tools/ completion.
+// TestAgentDeleteIntegration exercises create_agent then delete_agent to prove
+// the full lifecycle: agent created, agent removed, confirmation gate enforced.
+//
 // Traces to: wave5b-system-agent-spec.md line 401 (Scenario: Delete an agent with confirmation)
+// BDD: Given an agent in cfg.Agents.List,
+//
+//	When delete_agent is called with confirm=false, Then it is denied (CONFIRMATION required).
+//	When delete_agent is called with confirm=true,  Then agent is removed from the list.
 func TestAgentDeleteIntegration(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent/tools/ (systools) not yet fully compiled into registry — pending task #2")
+	// Traces to: wave5b-system-agent-spec.md line 401
+
+	deps, cfg, _ := newIntegrationDeps(t)
+
+	// Pre-populate the config with an agent to delete.
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "to-delete", Name: "To Delete"},
+	}
+
+	deleteTool := systools.NewAgentDeleteTool(deps)
+
+	// Rejection test: confirm=false must be denied by the tool.
+	resultNoConfirm := deleteTool.Execute(context.Background(), map[string]any{
+		"id":      "to-delete",
+		"confirm": false,
+	})
+	require.True(t, resultNoConfirm.IsError,
+		"delete_agent without confirm=true must return error (tool-level guard)")
+	assert.Len(t, cfg.Agents.List, 1,
+		"agent must NOT be deleted when confirm=false")
+
+	// Happy path: confirm=true executes the deletion.
+	resultConfirmed := deleteTool.Execute(context.Background(), map[string]any{
+		"id":      "to-delete",
+		"confirm": true,
+	})
+	require.False(t, resultConfirmed.IsError,
+		"delete_agent with confirm=true must succeed, got: %s", resultConfirmed.ForLLM)
+
+	// Persistence test: agent must be gone from the in-memory list.
+	assert.Empty(t, cfg.Agents.List,
+		"agent must be removed from cfg.Agents.List after confirmed delete")
+
+	// Differentiation test: deleting a non-existent agent returns a distinct
+	// error (not "success") to prove error handling is real, not hardcoded.
+	resultMissing := deleteTool.Execute(context.Background(), map[string]any{
+		"id":      "ghost-agent",
+		"confirm": true,
+	})
+	require.True(t, resultMissing.IsError,
+		"deleting a non-existent agent must return error, not silent success")
+	var missingBody map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultMissing.ForLLM), &missingBody))
+	errBlock, _ := missingBody["error"].(map[string]any)
+	assert.NotEmpty(t, errBlock["code"],
+		"missing-agent error must include an error code")
 }
 
-// TestProviderConfigureIntegration is blocked pending pkg/sysagent/tools/ completion.
+// TestProviderConfigureIntegration exercises configure_provider via its Execute
+// path and asserts that the provider is persisted in the config's Providers
+// slice with the correct APIKeyRef. This test does NOT require a network
+// connection — it asserts config write and credential-store write only.
+//
 // Traces to: wave5b-system-agent-spec.md line 600 (Scenario: Successful provider connection)
+// BDD: Given a credential store,
+//
+//	When configure_provider is called with name+api_key,
+//	Then the key is stored under <name>_API_KEY AND cfg.Providers has the entry wired.
 func TestProviderConfigureIntegration(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent/tools/ (systools) not yet fully compiled into registry — pending task #2")
+	// Traces to: wave5b-system-agent-spec.md line 600
+
+	deps, cfg, _ := newIntegrationDeps(t)
+	tool := systools.NewProviderConfigureTool(deps)
+
+	// Happy path: configure two different providers.
+	result1 := tool.Execute(context.Background(), map[string]any{
+		"name":    "groq",
+		"api_key": "gsk-test-key-1",
+	})
+	require.False(t, result1.IsError,
+		"configure_provider(groq) must succeed, got: %s", result1.ForLLM)
+
+	result2 := tool.Execute(context.Background(), map[string]any{
+		"name":    "openai",
+		"api_key": "sk-openai-test-2",
+	})
+	require.False(t, result2.IsError,
+		"configure_provider(openai) must succeed, got: %s", result2.ForLLM)
+
+	// providerName extracts the canonical name from a ModelConfig entry, mirroring
+	// the tool's providerNameOf logic: explicit Provider field, or the prefix of Model.
+	providerName := func(p *config.ModelConfig) string {
+		if p == nil {
+			return ""
+		}
+		if p.Provider != "" {
+			return p.Provider
+		}
+		// Extract prefix from "provider/model" format.
+		for i, ch := range p.Model {
+			if ch == '/' {
+				return p.Model[:i]
+			}
+		}
+		return p.Model
+	}
+
+	// Differentiation test: both providers must appear in cfg.Providers after
+	// configure calls. Groq and openai already have seed entries in DefaultConfig
+	// so configure_provider UPDATES their APIKeyRef rather than appending new ones.
+	// We assert via providerName(p) to match how the tool identifies entries.
+	var providerNames []string
+	for _, p := range cfg.Providers {
+		if p != nil {
+			providerNames = append(providerNames, providerName(p))
+		}
+	}
+	assert.Contains(t, providerNames, "groq",
+		"groq must appear in cfg.Providers (as existing seed or appended entry)")
+	assert.Contains(t, providerNames, "openai",
+		"openai must appear in cfg.Providers (as existing seed or appended entry)")
+
+	// Content test: APIKeyRef is wired on the persisted entry for groq.
+	var groqEntry *config.ModelConfig
+	for _, p := range cfg.Providers {
+		if p != nil && providerName(p) == "groq" {
+			if p.APIKeyRef != "" {
+				groqEntry = p
+				break
+			}
+		}
+	}
+	require.NotNil(t, groqEntry, "a groq provider entry with APIKeyRef must exist in config")
+	assert.Equal(t, "groq_API_KEY", groqEntry.APIKeyRef,
+		"APIKeyRef must follow <provider>_API_KEY convention")
+
+	// Persistence test: credential store holds the actual key.
+	storedKey, err := deps.CredStore.Get("groq_API_KEY")
+	require.NoError(t, err, "groq_API_KEY must be in credential store")
+	assert.Equal(t, "gsk-test-key-1", storedKey,
+		"stored credential must match what was passed to configure_provider")
+
+	// Rejection test: cloud provider without api_key must fail.
+	resultNoKey := tool.Execute(context.Background(), map[string]any{
+		"name": "deepseek",
+		// api_key deliberately omitted
+	})
+	require.True(t, resultNoKey.IsError,
+		"configure_provider of cloud provider without api_key must return error")
+	var errBody map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultNoKey.ForLLM), &errBody))
+	errBlock, _ := errBody["error"].(map[string]any)
+	assert.Equal(t, "INVALID_INPUT", errBlock["code"],
+		"missing api_key must return INVALID_INPUT, not a generic error")
 }
 
-// TestConfirmationFlowIntegration is blocked pending full system tool handler wiring.
-// Traces to: wave5b-system-agent-spec.md line 509 (Scenario: Confirmation flow)
+// TestConfirmationFlowIntegration exercises the GuardedTool→SystemToolHandler
+// confirmation gate end-to-end with a real delete_agent tool registered on a
+// real registry. This tests the full guard sequence that runs in production.
+//
+// Traces to: wave5b-system-agent-spec.md line 509 (Scenario: Confirmation dialog for agent deletion)
+// BDD: Given a real registry with delete_agent registered,
+//
+//	When GuardedTool.Execute is called with confirm=false (SingleUser), Then CONFIRMATION_REQUIRED.
+//	When GuardedTool.Execute is called with confirm=true  (SingleUser), Then tool executes.
 func TestConfirmationFlowIntegration(t *testing.T) {
-	t.Skip("Blocked: full SystemToolHandler integration with real tools pending task #2")
+	// Traces to: wave5b-system-agent-spec.md line 509
+
+	deps, cfg, _ := newIntegrationDeps(t)
+	// Pre-populate an agent to delete.
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "confirm-target", Name: "Confirm Target"},
+	}
+
+	// Wire a real registry with all system tools — this is the production path.
+	reg := newIntegrationRegistry(deps)
+	handler := sysagent.NewSystemToolHandler(sysagent.HandlerConfig{
+		Registry: reg,
+		Confirm:  nil, // no external confirm func; single-user relies on args["confirm"]
+	})
+
+	// Retrieve the real delete_agent tool from the registry for GuardedTool wrapping.
+	rawTool, ok := reg.Get("delete_agent")
+	require.True(t, ok, "delete_agent must be registered in the production registry")
+	require.NotNil(t, rawTool, "delete_agent tool must not be nil")
+
+	guarded := sysagent.NewGuardedTool(rawTool, handler, sysagent.RoleSingleUser, "test-device-integ")
+
+	// Test 1: confirm=false → CONFIRMATION_REQUIRED (no execution).
+	resultDenied := guarded.Execute(context.Background(), map[string]any{
+		"id":      "confirm-target",
+		"confirm": false,
+	})
+	require.NotNil(t, resultDenied)
+	assert.True(t, resultDenied.IsError,
+		"confirm=false must produce an error result")
+	assert.Contains(t, resultDenied.ContentForLLM(), "CONFIRMATION_REQUIRED",
+		"denied result must contain CONFIRMATION_REQUIRED code")
+	assert.Len(t, cfg.Agents.List, 1,
+		"agent must not be deleted when confirmation is denied")
+
+	// Test 2: confirm=true → executes (agent is removed).
+	resultApproved := guarded.Execute(context.Background(), map[string]any{
+		"id":      "confirm-target",
+		"confirm": true,
+	})
+	require.NotNil(t, resultApproved)
+	assert.False(t, resultApproved.IsError,
+		"confirm=true in SingleUser mode must succeed, got: %s", resultApproved.ContentForLLM())
+	assert.Empty(t, cfg.Agents.List,
+		"agent must be deleted after confirmed execution")
+
+	// Test 3: Differentiation — confirm=true on a DIFFERENT tool (create_agent) must
+	// NOT trigger the confirmation gate (create_agent is safe, not destructive).
+	createTool, ok2 := reg.Get("create_agent")
+	require.True(t, ok2, "create_agent must be registered")
+	require.NotNil(t, createTool, "create_agent tool must not be nil")
+	guardedCreate := sysagent.NewGuardedTool(createTool, handler, sysagent.RoleSingleUser, "test-device-integ")
+	resultCreate := guardedCreate.Execute(context.Background(), map[string]any{
+		"name":        "Fresh Agent",
+		"description": "a new agent",
+		"soul":        "You are fresh.",
+		"model":       "test/model",
+		"color":       "#22C55E",
+		"icon":        "robot",
+	})
+	assert.False(t, resultCreate.IsError,
+		"create_agent (non-destructive) must not be blocked by confirmation gate")
 }
 
-// TestDoctorRunIntegration is blocked pending pkg/sysagent/tools/ + state.json extension.
+// TestDoctorRunIntegration exercises the run_doctor tool through its real
+// Execute path and asserts it returns a structured diagnostic result with all
+// required fields. The test also verifies that two runs with different
+// filesystem states produce different risk scores.
+//
+// NOTE: state.json last_doctor_run/last_doctor_score is NOT wired by the
+// run_doctor tool Execute path — the tool returns the data but does not
+// write state.json. That wiring is a UI/gateway concern (the Settings panel
+// calls the REST endpoint which persists state.json). The test asserts what
+// the tool DOES produce and notes this gap.
+//
 // Traces to: wave5b-system-agent-spec.md line 730 (Scenario: Run doctor from Settings UI)
+// BDD: Given the doctor tool is registered and deps.Home exists,
+//
+//	When Execute is called, Then result contains risk_score, checks_passed,
+//	checks_failed, issues[], run_at — no network required.
 func TestDoctorRunIntegration(t *testing.T) {
-	t.Skip("Blocked: run_doctor tool and state.json last_doctor_run/last_doctor_score fields pending task #2-3")
+	// Traces to: wave5b-system-agent-spec.md line 730
+
+	deps, _, home := newIntegrationDeps(t)
+	tool := systools.NewDoctorRunTool(deps)
+
+	// Happy path: fresh temp-dir, config.json seeded by newIntegrationDeps.
+	result := tool.Execute(context.Background(), map[string]any{})
+	require.False(t, result.IsError,
+		"run_doctor must succeed on a fresh home, got: %s", result.ForLLM)
+
+	// Content test: result must be valid JSON with required top-level keys.
+	var body map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &body),
+		"run_doctor result must be valid JSON")
+
+	riskScore, hasRiskScore := body["risk_score"]
+	assert.True(t, hasRiskScore, "result must include risk_score")
+	riskFloat, _ := riskScore.(float64)
+	assert.GreaterOrEqual(t, riskFloat, 0.0,
+		"risk_score must be >= 0")
+	assert.LessOrEqual(t, riskFloat, 100.0,
+		"risk_score must be <= 100")
+
+	_, hasIssues := body["issues"]
+	assert.True(t, hasIssues, "result must include issues array")
+
+	_, hasChecksPassed := body["checks_passed"]
+	assert.True(t, hasChecksPassed, "result must include checks_passed")
+
+	_, hasChecksFailed := body["checks_failed"]
+	assert.True(t, hasChecksFailed, "result must include checks_failed")
+
+	runAt, hasRunAt := body["run_at"]
+	assert.True(t, hasRunAt, "result must include run_at timestamp")
+	assert.NotEmpty(t, runAt, "run_at must not be empty")
+
+	// Differentiation test: create a credentials.json with open permissions to
+	// trigger a high-severity issue, then re-run. The risk score must be higher
+	// than the baseline (proving the tool actually checks the filesystem).
+	credPath := filepath.Join(home, "credentials.json")
+	require.NoError(t, os.WriteFile(credPath, []byte(`{}`), 0o644),
+		"seed credentials.json with world-readable permissions")
+
+	result2 := tool.Execute(context.Background(), map[string]any{})
+	require.False(t, result2.IsError,
+		"run_doctor must succeed even with issues present, got: %s", result2.ForLLM)
+
+	var body2 map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result2.ForLLM), &body2))
+
+	riskScore2, _ := body2["risk_score"].(float64)
+	checksFailed2, _ := body2["checks_failed"].(float64)
+
+	assert.Greater(t, riskScore2, riskFloat,
+		"risk_score must increase when credentials.json has open permissions (hardcoded response would not change)")
+	assert.Greater(t, checksFailed2, 0.0,
+		"checks_failed must be > 0 when a security issue is detected")
+
+	// Gap documented: state.json last_doctor_run/last_doctor_score NOT written by
+	// run_doctor.Execute — that persistence is the gateway's responsibility (it
+	// reads the JSON result and writes state.json after calling the tool via the
+	// REST endpoint). No production code is changed here.
+	// TODO: when the gateway wires last_doctor_run/last_doctor_score into state.json,
+	// add a test here that reads state.json and asserts the fields.
 }
 
 // =====================================================================
