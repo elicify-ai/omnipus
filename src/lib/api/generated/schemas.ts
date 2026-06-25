@@ -455,6 +455,7 @@ type AgentToolEntry = {
   name: string;
   configured_policy: "allow" | "ask" | "deny";
   effective_policy: "allow" | "ask" | "deny";
+  manifest_tier: "full" | "compressed" | "infra";
 };
 type ChannelEnabledResponse = {
   id: ChannelId;
@@ -1218,6 +1219,7 @@ export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
     name: z.string(),
     configured_policy: z.enum(["allow", "ask", "deny"]),
     effective_policy: z.enum(["allow", "ask", "deny"]),
+    manifest_tier: z.enum(["full", "compressed", "infra"]),
   })
   .passthrough();
 export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({

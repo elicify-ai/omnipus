@@ -280,6 +280,14 @@ type AgentLoop struct {
 	// channelSessionIdx maps "channel/chatID" → shared session ID for fast per-peer
 	// session resumption. Built on startup and updated on every new channel session.
 	channelSessionIdx sync.Map
+
+	// loadedTools tracks which lazy tools have been on-demand loaded by the
+	// manifest optimization (cfg.Tools.Manifest.Compressed) for each session.
+	// Key: transcript session ID (string). Value: map[string]bool (tool name → loaded).
+	// Protected by loadedToolsMu. A new session ID means a fresh (absent) set — no
+	// explicit reset needed. Only populated when Compressed is true.
+	loadedTools   map[string]map[string]bool
+	loadedToolsMu sync.Mutex
 }
 
 // processOptions configures how a message is processed
@@ -468,6 +476,7 @@ func NewAgentLoop(
 		steering:               newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
 		contextBuilderRegistry: NewContextBuilderRegistry(),
 		admission:              newAdmissionController(0),
+		loadedTools:            make(map[string]map[string]bool),
 	}
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
@@ -1764,6 +1773,95 @@ func registerSharedTools(
 					al.browserMgr = mgr
 					al.mu.Unlock()
 				}
+			}
+		}
+
+		// Manifest optimization (cfg.Tools.Manifest.Compressed): register load_tool
+		// and the search tools so every agent can load its lazy tools on demand and
+		// search for tools by keyword.
+		//
+		// load_tool is an infra tool — always callable, never in the manifest block.
+		// Its resolver uses context-aware closures so that per-session and per-agent
+		// state is read from the tool ctx at call time, avoiding data races on the
+		// shared LoadTool instance across concurrent turns on the same agent.
+		//
+		// search_tools_bm25 / search_tools_regex (Gap 2): registered here so an
+		// agent can find lazy/MCP tools by keyword and then load_tool them. Guarded
+		// against double-registration in case MCP discovery already added them.
+		if cfg.Tools.Manifest.Compressed {
+			capturedAgentID := agentID
+			loadTool := tools.NewLoadTool()
+			loadTool.SetResolver(
+				// canLoad: true iff name is a real policy-allowed LAZY tool for the
+				// calling agent (infra/full tools are already callable — not loadable).
+				func(ctx context.Context, name string) bool {
+					callerID := tools.ToolAgentID(ctx)
+					if callerID == "" {
+						callerID = capturedAgentID
+					}
+					callerAgent, ok := al.registry.GetAgent(callerID)
+					if !ok {
+						return false
+					}
+					if tools.ToolManifestTier(name) != tools.ManifestLazy {
+						return false
+					}
+					allAgentTools := callerAgent.Tools.GetAll()
+					policyFiltered, _ := tools.FilterToolsByPolicy(allAgentTools, callerAgent.AgentType, callerAgent.LoadToolPolicy())
+					for _, t := range policyFiltered {
+						if t.Name() == name {
+							return true
+						}
+					}
+					return false
+				},
+				// markLoaded: records names in the session's loaded set and returns
+				// each tool's full schema so the model immediately sees the params.
+				func(ctx context.Context, names []string) (map[string]any, []string) {
+					sessionID := tools.ToolTranscriptSessionID(ctx)
+					if sessionID == "" {
+						sessionID = tools.ToolSessionKey(ctx)
+					}
+					al.markToolsLoaded(sessionID, names)
+
+					callerID := tools.ToolAgentID(ctx)
+					if callerID == "" {
+						callerID = capturedAgentID
+					}
+					callerAgent, ok := al.registry.GetAgent(callerID)
+					if !ok {
+						return map[string]any{}, nil
+					}
+					schemas := make(map[string]any, len(names))
+					for _, n := range names {
+						if t, ok := callerAgent.Tools.Get(n); ok {
+							schema := tools.ToolToSchema(t)
+							if fn, ok := schema["function"]; ok {
+								schemas[n] = fn
+							}
+						}
+					}
+					return schemas, nil
+				},
+			)
+			agent.Tools.Register(loadTool)
+
+			// Register search tools (Gap 2): available whenever compressed mode is
+			// on, not only when MCP discovery is enabled. Guard against
+			// double-registration if MCP init already added them.
+			ttl := cfg.Tools.MCP.Discovery.TTL
+			if ttl <= 0 {
+				ttl = 5
+			}
+			maxResults := cfg.Tools.MCP.Discovery.MaxSearchResults
+			if maxResults <= 0 {
+				maxResults = 5
+			}
+			if _, alreadyRegex := agent.Tools.Get("search_tools_regex"); !alreadyRegex {
+				agent.Tools.Register(tools.NewRegexSearchTool(agent.Tools, ttl, maxResults))
+			}
+			if _, alreadyBM25 := agent.Tools.Get("search_tools_bm25"); !alreadyBM25 {
+				agent.Tools.Register(tools.NewBM25SearchTool(agent.Tools, ttl, maxResults))
 			}
 		}
 	}
@@ -4868,7 +4966,12 @@ turnLoop:
 			return turnResult{status: TurnEndStatusError, finalContent: denyMsg}, dedupErr
 		}
 
-		providerToolDefs := tools.ToolsToProviderDefs(policyFilteredTools)
+		var providerToolDefs []providers.ToolDefinition
+		if cfg.Tools.Manifest.Compressed {
+			providerToolDefs = al.buildCompressedToolDefs(ts, policyFilteredTools)
+		} else {
+			providerToolDefs = tools.ToolsToProviderDefs(policyFilteredTools)
+		}
 
 		// Native web search support
 		_, hasWebSearch := ts.agent.Tools.Get("search_web")
@@ -4918,6 +5021,20 @@ turnLoop:
 				injected = append(injected, providers.Message{Role: "system", Content: note})
 				injected = append(injected, callMessages[1:]...)
 				callMessages = injected
+			}
+			// Re-inject the compressed manifest of unloaded lazy tools as an ephemeral
+			// system message. Like the scratchpad, it is rebuilt every turn (never
+			// persisted) so it is never stale and not double-counted in the cached
+			// system prompt. Injected only when Compressed is active and there are
+			// unloaded lazy tools to list.
+			if cfg.Tools.Manifest.Compressed && len(callMessages) > 0 {
+				if note := al.buildToolManifestNote(ts, policyFilteredTools); note != "" {
+					injected := make([]providers.Message, 0, len(callMessages)+1)
+					injected = append(injected, callMessages[0])
+					injected = append(injected, providers.Message{Role: "system", Content: note})
+					injected = append(injected, callMessages[1:]...)
+					callMessages = injected
+				}
 			}
 		}
 		if gracefulTerminal {
@@ -8339,4 +8456,41 @@ func (al *AgentLoop) buildScratchpadNote(agentID string) string {
 		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+// markToolsLoaded records names as loaded for the given session (manifest
+// optimization). Creates the inner map on first call for a session.
+// Safe for concurrent access — protected by loadedToolsMu.
+func (al *AgentLoop) markToolsLoaded(sessionID string, names []string) {
+	if sessionID == "" || len(names) == 0 {
+		return
+	}
+	al.loadedToolsMu.Lock()
+	defer al.loadedToolsMu.Unlock()
+	if al.loadedTools[sessionID] == nil {
+		al.loadedTools[sessionID] = make(map[string]bool, len(names))
+	}
+	for _, n := range names {
+		al.loadedTools[sessionID][n] = true
+	}
+}
+
+// sessionLoadedTools returns a copy of the loaded-tool set for sessionID.
+// Returns an empty map when sessionID is empty or has no entries.
+// Safe for concurrent access — protected by loadedToolsMu.
+func (al *AgentLoop) sessionLoadedTools(sessionID string) map[string]bool {
+	if sessionID == "" {
+		return map[string]bool{}
+	}
+	al.loadedToolsMu.Lock()
+	defer al.loadedToolsMu.Unlock()
+	src := al.loadedTools[sessionID]
+	if len(src) == 0 {
+		return map[string]bool{}
+	}
+	out := make(map[string]bool, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }

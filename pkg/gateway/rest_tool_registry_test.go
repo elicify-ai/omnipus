@@ -132,8 +132,8 @@ func TestREST_GetTools_MethodNotAllowed(t *testing.T) {
 // BDD: Given a registered agent ID,
 // When GET /api/v1/agents/{id}/tools is called,
 // Then 200 with {agent_type, config, effective_tools} where every effective tool has
-// {name, configured_policy, effective_policy}.
-// Traces to: tool-registry-redesign-spec.md FR-028, FR-086
+// {name, configured_policy, effective_policy, manifest_tier}.
+// Traces to: tool-registry-redesign-spec.md FR-028, FR-086; Gap 3 manifest_tier.
 func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
@@ -154,15 +154,97 @@ func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 	assert.Contains(t, resp, "config", "response must include config")
 	assert.Contains(t, resp, "tools", "response must include tools")
 
-	tools, ok := resp["tools"].([]any)
+	toolsArr, ok := resp["tools"].([]any)
 	require.True(t, ok, "tools must be an array")
 
-	for i, raw := range tools {
+	validTiers := map[string]bool{"full": true, "compressed": true, "infra": true}
+
+	for i, raw := range toolsArr {
 		entry, ok := raw.(map[string]any)
 		require.True(t, ok, "tools[%d] must be an object", i)
 		assert.Contains(t, entry, "name", "entry %d missing 'name'", i)
 		assert.Contains(t, entry, "configured_policy", "entry %d missing 'configured_policy'", i)
 		assert.Contains(t, entry, "effective_policy", "entry %d missing 'effective_policy'", i)
+		// Gap 3: every entry must carry a valid manifest_tier.
+		tier, hasTier := entry["manifest_tier"].(string)
+		assert.True(t, hasTier, "entry %d missing 'manifest_tier'", i)
+		assert.True(t, validTiers[tier], "entry %d has invalid manifest_tier %q", i, tier)
+	}
+}
+
+// TestREST_GetAgentTools_ManifestTierValues verifies that well-known tools carry the
+// correct manifest_tier classification in the per-agent tools view.
+// BDD: Given an agent that has read_file (full), workspace.shell (compressed), and
+// possibly load_tool (infra) in its tool set,
+// When GET /api/v1/agents/{id}/tools is called,
+// Then read_file has manifest_tier="full", workspace.shell has "compressed", and
+// if load_tool is present it has "infra".
+// Traces to: tool-manifest-optimization-2026-06.md Gap 3.
+func TestREST_GetAgentTools_ManifestTierValues(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	agentID := "main"
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+agentID+"/tools", nil)
+	r = withAdminRole(r)
+	w := httptest.NewRecorder()
+	api.HandleAgentToolsRegistry(w, r, agentID)
+
+	require.Equal(t, http.StatusOK, w.Code, "GET agent tools must return 200: %s", w.Body)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp), "must unmarshal as object")
+
+	toolsArr, ok := resp["tools"].([]any)
+	require.True(t, ok, "tools must be an array")
+
+	// Build a name→tier index from the response.
+	tierByName := make(map[string]string)
+	for _, raw := range toolsArr {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := entry["name"].(string)
+		tier, _ := entry["manifest_tier"].(string)
+		if name != "" {
+			tierByName[name] = tier
+		}
+	}
+
+	// read_file is in the full set (high-frequency core tool).
+	if tier, found := tierByName["read_file"]; found {
+		assert.Equal(t, "full", tier, "read_file must have manifest_tier=full")
+	}
+
+	// write_file is also in the full set.
+	if tier, found := tierByName["write_file"]; found {
+		assert.Equal(t, "full", tier, "write_file must have manifest_tier=full")
+	}
+
+	// workspace.shell is a management tool — lazy/compressed.
+	if tier, found := tierByName["workspace.shell"]; found {
+		assert.Equal(t, "compressed", tier, "workspace.shell must have manifest_tier=compressed")
+	}
+
+	// load_tool is an infra tool when registered (compressed mode on).
+	if tier, found := tierByName["load_tool"]; found {
+		assert.Equal(t, "infra", tier, "load_tool must have manifest_tier=infra")
+	}
+
+	// search_tools_bm25 is an infra tool when registered.
+	if tier, found := tierByName["search_tools_bm25"]; found {
+		assert.Equal(t, "infra", tier, "search_tools_bm25 must have manifest_tier=infra")
+	}
+
+	// spawn is a delegation tool — lazy/compressed.
+	if tier, found := tierByName["spawn"]; found {
+		assert.Equal(t, "compressed", tier, "spawn must have manifest_tier=compressed")
+	}
+
+	// Every entry must have a valid tier value.
+	validTiers := map[string]bool{"full": true, "compressed": true, "infra": true}
+	for name, tier := range tierByName {
+		assert.True(t, validTiers[tier], "tool %q has invalid manifest_tier %q", name, tier)
 	}
 }
 

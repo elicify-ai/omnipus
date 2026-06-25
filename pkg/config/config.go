@@ -2967,6 +2967,23 @@ type ToolsConfig struct {
 	// not rename the JSON tag or existing deployments will silently lose their
 	// duration bounds on next restart.
 	ServeWorkspace ServeWorkspaceConfig `json:"serve_workspace,omitempty" yaml:"-"`
+
+	// Manifest controls the tool-manifest optimization (v0.1.0). When
+	// Compressed is true (the default), only the high-frequency "full" tools
+	// plus load_tool/search are sent as callable defs each turn; all other
+	// allowed tools appear in a compact manifest block in the system context
+	// and are made callable on demand via load_tool. When false, every tool is
+	// sent as a full callable def every turn (legacy behavior; backward-compat
+	// kill-switch).
+	Manifest ManifestConfig `json:"manifest" yaml:"manifest,omitempty"`
+}
+
+// ManifestConfig holds settings for the tool-manifest optimization.
+// Maps to config.json: tools.manifest.*
+type ManifestConfig struct {
+	// Compressed controls whether the manifest optimization is active.
+	// Default: true (enabled). When false, every tool is sent full (legacy behavior).
+	Compressed bool `json:"compressed" yaml:"compressed,omitempty" env:"OMNIPUS_TOOLS_MANIFEST_COMPRESSED"`
 }
 
 // RunInWorkspaceConfig holds dev-mode configuration for the web_serve tool.

@@ -448,6 +448,9 @@ func DefaultConfig() *Config {
 			TaskUpdate: ToolConfig{
 				Enabled: true,
 			},
+			Manifest: ManifestConfig{
+				Compressed: true,
+			},
 		},
 		Heartbeat: HeartbeatConfig{
 			Enabled:  true,
