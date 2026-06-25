@@ -2,7 +2,13 @@
 
 **Scope:** every agent tool (~78 across `pkg/tools`, `pkg/sysagent/tools`, `pkg/tools/browser`) plus the time-bound subsystems (heartbeat, scheduled/recurring tasks, drains, idle-close, retention) and the **compressed-manifest reliability** mechanism. Goal: excellent coverage with no production surprises — each tool gets happy-path **and** edge/failure cases, driven through real seams (real files, real subprocesses, real Chrome, real channel delivery, a real served site, real multi-MCP discovery) wherever a unit stub would hide a bug.
 
-**Status:** plan. Grounded in a coverage/harness audit (2026-06). Build tags for all Go tests: `-tags goolm,stdjson`, `CGO_ENABLED=0`. CI authority = ci-omnipus worker.
+**Status:** plan — APPROVED for full build-out as a tracked epic (2026-06-25). Build tags for all Go tests: `-tags goolm,stdjson`, `CGO_ENABLED=0`. CI authority = ci-omnipus worker.
+
+**Operator decisions (2026-06-25):**
+- **Scope:** full build-out, tracked as a GitHub epic + sub-issues, sequenced by §9.
+- **CI budget:** heavy gates (T3 real-resource, T4 live-LLM, multi-model manifest reliability) run **pre-merge only** (not nightly). Fast T1/T2 run every push.
+- **Resources approved:** a real `vite build` in one gated T3 serve_web case; a throwaway SMTP/IMAP server for one real email round-trip.
+- **NOT approved:** adding a Chrome binary to the ci-worker image. ⇒ Browser T3 tests are written and runnable on-demand (`OMNIPUS_BROWSER_E2E=1` + local Chrome) but are **not wired into CI**; browser behavioral coverage stays opt-in/local until Chrome-in-CI is revisited.
 
 ---
 
@@ -22,8 +28,8 @@
 |---|---|---|---|---|
 | **T1 Unit** | pure logic, validators, single-tool Execute against tmpdir/fakes | `go-test` | none | every push (fast) |
 | **T2 Integration (in-proc)** | tool → loop → bus → channel; multi-tool chains; httptest gateway; manifest load→call via scripted provider | `go-test` | none | every push |
-| **T3 Real-resource (gated)** | real Chrome (chromedp), real Tier-3 dev server, real stdio MCP subprocesses, real exec sandbox edges, real served vite dir | `go-test` + env flags | Chrome / Linux / node | nightly + pre-merge |
-| **T4 Live-LLM e2e** | Playwright over real gateway + glm-5.2: does the *model* drive the tool correctly (manifest load→call, delegation, handoff) | `e2e` | OPENROUTER_API_KEY_CI | nightly + pre-merge |
+| **T3 Real-resource (gated)** | real Tier-3 dev server, real stdio MCP subprocesses, real exec sandbox edges, real served vite dir; real Chrome **opt-in/local only** | `go-test` + env flags | Chrome / Linux / node | **pre-merge only** (Chrome cases local-only) |
+| **T4 Live-LLM e2e** | Playwright over real gateway + glm-5.2: does the *model* drive the tool correctly (manifest load→call, delegation, handoff) | `e2e` | OPENROUTER_API_KEY_CI | **pre-merge only** |
 
 Env flags: `OMNIPUS_BROWSER_E2E=1` (+ Chrome on PATH) for T3 browser; `runtime.GOOS=="linux"` gate for Tier-3 serve/`workspace_shell_bg`; `OPENROUTER_API_KEY_CI` for T4.
 
@@ -223,7 +229,7 @@ T3, real subprocess where noted:
 | `TaskDrainService.fireOnce()` | `pkg/heartbeat/task_drain.go` | drop tiny-real-interval dependency |
 | Generic `ScriptResponses([...])` provider helper | `pkg/agent/*_test.go` | every test rolls its own scripted provider |
 | Stub stdio JSON-RPC MCP binary | new `pkg/mcp/testdata` | protocol-level + multi-server discovery fidelity |
-| Wire `OMNIPUS_BROWSER_E2E=1` + Chrome into ci-worker | `deploy/ci-worker` | browser tools currently CI-skipped (0 behavioral in CI) |
+| ~~Wire Chrome into ci-worker~~ — **deferred by operator**; browser T3 runs local-only (`OMNIPUS_BROWSER_E2E=1`) | `deploy/ci-worker` | not approved 2026-06-25; revisit later |
 | Fixture a `vite build` dist/ (+ optional real-build T3 case) | new `pkg/tools/testdata` | serve_web real-site test without node in the unit gate |
 
 ---
