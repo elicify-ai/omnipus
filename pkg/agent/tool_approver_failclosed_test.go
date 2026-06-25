@@ -104,12 +104,11 @@ func TestNopApprover_DefaultBuild_DeniesAndAudits(t *testing.T) {
 
 	approver := nopPolicyApprover{auditLogger: logger}
 	approved, reason := approver.RequestApproval(context.Background(), PolicyApprovalReq{
-		ToolCallID:    "call-1",
-		ToolName:      "exec",
-		AgentID:       "ray",
-		SessionID:     "sess-1",
-		TurnID:        "turn-1",
-		RequiresAdmin: true,
+		ToolCallID: "call-1",
+		ToolName:   "exec",
+		AgentID:    "ray",
+		SessionID:  "sess-1",
+		TurnID:     "turn-1",
 	})
 	assert.False(t, approved, "default-build nop must deny — fail-closed")
 	assert.Equal(t, "no_approver_configured", reason,
@@ -146,8 +145,6 @@ func TestNopApprover_DefaultBuild_DeniesAndAudits(t *testing.T) {
 	assert.Equal(t, "default", details["build"])
 	assert.Equal(t, "turn-1", details["turn_id"])
 	assert.Equal(t, "call-1", details["tool_call_id"])
-	assert.Equal(t, true, details["requires_admin"],
-		"requires_admin must round-trip so an operator can see the admin-flagged tool got denied")
 }
 
 // TestNopApprover_RepeatedHits_OnlyAuditOnce — V2.B sync.Once gate. Five

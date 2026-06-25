@@ -12,7 +12,7 @@
  *    Focus-trap, ESC, and focus-restore are provided by Radix DialogPrimitive
  *    (the Sheet primitive) — tested at the integration level via dialog role.
  * 8. G8: edit mode pre-populates fields and submits via patchMcpServer.
- * 9. G9: new fields (headers, env_file, requires_admin_ask) included in payload.
+ * 9. G9: new fields (headers, env_file) included in payload.
  * 10. G7: Test button in SkillsScreen calls testMcpServer and toasts the result.
  */
 
@@ -382,7 +382,7 @@ describe('McpServerModal — G8: edit mode', () => {
   })
 })
 
-// ── G9: New fields (headers, env_file, requires_admin_ask) ───────────────────
+// ── G9: New fields (headers, env_file) ───────────────────────────────────────
 
 describe('McpServerModal — G9: new fields', () => {
   it('adds headers to network-mode addMcpServer call', async () => {
@@ -404,28 +404,6 @@ describe('McpServerModal — G9: new fields', () => {
       expect(vi.mocked(addMcpServer)).toHaveBeenCalledWith(
         expect.objectContaining({
           headers: { Authorization: 'Bearer sk-test' },
-        })
-      )
-    })
-  })
-
-  it('adds requires_admin_ask to network-mode addMcpServer call', async () => {
-    renderModal()
-    const user = userEvent.setup()
-    await user.type(screen.getByPlaceholderText('my-mcp-server'), 'net-server')
-    await user.type(screen.getByTestId('network-url'), 'https://mcp.example.com/sse')
-
-    const advancedBtn = screen.getByText('Advanced')
-    await user.click(advancedBtn)
-
-    await waitFor(() => screen.getByTestId('requires-admin-ask'))
-    await user.type(screen.getByTestId('requires-admin-ask'), 'delete_record, drop_table')
-
-    await user.click(screen.getByTestId('submit-add'))
-    await waitFor(() => {
-      expect(vi.mocked(addMcpServer)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requires_admin_ask: ['delete_record', 'drop_table'],
         })
       )
     })
@@ -453,54 +431,6 @@ describe('McpServerModal — G9: new fields', () => {
     })
   })
 
-  it('adds requires_admin_ask to stdio-mode addMcpServer call', async () => {
-    renderModal()
-    const user = userEvent.setup()
-    await user.type(screen.getByPlaceholderText('my-mcp-server'), 'local-server')
-    await user.click(screen.getByTestId('mode-local'))
-    await waitFor(() => screen.getByTestId('stdio-confirm-dialog'))
-    await user.click(screen.getByTestId('stdio-confirm-accept'))
-    await waitFor(() => screen.getByTestId('local-command'))
-
-    await user.type(screen.getByTestId('local-command'), 'npx my-server')
-    // The stdio mode uses id="mcp-admin-ask-stdio" but data-testid="requires-admin-ask"
-    await user.type(screen.getByTestId('requires-admin-ask'), 'dangerous_op')
-
-    await user.click(screen.getByTestId('submit-add'))
-    await waitFor(() => {
-      expect(vi.mocked(addMcpServer)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requires_admin_ask: ['dangerous_op'],
-        })
-      )
-    })
-  })
-
-  it('passes requires_admin_ask via patchMcpServer in edit mode', async () => {
-    const sseServer = {
-      id: 's1',
-      name: 'my-sse-server',
-      transport: 'sse' as const,
-      status: 'connected' as const,
-      tool_count: 3,
-    }
-    renderModal(true, { initialServer: sseServer })
-    const user = userEvent.setup()
-
-    const advancedBtn = screen.getByText('Advanced')
-    await user.click(advancedBtn)
-
-    await waitFor(() => screen.getByTestId('requires-admin-ask'))
-    await user.type(screen.getByTestId('requires-admin-ask'), 'admin_tool')
-
-    await user.click(screen.getByTestId('submit-add'))
-    await waitFor(() => {
-      expect(vi.mocked(patchMcpServer)).toHaveBeenCalledWith(
-        's1',
-        expect.objectContaining({ requires_admin_ask: ['admin_tool'] })
-      )
-    })
-  })
 })
 
 // ── G7: Test button (via SkillsScreen) ───────────────────────────────────────
@@ -608,18 +538,16 @@ describe('MCPServerPicker — no raw transport string (US-E1)', () => {
       command: 'npx',
       args: ['server-everything', '--verbose'],
       env_file: '/etc/mcp.env',
-      requires_admin_ask: ['danger'],
       env_keys: ['API_KEY'],
     }
     renderModal(true, { initialServer: stdioWithConfig })
     await waitFor(() => {
       expect(screen.getByText('Edit MCP server')).toBeInTheDocument()
     })
-    // Command + args + env_file + requires_admin_ask pre-filled (non-secret).
+    // Command + args + env_file pre-filled (non-secret).
     expect(screen.getByDisplayValue('npx')).toBeInTheDocument()
     expect(screen.getByDisplayValue('server-everything, --verbose')).toBeInTheDocument()
     expect(screen.getByDisplayValue('/etc/mcp.env')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('danger')).toBeInTheDocument()
     // Secret env VALUE never pre-fills, but the set KEY is surfaced read-only.
     const envKeysNote = screen.getByTestId('env-keys-set')
     expect(envKeysNote).toHaveTextContent('API_KEY')

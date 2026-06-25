@@ -23,7 +23,6 @@ func (t *mcpTestTool) Name() string               { return t.name }
 func (t *mcpTestTool) Description() string        { return "mcp test tool: " + t.name }
 func (t *mcpTestTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (t *mcpTestTool) Scope() ToolScope           { return ScopeGeneral }
-func (t *mcpTestTool) RequiresAdminAsk() bool     { return false }
 func (t *mcpTestTool) Category() ToolCategory     { return CategoryShell }
 func (t *mcpTestTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	return SilentResult("ok")
@@ -309,45 +308,4 @@ func TestMCPRegistry_RenameDetection(t *testing.T) {
 		require.True(t, ok)
 		_ = got
 	})
-}
-
-// --- M4: requires_admin_ask opt-in tests (FR-064) ---
-
-// TestMCPRegistry_RequiresAdminAsk verifies that an MCP server registered with
-// requires_admin_ask: ["dangerous_tool"] produces a tool whose RequiresAdminAsk()
-// returns true, while sibling tools return false (FR-064).
-//
-// BDD: Given a server config with requires_admin_ask: ["dangerous_tool"],
-//
-//	When its tools are registered via RegisterServerToolsWithOpts,
-//	Then dangerous_tool.RequiresAdminAsk() == true;
-//	And safe_tool.RequiresAdminAsk() == false.
-//
-// Traces to: pkg/tools/mcp_registry.go — mcpAdminAskTool wrapper (FR-064).
-func TestMCPRegistry_RequiresAdminAsk(t *testing.T) {
-	builtins := NewBuiltinRegistry()
-	reg := NewMCPRegistry()
-
-	collisions := reg.RegisterServerToolsWithOpts("my-server", []Tool{
-		&mcpTestTool{name: "dangerous_tool"},
-		&mcpTestTool{name: "safe_tool"},
-		&mcpTestTool{name: "another_safe"},
-	}, builtins, MCPServerOpts{
-		RequiresAdminAsk: []string{"dangerous_tool"},
-	})
-	require.Empty(t, collisions)
-
-	dangerousTool, ok := reg.Get("dangerous_tool")
-	require.True(t, ok)
-	safeTool, ok2 := reg.Get("safe_tool")
-	require.True(t, ok2)
-	anotherSafe, ok3 := reg.Get("another_safe")
-	require.True(t, ok3)
-
-	assert.True(t, dangerousTool.RequiresAdminAsk(),
-		"dangerous_tool must have RequiresAdminAsk()==true (FR-064 opt-in)")
-	assert.False(t, safeTool.RequiresAdminAsk(),
-		"safe_tool must have RequiresAdminAsk()==false (not in requires_admin_ask list)")
-	assert.False(t, anotherSafe.RequiresAdminAsk(),
-		"another_safe must have RequiresAdminAsk()==false")
 }

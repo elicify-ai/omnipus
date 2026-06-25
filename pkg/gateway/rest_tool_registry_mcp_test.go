@@ -42,7 +42,6 @@ func (t *registryMCPTestTool) Name() string               { return t.name }
 func (t *registryMCPTestTool) Description() string        { return "mcp tool: " + t.name }
 func (t *registryMCPTestTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (t *registryMCPTestTool) Scope() tools.ToolScope     { return tools.ScopeGeneral }
-func (t *registryMCPTestTool) RequiresAdminAsk() bool     { return false }
 func (t *registryMCPTestTool) Category() tools.ToolCategory {
 	return tools.CategoryMCP
 }

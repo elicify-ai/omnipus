@@ -155,36 +155,6 @@ func TestSkillCreateTool_NilWriter_ReturnsNotAvailable(t *testing.T) {
 	}
 }
 
-// adminAskGate is the interface the agent loop's admin-ask fence (FR-061) and
-// tool-approval hook (FR-12) use to gate sensitive tools. SkillCreateTool and
-// SkillEditTool must implement it returning true so the loop routes their
-// invocations through ws_approval before Execute runs.
-type adminAskGate interface {
-	RequiresAdminAsk() bool
-}
-
-// TestSkillAuthoring_RequiresAdminAsk verifies the consent gate is wired for
-// both authoring tools (FR-9.2 / FR-12 two-layer consent, tool layer). This is
-// the machine-readable flag FilterToolsByPolicy downgrades "allow"→"ask" on for
-// custom agents, and that the loop's ApproveTool hook then prompts against.
-func TestSkillAuthoring_RequiresAdminAsk(t *testing.T) {
-	// Admin-ask fence retired (no admin role): create_skill/edit_skill must
-	// return false. Consent for skill writes is now expressed as the per-agent
-	// policy "ask" (Ava's seed) rather than a hardcoded per-tool fence.
-	deps, _ := newTestDeps()
-	create := systools.NewSkillCreateTool(deps)
-	edit := systools.NewSkillEditTool(deps)
-
-	for name, tool := range map[string]adminAskGate{
-		"create_skill": create,
-		"edit_skill":   edit,
-	} {
-		if tool.RequiresAdminAsk() {
-			t.Errorf("%s: RequiresAdminAsk() must return false (admin-ask fence retired)", name)
-		}
-	}
-}
-
 // recordingApprover is a ToolApprover that records the request and returns a
 // caller-configured verdict, simulating the ws_approval user decision.
 type recordingApprover struct {
@@ -203,7 +173,7 @@ func (r *recordingApprover) ApproveTool(
 // TestSkillAuthoring_ConsentFlow_DenyBlocksExecute verifies the FR-12 tool-layer
 // consent flow for system.skill.create/edit end-to-end at the hook level:
 //
-//	tool call → RequiresAdminAsk (escalates to "ask") → HookManager.ApproveTool
+//	tool call → policy "ask" → HookManager.ApproveTool
 //	→ ToolApprovalRequest (carries tool name + args) → user Deny
 //	→ ApprovalDecision not approved → Execute MUST NOT run.
 //

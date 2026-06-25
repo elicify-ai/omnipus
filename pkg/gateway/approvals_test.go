@@ -36,7 +36,6 @@ func TestApprovalRegistry_ResolveDeletesEntry(t *testing.T) {
 		"tc-resolve-cleanup", "read_file",
 		map[string]any{"path": "/tmp/x"},
 		"agent-A", "sess-A", "turn-A",
-		false,
 	)
 	require.True(t, accepted, "approval must be accepted")
 
@@ -79,7 +78,6 @@ func TestApprovalRegistry_BatchShortCircuitDeletesEntry(t *testing.T) {
 		"tc-bsc-cleanup", "search_web",
 		map[string]any{"q": "x"},
 		"agent-C", "sess-C", "turn-C",
-		false,
 	)
 	require.True(t, accepted, "approval must be accepted")
 
@@ -121,7 +119,6 @@ func TestApprovalRegistry_RestartCancelDeletesEntry(t *testing.T) {
 		"tc-restart-cleanup", "read_file",
 		map[string]any{"path": "/tmp/y"},
 		"agent-D", "sess-D", "turn-D",
-		false,
 	)
 	require.True(t, accepted, "approval must be accepted")
 
@@ -163,7 +160,6 @@ func TestApprovalRegistry_TimeoutDeletesEntry(t *testing.T) {
 		"tc-timeout-cleanup", "search_web",
 		map[string]any{"q": "x"},
 		"agent-B", "sess-B", "turn-B",
-		false,
 	)
 	require.True(t, accepted, "approval must be accepted")
 
@@ -210,7 +206,6 @@ func TestPendingApproval_AutoDeniedOnCancel(t *testing.T) {
 		"tc-cancel-T19", "read_file",
 		map[string]any{"path": "/tmp/secret"},
 		"agent-T19", targetSession, "turn-T19",
-		false,
 	)
 	require.True(t, accepted, "target approval must be accepted")
 
@@ -218,7 +213,6 @@ func TestPendingApproval_AutoDeniedOnCancel(t *testing.T) {
 		"tc-other-T19", "search_web",
 		map[string]any{"q": "hello"},
 		"agent-T19", otherSession, "turn-other-T19",
-		false,
 	)
 	require.True(t, accepted, "other-session approval must be accepted")
 

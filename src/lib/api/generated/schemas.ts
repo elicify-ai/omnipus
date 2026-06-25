@@ -455,8 +455,6 @@ type AgentToolEntry = {
   name: string;
   configured_policy: "allow" | "ask" | "deny";
   effective_policy: "allow" | "ask" | "deny";
-  fence_applied: boolean;
-  requires_admin_ask: boolean;
 };
 type ChannelEnabledResponse = {
   id: ChannelId;
@@ -1220,8 +1218,6 @@ export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
     name: z.string(),
     configured_policy: z.enum(["allow", "ask", "deny"]),
     effective_policy: z.enum(["allow", "ask", "deny"]),
-    fence_applied: z.boolean(),
-    requires_admin_ask: z.boolean(),
   })
   .passthrough();
 export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
@@ -1906,7 +1902,6 @@ export const McpServer = z
     url: z.string().optional(),
     args: z.array(z.string()).optional(),
     env_file: z.string().optional(),
-    requires_admin_ask: z.array(z.string()).optional(),
     env_keys: z.array(z.string()).optional(),
     header_names: z.array(z.string()).optional(),
   })
@@ -1920,7 +1915,6 @@ export const McpServerCreate = z.object({
   env: z.record(z.string()).optional(),
   headers: z.record(z.string()).optional(),
   env_file: z.string().optional(),
-  requires_admin_ask: z.array(z.string()).optional(),
 });
 export const McpServerUpdate = z
   .object({
@@ -1931,7 +1925,6 @@ export const McpServerUpdate = z
     env: z.record(z.string()),
     headers: z.record(z.string()),
     env_file: z.string(),
-    requires_admin_ask: z.array(z.string()),
   })
   .partial();
 export const McpServerTestResponse = z.object({
@@ -3729,7 +3722,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "patch",
     path: "/mcp-servers/:id",
     alias: "patchMcpServer",
-    description: `Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file, admin-ask). Omitted fields are preserved. Admin-only.
+    description: `Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file). Omitted fields are preserved. Admin-only.
 `,
     requestFormat: "json",
     parameters: [
@@ -5786,7 +5779,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "post",
     path: "/tool-approvals/:approval_id",
     alias: "postToolApproval",
-    description: `Approve, deny, or cancel a pending tool call approval. For tools with RequiresAdminAsk&#x3D;true, the caller must hold the admin role (FR-015).
+    description: `Approve, deny, or cancel a pending tool call approval.
 `,
     requestFormat: "json",
     parameters: [
@@ -5811,11 +5804,6 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 401,
         description: `Missing or invalid bearer token.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Admin role required (RequiresAdminAsk tool).`,
         schema: ErrorResponse,
       },
       {

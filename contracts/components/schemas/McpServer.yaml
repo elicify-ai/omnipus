@@ -73,11 +73,6 @@ properties:
     type: string
     description: Env-file path (stdio). For edit pre-fill.
     example: "/etc/omnipus/mcp.env"
-  requires_admin_ask:
-    type: array
-    items:
-      type: string
-    description: Tool names that require admin approval (FR-064). For edit pre-fill.
   env_keys:
     type: array
     items:

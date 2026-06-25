@@ -1925,16 +1925,12 @@ func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 		Tools: []struct {
 			ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
 			EffectivePolicy  AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
-			FenceApplied     bool                                    `json:"fence_applied"`
 			Name             string                                  `json:"name"`
-			RequiresAdminAsk bool                                    `json:"requires_admin_ask"`
 		}{
 			{
 				Name:             "workspace.shell",
 				ConfiguredPolicy: toolCfgAllow,
 				EffectivePolicy:  toolEffAllow,
-				FenceApplied:     false,
-				RequiresAdminAsk: false,
 			},
 		},
 	}
@@ -1972,16 +1968,12 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 		Tools: []struct {
 			ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
 			EffectivePolicy  AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
-			FenceApplied     bool                                    `json:"fence_applied"`
 			Name             string                                  `json:"name"`
-			RequiresAdminAsk bool                                    `json:"requires_admin_ask"`
 		}{
 			{
 				Name:             "system.spawn_subagent",
 				ConfiguredPolicy: toolCfgDeny,
 				EffectivePolicy:  toolEffAsk,
-				FenceApplied:     true,
-				RequiresAdminAsk: true,
 			},
 		},
 	}

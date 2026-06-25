@@ -12,27 +12,23 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// TestRegistry_AllSysagentToolsRequireAdminAsk verifies that every tool returned
-// by AllTools() implements RequiresAdminAsk() == FALSE (the role-based admin-ask
-// fence is retired — there is no admin role) and returns a domain category (NOT
-// CategorySystem) after the §7 tool rename.
+// TestRegistry_AllSysagentToolsCategory verifies that every tool returned by
+// AllTools() returns a domain category (NOT CategorySystem) after the §7 tool
+// rename and follows the verb-first naming convention.
 //
 // Rationale: access control is now the per-agent tool policy (allow/ask/deny)
-// plus destructive-op confirmation — not a role-based fence. Consent for risky
-// ops is expressed as policy "ask" per agent, not hardcoded per tool.
+// plus destructive-op confirmation — not a role-based fence. The role-based
+// admin-ask fence is retired (there is no admin role).
 //
 // BDD: Given all 37 tools returned by AllTools(),
 //
-//	When RequiresAdminAsk() is called on each,
-//	Then it returns false for every tool.
 //	When Category() is called on each,
 //	Then it returns a domain category (NOT CategorySystem) for every tool (FR-059).
 //	When Name() is called on each,
 //	Then the name does NOT start with "system." and does NOT contain a dot.
 //
-// Traces to: pkg/sysagent/tools/admin_ask.go — RequiresAdminAsk (retired).
 // Traces to: pkg/sysagent/tools/category.go — Category (FR-059).
-func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
+func TestRegistry_AllSysagentToolsCategory(t *testing.T) {
 	all := AllTools(nil, nil)
 
 	if len(all) != 37 {
@@ -41,20 +37,6 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
 
 	for _, tool := range all {
 		name := tool.Name()
-
-		// RequiresAdminAsk contract: the role-based admin-ask fence is RETIRED
-		// (no admin role) — every tool must now return false. Access control is
-		// the per-agent policy (allow/ask/deny) + destructive-op confirmation.
-		if adm, ok := tool.(interface{ RequiresAdminAsk() bool }); ok {
-			if adm.RequiresAdminAsk() {
-				t.Errorf("tool %q: RequiresAdminAsk() must return false (admin-ask fence retired)", name)
-			}
-		} else {
-			t.Errorf(
-				"tool %q: does not implement RequiresAdminAsk() — must embed BaseTool or implement it directly",
-				name,
-			)
-		}
 
 		// Category contract (FR-059): after §7 rename, system tools must NOT return
 		// CategorySystem. They must return a domain category.
@@ -126,20 +108,19 @@ func TestRegistry_NoDuplicateSysagentToolNames(t *testing.T) {
 	}
 }
 
-// TestRegistry_AllSysagentToolsRequireAdminAsk_CentralRegistry is the M4-spec
+// TestRegistry_AllSysagentToolsCategory_CentralRegistry is the M4-spec
 // variant: it populates the central BuiltinRegistry the same way production does
-// (BuildRegistry) and asserts every registered builtin satisfies RequiresAdminAsk()
-// and returns a domain Category().
+// (BuildRegistry) and asserts every registered builtin returns a domain
+// Category().
 //
 // BDD: Given a BuiltinRegistry populated via BuildRegistry,
 //
 //	When each tool is retrieved via All(),
-//	Then every tool has RequiresAdminAsk() == true (FR-061)
-//	And every tool has Category() != CategorySystem (FR-059).
+//	Then every tool has Category() != CategorySystem (FR-059).
 //
 // Traces to: pkg/tools/builtin_registry.go (central registry, FR-001).
 // Traces to: pkg/sysagent/tools/registry.go — BuildRegistry.
-func TestRegistry_AllSysagentToolsRequireAdminAsk_CentralRegistry(t *testing.T) {
+func TestRegistry_AllSysagentToolsCategory_CentralRegistry(t *testing.T) {
 	// Instantiate the registry exactly as production does at boot.
 	reg := BuildRegistry(nil, nil)
 	allTools := reg.GetAll()
@@ -150,15 +131,6 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk_CentralRegistry(t *testing.T) 
 
 	for _, tool := range allTools {
 		name := tool.Name()
-
-		// Admin-ask fence retired: every tool must now return false.
-		if adm, ok := tool.(interface{ RequiresAdminAsk() bool }); ok {
-			if adm.RequiresAdminAsk() {
-				t.Errorf("central registry tool %q: RequiresAdminAsk() must be false (admin-ask fence retired)", name)
-			}
-		} else {
-			t.Errorf("central registry tool %q: does not implement RequiresAdminAsk()", name)
-		}
 
 		// Category must NOT be CategorySystem after §7 rename (FR-059).
 		if cat, ok := tool.(interface{ Category() tools.ToolCategory }); ok {

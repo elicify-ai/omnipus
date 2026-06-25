@@ -13,7 +13,7 @@
 //
 // State machine (8 states, 1 active, 7 terminal):
 //
-//	pending → approved            (approve action, admin if RequiresAdminAsk)
+//	pending → approved            (approve action)
 //	pending → denied_user         (deny action)
 //	pending → denied_cancel       (cancel action)
 //	pending → denied_timeout      (timer fires, configurable, default 300 s)
@@ -79,16 +79,15 @@ const (
 // The loop blocks on resultCh until the entry resolves.
 type approvalEntry struct {
 	// Immutable fields set at creation.
-	ApprovalID    string
-	ToolCallID    string
-	ToolName      string
-	Args          map[string]any
-	AgentID       string
-	SessionID     string
-	TurnID        string
-	RequiresAdmin bool // true when tool.RequiresAdminAsk() == true
-	CreatedAt     time.Time
-	ExpiresAt     time.Time
+	ApprovalID string
+	ToolCallID string
+	ToolName   string
+	Args       map[string]any
+	AgentID    string
+	SessionID  string
+	TurnID     string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
 
 	// Mutable — protected by the registry's mu.
 	state ApprovalState
@@ -191,7 +190,6 @@ func (r *approvalRegistryV2) requestApproval(
 	toolCallID, toolName string,
 	args map[string]any,
 	agentID, sessionID, turnID string,
-	requiresAdmin bool,
 ) (*approvalEntry, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -207,17 +205,16 @@ func (r *approvalRegistryV2) requestApproval(
 	if maxCap > 0 && pendingCount >= maxCap {
 		// Return a synthetic saturated entry — caller must NOT emit WS event.
 		synthetic := &approvalEntry{
-			ApprovalID:    uuid.New().String(),
-			ToolCallID:    toolCallID,
-			ToolName:      toolName,
-			Args:          args,
-			AgentID:       agentID,
-			SessionID:     sessionID,
-			TurnID:        turnID,
-			RequiresAdmin: requiresAdmin,
-			CreatedAt:     time.Now(),
-			state:         ApprovalStateDeniedSaturated,
-			resultCh:      make(chan ApprovalOutcome, 1),
+			ApprovalID: uuid.New().String(),
+			ToolCallID: toolCallID,
+			ToolName:   toolName,
+			Args:       args,
+			AgentID:    agentID,
+			SessionID:  sessionID,
+			TurnID:     turnID,
+			CreatedAt:  time.Now(),
+			state:      ApprovalStateDeniedSaturated,
+			resultCh:   make(chan ApprovalOutcome, 1),
 		}
 		// Pre-deliver the outcome so the caller can receive without blocking.
 		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: "saturated"}
@@ -227,18 +224,17 @@ func (r *approvalRegistryV2) requestApproval(
 	now := time.Now()
 	expiresAt := now.Add(r.timeout)
 	e := &approvalEntry{
-		ApprovalID:    uuid.New().String(),
-		ToolCallID:    toolCallID,
-		ToolName:      toolName,
-		Args:          args,
-		AgentID:       agentID,
-		SessionID:     sessionID,
-		TurnID:        turnID,
-		RequiresAdmin: requiresAdmin,
-		CreatedAt:     now,
-		ExpiresAt:     expiresAt,
-		state:         ApprovalStatePending,
-		resultCh:      make(chan ApprovalOutcome, 1),
+		ApprovalID: uuid.New().String(),
+		ToolCallID: toolCallID,
+		ToolName:   toolName,
+		Args:       args,
+		AgentID:    agentID,
+		SessionID:  sessionID,
+		TurnID:     turnID,
+		CreatedAt:  now,
+		ExpiresAt:  expiresAt,
+		state:      ApprovalStatePending,
+		resultCh:   make(chan ApprovalOutcome, 1),
 	}
 
 	// Arm the timeout timer (FR-016, SC-006: default 300 s).
@@ -276,9 +272,6 @@ func (r *approvalRegistryV2) fireTimeout(approvalID string) {
 //   - resolveOK=true  → the state transitioned; HTTP 200 expected.
 //   - resolveOK=false, gone=true  → entry is already terminal; HTTP 410 expected.
 //   - resolveOK=false, gone=false → entry not found; HTTP 404 expected.
-//
-// For approve actions on tools with RequiresAdmin=true, the caller is responsible
-// for enforcing the admin-role check before calling resolve (FR-015).
 func (r *approvalRegistryV2) resolve(
 	approvalID string,
 	action ApprovalAction,

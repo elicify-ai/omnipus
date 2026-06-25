@@ -3062,10 +3062,6 @@ type MCPServerConfig struct {
 	URL string `json:"url,omitempty"`
 	// Headers are HTTP headers to send with requests (sse/http only)
 	Headers map[string]string `json:"headers,omitempty"`
-	// RequiresAdminAsk lists tool names from this server that require admin approval
-	// before execution (FR-064). Tools not in this list default to RequiresAdminAsk()==false.
-	// Example: ["dangerous_tool", "drop_database"]
-	RequiresAdminAsk []string `json:"requires_admin_ask,omitempty"`
 }
 
 // MCPConfig defines configuration for all MCP servers

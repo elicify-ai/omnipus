@@ -43,7 +43,6 @@ func (s *scopedMockTool) Name() string               { return s.name }
 func (s *scopedMockTool) Description() string        { return "scoped mock tool" }
 func (s *scopedMockTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (s *scopedMockTool) Scope() ToolScope           { return s.scope }
-func (s *scopedMockTool) RequiresAdminAsk() bool     { return false }
 func (s *scopedMockTool) Category() ToolCategory     { return CategoryCore }
 func (s *scopedMockTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	return SilentResult("ok")

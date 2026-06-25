@@ -54,9 +54,8 @@ const (
 
 // Tool is the interface that all tools must implement.
 //
-// RequiresAdminAsk and Category have default implementations via BaseTool.
-// Embed BaseTool in your tool struct to inherit the defaults without needing to
-// implement these methods explicitly:
+// Category has a default implementation via BaseTool. Embed BaseTool in your
+// tool struct to inherit the default without needing to implement it explicitly:
 //
 //	type MyTool struct {
 //	    tools.BaseTool
@@ -69,19 +68,14 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]any) *ToolResult
 	// Scope returns the privilege level of this tool.
 	Scope() ToolScope
-	// RequiresAdminAsk returns true when the tool must be approved by an admin
-	// user before execution on a custom agent, regardless of the configured
-	// policy. All tools in pkg/sysagent/tools/ return true.
-	// Default (via BaseTool): false.
-	RequiresAdminAsk() bool
 	// Category returns the functional category for the tool picker UI.
 	// Default (via BaseTool): CategoryCore.
 	Category() ToolCategory
 }
 
-// BaseTool provides zero-value default implementations of RequiresAdminAsk and
-// Category so that existing tool structs only need to embed BaseTool to satisfy
-// the full Tool interface without mass-modifying every file.
+// BaseTool provides a zero-value default implementation of Category so that
+// existing tool structs only need to embed BaseTool to satisfy the full Tool
+// interface without mass-modifying every file.
 //
 // Usage:
 //
@@ -91,15 +85,10 @@ type Tool interface {
 //	}
 //
 // MyTool then inherits:
-//   - RequiresAdminAsk() bool  → false
 //   - Category() ToolCategory  → CategoryCore
 //
-// Override either method on the embedding struct as needed.
+// Override the method on the embedding struct as needed.
 type BaseTool struct{}
-
-// RequiresAdminAsk returns false for generic tools. Override to return true on
-// privileged tools (e.g., every tool in pkg/sysagent/tools/).
-func (BaseTool) RequiresAdminAsk() bool { return false }
 
 // Category returns CategoryCore as the default. Override for more specific
 // categorisation (file, web, browser, etc.).

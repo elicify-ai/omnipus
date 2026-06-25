@@ -2,7 +2,6 @@ title: ToolApprovalActionRequest
 description: >
   Request body for POST /api/v1/tool-approvals/{approval_id}.
   Resolves a pending tool call approval by approving, denying, or cancelling it.
-  For tools with RequiresAdminAsk=true the caller must hold the admin role (FR-015).
 type: object
 additionalProperties: false
 required:

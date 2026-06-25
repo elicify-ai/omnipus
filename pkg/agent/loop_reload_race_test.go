@@ -201,7 +201,6 @@ func (d *depsRefTool) Description() string          { return "deps-ref test tool
 func (d *depsRefTool) Parameters() map[string]any   { return map[string]any{} }
 func (d *depsRefTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
 func (d *depsRefTool) Category() tools.ToolCategory { return tools.CategoryCore }
-func (d *depsRefTool) RequiresAdminAsk() bool       { return false }
 func (d *depsRefTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	// Per-call deref: load the current deps each time Execute is called.
 	// FR-019: MUST deref per call, never capture in closure.

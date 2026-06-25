@@ -7,24 +7,21 @@
  * (a11y F-16 — all satisfied by the primitive; no hand-wiring needed).
  *
  * Replaces the raw transport dropdown with a two-mode picker:
- *   - "Local program" (stdio): requires Command; Args, Env, Env file, and
- *     Requires admin-ask under AdvancedDisclosure. Follows the
- *     RiskySettingControl *pattern* (AlertDialog confirmation + standing badge)
- *     but hand-rolls it inline rather than reusing the shared component — the
- *     two-button mode picker needs a custom layout that the shared component's
- *     single-slot API cannot express without coupling.
+ *   - "Local program" (stdio): requires Command; Args, Env, Env file under
+ *     AdvancedDisclosure. Follows the RiskySettingControl *pattern* (AlertDialog
+ *     confirmation + standing badge) but hand-rolls it inline rather than reusing
+ *     the shared component — the two-button mode picker needs a custom layout that
+ *     the shared component's single-slot API cannot express without coupling.
  *   - "Network address" (sse/http): requires a URL; rejects non-https on
  *     non-loopback hosts; shows an inline SSRF caution for RFC1918/link-local
  *     literal addresses (heuristic — the real guard is backend F-G07). Also
- *     supports Headers key/value editor and Requires admin-ask under
- *     AdvancedDisclosure.
+ *     supports Headers key/value editor under AdvancedDisclosure.
  *
  * G8: edit mode — pass `initialServer` to pre-populate all fields; the modal
  * title becomes "Edit MCP server" and the submit path calls patchMcpServer
  * with only the changed fields.
  *
- * G9: new inputs — Headers (sse/http), Env file (stdio), Requires admin-ask
- * (both).
+ * G9: new inputs — Headers (sse/http), Env file (stdio).
  *
  * Issues #336, #356.
  */
@@ -172,9 +169,6 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
   const [url, setUrl] = useState('')
   const [headerRows, setHeaderRows] = useState<KVRow[]>([{ key: '', value: '' }])
 
-  // shared field
-  const [requiresAdminAsk, setRequiresAdminAsk] = useState('')
-
   // stdio safety gate: pendingLocal means user clicked "local program" but hasn't confirmed
   const [pendingLocal, setPendingLocal] = useState(false)
   // confirmedLocal: user has confirmed they want stdio (standing badge shows while true)
@@ -197,7 +191,6 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
       setUrl(initialServer.url ?? '')
       setArgs((initialServer.args ?? []).join(', '))
       setEnvFile(initialServer.env_file ?? '')
-      setRequiresAdminAsk((initialServer.requires_admin_ask ?? []).join(', '))
     } else if (!open) {
       // Reset all state on close
       setName('')
@@ -208,7 +201,6 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
       setEnvFile('')
       setUrl('')
       setHeaderRows([{ key: '', value: '' }])
-      setRequiresAdminAsk('')
       setPendingLocal(false)
       setConfirmedLocal(false)
     }
@@ -226,9 +218,6 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             envObj[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
           }
         })
-        const adminAsk = requiresAdminAsk.trim()
-          ? requiresAdminAsk.split(',').map((s) => s.trim()).filter(Boolean)
-          : undefined
         const envFileTrimmed = envFile.trim() || undefined
         return addMcpServer({
           name: trimmedName,
@@ -239,21 +228,16 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
           transport: 'stdio',
           env: Object.keys(envObj).length > 0 ? envObj : undefined,
           env_file: envFileTrimmed,
-          requires_admin_ask: adminAsk,
         })
       } else {
         // Network: send url field — backend stores it as cfg.URL so the MCP manager
         // (pkg/mcp/manager.go ConnectServer) can connect via StreamableClientTransport.Endpoint.
         const headers = rowsToRecord(headerRows)
-        const adminAsk = requiresAdminAsk.trim()
-          ? requiresAdminAsk.split(',').map((s) => s.trim()).filter(Boolean)
-          : undefined
         return addMcpServer({
           name: trimmedName,
           url: url.trim(),
           transport: 'sse',
           headers,
-          requires_admin_ask: adminAsk,
         })
       }
     },
@@ -301,10 +285,6 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
         const headers = rowsToRecord(headerRows)
         if (headers) patch.headers = headers
       }
-      const adminAsk = requiresAdminAsk.trim()
-        ? requiresAdminAsk.split(',').map((s) => s.trim()).filter(Boolean)
-        : undefined
-      if (adminAsk) patch.requires_admin_ask = adminAsk
       return patchMcpServer(initialServer.id, patch)
     },
     onSuccess: () => {
@@ -523,7 +503,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                 {/* G9: Headers key/value editor (sse/http only) */}
                 <AdvancedDisclosure
                   title="Advanced"
-                  summary="headers, admin-ask"
+                  summary="headers"
                   defaultOpen={(initialServer?.header_names?.length ?? 0) > 0}
                 >
                   <div className="space-y-3">
@@ -578,25 +558,12 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                       </div>
                     </div>
 
-                    <div className="space-y-1">
-                      <label htmlFor="mcp-admin-ask" className="text-xs text-[var(--color-muted)]">
-                        Requires admin approval (comma-separated tool names, optional)
-                      </label>
-                      <Input
-                        id="mcp-admin-ask"
-                        data-testid="requires-admin-ask"
-                        value={requiresAdminAsk}
-                        onChange={(e) => setRequiresAdminAsk(e.target.value)}
-                        placeholder="delete_record, drop_table"
-                        className="text-xs font-mono"
-                      />
-                    </div>
                   </div>
                 </AdvancedDisclosure>
               </>
             )}
 
-            {/* Local program mode: command / args / env / env_file / admin-ask (G9) */}
+            {/* Local program mode: command / args / env / env_file (G9) */}
             {mode === 'local' && (
               <AdvancedDisclosure
                 title="Command &amp; environment"
@@ -669,20 +636,6 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                     />
                   </div>
 
-                  {/* G9: Requires admin-ask (both) */}
-                  <div className="space-y-1">
-                    <label htmlFor="mcp-admin-ask-stdio" className="text-xs text-[var(--color-muted)]">
-                      Requires admin approval (comma-separated tool names, optional)
-                    </label>
-                    <Input
-                      id="mcp-admin-ask-stdio"
-                      data-testid="requires-admin-ask"
-                      value={requiresAdminAsk}
-                      onChange={(e) => setRequiresAdminAsk(e.target.value)}
-                      placeholder="delete_record, drop_table"
-                      className="text-xs font-mono"
-                    />
-                  </div>
                 </div>
               </AdvancedDisclosure>
             )}

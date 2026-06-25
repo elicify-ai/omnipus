@@ -29,13 +29,12 @@ import (
 
 // PolicyApprovalReq carries the fields needed to create and broadcast an approval.
 type PolicyApprovalReq struct {
-	ToolCallID    string
-	ToolName      string
-	Args          map[string]any
-	AgentID       string
-	SessionID     string
-	TurnID        string
-	RequiresAdmin bool
+	ToolCallID string
+	ToolName   string
+	Args       map[string]any
+	AgentID    string
+	SessionID  string
+	TurnID     string
 }
 
 // PolicyApprover is implemented by the gateway to wire the central approval
@@ -106,12 +105,11 @@ func (n nopPolicyApprover) RequestApproval(_ context.Context, req PolicyApproval
 			SessionID: req.SessionID,
 			Tool:      req.ToolName,
 			Details: map[string]any{
-				"reason":         nopApproverDenialReason,
-				"build":          "default",
-				"turn_id":        req.TurnID,
-				"tool_call_id":   req.ToolCallID,
-				"requires_admin": req.RequiresAdmin,
-				"note":           "SetToolApprover was not called; ask-policy tools are denied. Wire the gateway PolicyApprover to enable human-in-the-loop approval (FR-011, FR-082).",
+				"reason":       nopApproverDenialReason,
+				"build":        "default",
+				"turn_id":      req.TurnID,
+				"tool_call_id": req.ToolCallID,
+				"note":         "SetToolApprover was not called; ask-policy tools are denied. Wire the gateway PolicyApprover to enable human-in-the-loop approval (FR-011, FR-082).",
 			},
 		})
 	})

@@ -37,7 +37,6 @@ func (m *mcpCategoryTool) Name() string               { return m.name }
 func (m *mcpCategoryTool) Description() string        { return "mcp cat tool: " + m.name }
 func (m *mcpCategoryTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (m *mcpCategoryTool) Scope() ToolScope           { return ScopeGeneral }
-func (m *mcpCategoryTool) RequiresAdminAsk() bool     { return false }
 func (m *mcpCategoryTool) Category() ToolCategory     { return CategoryMCP }
 func (m *mcpCategoryTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	return SilentResult("ok")

@@ -5946,13 +5946,12 @@ turnLoop:
 				// ask-policy: pause and request human approval (FR-011).
 				approver := al.loadToolApprover()
 				approved, denialReason := approver.RequestApproval(turnCtx, PolicyApprovalReq{
-					ToolCallID:    tc.ID,
-					ToolName:      toolName,
-					Args:          cloneStringAnyMap(toolArgs),
-					AgentID:       ts.agentID,
-					SessionID:     ts.sessionKey,
-					TurnID:        ts.turnID,
-					RequiresAdmin: al.toolRequiresAdmin(ts, toolName),
+					ToolCallID: tc.ID,
+					ToolName:   toolName,
+					Args:       cloneStringAnyMap(toolArgs),
+					AgentID:    ts.agentID,
+					SessionID:  ts.sessionKey,
+					TurnID:     ts.turnID,
 				})
 				if !approved {
 					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
@@ -8170,19 +8169,6 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 		return nopPolicyApprover{auditLogger: logger}
 	}
 	return a
-}
-
-// toolRequiresAdmin returns true when the named tool implements RequiresAdminAsk()
-// and that method returns true.
-func (al *AgentLoop) toolRequiresAdmin(ts *turnState, toolName string) bool {
-	t, ok := ts.agent.Tools.Get(toolName)
-	if !ok {
-		return false
-	}
-	if asker, ok := t.(interface{ RequiresAdminAsk() bool }); ok {
-		return asker.RequiresAdminAsk()
-	}
-	return false
 }
 
 // emitPolicyDenyAudit writes a tool.policy.deny.attempted audit entry.

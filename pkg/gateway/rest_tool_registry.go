@@ -10,14 +10,7 @@
 //   - GET  /api/v1/tools                        (FR-027) — registry snapshot
 //   - GET  /api/v1/agents/{id}/tools            (FR-028, FR-086) — per-agent policy view
 //   - GET  /api/v1/tools/builtin               (FR-029) — returns HTTP 404
-//   - POST /api/v1/tool-approvals/{approval_id} (FR-011, FR-014, FR-015, FR-017, FR-018, FR-064)
-//
-// Coordination with A1/A2:
-//   - RequiresAdminAsk() is part of the Tool interface via BaseTool (default false).
-//     System tools override it to return true. toolRequiresAdminAsk() uses a direct
-//     interface call rather than a local optional interface.
-//   - isAdminRole checks the role placed in context by withAuth — same as existing usage
-//     in rest_rate_limits.go. No new RBAC infrastructure required (FR-015, resolves H-09).
+//   - POST /api/v1/tool-approvals/{approval_id} (FR-011, FR-014, FR-017, FR-018)
 
 package gateway
 
@@ -32,20 +25,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
-
-// toolRequiresAdminAsk returns true when the tool's RequiresAdminAsk() returns true.
-// RequiresAdminAsk() is part of the Tool interface (pkg/tools/base.go); BaseTool
-// provides a default-false implementation. System tools override to return true.
-func toolRequiresAdminAsk(t tools.Tool) bool {
-	return t.RequiresAdminAsk()
-}
-
-// isAdminRole returns true when the authenticated caller has the admin role.
-// Reads from the context written by withAuth; fails closed (returns false) if absent.
-func isAdminRole(r *http.Request) bool {
-	role, _ := r.Context().Value(RoleContextKey{}).(config.UserRole)
-	return role == config.UserRoleAdmin
-}
 
 // toolSource is the discriminator for GET /api/v1/tools (FR-027).
 type toolSource string
@@ -176,11 +155,9 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 //
 // Returns per-tool:
 //
-//	{name, configured_policy, effective_policy, fence_applied, requires_admin_ask}
+//	{name, configured_policy, effective_policy}
 //
-// FR-028, FR-086: effective_policy and fence_applied for SPA badge rendering.
-// fence_applied=true means the admin-ask structural fence downgraded allow→ask on a
-// custom agent for a RequiresAdminAsk tool (FR-061).
+// FR-028, FR-086: effective_policy for SPA badge rendering.
 func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Request, agentID string) {
 	cfg := a.agentLoop.GetConfig()
 
@@ -224,9 +201,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	type toolsEntry = struct {
 		ConfiguredPolicy gen.AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
 		EffectivePolicy  gen.AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
-		FenceApplied     bool                                        `json:"fence_applied"`
 		Name             string                                      `json:"name"`
-		RequiresAdminAsk bool                                        `json:"requires_admin_ask"`
 	}
 
 	var toolEntries []toolsEntry
@@ -242,25 +217,13 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 				effectivePolicy = "allow"
 			}
 
-			// configured_policy: what the agent config says (before fence).
+			// configured_policy: what the agent config says.
 			configuredPolicy := resolveConfiguredPolicy(name, toolsCfg)
-
-			// requires_admin_ask: check optional interface (A1 wires this).
-			rak := toolRequiresAdminAsk(t)
-
-			// fence_applied (FR-061): true when:
-			//   - tool.RequiresAdminAsk() == true
-			//   - agent is NOT a core agent
-			//   - configured_policy (or effective before fence) was "allow"
-			//   - effective_policy after fence is "ask"
-			fenceApplied := rak && agentType == "custom" && configuredPolicy == "allow" && effectivePolicy == "ask"
 
 			toolEntries = append(toolEntries, toolsEntry{
 				Name:             name,
 				ConfiguredPolicy: gen.AgentToolsResponseToolsConfiguredPolicy(configuredPolicy),
 				EffectivePolicy:  gen.AgentToolsResponseToolsEffectivePolicy(effectivePolicy),
-				FenceApplied:     fenceApplied,
-				RequiresAdminAsk: rak,
 			})
 		}
 	}
@@ -341,13 +304,11 @@ func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg) string 
 //
 // Auth:
 //   - Requires valid bearer token (withAuth, FR-014). Unauthenticated → 401.
-//   - For tools with RequiresAdminAsk=true, non-admin caller → 403 (FR-015).
 //
 // Outcomes:
 //   - 200 OK        action processed
 //   - 400 Bad Request  malformed body or unknown action
 //   - 401 Unauthorized  missing/invalid token (enforced by withAuth)
-//   - 403 Forbidden  non-admin on RequiresAdminAsk tool
 //   - 404 Not Found    approval_id not found
 //   - 410 Gone       approval already resolved (FR-018)
 func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
@@ -397,13 +358,6 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	entry := a.approvalReg.get(approvalID)
 	if entry == nil {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("approval %q not found", approvalID))
-		return
-	}
-
-	// Admin check for RequiresAdminAsk tools (FR-015).
-	// Any action (approve, deny, cancel) on a RequiresAdminAsk tool requires admin.
-	if entry.RequiresAdmin && !isAdminRole(r) {
-		jsonErr(w, http.StatusForbidden, "admin role required to act on this approval")
 		return
 	}
 
