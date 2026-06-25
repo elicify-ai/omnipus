@@ -281,17 +281,83 @@ func coreAgentSeed(
 	}
 	switch id {
 	case IDAva:
-		// Ava is the only core agent with explicit system.* allows (FR-010).
-		// Her four agent-CRUD tools must be allowed through the deny-wildcard rail.
-		base["create_agent"] = config.ToolPolicyAllow
-		base["update_agent"] = config.ToolPolicyAllow
-		base["delete_agent"] = config.ToolPolicyAllow
-		base["list_models"] = config.ToolPolicyAllow
-		// Ava is the skill-authoring agent (FR-9.2). Her create/edit skill tools
-		// are seeded as "ask" so every skill write routes through the tool-layer
-		// approval (ws_approval) consent gate before the SKILL.md is written.
-		base["create_skill"] = config.ToolPolicyAsk
-		base["edit_skill"] = config.ToolPolicyAsk
+		// Ava — the Builder. LEAST-PRIVILEGE: deny-by-default, allow only the
+		// tools her role needs (build/maintain agents, author skills, assign a
+		// team to a workspace). This replaces the old allow-by-default + "system.*"
+		// deny rail, which the §7 tool rename silently broke — the renamed
+		// management tools (create_workspace, set_config, …) no longer match the
+		// "system.*" glob, so every former-system tool fell through to allow.
+		ask := config.ToolPolicyAsk
+		allow := config.ToolPolicyAllow
+		return config.ToolPolicyDeny, map[string]config.ToolPolicy{
+			// Agent lifecycle — her core job. Delete is consent-gated (ask).
+			"create_agent": allow,
+			"update_agent": allow,
+			"delete_agent": ask,
+			"list_agents":  allow,
+			// Model selection + slug research (research the exact slug; never guess).
+			"list_models": allow,
+			"search_web":  allow,
+			"fetch_url":   allow,
+			// Persistent memory (FR-016/FR-017) — remember the user's design prefs.
+			"remember":          allow,
+			"recall_memory":     allow,
+			"run_retrospective": allow,
+			// Communication / handoff (hand back to Mia/Jim when out of scope).
+			"send_message":      allow,
+			"hand_off":          allow,
+			"return_to_default": allow,
+			// Skill discovery + authoring (FR-9.2). Authoring/install are
+			// consent-gated (ask) so every skill-tree write routes through approval.
+			"find_skills":   allow,
+			"list_skills":   allow,
+			"create_skill":  ask,
+			"edit_skill":    ask,
+			"install_skill": ask,
+			// Assign a freshly-built team to a workspace via core_team. NOT
+			// create/delete_workspace — workspace lifecycle is Jim/admin. The read
+			// pair lets her find the workspace and see its current team first.
+			"update_workspace": allow,
+			"list_workspaces":  allow,
+			"get_workspace":    allow,
+		}, ""
+	case IDMia:
+		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
+		// allow only the everyday-assistant surface (chat, memory, your tasks,
+		// email, light lookups, UI navigation). She ROUTES heavy work
+		// (build/shell/browser/research/admin) to Ava/Jim/Ray rather than doing
+		// it — matching her persona, which already refuses shell/browser.
+		allow := config.ToolPolicyAllow
+		ask := config.ToolPolicyAsk
+		return config.ToolPolicyDeny, map[string]config.ToolPolicy{
+			// Converse / route.
+			"send_message":      allow,
+			"hand_off":          allow,
+			"return_to_default": allow,
+			"list_agents":       allow, // knows who to route to
+			"send_file":         allow, // share an artifact in chat
+			"navigate":          allow, // drive the UI ("show me my agents")
+			// Memory — her signature (memory-rich, cross-workspace recall).
+			"remember":          allow,
+			"recall_memory":     allow,
+			"run_retrospective": allow,
+			// Your tasks ("runs your tasks"). Delete is consent-gated (ask).
+			"create_task": allow,
+			"update_task": allow,
+			"list_tasks":  allow,
+			"delete_task": ask,
+			"set_todos":   allow,
+			// Email — her domain.
+			"read_inbox":   allow,
+			"read_message": allow,
+			"reply":        allow,
+			"send_email":   allow,
+			"search_email": allow,
+			// Light lookups + skill discovery (she uses summarize/daily-briefing).
+			"search_web":  allow,
+			"fetch_url":   allow,
+			"find_skills": allow,
+		}, ""
 	case IDJim:
 		// Jim additionally uses workspace_shell and workspace_shell_bg (all
 		// explicitly allowed so the policy passes through even when
@@ -949,6 +1015,10 @@ You can create delegation-only workers that run on an EXTERNAL CLI instead of th
 - For an OpenRouter-backed CLI (e.g. opencode), the slug is the exact, lowercase OpenRouter id — confirm it with list_models (e.g. ` + "`minimax/minimax-m3`" + `, never ` + "`MiniMax-M3`" + `).
 - For claude-code, the model is a Claude alias/slug the claude CLI accepts (e.g. ` + "`sonnet`" + `, ` + "`opus`" + `).
 If you're unsure which provider or exact slug a CLI uses, **RESEARCH it yourself to derive the correct one — never ask the user and never guess.** Call list_models for provider-backed CLIs (e.g. opencode → OpenRouter), and use search_web / fetch_url to look up the provider's exact, current model id or the CLI's accepted model names. A guessed slug silently breaks the worker — always confirm the real slug from list_models or your research before creating.
+
+## Assigning a team to a workspace
+
+After you build a set of agents for a project, you can place them on a workspace's team so they show up there. Use list_workspaces to find the workspace id (and get_workspace to see its current team), then call update_workspace with core_team = the full list of agent IDs that should be on that workspace. Pass the COMPLETE list (it replaces the existing team), so include the agents already there plus the new ones. You manage a workspace's team, not its lifecycle — you do not create or delete workspaces.
 
 ## Your personality
 

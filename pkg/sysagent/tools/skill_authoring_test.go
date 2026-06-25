@@ -168,16 +168,19 @@ type adminAskGate interface {
 // the machine-readable flag FilterToolsByPolicy downgrades "allow"→"ask" on for
 // custom agents, and that the loop's ApproveTool hook then prompts against.
 func TestSkillAuthoring_RequiresAdminAsk(t *testing.T) {
+	// Admin-ask fence retired (no admin role): create_skill/edit_skill must
+	// return false. Consent for skill writes is now expressed as the per-agent
+	// policy "ask" (Ava's seed) rather than a hardcoded per-tool fence.
 	deps, _ := newTestDeps()
 	create := systools.NewSkillCreateTool(deps)
 	edit := systools.NewSkillEditTool(deps)
 
 	for name, tool := range map[string]adminAskGate{
-		"system.skill.create": create,
-		"system.skill.edit":   edit,
+		"create_skill": create,
+		"edit_skill":   edit,
 	} {
-		if !tool.RequiresAdminAsk() {
-			t.Errorf("%s: RequiresAdminAsk() must return true (FR-12 tool-layer consent)", name)
+		if tool.RequiresAdminAsk() {
+			t.Errorf("%s: RequiresAdminAsk() must return false (admin-ask fence retired)", name)
 		}
 	}
 }

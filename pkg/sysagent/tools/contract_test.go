@@ -13,25 +13,24 @@ import (
 )
 
 // TestRegistry_AllSysagentToolsRequireAdminAsk verifies that every tool returned
-// by AllTools() implements RequiresAdminAsk() == true and returns a domain
-// category (NOT CategorySystem). This is the admin-ask fence (FR-061) and
-// category-contract (FR-059) after the §7 tool rename.
+// by AllTools() implements RequiresAdminAsk() == FALSE (the role-based admin-ask
+// fence is retired — there is no admin role) and returns a domain category (NOT
+// CategorySystem) after the §7 tool rename.
 //
-// Rationale: all privileged management tools are privileged operations (creating
-// agents, editing config, managing channels). They must always require human
-// approval before execution — RequiresAdminAsk() == true is the machine-readable
-// gate.
+// Rationale: access control is now the per-agent tool policy (allow/ask/deny)
+// plus destructive-op confirmation — not a role-based fence. Consent for risky
+// ops is expressed as policy "ask" per agent, not hardcoded per tool.
 //
 // BDD: Given all 37 tools returned by AllTools(),
 //
 //	When RequiresAdminAsk() is called on each,
-//	Then it returns true for every tool.
+//	Then it returns false for every tool.
 //	When Category() is called on each,
 //	Then it returns a domain category (NOT CategorySystem) for every tool (FR-059).
 //	When Name() is called on each,
 //	Then the name does NOT start with "system." and does NOT contain a dot.
 //
-// Traces to: pkg/sysagent/tools/admin_ask.go — RequiresAdminAsk (FR-061).
+// Traces to: pkg/sysagent/tools/admin_ask.go — RequiresAdminAsk (retired).
 // Traces to: pkg/sysagent/tools/category.go — Category (FR-059).
 func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
 	all := AllTools(nil, nil)
@@ -43,10 +42,12 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
 	for _, tool := range all {
 		name := tool.Name()
 
-		// RequiresAdminAsk contract (FR-061).
+		// RequiresAdminAsk contract: the role-based admin-ask fence is RETIRED
+		// (no admin role) — every tool must now return false. Access control is
+		// the per-agent policy (allow/ask/deny) + destructive-op confirmation.
 		if adm, ok := tool.(interface{ RequiresAdminAsk() bool }); ok {
-			if !adm.RequiresAdminAsk() {
-				t.Errorf("tool %q: RequiresAdminAsk() must return true (FR-061 admin-ask fence)", name)
+			if adm.RequiresAdminAsk() {
+				t.Errorf("tool %q: RequiresAdminAsk() must return false (admin-ask fence retired)", name)
 			}
 		} else {
 			t.Errorf(
@@ -150,11 +151,10 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk_CentralRegistry(t *testing.T) 
 	for _, tool := range allTools {
 		name := tool.Name()
 
-		// All tools in this registry are privileged builtins — they must all
-		// require admin-ask (FR-061).
+		// Admin-ask fence retired: every tool must now return false.
 		if adm, ok := tool.(interface{ RequiresAdminAsk() bool }); ok {
-			if !adm.RequiresAdminAsk() {
-				t.Errorf("central registry tool %q: RequiresAdminAsk() must be true (FR-061)", name)
+			if adm.RequiresAdminAsk() {
+				t.Errorf("central registry tool %q: RequiresAdminAsk() must be false (admin-ask fence retired)", name)
 			}
 		} else {
 			t.Errorf("central registry tool %q: does not implement RequiresAdminAsk()", name)
