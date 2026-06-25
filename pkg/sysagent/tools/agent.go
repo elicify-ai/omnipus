@@ -112,7 +112,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new custom agent with personality, model, tools, and configuration."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path)."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -138,7 +138,21 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Phosphor icon name (e.g. 'robot', 'pencil', 'book')",
 			},
-			// Optional
+			// Optional — agent type + external-CLI worker runtime.
+			"agent_type": map[string]any{
+				"type":        "string",
+				"enum":        []any{"Main", "Subagent", "subagent_3p"},
+				"description": "Agent type. 'Main' (default) = native chat colleague on the Omnipus engine. 'Subagent' = native delegation-only worker. 'subagent_3p' = delegation-only worker that runs on an EXTERNAL CLI (requires cli + cli_path).",
+			},
+			"cli": map[string]any{
+				"type":        "string",
+				"enum":        []any{"claude-code", "codex", "opencode"},
+				"description": "External CLI runtime. REQUIRED when agent_type='subagent_3p'. 'claude-code' for Claude (claudex), 'opencode' for opencode, 'codex' for Codex.",
+			},
+			"cli_path": map[string]any{
+				"type":        "string",
+				"description": "Optional. Absolute path to the external CLI binary. Leave EMPTY to use the CLI's default binary on $PATH (claude / codex / opencode). Set it only when this machine invokes the CLI via a wrapper or a non-standard path — and derive the real path on this system, never hardcode a guess.",
+			},
 			"provider": map[string]any{
 				"type":        "string",
 				"description": "Provider name for the primary model (e.g. 'openrouter')",
@@ -209,6 +223,34 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.ErrorResult(errorJSON("INVALID_ICON", err.Error(), "Use alphanumeric + hyphens, e.g. robot"))
 	}
 
+	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
+	agentType, _ := args["agent_type"].(string)
+	if agentType == "" {
+		agentType = "Main"
+	}
+	var execCLI, execCLIPath string
+	switch agentType {
+	case "Main", "Subagent", "subagent_3p":
+	default:
+		return tools.ErrorResult(errorJSON("INVALID_INPUT",
+			"agent_type must be one of Main, Subagent, subagent_3p",
+			"Use 'subagent_3p' for an external CLI worker"))
+	}
+	if agentType == "subagent_3p" {
+		execCLI, _ = args["cli"].(string)
+		switch execCLI {
+		case "claude-code", "codex", "opencode":
+		default:
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				"cli is required for subagent_3p and must be one of claude-code, codex, opencode",
+				"Set cli (e.g. 'opencode' or 'claude-code')"))
+		}
+		// cli_path is OPTIONAL: when empty the driver invokes the CLI's default
+		// binary name on $PATH (claude / codex / opencode). Set it only when this
+		// machine uses a wrapper or a non-standard binary path.
+		execCLIPath, _ = args["cli_path"].(string)
+	}
+
 	id := toSlug(name)
 	if err := validateID(id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
@@ -230,6 +272,26 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 			Icon:        icon,
 			Enabled:     &enabled,
 			Model:       &config.AgentModelConfig{Primary: model},
+		}
+		// Agent type / runtime (W4). Subagent + subagent_3p persist as worker;
+		// subagent_3p additionally carries an external-CLI executor so dispatch
+		// runs it on the named CLI (claude-code / codex / opencode).
+		switch agentType {
+		case "Subagent":
+			newAgent.Type = config.AgentTypeWorker
+		case "subagent_3p":
+			// External CLI worker: Type=worker + an external-cli executor. The
+			// worker's own run model is the top-level Model.Primary (set above);
+			// SubagentsConfig.Model is for THIS agent's own sub-delegations, so we
+			// leave it unset to avoid a misleading duplicate.
+			newAgent.Type = config.AgentTypeWorker
+			newAgent.Subagents = &config.SubagentsConfig{
+				Executor: &config.ExecutorConfig{
+					Kind:    config.ExecutorKindExternalCLI,
+					CLI:     execCLI,
+					CLIPath: execCLIPath,
+				},
+			}
 		}
 		// Optional: model fallbacks.
 		if fb, ok := args["model_fallbacks"].([]any); ok && len(fb) > 0 {
@@ -321,13 +383,18 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 		}
 	}
 
-	return tools.NewToolResult(successJSON(map[string]any{
+	result := map[string]any{
 		"id":     finalID,
 		"name":   name,
 		"model":  model,
-		"type":   string(config.AgentTypeCustom),
+		"type":   agentType,
 		"status": "active",
-	}))
+	}
+	if agentType == "subagent_3p" {
+		result["cli"] = execCLI
+		result["cli_path"] = execCLIPath
+	}
+	return tools.NewToolResult(successJSON(result))
 }
 
 // ---- system.agent.update ----
