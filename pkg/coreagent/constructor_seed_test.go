@@ -78,6 +78,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 				"browser_navigate", "browser_click", "browser_type",
 				"browser_get_text", "browser_wait", "browser_screenshot",
 				"read_file", "list_directory", "write_file", "append_file", "edit_file",
+				"spawn", "run_subagent", "check_spawn_status",
 				"remember", "recall_memory", "run_retrospective",
 				"send_message", "hand_off", "return_to_default", "send_file",
 				"find_skills", "set_todos",
