@@ -251,7 +251,9 @@ func coreAgentSeed(
 	// survives any future default_policy change. Mia (router) and Ava (builder) are
 	// excluded by design — they delegate browser work; Planner only decomposes.
 	switch id {
-	case IDJim, IDRay, IDWorker, IDExplorer, IDResearcher:
+	case IDJim, IDWorker, IDExplorer, IDResearcher:
+		// Ray is handled by his own deny-by-default branch below (browser tools
+		// allowed explicitly there); the others still ride the legacy allow rail.
 		for _, b := range []string{
 			"browser_navigate", "browser_click", "browser_type",
 			"browser_screenshot", "browser_get_text", "browser_wait",
@@ -357,6 +359,43 @@ func coreAgentSeed(
 			"search_web":  allow,
 			"fetch_url":   allow,
 			"find_skills": allow,
+		}, ""
+	case IDRay:
+		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
+		// allow only the research surface (search + read the web and local docs,
+		// drive a browser for interactive sources, write up findings to files,
+		// synthesize with memory, present with citations). No shell, no admin, no
+		// task/agent management — he researches and reports, he doesn't build or run.
+		allow := config.ToolPolicyAllow
+		return config.ToolPolicyDeny, map[string]config.ToolPolicy{
+			// Web research.
+			"search_web": allow,
+			"fetch_url":  allow,
+			// Interactive / visual research (NOT browser_evaluate — arbitrary JS).
+			"browser_navigate":   allow,
+			"browser_click":      allow,
+			"browser_type":       allow,
+			"browser_get_text":   allow,
+			"browser_wait":       allow,
+			"browser_screenshot": allow,
+			// Local sources + writing up research results.
+			"read_file":      allow,
+			"list_directory": allow,
+			"write_file":     allow,
+			"append_file":    allow,
+			"edit_file":      allow,
+			// Persistent memory (carries research context across sessions).
+			"remember":          allow,
+			"recall_memory":     allow,
+			"run_retrospective": allow,
+			// Present / route / share an artifact.
+			"send_message":      allow,
+			"hand_off":          allow,
+			"return_to_default": allow,
+			"send_file":         allow,
+			// Working aids (his summarize skill; a research checklist).
+			"find_skills": allow,
+			"set_todos":   allow,
 		}, ""
 	case IDJim:
 		// Jim additionally uses workspace_shell and workspace_shell_bg (all
