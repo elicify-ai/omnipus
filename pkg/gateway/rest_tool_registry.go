@@ -155,9 +155,14 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 //
 // Returns per-tool:
 //
-//	{name, configured_policy, effective_policy}
+//	{name, configured_policy, effective_policy, manifest_tier}
 //
 // FR-028, FR-086: effective_policy for SPA badge rendering.
+// Gap 3: manifest_tier tags each tool as "full" (always-callable), "compressed"
+// (lazy — listed in manifest, loaded on demand via load_tool), or "infra"
+// (always-callable discovery tools like load_tool / search_tools_*).
+// Infra tools are force-included even when FilterToolsByPolicy would drop them
+// for a deny-default agent, mirroring the loop's runtime force-include.
 func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Request, agentID string) {
 	cfg := a.agentLoop.GetConfig()
 
@@ -201,6 +206,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	type toolsEntry = struct {
 		ConfiguredPolicy gen.AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
 		EffectivePolicy  gen.AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
+		ManifestTier     gen.AgentToolsResponseToolsManifestTier     `json:"manifest_tier"`
 		Name             string                                      `json:"name"`
 	}
 
@@ -209,6 +215,9 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	if agentInstance != nil {
 		allTools := agentInstance.Tools.GetAll()
 		filtered, policyMap := tools.FilterToolsByPolicy(allTools, agentType, policyCfg)
+
+		// Track which tools are already included so infra force-include can dedup.
+		included := make(map[string]struct{}, len(filtered))
 
 		for _, t := range filtered {
 			name := t.Name()
@@ -220,10 +229,36 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			// configured_policy: what the agent config says.
 			configuredPolicy := resolveConfiguredPolicy(name, toolsCfg)
 
+			// manifest_tier: map tools.ManifestTier to the wire enum.
+			tier := manifestTierToWire(tools.ToolManifestTier(name))
+
 			toolEntries = append(toolEntries, toolsEntry{
 				Name:             name,
 				ConfiguredPolicy: gen.AgentToolsResponseToolsConfiguredPolicy(configuredPolicy),
 				EffectivePolicy:  gen.AgentToolsResponseToolsEffectivePolicy(effectivePolicy),
+				ManifestTier:     tier,
+			})
+			included[name] = struct{}{}
+		}
+
+		// Force-include infra tools that FilterToolsByPolicy may have dropped for a
+		// deny-default agent. At runtime the agent loop always makes infra tools
+		// (load_tool, search_tools_*) callable when registered, regardless of policy.
+		// The panel must reflect this so operators can see the complete callable surface.
+		for _, t := range allTools {
+			name := t.Name()
+			if _, alreadyIncluded := included[name]; alreadyIncluded {
+				continue
+			}
+			if tools.ToolManifestTier(name) != tools.ManifestInfra {
+				continue
+			}
+			configuredPolicy := resolveConfiguredPolicy(name, toolsCfg)
+			toolEntries = append(toolEntries, toolsEntry{
+				Name:             name,
+				ConfiguredPolicy: gen.AgentToolsResponseToolsConfiguredPolicy(configuredPolicy),
+				EffectivePolicy:  gen.AgentToolsResponseToolsEffectivePolicy("allow"),
+				ManifestTier:     gen.AgentToolsResponseToolsManifestTierInfra,
 			})
 		}
 	}
@@ -280,6 +315,19 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		Tools: toolEntries,
 	}
 	jsonOK(w, resp)
+}
+
+// manifestTierToWire converts a tools.ManifestTier to the wire enum string used
+// by the AgentToolsResponse.Tools.ManifestTier field.
+func manifestTierToWire(tier tools.ManifestTier) gen.AgentToolsResponseToolsManifestTier {
+	switch tier {
+	case tools.ManifestFull:
+		return gen.AgentToolsResponseToolsManifestTierFull
+	case tools.ManifestInfra:
+		return gen.AgentToolsResponseToolsManifestTierInfra
+	default: // ManifestLazy
+		return gen.AgentToolsResponseToolsManifestTierCompressed
+	}
 }
 
 // resolveConfiguredPolicy returns the agent-configured policy for toolName

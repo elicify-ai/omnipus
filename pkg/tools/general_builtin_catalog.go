@@ -134,5 +134,12 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, NewRegexSearchTool(nil, 0, 0))
 	out = append(out, NewBM25SearchTool(nil, 0, 0))
 
+	// Tool-discovery infra (CategoryToolDiscovery): load_tool is registered
+	// per-agent whenever compressed manifest mode is enabled (ManifestInfra tier
+	// — never appears in the manifest block; always callable when registered).
+	// The metadata instance has no resolver wired; the loop wires SetResolver
+	// before any Execute call.
+	out = append(out, NewLoadTool())
+
 	return out
 }

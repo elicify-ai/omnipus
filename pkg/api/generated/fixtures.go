@@ -1925,12 +1925,14 @@ func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 		Tools: []struct {
 			ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
 			EffectivePolicy  AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
+			ManifestTier     AgentToolsResponseToolsManifestTier     `json:"manifest_tier"`
 			Name             string                                  `json:"name"`
 		}{
 			{
 				Name:             "workspace.shell",
 				ConfiguredPolicy: toolCfgAllow,
 				EffectivePolicy:  toolEffAllow,
+				ManifestTier:     AgentToolsResponseToolsManifestTierCompressed,
 			},
 		},
 	}
@@ -1968,12 +1970,14 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 		Tools: []struct {
 			ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
 			EffectivePolicy  AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
+			ManifestTier     AgentToolsResponseToolsManifestTier     `json:"manifest_tier"`
 			Name             string                                  `json:"name"`
 		}{
 			{
 				Name:             "system.spawn_subagent",
 				ConfiguredPolicy: toolCfgDeny,
 				EffectivePolicy:  toolEffAsk,
+				ManifestTier:     AgentToolsResponseToolsManifestTierCompressed,
 			},
 		},
 	}

@@ -532,6 +532,27 @@ func (e AgentToolEntryEffectivePolicy) Valid() bool {
 	}
 }
 
+// Defines values for AgentToolEntryManifestTier.
+const (
+	AgentToolEntryManifestTierCompressed AgentToolEntryManifestTier = "compressed"
+	AgentToolEntryManifestTierFull       AgentToolEntryManifestTier = "full"
+	AgentToolEntryManifestTierInfra      AgentToolEntryManifestTier = "infra"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolEntryManifestTier enum.
+func (e AgentToolEntryManifestTier) Valid() bool {
+	switch e {
+	case AgentToolEntryManifestTierCompressed:
+		return true
+	case AgentToolEntryManifestTierFull:
+		return true
+	case AgentToolEntryManifestTierInfra:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentToolsResponseAgentType.
 const (
 	AgentToolsResponseAgentTypeCore       AgentToolsResponseAgentType = "core"
@@ -637,6 +658,27 @@ func (e AgentToolsResponseToolsEffectivePolicy) Valid() bool {
 	case AgentToolsResponseToolsEffectivePolicyAsk:
 		return true
 	case AgentToolsResponseToolsEffectivePolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsResponseToolsManifestTier.
+const (
+	AgentToolsResponseToolsManifestTierCompressed AgentToolsResponseToolsManifestTier = "compressed"
+	AgentToolsResponseToolsManifestTierFull       AgentToolsResponseToolsManifestTier = "full"
+	AgentToolsResponseToolsManifestTierInfra      AgentToolsResponseToolsManifestTier = "infra"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsResponseToolsManifestTier enum.
+func (e AgentToolsResponseToolsManifestTier) Valid() bool {
+	switch e {
+	case AgentToolsResponseToolsManifestTierCompressed:
+		return true
+	case AgentToolsResponseToolsManifestTierFull:
+		return true
+	case AgentToolsResponseToolsManifestTierInfra:
 		return true
 	default:
 		return false
@@ -4326,13 +4368,16 @@ type AgentTokenEntry struct {
 	TokensTotal int    `json:"tokens_total"`
 }
 
-// AgentToolEntry Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective policy so the SPA can display policy downgrades.
+// AgentToolEntry Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective policy so the SPA can display policy downgrades, plus the manifest tier so the panel can show which tools are always-callable versus loaded on demand.
 type AgentToolEntry struct {
 	// ConfiguredPolicy The policy as written in the agent's config.
 	ConfiguredPolicy AgentToolEntryConfiguredPolicy `json:"configured_policy"`
 
 	// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 	EffectivePolicy AgentToolEntryEffectivePolicy `json:"effective_policy"`
+
+	// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+	ManifestTier AgentToolEntryManifestTier `json:"manifest_tier"`
 
 	// Name Canonical tool name.
 	Name string `json:"name"`
@@ -4343,6 +4388,9 @@ type AgentToolEntryConfiguredPolicy string
 
 // AgentToolEntryEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 type AgentToolEntryEffectivePolicy string
+
+// AgentToolEntryManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+type AgentToolEntryManifestTier string
 
 // AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 type AgentToolsCfg struct {
@@ -4405,6 +4453,9 @@ type AgentToolsResponse struct {
 		// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 		EffectivePolicy AgentToolsResponseToolsEffectivePolicy `json:"effective_policy"`
 
+		// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+		ManifestTier AgentToolsResponseToolsManifestTier `json:"manifest_tier"`
+
 		// Name Canonical tool name.
 		Name string `json:"name"`
 	} `json:"tools"`
@@ -4424,6 +4475,9 @@ type AgentToolsResponseToolsConfiguredPolicy string
 
 // AgentToolsResponseToolsEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 type AgentToolsResponseToolsEffectivePolicy string
+
+// AgentToolsResponseToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+type AgentToolsResponseToolsManifestTier string
 
 // AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.default_policy + builtin.policies) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
 type AgentToolsUpdateRequest struct {

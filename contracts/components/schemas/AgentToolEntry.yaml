@@ -2,12 +2,14 @@ title: AgentToolEntry
 description: >
   Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008).
   Exposes both the configured policy and the effective policy so the SPA can
-  display policy downgrades.
+  display policy downgrades, plus the manifest tier so the panel can show
+  which tools are always-callable versus loaded on demand.
 type: object
 required:
   - name
   - configured_policy
   - effective_policy
+  - manifest_tier
 properties:
   name:
     type: string
@@ -32,3 +34,17 @@ properties:
       - ask
       - deny
     example: ask
+  manifest_tier:
+    type: string
+    description: >
+      How the tool is presented to the LLM when the manifest optimization is
+      active. "full" = always sent as a callable tool definition every turn;
+      "compressed" = listed by name only in the system context, schema fetched
+      on demand via load_tool; "infra" = always-callable discovery tool
+      (load_tool / search_tools_*) that drives the manifest mechanism itself
+      and never appears in the manifest block.
+    enum:
+      - full
+      - compressed
+      - infra
+    example: full
