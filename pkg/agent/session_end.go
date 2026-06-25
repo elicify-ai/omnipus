@@ -28,6 +28,12 @@ import (
 // and this sessionID has not already been claimed. Idempotent: duplicate calls
 // for the same sessionID are silently dropped (FR-027).
 func (al *AgentLoop) CloseSession(sessionID, trigger string) {
+	// Evict the session's loaded-tool entry unconditionally so the
+	// loadedTools map does not grow without bound regardless of whether the
+	// recap feature is enabled. The sessionID here is the transcript session ID
+	// — the same key that manifestSessionID returns when transcriptID != "".
+	al.forgetSession(sessionID)
+
 	if !al.cfg.Agents.Defaults.AutoRecapEnabled {
 		return
 	}

@@ -325,9 +325,11 @@ func manifestTierToWire(tier tools.ManifestTier) gen.AgentToolsResponseToolsMani
 		return gen.AgentToolsResponseToolsManifestTierFull
 	case tools.ManifestInfra:
 		return gen.AgentToolsResponseToolsManifestTierInfra
-	default: // ManifestLazy
+	case tools.ManifestLazy:
 		return gen.AgentToolsResponseToolsManifestTierCompressed
 	}
+	// Unreachable: ToolManifestTier returns only the three tiers above.
+	return gen.AgentToolsResponseToolsManifestTierCompressed
 }
 
 // resolveConfiguredPolicy returns the agent-configured policy for toolName

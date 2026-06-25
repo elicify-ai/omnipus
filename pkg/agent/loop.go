@@ -283,9 +283,11 @@ type AgentLoop struct {
 
 	// loadedTools tracks which lazy tools have been on-demand loaded by the
 	// manifest optimization (cfg.Tools.Manifest.Compressed) for each session.
-	// Key: transcript session ID (string). Value: map[string]bool (tool name → loaded).
-	// Protected by loadedToolsMu. A new session ID means a fresh (absent) set — no
-	// explicit reset needed. Only populated when Compressed is true.
+	// Key: manifest session ID (transcript session ID, or the session key when
+	// transcripts are disabled — see manifestSessionID). Value: map[string]bool
+	// (tool name → loaded). Protected by loadedToolsMu. A new session ID lazily
+	// creates a fresh set on first load; entries are evicted by forgetSession on
+	// CloseSession (transcript sessions). Only populated when Compressed is true.
 	loadedTools   map[string]map[string]bool
 	loadedToolsMu sync.Mutex
 }
@@ -1815,33 +1817,54 @@ func registerSharedTools(
 					}
 					return false
 				},
-				// markLoaded: records names in the session's loaded set and returns
-				// each tool's full schema so the model immediately sees the params.
+				// markLoaded: fetches schemas FIRST, marks only successfully resolved
+				// names as loaded, and returns any names that could not be resolved in
+				// the rejected slice. This ensures the model's loaded-set is always
+				// consistent with what it can actually call: a name that canLoad
+				// accepted but whose registry lookup or schema extraction fails is
+				// reported as rejected and never marked loaded.
 				func(ctx context.Context, names []string) (map[string]any, []string) {
-					sessionID := tools.ToolTranscriptSessionID(ctx)
-					if sessionID == "" {
-						sessionID = tools.ToolSessionKey(ctx)
-					}
-					al.markToolsLoaded(sessionID, names)
-
 					callerID := tools.ToolAgentID(ctx)
 					if callerID == "" {
 						callerID = capturedAgentID
 					}
 					callerAgent, ok := al.registry.GetAgent(callerID)
 					if !ok {
-						return map[string]any{}, nil
-					}
-					schemas := make(map[string]any, len(names))
-					for _, n := range names {
-						if t, ok := callerAgent.Tools.Get(n); ok {
-							schema := tools.ToolToSchema(t)
-							if fn, ok := schema["function"]; ok {
-								schemas[n] = fn
-							}
+						// No agent — reject everything so the caller can surface the error.
+						rejected := make([]string, 0, len(names))
+						for _, n := range names {
+							rejected = append(rejected, n+" — agent not found at load time")
 						}
+						return map[string]any{}, rejected
 					}
-					return schemas, nil
+
+					// Fetch schemas first; separate names into resolved and rejected.
+					schemas := make(map[string]any, len(names))
+					loadedOK := make([]string, 0, len(names))
+					var rejected []string
+					for _, n := range names {
+						t, tOK := callerAgent.Tools.Get(n)
+						if !tOK {
+							rejected = append(rejected, n+" — not registered for agent at load time")
+							continue
+						}
+						schema := tools.ToolToSchema(t)
+						fn, fnOK := schema["function"]
+						if !fnOK {
+							rejected = append(rejected, n+" — schema has no function key")
+							continue
+						}
+						schemas[n] = fn
+						loadedOK = append(loadedOK, n)
+					}
+
+					// Mark only the successfully resolved names as loaded.
+					sessionID := manifestSessionID(
+						tools.ToolTranscriptSessionID(ctx),
+						tools.ToolSessionKey(ctx),
+					)
+					al.markToolsLoaded(sessionID, loadedOK)
+					return schemas, rejected
 				},
 			)
 			agent.Tools.Register(loadTool)
@@ -5027,14 +5050,8 @@ turnLoop:
 			// persisted) so it is never stale and not double-counted in the cached
 			// system prompt. Injected only when Compressed is active and there are
 			// unloaded lazy tools to list.
-			if cfg.Tools.Manifest.Compressed && len(callMessages) > 0 {
-				if note := al.buildToolManifestNote(ts, policyFilteredTools); note != "" {
-					injected := make([]providers.Message, 0, len(callMessages)+1)
-					injected = append(injected, callMessages[0])
-					injected = append(injected, providers.Message{Role: "system", Content: note})
-					injected = append(injected, callMessages[1:]...)
-					callMessages = injected
-				}
+			if cfg.Tools.Manifest.Compressed {
+				callMessages = injectManifestNote(callMessages, al.buildToolManifestNote(ts, policyFilteredTools))
 			}
 		}
 		if gracefulTerminal {
@@ -8493,4 +8510,17 @@ func (al *AgentLoop) sessionLoadedTools(sessionID string) map[string]bool {
 		out[k] = v
 	}
 	return out
+}
+
+// forgetSession removes the session's loaded-tool entry from the manifest map,
+// preventing unbounded memory growth. Called from CloseSession with the same
+// key that the manifest system uses (manifestSessionID derivation).
+// Safe for concurrent access — protected by loadedToolsMu. No-op for unknown keys.
+func (al *AgentLoop) forgetSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	al.loadedToolsMu.Lock()
+	defer al.loadedToolsMu.Unlock()
+	delete(al.loadedTools, sessionID)
 }

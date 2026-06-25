@@ -9,6 +9,21 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
+// manifestSessionID derives the map key used to bucket loaded-tool state for a
+// session. It mirrors the fallback logic in pkg/tools/handoff.go:250-253:
+// prefer the transcript session ID when available (it is a stable, unique
+// session directory name); fall back to the session key when the transcript is
+// disabled (TranscriptSessionID == ""). Both the writer (markLoaded closure in
+// the agent loop) and the readers (buildCompressedToolDefs, buildToolManifestNote)
+// must call this helper with the same two inputs so they always resolve to the
+// same bucket — a mismatch causes loaded tools to become invisible to the model.
+func manifestSessionID(transcriptID, sessionKey string) string {
+	if transcriptID != "" {
+		return transcriptID
+	}
+	return sessionKey
+}
+
 // buildCompressedToolDefs partitions policyFilteredTools into full/lazy/infra
 // tiers and returns provider defs for only the always-callable tools plus any
 // lazy tools that have already been loaded for this session.
@@ -28,7 +43,7 @@ import (
 // tools.ToolsToProviderDefs directly — this helper is only called on the
 // compressed code-path.
 func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) []providers.ToolDefinition {
-	sessionID := ts.opts.TranscriptSessionID
+	sessionID := manifestSessionID(ts.opts.TranscriptSessionID, ts.sessionKey)
 	loaded := al.sessionLoadedTools(sessionID)
 
 	// Track which infra tools are already present in policyFiltered so we don't
@@ -52,7 +67,7 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 	// Force-include any infra tools that were stripped by policy (deny-by-default
 	// agents). Look them up directly from the agent's full registry.
 	if ts.agent != nil && ts.agent.Tools != nil {
-		for _, infraName := range []string{"load_tool", "search_tools_regex", "search_tools_bm25"} {
+		for _, infraName := range tools.InfraManifestToolNames() {
 			if infraInFiltered[infraName] {
 				continue // already included above
 			}
@@ -72,11 +87,27 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 //
 // The returned string is ephemeral — rebuilt every turn, never persisted.
 func (al *AgentLoop) buildToolManifestNote(ts *turnState, policyFiltered []tools.Tool) string {
-	sessionID := ts.opts.TranscriptSessionID
+	sessionID := manifestSessionID(ts.opts.TranscriptSessionID, ts.sessionKey)
 	loaded := al.sessionLoadedTools(sessionID)
 
 	// Collect only the lazy tier tools; BuildCompressedManifest filters further
 	// (infra/full are excluded inside it, but we pass all policyFiltered to keep
 	// the helper self-contained as per its contract).
 	return tools.BuildCompressedManifest(policyFiltered, loaded)
+}
+
+// injectManifestNote inserts note as a "system" role message at index 1 of
+// msgs (immediately after the system prompt at index 0, before conversation
+// history). Returns msgs unchanged when note == "" or len(msgs) == 0.
+// This is a pure helper extracted from the runTurn injection site to allow
+// unit-testing the position and role invariants without driving a full turn.
+func injectManifestNote(msgs []providers.Message, note string) []providers.Message {
+	if note == "" || len(msgs) == 0 {
+		return msgs
+	}
+	out := make([]providers.Message, 0, len(msgs)+1)
+	out = append(out, msgs[0])
+	out = append(out, providers.Message{Role: "system", Content: note})
+	out = append(out, msgs[1:]...)
+	return out
 }
