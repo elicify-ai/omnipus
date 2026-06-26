@@ -863,18 +863,39 @@ func TestSearchToolsRegistered_CompressedMode(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	for _, agentID := range []string{"mia", "jim", "ava", "ray"} {
+	// Verify EVERY registered agent — the 4 core agents AND the native
+	// subagents/workers (worker/planner/explorer/researcher, type=worker, which
+	// run on the Omnipus engine and share the tool registry) — gets the full
+	// infra trio. (External subagent_3p workers run on an external CLI and don't
+	// use this registry, so they are not seeded here and not in scope.)
+	ids := al.registry.ListAgentIDs()
+	require.NotEmpty(t, ids)
+	sawCore, sawWorker := false, false
+	for _, agentID := range ids {
 		agentInst, ok := al.registry.GetAgent(agentID)
 		require.True(t, ok, "agent %q must be in registry", agentID)
 
 		_, hasRegex := agentInst.Tools.Get("search_tools_regex")
 		assert.True(t, hasRegex,
-			"agent %q: search_tools_regex must be registered when Compressed=true", agentID)
-
+			"agent %q (type %s): search_tools_regex must be registered when Compressed=true", agentID, agentInst.AgentType)
 		_, hasBM25 := agentInst.Tools.Get("search_tools_bm25")
 		assert.True(t, hasBM25,
-			"agent %q: search_tools_bm25 must be registered when Compressed=true", agentID)
+			"agent %q (type %s): search_tools_bm25 must be registered when Compressed=true", agentID, agentInst.AgentType)
+		_, hasLoad := agentInst.Tools.Get("load_tool")
+		assert.True(t, hasLoad,
+			"agent %q (type %s): load_tool must be registered when Compressed=true", agentID, agentInst.AgentType)
+
+		switch agentInst.AgentType {
+		case "core":
+			sawCore = true
+		case "worker":
+			sawWorker = true
+		}
 	}
+	// Guard against a seed change silently dropping a whole class of agent —
+	// the worker assertion is the one the original test missed.
+	assert.True(t, sawCore, "expected at least one core agent in the registry")
+	assert.True(t, sawWorker, "expected at least one native subagent/worker (type=worker) in the registry")
 }
 
 // ─── manifestSessionID unit tests ──────────────────────────────────────────
