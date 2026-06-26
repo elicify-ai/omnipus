@@ -1853,6 +1853,7 @@ const (
 	DashscopeIntl          ProbeProviderRequestId = "dashscope-intl"
 	DashscopeUs            ProbeProviderRequestId = "dashscope-us"
 	Deepseek               ProbeProviderRequestId = "deepseek"
+	DeepseekAnthropic      ProbeProviderRequestId = "deepseek-anthropic"
 	Gemini                 ProbeProviderRequestId = "gemini"
 	GithubCopilot          ProbeProviderRequestId = "github-copilot"
 	GlmCoding              ProbeProviderRequestId = "glm-coding"
@@ -1862,11 +1863,15 @@ const (
 	Longcat                ProbeProviderRequestId = "longcat"
 	Mimo                   ProbeProviderRequestId = "mimo"
 	Minimax                ProbeProviderRequestId = "minimax"
+	MinimaxAnthropic       ProbeProviderRequestId = "minimax-anthropic"
 	MinimaxCn              ProbeProviderRequestId = "minimax-cn"
+	MinimaxCnAnthropic     ProbeProviderRequestId = "minimax-cn-anthropic"
 	Mistral                ProbeProviderRequestId = "mistral"
 	Modelscope             ProbeProviderRequestId = "modelscope"
 	Moonshot               ProbeProviderRequestId = "moonshot"
+	MoonshotAnthropic      ProbeProviderRequestId = "moonshot-anthropic"
 	MoonshotCn             ProbeProviderRequestId = "moonshot-cn"
+	MoonshotCnAnthropic    ProbeProviderRequestId = "moonshot-cn-anthropic"
 	Novita                 ProbeProviderRequestId = "novita"
 	Nvidia                 ProbeProviderRequestId = "nvidia"
 	Ollama                 ProbeProviderRequestId = "ollama"
@@ -1882,9 +1887,12 @@ const (
 	Vllm                   ProbeProviderRequestId = "vllm"
 	Volcengine             ProbeProviderRequestId = "volcengine"
 	ZAi                    ProbeProviderRequestId = "z-ai"
+	ZAiAnthropic           ProbeProviderRequestId = "z-ai-anthropic"
 	ZAiCoding              ProbeProviderRequestId = "z-ai-coding"
 	Zai                    ProbeProviderRequestId = "zai"
 	Zhipu                  ProbeProviderRequestId = "zhipu"
+	ZhipuAnthropic         ProbeProviderRequestId = "zhipu-anthropic"
+	ZhipuCoding            ProbeProviderRequestId = "zhipu-coding"
 )
 
 // Valid indicates whether the value is a known member of the ProbeProviderRequestId enum.
@@ -1930,6 +1938,8 @@ func (e ProbeProviderRequestId) Valid() bool {
 		return true
 	case Deepseek:
 		return true
+	case DeepseekAnthropic:
+		return true
 	case Gemini:
 		return true
 	case GithubCopilot:
@@ -1948,7 +1958,11 @@ func (e ProbeProviderRequestId) Valid() bool {
 		return true
 	case Minimax:
 		return true
+	case MinimaxAnthropic:
+		return true
 	case MinimaxCn:
+		return true
+	case MinimaxCnAnthropic:
 		return true
 	case Mistral:
 		return true
@@ -1956,7 +1970,11 @@ func (e ProbeProviderRequestId) Valid() bool {
 		return true
 	case Moonshot:
 		return true
+	case MoonshotAnthropic:
+		return true
 	case MoonshotCn:
+		return true
+	case MoonshotCnAnthropic:
 		return true
 	case Novita:
 		return true
@@ -1988,11 +2006,17 @@ func (e ProbeProviderRequestId) Valid() bool {
 		return true
 	case ZAi:
 		return true
+	case ZAiAnthropic:
+		return true
 	case ZAiCoding:
 		return true
 	case Zai:
 		return true
 	case Zhipu:
+		return true
+	case ZhipuAnthropic:
+		return true
+	case ZhipuCoding:
 		return true
 	default:
 		return false

@@ -198,7 +198,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		}
 		return p, modelID, nil
 
-	case "litellm", "groq", "zhipu", "z-ai", "z.ai", "zai", "z-ai-coding", "glm-coding", "gemini", "google", "nvidia",
+	case "litellm", "groq", "zhipu", "z-ai", "z.ai", "zai", "z-ai-coding", "glm-coding", "zhipu-coding", "gemini", "google", "nvidia",
 		"ollama", "moonshot", "moonshot-cn", "shengsuanyun", "deepseek", "cerebras",
 		"vivgrid", "volcengine", "vllm", "qwen", "qwen-intl", "qwen-international", "dashscope-intl",
 		"qwen-us", "dashscope-us", "mistral", "avian", "longcat", "modelscope", "novita",
@@ -298,8 +298,14 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.RequestTimeout,
 		), modelID, nil
 
-	case "coding-plan-anthropic", "alibaba-coding-anthropic":
-		// Alibaba Coding Plan with Anthropic-compatible API
+	case "coding-plan-anthropic", "alibaba-coding-anthropic",
+		"z-ai-anthropic", "zhipu-anthropic",
+		"moonshot-anthropic", "moonshot-cn-anthropic",
+		"minimax-anthropic", "minimax-cn-anthropic",
+		"deepseek-anthropic":
+		// Anthropic-compatible (Messages API) providers — Alibaba Coding Plan plus
+		// the Chinese vendors that expose a Claude-compatible endpoint alongside
+		// their OpenAI one. All speak the native Anthropic Messages format.
 		apiBase := cfg.APIBase
 		if apiBase == "" {
 			apiBase = GetDefaultAPIBase(protocol)
@@ -368,6 +374,14 @@ var knownProtocols = map[string]bool{
 	"zai":                      true,
 	"z-ai-coding":              true,
 	"glm-coding":               true,
+	"zhipu-coding":             true,
+	"z-ai-anthropic":           true,
+	"zhipu-anthropic":          true,
+	"moonshot-anthropic":       true,
+	"moonshot-cn-anthropic":    true,
+	"minimax-anthropic":        true,
+	"minimax-cn-anthropic":     true,
+	"deepseek-anthropic":       true,
 	"gemini":                   true,
 	"google":                   true,
 	"nvidia":                   true,
@@ -447,6 +461,26 @@ func GetDefaultAPIBase(protocol string) string {
 		// Coding Plan key gets 1113 "insufficient balance" on the pay-per-token
 		// host). Distinct base so subscription users can actually run.
 		return "https://api.z.ai/api/coding/paas/v4"
+	case "zhipu-coding":
+		// GLM Coding Plan, China-mainland host (OpenAI-compatible).
+		return "https://open.bigmodel.cn/api/coding/paas/v4"
+	// ── Anthropic-compatible (Messages API) endpoints — Chinese providers that
+	// expose a Claude-compatible endpoint alongside their OpenAI one. Base ends
+	// in /anthropic/v1; the anthropic_messages provider appends "messages".
+	case "z-ai-anthropic":
+		return "https://api.z.ai/api/anthropic/v1"
+	case "zhipu-anthropic":
+		return "https://open.bigmodel.cn/api/anthropic/v1"
+	case "moonshot-anthropic":
+		return "https://api.moonshot.ai/anthropic/v1"
+	case "moonshot-cn-anthropic":
+		return "https://api.moonshot.cn/anthropic/v1"
+	case "minimax-anthropic":
+		return "https://api.minimax.io/anthropic/v1"
+	case "minimax-cn-anthropic":
+		return "https://api.minimaxi.com/anthropic/v1"
+	case "deepseek-anthropic":
+		return "https://api.deepseek.com/anthropic/v1"
 	case "gemini", "google":
 		return "https://generativelanguage.googleapis.com/v1beta/openai"
 	case "nvidia":
