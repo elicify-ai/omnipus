@@ -807,6 +807,8 @@ export const ProbeProviderRequest = z.object({
     "zhipu",
     "z-ai",
     "zai",
+    "z-ai-coding",
+    "glm-coding",
     "nvidia",
     "moonshot",
     "moonshot-cn",
