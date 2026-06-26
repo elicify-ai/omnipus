@@ -804,6 +804,8 @@ export const ProbeProviderRequest = z.object({
     "litellm",
     "groq",
     "zhipu",
+    "z-ai",
+    "zai",
     "nvidia",
     "moonshot",
     "shengsuanyun",

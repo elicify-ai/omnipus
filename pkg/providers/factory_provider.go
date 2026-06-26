@@ -198,7 +198,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		}
 		return p, modelID, nil
 
-	case "litellm", "groq", "zhipu", "gemini", "google", "nvidia",
+	case "litellm", "groq", "zhipu", "z-ai", "z.ai", "zai", "gemini", "google", "nvidia",
 		"ollama", "moonshot", "shengsuanyun", "deepseek", "cerebras",
 		"vivgrid", "volcengine", "vllm", "qwen", "qwen-intl", "qwen-international", "dashscope-intl",
 		"qwen-us", "dashscope-us", "mistral", "avian", "longcat", "modelscope", "novita",
@@ -426,6 +426,10 @@ func GetDefaultAPIBase(protocol string) string {
 		return "https://api.groq.com/openai/v1"
 	case "zhipu":
 		return "https://open.bigmodel.cn/api/paas/v4"
+	case "z-ai", "z.ai", "zai":
+		// International Z.ai (GLM) endpoint — distinct from the China-mainland
+		// Zhipu host above. The onboarding "Z.ai (GLM)" option sends id "z-ai".
+		return "https://api.z.ai/api/paas/v4"
 	case "gemini", "google":
 		return "https://generativelanguage.googleapis.com/v1beta/openai"
 	case "nvidia":

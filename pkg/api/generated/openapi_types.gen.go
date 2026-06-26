@@ -1878,6 +1878,8 @@ const (
 	Vivgrid                ProbeProviderRequestId = "vivgrid"
 	Vllm                   ProbeProviderRequestId = "vllm"
 	Volcengine             ProbeProviderRequestId = "volcengine"
+	ZAi                    ProbeProviderRequestId = "z-ai"
+	Zai                    ProbeProviderRequestId = "zai"
 	Zhipu                  ProbeProviderRequestId = "zhipu"
 )
 
@@ -1973,6 +1975,10 @@ func (e ProbeProviderRequestId) Valid() bool {
 	case Vllm:
 		return true
 	case Volcengine:
+		return true
+	case ZAi:
+		return true
+	case Zai:
 		return true
 	case Zhipu:
 		return true

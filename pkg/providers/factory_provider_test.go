@@ -844,3 +844,35 @@ func TestCreateProviderFromConfig_BedrockWithEndpointURL(t *testing.T) {
 	// Unexpected error - fail the test
 	t.Errorf("unexpected error from bedrock provider: %v", err)
 }
+
+// TestGetDefaultAPIBase_ZAI guards the z-ai/GLM wiring: the onboarding
+// "Z.ai (GLM)" option sends provider id "z-ai", which must resolve to the
+// international Z.ai endpoint. Regression for the onboarding probe returning
+// 400 "unknown provider \"z-ai\"" (surfaced to the user as "Couldn't reach
+// Z.ai (GLM)") because GetDefaultAPIBase had no z-ai case.
+func TestGetDefaultAPIBase_ZAI(t *testing.T) {
+	const want = "https://api.z.ai/api/paas/v4"
+	for _, id := range []string{"z-ai", "z.ai", "zai"} {
+		if got := GetDefaultAPIBase(id); got != want {
+			t.Errorf("GetDefaultAPIBase(%q) = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// TestCreateProviderFromConfig_ZAI verifies the runtime factory recognizes the
+// z-ai protocol (OpenAI-compatible) and builds a provider with the default base.
+func TestCreateProviderFromConfig_ZAI(t *testing.T) {
+	const keyRef = "FACTORY_PROVIDER_ZAI_TEST_KEY"
+	t.Setenv(keyRef, "test-key")
+	cfg := &config.ModelConfig{Model: "z-ai/glm-5.2", APIKeyRef: keyRef}
+	p, modelID, err := CreateProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig(z-ai) error: %v", err)
+	}
+	if p == nil {
+		t.Fatal("CreateProviderFromConfig(z-ai) returned nil provider")
+	}
+	if modelID != "glm-5.2" {
+		t.Errorf("modelID = %q, want %q", modelID, "glm-5.2")
+	}
+}
