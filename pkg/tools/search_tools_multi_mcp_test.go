@@ -4,14 +4,14 @@
 
 // These tests cover §6 of docs/internal/specs/tool-test-plan-2026-06.md:
 // multi-server discovery, ranking fidelity, version-keyed cache refresh,
-// promotion TTL lifecycle, cross-server regex, and concurrent register+search.
+// promotion TTL lifecycle, and concurrent register+search.
 //
 // All tests are pure in-process: RegisterHidden of mockSearchableTool or
 // NewMCPTool wrappers — no real subprocesses. Deterministic.
 //
-// After the tools-tool unification, searches go through ToolsTool
-// (action="search") which is READ-ONLY (no promote). Promotion is only done
-// by ToolsTool action="load" or direct PromoteTools calls.
+// After the param-inferred tools-tool redesign, searches go through
+// tools{query:...} which auto-loads the top hit (when a resolver is wired).
+// Without a resolver, the query path is still read-only (no promote).
 //
 // Build tags: -tags goolm,stdjson CGO_ENABLED=0 (inherited from the package).
 
@@ -56,6 +56,12 @@ func newMultiMCPTool(reg *ToolRegistry) *ToolsTool {
 	return NewToolsTool(reg, 5, 10)
 }
 
+// execBM25Query calls tools{query:q} on tt (the new param-inferred shape).
+// No resolver is wired, so this is purely the BM25 search path (no auto-load).
+func execBM25Query(tt *ToolsTool, ctx context.Context, query string) *ToolResult {
+	return tt.Execute(ctx, map[string]any{"query": query})
+}
+
 // ─── Part B §6 (1) — Two-server BM25 ranking ───────────────────────────────
 
 // TestMultiMCP_BM25_AlphaTopForSearchRepos proves that a BM25 query for
@@ -68,7 +74,7 @@ func TestMultiMCP_BM25_AlphaTopForSearchRepos(t *testing.T) {
 	tt := newMultiMCPTool(reg)
 	ctx := context.Background()
 
-	res := execSearchBM25(tt, ctx, "search repositories")
+	res := execBM25Query(tt, ctx, "search repositories")
 	if res.IsError {
 		t.Fatalf("BM25 search(search repositories): unexpected error: %s", res.ForLLM)
 	}
@@ -95,7 +101,7 @@ func TestMultiMCP_BM25_BetaTopForQueryDocs(t *testing.T) {
 	tt := newMultiMCPTool(reg)
 	ctx := context.Background()
 
-	res := execSearchBM25(tt, ctx, "query documentation")
+	res := execBM25Query(tt, ctx, "query documentation")
 	if res.IsError {
 		t.Fatalf("BM25 search(query documentation): unexpected error: %s", res.ForLLM)
 	}
@@ -122,8 +128,8 @@ func TestMultiMCP_BM25_Differentiation(t *testing.T) {
 	tt := newMultiMCPTool(reg)
 	ctx := context.Background()
 
-	res1 := execSearchBM25(tt, ctx, "search repositories")
-	res2 := execSearchBM25(tt, ctx, "query documentation")
+	res1 := execBM25Query(tt, ctx, "search repositories")
+	res2 := execBM25Query(tt, ctx, "query documentation")
 
 	if res1.IsError || res2.IsError {
 		t.Fatalf("BM25 differentiation: unexpected error: %s / %s", res1.ForLLM, res2.ForLLM)
@@ -162,7 +168,7 @@ func TestMultiMCP_BM25_OverlappingDescriptions(t *testing.T) {
 	ctx := context.Background()
 
 	// Query strongly matching gamma.
-	res := execSearchBM25(tt, ctx, "search repository files")
+	res := execBM25Query(tt, ctx, "search repository files")
 	if res.IsError {
 		t.Fatalf("BM25 overlapping(search repository files): error: %s", res.ForLLM)
 	}
@@ -177,7 +183,7 @@ func TestMultiMCP_BM25_OverlappingDescriptions(t *testing.T) {
 	}
 
 	// Query for "list" — epsilon must appear.
-	res2 := execSearchBM25(tt, ctx, "list items")
+	res2 := execBM25Query(tt, ctx, "list items")
 	if res2.IsError {
 		t.Fatalf("BM25 overlapping(list items): error: %s", res2.ForLLM)
 	}
@@ -201,7 +207,7 @@ func TestMultiMCP_BM25_CacheRefreshOnNewServer(t *testing.T) {
 
 	// Build cache at V1 by running a search.
 	v1 := reg.Version()
-	res1 := execSearchBM25(tt, ctx, "search repositories")
+	res1 := execBM25Query(tt, ctx, "search repositories")
 	if res1.IsError {
 		t.Fatalf("BM25 cache V1 search: %s", res1.ForLLM)
 	}
@@ -214,7 +220,7 @@ func TestMultiMCP_BM25_CacheRefreshOnNewServer(t *testing.T) {
 	}
 
 	// The next search must find the new tool (cache rebuilt at V2).
-	res2 := execSearchBM25(tt, ctx, "ingest data pipeline")
+	res2 := execBM25Query(tt, ctx, "ingest data pipeline")
 	if res2.IsError {
 		t.Fatalf("BM25 cache V2 search: %s", res2.ForLLM)
 	}
@@ -227,7 +233,7 @@ func TestMultiMCP_BM25_CacheRefreshOnNewServer(t *testing.T) {
 
 // TestMultiMCP_PromotionTTL_Lifecycle proves the full promotion TTL lifecycle
 // for hidden tools from two MCP servers via direct PromoteTools calls (not via
-// search, since search is now read-only).
+// search, since search without resolver is read-only).
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §6 (T2, point 4)
 func TestMultiMCP_PromotionTTL_Lifecycle(t *testing.T) {
@@ -247,7 +253,7 @@ func TestMultiMCP_PromotionTTL_Lifecycle(t *testing.T) {
 		t.Error("before promotion: beta must not be Get-able (TTL=0)")
 	}
 
-	// Step 2: Direct promotion of alpha (as load action would do).
+	// Step 2: Direct promotion of alpha (as the load path would do).
 	reg.PromoteTools([]string{alphaName}, ttl)
 
 	// Alpha must now be Get-able (promoted).
@@ -284,7 +290,7 @@ func TestMultiMCP_PromotionTTL_MatchedGetable_ThenHidden(t *testing.T) {
 	reg.RegisterHidden(newMCPToolForTest("alpha", "search_repos", "Search repositories"))
 
 	const ttl = 2
-	// Promote directly (as tools{action:load} would do).
+	// Promote directly (as tools{names:[...]} would do).
 	reg.PromoteTools([]string{"mcp_alpha_search_repos"}, ttl)
 
 	// Verify actual TTL stored.
@@ -321,119 +327,10 @@ func TestMultiMCP_PromotionTTL_MatchedGetable_ThenHidden(t *testing.T) {
 	}
 }
 
-// ─── Part B §6 (5) — tools(search/regex) across servers ────────────────────
-
-// TestMultiMCP_Regex_AcrossServers proves that tools(action=search, mode=regex)
-// matches tool names AND descriptions across both MCP servers.
-//
-// Traces to: docs/internal/specs/tool-test-plan-2026-06.md §6 (T2, point 5)
-func TestMultiMCP_Regex_AcrossServers(t *testing.T) {
-	reg := setupMultiMCPRegistry() // alpha=search_repos, beta=query_docs
-	tt := newMultiMCPTool(reg)
-	ctx := context.Background()
-
-	// Pattern matching alpha by name.
-	res := execSearchRegex(tt, ctx, "search_repos")
-	if res.IsError {
-		t.Fatalf("regex across servers (alpha name): %s", res.ForLLM)
-	}
-	if !strings.Contains(res.ForLLM, "mcp_alpha_search_repos") {
-		t.Errorf("regex(search_repos): expected mcp_alpha_search_repos; got: %s", res.ForLLM)
-	}
-
-	// Pattern matching beta by description keyword.
-	res2 := execSearchRegex(tt, ctx, "documentation")
-	if res2.IsError {
-		t.Fatalf("regex across servers (beta desc): %s", res2.ForLLM)
-	}
-	if !strings.Contains(res2.ForLLM, "mcp_beta_query_docs") {
-		t.Errorf("regex(documentation): expected mcp_beta_query_docs; got: %s", res2.ForLLM)
-	}
-
-	// Pattern matching BOTH servers (the word "mcp" appears in all tool names).
-	res3 := execSearchRegex(tt, ctx, "mcp")
-	if res3.IsError {
-		t.Fatalf("regex across servers (both): %s", res3.ForLLM)
-	}
-	if !strings.Contains(res3.ForLLM, "mcp_alpha_search_repos") {
-		t.Errorf("regex(mcp): expected alpha in results; got: %s", res3.ForLLM)
-	}
-	if !strings.Contains(res3.ForLLM, "mcp_beta_query_docs") {
-		t.Errorf("regex(mcp): expected beta in results; got: %s", res3.ForLLM)
-	}
-}
-
-// TestMultiMCP_Regex_InvalidPattern proves that an invalid regex pattern
-// returns an error and does not promote any tools.
-//
-// Traces to: docs/internal/specs/tool-test-plan-2026-06.md §6 (T2, point 5)
-func TestMultiMCP_Regex_InvalidPattern(t *testing.T) {
-	reg := setupMultiMCPRegistry()
-	tt := newMultiMCPTool(reg)
-	ctx := context.Background()
-
-	res := execSearchRegex(tt, ctx, "[unclosed")
-	if !res.IsError {
-		t.Errorf("invalid regex must return error; got: %s", res.ForLLM)
-	}
-	// Must mention the syntax issue.
-	if !strings.Contains(res.ForLLM, "Invalid regex pattern syntax") {
-		t.Errorf("error message must mention 'Invalid regex pattern syntax'; got: %s", res.ForLLM)
-	}
-
-	// No tools must be promoted after an invalid-pattern error.
-	reg.mu.RLock()
-	alphaEntry := reg.tools["mcp_alpha_search_repos"]
-	betaEntry := reg.tools["mcp_beta_query_docs"]
-	reg.mu.RUnlock()
-	if alphaEntry != nil && alphaEntry.TTL > 0 {
-		t.Errorf("invalid regex must not promote alpha; TTL=%d", alphaEntry.TTL)
-	}
-	if betaEntry != nil && betaEntry.TTL > 0 {
-		t.Errorf("invalid regex must not promote beta; TTL=%d", betaEntry.TTL)
-	}
-}
-
-// TestMultiMCP_Regex_OversizedPattern proves that a pattern longer than
-// MaxRegexPatternLength is rejected with a clear error.
-//
-// Traces to: docs/internal/specs/tool-test-plan-2026-06.md §6 (T2, point 5)
-func TestMultiMCP_Regex_OversizedPattern(t *testing.T) {
-	reg := setupMultiMCPRegistry()
-	tt := newMultiMCPTool(reg)
-	ctx := context.Background()
-
-	longPattern := strings.Repeat("a", MaxRegexPatternLength+1) // 201 chars
-	res := execSearchRegex(tt, ctx, longPattern)
-	if !res.IsError {
-		t.Errorf("oversized pattern (len=%d) must return error; got: %s", len(longPattern), res.ForLLM)
-	}
-	if !strings.Contains(res.ForLLM, "Pattern too long") {
-		t.Errorf("oversized error must say 'Pattern too long'; got: %s", res.ForLLM)
-	}
-}
-
-// TestMultiMCP_Regex_EmptyPattern proves that an empty (whitespace-only)
-// pattern is rejected with a clear error.
-//
-// Traces to: docs/internal/specs/tool-test-plan-2026-06.md §6 (T2, point 5)
-func TestMultiMCP_Regex_EmptyPattern(t *testing.T) {
-	reg := setupMultiMCPRegistry()
-	tt := newMultiMCPTool(reg)
-	ctx := context.Background()
-
-	for _, pattern := range []string{"", "   ", "\t"} {
-		res := execSearchRegex(tt, ctx, pattern)
-		if !res.IsError {
-			t.Errorf("empty/whitespace pattern %q must return error; got: %s", pattern, res.ForLLM)
-		}
-	}
-}
-
 // ─── Part B §6 (6) — Concurrent register + search (no race) ──────────────
 
 // TestMultiMCP_Concurrent_RegisterAndSearch proves there is no data race
-// between concurrent RegisterHidden calls and concurrent BM25 or Regex search calls.
+// between concurrent RegisterHidden calls and concurrent BM25 query calls.
 //
 // Run with: go test -tags goolm,stdjson -race -run TestMultiMCP_Concurrent_RegisterAndSearch
 //
@@ -445,14 +342,12 @@ func TestMultiMCP_Concurrent_RegisterAndSearch(t *testing.T) {
 	reg.RegisterHidden(newMCPToolForTest("beta", "query_docs", "Query documentation"))
 
 	bm25tt := NewToolsTool(reg, 5, 20)
-	regextt := NewToolsTool(reg, 5, 20)
 	ctx := context.Background()
 
 	const (
-		writers  = 4
-		bm25ers  = 4
-		regexers = 4
-		iters    = 50
+		writers = 4
+		readers = 8
+		iters   = 50
 	)
 
 	var wg sync.WaitGroup
@@ -471,26 +366,14 @@ func TestMultiMCP_Concurrent_RegisterAndSearch(t *testing.T) {
 		}()
 	}
 
-	// BM25 searchers: run searches concurrently.
-	for b := 0; b < bm25ers; b++ {
+	// BM25 readers: run queries concurrently (no resolver = no auto-load side-effect).
+	for b := 0; b < readers; b++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iters; i++ {
-				res := execSearchBM25(bm25tt, ctx, "search repositories")
+				res := execBM25Query(bm25tt, ctx, "search repositories")
 				// We don't assert on results here (registry is in flux) — only race detection matters.
-				_ = res
-			}
-		}()
-	}
-
-	// Regex searchers: run searches concurrently.
-	for r := 0; r < regexers; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < iters; i++ {
-				res := execSearchRegex(regextt, ctx, "mcp")
 				_ = res
 			}
 		}()
@@ -501,7 +384,7 @@ func TestMultiMCP_Concurrent_RegisterAndSearch(t *testing.T) {
 }
 
 // TestMultiMCP_Concurrent_PromoteAndSearch proves there is no data race
-// between concurrent PromoteTools/TickTTL and concurrent searches.
+// between concurrent PromoteTools/TickTTL and concurrent BM25 query calls.
 //
 // Run with: go test -tags goolm,stdjson -race -run TestMultiMCP_Concurrent_PromoteAndSearch
 //
@@ -549,7 +432,7 @@ func TestMultiMCP_Concurrent_PromoteAndSearch(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 100; i++ {
-			res := execSearchBM25(tt, ctx, "concurrent test")
+			res := execBM25Query(tt, ctx, "concurrent test")
 			_ = res
 		}
 	}()
@@ -559,32 +442,32 @@ func TestMultiMCP_Concurrent_PromoteAndSearch(t *testing.T) {
 
 // ─── Persistence / content test ───────────────────────────────────────────
 
-// TestMultiMCP_Persistence_SearchThenLoadContent proves that after a search
-// finds a tool and then load promotes it, Get returns the actual tool with the
-// correct Name and Description.
+// TestMultiMCP_Persistence_QueryThenLoadContent proves that after a query
+// finds a tool and the caller then uses names to load it, Get returns the
+// actual tool with the correct Name and Description.
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §6 (T2, point 4)
-func TestMultiMCP_Persistence_SearchThenLoadContent(t *testing.T) {
+func TestMultiMCP_Persistence_QueryThenLoadContent(t *testing.T) {
 	reg := setupMultiMCPRegistry()
 
-	// Step 1: Search finds the tool (read-only, not promoted).
+	// Step 1: Query finds the tool (read-only without resolver, not promoted).
 	tt := newMultiMCPTool(reg)
 	ctx := context.Background()
-	res := execSearchBM25(tt, ctx, "search repositories")
+	res := execBM25Query(tt, ctx, "search repositories")
 	if res.IsError {
-		t.Fatalf("search failed: %s", res.ForLLM)
+		t.Fatalf("query failed: %s", res.ForLLM)
 	}
 	if !strings.Contains(res.ForLLM, "mcp_alpha_search_repos") {
-		t.Fatalf("search must find mcp_alpha_search_repos; got: %s", res.ForLLM)
+		t.Fatalf("query must find mcp_alpha_search_repos; got: %s", res.ForLLM)
 	}
 
-	// After search alone: NOT promoted (search is read-only).
+	// After query alone: NOT promoted (no resolver wired).
 	_, ok := reg.Get("mcp_alpha_search_repos")
 	if ok {
-		t.Error("tool must NOT be Get-able after search alone (search is read-only)")
+		t.Error("tool must NOT be Get-able after query alone (no resolver = no auto-load)")
 	}
 
-	// Step 2: Load promotes the tool.
+	// Step 2: Load by name promotes the tool.
 	reg.PromoteTools([]string{"mcp_alpha_search_repos"}, 5)
 
 	// After promote: Get-able.
@@ -627,37 +510,79 @@ func TestMultiMCP_Rejection_UnknownToolNotPromoted(t *testing.T) {
 	}
 }
 
-// ─── Search is read-only: multi-server assertion ───────────────────────────
+// ─── Query without resolver: read-only (multi-server) ─────────────────────
 
-// TestMultiMCP_SearchIsReadOnly_NeverPromotes proves that after searching across
-// two MCP servers (finding both), neither tool has TTL > 0 (not promoted).
-// This is the critical behavioral change from the old auto-promote-on-search.
-func TestMultiMCP_SearchIsReadOnly_NeverPromotes(t *testing.T) {
+// TestMultiMCP_QueryNoResolver_NeverPromotes proves that without a resolver,
+// tools{query:...} finds tools but does NOT promote them (read-only fallback).
+func TestMultiMCP_QueryNoResolver_NeverPromotes(t *testing.T) {
 	reg := setupMultiMCPRegistry()
-	tt := newMultiMCPTool(reg)
+	tt := newMultiMCPTool(reg) // no resolver set
 	ctx := context.Background()
 
-	// Search for all mcp tools.
-	res := execSearchRegex(tt, ctx, "mcp")
+	// Query for all mcp tools.
+	res := execBM25Query(tt, ctx, "search repositories")
 	if res.IsError {
-		t.Fatalf("search failed: %s", res.ForLLM)
+		t.Fatalf("query failed: %s", res.ForLLM)
 	}
 
-	// Neither tool must have TTL > 0 after a search-only call.
+	// Neither tool must have TTL > 0 after a query-only call with no resolver.
 	reg.mu.RLock()
 	alphaEntry := reg.tools["mcp_alpha_search_repos"]
 	betaEntry := reg.tools["mcp_beta_query_docs"]
 	reg.mu.RUnlock()
 
 	if alphaEntry != nil && alphaEntry.TTL > 0 {
-		t.Errorf("tools(search) must NOT promote mcp_alpha_search_repos; TTL=%d", alphaEntry.TTL)
+		t.Errorf("tools(query) without resolver must NOT promote mcp_alpha_search_repos; TTL=%d", alphaEntry.TTL)
 	}
 	if betaEntry != nil && betaEntry.TTL > 0 {
-		t.Errorf("tools(search) must NOT promote mcp_beta_query_docs; TTL=%d", betaEntry.TTL)
+		t.Errorf("tools(query) without resolver must NOT promote mcp_beta_query_docs; TTL=%d", betaEntry.TTL)
 	}
 
-	// Also verify response tells model to call action='load'.
-	if !strings.Contains(res.ForLLM, "action='load'") {
-		t.Errorf("search response must mention action='load'; got: %s", res.ForLLM)
+	// Response must tell model how to load by name.
+	if !strings.Contains(res.ForLLM, "names") {
+		t.Errorf("query response must mention 'names' for loading; got: %s", res.ForLLM)
+	}
+}
+
+// TestMultiMCP_AutoLoad_TopHitQueryWithResolver proves that with a wired resolver,
+// tools{query:...} auto-loads the top hit and returns schemas.
+func TestMultiMCP_AutoLoad_TopHitQueryWithResolver(t *testing.T) {
+	reg := setupMultiMCPRegistry()
+	tt := newMultiMCPTool(reg)
+
+	var promotedName string
+	tt.SetResolver(
+		func(_ context.Context, name string) bool { return true },
+		func(_ context.Context, names []string) (map[string]any, []string) {
+			sc := make(map[string]any)
+			for _, n := range names {
+				sc[n] = map[string]any{"name": n}
+				promotedName = n
+			}
+			return sc, nil
+		},
+	)
+
+	ctx := context.Background()
+	res := tt.Execute(ctx, map[string]any{"query": "search repositories"})
+	if res.IsError {
+		t.Fatalf("query with resolver failed: %s", res.ForLLM)
+	}
+
+	// The response must contain 'loaded' and 'schemas'.
+	if !strings.Contains(res.ForLLM, `"loaded"`) {
+		t.Errorf("auto-load response must contain 'loaded'; got: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, `"schemas"`) {
+		t.Errorf("auto-load response must contain 'schemas'; got: %s", res.ForLLM)
+	}
+
+	// Top hit (alpha) must be promoted.
+	if promotedName == "" {
+		t.Error("resolver markLoaded must have been called for the top hit")
+	}
+	_, ok := reg.Get(promotedName)
+	if !ok {
+		t.Errorf("auto-loaded top hit %q must be Get-able (promoted)", promotedName)
 	}
 }

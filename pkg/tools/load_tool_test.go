@@ -1,9 +1,9 @@
-// Omnipus — tools(action=load) tests
+// Omnipus — tools(names=load) tests
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Tests for the load action of the unified ToolsTool. Replaces the former
-// load_tool_test.go — all behavioral assertions are preserved.
+// Tests for the names/load path of the unified ToolsTool.
+// All behavioral assertions from the former load_tool_test.go are preserved.
 
 package tools
 
@@ -52,9 +52,9 @@ func newWiredToolsTool(available map[string]struct{}) *ToolsTool {
 	return tt
 }
 
-// execLoad calls tools{action:load,names:names} on tt.
+// execLoad calls tools{names:names} on tt — the param-inferred load path.
 func execLoad(tt *ToolsTool, ctx context.Context, names []any) *ToolResult {
-	return tt.Execute(ctx, map[string]any{"action": "load", "names": names})
+	return tt.Execute(ctx, map[string]any{"names": names})
 }
 
 // parseLoadResult decodes the SilentResult ForLLM JSON into a map.
@@ -226,9 +226,10 @@ func TestToolsTool_Load_Idempotent(t *testing.T) {
 
 func TestToolsTool_Load_MissingNamesParam(t *testing.T) {
 	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
-	r := tt.Execute(context.Background(), map[string]any{"action": "load"})
+	// Neither names nor query provided.
+	r := tt.Execute(context.Background(), map[string]any{})
 	if !r.IsError {
-		t.Error("expected error when 'names' param is missing")
+		t.Error("expected error when neither 'names' nor 'query' param is provided")
 	}
 }
 
@@ -236,15 +237,14 @@ func TestToolsTool_Load_EmptyNamesArray(t *testing.T) {
 	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
 	r := execLoad(tt, context.Background(), []any{})
 	if !r.IsError {
-		t.Error("expected error for empty names array")
+		t.Error("expected error for empty names array (falls through to query path, which is also empty)")
 	}
 }
 
 func TestToolsTool_Load_InvalidNamesType(t *testing.T) {
 	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
 	r := tt.Execute(context.Background(), map[string]any{
-		"action": "load",
-		"names":  "not_an_array",
+		"names": "not_an_array",
 	})
 	if !r.IsError {
 		t.Error("expected error when names is a string instead of []string")
@@ -255,8 +255,7 @@ func TestToolsTool_Load_SliceOfStringsDirect(t *testing.T) {
 	// Some callers may pass []string (not []any) from typed decoding.
 	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
 	r := tt.Execute(context.Background(), map[string]any{
-		"action": "load",
-		"names":  []string{"create_agent"},
+		"names": []string{"create_agent"},
 	})
 	if r.IsError {
 		t.Fatalf("expected success for []string input, got error: %s", r.ForLLM)
@@ -278,8 +277,12 @@ func TestToolsTool_Metadata(t *testing.T) {
 	if desc == "" {
 		t.Error("Description() is empty")
 	}
-	if !strings.Contains(desc, "search") || !strings.Contains(desc, "load") {
-		t.Errorf("Description() must mention both 'search' and 'load', got: %q", desc)
+	// New description must mention both 'names' and 'query'.
+	if !strings.Contains(desc, "names") {
+		t.Errorf("Description() must mention 'names', got: %q", desc)
+	}
+	if !strings.Contains(desc, "query") {
+		t.Errorf("Description() must mention 'query', got: %q", desc)
 	}
 	params := tt.Parameters()
 	if params == nil {
@@ -289,27 +292,25 @@ func TestToolsTool_Metadata(t *testing.T) {
 	if !ok {
 		t.Fatal("Parameters() missing 'properties'")
 	}
-	if _, ok := props["action"]; !ok {
-		t.Error("Parameters() missing 'action' property")
-	}
+	// New schema: names and query only; no action, no mode.
 	if _, ok := props["names"]; !ok {
 		t.Error("Parameters() missing 'names' property")
 	}
 	if _, ok := props["query"]; !ok {
 		t.Error("Parameters() missing 'query' property")
 	}
-	if _, ok := props["mode"]; !ok {
-		t.Error("Parameters() missing 'mode' property")
+	if _, ok := props["action"]; ok {
+		t.Error("Parameters() must NOT contain 'action' property (removed)")
 	}
+	if _, ok := props["mode"]; ok {
+		t.Error("Parameters() must NOT contain 'mode' property (removed)")
+	}
+	// New schema: no required fields (both names and query are optional at schema level).
 	req, _ := params["required"].([]string)
-	found := false
 	for _, r := range req {
 		if r == "action" {
-			found = true
+			t.Error("'action' must not be in required list (removed)")
 		}
-	}
-	if !found {
-		t.Error("'action' not in required list")
 	}
 }
 
@@ -321,7 +322,6 @@ func TestToolsTool_TierIsInfra(t *testing.T) {
 
 func TestToolsTool_NotInManifest(t *testing.T) {
 	// A manifest built with the 'tools' infra tool present should not list it as an entry.
-	// The manifest header prose now says "action='load'" instead of mentioning "tools" by name.
 	toolList := []Tool{
 		NewToolsTool(nil, 5, 10),
 		&fakeManifestTool{name: "create_agent", desc: "Create.", cat: CategoryAgents},
@@ -332,26 +332,15 @@ func TestToolsTool_NotInManifest(t *testing.T) {
 	}
 }
 
-func TestToolsTool_UnknownAction(t *testing.T) {
-	tt := NewToolsTool(nil, 5, 10)
-	r := tt.Execute(context.Background(), map[string]any{"action": "explode"})
-	if !r.IsError {
-		t.Error("expected error for unknown action")
-	}
-	if !strings.Contains(r.ForLLM, "unknown action") {
-		t.Errorf("expected 'unknown action' in error, got: %s", r.ForLLM)
-	}
-}
-
-func TestToolsTool_MissingAction(t *testing.T) {
+func TestToolsTool_NeitherNamesNorQuery_Error(t *testing.T) {
 	tt := NewToolsTool(nil, 5, 10)
 	r := tt.Execute(context.Background(), map[string]any{})
 	if !r.IsError {
-		t.Error("expected error when action is missing")
+		t.Error("expected error when neither names nor query provided")
 	}
 }
 
-// TestToolsTool_Load_PromotesHiddenTool proves that action=load promotes a
+// TestToolsTool_Load_PromotesHiddenTool proves that tools{names:[...]} promotes a
 // hidden-registry tool (RegisterHidden) so it becomes Get-able via PromoteTools,
 // AND records it in the session loaded-set via markLoaded.
 func TestToolsTool_Load_PromotesHiddenTool(t *testing.T) {
@@ -389,7 +378,7 @@ func TestToolsTool_Load_PromotesHiddenTool(t *testing.T) {
 	// After load: must be Get-able (promoted by PromoteTools).
 	_, ok = reg.Get("mcp_stub_hidden")
 	if !ok {
-		t.Error("hidden tool must be Get-able after tools(action=load) (PromoteTools called)")
+		t.Error("hidden tool must be Get-able after tools{names:[...]} (PromoteTools called)")
 	}
 
 	// markLoaded closure must have been called.
@@ -404,45 +393,42 @@ func TestToolsTool_Load_PromotesHiddenTool(t *testing.T) {
 	}
 }
 
-// TestToolsTool_Search_DoesNotPromote proves that action=search is read-only:
-// it finds tools by keyword but does NOT call PromoteTools on the results.
-func TestToolsTool_Search_DoesNotPromote(t *testing.T) {
+// TestToolsTool_Query_DoesNotPromoteWithoutResolver proves that tools{query:...}
+// without a resolver is read-only: it finds tools by keyword but does NOT
+// call PromoteTools.
+func TestToolsTool_Query_DoesNotPromoteWithoutResolver(t *testing.T) {
 	reg := NewToolRegistry()
-	reg.RegisterHidden(&mockSearchableTool{name: "mcp_findme", desc: "find me with search"})
+	reg.RegisterHidden(&mockSearchableTool{name: "mcp_findme2", desc: "find me with query"})
 
 	tt := NewToolsTool(reg, 5, 10)
-	// No resolver needed for search.
+	// No resolver needed for search without auto-load.
 
 	r := tt.Execute(context.Background(), map[string]any{
-		"action": "search",
-		"query":  "find me",
+		"query": "find me",
 	})
 	if r.IsError {
-		t.Fatalf("tools(search) failed: %s", r.ForLLM)
+		t.Fatalf("tools(query) failed: %s", r.ForLLM)
 	}
-	if !strings.Contains(r.ForLLM, "mcp_findme") {
-		t.Errorf("tools(search) must return the matching tool name; got: %s", r.ForLLM)
+	if !strings.Contains(r.ForLLM, "mcp_findme2") {
+		t.Errorf("tools(query) must return the matching tool name; got: %s", r.ForLLM)
 	}
 
 	// Tool must NOT be promoted (TTL must still be 0 after search).
 	reg.mu.RLock()
-	entry := reg.tools["mcp_findme"]
+	entry := reg.tools["mcp_findme2"]
 	reg.mu.RUnlock()
 	if entry != nil && entry.TTL != 0 {
-		t.Errorf("tools(search) must NOT promote (TTL must stay 0); got TTL=%d", entry.TTL)
+		t.Errorf("tools(query) without resolver must NOT promote (TTL must stay 0); got TTL=%d", entry.TTL)
 	}
 
 	// Tool must NOT be Get-able (not promoted).
-	_, ok := reg.Get("mcp_findme")
+	_, ok := reg.Get("mcp_findme2")
 	if ok {
-		t.Error("tools(search) must NOT make the tool Get-able (no promote)")
+		t.Error("tools(query) without resolver must NOT make the tool Get-able (no promote)")
 	}
 
-	// The response must tell the model to call load, not announce unlocked tools.
+	// The response must NOT say UNLOCKED (old behavior).
 	if strings.Contains(r.ForLLM, "UNLOCKED") {
-		t.Error("tools(search) response must NOT say 'UNLOCKED' (that was the old promote-on-search behavior)")
-	}
-	if !strings.Contains(r.ForLLM, "action='load'") {
-		t.Errorf("tools(search) response must tell model to use action='load'; got: %s", r.ForLLM)
+		t.Error("tools(query) response must NOT say 'UNLOCKED' (that was the old promote-on-search behavior)")
 	}
 }

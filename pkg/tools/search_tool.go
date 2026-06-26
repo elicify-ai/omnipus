@@ -1,14 +1,7 @@
 package tools
 
 import (
-	"fmt"
-	"regexp"
-
 	"github.com/dapicom-ai/omnipus/pkg/utils"
-)
-
-const (
-	MaxRegexPatternLength = 200
 )
 
 // ToolSearchResult represents the result returned to the LLM.
@@ -17,44 +10,6 @@ const (
 type ToolSearchResult struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-}
-
-func (r *ToolRegistry) SearchRegex(pattern string, maxSearchResults int) ([]ToolSearchResult, error) {
-	if maxSearchResults <= 0 {
-		return nil, nil
-	}
-
-	regex, err := regexp.Compile("(?i)" + pattern)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compile regex pattern %q: %w", pattern, err)
-	}
-
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var results []ToolSearchResult
-
-	// Iterate in sorted order for deterministic results across calls.
-	for _, name := range r.sortedToolNames() {
-		entry := r.tools[name]
-		// Search only among the hidden tools (Core tools are already visible)
-		if !entry.IsCore {
-			// Directly call interface methods! No reflection/unmarshalling needed.
-			desc := entry.Tool.Description()
-
-			if regex.MatchString(name) || regex.MatchString(desc) {
-				results = append(results, ToolSearchResult{
-					Name:        name,
-					Description: desc,
-				})
-				if len(results) >= maxSearchResults {
-					break // Stop searching once we hit the max! Saves CPU.
-				}
-			}
-		}
-	}
-
-	return results, nil
 }
 
 // Lightweight internal type used as corpus document for BM25.
