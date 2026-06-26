@@ -30,8 +30,8 @@ type infraToolGetter interface {
 	Get(name string) (tools.Tool, bool)
 }
 
-// ensureInfraToolsExecutable force-allows the manifest infra tools (load_tool,
-// search_tools_*) for execution when compressed mode is on. Infra tools are
+// ensureInfraToolsExecutable force-allows the manifest infra tool (`tools`)
+// for execution when compressed mode is on. Infra tools are
 // registration-gated, not policy-gated: a deny-by-default agent never lists them
 // in its allow-set, so FilterToolsByPolicy omits them from policyMap and the
 // execution gate (resolveToolPolicyAtExec) would deny load_tool even though the
@@ -60,15 +60,15 @@ func ensureInfraToolsExecutable(compressed bool, agentTools infraToolGetter, pol
 // lazy tools that have already been loaded for this session.
 //
 //   - full (ManifestFull): always sent — high-frequency core tools.
-//   - infra (ManifestInfra): load_tool + search_tools_*; always sent so the
+//   - infra (ManifestInfra): the unified `tools` tool; always sent so the
 //     agent can always discover and load its lazy tools.
 //   - lazy (ManifestLazy): sent ONLY if in the session's loaded set.
 //
 // Critical invariant: infra tools are FORCE-INCLUDED from the agent's full
 // registry (ts.agent.Tools) even when FilterToolsByPolicy removed them.
-// A deny-by-default agent (e.g. Ava) would otherwise lose load_tool, making
+// A deny-by-default agent (e.g. Ava) would otherwise lose `tools`, making
 // lazy tools permanently unreachable. Infra tools are registration-gated (they
-// are only present when Compressed=true), not policy-gated.
+// are only present when Compressed=true or MCP discovery is on), not policy-gated.
 //
 // When cfg.Tools.Manifest.Compressed is false, the caller must use
 // tools.ToolsToProviderDefs directly — this helper is only called on the

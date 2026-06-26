@@ -1,6 +1,9 @@
-// Omnipus — load_tool tests
+// Omnipus — tools(action=load) tests
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
+
+// Tests for the load action of the unified ToolsTool. Replaces the former
+// load_tool_test.go — all behavioral assertions are preserved.
 
 package tools
 
@@ -41,11 +44,17 @@ func fakeResolver(available map[string]struct{}) (
 	return
 }
 
-func newWiredLoadTool(available map[string]struct{}) *LoadTool {
-	t := NewLoadTool()
+// newWiredToolsTool constructs a ToolsTool with resolver wired (no real registry).
+func newWiredToolsTool(available map[string]struct{}) *ToolsTool {
+	tt := NewToolsTool(nil, 5, 10)
 	cl, ml := fakeResolver(available)
-	t.SetResolver(cl, ml)
-	return t
+	tt.SetResolver(cl, ml)
+	return tt
+}
+
+// execLoad calls tools{action:load,names:names} on tt.
+func execLoad(tt *ToolsTool, ctx context.Context, names []any) *ToolResult {
+	return tt.Execute(ctx, map[string]any{"action": "load", "names": names})
 }
 
 // parseLoadResult decodes the SilentResult ForLLM JSON into a map.
@@ -53,7 +62,7 @@ func parseLoadResult(t *testing.T, r *ToolResult) map[string]any {
 	t.Helper()
 	var out map[string]any
 	if err := json.Unmarshal([]byte(r.ForLLM), &out); err != nil {
-		t.Fatalf("failed to parse load_tool result JSON: %v\nraw: %s", err, r.ForLLM)
+		t.Fatalf("failed to parse tools(load) result JSON: %v\nraw: %s", err, r.ForLLM)
 	}
 	return out
 }
@@ -107,23 +116,21 @@ func schemas(t *testing.T, m map[string]any) map[string]any {
 
 // --- Tests ---
 
-func TestLoadTool_NilResolver(t *testing.T) {
-	lt := NewLoadTool()
+func TestToolsTool_Load_NilResolver(t *testing.T) {
+	tt := NewToolsTool(nil, 5, 10)
 	// No SetResolver called.
-	r := lt.Execute(context.Background(), map[string]any{"names": []any{"create_agent"}})
+	r := execLoad(tt, context.Background(), []any{"create_agent"})
 	if !r.IsError {
 		t.Error("expected error result when resolver is nil")
 	}
-	if !strings.Contains(r.ForLLM, "not wired") {
-		t.Errorf("expected 'not wired' in error message, got: %s", r.ForLLM)
+	if !strings.Contains(r.ForLLM, "resolver not set") {
+		t.Errorf("expected 'resolver not set' in error message, got: %s", r.ForLLM)
 	}
 }
 
-func TestLoadTool_ValidSingleName(t *testing.T) {
-	lt := newWiredLoadTool(map[string]struct{}{"create_agent": {}})
-	r := lt.Execute(context.Background(), map[string]any{
-		"names": []any{"create_agent"},
-	})
+func TestToolsTool_Load_ValidSingleName(t *testing.T) {
+	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
+	r := execLoad(tt, context.Background(), []any{"create_agent"})
 	if r.IsError {
 		t.Fatalf("expected success, got error: %s", r.ForLLM)
 	}
@@ -142,16 +149,14 @@ func TestLoadTool_ValidSingleName(t *testing.T) {
 	}
 }
 
-func TestLoadTool_MultiName(t *testing.T) {
+func TestToolsTool_Load_MultiName(t *testing.T) {
 	avail := map[string]struct{}{
 		"create_agent":     {},
 		"browser_navigate": {},
 		"list_agents":      {},
 	}
-	lt := newWiredLoadTool(avail)
-	r := lt.Execute(context.Background(), map[string]any{
-		"names": []any{"create_agent", "browser_navigate", "list_agents"},
-	})
+	tt := newWiredToolsTool(avail)
+	r := execLoad(tt, context.Background(), []any{"create_agent", "browser_navigate", "list_agents"})
 	if r.IsError {
 		t.Fatalf("expected success, got error: %s", r.ForLLM)
 	}
@@ -166,11 +171,9 @@ func TestLoadTool_MultiName(t *testing.T) {
 	}
 }
 
-func TestLoadTool_UnknownNameRejected(t *testing.T) {
-	lt := newWiredLoadTool(map[string]struct{}{"create_agent": {}})
-	r := lt.Execute(context.Background(), map[string]any{
-		"names": []any{"no_such_tool"},
-	})
+func TestToolsTool_Load_UnknownNameRejected(t *testing.T) {
+	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
+	r := execLoad(tt, context.Background(), []any{"no_such_tool"})
 	if !r.IsError {
 		t.Error("expected error result for unknown tool name")
 	}
@@ -179,21 +182,17 @@ func TestLoadTool_UnknownNameRejected(t *testing.T) {
 	}
 }
 
-func TestLoadTool_AllRejectedIsError(t *testing.T) {
-	lt := newWiredLoadTool(map[string]struct{}{})
-	r := lt.Execute(context.Background(), map[string]any{
-		"names": []any{"ghost_tool", "phantom_tool"},
-	})
+func TestToolsTool_Load_AllRejectedIsError(t *testing.T) {
+	tt := newWiredToolsTool(map[string]struct{}{})
+	r := execLoad(tt, context.Background(), []any{"ghost_tool", "phantom_tool"})
 	if !r.IsError {
 		t.Error("expected error when all names are rejected")
 	}
 }
 
-func TestLoadTool_PartialRejection(t *testing.T) {
-	lt := newWiredLoadTool(map[string]struct{}{"create_agent": {}})
-	r := lt.Execute(context.Background(), map[string]any{
-		"names": []any{"create_agent", "unknown_tool"},
-	})
+func TestToolsTool_Load_PartialRejection(t *testing.T) {
+	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
+	r := execLoad(tt, context.Background(), []any{"create_agent", "unknown_tool"})
 	if r.IsError {
 		t.Fatalf("expected success when at least one name loads, got error: %s", r.ForLLM)
 	}
@@ -214,73 +213,75 @@ func TestLoadTool_PartialRejection(t *testing.T) {
 	}
 }
 
-func TestLoadTool_Idempotent(t *testing.T) {
+func TestToolsTool_Load_Idempotent(t *testing.T) {
 	// Re-loading an already-loaded tool should succeed (not error).
-	lt := newWiredLoadTool(map[string]struct{}{"create_agent": {}})
+	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
 	for i := range 3 {
-		r := lt.Execute(context.Background(), map[string]any{
-			"names": []any{"create_agent"},
-		})
+		r := execLoad(tt, context.Background(), []any{"create_agent"})
 		if r.IsError {
 			t.Errorf("iteration %d: expected idempotent success, got error: %s", i, r.ForLLM)
 		}
 	}
 }
 
-func TestLoadTool_MissingNamesParam(t *testing.T) {
-	lt := newWiredLoadTool(map[string]struct{}{"create_agent": {}})
-	r := lt.Execute(context.Background(), map[string]any{})
+func TestToolsTool_Load_MissingNamesParam(t *testing.T) {
+	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
+	r := tt.Execute(context.Background(), map[string]any{"action": "load"})
 	if !r.IsError {
 		t.Error("expected error when 'names' param is missing")
 	}
 }
 
-func TestLoadTool_EmptyNamesArray(t *testing.T) {
-	lt := newWiredLoadTool(map[string]struct{}{"create_agent": {}})
-	r := lt.Execute(context.Background(), map[string]any{
-		"names": []any{},
-	})
+func TestToolsTool_Load_EmptyNamesArray(t *testing.T) {
+	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
+	r := execLoad(tt, context.Background(), []any{})
 	if !r.IsError {
 		t.Error("expected error for empty names array")
 	}
 }
 
-func TestLoadTool_InvalidNamesType(t *testing.T) {
-	lt := newWiredLoadTool(map[string]struct{}{"create_agent": {}})
-	r := lt.Execute(context.Background(), map[string]any{
-		"names": "not_an_array",
+func TestToolsTool_Load_InvalidNamesType(t *testing.T) {
+	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
+	r := tt.Execute(context.Background(), map[string]any{
+		"action": "load",
+		"names":  "not_an_array",
 	})
 	if !r.IsError {
 		t.Error("expected error when names is a string instead of []string")
 	}
 }
 
-func TestLoadTool_SliceOfStringsDirect(t *testing.T) {
+func TestToolsTool_Load_SliceOfStringsDirect(t *testing.T) {
 	// Some callers may pass []string (not []any) from typed decoding.
-	lt := newWiredLoadTool(map[string]struct{}{"create_agent": {}})
-	r := lt.Execute(context.Background(), map[string]any{
-		"names": []string{"create_agent"},
+	tt := newWiredToolsTool(map[string]struct{}{"create_agent": {}})
+	r := tt.Execute(context.Background(), map[string]any{
+		"action": "load",
+		"names":  []string{"create_agent"},
 	})
 	if r.IsError {
 		t.Fatalf("expected success for []string input, got error: %s", r.ForLLM)
 	}
 }
 
-func TestLoadTool_Metadata(t *testing.T) {
-	lt := NewLoadTool()
-	if lt.Name() != "load_tool" {
-		t.Errorf("Name() = %q, want %q", lt.Name(), "load_tool")
+func TestToolsTool_Metadata(t *testing.T) {
+	tt := NewToolsTool(nil, 5, 10)
+	if tt.Name() != "tools" {
+		t.Errorf("Name() = %q, want %q", tt.Name(), "tools")
 	}
-	if lt.Scope() != ScopeGeneral {
-		t.Errorf("Scope() = %q, want ScopeGeneral", lt.Scope())
+	if tt.Scope() != ScopeGeneral {
+		t.Errorf("Scope() = %q, want ScopeGeneral", tt.Scope())
 	}
-	if lt.Category() != CategoryToolDiscovery {
-		t.Errorf("Category() = %q, want CategoryToolDiscovery", lt.Category())
+	if tt.Category() != CategoryToolDiscovery {
+		t.Errorf("Category() = %q, want CategoryToolDiscovery", tt.Category())
 	}
-	if lt.Description() == "" {
+	desc := tt.Description()
+	if desc == "" {
 		t.Error("Description() is empty")
 	}
-	params := lt.Parameters()
+	if !strings.Contains(desc, "search") || !strings.Contains(desc, "load") {
+		t.Errorf("Description() must mention both 'search' and 'load', got: %q", desc)
+	}
+	params := tt.Parameters()
 	if params == nil {
 		t.Fatal("Parameters() returned nil")
 	}
@@ -288,37 +289,160 @@ func TestLoadTool_Metadata(t *testing.T) {
 	if !ok {
 		t.Fatal("Parameters() missing 'properties'")
 	}
+	if _, ok := props["action"]; !ok {
+		t.Error("Parameters() missing 'action' property")
+	}
 	if _, ok := props["names"]; !ok {
 		t.Error("Parameters() missing 'names' property")
+	}
+	if _, ok := props["query"]; !ok {
+		t.Error("Parameters() missing 'query' property")
+	}
+	if _, ok := props["mode"]; !ok {
+		t.Error("Parameters() missing 'mode' property")
 	}
 	req, _ := params["required"].([]string)
 	found := false
 	for _, r := range req {
-		if r == "names" {
+		if r == "action" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("'names' not in required list")
+		t.Error("'action' not in required list")
 	}
 }
 
-func TestLoadTool_TierIsInfra(t *testing.T) {
-	if ToolManifestTier("load_tool") != ManifestInfra {
-		t.Error("load_tool must have ManifestInfra tier")
+func TestToolsTool_TierIsInfra(t *testing.T) {
+	if ToolManifestTier("tools") != ManifestInfra {
+		t.Error("'tools' must have ManifestInfra tier")
 	}
 }
 
-func TestLoadTool_NotInManifest(t *testing.T) {
-	// A manifest built with load_tool present should not list it as an entry.
-	// Note: the manifest header prose mentions "load_tool" by name (that's intentional),
-	// so we check for the bullet-entry format "  - load_tool".
-	tools := []Tool{
-		NewLoadTool(),
+func TestToolsTool_NotInManifest(t *testing.T) {
+	// A manifest built with the 'tools' infra tool present should not list it as an entry.
+	// The manifest header prose now says "action='load'" instead of mentioning "tools" by name.
+	toolList := []Tool{
+		NewToolsTool(nil, 5, 10),
 		&fakeManifestTool{name: "create_agent", desc: "Create.", cat: CategoryAgents},
 	}
-	got := BuildCompressedManifest(tools, nil)
-	if strings.Contains(got, "  - load_tool") {
-		t.Error("BuildCompressedManifest must NOT include load_tool as a manifest entry")
+	got := BuildCompressedManifest(toolList, nil)
+	if strings.Contains(got, "  - tools") {
+		t.Error("BuildCompressedManifest must NOT include 'tools' (infra) as a manifest entry")
+	}
+}
+
+func TestToolsTool_UnknownAction(t *testing.T) {
+	tt := NewToolsTool(nil, 5, 10)
+	r := tt.Execute(context.Background(), map[string]any{"action": "explode"})
+	if !r.IsError {
+		t.Error("expected error for unknown action")
+	}
+	if !strings.Contains(r.ForLLM, "unknown action") {
+		t.Errorf("expected 'unknown action' in error, got: %s", r.ForLLM)
+	}
+}
+
+func TestToolsTool_MissingAction(t *testing.T) {
+	tt := NewToolsTool(nil, 5, 10)
+	r := tt.Execute(context.Background(), map[string]any{})
+	if !r.IsError {
+		t.Error("expected error when action is missing")
+	}
+}
+
+// TestToolsTool_Load_PromotesHiddenTool proves that action=load promotes a
+// hidden-registry tool (RegisterHidden) so it becomes Get-able via PromoteTools,
+// AND records it in the session loaded-set via markLoaded.
+func TestToolsTool_Load_PromotesHiddenTool(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.RegisterHidden(&mockSearchableTool{name: "mcp_stub_hidden", desc: "hidden MCP stub"})
+
+	// Before load: not Get-able (TTL=0).
+	_, ok := reg.Get("mcp_stub_hidden")
+	if ok {
+		t.Fatal("hidden tool must not be Get-able before load")
+	}
+
+	// Wire canLoad to accept it and markLoaded to return a stub schema.
+	var markedLoaded []string
+	tt := NewToolsTool(reg, 5, 10)
+	tt.SetResolver(
+		func(_ context.Context, name string) bool {
+			return name == "mcp_stub_hidden"
+		},
+		func(_ context.Context, names []string) (map[string]any, []string) {
+			markedLoaded = append(markedLoaded, names...)
+			schemas := make(map[string]any, len(names))
+			for _, n := range names {
+				schemas[n] = map[string]any{"name": n}
+			}
+			return schemas, nil
+		},
+	)
+
+	r := execLoad(tt, context.Background(), []any{"mcp_stub_hidden"})
+	if r.IsError {
+		t.Fatalf("tools(load) failed for hidden tool: %s", r.ForLLM)
+	}
+
+	// After load: must be Get-able (promoted by PromoteTools).
+	_, ok = reg.Get("mcp_stub_hidden")
+	if !ok {
+		t.Error("hidden tool must be Get-able after tools(action=load) (PromoteTools called)")
+	}
+
+	// markLoaded closure must have been called.
+	found := false
+	for _, n := range markedLoaded {
+		if n == "mcp_stub_hidden" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("markLoaded was not called for mcp_stub_hidden")
+	}
+}
+
+// TestToolsTool_Search_DoesNotPromote proves that action=search is read-only:
+// it finds tools by keyword but does NOT call PromoteTools on the results.
+func TestToolsTool_Search_DoesNotPromote(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.RegisterHidden(&mockSearchableTool{name: "mcp_findme", desc: "find me with search"})
+
+	tt := NewToolsTool(reg, 5, 10)
+	// No resolver needed for search.
+
+	r := tt.Execute(context.Background(), map[string]any{
+		"action": "search",
+		"query":  "find me",
+	})
+	if r.IsError {
+		t.Fatalf("tools(search) failed: %s", r.ForLLM)
+	}
+	if !strings.Contains(r.ForLLM, "mcp_findme") {
+		t.Errorf("tools(search) must return the matching tool name; got: %s", r.ForLLM)
+	}
+
+	// Tool must NOT be promoted (TTL must still be 0 after search).
+	reg.mu.RLock()
+	entry := reg.tools["mcp_findme"]
+	reg.mu.RUnlock()
+	if entry != nil && entry.TTL != 0 {
+		t.Errorf("tools(search) must NOT promote (TTL must stay 0); got TTL=%d", entry.TTL)
+	}
+
+	// Tool must NOT be Get-able (not promoted).
+	_, ok := reg.Get("mcp_findme")
+	if ok {
+		t.Error("tools(search) must NOT make the tool Get-able (no promote)")
+	}
+
+	// The response must tell the model to call load, not announce unlocked tools.
+	if strings.Contains(r.ForLLM, "UNLOCKED") {
+		t.Error("tools(search) response must NOT say 'UNLOCKED' (that was the old promote-on-search behavior)")
+	}
+	if !strings.Contains(r.ForLLM, "action='load'") {
+		t.Errorf("tools(search) response must tell model to use action='load'; got: %s", r.ForLLM)
 	}
 }

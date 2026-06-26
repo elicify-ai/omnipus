@@ -52,78 +52,98 @@ func setupPopulatedRegistry() *ToolRegistry {
 	return reg
 }
 
-func TestRegexSearchTool_Execute(t *testing.T) {
+// newSearchTool builds a ToolsTool configured for search tests.
+func newSearchTool(reg *ToolRegistry, ttl, max int) *ToolsTool {
+	return NewToolsTool(reg, ttl, max)
+}
+
+// execSearchRegex calls tools{action:search,mode:regex,query:pattern}.
+func execSearchRegex(tt *ToolsTool, ctx context.Context, pattern string) *ToolResult {
+	return tt.Execute(ctx, map[string]any{
+		"action": "search",
+		"mode":   "regex",
+		"query":  pattern,
+	})
+}
+
+// execSearchBM25 calls tools{action:search,mode:bm25,query:q} (or just query — default bm25).
+func execSearchBM25(tt *ToolsTool, ctx context.Context, query string) *ToolResult {
+	return tt.Execute(ctx, map[string]any{
+		"action": "search",
+		"query":  query,
+	})
+}
+
+func TestToolsTool_Search_Regex_Execute(t *testing.T) {
 	reg := setupPopulatedRegistry()
-	tool := NewRegexSearchTool(reg, 5, 10)
+	tt := newSearchTool(reg, 5, 10)
 	ctx := context.Background()
 
 	t.Run("Empty Pattern Error", func(t *testing.T) {
-		res := tool.Execute(ctx, map[string]any{})
-		if !res.IsError || !strings.Contains(res.ForLLM, "Missing or invalid 'pattern'") {
-			t.Errorf("Expected missing pattern error, got: %v", res.ForLLM)
+		res := tt.Execute(ctx, map[string]any{"action": "search", "mode": "regex"})
+		if !res.IsError || !strings.Contains(res.ForLLM, "missing required parameter") {
+			t.Errorf("Expected missing query error, got: %v", res.ForLLM)
 		}
 	})
 
 	t.Run("Invalid Regex Syntax", func(t *testing.T) {
-		res := tool.Execute(ctx, map[string]any{"pattern": "[unclosed"})
+		res := execSearchRegex(tt, ctx, "[unclosed")
 		if !res.IsError || !strings.Contains(res.ForLLM, "Invalid regex pattern syntax") {
 			t.Errorf("Expected regex syntax error, got: %v", res.ForLLM)
 		}
 	})
 
 	t.Run("No Match Found", func(t *testing.T) {
-		res := tool.Execute(ctx, map[string]any{"pattern": "alien"})
+		res := execSearchRegex(tt, ctx, "alien")
 		if res.IsError || !strings.Contains(res.ForLLM, "No tools found matching") {
 			t.Errorf("Expected 'no tools found' message, got: %v", res.ForLLM)
 		}
 	})
 
-	t.Run("Successful Match & Promotion", func(t *testing.T) {
-		res := tool.Execute(ctx, map[string]any{"pattern": "system"})
+	t.Run("Successful Match — Read-Only (no promote)", func(t *testing.T) {
+		res := execSearchRegex(tt, ctx, "system")
 
 		if res.IsError {
 			t.Fatalf("Unexpected error: %v", res.ForLLM)
 		}
-		if !strings.Contains(res.ForLLM, "SUCCESS: These tools have been temporarily UNLOCKED") {
-			t.Errorf("Expected success string, got: %v", res.ForLLM)
-		}
 		if !strings.Contains(res.ForLLM, "mcp_read_file") {
 			t.Errorf("Expected 'mcp_read_file' in results")
 		}
-
-		// Verify that the TTL has been updated for the tools found
+		// Must NOT promote tools (search is read-only).
 		reg.mu.RLock()
 		defer reg.mu.RUnlock()
-		if reg.tools["mcp_read_file"].TTL != 5 {
-			t.Errorf("Expected TTL of 'mcp_read_file' to be promoted to 5, got %d", reg.tools["mcp_read_file"].TTL)
+		if reg.tools["mcp_read_file"] != nil && reg.tools["mcp_read_file"].TTL != 0 {
+			t.Errorf("tools(search/regex) must NOT promote mcp_read_file (TTL must be 0, got %d)",
+				reg.tools["mcp_read_file"].TTL)
 		}
-		if reg.tools["mcp_fetch_net"].TTL != 0 {
-			t.Errorf("Expected 'mcp_fetch_net' to NOT be promoted (TTL=0)")
+		if reg.tools["mcp_fetch_net"] != nil && reg.tools["mcp_fetch_net"].TTL != 0 {
+			t.Errorf("tools(search/regex) must NOT promote mcp_fetch_net (TTL must be 0, got %d)",
+				reg.tools["mcp_fetch_net"].TTL)
 		}
 	})
 }
 
-func TestBM25SearchTool_Execute(t *testing.T) {
+func TestToolsTool_Search_BM25_Execute(t *testing.T) {
 	reg := setupPopulatedRegistry()
-	tool := NewBM25SearchTool(reg, 3, 10)
+	tt := newSearchTool(reg, 3, 10)
 	ctx := context.Background()
 
 	t.Run("Empty Query Error", func(t *testing.T) {
-		res := tool.Execute(ctx, map[string]any{"query": "   "})
-		if !res.IsError || !strings.Contains(res.ForLLM, "Missing or invalid 'query'") {
+		res := tt.Execute(ctx, map[string]any{"action": "search", "query": "   "})
+		if !res.IsError || !strings.Contains(res.ForLLM, "missing required parameter") {
 			t.Errorf("Expected missing query error, got: %v", res.ForLLM)
 		}
 	})
 
 	t.Run("No Match Found", func(t *testing.T) {
-		res := tool.Execute(ctx, map[string]any{"query": "aliens spaceships"})
+		res := execSearchBM25(tt, ctx, "aliens spaceships")
 		if res.IsError || !strings.Contains(res.ForLLM, "No tools found matching") {
 			t.Errorf("Expected 'no tools found', got: %v", res.ForLLM)
 		}
 	})
 
-	t.Run("Successful Match & Promotion", func(t *testing.T) {
-		res := tool.Execute(ctx, map[string]any{"query": "read files"})
+	t.Run("Successful Match — Read-Only (no promote)", func(t *testing.T) {
+		res := execSearchBM25(tt, ctx, "read files")
 
 		if res.IsError {
 			t.Fatalf("Unexpected error: %v", res.ForLLM)
@@ -131,22 +151,23 @@ func TestBM25SearchTool_Execute(t *testing.T) {
 		if !strings.Contains(res.ForLLM, "mcp_read_file") {
 			t.Errorf("Expected 'mcp_read_file' in BM25 results")
 		}
-
+		// Must NOT promote (search is read-only after tools-tool unification).
 		reg.mu.RLock()
 		defer reg.mu.RUnlock()
-		if reg.tools["mcp_read_file"].TTL != 3 {
-			t.Errorf("Expected TTL of 'mcp_read_file' to be promoted to 3")
+		if reg.tools["mcp_read_file"] != nil && reg.tools["mcp_read_file"].TTL != 0 {
+			t.Errorf("tools(search/bm25) must NOT promote mcp_read_file (TTL must be 0, got %d)",
+				reg.tools["mcp_read_file"].TTL)
 		}
 	})
 }
 
-func TestRegexSearchTool_PatternTooLong(t *testing.T) {
+func TestToolsTool_Search_Regex_PatternTooLong(t *testing.T) {
 	reg := setupPopulatedRegistry()
-	tool := NewRegexSearchTool(reg, 5, 10)
+	tt := newSearchTool(reg, 5, 10)
 	ctx := context.Background()
 
 	longPattern := strings.Repeat("a", MaxRegexPatternLength+1)
-	res := tool.Execute(ctx, map[string]any{"pattern": longPattern})
+	res := execSearchRegex(tt, ctx, longPattern)
 	if !res.IsError || !strings.Contains(res.ForLLM, "Pattern too long") {
 		t.Errorf("Expected pattern too long error, got: %v", res.ForLLM)
 	}
@@ -292,11 +313,11 @@ func TestBM25CacheInvalidation(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "tool_alpha", desc: "alpha functionality"})
 
-	tool := NewBM25SearchTool(reg, 5, 10)
+	tt := newSearchTool(reg, 5, 10)
 	ctx := context.Background()
 
 	// First search should find tool_alpha
-	res := tool.Execute(ctx, map[string]any{"query": "alpha"})
+	res := execSearchBM25(tt, ctx, "alpha")
 	if !strings.Contains(res.ForLLM, "tool_alpha") {
 		t.Fatalf("Expected 'tool_alpha' in first search, got: %v", res.ForLLM)
 	}
@@ -305,7 +326,7 @@ func TestBM25CacheInvalidation(t *testing.T) {
 	reg.RegisterHidden(&mockSearchableTool{name: "tool_beta", desc: "beta functionality"})
 
 	// Cache should be invalidated; new tool should be findable
-	res = tool.Execute(ctx, map[string]any{"query": "beta"})
+	res = execSearchBM25(tt, ctx, "beta")
 	if !strings.Contains(res.ForLLM, "tool_beta") {
 		t.Errorf("Expected 'tool_beta' after cache invalidation, got: %v", res.ForLLM)
 	}
@@ -338,4 +359,24 @@ func TestPromoteTools_ConcurrentWithTickTTL(t *testing.T) {
 		reg.TickTTL()
 	}
 	<-done
+}
+
+// TestToolsTool_Search_ResponseMentionsLoad verifies that search results tell
+// the model to use action='load', not the old "UNLOCKED" banner.
+func TestToolsTool_Search_ResponseMentionsLoad(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.RegisterHidden(&mockSearchableTool{name: "mcp_foo", desc: "foo tool"})
+	tt := newSearchTool(reg, 5, 10)
+	ctx := context.Background()
+
+	res := execSearchBM25(tt, ctx, "foo")
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	if strings.Contains(res.ForLLM, "UNLOCKED") {
+		t.Error("search response must not say 'UNLOCKED' (old auto-promote behavior removed)")
+	}
+	if !strings.Contains(res.ForLLM, "action='load'") {
+		t.Errorf("search response must tell model to use action='load'; got: %s", res.ForLLM)
+	}
 }
