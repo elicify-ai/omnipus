@@ -234,6 +234,28 @@ describe('UsageScreen', () => {
     expect(screen.queryByTestId('usage-hero-row')).not.toBeInTheDocument()
   })
 
+  it('shows partial-data warning banner when response has partial: true', async () => {
+    vi.mocked(fetchTokenStats).mockResolvedValue({
+      ...mockSummary,
+      partial: true,
+    })
+    renderUsage()
+    await waitFor(() =>
+      expect(screen.getByTestId('usage-partial-warning')).toBeInTheDocument(),
+    )
+    expect(
+      screen.getByText('Some sessions could not be read — these totals may under-count.'),
+    ).toBeInTheDocument()
+  })
+
+  it('does not show partial-data warning banner when partial is absent', async () => {
+    // mockSummary has no partial field — ensure banner is absent after data loads
+    vi.mocked(fetchTokenStats).mockResolvedValue({ ...mockSummary })
+    renderUsage()
+    await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+    expect(screen.queryByTestId('usage-partial-warning')).toBeNull()
+  })
+
   it('shows no dollar sign or CurrencyDollar anywhere in the rendered output', async () => {
     const { container } = renderUsage()
     await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())

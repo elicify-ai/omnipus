@@ -689,6 +689,8 @@ type TokenUsageSummary = {
   tokens_cache_read?: number | undefined;
   tokens_cache_write?: number | undefined;
   by_model?: {} | undefined;
+  partial?: boolean | undefined;
+  partial_error_count?: number | undefined;
 };
 
 export const LoginRequest = z.object({
@@ -2186,6 +2188,8 @@ export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
     tokens_cache_read: z.number().int().gte(0).optional(),
     tokens_cache_write: z.number().int().gte(0).optional(),
     by_model: z.record(ModelTokens).optional(),
+    partial: z.boolean().optional(),
+    partial_error_count: z.number().int().gte(0).optional(),
   })
   .passthrough();
 export const CliDetect = z
