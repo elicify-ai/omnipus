@@ -25,6 +25,8 @@ properties:
       - litellm
       - groq
       - zhipu
+      - z-ai
+      - zai
       - nvidia
       - moonshot
       - shengsuanyun
