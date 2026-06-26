@@ -109,18 +109,84 @@ describe('FR-076 canonical tool names', () => {
     expect(violations, `Legacy name "regex_search" found in: ${violations.join(', ')}`).toHaveLength(0)
   })
 
-  it('canonical name search_tools_bm25 is declared in this regression test', () => {
+  // §-consolidation (2026-06-25): load_tool + search_tools_bm25 + search_tools_regex
+  // were collapsed into a single multi-action tool `tools` (action: search|load).
+  // The two canonical-name assertions below replace the old bm25/regex pair.
+  // Backend: pkg/tools registers `tools`; InfraManifestToolNames() returns {"tools"}.
+  // Frontend: humanizeToolName maps `tools` → "Tools (search & load)".
+
+  it('canonical name tools is declared in this regression test', () => {
     // The presence of this string in this file demonstrates that the canonical
     // name is known and tracked. Backend tests assert the registry emits this name;
-    // this test guards the frontend boundary.
-    // Note: renamed from tool_search_tool_bm25 → search_tools_bm25 (§7 rename).
-    const canonical = 'search_tools_bm25'
-    expect(canonical).toBe('search_tools_bm25')
+    // this test guards the frontend boundary against silent drift back to the old names.
+    // History: tool_search_tool_bm25 (§6) → search_tools_bm25 (§7 rename) →
+    //          collapsed into `tools` multi-action (§-consolidation, 2026-06-25).
+    const canonical = 'tools'
+    expect(canonical).toBe('tools')
   })
 
-  it('canonical name search_tools_regex is declared in this regression test', () => {
-    // Note: renamed from tool_search_tool_regex → search_tools_regex (§7 rename).
-    const canonical = 'search_tools_regex'
-    expect(canonical).toBe('search_tools_regex')
+  it('legacy name search_tools_bm25 does not appear as a non-comment literal in source files', () => {
+    // After the §-consolidation the old standalone names must not reappear as new
+    // code literals (they may still exist in backward-compat comment blocks).
+    const files = collectFiles()
+    const violations: string[] = []
+    for (const file of files) {
+      if (file === THIS_FILE) continue
+      let content: string
+      try {
+        content = readFileSync(file, 'utf-8')
+      } catch {
+        continue
+      }
+      const withoutComments = content
+        .replace(/\/\/[^\n]*/g, '')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+      if (withoutComments.includes('search_tools_bm25')) {
+        violations.push(file)
+      }
+    }
+    expect(violations, `Retired name "search_tools_bm25" found in: ${violations.join(', ')}`).toHaveLength(0)
+  })
+
+  it('legacy name search_tools_regex does not appear as a non-comment literal in source files', () => {
+    const files = collectFiles()
+    const violations: string[] = []
+    for (const file of files) {
+      if (file === THIS_FILE) continue
+      let content: string
+      try {
+        content = readFileSync(file, 'utf-8')
+      } catch {
+        continue
+      }
+      const withoutComments = content
+        .replace(/\/\/[^\n]*/g, '')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+      if (withoutComments.includes('search_tools_regex')) {
+        violations.push(file)
+      }
+    }
+    expect(violations, `Retired name "search_tools_regex" found in: ${violations.join(', ')}`).toHaveLength(0)
+  })
+
+  it('legacy name load_tool does not appear as a non-comment literal in source files', () => {
+    const files = collectFiles()
+    const violations: string[] = []
+    for (const file of files) {
+      if (file === THIS_FILE) continue
+      let content: string
+      try {
+        content = readFileSync(file, 'utf-8')
+      } catch {
+        continue
+      }
+      const withoutComments = content
+        .replace(/\/\/[^\n]*/g, '')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+      if (withoutComments.includes('load_tool')) {
+        violations.push(file)
+      }
+    }
+    expect(violations, `Retired name "load_tool" found in: ${violations.join(', ')}`).toHaveLength(0)
   })
 })

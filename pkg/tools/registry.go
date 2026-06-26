@@ -197,7 +197,7 @@ func (r *ToolRegistry) Version() uint64 {
 }
 
 // HiddenToolSnapshot holds a consistent snapshot of hidden tools and the
-// registry version at which it was taken. Used by BM25SearchTool cache.
+// registry version at which it was taken. Used by ToolsTool BM25 engine cache.
 type HiddenToolSnapshot struct {
 	Docs    []HiddenToolDoc
 	Version uint64

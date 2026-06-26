@@ -128,18 +128,12 @@ func GeneralBuiltinMetadata() []Tool {
 	// all five; nil transport is safe (Execute guards tp==nil; Description static).
 	out = append(out, EmailToolset(nil)...)
 
-	// On-demand tool-discovery search (CategoryToolDiscovery): registered
-	// only when the MCP search cache is enabled (pkg/agent/loop_mcp.go). Nil
-	// registry — metadata only.
-	out = append(out, NewRegexSearchTool(nil, 0, 0))
-	out = append(out, NewBM25SearchTool(nil, 0, 0))
-
-	// Tool-discovery infra (CategoryToolDiscovery): load_tool is registered
-	// per-agent whenever compressed manifest mode is enabled (ManifestInfra tier
-	// — never appears in the manifest block; always callable when registered).
-	// The metadata instance has no resolver wired; the loop wires SetResolver
-	// before any Execute call.
-	out = append(out, NewLoadTool())
+	// Unified tool-discovery + load infra (CategoryToolDiscovery): the `tools`
+	// tool is registered per-agent whenever compressed manifest mode is enabled
+	// OR MCP discovery is enabled (ManifestInfra tier — never appears in the
+	// manifest block; always callable when registered). The metadata instance
+	// has no resolver wired; the loop wires SetResolver before any Execute call.
+	out = append(out, NewToolsTool(nil, 0, 0))
 
 	return out
 }

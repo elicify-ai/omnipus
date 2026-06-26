@@ -280,8 +280,8 @@ func TestCompressedToolDefs_DifferentSessionNoInheritance(t *testing.T) {
 	}
 }
 
-// TestCompressedToolDefs_InfraAlwaysPresent proves load_tool and search_tools_*
-// are always in the compressed defs (they are ManifestInfra).
+// TestCompressedToolDefs_InfraAlwaysPresent proves the unified `tools` infra
+// tool is always in the compressed defs (it is ManifestInfra).
 func TestCompressedToolDefs_InfraAlwaysPresent(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -300,7 +300,7 @@ func TestCompressedToolDefs_InfraAlwaysPresent(t *testing.T) {
 		defNames[d.Function.Name] = true
 	}
 
-	assert.True(t, defNames["load_tool"], "load_tool (infra) must always be in compressed defs")
+	assert.True(t, defNames["tools"], "`tools` (infra) must always be in compressed defs")
 }
 
 // TestCompressedToolDefs_LegacyPath proves backward compat of the uncompressed
@@ -404,8 +404,8 @@ func TestBuildToolManifestNote_ContainsLazyTools(t *testing.T) {
 
 	// Full-tier tools must NOT appear as manifest entries.
 	for _, name := range tools.FullManifestToolNames() {
-		// The manifest header mentions "load_tool" by name in its prose, so we
-		// only check for the bullet-entry format "  - <name>".
+		// The manifest header prose mentions action='load' but not individual
+		// tool names, so we only check for the bullet-entry format "  - <name>".
 		assert.NotContains(t, note, "  - "+name,
 			"full-tier tool %q must not appear as a manifest entry", name)
 	}
@@ -550,10 +550,11 @@ func TestReachabilityInvariant_AllCoreAgents(t *testing.T) {
 	}
 }
 
-// TestReachabilityInvariant_LoadToolInfra_DenyDefaultAgent proves that even for
-// Ava (deny-by-default), load_tool is always present in the compressed defs.
-// This is the critical infra invariant: an agent must always be able to load.
-func TestReachabilityInvariant_LoadToolInfra_DenyDefaultAgent(t *testing.T) {
+// TestReachabilityInvariant_ToolsInfra_DenyDefaultAgent proves that even for
+// Ava (deny-by-default), the unified `tools` infra tool is always present in
+// the compressed defs. This is the critical infra invariant: an agent must
+// always be able to search and load tools.
+func TestReachabilityInvariant_ToolsInfra_DenyDefaultAgent(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
@@ -572,8 +573,8 @@ func TestReachabilityInvariant_LoadToolInfra_DenyDefaultAgent(t *testing.T) {
 		defNames[d.Function.Name] = true
 	}
 
-	assert.True(t, defNames["load_tool"],
-		"load_tool must always be in compressed defs even for deny-default agent (ava)")
+	assert.True(t, defNames["tools"],
+		"`tools` must always be in compressed defs even for deny-default agent (ava)")
 }
 
 // ─── canLoad guard tests ─────────────────────────────────────────────────────
@@ -598,27 +599,27 @@ func TestCanLoad_LazyAllowedTool(t *testing.T) {
 	_, findSkillsRegistered := avaAgent.Tools.Get("find_skills")
 	require.True(t, findSkillsRegistered, "find_skills must be registered for ava")
 
-	// Build ctx as load_tool's resolver would see it.
+	// Build ctx as the tools tool's resolver would see it.
 	ctx := tools.WithAgentID(context.Background(), "ava")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-canload")
 
-	// Retrieve the actual load_tool's canLoad via the registered tool.
-	loadToolRaw, ok := avaAgent.Tools.Get("load_tool")
-	require.True(t, ok, "load_tool must be registered for ava in compressed mode")
+	// Retrieve the actual ToolsTool (unified infra tool) via the registered instance.
+	toolsToolRaw, ok := avaAgent.Tools.Get("tools")
+	require.True(t, ok, "`tools` infra tool must be registered for ava in compressed mode")
 
-	lt, ok := loadToolRaw.(*tools.LoadTool)
-	require.True(t, ok, "load_tool must be *tools.LoadTool")
+	tt, ok := toolsToolRaw.(*tools.ToolsTool)
+	require.True(t, ok, "`tools` infra tool must be *tools.ToolsTool")
 
-	// We cannot call lt.canLoad directly (unexported). Instead we call Execute
-	// with the tool wired and check the result — if canLoad returns true, Execute
+	// We cannot call tt.canLoad directly (unexported). Instead we call Execute
+	// with action='load' and check the result — if canLoad returns true, Execute
 	// succeeds (schema is returned); if false, it returns an error.
-	result := lt.Execute(ctx, map[string]any{"names": []any{"find_skills"}})
+	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{"find_skills"}})
 	assert.False(t, result.IsError,
 		"find_skills must be loadable by ava; got error: %s", result.ForLLM)
 }
 
 // TestCanLoad_FullTierNotLoadable proves that a full-tier tool cannot be
-// loaded via load_tool (it is already callable — not loadable).
+// loaded via tools{action:'load'} (it is already callable — not loadable).
 func TestCanLoad_FullTierNotLoadable(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -634,18 +635,18 @@ func TestCanLoad_FullTierNotLoadable(t *testing.T) {
 	ctx := tools.WithAgentID(context.Background(), "jim")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-full-notloadable")
 
-	loadToolRaw, ok := jimAgent.Tools.Get("load_tool")
-	require.True(t, ok, "load_tool must be registered for jim in compressed mode")
-	lt, ok := loadToolRaw.(*tools.LoadTool)
+	toolsToolRaw, ok := jimAgent.Tools.Get("tools")
+	require.True(t, ok, "`tools` infra tool must be registered for jim in compressed mode")
+	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok)
 
-	result := lt.Execute(ctx, map[string]any{"names": []any{"send_message"}})
+	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{"send_message"}})
 	assert.True(t, result.IsError,
-		"send_message (full-tier) must not be loadable via load_tool")
+		"send_message (full-tier) must not be loadable via tools{action:'load'}")
 }
 
 // TestCanLoad_PolicyDeniedToolRejected proves that a policy-denied tool cannot
-// be loaded via load_tool (cannot bypass policy via load).
+// be loaded via tools{action:'load'} (cannot bypass policy via load).
 // This test is structurally non-skippable: Ava is deny-by-default and read_file
 // is not in her explicit allow-list (pkg/coreagent/core.go Ava policy). If
 // read_file appears in Ava's policy-filtered set, that is itself a regression
@@ -674,12 +675,12 @@ func TestCanLoad_PolicyDeniedToolRejected(t *testing.T) {
 	ctx := tools.WithAgentID(context.Background(), "ava")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-denied")
 
-	loadToolRaw, ok := avaAgent.Tools.Get("load_tool")
-	require.True(t, ok)
-	lt, ok := loadToolRaw.(*tools.LoadTool)
+	toolsToolRaw, ok := avaAgent.Tools.Get("tools")
+	require.True(t, ok, "`tools` infra tool must be registered for ava")
+	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok)
 
-	result := lt.Execute(ctx, map[string]any{"names": []any{"read_file"}})
+	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{"read_file"}})
 	assert.True(t, result.IsError,
 		"read_file must be rejected for ava (policy denied); got: %s", result.ForLLM)
 }
@@ -787,22 +788,22 @@ func TestMarkLoaded_UnregisteredNameRejected(t *testing.T) {
 	assert.False(t, loaded["phantom_tool"],
 		"phantom_tool must not appear in loaded set — markToolsLoaded must not mark names not passed to it")
 
-	// The real post-FIX 1 behavior: drive load_tool.Execute with a name whose
-	// schema resolution will fail (empty string agent ID → agent not found).
-	// canLoad will reject it at the pre-rejected stage, not at markLoaded.
+	// The real post-FIX 1 behavior: drive tools{action:'load'}.Execute with a
+	// name whose schema resolution will fail (empty string agent ID → agent not
+	// found). canLoad will reject it at the pre-rejected stage, not at markLoaded.
 	// So we verify the full round-trip is consistent: rejected comes back in
 	// the result, not in the loaded set.
-	loadToolRaw, ok := jimAgent.Tools.Get("load_tool")
-	require.True(t, ok, "load_tool must be registered for jim")
-	lt, ok := loadToolRaw.(*tools.LoadTool)
+	toolsToolRaw, ok := jimAgent.Tools.Get("tools")
+	require.True(t, ok, "`tools` infra tool must be registered for jim")
+	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok)
 
 	// Execute with an unknown name — should be rejected pre-markLoaded.
 	ctx := tools.WithAgentID(context.Background(), "jim")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-fix1-roundtrip")
-	result := lt.Execute(ctx, map[string]any{"names": []any{"nonexistent_phantom_xyz"}})
+	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{"nonexistent_phantom_xyz"}})
 	assert.True(t, result.IsError,
-		"nonexistent_phantom_xyz must be rejected by load_tool; got: %s", result.ForLLM)
+		"nonexistent_phantom_xyz must be rejected by tools{action:'load'}; got: %s", result.ForLLM)
 
 	// Confirm the phantom name is NOT in the loaded set.
 	loadedAfter := al.sessionLoadedTools("sess-fix1-roundtrip")
@@ -852,12 +853,13 @@ func TestForgetSession_OtherSessionsUnaffected(t *testing.T) {
 // ─── Search-tool registration (Gap 2) ──────────────────────────────────────
 
 // TestSearchToolsRegistered_CompressedMode proves that with Compressed=true and
-// MCP discovery OFF, search_tools_bm25 and search_tools_regex are registered in
-// each agent's Tools registry (Gap 2 fix: available without MCP discovery).
+// MCP discovery OFF, the unified `tools` infra tool is registered in each
+// agent's Tools registry (replaces old search_tools_bm25 / search_tools_regex
+// / load_tool trio after the tools-tool unification).
 func TestSearchToolsRegistered_CompressedMode(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	// Ensure MCP discovery is off (the default in test configs) so we verify
-	// the Gap 2 path specifically.
+	// the Compressed=true path specifically (not the MCP discovery union path).
 	cfg.Tools.MCP.Discovery.Enabled = false
 
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -865,9 +867,9 @@ func TestSearchToolsRegistered_CompressedMode(t *testing.T) {
 
 	// Verify EVERY registered agent — the 4 core agents AND the native
 	// subagents/workers (worker/planner/explorer/researcher, type=worker, which
-	// run on the Omnipus engine and share the tool registry) — gets the full
-	// infra trio. (External subagent_3p workers run on an external CLI and don't
-	// use this registry, so they are not seeded here and not in scope.)
+	// run on the Omnipus engine and share the tool registry) — gets the unified
+	// `tools` infra tool. (External subagent_3p workers run on an external CLI
+	// and don't use this registry, so they are not seeded here and not in scope.)
 	ids := al.registry.ListAgentIDs()
 	require.NotEmpty(t, ids)
 	sawCore, sawWorker := false, false
@@ -875,15 +877,21 @@ func TestSearchToolsRegistered_CompressedMode(t *testing.T) {
 		agentInst, ok := al.registry.GetAgent(agentID)
 		require.True(t, ok, "agent %q must be in registry", agentID)
 
-		_, hasRegex := agentInst.Tools.Get("search_tools_regex")
-		assert.True(t, hasRegex,
-			"agent %q (type %s): search_tools_regex must be registered when Compressed=true", agentID, agentInst.AgentType)
-		_, hasBM25 := agentInst.Tools.Get("search_tools_bm25")
-		assert.True(t, hasBM25,
-			"agent %q (type %s): search_tools_bm25 must be registered when Compressed=true", agentID, agentInst.AgentType)
-		_, hasLoad := agentInst.Tools.Get("load_tool")
-		assert.True(t, hasLoad,
-			"agent %q (type %s): load_tool must be registered when Compressed=true", agentID, agentInst.AgentType)
+		_, hasTools := agentInst.Tools.Get("tools")
+		assert.True(t, hasTools,
+			"agent %q (type %s): unified `tools` infra tool must be registered when Compressed=true",
+			agentID, agentInst.AgentType)
+
+		// Old names must NOT be registered (they are now collapsed into `tools`).
+		_, hasOldLoad := agentInst.Tools.Get("load_tool")
+		assert.False(t, hasOldLoad,
+			"agent %q: load_tool must NOT be registered after tools-tool unification", agentID)
+		_, hasOldBM25 := agentInst.Tools.Get("search_tools_bm25")
+		assert.False(t, hasOldBM25,
+			"agent %q: search_tools_bm25 must NOT be registered after tools-tool unification", agentID)
+		_, hasOldRegex := agentInst.Tools.Get("search_tools_regex")
+		assert.False(t, hasOldRegex,
+			"agent %q: search_tools_regex must NOT be registered after tools-tool unification", agentID)
 
 		switch agentInst.AgentType {
 		case "core":
@@ -983,12 +991,12 @@ func TestInjectManifestNote_NotInjectedTwice(t *testing.T) {
 
 // ─── load→callable round-trip ──────────────────────────────────────────────
 
-// TestLoadToCallableRoundTrip proves that executing load_tool for a valid lazy
-// name causes that name to appear in buildCompressedToolDefs for the same
-// session on the next call — i.e., the tool becomes callable after a load.
+// TestLoadToCallableRoundTrip proves that executing tools{action:'load'} for a
+// valid lazy name causes that name to appear in buildCompressedToolDefs for the
+// same session on the next call — i.e., the tool becomes callable after a load.
 //
-// This is an end-to-end chain: load_tool.Execute → markLoaded closure →
-// al.markToolsLoaded → al.buildCompressedToolDefs sees the tool in defs.
+// This is an end-to-end chain: ToolsTool.Execute(action='load') → markLoaded
+// closure → al.markToolsLoaded → al.buildCompressedToolDefs sees the tool in defs.
 func TestLoadToCallableRoundTrip(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -1017,22 +1025,22 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
 	for _, d := range defsBefore {
 		require.NotEqual(t, lazyName, d.Function.Name,
-			"lazy tool %q must not be callable before load_tool is called", lazyName)
+			"lazy tool %q must not be callable before tools{action:'load'} is called", lazyName)
 	}
 
-	// Execute load_tool via the registered instance (uses the real markLoaded closure).
-	loadToolRaw, ok := jimAgent.Tools.Get("load_tool")
-	require.True(t, ok, "load_tool must be registered for jim")
-	lt, ok := loadToolRaw.(*tools.LoadTool)
+	// Execute tools{action:'load'} via the registered instance (uses the real markLoaded closure).
+	toolsToolRaw, ok := jimAgent.Tools.Get("tools")
+	require.True(t, ok, "`tools` infra tool must be registered for jim")
+	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok)
 
 	ctx := tools.WithAgentID(context.Background(), "jim")
 	ctx = tools.WithTranscriptSessionID(ctx, transcriptID)
 	ctx = tools.WithSessionKey(ctx, transcriptID) // match the session key for manifestSessionID
 
-	result := lt.Execute(ctx, map[string]any{"names": []any{lazyName}})
+	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{lazyName}})
 	require.False(t, result.IsError,
-		"load_tool.Execute must succeed for a valid lazy tool; got: %s", result.ForLLM)
+		"tools{action:'load'}.Execute must succeed for a valid lazy tool; got: %s", result.ForLLM)
 
 	// After load: lazyName must appear in compressed defs.
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
@@ -1042,20 +1050,20 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 		defNamesAfter[d.Function.Name] = true
 	}
 	assert.True(t, defNamesAfter[lazyName],
-		"load→callable round-trip: lazy tool %q must be in compressed defs after load_tool.Execute", lazyName)
+		"load→callable round-trip: lazy tool %q must be in compressed defs after tools{action:'load'}.Execute", lazyName)
 }
 
 // TestInfraToolsExecutable_DenyDefaultAgent is the regression test for the bug
-// found by live validation: a deny-by-default agent (Ava/Mia) was SHOWN load_tool
-// in its provider defs (force-included) but the EXECUTION gate denied it, so every
-// lazy tool was unreachable in practice. This asserts the full authorization chain
-// now allows infra-tool execution.
+// found by live validation: a deny-by-default agent (Ava/Mia) was SHOWN the
+// `tools` infra tool in its provider defs (force-included) but the EXECUTION
+// gate denied it, so every lazy tool was unreachable in practice. This asserts
+// the full authorization chain now allows infra-tool execution.
 func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// Ava and Mia are deny-by-default; load_tool is not in their allow-list.
+	// Ava and Mia are deny-by-default; `tools` is not in their explicit allow-list.
 	for _, agentID := range []string{"ava", "mia"} {
 		t.Run(agentID, func(t *testing.T) {
 			agentInst, ok := al.registry.GetAgent(agentID)
@@ -1064,25 +1072,25 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 			allTools := agentInst.Tools.GetAll()
 			policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, agentInst.AgentType, agentInst.LoadToolPolicy())
 
-			// Precondition (the bug): raw policy does NOT authorize load_tool for a
+			// Precondition (the bug): raw policy does NOT authorize `tools` for a
 			// deny-default agent. (If a future seed adds it explicitly this just
 			// makes the test trivially pass — still correct.)
-			_, rawAllowed := policyMap["load_tool"]
+			_, rawAllowed := policyMap["tools"]
 
 			// Apply the fix: force infra tools into the exec snapshot.
 			policyFiltered = ensureInfraToolsExecutable(true, agentInst.Tools, policyFiltered, policyMap)
 
-			// After the fix: load_tool is in the snapshot as "allow".
-			require.Equal(t, "allow", policyMap["load_tool"],
-				"agent %q: load_tool must be allow in the exec policy snapshot (was rawAllowed=%v)", agentID, rawAllowed)
-			require.Contains(t, toolNameSet(policyFiltered), "load_tool",
-				"agent %q: load_tool must be in the sent defs surface", agentID)
+			// After the fix: `tools` is in the snapshot as "allow".
+			require.Equal(t, "allow", policyMap["tools"],
+				"agent %q: `tools` must be allow in the exec policy snapshot (was rawAllowed=%v)", agentID, rawAllowed)
+			require.Contains(t, toolNameSet(policyFiltered), "tools",
+				"agent %q: `tools` must be in the sent defs surface", agentID)
 
-			// The execution gate itself must authorize load_tool end-to-end.
+			// The execution gate itself must authorize `tools` end-to-end.
 			ts := fakeTurnState(agentInst, "sess-exec-"+agentID)
-			require.Equal(t, "allow", al.resolveToolPolicyAtExec(ts, "load_tool", policyMap),
-				"agent %q: resolveToolPolicyAtExec must allow load_tool", agentID)
-			require.Equal(t, "allow", al.resolveSingleToolPolicy(ts, "load_tool"),
+			require.Equal(t, "allow", al.resolveToolPolicyAtExec(ts, "tools", policyMap),
+				"agent %q: resolveToolPolicyAtExec must allow `tools`", agentID)
+			require.Equal(t, "allow", al.resolveSingleToolPolicy(ts, "tools"),
 				"agent %q: resolveSingleToolPolicy must allow registered infra tool", agentID)
 
 			// And every infra tool, for completeness.
@@ -1110,8 +1118,8 @@ func TestEnsureInfraToolsExecutable_NoopWhenCompressedOff(t *testing.T) {
 	before := len(policyFiltered)
 	out := ensureInfraToolsExecutable(false, ava.Tools, policyFiltered, policyMap)
 	require.Len(t, out, before, "compressed=false must not add infra tools")
-	_, ok = policyMap["load_tool"]
-	require.False(t, ok, "compressed=false must not allow load_tool")
+	_, ok = policyMap["tools"]
+	require.False(t, ok, "compressed=false must not allow the unified `tools` infra tool")
 }
 
 // toolNameSet is a tiny helper for membership assertions.
@@ -1134,8 +1142,8 @@ func toolNameSet(ts []tools.Tool) map[string]bool {
 // larger, the compression is silently regressing to all-full — this test fails
 // loudly.
 //
-// Monotonicity ensures that each load_tool call increases the sent surface
-// predictably and never exceeds what we'd send without compression.
+// Monotonicity ensures that each tools{action:'load'} call increases the sent
+// surface predictably and never exceeds what we'd send without compression.
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §5c
 func TestTokenWin_ByteSizeMaterially(t *testing.T) {
@@ -1250,15 +1258,16 @@ func TestTokenWin_LoadingAllLazyReachesFullSize(t *testing.T) {
 
 // ─── Part A §5a — Search-then-load reachability ────────────────────────────
 
-// TestSearchThenLoad_Reachability proves that a tool found via the search_tools_bm25
-// or search_tools_regex infra tool is in the lazy/loadable set, and that calling
-// load_tool then makes it appear in buildCompressedToolDefs (callable).
+// TestSearchThenLoad_Reachability proves that a tool found via the unified
+// tools{action:'search'} infra tool is in the lazy/loadable set, and that
+// calling tools{action:'load'} then makes it appear in buildCompressedToolDefs
+// (callable).
 //
 // This is the "search→find→load→callable" chain at the helper level. It chains
-// three helpers without a live LLM:
-//  1. search_tools_bm25.Execute finds a lazy tool by description.
-//  2. After the search, the tool is promoted (TTL > 0), so Get returns it.
-//  3. load_tool.Execute loads it for the session.
+// the two actions of the unified `tools` infra tool without a live LLM:
+//  1. tools{action:'search'} finds a lazy tool by name/description (read-only).
+//  2. The tool is in the lazy set (search does NOT promote it).
+//  3. tools{action:'load'} loads it for the session.
 //  4. buildCompressedToolDefs now includes it (callable).
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §5a, §5b (search-then-load)
@@ -1275,11 +1284,10 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 
 	// Find a lazy tool registered for Jim (we pick the first lazy tool in the
 	// policy-filtered set as the search target).
-	var lazyName, lazyDesc string
+	var lazyName string
 	for _, tool := range policyFiltered {
 		if tools.ToolManifestTier(tool.Name()) == tools.ManifestLazy {
 			lazyName = tool.Name()
-			lazyDesc = tool.Description()
 			break
 		}
 	}
@@ -1295,24 +1303,23 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
 	for _, d := range defsBefore {
 		require.NotEqual(t, lazyName, d.Function.Name,
-			"lazy tool %q must not be callable before load_tool is called", lazyName)
+			"lazy tool %q must not be callable before tools{action:'load'} is called", lazyName)
 	}
-	_ = lazyDesc // used below for BM25 but description may differ after registration
 
-	// Step 3: Call load_tool.Execute with the lazy name (simulating the model
-	// calling load_tool after a search result returned the tool name).
-	loadToolRaw, ok := jimAgent.Tools.Get("load_tool")
-	require.True(t, ok, "load_tool must be registered for jim in compressed mode")
-	lt, ok := loadToolRaw.(*tools.LoadTool)
-	require.True(t, ok, "load_tool must be *tools.LoadTool")
+	// Step 3: Call tools{action:'load'}.Execute with the lazy name (simulating
+	// the model calling load after a search result returned the tool name).
+	toolsToolRaw, ok := jimAgent.Tools.Get("tools")
+	require.True(t, ok, "`tools` infra tool must be registered for jim in compressed mode")
+	tt, ok := toolsToolRaw.(*tools.ToolsTool)
+	require.True(t, ok, "`tools` infra tool must be *tools.ToolsTool")
 
 	ctx := tools.WithAgentID(context.Background(), "jim")
 	ctx = tools.WithTranscriptSessionID(ctx, transcriptID)
 	ctx = tools.WithSessionKey(ctx, transcriptID)
 
-	loadResult := lt.Execute(ctx, map[string]any{"names": []any{lazyName}})
+	loadResult := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{lazyName}})
 	require.False(t, loadResult.IsError,
-		"load_tool must succeed for lazy tool %q found via search; error: %s", lazyName, loadResult.ForLLM)
+		"tools{action:'load'} must succeed for lazy tool %q found via search; error: %s", lazyName, loadResult.ForLLM)
 
 	// Step 4: After load, the tool must appear in compressed defs (callable).
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
@@ -1322,7 +1329,7 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 		defNamesAfter[d.Function.Name] = true
 	}
 	assert.True(t, defNamesAfter[lazyName],
-		"search-then-load chain: lazy tool %q must be callable after load_tool.Execute", lazyName)
+		"search-then-load chain: lazy tool %q must be callable after tools{action:'load'}.Execute", lazyName)
 }
 
 // ─── Part A §5a — Manifest determinism under load churn ───────────────────

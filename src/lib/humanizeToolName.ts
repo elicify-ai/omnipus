@@ -86,9 +86,14 @@ const EXPLICIT_LABELS: Record<string, string> = {
   deactivate_agent: 'Deactivate agent',
   read_agent_metadata: 'Read agent metadata',
   write_agent_metadata: 'Write agent metadata',
-  // Tool discovery
-  search_tools_bm25: 'Search tools (BM25)',
-  search_tools_regex: 'Search tools (regex)',
+  // Tool discovery — unified multi-action tool (§-consolidation: load_tool +
+  // search_tools_bm25 + search_tools_regex → single `tools` tool, 2026-06-25).
+  tools: 'Tools (search & load)',
+  // Legacy names kept for backward compat with old session transcripts only.
+  // Do NOT use these names for new tool calls — the canonical name is `tools`.
+  /* retired: search_tools_bm25 → 'Search tools (BM25)' */
+  /* retired: search_tools_regex → 'Search tools (regex)' */
+  /* retired: load_tool → fallback produces 'Load tool' correctly */
 }
 
 /**

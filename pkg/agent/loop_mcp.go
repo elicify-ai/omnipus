@@ -195,12 +195,15 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 				"agent_count":         agentCount,
 			})
 
-		// Initializes Discovery Tools only if enabled by configuration
+		// Initializes Discovery Tools only if enabled by configuration.
+		// The unified `tools` infra tool (action=search + action=load) is already
+		// registered for every agent by registerSharedTools when MCP discovery is
+		// enabled (union condition). No separate registration is needed here.
 		if al.cfg.Tools.MCP.Enabled && al.cfg.Tools.MCP.Discovery.Enabled {
 			useBM25 := al.cfg.Tools.MCP.Discovery.UseBM25
 			useRegex := al.cfg.Tools.MCP.Discovery.UseRegex
 
-			// Fail fast: If discovery is enabled but no search method is turned on
+			// Fail fast: If discovery is enabled but no search method is turned on.
 			if !useBM25 && !useRegex {
 				al.mcp.setInitErr(fmt.Errorf(
 					"tool discovery is enabled but neither 'use_bm25' nor 'use_regex' is set to true in the configuration",
@@ -216,31 +219,15 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 
 			ttl := al.cfg.Tools.MCP.Discovery.TTL
 			if ttl <= 0 {
-				ttl = 5 // Default value
+				ttl = 5
 			}
-
 			maxSearchResults := al.cfg.Tools.MCP.Discovery.MaxSearchResults
 			if maxSearchResults <= 0 {
-				maxSearchResults = 5 // Default value
+				maxSearchResults = 5
 			}
 
-			logger.InfoCF("agent", "Initializing tool discovery", map[string]any{
-				"bm25": useBM25, "regex": useRegex, "ttl": ttl, "max_results": maxSearchResults,
-			})
-
-			for _, agentID := range agentIDs {
-				agent, ok := al.registry.GetAgent(agentID)
-				if !ok {
-					continue
-				}
-
-				if useRegex {
-					agent.Tools.Register(tools.NewRegexSearchTool(agent.Tools, ttl, maxSearchResults))
-				}
-				if useBM25 {
-					agent.Tools.Register(tools.NewBM25SearchTool(agent.Tools, ttl, maxSearchResults))
-				}
-			}
+			logger.InfoCF("agent", "Tool discovery enabled (handled by unified 'tools' infra tool)",
+				map[string]any{"bm25": useBM25, "regex": useRegex, "ttl": ttl, "max_results": maxSearchResults})
 		}
 
 		al.mcp.setManager(mcpManager)

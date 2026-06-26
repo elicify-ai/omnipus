@@ -1792,113 +1792,105 @@ func registerSharedTools(
 			}
 		}
 
-		// Manifest optimization (cfg.Tools.Manifest.Compressed): register load_tool
-		// and the search tools so every agent can load its lazy tools on demand and
-		// search for tools by keyword.
-		//
-		// load_tool is an infra tool — always callable, never in the manifest block.
-		// Its resolver uses context-aware closures so that per-session and per-agent
-		// state is read from the tool ctx at call time, avoiding data races on the
-		// shared LoadTool instance across concurrent turns on the same agent.
-		//
-		// search_tools_bm25 / search_tools_regex (Gap 2): registered here so an
-		// agent can find lazy/MCP tools by keyword and then load_tool them. Guarded
-		// against double-registration in case MCP discovery already added them.
-		if cfg.Tools.Manifest.Compressed {
-			capturedAgentID := agentID
-			loadTool := tools.NewLoadTool()
-			loadTool.SetResolver(
-				// canLoad: true iff name is a real policy-allowed LAZY tool for the
-				// calling agent (infra/full tools are already callable — not loadable).
-				func(ctx context.Context, name string) bool {
-					callerID := tools.ToolAgentID(ctx)
-					if callerID == "" {
-						callerID = capturedAgentID
-					}
-					callerAgent, ok := al.registry.GetAgent(callerID)
-					if !ok {
-						return false
-					}
-					if tools.ToolManifestTier(name) != tools.ManifestLazy {
-						return false
-					}
-					allAgentTools := callerAgent.Tools.GetAll()
-					policyFiltered, _ := tools.FilterToolsByPolicy(allAgentTools, callerAgent.AgentType, callerAgent.LoadToolPolicy())
-					for _, t := range policyFiltered {
-						if t.Name() == name {
-							return true
+		// Register the unified `tools` infra tool (action=search + action=load).
+		// Replaces the former load_tool + search_tools_bm25 + search_tools_regex trio.
+		// The resolver uses context-aware closures so per-session and per-agent state
+		// is read from the tool ctx at call time, avoiding data races on the shared
+		// instance across concurrent turns on the same agent.
+		// Register the unified `tools` infra tool when compressed manifest mode
+		// is on OR when the MCP discovery cache is enabled. The tool covers both
+		// the former load_tool (action=load) and search_tools_bm25/search_tools_regex
+		// (action=search) in one callable surface. Guard against double-registration
+		// in case the MCP init path already added it.
+		if cfg.Tools.Manifest.Compressed || (cfg.Tools.MCP.Enabled && cfg.Tools.MCP.Discovery.Enabled) {
+			if _, alreadyTools := agent.Tools.Get("tools"); !alreadyTools {
+				capturedAgentID := agentID
+
+				ttl := cfg.Tools.MCP.Discovery.TTL
+				if ttl <= 0 {
+					ttl = 5
+				}
+				maxResults := cfg.Tools.MCP.Discovery.MaxSearchResults
+				if maxResults <= 0 {
+					maxResults = 5
+				}
+
+				toolsTool := tools.NewToolsTool(agent.Tools, ttl, maxResults)
+				toolsTool.SetResolver(
+					// canLoad: true iff name is a real policy-allowed LAZY tool for the
+					// calling agent (infra/full tools are already callable — not loadable).
+					func(ctx context.Context, name string) bool {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
 						}
-					}
-					return false
-				},
-				// markLoaded: fetches schemas FIRST, marks only successfully resolved
-				// names as loaded, and returns any names that could not be resolved in
-				// the rejected slice. This ensures the model's loaded-set is always
-				// consistent with what it can actually call: a name that canLoad
-				// accepted but whose registry lookup or schema extraction fails is
-				// reported as rejected and never marked loaded.
-				func(ctx context.Context, names []string) (map[string]any, []string) {
-					callerID := tools.ToolAgentID(ctx)
-					if callerID == "" {
-						callerID = capturedAgentID
-					}
-					callerAgent, ok := al.registry.GetAgent(callerID)
-					if !ok {
-						// No agent — reject everything so the caller can surface the error.
-						rejected := make([]string, 0, len(names))
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							return false
+						}
+						if tools.ToolManifestTier(name) != tools.ManifestLazy {
+							return false
+						}
+						allAgentTools := callerAgent.Tools.GetAll()
+						policyFiltered, _ := tools.FilterToolsByPolicy(allAgentTools, callerAgent.AgentType, callerAgent.LoadToolPolicy())
+						for _, t := range policyFiltered {
+							if t.Name() == name {
+								return true
+							}
+						}
+						return false
+					},
+					// markLoaded: fetches schemas FIRST, marks only successfully resolved
+					// names as loaded, and returns any names that could not be resolved in
+					// the rejected slice. This ensures the model's loaded-set is always
+					// consistent with what it can actually call: a name that canLoad
+					// accepted but whose registry lookup or schema extraction fails is
+					// reported as rejected and never marked loaded.
+					func(ctx context.Context, names []string) (map[string]any, []string) {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							// No agent — reject everything so the caller can surface the error.
+							rejected := make([]string, 0, len(names))
+							for _, n := range names {
+								rejected = append(rejected, n+" — agent not found at load time")
+							}
+							return map[string]any{}, rejected
+						}
+
+						// Fetch schemas first; separate names into resolved and rejected.
+						schemas := make(map[string]any, len(names))
+						loadedOK := make([]string, 0, len(names))
+						var rejected []string
 						for _, n := range names {
-							rejected = append(rejected, n+" — agent not found at load time")
+							t, tOK := callerAgent.Tools.Get(n)
+							if !tOK {
+								rejected = append(rejected, n+" — not registered for agent at load time")
+								continue
+							}
+							schema := tools.ToolToSchema(t)
+							fn, fnOK := schema["function"]
+							if !fnOK {
+								rejected = append(rejected, n+" — schema has no function key")
+								continue
+							}
+							schemas[n] = fn
+							loadedOK = append(loadedOK, n)
 						}
-						return map[string]any{}, rejected
-					}
 
-					// Fetch schemas first; separate names into resolved and rejected.
-					schemas := make(map[string]any, len(names))
-					loadedOK := make([]string, 0, len(names))
-					var rejected []string
-					for _, n := range names {
-						t, tOK := callerAgent.Tools.Get(n)
-						if !tOK {
-							rejected = append(rejected, n+" — not registered for agent at load time")
-							continue
-						}
-						schema := tools.ToolToSchema(t)
-						fn, fnOK := schema["function"]
-						if !fnOK {
-							rejected = append(rejected, n+" — schema has no function key")
-							continue
-						}
-						schemas[n] = fn
-						loadedOK = append(loadedOK, n)
-					}
-
-					// Mark only the successfully resolved names as loaded.
-					sessionID := manifestSessionID(
-						tools.ToolTranscriptSessionID(ctx),
-						tools.ToolSessionKey(ctx),
-					)
-					al.markToolsLoaded(sessionID, loadedOK)
-					return schemas, rejected
-				},
-			)
-			agent.Tools.Register(loadTool)
-
-			// Register search tools (Gap 2): available whenever compressed mode is
-			// on, not only when MCP discovery is enabled. Guard against
-			// double-registration if MCP init already added them.
-			ttl := cfg.Tools.MCP.Discovery.TTL
-			if ttl <= 0 {
-				ttl = 5
-			}
-			maxResults := cfg.Tools.MCP.Discovery.MaxSearchResults
-			if maxResults <= 0 {
-				maxResults = 5
-			}
-			if _, alreadyRegex := agent.Tools.Get("search_tools_regex"); !alreadyRegex {
-				agent.Tools.Register(tools.NewRegexSearchTool(agent.Tools, ttl, maxResults))
-			}
-			if _, alreadyBM25 := agent.Tools.Get("search_tools_bm25"); !alreadyBM25 {
-				agent.Tools.Register(tools.NewBM25SearchTool(agent.Tools, ttl, maxResults))
+						// Mark only the successfully resolved names as loaded.
+						sessionID := manifestSessionID(
+							tools.ToolTranscriptSessionID(ctx),
+							tools.ToolSessionKey(ctx),
+						)
+						al.markToolsLoaded(sessionID, loadedOK)
+						return schemas, rejected
+					},
+				)
+				agent.Tools.Register(toolsTool)
 			}
 		}
 	}
@@ -4984,16 +4976,16 @@ turnLoop:
 		allAgentTools := ts.agent.Tools.GetAll()
 		policyFilteredTools, filterTimePolicyMap := tools.FilterToolsByPolicy(allAgentTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 
-		// Manifest infra tools (load_tool, search_tools_*) are registration-gated,
-		// NOT policy-gated: when compressed mode is on they must be callable by
-		// EVERY agent — including deny-by-default agents (Ava/Mia/Ray) — or the
-		// model is shown load_tool in its defs but its EXECUTION is denied, leaving
-		// every lazy tool permanently unreachable. Force them into both the sent
-		// defs (policyFilteredTools) and the execution-time policy snapshot
-		// (filterTimePolicyMap, consulted by resolveToolPolicyAtExec) as "allow".
-		// This mirrors the defs force-include in buildCompressedToolDefs at the
-		// authorization layer. (Found by live validation: a deny-default agent
-		// called load_tool and the exec gate denied it — reachability broke.)
+		// The unified `tools` infra tool is registration-gated, NOT policy-gated:
+		// when compressed mode is on it must be callable by EVERY agent — including
+		// deny-by-default agents (Ava/Mia/Ray) — or the model is shown `tools` in
+		// its defs but its EXECUTION is denied, leaving every lazy tool permanently
+		// unreachable. Force it into both the sent defs (policyFilteredTools) and
+		// the execution-time policy snapshot (filterTimePolicyMap, consulted by
+		// resolveToolPolicyAtExec) as "allow". This mirrors the defs force-include
+		// in buildCompressedToolDefs at the authorization layer. (Found by live
+		// validation: a deny-default agent called load_tool and the exec gate denied
+		// it — reachability broke.)
 		policyFilteredTools = ensureInfraToolsExecutable(
 			cfg.Tools.Manifest.Compressed, ts.agent.Tools, policyFilteredTools, filterTimePolicyMap)
 
@@ -8301,10 +8293,10 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 // effective policy for toolName using FilterToolsByPolicy. Returns "" if the
 // tool is not found in the agent's registered tools.
 func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) string {
-	// Manifest infra tools (load_tool, search_tools_*) are registration-gated,
-	// not policy-gated: they only exist on the agent when compressed mode is on,
-	// and when present they MUST always be executable — they drive the manifest
-	// mechanism itself, so denying them makes every lazy tool unreachable. Treat a
+	// The unified `tools` infra tool is registration-gated, not policy-gated:
+	// it only exists on the agent when compressed mode or MCP discovery is on,
+	// and when present it MUST always be executable — it drives the manifest
+	// mechanism itself, so denying it makes every lazy tool unreachable. Treat a
 	// registered infra tool as "allow" regardless of the agent's default policy.
 	// (Without this, resolveToolPolicyAtExec re-derives livePolicy="deny" for a
 	// deny-by-default agent and overrides the filter-time allow — the live bug.)

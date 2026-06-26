@@ -159,10 +159,10 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 //
 // FR-028, FR-086: effective_policy for SPA badge rendering.
 // Gap 3: manifest_tier tags each tool as "full" (always-callable), "compressed"
-// (lazy — listed in manifest, loaded on demand via load_tool), or "infra"
-// (always-callable discovery tools like load_tool / search_tools_*).
-// Infra tools are force-included even when FilterToolsByPolicy would drop them
-// for a deny-default agent, mirroring the loop's runtime force-include.
+// (lazy — listed in manifest, loaded on demand via the `tools` infra tool), or
+// "infra" (always-callable discovery tool `tools` that drives the manifest
+// mechanism itself). Infra tools are force-included even when FilterToolsByPolicy
+// would drop them for a deny-default agent, mirroring the loop's runtime force-include.
 func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Request, agentID string) {
 	cfg := a.agentLoop.GetConfig()
 
@@ -242,9 +242,9 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		}
 
 		// Force-include infra tools that FilterToolsByPolicy may have dropped for a
-		// deny-default agent. At runtime the agent loop always makes infra tools
-		// (load_tool, search_tools_*) callable when registered, regardless of policy.
-		// The panel must reflect this so operators can see the complete callable surface.
+		// deny-default agent. At runtime the agent loop always makes the `tools`
+		// infra tool callable when registered, regardless of policy. The panel must
+		// reflect this so operators can see the complete callable surface.
 		for _, t := range allTools {
 			name := t.Name()
 			if _, alreadyIncluded := included[name]; alreadyIncluded {

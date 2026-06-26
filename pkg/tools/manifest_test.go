@@ -53,17 +53,25 @@ func TestIsFullManifestTool(t *testing.T) {
 	if IsFullManifestTool("create_agent") {
 		t.Error("IsFullManifestTool(create_agent) = true, want false")
 	}
-	if IsFullManifestTool("load_tool") {
-		t.Error("IsFullManifestTool(load_tool) = true, want false (it is Infra)")
+	if IsFullManifestTool("tools") {
+		t.Error("IsFullManifestTool(tools) = true, want false (it is Infra)")
 	}
 }
 
 func TestToolManifestTier_InfraSet(t *testing.T) {
-	infraNames := []string{"load_tool", "search_tools_bm25", "search_tools_regex"}
+	// The unified `tools` tool is the sole infra tool.
+	infraNames := []string{"tools"}
 	for _, n := range infraNames {
 		got := ToolManifestTier(n)
 		if got != ManifestInfra {
 			t.Errorf("ToolManifestTier(%q) = %v, want ManifestInfra", n, got)
+		}
+	}
+	// Old standalone names must be ManifestLazy (no longer infra).
+	for _, n := range []string{"load_tool", "search_tools_bm25", "search_tools_regex"} {
+		got := ToolManifestTier(n)
+		if got != ManifestLazy {
+			t.Errorf("ToolManifestTier(%q) = %v, want ManifestLazy (no longer infra)", n, got)
 		}
 	}
 }
@@ -133,7 +141,7 @@ func (f *fakeManifestTool) Execute(_ context.Context, _ map[string]any) *ToolRes
 }
 
 func TestBuildCompressedManifest_Basic(t *testing.T) {
-	tools := []Tool{
+	toolList := []Tool{
 		// lazy tools in two categories
 		&fakeManifestTool{name: "create_agent", desc: "Create a new agent.", cat: CategoryAgents},
 		&fakeManifestTool{name: "list_agents", desc: "List agents.", cat: CategoryAgents},
@@ -141,12 +149,10 @@ func TestBuildCompressedManifest_Basic(t *testing.T) {
 		// full tool — must be excluded
 		&fakeManifestTool{name: "read_file", desc: "Read a file.", cat: CategoryFilesystem},
 		// infra tool — must be excluded
-		&fakeManifestTool{name: "load_tool", desc: "Load tools.", cat: CategoryToolDiscovery},
-		// search_tools infra — must be excluded
-		&fakeManifestTool{name: "search_tools_bm25", desc: "BM25 search.", cat: CategoryToolDiscovery},
+		&fakeManifestTool{name: "tools", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
 	}
 
-	got := BuildCompressedManifest(tools, nil)
+	got := BuildCompressedManifest(toolList, nil)
 
 	if got == "" {
 		t.Fatal("BuildCompressedManifest returned empty string, expected manifest content")
@@ -164,26 +170,28 @@ func TestBuildCompressedManifest_Basic(t *testing.T) {
 		t.Error("manifest missing browser_navigate")
 	}
 	// Full and infra tools must not appear as manifest ENTRIES (indented bullet lines).
-	// Note: "load_tool" appears in the header prose ("call load_tool with its name(s)"),
-	// so we check for the entry format "  - load_tool" not bare substring.
 	if strings.Contains(got, "  - read_file") {
 		t.Error("manifest must NOT contain full-tier tool read_file as an entry")
 	}
-	if strings.Contains(got, "  - load_tool") {
-		t.Error("manifest must NOT contain infra tool load_tool as an entry")
+	if strings.Contains(got, "  - tools") {
+		t.Error("manifest must NOT contain infra tool 'tools' as an entry")
 	}
-	if strings.Contains(got, "  - search_tools_bm25") {
-		t.Error("manifest must NOT contain infra tool search_tools_bm25 as an entry")
+	// The manifest header prose mentions the tools action — verify it uses the new wording.
+	if strings.Contains(got, "call load_tool") {
+		t.Error("manifest header must NOT mention 'call load_tool' (old wording)")
+	}
+	if !strings.Contains(got, "action='load'") {
+		t.Error("manifest header must mention \"action='load'\" (new wording)")
 	}
 }
 
 func TestBuildCompressedManifest_ExcludesLoaded(t *testing.T) {
-	tools := []Tool{
+	toolList := []Tool{
 		&fakeManifestTool{name: "create_agent", desc: "Create a new agent.", cat: CategoryAgents},
 		&fakeManifestTool{name: "list_agents", desc: "List agents.", cat: CategoryAgents},
 	}
 	loaded := map[string]bool{"create_agent": true}
-	got := BuildCompressedManifest(tools, loaded)
+	got := BuildCompressedManifest(toolList, loaded)
 
 	if strings.Contains(got, "create_agent") {
 		t.Error("manifest must not include already-loaded tool create_agent")
@@ -195,11 +203,11 @@ func TestBuildCompressedManifest_ExcludesLoaded(t *testing.T) {
 
 func TestBuildCompressedManifest_EmptyWhenAllExcluded(t *testing.T) {
 	// Only full and infra tools — manifest must be empty.
-	tools := []Tool{
+	toolList := []Tool{
 		&fakeManifestTool{name: "read_file", desc: "Read.", cat: CategoryFilesystem},
-		&fakeManifestTool{name: "load_tool", desc: "Load.", cat: CategoryToolDiscovery},
+		&fakeManifestTool{name: "tools", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
 	}
-	got := BuildCompressedManifest(tools, nil)
+	got := BuildCompressedManifest(toolList, nil)
 	if got != "" {
 		t.Errorf("BuildCompressedManifest should return empty string when no lazy tools remain, got: %q", got)
 	}
@@ -217,11 +225,11 @@ func TestBuildCompressedManifest_EmptyInput(t *testing.T) {
 }
 
 func TestBuildCompressedManifest_GroupsByCategory(t *testing.T) {
-	tools := []Tool{
+	toolList := []Tool{
 		&fakeManifestTool{name: "z_agents_tool", desc: "Agents desc.", cat: CategoryAgents},
 		&fakeManifestTool{name: "a_browser_tool", desc: "Browser desc.", cat: CategoryBrowser},
 	}
-	got := BuildCompressedManifest(tools, nil)
+	got := BuildCompressedManifest(toolList, nil)
 
 	agentsIdx := strings.Index(got, "## agents")
 	browserIdx := strings.Index(got, "## browser")
@@ -238,12 +246,12 @@ func TestBuildCompressedManifest_GroupsByCategory(t *testing.T) {
 }
 
 func TestBuildCompressedManifest_SortedNamesWithinCategory(t *testing.T) {
-	tools := []Tool{
+	toolList := []Tool{
 		&fakeManifestTool{name: "z_tool", desc: "Z tool.", cat: CategoryAgents},
 		&fakeManifestTool{name: "a_tool", desc: "A tool.", cat: CategoryAgents},
 		&fakeManifestTool{name: "m_tool", desc: "M tool.", cat: CategoryAgents},
 	}
-	got := BuildCompressedManifest(tools, nil)
+	got := BuildCompressedManifest(toolList, nil)
 
 	aIdx := strings.Index(got, "a_tool")
 	mIdx := strings.Index(got, "m_tool")
@@ -257,14 +265,14 @@ func TestBuildCompressedManifest_SortedNamesWithinCategory(t *testing.T) {
 }
 
 func TestBuildCompressedManifest_TruncatesMultiLineDescription(t *testing.T) {
-	tools := []Tool{
+	toolList := []Tool{
 		&fakeManifestTool{
 			name: "multi_line_tool",
 			desc: "First line only.\nThis second line must NOT appear.",
 			cat:  CategoryAgents,
 		},
 	}
-	got := BuildCompressedManifest(tools, nil)
+	got := BuildCompressedManifest(toolList, nil)
 
 	if strings.Contains(got, "second line must NOT appear") {
 		t.Error("manifest must truncate multi-line description to first line only")
@@ -276,10 +284,10 @@ func TestBuildCompressedManifest_TruncatesMultiLineDescription(t *testing.T) {
 
 func TestBuildCompressedManifest_TruncatesLongDescription(t *testing.T) {
 	long := strings.Repeat("x", 200)
-	tools := []Tool{
+	toolList := []Tool{
 		&fakeManifestTool{name: "long_tool", desc: long, cat: CategoryAgents},
 	}
-	got := BuildCompressedManifest(tools, nil)
+	got := BuildCompressedManifest(toolList, nil)
 
 	// Find the entry line.
 	for _, line := range strings.Split(got, "\n") {
@@ -297,25 +305,25 @@ func TestBuildCompressedManifest_TruncatesLongDescription(t *testing.T) {
 
 func TestBuildCompressedManifest_Deterministic(t *testing.T) {
 	// Same input produces the same output on repeated calls.
-	tools := []Tool{
+	toolList := []Tool{
 		&fakeManifestTool{name: "b_tool", desc: "B.", cat: CategoryBrowser},
 		&fakeManifestTool{name: "a_tool", desc: "A.", cat: CategoryAgents},
 		&fakeManifestTool{name: "c_tool", desc: "C.", cat: CategoryAgents},
 	}
-	first := BuildCompressedManifest(tools, nil)
-	second := BuildCompressedManifest(tools, nil)
+	first := BuildCompressedManifest(toolList, nil)
+	second := BuildCompressedManifest(toolList, nil)
 	if first != second {
 		t.Errorf("BuildCompressedManifest is not deterministic:\nfirst:  %q\nsecond: %q", first, second)
 	}
 }
 
 func TestBuildCompressedManifest_AllLoadedReturnsEmpty(t *testing.T) {
-	tools := []Tool{
+	toolList := []Tool{
 		&fakeManifestTool{name: "create_agent", desc: "Create.", cat: CategoryAgents},
 		&fakeManifestTool{name: "list_agents", desc: "List.", cat: CategoryAgents},
 	}
 	loaded := map[string]bool{"create_agent": true, "list_agents": true}
-	got := BuildCompressedManifest(tools, loaded)
+	got := BuildCompressedManifest(toolList, loaded)
 	if got != "" {
 		t.Errorf("all tools loaded: expected empty manifest, got %q", got)
 	}
@@ -345,9 +353,10 @@ func TestManifestNamesResolveInCatalog(t *testing.T) {
 
 // TestInfraManifestToolNames_Set asserts the infra accessor returns the expected
 // sorted set (single source of truth consumed by the loop's force-include).
+// After the tools-tool unification, the set is just {"tools"}.
 func TestInfraManifestToolNames_Set(t *testing.T) {
 	got := InfraManifestToolNames()
-	want := []string{"load_tool", "search_tools_bm25", "search_tools_regex"}
+	want := []string{"tools"}
 	if len(got) != len(want) {
 		t.Fatalf("InfraManifestToolNames() = %v, want %v", got, want)
 	}
