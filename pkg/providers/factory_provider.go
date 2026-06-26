@@ -199,7 +199,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		return p, modelID, nil
 
 	case "litellm", "groq", "zhipu", "z-ai", "z.ai", "zai", "gemini", "google", "nvidia",
-		"ollama", "moonshot", "shengsuanyun", "deepseek", "cerebras",
+		"ollama", "moonshot", "moonshot-cn", "shengsuanyun", "deepseek", "cerebras",
 		"vivgrid", "volcengine", "vllm", "qwen", "qwen-intl", "qwen-international", "dashscope-intl",
 		"qwen-us", "dashscope-us", "mistral", "avian", "longcat", "modelscope", "novita",
 		"coding-plan", "alibaba-coding", "qwen-coding", "mimo":
@@ -224,7 +224,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		}
 		return p, modelID, nil
 
-	case "minimax":
+	case "minimax", "minimax-cn":
 		// Minimax requires reasoning_split: true in the request body
 		if cfg.APIKey() == "" && cfg.APIBase == "" {
 			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
@@ -363,11 +363,15 @@ var knownProtocols = map[string]bool{
 	"openrouter":               true,
 	"groq":                     true,
 	"zhipu":                    true,
+	"z-ai":                     true,
+	"z.ai":                     true,
+	"zai":                      true,
 	"gemini":                   true,
 	"google":                   true,
 	"nvidia":                   true,
 	"ollama":                   true,
 	"moonshot":                 true,
+	"moonshot-cn":              true,
 	"shengsuanyun":             true,
 	"deepseek":                 true,
 	"cerebras":                 true,
@@ -390,6 +394,7 @@ var knownProtocols = map[string]bool{
 	"qwen-coding":              true,
 	"mimo":                     true,
 	"minimax":                  true,
+	"minimax-cn":               true,
 	"anthropic":                true,
 	"anthropic-messages":       true,
 	"coding-plan-anthropic":    true,
@@ -416,6 +421,10 @@ func GetDefaultAPIBase(protocol string) string {
 	switch protocol {
 	case "openai":
 		return "https://api.openai.com/v1"
+	case "anthropic", "anthropic-messages":
+		// The runtime factory hardcodes this base too; resolving it here lets the
+		// onboarding model-list probe work (it resolves via GetDefaultAPIBase).
+		return "https://api.anthropic.com/v1"
 	case "openrouter":
 		return "https://openrouter.ai/api/v1"
 	case "litellm":
@@ -437,7 +446,11 @@ func GetDefaultAPIBase(protocol string) string {
 	case "ollama":
 		return "http://localhost:11434/v1"
 	case "moonshot":
+		// International Moonshot (Kimi) endpoint.
 		return "https://api.moonshot.ai/v1"
+	case "moonshot-cn":
+		// China-mainland Moonshot (Kimi) platform — separate account/key from intl.
+		return "https://api.moonshot.cn/v1"
 	case "shengsuanyun":
 		return "https://router.shengsuanyun.com/api/v1"
 	case "deepseek":
@@ -465,7 +478,11 @@ func GetDefaultAPIBase(protocol string) string {
 	case "avian":
 		return "https://api.avian.io/v1"
 	case "minimax":
+		// International MiniMax endpoint.
 		return "https://api.minimax.io/v1"
+	case "minimax-cn":
+		// China-mainland MiniMax platform — separate account/key from intl.
+		return "https://api.minimaxi.com/v1"
 	case "longcat":
 		return "https://api.longcat.chat/openai"
 	case "modelscope":

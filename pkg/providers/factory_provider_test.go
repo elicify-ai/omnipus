@@ -6,9 +6,11 @@
 package providers
 
 import (
+	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -874,5 +876,254 @@ func TestCreateProviderFromConfig_ZAI(t *testing.T) {
 	}
 	if modelID != "glm-5.2" {
 		t.Errorf("modelID = %q, want %q", modelID, "glm-5.2")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 1 — base-resolution invariant
+// Traces to: docs/internal/provider-endpoint-audit-2026-06.md (Recommendations §1)
+//
+// Every id in the ProbeProviderRequest.yaml enum must either resolve a non-empty
+// default API base (so the onboarding probe can build the request URL) OR appear
+// in the explicit allowlist below for ids that *require* a per-deployment endpoint
+// (azure, azure-openai, bedrock).
+//
+// This test would have caught the z-ai, anthropic, anthropic-messages, moonshot-cn,
+// and minimax-cn gaps. A new provider id added to the enum without a GetDefaultAPIBase
+// case (and not in the allowlist) causes a red test here.
+// ---------------------------------------------------------------------------
+
+// probeEnumIDsFromYAML parses the enum: list from the ProbeProviderRequest schema file.
+// It looks for lines that are "      - <id>" under the enum key.
+func probeEnumIDsFromYAML(t *testing.T) []string {
+	t.Helper()
+	data, err := os.ReadFile("../../contracts/components/schemas/ProbeProviderRequest.yaml")
+	if err != nil {
+		t.Fatalf("cannot read ProbeProviderRequest.yaml: %v", err)
+	}
+	var ids []string
+	inEnum := false
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "enum:" {
+			inEnum = true
+			continue
+		}
+		if inEnum {
+			// Stop at the next key that is not a list item
+			if strings.HasPrefix(trimmed, "-") {
+				id := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+				if id != "" {
+					ids = append(ids, id)
+				}
+			} else if trimmed != "" {
+				// A non-list, non-empty line ends the enum block
+				inEnum = false
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scanning ProbeProviderRequest.yaml: %v", err)
+	}
+	if len(ids) == 0 {
+		t.Fatal("ProbeProviderRequest.yaml parsed 0 enum ids — check YAML structure")
+	}
+	return ids
+}
+
+// TestProbeEnumProvidersResolveBase is the headline invariant guard.
+//
+// For every id in the ProbeProviderRequest enum:
+//   - if id is in needsEndpointAllowlist  → assert GetDefaultAPIBase(id) == "" (documents the requirement)
+//   - otherwise                           → assert GetDefaultAPIBase(id) != "" (the probe can build a URL)
+//
+// If this test fails, add a GetDefaultAPIBase case for the id, or add it to
+// needsEndpointAllowlist with a comment explaining why it needs a per-deployment base.
+func TestProbeEnumProvidersResolveBase(t *testing.T) {
+	// needsEndpointAllowlist contains ids that legitimately have NO fixed default base
+	// because every deployment has a unique host. These ids MUST be supplied an
+	// endpoint override in the probe request or they cannot work. The allowlist is
+	// intentionally small — if you're tempted to add a new id here, consider whether
+	// the provider actually has a well-known hosted endpoint instead.
+	needsEndpointAllowlist := map[string]bool{
+		"azure":        true, // per-resource Azure OpenAI host, e.g. https://your-resource.openai.azure.com
+		"azure-openai": true, // alias for azure; same requirement
+		"bedrock":      true, // AWS SDK credential-based; endpoint derived from region, not a fixed URL
+	}
+
+	// Ids that don't route through GetDefaultAPIBase at all (CLI/local tools, no HTTP probe base needed)
+	// and are not in the onboarding probe's base-resolution path.
+	noBaseExpected := map[string]bool{
+		"antigravity":    true, // in-process mock provider — no real upstream
+		"claude-cli":     true, // local CLI subprocess, no HTTP base
+		"claudecli":      true, // alias for claude-cli
+		"codex-cli":      true, // local CLI subprocess, no HTTP base
+		"codexcli":       true, // alias for codex-cli
+		"github-copilot": true, // local gRPC, not HTTP-base-routed
+		"copilot":        true, // alias for github-copilot
+	}
+
+	ids := probeEnumIDsFromYAML(t)
+	t.Logf("ProbeProviderRequest enum contains %d ids", len(ids))
+
+	for _, id := range ids {
+		id := id
+		t.Run(id, func(t *testing.T) {
+			got := GetDefaultAPIBase(id)
+			switch {
+			case needsEndpointAllowlist[id]:
+				// These must NOT have a fixed default — they require per-deployment endpoints.
+				if got != "" {
+					t.Errorf("GetDefaultAPIBase(%q) = %q: id is in needsEndpointAllowlist (per-deployment host required), expected empty string", id, got)
+				}
+			case noBaseExpected[id]:
+				// CLI / local tools — no HTTP base; either "" or a localhost default is acceptable.
+				// We only document; we don't fail.
+			default:
+				// Every other probe-enum id MUST resolve a non-empty base so the
+				// onboarding probe can construct the upstream URL. If this fails,
+				// add a GetDefaultAPIBase case for %q or add it to needsEndpointAllowlist.
+				if got == "" {
+					t.Errorf("GetDefaultAPIBase(%q) = \"\": id is in the ProbeProviderRequest enum but has no default base — "+
+						"add a GetDefaultAPIBase case for %q or add it to needsEndpointAllowlist with a comment explaining why", id, id)
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 2 — per-provider base assertions for newly-wired and key providers
+// Traces to: docs/internal/provider-endpoint-audit-2026-06.md (Findings §A, §B)
+//
+// TestGetDefaultAPIBase_ZAI and the existing aliases already cover z-ai/zai/z.ai.
+// This table covers the newly added and adjacent providers; do not duplicate those.
+// ---------------------------------------------------------------------------
+
+func TestGetDefaultAPIBase_ExactBases(t *testing.T) {
+	// Traces to: docs/internal/provider-endpoint-audit-2026-06.md
+	tests := []struct {
+		id   string
+		want string
+	}{
+		// Anthropic — added to fix onboarding-probe break (audit Category A)
+		{"anthropic", "https://api.anthropic.com/v1"},
+		{"anthropic-messages", "https://api.anthropic.com/v1"},
+		// Moonshot / Kimi — international vs China-mainland split (audit Category B)
+		{"moonshot", "https://api.moonshot.ai/v1"},
+		{"moonshot-cn", "https://api.moonshot.cn/v1"},
+		// MiniMax — international vs China-mainland split (audit Category B)
+		{"minimax", "https://api.minimax.io/v1"},
+		{"minimax-cn", "https://api.minimaxi.com/v1"},
+		// Zhipu / Z.ai — existing, confirmed in TestGetDefaultAPIBase_ZAI; add zhipu here for cross-reference
+		{"zhipu", "https://open.bigmodel.cn/api/paas/v4"},
+		{"z-ai", "https://api.z.ai/api/paas/v4"},
+		// Qwen / DashScope variants
+		{"qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-intl", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-us", "https://dashscope-us.aliyuncs.com/compatible-mode/v1"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.id, func(t *testing.T) {
+			got := GetDefaultAPIBase(tt.id)
+			if got != tt.want {
+				t.Errorf("GetDefaultAPIBase(%q) = %q, want %q", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 — factory recognizes moonshot-cn and minimax-cn
+// Traces to: docs/internal/provider-endpoint-audit-2026-06.md (Findings §B)
+//
+// Regression guard: the factory's case list (factory_provider.go CreateProviderFromConfig)
+// must recognize "moonshot-cn" and "minimax-cn" and build a non-nil provider.
+// Without a case these return "unknown protocol" even though GetDefaultAPIBase knows them.
+// ---------------------------------------------------------------------------
+
+func TestCreateProviderFromConfig_MoonshotCN(t *testing.T) {
+	// Traces to: docs/internal/provider-endpoint-audit-2026-06.md (Category B)
+	// moonshot-cn is the China-mainland Moonshot (Kimi) platform; separate key from intl.
+	const keyRef = "FACTORY_PROVIDER_MOONSHOT_CN_TEST_KEY"
+	t.Setenv(keyRef, "test-key")
+	cfg := &config.ModelConfig{
+		ModelName: "test-moonshot-cn",
+		Model:     "moonshot-cn/moonshot-v1-8k",
+		APIKeyRef: keyRef,
+	}
+
+	p, modelID, err := CreateProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig(moonshot-cn) error: %v — factory may be missing a case for moonshot-cn", err)
+	}
+	if p == nil {
+		t.Fatal("CreateProviderFromConfig(moonshot-cn) returned nil provider")
+	}
+	if modelID != "moonshot-v1-8k" {
+		t.Errorf("modelID = %q, want %q", modelID, "moonshot-v1-8k")
+	}
+	if _, ok := p.(*HTTPProvider); !ok {
+		t.Errorf("expected *HTTPProvider, got %T", p)
+	}
+}
+
+func TestCreateProviderFromConfig_MinimaxCN(t *testing.T) {
+	// Traces to: docs/internal/provider-endpoint-audit-2026-06.md (Category B)
+	// minimax-cn is the China-mainland MiniMax platform; separate key from intl.
+	// The factory also injects reasoning_split:true for both minimax variants.
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&requestBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	const keyRef = "FACTORY_PROVIDER_MINIMAX_CN_TEST_KEY"
+	t.Setenv(keyRef, "test-key")
+	cfg := &config.ModelConfig{
+		ModelName: "test-minimax-cn",
+		Model:     "minimax-cn/MiniMax-M2.5",
+		APIBase:   server.URL,
+		APIKeyRef: keyRef,
+	}
+
+	p, modelID, err := CreateProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig(minimax-cn) error: %v — factory may be missing a case for minimax-cn", err)
+	}
+	if p == nil {
+		t.Fatal("CreateProviderFromConfig(minimax-cn) returned nil provider")
+	}
+	if modelID != "MiniMax-M2.5" {
+		t.Errorf("modelID = %q, want %q", modelID, "MiniMax-M2.5")
+	}
+	// Invoke Chat to let the provider populate requestBody
+	_, _ = p.Chat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, modelID, nil)
+	// minimax-cn must also inject reasoning_split (same branch as minimax)
+	if got, ok := requestBody["reasoning_split"]; !ok || got != true {
+		t.Errorf("minimax-cn: reasoning_split = %v, want true — minimax-cn branch must inject reasoning_split", got)
+	}
+}
+
+// TestProbeEnumProvidersAreKnownProtocols guards the second half of the
+// onboarding consistency contract: every provider id offered to the probe must
+// ALSO be accepted by IsKnownProtocol — otherwise onboarding lets the user TEST
+// the key but then rejects /onboarding/complete with "not a known protocol".
+// This is the gap that left z-ai / moonshot-cn / minimax-cn in the probe enum +
+// factory switch but missing from knownProtocols. A new probe-enum id that isn't
+// wired into knownProtocols fails here with a clear, actionable message.
+func TestProbeEnumProvidersAreKnownProtocols(t *testing.T) {
+	for _, id := range probeEnumIDsFromYAML(t) {
+		if !IsKnownProtocol(id) {
+			t.Errorf("provider id %q is in the ProbeProviderRequest enum but not in "+
+				"knownProtocols — onboarding-complete would reject it. Add %q to the "+
+				"knownProtocols map in factory_provider.go.", id, id)
+		}
 	}
 }

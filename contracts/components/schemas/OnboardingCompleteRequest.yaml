@@ -31,6 +31,15 @@ properties:
           Default model to use for this provider. When omitted, a sensible default is chosen
           per provider (e.g. "claude-sonnet-4-6" for anthropic, "gpt-4o" for openai).
         example: "claude-sonnet-4-6"
+      endpoint:
+        type: string
+        description: >
+          Optional custom API base URL, persisted as the provider entry's api_base.
+          Required for providers that have no fixed default endpoint (e.g. azure,
+          azure-openai — a per-resource host); also usable to override the regional
+          default (e.g. a China vs international host). When omitted, the provider's
+          built-in default base is used.
+        example: "https://my-resource.openai.azure.com/openai/deployments/gpt-4o"
   admin:
     type: object
     description: Initial admin account credentials.

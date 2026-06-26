@@ -776,6 +776,7 @@ export const OnboardingCompleteRequest = z.object({
       id: z.string(),
       api_key: z.string().min(1),
       model: z.string().optional(),
+      endpoint: z.string().optional(),
     })
     .passthrough(),
   admin: z
@@ -808,6 +809,7 @@ export const ProbeProviderRequest = z.object({
     "zai",
     "nvidia",
     "moonshot",
+    "moonshot-cn",
     "shengsuanyun",
     "deepseek",
     "cerebras",
@@ -830,6 +832,7 @@ export const ProbeProviderRequest = z.object({
     "qwen-coding",
     "mimo",
     "minimax",
+    "minimax-cn",
     "coding-plan-anthropic",
     "alibaba-coding-anthropic",
     "antigravity",

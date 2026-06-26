@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -153,6 +154,14 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		"model":       providerModel,
 		"api_key_ref": credRefName,
 	}
+	// Persist a custom endpoint as api_base when supplied (required for providers
+	// with no fixed default base, e.g. azure; also a regional-host override). The
+	// runtime factory reads api_base before falling back to GetDefaultAPIBase.
+	if body.Provider.Endpoint != nil {
+		if ep := strings.TrimSpace(*body.Provider.Endpoint); ep != "" {
+			newProviderEntry["api_base"] = ep
+		}
+	}
 
 	// Pre-compute all expensive crypto operations outside the config lock to
 	// avoid holding configMu for ~300ms across three bcrypt operations.
@@ -221,6 +230,11 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 				entryMap["model"] = providerModel
 				entryMap["model_name"] = providerModel
 				entryMap["provider"] = body.Provider.Id
+				if body.Provider.Endpoint != nil {
+					if ep := strings.TrimSpace(*body.Provider.Endpoint); ep != "" {
+						entryMap["api_base"] = ep
+					}
+				}
 				providerList[i] = entryMap
 				found = true
 				break

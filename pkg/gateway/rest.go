@@ -1152,6 +1152,12 @@ func fetchUpstreamModels(baseURL, apiKey string) ([]string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("X-Api-Key", apiKey)
+	// Anthropic's GET /v1/models requires the anthropic-version header in addition
+	// to x-api-key. Scope it to the Anthropic host so we don't perturb providers
+	// that might reject unknown headers.
+	if strings.Contains(baseURL, "api.anthropic.com") {
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

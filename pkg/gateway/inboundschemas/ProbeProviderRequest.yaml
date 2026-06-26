@@ -29,6 +29,7 @@ properties:
       - zai
       - nvidia
       - moonshot
+      - moonshot-cn
       - shengsuanyun
       - deepseek
       - cerebras
@@ -51,6 +52,7 @@ properties:
       - qwen-coding
       - mimo
       - minimax
+      - minimax-cn
       - coding-plan-anthropic
       - alibaba-coding-anthropic
       - antigravity

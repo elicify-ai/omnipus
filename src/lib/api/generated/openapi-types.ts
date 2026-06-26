@@ -2464,6 +2464,11 @@ export interface components {
                  * @example claude-sonnet-4-6
                  */
                 model?: string;
+                /**
+                 * @description Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default (e.g. a China vs international host). When omitted, the provider's built-in default base is used.
+                 * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
+                 */
+                endpoint?: string;
             };
             /** @description Initial admin account credentials. */
             admin: {
@@ -2487,7 +2492,7 @@ export interface components {
              * @example openrouter
              * @enum {string}
              */
-            id: "anthropic" | "anthropic-messages" | "openai" | "openrouter" | "gemini" | "google" | "ollama" | "azure" | "azure-openai" | "bedrock" | "litellm" | "groq" | "zhipu" | "z-ai" | "zai" | "nvidia" | "moonshot" | "shengsuanyun" | "deepseek" | "cerebras" | "vivgrid" | "volcengine" | "vllm" | "qwen" | "qwen-intl" | "qwen-international" | "dashscope-intl" | "qwen-us" | "dashscope-us" | "mistral" | "avian" | "longcat" | "modelscope" | "novita" | "coding-plan" | "alibaba-coding" | "qwen-coding" | "mimo" | "minimax" | "coding-plan-anthropic" | "alibaba-coding-anthropic" | "antigravity" | "claude-cli" | "claudecli" | "codex-cli" | "codexcli" | "github-copilot" | "copilot";
+            id: "anthropic" | "anthropic-messages" | "openai" | "openrouter" | "gemini" | "google" | "ollama" | "azure" | "azure-openai" | "bedrock" | "litellm" | "groq" | "zhipu" | "z-ai" | "zai" | "nvidia" | "moonshot" | "moonshot-cn" | "shengsuanyun" | "deepseek" | "cerebras" | "vivgrid" | "volcengine" | "vllm" | "qwen" | "qwen-intl" | "qwen-international" | "dashscope-intl" | "qwen-us" | "dashscope-us" | "mistral" | "avian" | "longcat" | "modelscope" | "novita" | "coding-plan" | "alibaba-coding" | "qwen-coding" | "mimo" | "minimax" | "minimax-cn" | "coding-plan-anthropic" | "alibaba-coding-anthropic" | "antigravity" | "claude-cli" | "claudecli" | "codex-cli" | "codexcli" | "github-copilot" | "copilot";
             /**
              * @description API key to test against the provider.
              * @example sk-or-...
