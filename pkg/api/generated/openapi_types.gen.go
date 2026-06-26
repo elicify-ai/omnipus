@@ -7899,6 +7899,12 @@ type TokenUsageSummary struct {
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
+	// Partial True when one or more session stores failed to load during aggregation, so the totals may under-count. Clients should surface a "some sessions could not be read" indicator rather than presenting the number as authoritative. Absent (or false) when every store loaded cleanly.
+	Partial *bool `json:"partial,omitempty"`
+
+	// PartialErrorCount Number of session-store load errors encountered (present only when partial is true).
+	PartialErrorCount *int `json:"partial_error_count,omitempty"`
+
 	// PeriodEnd End of the aggregation period (exclusive), UTC.
 	PeriodEnd time.Time `json:"period_end"`
 

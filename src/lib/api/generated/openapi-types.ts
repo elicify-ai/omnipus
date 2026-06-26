@@ -7205,6 +7205,16 @@ export interface components {
             by_model?: {
                 [key: string]: components["schemas"]["ModelTokens"];
             };
+            /**
+             * @description True when one or more session stores failed to load during aggregation, so the totals may under-count. Clients should surface a "some sessions could not be read" indicator rather than presenting the number as authoritative. Absent (or false) when every store loaded cleanly.
+             * @example false
+             */
+            partial?: boolean;
+            /**
+             * @description Number of session-store load errors encountered (present only when partial is true).
+             * @example 0
+             */
+            partial_error_count?: number;
         };
         /** @description Per-model token breakdown within a session or usage summary. */
         ModelTokens: {

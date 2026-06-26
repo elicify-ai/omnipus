@@ -222,20 +222,33 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	// the AgentTokenEntry element type is the contract source of truth that
 	// make verify-contracts tracks for drift.
 	type tokenUsageResp struct { // not-wire-format: wrapper over gen.AgentTokenEntry items, mirrors TokenUsageSummary with cache+by_model extensions
-		Agents           []agentEntryWithByModel `json:"agents"`
-		ByModel          interface{}             `json:"by_model,omitempty"`
-		PeriodEnd        time.Time               `json:"period_end"`
-		PeriodStart      time.Time               `json:"period_start"`
-		TokensCacheRead  *int                    `json:"tokens_cache_read,omitempty"`
-		TokensCacheWrite *int                    `json:"tokens_cache_write,omitempty"`
+		Agents            []agentEntryWithByModel `json:"agents"`
+		ByModel           interface{}             `json:"by_model,omitempty"`
+		PeriodEnd         time.Time               `json:"period_end"`
+		PeriodStart       time.Time               `json:"period_start"`
+		TokensCacheRead   *int                    `json:"tokens_cache_read,omitempty"`
+		TokensCacheWrite  *int                    `json:"tokens_cache_write,omitempty"`
+		Partial           bool                    `json:"partial,omitempty"`
+		PartialErrorCount *int                    `json:"partial_error_count,omitempty"`
+	}
+
+	// Surface partial-store failures so the dashboard can warn the operator that
+	// the totals may under-count, instead of presenting a degraded number as
+	// authoritative (mirrors the get_usage tool's partial flag).
+	var partialCount *int
+	if len(errs) > 0 {
+		n := len(errs)
+		partialCount = &n
 	}
 
 	jsonOK(w, tokenUsageResp{
-		Agents:           enriched,
-		ByModel:          crossModelOut,
-		PeriodEnd:        report.PeriodEnd,
-		PeriodStart:      report.PeriodStart,
-		TokensCacheRead:  nonZeroPtr(report.Total.CacheRead),
-		TokensCacheWrite: nonZeroPtr(report.Total.CacheWrite),
+		Agents:            enriched,
+		ByModel:           crossModelOut,
+		PeriodEnd:         report.PeriodEnd,
+		PeriodStart:       report.PeriodStart,
+		TokensCacheRead:   nonZeroPtr(report.Total.CacheRead),
+		TokensCacheWrite:  nonZeroPtr(report.Total.CacheWrite),
+		Partial:           len(errs) > 0,
+		PartialErrorCount: partialCount,
 	})
 }

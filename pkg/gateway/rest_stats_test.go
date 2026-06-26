@@ -507,3 +507,139 @@ func TestHandleTokenStats_WireShapeMatchesContract(t *testing.T) {
 	assert.Contains(t, reMarshaledStr, `"cache_read":50`,
 		"re-marshaled output must contain cache_read:50")
 }
+
+// TestHandleTokenStats_PartialFlag exercises the partial / partial_error_count
+// fields added to the /api/v1/stats/tokens response in rest_stats.go.
+//
+// The partial flag is set when agentLoop.ListAllSessions() returns a non-empty
+// errs slice — indicating that at least one session store failed to enumerate
+// sessions (ListSessions returned an error rather than just skipping a bad file).
+//
+// # Background: what actually surfaces in errs
+//
+// UnifiedStore.ListSessions() swallows individual bad meta.json entries (it logs
+// a warning and continues). An error is only returned when os.ReadDir on the
+// store's base directory fails (e.g., EACCES, ENOTDIR, ENOENT on a pre-existing
+// dir). AgentLoop.ListAllSessions() then appends that error to errs.
+//
+// Concretely: making the shared sessions directory unreadable (chmod 000) causes
+// sharedSessionStore.ListSessions() to return an error, which lands in errs.
+//
+// # Sub-tests
+//
+//   - Clean: normal sessions, no errs → response has NO partial field (or
+//     partial:false) and NO partial_error_count.
+//   - Partial: shared sessions directory made unreadable → ListAllSessions
+//     returns errs with ≥1 entry → response has partial:true and
+//     partial_error_count:1; status is still 200.
+//
+// Traces to: rest_stats.go — tokenUsageResp.Partial / tokenUsageResp.PartialErrorCount
+func TestHandleTokenStats_PartialFlag(t *testing.T) {
+	// ── Sub-test 1: clean case ───────────────────────────────────────────────
+	// BDD: Given normal sessions with no store errors,
+	// When GET /api/v1/stats/tokens?period=all is called,
+	// Then 200 with partial absent or false, and partial_error_count absent.
+	// Traces to: rest_stats.go:231-232 (Partial bool `json:"partial,omitempty"`)
+	t.Run("clean_no_partial", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+		now := time.Now().UTC()
+		writeTestSessionMeta(t, api.homePath, "sess-clean-001", "agent-clean", 100, 50, now)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens", nil)
+		r.URL.RawQuery = "period=all"
+		api.HandleTokenStats(w, r)
+
+		require.Equal(t, http.StatusOK, w.Code,
+			"GET /stats/tokens?period=all must return 200 in clean case; body=%s", w.Body.String())
+
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+		// partial must be absent OR false (omitempty on bool means absent when false).
+		if partialVal, hasPartial := resp["partial"]; hasPartial {
+			assert.Equal(t, false, partialVal,
+				"partial must be false in the clean case; body=%s", w.Body.String())
+		}
+		// partial_error_count must be absent (omitempty on *int means absent when nil).
+		_, hasPartialCount := resp["partial_error_count"]
+		assert.False(t, hasPartialCount,
+			"partial_error_count must be absent in the clean case; body=%s", w.Body.String())
+
+		// Differentiation: the valid session's tokens must appear — proving the
+		// handler is not just returning a trivial empty response.
+		agents, _ := resp["agents"].([]any)
+		require.NotEmpty(t, agents,
+			"agents must be non-empty in the clean case (session was written); body=%s", w.Body.String())
+	})
+
+	// ── Sub-test 2: partial case ─────────────────────────────────────────────
+	// BDD: Given the shared sessions directory is unreadable (chmod 000),
+	// so that sharedSessionStore.ListSessions() returns an EACCES error,
+	// When GET /api/v1/stats/tokens?period=all is called,
+	// Then 200 (partial failure does not abort the request),
+	//      partial:true, partial_error_count >= 1.
+	// Traces to: rest_stats.go:239-242, 251 — errs slice drives both fields.
+	t.Run("partial_unreadable_sessions_dir", func(t *testing.T) {
+		// chmod 000 does not block root (root bypasses DAC permission checks), so
+		// os.ReadDir would still succeed and no partial error would surface. Skip
+		// when running as root (e.g. some CI runners) rather than false-fail.
+		if os.Geteuid() == 0 {
+			t.Skip("chmod-based permission test is a no-op as root")
+		}
+
+		api := newTestRestAPIWithHome(t)
+
+		// Locate the shared sessions directory.
+		// AgentLoop uses homePath = filepath.Dir(cfg.WorkspacePath()) = filepath.Dir(api.homePath).
+		// sharedSessionStore baseDir = homePath/sessions = filepath.Dir(api.homePath)/sessions.
+		agentLoopHome := filepath.Dir(api.homePath)
+		sessionsDir := filepath.Join(agentLoopHome, "sessions")
+
+		// Ensure the sessions directory exists so chmod has a target.
+		require.NoError(t, os.MkdirAll(sessionsDir, 0o700))
+
+		// Register cleanup to restore permissions BEFORE t.TempDir() removes the
+		// parent tree — otherwise RemoveAll would fail on a mode-000 directory.
+		t.Cleanup(func() {
+			// Restore read+execute so the cleanup can descend into the tree.
+			_ = os.Chmod(sessionsDir, 0o700)
+		})
+
+		// Remove read and execute bits → os.ReadDir(sessionsDir) returns EACCES.
+		require.NoError(t, os.Chmod(sessionsDir, 0o000),
+			"chmod 000 on sessions dir must succeed (running as non-root)")
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens", nil)
+		r.URL.RawQuery = "period=all"
+		api.HandleTokenStats(w, r)
+
+		// Handler must still return 200 — partial is a warning, not a fatal error.
+		require.Equal(t, http.StatusOK, w.Code,
+			"GET /stats/tokens must return 200 even when sessions dir is unreadable; body=%s", w.Body.String())
+
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+		// partial must be present and true.
+		partialVal, hasPartial := resp["partial"]
+		require.True(t, hasPartial,
+			"partial field must be present when session store errors occurred; body=%s", w.Body.String())
+		assert.Equal(t, true, partialVal,
+			"partial must be true when sharedSessionStore.ListSessions() failed; body=%s", w.Body.String())
+
+		// partial_error_count must be present and >= 1.
+		partialCountVal, hasPartialCount := resp["partial_error_count"]
+		require.True(t, hasPartialCount,
+			"partial_error_count must be present when partial:true; body=%s", w.Body.String())
+		partialCount, ok := partialCountVal.(float64) // JSON numbers decode as float64.
+		require.True(t, ok,
+			"partial_error_count must be a number; got %T; body=%s", partialCountVal, w.Body.String())
+		assert.GreaterOrEqual(t, int(partialCount), 1,
+			"partial_error_count must be >= 1; got %v; body=%s", partialCount, w.Body.String())
+
+		// Restore permissions so the cleanup goroutine can remove the dir.
+		require.NoError(t, os.Chmod(sessionsDir, 0o700))
+	})
+}

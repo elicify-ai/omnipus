@@ -317,6 +317,17 @@ export function UsageScreen() {
           </div>
         )}
 
+        {/* Partial-data warning — some session stores failed to load, so totals may under-count. */}
+        {!isLoading && !statsError && summary?.partial && (
+          <div
+            className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-4 py-3 text-sm text-[var(--color-secondary)]"
+            data-testid="usage-partial-warning"
+            role="status"
+          >
+            Some sessions could not be read — these totals may under-count.
+          </div>
+        )}
+
         {/* Empty state */}
         {!isLoading && !statsError && isEmpty && (
           <div

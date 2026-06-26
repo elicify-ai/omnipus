@@ -465,3 +465,42 @@ func TestRecordExternalToolResult(t *testing.T) {
 			"two calls with empty CallID must produce distinct generated IDs")
 	})
 }
+
+// TestExternalDispatch_G2_NeverAttributesTokens is the production-gate test for the
+// subagent_3p scope guard (token-usage-tracking-2026-06 / ADR-023 §D4): an
+// external-CLI sub-turn must contribute ZERO usage. The external CLI runs its own
+// LLM on a separate engine we cannot meter, so runExternalCLISubTurn must NEVER call
+// AddTurnStats / AddTurnCacheStats — regardless of what the run emits.
+//
+// Unlike the session-side simulation (pkg/session TestAppendTranscript_G2_*, which
+// only proves a zero-token entry contributes zero), this drives the real dispatch
+// path with a fake driver and asserts the turn's accumulated stats stay zero. It
+// fails loudly if anyone later wires token attribution into the external path.
+func TestExternalDispatch_G2_NeverAttributesTokens(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	al, ts := newExternalTestLoop(t, "claude-code", "")
+	fr, restore := withFakeDriver(t)
+	defer restore()
+
+	// Emit a normal run (output + end). Even a token-bearing external run must not
+	// flow into the turn's stats — the dispatch path reads no usage counters.
+	go func() {
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "external work done"}})
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		fr.Cancel()
+	}()
+
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	tokens, cost := ts.GetTurnStats()
+	assert.Zero(t, tokens, "external-CLI sub-turn must attribute 0 tokens (subagent_3p is not metered)")
+	assert.Zero(t, cost, "external-CLI sub-turn must attribute 0 cost")
+
+	cacheRead, cacheWrite := ts.GetTurnCacheStats()
+	assert.Zero(t, cacheRead, "external-CLI sub-turn must attribute 0 cache-read tokens")
+	assert.Zero(t, cacheWrite, "external-CLI sub-turn must attribute 0 cache-write tokens")
+}
