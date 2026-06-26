@@ -771,7 +771,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// Wire management tool dependencies into the agent loop (FR-001, FR-002).
 	// Called after SetReloadFunc so the reload trigger is available to system
 	// tools that trigger hot-reload (e.g., create_agent).
-	// WireSysagentDeps immediately registers all 37 management tools on every agent
+	// WireSysagentDeps immediately registers all 35 management tools on every agent
 	// in the current registry and stashes deps for re-application on hot-reload.
 
 	// Build skill engine components for the sysagent tool deps (Spec-6 U1).
@@ -2278,21 +2278,10 @@ func setupCronTool(
 	// schedule's OWNING agent (never the default), bounded by the per-run
 	// deadline, and raises a notification + channel alert on failure. It is the
 	// only fire path — the cron service records a no-op when no runner is set.
-	// An owner is available only when it is registered AND enabled (HIGH:
-	// disabled-but-registered owner must not run). The registry registers all
-	// agents regardless of Enabled, so we additionally consult the agent's
-	// config IsActive() flag — a disabled owner is treated as unavailable.
+	// An owner is available when it is registered in the runtime registry.
 	checker := agentCheckerFunc(func(agentID string) bool {
-		if _, ok := agentLoop.GetRegistry().GetAgent(agentID); !ok {
-			return false
-		}
-		ac := findAgentConfig(agentLoop.GetConfig(), agentID)
-		if ac == nil {
-			// Registered in the runtime registry but absent from config (e.g. the
-			// generic default instance) — treat as available for back-compat.
-			return true
-		}
-		return ac.IsActive()
+		_, ok := agentLoop.GetRegistry().GetAgent(agentID)
+		return ok
 	})
 	runner := newScheduledRunner(agentLoop, checker, msgBus, notifStore, agentLoop.GetConfig)
 	// M2: resolve the channel registry lazily — the channel manager is wired onto

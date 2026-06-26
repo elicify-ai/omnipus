@@ -395,15 +395,13 @@ func TestSeedConfig_JimProfileApplied(t *testing.T) {
 // Traces to: quizzical-marinating-frog.md PR 5 — idempotent migration.
 func TestSeedConfig_JimProfileMigration(t *testing.T) {
 	t.Run("empty profile is filled with seed", func(t *testing.T) {
-		enabled := true
 		cfg := &config.Config{
 			Agents: config.AgentsConfig{
 				List: []config.AgentConfig{
 					{
-						ID:      string(IDJim),
-						Name:    "Jim — Planner & Orchestrator",
-						Locked:  true,
-						Enabled: &enabled,
+						ID:     string(IDJim),
+						Name:   "Jim — Planner & Orchestrator",
+						Locked: true,
 						// SandboxProfile intentionally empty (pre-PR5 config)
 					},
 				},
@@ -425,7 +423,6 @@ func TestSeedConfig_JimProfileMigration(t *testing.T) {
 	})
 
 	t.Run("operator-set profile is preserved", func(t *testing.T) {
-		enabled := true
 		cfg := &config.Config{
 			Agents: config.AgentsConfig{
 				List: []config.AgentConfig{
@@ -433,7 +430,6 @@ func TestSeedConfig_JimProfileMigration(t *testing.T) {
 						ID:             string(IDJim),
 						Name:           "Jim — Planner & Orchestrator",
 						Locked:         true,
-						Enabled:        &enabled,
 						SandboxProfile: config.SandboxProfileHost, // operator override
 					},
 				},

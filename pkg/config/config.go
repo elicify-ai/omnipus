@@ -784,11 +784,6 @@ type AgentConfig struct {
 	// HeartbeatInterval is this agent's heartbeat period in minutes (min 5). Zero
 	// means "unset" → fall back to the migrated/global default. Main agents only.
 	HeartbeatInterval int `json:"heartbeat_interval,omitempty"`
-	// Enabled controls whether the agent is active. A nil pointer means
-	// "treat as active" for backward compatibility with configs that predate
-	// this field. Agents with Enabled=false are inactive; Enabled=true are
-	// explicitly active. Use IsActive() to read the effective state.
-	Enabled *bool `json:"enabled,omitempty"`
 	// Color is the hex color code for this agent's avatar in the UI (e.g. "#22C55E").
 	Color string `json:"color,omitempty"`
 	// Icon is the Phosphor icon name for this agent's avatar in the UI (e.g. "robot").
@@ -821,14 +816,6 @@ type AgentConfig struct {
 	// is a struct type and always serializes (writing "0001-01-01T00:00:00Z"
 	// for agents that were never PUT-updated), defeating omitempty.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
-}
-
-// IsActive returns the effective active state of this agent.
-// Agents without an explicit Enabled field (nil) are treated as active for
-// backward compatibility with configs created before the Enabled field existed.
-// Agents with Enabled=false are inactive; Enabled=true are explicitly active.
-func (a AgentConfig) IsActive() bool {
-	return a.Enabled == nil || *a.Enabled
 }
 
 // HeartbeatIsEnabled returns whether this agent's heartbeat schedule should run

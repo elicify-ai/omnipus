@@ -99,13 +99,11 @@ func TestScenario2AvaCreatesAgentPenny(t *testing.T) {
 
 	// Simulate Ava creating a new custom agent "penny" — this is what system.agent.create
 	// does at the config layer.
-	enabled := true
 	penny := config.AgentConfig{
-		ID:      "penny",
-		Name:    "Penny — Custom",
-		Type:    config.AgentTypeCustom,
-		Locked:  false, // custom agents are NOT locked
-		Enabled: &enabled,
+		ID:     "penny",
+		Name:   "Penny — Custom",
+		Type:   config.AgentTypeCustom,
+		Locked: false, // custom agents are NOT locked
 	}
 	cfg.Agents.List = append(cfg.Agents.List, penny)
 

@@ -756,7 +756,6 @@ func SeedConfig(cfg *config.Config) bool {
 		if existing[string(ca.ID)] {
 			continue
 		}
-		enabled := true
 		dp, policies, seedProfile := coreAgentSeed(ca.ID)
 		isSubagentTier := IsSubagentTierID(ca.ID)
 		// Mia is the default agent on fresh installs: she appears first in the
@@ -780,7 +779,6 @@ func SeedConfig(cfg *config.Config) bool {
 			Icon:           ca.Icon,
 			Type:           agentType,
 			Locked:         true,
-			Enabled:        &enabled,
 			Default:        isDefault,
 			SandboxProfile: seedProfile,
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill

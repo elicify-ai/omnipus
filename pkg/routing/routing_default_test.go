@@ -21,11 +21,10 @@ import (
 // (coreagent.SeedConfig → Default=true on mia → resolver returns "mia") is covered in
 // pkg/coreagent (TestSeedConfig_MiaIsDefault). Here we test the resolver logic only.
 func TestResolveRoute_MiaIsDefault(t *testing.T) {
-	enabled := true
 	agents := []config.AgentConfig{
-		{ID: "mia", Default: true, Enabled: &enabled},
-		{ID: "jim", Enabled: &enabled},
-		{ID: "ava", Enabled: &enabled},
+		{ID: "mia", Default: true},
+		{ID: "jim"},
+		{ID: "ava"},
 	}
 	cfg := testConfig(agents, nil)
 	r := NewRouteResolver(cfg)
@@ -47,10 +46,9 @@ func TestResolveRoute_MiaIsDefault(t *testing.T) {
 //	When ResolveRoute for channel=telegram with no peer/guild/team,
 //	Then the resolved agent is "jim" (binding.channel takes priority).
 func TestResolveRoute_ChannelBindingOverridesDefault(t *testing.T) {
-	enabled := true
 	agents := []config.AgentConfig{
-		{ID: "mia", Default: true, Enabled: &enabled},
-		{ID: "jim", Enabled: &enabled},
+		{ID: "mia", Default: true},
+		{ID: "jim"},
 	}
 	bindings := []config.AgentBinding{
 		{
@@ -76,94 +74,29 @@ func TestResolveRoute_ChannelBindingOverridesDefault(t *testing.T) {
 	}
 }
 
-// TestResolveRoute_NoDefaultFallsToFirstEnabledAgent verifies that when no agent
-// has Default=true, the resolver picks the first enabled agent instead of
+// TestResolveRoute_NoDefaultFallsToFirstAgent verifies that when no agent
+// has Default=true, the resolver picks the first chat-target agent instead of
 // the DefaultAgentID constant ("main").
 //
-// BDD: Given agents alpha (enabled) and beta (enabled), neither is default,
+// BDD: Given agents alpha and beta, neither is default,
 //
 //	When ResolveRoute is called,
-//	Then the resolved agent is "alpha" (first enabled),
+//	Then the resolved agent is "alpha" (first in list),
 //	And the old "main" constant is NOT returned.
-func TestResolveRoute_NoDefaultFallsToFirstEnabledAgent(t *testing.T) {
-	enabled := true
+func TestResolveRoute_NoDefaultFallsToFirstAgent(t *testing.T) {
 	agents := []config.AgentConfig{
-		{ID: "alpha", Enabled: &enabled},
-		{ID: "beta", Enabled: &enabled},
+		{ID: "alpha"},
+		{ID: "beta"},
 	}
 	cfg := testConfig(agents, nil)
 	r := NewRouteResolver(cfg)
 
 	route := r.ResolveRoute(RouteInput{Channel: "cli"})
 	if route.AgentID != "alpha" {
-		t.Errorf("AgentID = %q, want 'alpha' (first enabled agent when no default set)", route.AgentID)
+		t.Errorf("AgentID = %q, want 'alpha' (first agent when no default set)", route.AgentID)
 	}
 	if route.AgentID == DefaultAgentID {
-		t.Errorf("AgentID must NOT be %q — fallback must be the first enabled agent, not the constant", DefaultAgentID)
-	}
-}
-
-// TestResolveRoute_AllDisabledFallsToDefaultConstant verifies that when all
-// agents are disabled, the resolver falls back to the DefaultAgentID constant.
-//
-// BDD: Given agents alpha and beta, both explicitly disabled,
-//
-//	When ResolveRoute is called,
-//	Then the resolved agent is DefaultAgentID ("main") as a last resort.
-func TestResolveRoute_AllDisabledFallsToDefaultConstant(t *testing.T) {
-	disabled := false
-	agents := []config.AgentConfig{
-		{ID: "alpha", Enabled: &disabled},
-		{ID: "beta", Enabled: &disabled},
-	}
-	cfg := testConfig(agents, nil)
-	r := NewRouteResolver(cfg)
-
-	route := r.ResolveRoute(RouteInput{Channel: "cli"})
-	if route.AgentID != DefaultAgentID {
-		t.Errorf("AgentID = %q, want %q (all-disabled must fall back to DefaultAgentID)", route.AgentID, DefaultAgentID)
-	}
-}
-
-// TestResolveRoute_DisabledDefaultSkipsToFirstEnabled verifies that when the
-// agent marked Default=true is explicitly disabled, the resolver falls back to
-// the first enabled agent rather than returning the disabled default or the
-// DefaultAgentID constant.
-//
-// BDD: Given "mia" is Default=true but Enabled=false, and "jim" is Enabled=true,
-//
-//	When ResolveRoute is called,
-//	Then the resolved agent is "jim" (first enabled non-default),
-//	And NOT "mia" (disabled default must be skipped).
-//
-// Traces to: sprint/258-jun-2026 — routing fallback picks first ENABLED agent.
-//
-// Previously: PRODUCT BUG in resolveDefaultAgentID (route.go:254) returned a disabled
-// agent when it had Default=true because the loop only checked `a.Default` and NOT
-// `a.IsActive()`. Fixed by backend-lead: resolveDefaultAgentID now skips disabled
-// agents in the Default=true pass and falls through to the first-enabled-agent fallback.
-// This test was written to catch the bug and now confirms the fix is stable. Keep it.
-func TestResolveRoute_DisabledDefaultSkipsToFirstEnabled(t *testing.T) {
-	disabled := false
-	enabled := true
-	agents := []config.AgentConfig{
-		{ID: "mia", Default: true, Enabled: &disabled},
-		{ID: "jim", Enabled: &enabled},
-	}
-	cfg := testConfig(agents, nil)
-	r := NewRouteResolver(cfg)
-
-	route := r.ResolveRoute(RouteInput{Channel: "telegram"})
-	if route.AgentID == "mia" {
-		t.Errorf(
-			"PRODUCT BUG: AgentID = %q (disabled default was returned) — "+
-				"resolveDefaultAgentID must skip disabled agents even when Default=true. "+
-				"Fix: add a.IsActive() check in pkg/routing/route.go:resolveDefaultAgentID.",
-			route.AgentID)
-	}
-	// "jim" is the only enabled agent — must be selected.
-	if route.AgentID != "jim" {
-		t.Errorf("AgentID = %q, want 'jim' (only enabled agent when default is disabled)", route.AgentID)
+		t.Errorf("AgentID must NOT be %q — fallback must be the first available agent, not the constant", DefaultAgentID)
 	}
 }
 
@@ -177,10 +110,9 @@ func TestResolveRoute_DisabledDefaultSkipsToFirstEnabled(t *testing.T) {
 //
 // Traces to: sprint/258-jun-2026 — routing precedence, channel binding over no-default.
 func TestResolveRoute_ChannelBindingWinsWithNoGlobalDefault(t *testing.T) {
-	enabled := true
 	agents := []config.AgentConfig{
-		{ID: "mia", Enabled: &enabled}, // no Default=true
-		{ID: "jim", Enabled: &enabled},
+		{ID: "mia"}, // no Default=true
+		{ID: "jim"},
 	}
 	bindings := []config.AgentBinding{
 		{
@@ -217,10 +149,9 @@ func TestResolveRoute_ChannelBindingWinsWithNoGlobalDefault(t *testing.T) {
 //
 // Traces to: sprint/258-jun-2026 — routing fallback, non-existent agent in binding.
 func TestResolveRoute_NonExistentAgentInBindingFallsToDefault(t *testing.T) {
-	enabled := true
 	agents := []config.AgentConfig{
-		{ID: "mia", Default: true, Enabled: &enabled},
-		{ID: "jim", Enabled: &enabled},
+		{ID: "mia", Default: true},
+		{ID: "jim"},
 	}
 	bindings := []config.AgentBinding{
 		{

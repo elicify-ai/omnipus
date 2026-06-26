@@ -49,14 +49,12 @@ func seedTestAgents(cfg *config.Config) {
 		}
 	}
 	if !sysPresent {
-		enabled := true
 		cfg.Agents.List = append([]config.AgentConfig{
 			{
-				ID:      "omnipus-system",
-				Name:    "Omnipus",
-				Type:    config.AgentTypeSystem,
-				Locked:  true,
-				Enabled: &enabled,
+				ID:     "omnipus-system",
+				Name:   "Omnipus",
+				Type:   config.AgentTypeSystem,
+				Locked: true,
 			},
 		}, cfg.Agents.List...)
 	}

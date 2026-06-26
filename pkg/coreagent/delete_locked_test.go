@@ -72,13 +72,11 @@ func TestDeleteLockedCoreAgentRejected(t *testing.T) {
 	}
 
 	// Differentiation: a custom agent is NOT locked.
-	enabled := true
 	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
-		ID:      "penny-custom",
-		Name:    "Penny",
-		Type:    config.AgentTypeCustom,
-		Locked:  false,
-		Enabled: &enabled,
+		ID:     "penny-custom",
+		Name:   "Penny",
+		Type:   config.AgentTypeCustom,
+		Locked: false,
 	})
 	penny := findAgent(cfg, "penny-custom")
 	require.NotNil(t, penny)

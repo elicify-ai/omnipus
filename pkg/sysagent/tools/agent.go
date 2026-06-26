@@ -66,42 +66,6 @@ func validateAgentIcon(s string) error {
 	return nil
 }
 
-// setAgentEnabled is the shared implementation for activate and deactivate.
-// id must not be empty. Locked (core) agents cannot be toggled.
-func setAgentEnabled(deps *Deps, id string, enabled bool) *tools.ToolResult {
-	if id == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
-	}
-	var found bool
-	err := deps.WithConfig(func(cfg *config.Config) error {
-		for i, a := range cfg.Agents.List {
-			if a.ID == id {
-				if a.Locked {
-					return fmt.Errorf("agent %q is a locked core agent and cannot be enabled/disabled", id)
-				}
-				found = true
-				cfg.Agents.List[i].Enabled = &enabled
-				return nil
-			}
-		}
-		return nil // not found — handled after WithConfig returns
-	})
-	if err != nil {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "Check disk space and permissions"))
-	}
-	if !found {
-		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND",
-			fmt.Sprintf("No agent with ID %q", id),
-			"Use list_agents to see available agents",
-		))
-	}
-	slog.Info("sysagent: agent enabled state changed", "id", id, "enabled", enabled)
-	return tools.NewToolResult(successJSON(map[string]any{
-		"id":      id,
-		"enabled": enabled,
-	}))
-}
-
 // ---- system.agent.create ----
 
 // AgentCreateTool implements system.agent.create per BRD §D.4.2.
@@ -263,14 +227,12 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 				return fmt.Errorf("AGENT_ALREADY_EXISTS: an agent with ID %q already exists", id)
 			}
 		}
-		enabled := true
 		newAgent := config.AgentConfig{
 			ID:          id,
 			Name:        name,
 			Description: description,
 			Color:       color,
 			Icon:        icon,
-			Enabled:     &enabled,
 			Model:       &config.AgentModelConfig{Primary: model},
 		}
 		// Agent type / runtime (W4). Subagent + subagent_3p persist as worker;
@@ -637,58 +599,4 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 		"id":      id,
 		"deleted": true,
 	}))
-}
-
-// ---- system.agent.activate ----
-
-// AgentActivateTool implements system.agent.activate per BRD §D.4.2.
-// It sets Enabled=true on the agent entry and persists the change via SaveConfig.
-type AgentActivateTool struct{ deps *Deps }
-
-func NewAgentActivateTool(d *Deps) *AgentActivateTool { return &AgentActivateTool{deps: d} }
-
-func (t *AgentActivateTool) Name() string           { return "activate_agent" }
-func (t *AgentActivateTool) Scope() tools.ToolScope { return tools.ScopeCore }
-func (t *AgentActivateTool) Description() string {
-	return "Activate a core or custom agent, persisting the enabled state.\nParameters: id (required)."
-}
-
-func (t *AgentActivateTool) Parameters() map[string]any {
-	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"id": map[string]any{"type": "string"}},
-		"required":   []string{"id"},
-	}
-}
-
-func (t *AgentActivateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	id, _ := args["id"].(string)
-	return setAgentEnabled(t.deps, id, true)
-}
-
-// ---- system.agent.deactivate ----
-
-// AgentDeactivateTool implements system.agent.deactivate per BRD §D.4.2.
-// It sets Enabled=false on the agent entry and persists the change via SaveConfig.
-type AgentDeactivateTool struct{ deps *Deps }
-
-func NewAgentDeactivateTool(d *Deps) *AgentDeactivateTool { return &AgentDeactivateTool{deps: d} }
-
-func (t *AgentDeactivateTool) Name() string           { return "deactivate_agent" }
-func (t *AgentDeactivateTool) Scope() tools.ToolScope { return tools.ScopeCore }
-func (t *AgentDeactivateTool) Description() string {
-	return "Deactivate an agent (makes it unavailable for new sessions), persisting the disabled state.\nParameters: id (required)."
-}
-
-func (t *AgentDeactivateTool) Parameters() map[string]any {
-	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"id": map[string]any{"type": "string"}},
-		"required":   []string{"id"},
-	}
-}
-
-func (t *AgentDeactivateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	id, _ := args["id"].(string)
-	return setAgentEnabled(t.deps, id, false)
 }

@@ -82,8 +82,6 @@ const EXPLICIT_LABELS: Record<string, string> = {
   create_agent: 'Create agent',
   update_agent: 'Update agent',
   delete_agent: 'Delete agent',
-  activate_agent: 'Activate agent',
-  deactivate_agent: 'Deactivate agent',
   read_agent_metadata: 'Read agent metadata',
   write_agent_metadata: 'Write agent metadata',
   // Tool discovery — unified multi-action tool (§-consolidation: load_tool +

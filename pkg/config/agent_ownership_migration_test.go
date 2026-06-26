@@ -70,13 +70,6 @@ func buildMigrationFixture(t *testing.T, admins []UserConfig, agents []AgentConf
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.json")
 
-	enabled := true
-	for i := range agents {
-		if agents[i].Enabled == nil {
-			agents[i].Enabled = &enabled
-		}
-	}
-
 	cfg := &Config{
 		Version: CurrentVersion,
 		Gateway: GatewayConfig{

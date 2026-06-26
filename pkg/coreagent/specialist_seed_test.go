@@ -33,9 +33,6 @@ func TestSeedSpecialists(t *testing.T) {
 			require.NotNil(t, ac.Subagents.Executor)
 			assert.Equal(t, config.ExecutorKindNative, ac.Subagents.Executor.EffectiveKind(),
 				"specialists run native")
-			require.NotNil(t, ac.Enabled)
-			assert.True(t, *ac.Enabled)
-
 			assert.True(t, coreagent.IsSpecialistID(id))
 			assert.True(t, coreagent.IsSubagentTierID(id))
 			assert.False(t, coreagent.IsCoreAgent(string(id)),

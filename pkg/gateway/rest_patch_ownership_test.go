@@ -51,7 +51,6 @@ func newPatchOwnershipAPI(
 	tmpDir := t.TempDir()
 	auditDir := t.TempDir()
 
-	enabled := true
 	adminUser := config.UserConfig{
 		Username: "admin",
 		Role:     config.UserRoleAdmin,
@@ -74,21 +73,18 @@ func newPatchOwnershipAPI(
 					ID:            "custom-agent-1",
 					Name:          "Custom Agent One",
 					Type:          config.AgentTypeCustom,
-					Enabled:       &enabled,
 					OwnerUsername: initialOwner,
 				},
 				{
-					ID:      "omnipus-system",
-					Name:    "Omnipus",
-					Type:    config.AgentTypeSystem,
-					Locked:  true,
-					Enabled: &enabled,
+					ID:     "omnipus-system",
+					Name:   "Omnipus",
+					Type:   config.AgentTypeSystem,
+					Locked: true,
 				},
 				{
-					ID:      "jim",
-					Name:    "Jim",
-					Type:    config.AgentTypeCore,
-					Enabled: &enabled,
+					ID:   "jim",
+					Name: "Jim",
+					Type: config.AgentTypeCore,
 				},
 			},
 		},
@@ -357,7 +353,6 @@ func TestPatchOwnership_UnknownAgent_Returns404(t *testing.T) {
 // Differentiation test: patching agent A and agent B with different owners
 // produces different outcomes (guards against hardcoded responses).
 func TestPatchOwnership_DifferentAgents_ProduceDifferentResults(t *testing.T) {
-	enabled := true
 	bob := config.UserConfig{Username: "bob", Role: config.UserRoleUser}
 	carol := config.UserConfig{Username: "carol", Role: config.UserRoleUser}
 
@@ -382,8 +377,8 @@ func TestPatchOwnership_DifferentAgents_ProduceDifferentResults(t *testing.T) {
 				MaxTokens: 4096,
 			},
 			List: []config.AgentConfig{
-				{ID: "agent-a", Name: "Agent A", Type: config.AgentTypeCustom, Enabled: &enabled},
-				{ID: "agent-b", Name: "Agent B", Type: config.AgentTypeCustom, Enabled: &enabled},
+				{ID: "agent-a", Name: "Agent A", Type: config.AgentTypeCustom},
+				{ID: "agent-b", Name: "Agent B", Type: config.AgentTypeCustom},
 			},
 		},
 	}

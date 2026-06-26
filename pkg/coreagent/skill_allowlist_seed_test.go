@@ -56,13 +56,11 @@ func TestSeedConfig_SeedsSkillAllowlistMatrix(t *testing.T) {
 // keeps it (operator choice wins).
 func TestSeedConfig_SkillAllowlist_RespectsOperatorEdits(t *testing.T) {
 	cfg := config.DefaultConfig()
-	enabled := true
 	cfg.Agents.List = []config.AgentConfig{
 		{
-			ID:      "mia",
-			Name:    "Mia",
-			Enabled: &enabled,
-			Skills:  []string{"custom-skill"}, // operator-set
+			ID:     "mia",
+			Name:   "Mia",
+			Skills: []string{"custom-skill"}, // operator-set
 		},
 	}
 

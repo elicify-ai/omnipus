@@ -59,7 +59,6 @@ func TestSeedConfig_MiaIsDefault(t *testing.T) {
 //	When SeedConfig is called (re-enforcement path),
 //	Then mia.Default remains false (operator choice preserved).
 func TestSeedConfig_MiaDefaultNotOverriddenOnReEnforcement(t *testing.T) {
-	enabled := true
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			List: []config.AgentConfig{
@@ -67,7 +66,6 @@ func TestSeedConfig_MiaDefaultNotOverriddenOnReEnforcement(t *testing.T) {
 					ID:      string(IDMia),
 					Name:    "Mia — Assistant",
 					Locked:  true,
-					Enabled: &enabled,
 					Default: false, // operator explicitly cleared the default
 				},
 			},

@@ -19,20 +19,19 @@ import (
 func runnerTestAPI(t *testing.T) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-	enabled := true
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{ModelName: "test-model", MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "native-agent", Name: "Native", Enabled: &enabled, Type: config.AgentTypeCustom},
+				{ID: "native-agent", Name: "Native", Type: config.AgentTypeCustom},
 				{
-					ID: "ext-no-cli", Name: "ExtNoCLI", Enabled: &enabled, Type: config.AgentTypeCustom,
+					ID: "ext-no-cli", Name: "ExtNoCLI", Type: config.AgentTypeCustom,
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: ""},
 					},
 				},
 				{
-					ID: "ext-claude", Name: "ExtClaude", Enabled: &enabled, Type: config.AgentTypeCustom,
+					ID: "ext-claude", Name: "ExtClaude", Type: config.AgentTypeCustom,
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},

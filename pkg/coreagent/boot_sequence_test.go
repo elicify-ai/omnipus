@@ -44,13 +44,11 @@ func TestSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 
 		// Add Jim to the list so the re-enforcement branch fires
 		// (not the new-agent seeding branch).
-		enabled := true
 		cfg.Agents.List = []config.AgentConfig{
 			{
-				ID:      "jim",
-				Name:    "Jim — General Purpose",
-				Enabled: &enabled,
-				Locked:  false, // will be set to true by SeedConfig
+				ID:     "jim",
+				Name:   "Jim — General Purpose",
+				Locked: false, // will be set to true by SeedConfig
 			},
 		}
 
@@ -75,13 +73,11 @@ func TestSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 		f := false
 		cfg.Sandbox.Experimental.WorkspaceShellEnabled = &f
 
-		enabled := true
 		cfg.Agents.List = []config.AgentConfig{
 			{
-				ID:      "jim",
-				Name:    "Jim — General Purpose",
-				Enabled: &enabled,
-				Locked:  false,
+				ID:     "jim",
+				Name:   "Jim — General Purpose",
+				Locked: false,
 			},
 		}
 
@@ -104,9 +100,8 @@ func TestSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 		cfg := config.DefaultConfig()
 		f := false
 		cfg.Sandbox.Experimental.WorkspaceShellEnabled = &f
-		enabled := true
 		cfg.Agents.List = []config.AgentConfig{
-			{ID: "jim", Name: "Jim — General Purpose", Enabled: &enabled, Locked: true},
+			{ID: "jim", Name: "Jim — General Purpose", Locked: true},
 		}
 
 		for boot := 1; boot <= 3; boot++ {
@@ -142,13 +137,12 @@ func TestSeedConfig_NonJimAgent_WorkspaceShellPassthrough(t *testing.T) {
 
 		// Populate all 5 core agents in the list so SeedConfig only runs
 		// the re-enforcement loop (no new-agent seeding).
-		enabled := true
 		cfg.Agents.List = []config.AgentConfig{
-			{ID: "jim", Name: "Jim — General Purpose", Enabled: &enabled, Locked: true},
-			{ID: "ava", Name: "Ava — Agent Builder", Enabled: &enabled, Locked: true},
-			{ID: "mia", Name: "Mia — Omnipus Guide", Enabled: &enabled, Locked: true},
-			{ID: "ray", Name: "Ray — Researcher", Enabled: &enabled, Locked: true},
-			{ID: "max", Name: "Max — Automator", Enabled: &enabled, Locked: true},
+			{ID: "jim", Name: "Jim — General Purpose", Locked: true},
+			{ID: "ava", Name: "Ava — Agent Builder", Locked: true},
+			{ID: "mia", Name: "Mia — Omnipus Guide", Locked: true},
+			{ID: "ray", Name: "Ray — Researcher", Locked: true},
+			{ID: "max", Name: "Max — Automator", Locked: true},
 		}
 
 		coreagent.SeedConfig(cfg)
@@ -165,12 +159,10 @@ func TestSeedConfig_NonJimAgent_WorkspaceShellPassthrough(t *testing.T) {
 		cfg.Sandbox.Experimental.WorkspaceShellEnabled = nil
 
 		// One custom (non-core) agent only.
-		enabled := true
 		cfg.Agents.List = []config.AgentConfig{
 			{
-				ID:      "my-custom-agent",
-				Name:    "My Custom Agent",
-				Enabled: &enabled,
+				ID:   "my-custom-agent",
+				Name: "My Custom Agent",
 			},
 		}
 

@@ -342,7 +342,6 @@ func newTestRestAPIWithValidationAndAgent(t *testing.T) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
-	enabled := true
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
 			Host:            "127.0.0.1",
@@ -357,10 +356,9 @@ func newTestRestAPIWithValidationAndAgent(t *testing.T) *restAPI {
 			},
 			List: []config.AgentConfig{
 				{
-					ID:      "test-agent-001",
-					Name:    "Test Agent",
-					Type:    config.AgentTypeCustom,
-					Enabled: &enabled,
+					ID:   "test-agent-001",
+					Name: "Test Agent",
+					Type: config.AgentTypeCustom,
 				},
 			},
 		},

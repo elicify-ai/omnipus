@@ -50,8 +50,6 @@ func TestSeedWorker(t *testing.T) {
 	assert.Equal(t, config.ExecutorKindNative, worker.Subagents.Executor.EffectiveKind(),
 		"the seeded general-purpose worker runs native")
 
-	require.NotNil(t, worker.Enabled)
-	assert.True(t, *worker.Enabled, "worker must be enabled by default")
 }
 
 // TestWorkerNotCoreAgent verifies the worker is classified as its own tier and is

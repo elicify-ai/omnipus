@@ -772,18 +772,18 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 	jsonOK(w, map[string]bool{"success": true})
 }
 
-// firstEnabledAgentID returns the ID of the first active/enabled chat-target agent
-// in the config list, or "" when no such agent is configured. Used as a last-resort
+// firstChatTargetAgentID returns the ID of the first chat-target agent in the
+// config list, or "" when no such agent is configured. Used as a last-resort
 // fallback after GetDefaultAgent() — mirrors resolveDefaultAgentID in
-// pkg/routing/route.go. Workers are active but are NOT chat targets, so they are
-// skipped here: a last-resort fallback must never land on a worker, which is invoked
-// only via delegation.
-func firstEnabledAgentID(cfg *config.Config) string {
+// pkg/routing/route.go. Workers are NOT chat targets, so they are skipped here:
+// a last-resort fallback must never land on a worker, which is invoked only via
+// delegation.
+func firstChatTargetAgentID(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
 	for _, ag := range cfg.Agents.List {
-		if ag.IsActive() && ag.IsChatTarget() {
+		if ag.IsChatTarget() {
 			return ag.ID
 		}
 	}
@@ -820,9 +820,9 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if agentID == "" {
-			// Fall back to the first enabled agent (mirrors handleBoardTaskStart /
+			// Fall back to the first chat-target agent (mirrors handleBoardTaskStart /
 			// resolveDefaultAgentID in pkg/routing/route.go).
-			agentID = firstEnabledAgentID(a.agentLoop.GetConfig())
+			agentID = firstChatTargetAgentID(a.agentLoop.GetConfig())
 		}
 	}
 	if err := validateEntityID(agentID); err != nil {

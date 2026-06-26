@@ -25,13 +25,12 @@ import (
 func newMailboxTestAPI(t *testing.T, mailboxes map[string]config.MailboxConfig) *restAPI {
 	t.Helper()
 	tmpDir := t.TempDir()
-	enabled := true
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Enabled: &enabled, Type: config.AgentTypeCustom, Workspace: tmpDir},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom, Workspace: tmpDir},
 			},
 		},
 		Mailboxes: mailboxes,
