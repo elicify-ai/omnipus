@@ -7209,28 +7209,28 @@ export interface components {
         /** @description Per-model token breakdown within a session or usage summary. */
         ModelTokens: {
             /**
-             * @description Uncached input tokens for this model.
-             * @example 800
+             * @description Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+             * @example 0
              */
             in?: number;
             /**
-             * @description Output (completion) tokens for this model.
-             * @example 200
+             * @description Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+             * @example 0
              */
             out?: number;
             /**
-             * @description Cache-read tokens (served from KV cache) for this model.
+             * @description Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
              * @example 150
              */
             cache_read?: number;
             /**
-             * @description Cache-write tokens (written into a new cache entry) for this model.
+             * @description Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
              * @example 25
              */
             cache_write?: number;
             /**
-             * @description Total tokens (in + out + cache_read + cache_write) for this model.
-             * @example 1175
+             * @description Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+             * @example 1000
              */
             total: number;
         };

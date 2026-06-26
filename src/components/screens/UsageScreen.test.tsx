@@ -224,6 +224,16 @@ describe('UsageScreen', () => {
     )
   })
 
+  it('shows error message and hides hero dashboard when stats fetch rejects', async () => {
+    vi.mocked(fetchTokenStats).mockRejectedValue(new Error('network failure'))
+    renderUsage()
+    await waitFor(() =>
+      expect(screen.getByText('Could not load usage data. Check your connection and try again.')).toBeInTheDocument(),
+    )
+    // The hero row must NOT be present — a fetch failure must not render a fake "0" dashboard
+    expect(screen.queryByTestId('usage-hero-row')).not.toBeInTheDocument()
+  })
+
   it('shows no dollar sign or CurrencyDollar anywhere in the rendered output', async () => {
     const { container } = renderUsage()
     await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
