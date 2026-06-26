@@ -1127,3 +1127,55 @@ func TestProbeEnumProvidersAreKnownProtocols(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryProbeProviderBuilds is the comprehensive end-to-end guard: EVERY
+// provider id offered by the onboarding probe must actually build via
+// CreateProviderFromConfig — not just resolve a base (TestProbeEnumProviders
+// ResolveBase) and be a known protocol (TestProbeEnumProvidersAreKnownProtocols),
+// but have a real factory case that constructs a provider. This catches a
+// provider that's wired into the enum + knownProtocols + GetDefaultAPIBase but
+// missing from the CreateProviderFromConfig switch (it would build "unknown
+// protocol"). One subtest per provider, so CI names the exact id that broke.
+func TestEveryProbeProviderBuilds(t *testing.T) {
+	// Providers that cannot be built from a bare api_key in a unit test: CLI/local
+	// subprocess providers (need an external binary) and the AWS-SDK bedrock path.
+	// Still guarded by knownProtocols + their own dedicated tests.
+	skipBuild := map[string]bool{
+		"bedrock":        true, // AWS SDK credential flow, no api_key HTTP path
+		"antigravity":    true, // in-process mock harness
+		"claude-cli":     true, // local CLI subprocess
+		"claudecli":      true,
+		"codex-cli":      true, // local CLI subprocess
+		"codexcli":       true,
+		"github-copilot": true, // local gRPC bridge
+		"copilot":        true,
+	}
+	// Providers with no fixed base require an explicit endpoint to build.
+	needsEndpoint := map[string]bool{"azure": true, "azure-openai": true}
+
+	for _, id := range probeEnumIDsFromYAML(t) {
+		id := id
+		if skipBuild[id] {
+			continue
+		}
+		t.Run(id, func(t *testing.T) {
+			const keyRef = "FACTORY_EVERY_PROVIDER_TEST_KEY"
+			t.Setenv(keyRef, "test-key")
+			cfg := &config.ModelConfig{
+				Model:     id + "/test-model",
+				APIKeyRef: keyRef,
+			}
+			if needsEndpoint[id] {
+				cfg.APIBase = "https://example.openai.azure.com/openai/deployments/test"
+			}
+			p, _, err := CreateProviderFromConfig(cfg)
+			if err != nil {
+				t.Fatalf("CreateProviderFromConfig(%q) error: %v — the factory "+
+					"switch in CreateProviderFromConfig is missing a case for %q", id, err, id)
+			}
+			if p == nil {
+				t.Fatalf("CreateProviderFromConfig(%q) returned nil provider", id)
+			}
+		})
+	}
+}
