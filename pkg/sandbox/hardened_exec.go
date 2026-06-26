@@ -415,8 +415,14 @@ type Result struct {
 	ExitCode int
 
 	// TimedOut is true when the wall-clock deadline elapsed before the
-	// child exited on its own. The child receives SIGTERM, then SIGKILL
-	// after a 5-second grace period.
+	// child exited on its own. On timeout the child's entire process GROUP
+	// is signalled (Unix: SIGTERM, then SIGKILL after a 1-second grace —
+	// see installProcessGroupCancel; Windows: TerminateProcess on the child
+	// via the os/exec default cancel). A cross-platform cmd.WaitDelay (5s)
+	// backstops the kill so a grandchild that escaped the group-kill and
+	// still holds an inherited stdout/stderr pipe cannot block Wait beyond
+	// that window. Either way Run returns promptly after the deadline rather
+	// than waiting for a pipe-holding grandchild to exit on its own.
 	TimedOut bool
 
 	// Duration is the elapsed wall-clock time of the child run.
@@ -437,6 +443,18 @@ type Result struct {
 // outputCap bounds captured stdout/stderr per stream. 4 MiB is enough for
 // build logs while preventing a runaway child from exhausting gateway memory.
 const outputCap = 4 << 20
+
+// waitDelay is the cross-platform backstop on cmd.Wait after the context is
+// cancelled. Per os/exec semantics, once the context is done the I/O copying
+// goroutines are given at most WaitDelay to finish before os/exec closes the
+// child's pipes and forcibly returns from Wait. This guarantees a grandchild
+// that escaped the process-group kill (e.g. one that called setsid and so
+// holds an inherited stdout pipe) cannot block Wait indefinitely. The
+// process-group cancel (installProcessGroupCancel) kills the group well inside
+// this window on Unix (1s grace); WaitDelay is the safety net, not the primary
+// mechanism. Unconditional and cross-platform — set even when no explicit
+// TimeoutSeconds is configured so a caller-context cancellation is also bounded.
+const waitDelay = 5 * time.Second
 
 // ErrEmptyArgv is returned by Run when called with no command to execute.
 var ErrEmptyArgv = errors.New("hardened_exec: argv is empty")
@@ -583,6 +601,20 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 	if err := applyPlatformHardening(cmd, lim); err != nil {
 		return Result{}, fmt.Errorf("hardened_exec: apply hardening: %w", err)
 	}
+
+	// HIGH-fix (timeout bypass): exec.CommandContext's default cmd.Cancel
+	// kills only the DIRECT child PID, so a `sh -c 'cmd && sleep N'` grandchild
+	// that inherited the stdout pipe keeps the pipe's write end open, EOF never
+	// arrives, and cmd.Wait blocks until the grandchild exits on its own — the
+	// command outlives its timeout by the full grandchild duration. We override
+	// cmd.Cancel to kill the whole process GROUP (Setpgid was applied above on
+	// Unix), and set cmd.WaitDelay as a cross-platform backstop so a stuck pipe
+	// can never block Wait indefinitely even if a process escapes its group
+	// (e.g. via setsid). These have no effect unless the context is cancelled
+	// (timeout fired or the caller's ctx was cancelled), so the normal-exit
+	// path is unchanged.
+	installProcessGroupCancel(cmd)
+	cmd.WaitDelay = waitDelay
 
 	start := time.Now()
 	if err := cmd.Start(); err != nil {

@@ -440,13 +440,48 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
 
-	var result any
-	err = chromedp.Run(tabCtx, chromedp.Evaluate(js, &result))
+	var raw []byte
+	err = chromedp.Run(tabCtx, chromedp.Evaluate(js, &raw))
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_evaluate: %s", err))
 	}
 
-	return jsonResult(map[string]any{"result": result})
+	return classifyEvalResult(raw)
+}
+
+// classifyEvalResult interprets the raw JSON bytes returned by the CDP Evaluate
+// call (via chromedp.Evaluate with a *[]byte destination):
+//
+//   - nil raw: CDP returned no serializable value — the JS expression evaluated
+//     to a non-serializable type (DOM node, function, circular object, etc.).
+//     Returns a non-error result with result=null and an explanatory note so the
+//     agent can distinguish this from an intentional JS null.
+//   - raw == "null": genuine JavaScript null. Returns {"result": null} with no note.
+//   - everything else: a valid JSON scalar, array, or object. Unmarshal and return
+//     {"result": <value>} so the caller gets a typed Go value.
+//
+// This is factored out so unit tests can exercise the classification logic without
+// a live Chromium binary.
+func classifyEvalResult(raw []byte) *tools.ToolResult {
+	if raw == nil {
+		// CDP sent no serializable value — the expression produced a non-JSON type.
+		return jsonResult(map[string]any{
+			"result": nil,
+			"note":   "value was not JSON-serializable (e.g. DOM node, function, or circular reference)",
+		})
+	}
+
+	// Unmarshal the raw JSON so we pass a typed value through to the result map.
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		// Malformed JSON from CDP — treat as non-serializable.
+		return jsonResult(map[string]any{
+			"result": nil,
+			"note":   "value was not JSON-serializable (e.g. DOM node, function, or circular reference)",
+		})
+	}
+
+	return jsonResult(map[string]any{"result": v})
 }
 
 // jsonResult marshals v to JSON and returns a SilentResult.

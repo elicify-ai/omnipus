@@ -49,12 +49,22 @@ func skipIfNoBrowser(t *testing.T) {
 	if os.Getenv("CI") != "" && os.Getenv("OMNIPUS_BROWSER_E2E") == "" {
 		t.Skip("skipping browser E2E test in CI — set OMNIPUS_BROWSER_E2E=1 to enable")
 	}
+	// LookPath finds candidate executables, but Ubuntu ships a snap stub at
+	// /usr/bin/chromium-browser that exits 1 on launch (it only prints a
+	// "please install via snap" message). Probe each candidate with --version
+	// and only accept it if the probe exits 0. Skip when no candidate probes
+	// successfully so tests SKIP instead of failing with a "Zygote" crash.
 	for _, name := range []string{"chromium-browser", "chromium", "google-chrome", "google-chrome-stable"} {
-		if _, err := exec.LookPath(name); err == nil {
-			return
+		path, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		probe := exec.Command(path, "--version")
+		if probe.Run() == nil {
+			return // real browser found
 		}
 	}
-	t.Skip("skipping browser E2E test: no Chromium/Chrome binary found in PATH")
+	t.Skip("skipping browser E2E test: no working Chromium/Chrome binary found in PATH")
 }
 
 func startTestServer(t *testing.T) *httptest.Server {
