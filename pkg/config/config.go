@@ -957,6 +957,45 @@ func (a AgentConfig) IsChatTarget() bool {
 	return !a.IsWorker()
 }
 
+// IsExternalCLIWorker reports whether this agent is a subagent_3p — a worker
+// that delegates to an external CLI tool (claude-code, codex, opencode, …)
+// rather than running on the native Omnipus agent engine.
+//
+// The predicate is true when BOTH conditions hold:
+//  1. Type == AgentTypeWorker (IsWorker() is true).
+//  2. Subagents.Executor.Kind == ExecutorKindExternalCLI ("external-cli").
+//
+// Subagent_3p agents run on a separate engine and their token usage is not
+// tracked through Omnipus's provider layer, so they must be excluded from
+// token aggregation reports.  This is the single authoritative implementation;
+// both rest_stats.go and the get_usage sysagent tool delegate to it via
+// (*Config).IsExternalCLIWorkerID.
+func (a AgentConfig) IsExternalCLIWorker() bool {
+	return a.IsWorker() &&
+		a.Subagents != nil &&
+		a.Subagents.Executor != nil &&
+		a.Subagents.Executor.Kind == ExecutorKindExternalCLI
+}
+
+// IsExternalCLIWorkerID reports whether the agent with the given ID is a
+// subagent_3p (external CLI worker).  Returns false when agentID is empty,
+// when cfg is nil, or when no agent with that ID exists in the config list.
+//
+// This is the lookup variant used by callers that have a *Config and an agent
+// ID string (rest_stats.go, the get_usage sysagent tool) so that neither
+// caller needs to inline the two-condition predicate.
+func (c *Config) IsExternalCLIWorkerID(agentID string) bool {
+	if c == nil || agentID == "" {
+		return false
+	}
+	for i := range c.Agents.List {
+		if c.Agents.List[i].ID == agentID {
+			return c.Agents.List[i].IsExternalCLIWorker()
+		}
+	}
+	return false
+}
+
 // DelegationMode is the mode in which delegation is allowed.
 // "await" = synchronous subagent (blocks caller).
 // "background" = async spawn (caller continues).

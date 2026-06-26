@@ -138,8 +138,10 @@ type Deps struct {
 
 	// ListSessions returns all sessions across all stores (shared + legacy per-agent),
 	// deduplicating entries that appear in both. Errors are per-store and non-fatal;
-	// the slice may be partial on error. Nil in tests or when not wired — the
-	// get_usage tool handles nil gracefully (returns an empty report).
+	// the slice may be partial on error. Nil when not wired — the get_usage tool
+	// returns a USAGE_UNAVAILABLE error when this field is nil, because a nil
+	// dependency in production is a wiring bug that must fail loudly rather than
+	// returning an empty report indistinguishable from genuine zero usage.
 	//
 	// The production gateway wires this to agentLoop.ListAllSessions.
 	ListSessions func() ([]*session.UnifiedMeta, []error)

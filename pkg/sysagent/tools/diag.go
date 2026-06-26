@@ -170,65 +170,52 @@ func (t *UsageQueryTool) Parameters() map[string]any {
 }
 
 func (t *UsageQueryTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	// Parse period (default: month).
-	periodStr, _ := args["period"].(string)
-	if periodStr == "" {
-		periodStr = "month"
+	// Nil ListSessions is a production wiring bug — fail loudly rather than
+	// returning an empty report indistinguishable from genuine zero usage.
+	if t.deps == nil || t.deps.ListSessions == nil {
+		return tools.ErrorResult(errorJSON("USAGE_UNAVAILABLE",
+			"usage data source is not available",
+			"The session store is not wired to the get_usage tool. This is a server-side configuration issue; contact your administrator."))
 	}
-	var period session.UsagePeriod
-	switch periodStr {
-	case "day":
-		period = session.UsagePeriodDay
-	case "week":
-		period = session.UsagePeriodWeek
-	case "month":
-		period = session.UsagePeriodMonth
-	case "all":
-		period = session.UsagePeriodAll
-	default:
+
+	// Parse period via the authoritative constructor (empty → month; unrecognized → error).
+	periodStr, _ := args["period"].(string)
+	period, ok := session.ParseUsagePeriod(periodStr)
+	if !ok {
 		return tools.ErrorResult(errorJSON("INVALID_PARAM",
 			"period must be one of: day, week, month, all",
 			"Pass period=month to use the default monthly window."))
 	}
-
-	// Parse by (default: agent).
-	byStr, _ := args["by"].(string)
-	if byStr == "" {
-		byStr = "agent"
+	if periodStr == "" {
+		periodStr = string(period) // normalise for the response field
 	}
-	var dim session.UsageDimension
-	switch byStr {
-	case "agent":
-		dim = session.UsageDimensionAgent
-	case "model":
-		dim = session.UsageDimensionModel
-	case "session":
-		dim = session.UsageDimensionSession
-	default:
+
+	// Parse by via the authoritative constructor (empty → agent; unrecognized → error).
+	byStr, _ := args["by"].(string)
+	dim, ok := session.ParseUsageDimension(byStr)
+	if !ok {
 		return tools.ErrorResult(errorJSON("INVALID_PARAM",
 			"by must be one of: agent, model, session",
 			"Pass by=agent to group by agent (the default)."))
+	}
+	if byStr == "" {
+		byStr = string(dim) // normalise for the response field
 	}
 
 	// Optional filters.
 	agentID, _ := args["agent_id"].(string)
 	sessionID, _ := args["session_id"].(string)
 
-	// Collect sessions.  Handle nil ListSessions gracefully.
-	var metas []*session.UnifiedMeta
-	if t.deps != nil && t.deps.ListSessions != nil {
-		var errs []error
-		metas, errs = t.deps.ListSessions()
-		for _, e := range errs {
-			// Non-fatal: log and proceed with partial data.
-			slog.Warn("get_usage: partial session list error", "error", e)
-		}
+	// Collect sessions; surface partial errors in the report.
+	metas, errs := t.deps.ListSessions()
+	for _, e := range errs {
+		slog.Warn("get_usage: partial session list error", "error", e)
 	}
 
 	// Build NameResolver and Exclude from live config.
 	var nameResolver func(string) string
 	var excludeFn func(string) bool
-	if t.deps != nil && t.deps.GetCfg != nil {
+	if t.deps.GetCfg != nil {
 		cfg := t.deps.GetCfg()
 		nameResolver = func(id string) string {
 			for i := range cfg.Agents.List {
@@ -239,18 +226,7 @@ func (t *UsageQueryTool) Execute(_ context.Context, args map[string]any) *tools.
 			return ""
 		}
 		excludeFn = func(id string) bool {
-			for i := range cfg.Agents.List {
-				a := &cfg.Agents.List[i]
-				if a.ID != id {
-					continue
-				}
-				// Exclude external CLI workers: Type=="worker" AND Subagents.Executor.Kind=="external-cli".
-				if a.IsWorker() && a.Subagents != nil &&
-					a.Subagents.Executor != nil && a.Subagents.Executor.Kind == "external-cli" {
-					return true
-				}
-			}
-			return false
+			return cfg.IsExternalCLIWorkerID(id)
 		}
 	}
 
@@ -292,7 +268,7 @@ func (t *UsageQueryTool) Execute(_ context.Context, args map[string]any) *tools.
 		periodStart = report.PeriodStart.Format(time.RFC3339)
 	}
 
-	return tools.NewToolResult(successJSON(map[string]any{
+	result := map[string]any{
 		"period":       periodStr,
 		"by":           byStr,
 		"period_start": periodStart,
@@ -305,5 +281,12 @@ func (t *UsageQueryTool) Execute(_ context.Context, args map[string]any) *tools.
 			"total":       report.Total.Total,
 		},
 		"breakdown": breakdown,
-	}))
+	}
+	// Surface partial data to the calling agent so it can caveat its answer.
+	if len(errs) > 0 {
+		result["partial"] = true
+		result["partial_error_count"] = len(errs)
+	}
+
+	return tools.NewToolResult(successJSON(result))
 }

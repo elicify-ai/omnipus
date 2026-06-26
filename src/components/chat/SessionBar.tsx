@@ -14,13 +14,9 @@ import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
+import { formatTokens } from '@/lib/formatTokens'
 
-/** Human-readable token count: 44.0k / 1.2M. Values under 1000 show as-is. */
-export function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`
-  return tokens.toString()
-}
+export { formatTokens }
 
 export function SessionBar() {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()

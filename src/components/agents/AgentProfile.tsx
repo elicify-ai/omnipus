@@ -74,6 +74,7 @@ import {
   type ExecutorConfig,
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
+import { formatTokens } from '@/lib/formatTokens'
 import { useUiStore } from '@/store/ui'
 import type { FallbackModel } from '@/lib/api/generated/openapi-types'
 import { type IconName } from '@/lib/agentIcons'
@@ -1690,13 +1691,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <StatCard label="Sessions" value={agent.stats.total_sessions.toString()} />
                 <StatCard
                   label="Total tokens"
-                  value={
-                    agent.stats.total_tokens >= 1_000_000
-                      ? `${(agent.stats.total_tokens / 1_000_000).toFixed(1)}M`
-                      : agent.stats.total_tokens >= 1_000
-                        ? `${(agent.stats.total_tokens / 1_000).toFixed(1)}k`
-                        : agent.stats.total_tokens.toString()
-                  }
+                  value={formatTokens(agent.stats.total_tokens)}
                 />
                 <StatCard
                   label="Last active"
