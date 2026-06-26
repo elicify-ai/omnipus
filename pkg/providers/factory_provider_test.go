@@ -1023,6 +1023,15 @@ func TestGetDefaultAPIBase_ExactBases(t *testing.T) {
 		// GLM Coding Plan (subscription) — distinct from the pay-per-token z-ai base.
 		{"z-ai-coding", "https://api.z.ai/api/coding/paas/v4"},
 		{"glm-coding", "https://api.z.ai/api/coding/paas/v4"},
+		{"zhipu-coding", "https://open.bigmodel.cn/api/coding/paas/v4"},
+		// Anthropic-compatible (Messages API) endpoints for the Chinese vendors.
+		{"z-ai-anthropic", "https://api.z.ai/api/anthropic/v1"},
+		{"zhipu-anthropic", "https://open.bigmodel.cn/api/anthropic/v1"},
+		{"moonshot-anthropic", "https://api.moonshot.ai/anthropic/v1"},
+		{"moonshot-cn-anthropic", "https://api.moonshot.cn/anthropic/v1"},
+		{"minimax-anthropic", "https://api.minimax.io/anthropic/v1"},
+		{"minimax-cn-anthropic", "https://api.minimaxi.com/anthropic/v1"},
+		{"deepseek-anthropic", "https://api.deepseek.com/anthropic/v1"},
 		// Qwen / DashScope variants
 		{"qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 		{"qwen-intl", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},

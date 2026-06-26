@@ -29,6 +29,14 @@ properties:
       - zai
       - z-ai-coding
       - glm-coding
+      - zhipu-coding
+      - z-ai-anthropic
+      - zhipu-anthropic
+      - moonshot-anthropic
+      - moonshot-cn-anthropic
+      - minimax-anthropic
+      - minimax-cn-anthropic
+      - deepseek-anthropic
       - nvidia
       - moonshot
       - moonshot-cn
