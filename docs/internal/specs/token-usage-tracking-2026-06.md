@@ -1,5 +1,14 @@
 # Token-usage tracking (tokens only, no cost) — implementation spec
 
+> **Status: DELIVERED (2026-06-26)** on `feat/0.1.0-uat-fixes` (commits `b8dc020f` W1 ·
+> `e63b9319` W2 · `84afed66` W3 · `8b0942d5` reviewer-gate fixes · `0608ea70` polish).
+> Decisions ratified in **ADR-023**. All three waves implemented, passed the 7-reviewer
+> quality gate (twice — per-wave and whole-diff) with all CRITICAL findings fixed and
+> regression-locked. Two non-blocking follow-ups tracked in **#449**. Key correction
+> during review: the cache-token convention (`TokensIn+TokensOut==TokensTotal`; cache is a
+> SUBSET of `TokensOut`, NOT additive) — bucket `Total` is the authoritative stored total,
+> never `In+Out+cache`; the UI shows Total + Cached + Uncached (reconciling). See ADR-023 §D5.
+
 **Decision:** report **token usage only** (no dollar cost). Deliver: a `get_usage` tool, a Usage analytics page, a per-session token counter (live + on reopening historic sessions), per-session totals in the Sessions panel. Full breakdown: **by agent · by session · by model · input/output/cache split**. **Out of scope:** external 3rd-party CLI subagents (`subagent_3p`) — they run on a separate engine and don't report usage through our provider layer; their usage is NOT tracked (show "not tracked", never a wrong 0). Keep the daily-cost **cap** (backend safety) — it's orthogonal to reporting.
 
 ## What already exists (don't rebuild)
