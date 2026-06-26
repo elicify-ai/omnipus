@@ -244,6 +244,21 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	return entry.Tool, true
 }
 
+// GetIncludingHidden returns the registered tool for name regardless of whether
+// it is hidden or its TTL has expired. Unlike Get, it does NOT gate on TTL — it
+// exists for policy evaluation (canLoad), where a deferred/hidden MCP tool must
+// be resolvable BEFORE it is promoted (the load path promotes it before fetching
+// the schema). Returns false only when name is not registered at all.
+func (r *ToolRegistry) GetIncludingHidden(name string) (Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.tools[name]
+	if !ok {
+		return nil, false
+	}
+	return entry.Tool, true
+}
+
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string]any) *ToolResult {
 	return r.ExecuteWithContext(ctx, name, args, "", "", nil)
 }

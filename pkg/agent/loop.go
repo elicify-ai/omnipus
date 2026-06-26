@@ -1838,6 +1838,20 @@ func registerSharedTools(
 								return true
 							}
 						}
+						// Hidden tools (deferred MCP tools registered via RegisterHidden)
+						// are NOT in GetAll() until promoted, so the visible check above
+						// misses them. They ARE loadable: the load path promotes (un-hides)
+						// them before fetching the schema. Resolve the hidden tool directly
+						// and evaluate its policy so an allowed hidden MCP tool can be loaded
+						// by search/auto-load. (Without this, search surfaces the MCP tool
+						// but load rejects it as "unknown" — the chicken-and-egg the MCP UAT
+						// caught: search uses the hidden corpus, canLoad used only GetAll.)
+						if hiddenTool, hok := callerAgent.Tools.GetIncludingHidden(name); hok {
+							hiddenAllowed, _ := tools.FilterToolsByPolicy([]tools.Tool{hiddenTool}, callerAgent.AgentType, callerAgent.LoadToolPolicy())
+							if len(hiddenAllowed) > 0 {
+								return true
+							}
+						}
 						return false
 					},
 					// markLoaded: fetches schemas FIRST, marks only successfully resolved

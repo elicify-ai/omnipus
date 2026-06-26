@@ -1436,3 +1436,47 @@ func TestManifestDeterminism_LoadChurn(t *testing.T) {
 			"manifest note must be deterministic: call 0 and call %d differ", i)
 	}
 }
+
+// TestCanLoad_HiddenMCPTool_AllowDefaultAgent is the regression test for the bug
+// the MCP UAT caught: a deferred/hidden MCP tool (RegisterHidden, not in GetAll()
+// until promoted) is surfaced by tools{query} search but the load path's canLoad
+// gate used only GetAll() — so it rejected the hidden tool as "unknown", breaking
+// search→load→use for MCP. canLoad is now hidden-aware (GetIncludingHidden +
+// per-tool policy). An allow-default agent (Jim) must be able to load a
+// policy-allowed hidden tool; a deny-default agent (Ava) must not.
+func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	loadHidden := func(t *testing.T, agentID string) *tools.ToolResult {
+		t.Helper()
+		agentInst, ok := al.registry.GetAgent(agentID)
+		require.True(t, ok)
+		// Register a hidden lazy tool (simulates a deferred MCP tool).
+		agentInst.Tools.RegisterHidden(&mockCustomTool{})
+		toolsTool, ok := agentInst.Tools.Get("tools")
+		require.True(t, ok, "agent %q must have the unified 'tools' tool", agentID)
+		tt, ok := toolsTool.(*tools.ToolsTool)
+		require.True(t, ok)
+		ctx := tools.WithAgentID(context.Background(), agentID)
+		ctx = tools.WithSessionKey(ctx, "sess-hidden-"+agentID)
+		return tt.Execute(ctx, map[string]any{"names": []any{"mock_custom"}})
+	}
+
+	t.Run("jim_allow_default_loads_hidden", func(t *testing.T) {
+		res := loadHidden(t, "jim")
+		require.NotNil(t, res)
+		require.False(t, res.IsError, "jim (allow-default) must load the hidden tool, got error: %s", res.ForLLM)
+		require.Contains(t, res.ForLLM, "mock_custom", "result should report the loaded hidden tool")
+		require.Contains(t, res.ForLLM, "\"loaded\"")
+	})
+
+	t.Run("ava_deny_default_rejects_hidden", func(t *testing.T) {
+		res := loadHidden(t, "ava")
+		require.NotNil(t, res)
+		// Ava is deny-by-default and mock_custom is not in her allow-list, so the
+		// hidden tool must be rejected (no policy escalation via load).
+		require.True(t, res.IsError, "ava (deny-default) must reject the unlisted hidden tool")
+	})
+}
