@@ -176,12 +176,15 @@ func TestBuildCompressedManifest_Basic(t *testing.T) {
 	if strings.Contains(got, "  - tools") {
 		t.Error("manifest must NOT contain infra tool 'tools' as an entry")
 	}
-	// The manifest header prose mentions the tools action — verify it uses the new wording.
+	// The manifest header prose uses the new param-inferred wording (names/query).
 	if strings.Contains(got, "call load_tool") {
 		t.Error("manifest header must NOT mention 'call load_tool' (old wording)")
 	}
-	if !strings.Contains(got, "action='load'") {
-		t.Error("manifest header must mention \"action='load'\" (new wording)")
+	if strings.Contains(got, "action='load'") {
+		t.Error("manifest header must NOT mention \"action='load'\" (removed: no action param)")
+	}
+	if !strings.Contains(got, "names") || !strings.Contains(got, "query") {
+		t.Errorf("manifest header must mention 'names' and 'query' (new param-inferred wording); got: %s", got)
 	}
 }
 

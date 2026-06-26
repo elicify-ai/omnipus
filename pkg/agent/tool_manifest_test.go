@@ -404,7 +404,7 @@ func TestBuildToolManifestNote_ContainsLazyTools(t *testing.T) {
 
 	// Full-tier tools must NOT appear as manifest entries.
 	for _, name := range tools.FullManifestToolNames() {
-		// The manifest header prose mentions action='load' but not individual
+		// The manifest header prose mentions 'names' and 'query' but not individual
 		// tool names, so we only check for the bullet-entry format "  - <name>".
 		assert.NotContains(t, note, "  - "+name,
 			"full-tier tool %q must not appear as a manifest entry", name)
@@ -613,7 +613,7 @@ func TestCanLoad_LazyAllowedTool(t *testing.T) {
 	// We cannot call tt.canLoad directly (unexported). Instead we call Execute
 	// with action='load' and check the result — if canLoad returns true, Execute
 	// succeeds (schema is returned); if false, it returns an error.
-	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{"find_skills"}})
+	result := tt.Execute(ctx, map[string]any{"names": []any{"find_skills"}})
 	assert.False(t, result.IsError,
 		"find_skills must be loadable by ava; got error: %s", result.ForLLM)
 }
@@ -640,9 +640,9 @@ func TestCanLoad_FullTierNotLoadable(t *testing.T) {
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok)
 
-	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{"send_message"}})
+	result := tt.Execute(ctx, map[string]any{"names": []any{"send_message"}})
 	assert.True(t, result.IsError,
-		"send_message (full-tier) must not be loadable via tools{action:'load'}")
+		"send_message (full-tier) must not be loadable via tools{names:['send_message']}")
 }
 
 // TestCanLoad_PolicyDeniedToolRejected proves that a policy-denied tool cannot
@@ -680,7 +680,7 @@ func TestCanLoad_PolicyDeniedToolRejected(t *testing.T) {
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok)
 
-	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{"read_file"}})
+	result := tt.Execute(ctx, map[string]any{"names": []any{"read_file"}})
 	assert.True(t, result.IsError,
 		"read_file must be rejected for ava (policy denied); got: %s", result.ForLLM)
 }
@@ -801,9 +801,9 @@ func TestMarkLoaded_UnregisteredNameRejected(t *testing.T) {
 	// Execute with an unknown name — should be rejected pre-markLoaded.
 	ctx := tools.WithAgentID(context.Background(), "jim")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-fix1-roundtrip")
-	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{"nonexistent_phantom_xyz"}})
+	result := tt.Execute(ctx, map[string]any{"names": []any{"nonexistent_phantom_xyz"}})
 	assert.True(t, result.IsError,
-		"nonexistent_phantom_xyz must be rejected by tools{action:'load'}; got: %s", result.ForLLM)
+		"nonexistent_phantom_xyz must be rejected by tools{names:['nonexistent_phantom_xyz']}; got: %s", result.ForLLM)
 
 	// Confirm the phantom name is NOT in the loaded set.
 	loadedAfter := al.sessionLoadedTools("sess-fix1-roundtrip")
@@ -991,11 +991,11 @@ func TestInjectManifestNote_NotInjectedTwice(t *testing.T) {
 
 // ─── load→callable round-trip ──────────────────────────────────────────────
 
-// TestLoadToCallableRoundTrip proves that executing tools{action:'load'} for a
+// TestLoadToCallableRoundTrip proves that executing tools{names:[...]} for a
 // valid lazy name causes that name to appear in buildCompressedToolDefs for the
 // same session on the next call — i.e., the tool becomes callable after a load.
 //
-// This is an end-to-end chain: ToolsTool.Execute(action='load') → markLoaded
+// This is an end-to-end chain: ToolsTool.Execute(names=[...]) → markLoaded
 // closure → al.markToolsLoaded → al.buildCompressedToolDefs sees the tool in defs.
 func TestLoadToCallableRoundTrip(t *testing.T) {
 	cfg := newCompressedCfg(t)
@@ -1025,10 +1025,10 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
 	for _, d := range defsBefore {
 		require.NotEqual(t, lazyName, d.Function.Name,
-			"lazy tool %q must not be callable before tools{action:'load'} is called", lazyName)
+			"lazy tool %q must not be callable before tools{names:[...]} is called", lazyName)
 	}
 
-	// Execute tools{action:'load'} via the registered instance (uses the real markLoaded closure).
+	// Execute tools{names:[...]} via the registered instance (uses the real markLoaded closure).
 	toolsToolRaw, ok := jimAgent.Tools.Get("tools")
 	require.True(t, ok, "`tools` infra tool must be registered for jim")
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
@@ -1038,9 +1038,9 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 	ctx = tools.WithTranscriptSessionID(ctx, transcriptID)
 	ctx = tools.WithSessionKey(ctx, transcriptID) // match the session key for manifestSessionID
 
-	result := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{lazyName}})
+	result := tt.Execute(ctx, map[string]any{"names": []any{lazyName}})
 	require.False(t, result.IsError,
-		"tools{action:'load'}.Execute must succeed for a valid lazy tool; got: %s", result.ForLLM)
+		"tools{names:[...]}.Execute must succeed for a valid lazy tool; got: %s", result.ForLLM)
 
 	// After load: lazyName must appear in compressed defs.
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
@@ -1050,7 +1050,7 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 		defNamesAfter[d.Function.Name] = true
 	}
 	assert.True(t, defNamesAfter[lazyName],
-		"load→callable round-trip: lazy tool %q must be in compressed defs after tools{action:'load'}.Execute", lazyName)
+		"load→callable round-trip: lazy tool %q must be in compressed defs after tools{names:[...]}.Execute", lazyName)
 }
 
 // TestInfraToolsExecutable_DenyDefaultAgent is the regression test for the bug
@@ -1259,15 +1259,15 @@ func TestTokenWin_LoadingAllLazyReachesFullSize(t *testing.T) {
 // ─── Part A §5a — Search-then-load reachability ────────────────────────────
 
 // TestSearchThenLoad_Reachability proves that a tool found via the unified
-// tools{action:'search'} infra tool is in the lazy/loadable set, and that
-// calling tools{action:'load'} then makes it appear in buildCompressedToolDefs
+// tools{query:...} infra tool is in the lazy/loadable set, and that
+// calling tools{names:[...]} then makes it appear in buildCompressedToolDefs
 // (callable).
 //
-// This is the "search→find→load→callable" chain at the helper level. It chains
-// the two actions of the unified `tools` infra tool without a live LLM:
-//  1. tools{action:'search'} finds a lazy tool by name/description (read-only).
-//  2. The tool is in the lazy set (search does NOT promote it).
-//  3. tools{action:'load'} loads it for the session.
+// This is the "query→find→load→callable" chain at the helper level. It chains
+// the two param paths of the unified `tools` infra tool without a live LLM:
+//  1. tools{query:...} finds a lazy tool by name/description.
+//  2. The tool is in the lazy set (query without resolver does NOT promote it).
+//  3. tools{names:[...]} loads it for the session.
 //  4. buildCompressedToolDefs now includes it (callable).
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §5a, §5b (search-then-load)
@@ -1303,11 +1303,11 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
 	for _, d := range defsBefore {
 		require.NotEqual(t, lazyName, d.Function.Name,
-			"lazy tool %q must not be callable before tools{action:'load'} is called", lazyName)
+			"lazy tool %q must not be callable before tools{names:[...]} is called", lazyName)
 	}
 
-	// Step 3: Call tools{action:'load'}.Execute with the lazy name (simulating
-	// the model calling load after a search result returned the tool name).
+	// Step 3: Call tools{names:[...]}.Execute with the lazy name (simulating
+	// the model calling load by name after a query result returned the tool name).
 	toolsToolRaw, ok := jimAgent.Tools.Get("tools")
 	require.True(t, ok, "`tools` infra tool must be registered for jim in compressed mode")
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
@@ -1317,9 +1317,9 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 	ctx = tools.WithTranscriptSessionID(ctx, transcriptID)
 	ctx = tools.WithSessionKey(ctx, transcriptID)
 
-	loadResult := tt.Execute(ctx, map[string]any{"action": "load", "names": []any{lazyName}})
+	loadResult := tt.Execute(ctx, map[string]any{"names": []any{lazyName}})
 	require.False(t, loadResult.IsError,
-		"tools{action:'load'} must succeed for lazy tool %q found via search; error: %s", lazyName, loadResult.ForLLM)
+		"tools{names:[...]} must succeed for lazy tool %q found via query; error: %s", lazyName, loadResult.ForLLM)
 
 	// Step 4: After load, the tool must appear in compressed defs (callable).
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
@@ -1329,7 +1329,7 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 		defNamesAfter[d.Function.Name] = true
 	}
 	assert.True(t, defNamesAfter[lazyName],
-		"search-then-load chain: lazy tool %q must be callable after tools{action:'load'}.Execute", lazyName)
+		"query-then-load chain: lazy tool %q must be callable after tools{names:[...]}.Execute", lazyName)
 }
 
 // ─── Part A §5a — Manifest determinism under load churn ───────────────────
