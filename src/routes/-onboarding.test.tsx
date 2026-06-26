@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
+import React from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 // Wave 5b spec tests — OnboardingWizard frontend tests
@@ -60,7 +61,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
 import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
-import { evaluatePasswordStrength, friendlyProbeError } from './onboarding'
+import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, sortProvidersByPriority } from './onboarding'
 
 // Cache the dynamically imported component across all tests so the first import's
 // transform cost (~20s) only pays once and doesn't time out individual tests.
@@ -321,7 +322,7 @@ describe('OnboardingWizard — test connection', () => {
 })
 
 // =====================================================================
-// friendlyProbeError — pure unit tests (unchanged behaviour)
+// friendlyProbeError — pure unit tests
 // =====================================================================
 
 describe('friendlyProbeError', () => {
@@ -353,9 +354,50 @@ describe('friendlyProbeError', () => {
     }
   })
 
-  it('does not misclassify a 404/500 status as an auth error', () => {
-    expect(friendlyProbeError('status 404', 'OpenAI')).toMatch(/couldn.t reach OpenAI/i)
-    expect(friendlyProbeError('status 500', 'OpenAI')).toMatch(/couldn.t reach OpenAI/i)
+  it('maps "unknown provider" / "requires endpoint" to the needs-endpoint message', () => {
+    for (const raw of [
+      'unknown provider "azure"',
+      'unknown provider azure',
+      'requires an endpoint',
+      'requires endpoint',
+      'no endpoint configured',
+    ]) {
+      const msg = friendlyProbeError(raw, 'Azure OpenAI')
+      expect(msg).toMatch(/Azure OpenAI needs a custom API endpoint/i)
+      expect(msg).toMatch(/enter it below/i)
+    }
+  })
+
+  it('maps upstream 400 / 404 to a region/endpoint check message', () => {
+    for (const raw of [
+      'upstream models: status 400',
+      'status 404',
+      'not found',
+      'bad request',
+    ]) {
+      const msg = friendlyProbeError(raw, 'Google Gemini')
+      expect(msg).toMatch(/rejected the request/i)
+      expect(msg).toMatch(/check the endpoint/i)
+    }
+  })
+
+  it('maps upstream 5xx to a server-issues message', () => {
+    for (const raw of ['status 500', 'status 503', 'upstream models: status 502']) {
+      const msg = friendlyProbeError(raw, 'Mistral')
+      expect(msg).toMatch(/having server issues/i)
+      expect(msg).toMatch(/try again shortly/i)
+    }
+  })
+
+  it('does not misclassify 404/5xx as an auth error', () => {
+    expect(friendlyProbeError('status 404', 'OpenAI')).not.toMatch(/rejected by OpenAI/i)
+    expect(friendlyProbeError('status 500', 'OpenAI')).not.toMatch(/rejected by OpenAI/i)
+  })
+
+  it('needs-endpoint branch takes priority over auth branch (unknown-provider 401 edge)', () => {
+    // A raw string with both "unknown provider" and "401" must hit the endpoint branch first.
+    const msg = friendlyProbeError('unknown provider: status 401', 'Azure OpenAI')
+    expect(msg).toMatch(/needs a custom API endpoint/i)
   })
 })
 
@@ -418,6 +460,162 @@ describe('OnboardingWizard — no skip button', () => {
     await renderWizard()
     expect(screen.queryByRole('button', { name: /skip/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/skip/i)).not.toBeInTheDocument()
+  })
+})
+
+// =====================================================================
+// PROVIDERS_REQUIRING_ENDPOINT — exported set
+// =====================================================================
+
+describe('PROVIDERS_REQUIRING_ENDPOINT', () => {
+  it('includes azure and azure-openai', () => {
+    expect(PROVIDERS_REQUIRING_ENDPOINT.has('azure')).toBe(true)
+    expect(PROVIDERS_REQUIRING_ENDPOINT.has('azure-openai')).toBe(true)
+  })
+
+  it('does not include openai, anthropic, or other standard providers', () => {
+    expect(PROVIDERS_REQUIRING_ENDPOINT.has('openai')).toBe(false)
+    expect(PROVIDERS_REQUIRING_ENDPOINT.has('anthropic')).toBe(false)
+    expect(PROVIDERS_REQUIRING_ENDPOINT.has('moonshot')).toBe(false)
+  })
+})
+
+// =====================================================================
+// sortProvidersByPriority — covers new China/intl variants
+// =====================================================================
+
+describe('sortProvidersByPriority — provider list ordering', () => {
+  it('moves openai/anthropic/openrouter to the front', () => {
+    const list = [
+      { id: 'qwen', display_name: 'Qwen (China)' },
+      { id: 'openai', display_name: 'OpenAI' },
+      { id: 'anthropic', display_name: 'Anthropic' },
+      { id: 'openrouter', display_name: 'OpenRouter' },
+    ]
+    const sorted = sortProvidersByPriority(list)
+    expect(sorted[0].id).toBe('openai')
+    expect(sorted[1].id).toBe('anthropic')
+    expect(sorted[2].id).toBe('openrouter')
+  })
+})
+
+// =====================================================================
+// Provider list — China/intl variants present in the UI
+// =====================================================================
+
+describe('OnboardingWizard — provider list (China + intl variants)', () => {
+  async function goToStep3() {
+    await renderWizard()
+    const username = screen.getByLabelText(/username/i)
+    fireEvent.change(username, { target: { value: 'admin' } })
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => screen.getByText(/set your password/i))
+    const pw = 'password123'
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: pw } })
+    fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: pw } })
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => screen.getByText(/add a model key/i))
+  }
+
+  it('shows Moonshot intl and China variants separately', async () => {
+    await goToStep3()
+    expect(screen.getByRole('button', { name: /Moonshot \/ Kimi \(International\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Moonshot \/ Kimi \(China\)/i })).toBeInTheDocument()
+  })
+
+  it('shows MiniMax intl and China variants separately', async () => {
+    await goToStep3()
+    expect(screen.getByRole('button', { name: /MiniMax \(International\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /MiniMax \(China\)/i })).toBeInTheDocument()
+  })
+
+  it('shows Qwen China, International, and US variants', async () => {
+    await goToStep3()
+    expect(screen.getByRole('button', { name: /Qwen \(China\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Qwen \(International\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Qwen \(US\)/i })).toBeInTheDocument()
+  })
+
+  it('shows Z.ai international and Zhipu China variants', async () => {
+    await goToStep3()
+    expect(screen.getByRole('button', { name: /Z\.ai \(GLM, International\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Zhipu \(GLM, China\)/i })).toBeInTheDocument()
+  })
+})
+
+// =====================================================================
+// Azure endpoint field — required before Connect
+// =====================================================================
+
+describe('OnboardingWizard — azure endpoint field', () => {
+  async function goToStep3() {
+    await renderWizard()
+    const username = screen.getByLabelText(/username/i)
+    fireEvent.change(username, { target: { value: 'admin' } })
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => screen.getByText(/set your password/i))
+    const pw = 'password123'
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: pw } })
+    fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: pw } })
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => screen.getByText(/add a model key/i))
+  }
+
+  it('shows the endpoint field when Azure is selected', async () => {
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /azure openai/i }))
+    await waitFor(() => expect(screen.getByLabelText(/api endpoint/i)).toBeInTheDocument())
+  })
+
+  it('does not show the endpoint field for non-azure providers', async () => {
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: 'Anthropic' }))
+    await waitFor(() => screen.getByLabelText('API Key'))
+    expect(screen.queryByLabelText(/api endpoint/i)).not.toBeInTheDocument()
+  })
+
+  it('Connect is disabled for Azure when endpoint is empty', async () => {
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /azure openai/i }))
+    await waitFor(() => screen.getByLabelText('API Key'))
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'some-azure-key' },
+    })
+    // Endpoint is still empty — Connect must be disabled.
+    const connectBtn = screen.getByRole('button', { name: /connect & load models/i })
+    expect(connectBtn).toBeDisabled()
+  })
+
+  it('Connect is enabled for Azure when both key and endpoint are filled', async () => {
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /azure openai/i }))
+    await waitFor(() => screen.getByLabelText('API Key'))
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'some-azure-key' },
+    })
+    fireEvent.change(screen.getByLabelText(/api endpoint/i), {
+      target: { value: 'https://my-resource.openai.azure.com/openai/deployments/gpt4' },
+    })
+    const connectBtn = screen.getByRole('button', { name: /connect & load models/i })
+    expect(connectBtn).not.toBeDisabled()
+  })
+
+  it('probe is called with the endpoint when Azure Connect is clicked', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /azure openai/i }))
+    await waitFor(() => screen.getByLabelText('API Key'))
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'azure-key-123' },
+    })
+    const azureEndpoint = 'https://my-resource.openai.azure.com/openai/deployments/gpt4'
+    fireEvent.change(screen.getByLabelText(/api endpoint/i), {
+      target: { value: azureEndpoint },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+    await waitFor(() => {
+      expect(probeProvider).toHaveBeenCalledWith('azure', 'azure-key-123', azureEndpoint)
+    })
   })
 })
 

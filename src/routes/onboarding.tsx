@@ -37,6 +37,10 @@ type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 
 // All supported providers. Providers with /v1/models get a searchable dropdown;
 // providers without it get a text input for manual model slug entry.
+//
+// Dual-endpoint vendors (China vs international) are listed as separate entries
+// so users pick the one matching their key/region. The ids below are all valid
+// values in the ProbeProviderRequest enum (src/lib/api/generated/).
 const AVAILABLE_PROVIDERS = [
   { id: 'openai', display_name: 'OpenAI' },
   { id: 'openrouter', display_name: 'OpenRouter' },
@@ -46,18 +50,30 @@ const AVAILABLE_PROVIDERS = [
   { id: 'deepseek', display_name: 'DeepSeek' },
   { id: 'mistral', display_name: 'Mistral' },
   { id: 'azure', display_name: 'Azure OpenAI' },
-  { id: 'zhipu', display_name: 'Zhipu' },
-  // The runtime GLM provider registers as `z-ai` (the id the backend probes for
-  // the live GLM model list). Listing it here makes that provider reachable in
-  // onboarding so the `glm-5.2` capable-default preference can surface.
-  { id: 'z-ai', display_name: 'Z.ai (GLM)' },
-  { id: 'moonshot', display_name: 'Moonshot' },
+  // Zhipu / Z.ai: two separate platforms. z-ai = international (api.z.ai);
+  // zhipu = China-mainland (open.bigmodel.cn). Pick the one matching your key.
+  { id: 'z-ai', display_name: 'Z.ai (GLM, International)' },
+  { id: 'zhipu', display_name: 'Zhipu (GLM, China)' },
+  // Moonshot / Kimi: api.moonshot.ai (intl) vs api.moonshot.cn (China).
+  { id: 'moonshot', display_name: 'Moonshot / Kimi (International)' },
+  { id: 'moonshot-cn', display_name: 'Moonshot / Kimi (China)' },
   { id: 'nvidia', display_name: 'NVIDIA' },
-  { id: 'minimax', display_name: 'MiniMax' },
-  { id: 'qwen', display_name: 'Qwen' },
+  // MiniMax: api.minimax.io (intl) vs api.minimaxi.com (China).
+  { id: 'minimax', display_name: 'MiniMax (International)' },
+  { id: 'minimax-cn', display_name: 'MiniMax (China)' },
+  // Qwen / DashScope: China (dashscope.aliyuncs.com), International, and US
+  // are all separate platforms — pick the one matching your Alibaba Cloud region.
+  { id: 'qwen', display_name: 'Qwen (China)' },
+  { id: 'qwen-intl', display_name: 'Qwen (International)' },
+  { id: 'qwen-us', display_name: 'Qwen (US)' },
   { id: 'ollama', display_name: 'Ollama' },
   { id: 'cerebras', display_name: 'Cerebras' },
 ]
+
+// Providers that REQUIRE a custom endpoint to function. The probe will always
+// return "unknown provider" for these without an endpoint because no fixed
+// default base exists (e.g. Azure is per-resource-host).
+export const PROVIDERS_REQUIRING_ENDPOINT = new Set(['azure', 'azure-openai'])
 
 // Popular providers surfaced first in the onboarding selection grid to reduce
 // decision overload (Hick's law). Providers not listed here keep their original
@@ -128,16 +144,47 @@ export function evaluatePasswordStrength(pw: string): PasswordStrength | null {
 // to a plain-language, actionable message for the given provider. The raw
 // string is preserved separately by the caller behind a "Technical details"
 // disclosure so debugging info is never lost. Exported for unit testing.
+//
+// Branch order (first match wins):
+//   1. "needs endpoint" — provider unknown / requires a custom base URL
+//   2. Auth rejected (401 / 403 / invalid-key text)
+//   3. Rate limited (429)
+//   4. Upstream 400 / 404 — bad request or wrong endpoint/region
+//   5. Upstream 5xx — provider server error
+//   6. Fallback — real network / timeout / unknown
 export function friendlyProbeError(raw: string, providerName: string): string {
   const r = (raw || '').toLowerCase()
   const has = (...codes: string[]) =>
     codes.some((c) => new RegExp(`(^|[^0-9])${c}([^0-9]|$)`).test(r))
+
+  // Branch 1 — provider wiring gap or explicit "needs endpoint" response.
+  // Matches the 400 "unknown provider" or "requires an endpoint" messages
+  // returned when the backend has no base URL for the selected id.
+  if (/unknown provider|requires?\s+(an?\s+)?endpoint|no endpoint/.test(r)) {
+    return `${providerName} needs a custom API endpoint. Enter it below and retry.`
+  }
+
+  // Branch 2 — key rejected.
   if (has('401', '403') || /unauthor|forbidden|invalid api key|invalid key|rejected/.test(r)) {
     return `That API key was rejected by ${providerName}. Double-check you copied the full key and that it's active, then retry.`
   }
+
+  // Branch 3 — rate limited.
   if (has('429') || /rate.?limit|too many requests/.test(r)) {
     return `Rate limited by ${providerName}. Wait a moment and retry.`
   }
+
+  // Branch 4 — upstream 400 / 404 (bad request or wrong endpoint/region).
+  if (has('400', '404') || /not found|bad request/.test(r)) {
+    return `${providerName} rejected the request — check the endpoint and that your key is for this region/platform.`
+  }
+
+  // Branch 5 — upstream 5xx (provider server error).
+  if (/status 5\d\d/.test(r)) {
+    return `${providerName} is having server issues. Try again shortly.`
+  }
+
+  // Branch 6 — fallback: real network/timeout/unknown.
   return `Couldn't reach ${providerName}. Check your connection and the key, then retry.`
 }
 
@@ -176,6 +223,7 @@ function OnboardingWizard() {
   const [completed, setCompleted] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState('')
   const [apiKey, setApiKey] = useState('')
+  const [endpoint, setEndpoint] = useState('')
   const [showKey, setShowKey] = useState(false)
   const [testStatus, setTestStatus] = useState<TestStatus>('idle')
   const [testError, setTestError] = useState('')
@@ -204,6 +252,7 @@ function OnboardingWizard() {
   const handleSelectProvider = (id: string) => {
     setSelectedProvider(id)
     setApiKey('')
+    setEndpoint('')
     setTestStatus('idle')
     setTestError('')
     setSelectedModel('')
@@ -218,8 +267,20 @@ function OnboardingWizard() {
     }
   }
 
+  const handleEndpointChange = (v: string) => {
+    setEndpoint(v)
+    if (testStatus !== 'idle') {
+      setTestStatus('idle')
+      setTestError('')
+    }
+  }
+
   const handleTest = async () => {
     if (!selectedProvider || !apiKey.trim()) return
+    // For providers requiring an endpoint (e.g. Azure), block the probe until
+    // the endpoint field has a value. The Connect button is also disabled in
+    // the UI, but this guard prevents any programmatic bypass.
+    if (PROVIDERS_REQUIRING_ENDPOINT.has(selectedProvider) && !endpoint.trim()) return
     setTestStatus('testing')
     setTestError('')
     try {
@@ -227,7 +288,8 @@ function OnboardingWizard() {
       // supplied key and returns the model list in one response. Nothing is
       // saved to disk until the user clicks "Complete setup" on step 3, which
       // fires /onboarding/complete with the full payload atomically.
-      const result = await probeProvider(selectedProvider, apiKey.trim())
+      const endpointArg = endpoint.trim() || undefined
+      const result = await probeProvider(selectedProvider, apiKey.trim(), endpointArg)
       if (result.success) {
         setTestStatus('success')
         if (result.models && result.models.length > 0) {
@@ -292,6 +354,9 @@ function OnboardingWizard() {
           id: selectedProvider,
           api_key: apiKey,
           model: selectedModel,
+          // Persist a custom endpoint (required for azure; optional regional
+          // override for others) so the saved provider config can reach it.
+          ...(endpoint.trim() ? { endpoint: endpoint.trim() } : {}),
         },
         admin: {
           username: adminUsername,
@@ -464,6 +529,8 @@ function OnboardingWizard() {
                 onSelect={handleSelectProvider}
                 apiKey={apiKey}
                 onApiKeyChange={handleApiKeyChange}
+                endpoint={endpoint}
+                onEndpointChange={handleEndpointChange}
                 showKey={showKey}
                 onToggleShowKey={() => setShowKey((v) => !v)}
                 testStatus={testStatus}
@@ -768,6 +835,8 @@ function ModelKeyStep({
   onSelect,
   apiKey,
   onApiKeyChange,
+  endpoint,
+  onEndpointChange,
   showKey,
   onToggleShowKey,
   testStatus,
@@ -787,6 +856,8 @@ function ModelKeyStep({
   onSelect: (id: string) => void
   apiKey: string
   onApiKeyChange: (k: string) => void
+  endpoint: string
+  onEndpointChange: (v: string) => void
   showKey: boolean
   onToggleShowKey: () => void
   testStatus: TestStatus
@@ -810,6 +881,12 @@ function ModelKeyStep({
       ? [{ providerName: providerDef.display_name, models: availableModels }]
       : []
   const continueEnabled = testStatus === 'success' && !!selectedModel.trim()
+  const requiresEndpoint = PROVIDERS_REQUIRING_ENDPOINT.has(selectedProvider)
+  // The Connect button is blocked when a required endpoint is missing.
+  const connectDisabled =
+    !apiKey.trim() ||
+    testStatus === 'testing' ||
+    (requiresEndpoint && !endpoint.trim())
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -898,6 +975,36 @@ function ModelKeyStep({
                 </p>
               </div>
 
+              {/* Endpoint input — required for providers with no fixed default
+                  base (e.g. Azure, where each resource has its own host). The
+                  field is mandatory for PROVIDERS_REQUIRING_ENDPOINT; for others
+                  it is not shown (they use the well-known default). */}
+              {requiresEndpoint && (
+                <div>
+                  <label
+                    htmlFor="onboarding-endpoint"
+                    className="text-xs font-medium mb-1.5 block"
+                    style={{ color: 'var(--color-muted)' }}
+                  >
+                    API Endpoint <span style={{ color: 'var(--color-error)' }}>*</span>
+                  </label>
+                  <Input
+                    id="onboarding-endpoint"
+                    type="url"
+                    value={endpoint}
+                    onChange={(e) => onEndpointChange(e.target.value)}
+                    placeholder="https://<resource>.openai.azure.com/openai/deployments/<deployment>"
+                    className="font-mono text-sm"
+                    autoComplete="off"
+                  />
+                  <p className="text-[10px] mt-1.5" style={{ color: 'var(--color-muted)' }}>
+                    {selectedProvider === 'azure' || selectedProvider === 'azure-openai'
+                      ? 'Your Azure OpenAI resource URL (per-deployment endpoint)'
+                      : 'Custom base URL for this provider'}
+                  </p>
+                </div>
+              )}
+
               {/* Connection feedback — friendly, actionable message at the display
                   layer; the raw upstream string is preserved behind a collapsible
                   "Technical details" disclosure. role="alert" + aria-live make the
@@ -931,12 +1038,14 @@ function ModelKeyStep({
                 </div>
               )}
 
-              {/* Connect & Load Models — the main CTA before model selection */}
+              {/* Connect & Load Models — the main CTA before model selection.
+                  Disabled when the key is empty, the test is running, or a
+                  required endpoint has not been filled in (azure). */}
               {testStatus !== 'success' && (
                 <Button
                   className="w-full gap-2 font-headline font-bold"
                   onClick={onTest}
-                  disabled={!apiKey.trim() || testStatus === 'testing'}
+                  disabled={connectDisabled}
                 >
                   {testStatus === 'testing' ? (
                     <>

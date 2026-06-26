@@ -1861,9 +1861,11 @@ const (
 	Longcat                ProbeProviderRequestId = "longcat"
 	Mimo                   ProbeProviderRequestId = "mimo"
 	Minimax                ProbeProviderRequestId = "minimax"
+	MinimaxCn              ProbeProviderRequestId = "minimax-cn"
 	Mistral                ProbeProviderRequestId = "mistral"
 	Modelscope             ProbeProviderRequestId = "modelscope"
 	Moonshot               ProbeProviderRequestId = "moonshot"
+	MoonshotCn             ProbeProviderRequestId = "moonshot-cn"
 	Novita                 ProbeProviderRequestId = "novita"
 	Nvidia                 ProbeProviderRequestId = "nvidia"
 	Ollama                 ProbeProviderRequestId = "ollama"
@@ -1942,11 +1944,15 @@ func (e ProbeProviderRequestId) Valid() bool {
 		return true
 	case Minimax:
 		return true
+	case MinimaxCn:
+		return true
 	case Mistral:
 		return true
 	case Modelscope:
 		return true
 	case Moonshot:
+		return true
+	case MoonshotCn:
 		return true
 	case Novita:
 		return true
@@ -6031,6 +6037,9 @@ type OnboardingCompleteRequest struct {
 	Provider struct {
 		// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
 		ApiKey string `json:"api_key"`
+
+		// Endpoint Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default (e.g. a China vs international host). When omitted, the provider's built-in default base is used.
+		Endpoint *string `json:"endpoint,omitempty"`
 
 		// Id Provider protocol identifier (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
 		Id string `json:"id"`
