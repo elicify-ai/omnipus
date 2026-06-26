@@ -23,7 +23,7 @@ type UsagePeriod string
 const (
 	// UsagePeriodDay covers the current UTC calendar day (00:00 – 24:00).
 	UsagePeriodDay UsagePeriod = "day"
-	// UsagePeriodWeek covers the current ISO week (Monday 00:00 UTC – +7d).
+	// UsagePeriodWeek covers the current Monday-anchored week (Monday 00:00 UTC – +7d).
 	UsagePeriodWeek UsagePeriod = "week"
 	// UsagePeriodMonth covers the current UTC calendar month (1st – last day).
 	UsagePeriodMonth UsagePeriod = "month"
@@ -31,6 +31,21 @@ const (
 	// PeriodStart is the zero time; PeriodEnd is opts.Now.
 	UsagePeriodAll UsagePeriod = "all"
 )
+
+// ParseUsagePeriod validates a raw period string and returns the typed value.
+// An empty string defaults to UsagePeriodMonth. Any unrecognized value returns
+// ok=false so callers (the REST handler and the get_usage tool) can reject it
+// instead of silently coercing — the single source of truth for the valid set.
+func ParseUsagePeriod(raw string) (UsagePeriod, bool) {
+	switch raw {
+	case "":
+		return UsagePeriodMonth, true
+	case string(UsagePeriodDay), string(UsagePeriodWeek), string(UsagePeriodMonth), string(UsagePeriodAll):
+		return UsagePeriod(raw), true
+	default:
+		return "", false
+	}
+}
 
 // UsageDimension controls how sessions are grouped in UsageReport.Buckets.
 type UsageDimension string
@@ -44,6 +59,20 @@ const (
 	UsageDimensionSession UsageDimension = "session"
 )
 
+// ParseUsageDimension validates a raw dimension string and returns the typed
+// value. An empty string defaults to UsageDimensionAgent. Any unrecognized
+// value returns ok=false so callers can reject it.
+func ParseUsageDimension(raw string) (UsageDimension, bool) {
+	switch raw {
+	case "":
+		return UsageDimensionAgent, true
+	case string(UsageDimensionAgent), string(UsageDimensionModel), string(UsageDimensionSession):
+		return UsageDimension(raw), true
+	default:
+		return "", false
+	}
+}
+
 // UsageBucket holds aggregated token counts for one grouping key.
 type UsageBucket struct {
 	// Key is the grouping key: agent_id, model name, or session ID.
@@ -56,10 +85,15 @@ type UsageBucket struct {
 	// Out is output (completion) tokens.
 	Out int
 	// CacheRead is tokens served from the provider KV cache (not re-computed).
+	// Cache tokens are a SUBSET of Out, not additive — do not add them to Total.
 	CacheRead int
 	// CacheWrite is tokens written into a new cache entry (Anthropic only).
+	// Also a subset of Out.
 	CacheWrite int
-	// Total is In + Out + CacheRead + CacheWrite.
+	// Total is the authoritative recorded token total for this bucket
+	// (SessionStats.TokensTotal for agent/session dimensions, ModelTokens.Total
+	// for the model dimension). For agent/session dimensions Total == In + Out
+	// (cache is already counted inside Out). It is NEVER In+Out+cache.
 	Total int
 }
 
@@ -95,8 +129,13 @@ type UsageReport struct {
 	// PeriodEnd is the exclusive end of the aggregation window.
 	// Equals opts.Now for UsagePeriodAll.
 	PeriodEnd time.Time
-	// Total is the grand total across all included sessions.  It always
-	// reconciles with the sum of Buckets (In/Out/CacheRead/CacheWrite).
+	// Total is the grand total across all included sessions. The grand
+	// Total.Total always reconciles with the sum of the buckets' Total across
+	// every dimension. The In/Out/CacheRead/CacheWrite sub-fields reconcile
+	// exactly for the agent and session dimensions; for the model dimension only
+	// Total reconciles (per-model In/Out are not recorded by the write path, so
+	// the unmodeled remainder is folded into a "(unknown)" bucket carrying Total
+	// only).
 	Total UsageBucket
 	// Buckets contains one entry per grouping key, sorted descending by Total
 	// then ascending by Key.
@@ -114,19 +153,23 @@ func periodBounds(period UsagePeriod, now time.Time) (start, end time.Time) {
 		start = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 		end = start.Add(24 * time.Hour)
 	case UsagePeriodWeek:
-		// ISO week: Monday is day 1.
+		// Monday-anchored week (Monday 00:00 UTC start, +7d). Not ISO week
+		// numbering — just the current week's Monday as the window start.
 		weekday := int(now.Weekday()) // Sunday=0 … Saturday=6
 		if weekday == 0 {
 			weekday = 7 // treat Sunday as day 7 so Monday=1
 		}
 		start = time.Date(now.Year(), now.Month(), now.Day()-weekday+1, 0, 0, 0, 0, time.UTC)
 		end = start.Add(7 * 24 * time.Hour)
-	case UsagePeriodMonth:
-		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-		end = start.AddDate(0, 1, 0)
 	case UsagePeriodAll:
 		// Zero start signals "no time filter"; PeriodEnd == now.
 		end = now
+	default:
+		// UsagePeriodMonth and any unexpected value fall back to the current
+		// calendar month (mirrors the empty-period default above), so an
+		// invalid period can never silently produce a zero [start,end) window.
+		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		end = start.AddDate(0, 1, 0)
 	}
 	return
 }
@@ -164,6 +207,9 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 	if opts.Now.IsZero() {
 		opts.Now = time.Now().UTC()
 	}
+	// Enforce the documented UTC precondition defensively so a caller passing
+	// local time can't silently shift every period boundary.
+	opts.Now = opts.Now.UTC()
 
 	start, end := periodBounds(opts.Period, opts.Now)
 
@@ -173,17 +219,27 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 	}
 
 	// accumByKey holds running totals keyed by the grouping key.
+	//
+	// total is the AUTHORITATIVE recorded token total (SessionStats.TokensTotal
+	// or ModelTokens.Total), accumulated independently of in/out/cache. We never
+	// recompute Total from in+out+cache: in the persisted convention cache tokens
+	// are a SUBSET of out (each assistant turn's full token count — uncached input
+	// + cache_read + cache_write + completion — is added to TokensOut, while the
+	// cache split is tracked additionally). Summing in+out+cache would therefore
+	// double-count cache. See pkg/session/daypartition.go AppendMessage.
 	type accumEntry struct {
 		label      string
 		in         int
 		out        int
 		cacheRead  int
 		cacheWrite int
+		total      int
 	}
 	accumByKey := make(map[string]*accumEntry)
 
-	// addToKey upserts token counts into accumByKey under key.
-	addToKey := func(key, label string, in, out, cr, cw int) {
+	// addToKey upserts token counts into accumByKey under key. total is the
+	// authoritative recorded total (NOT derived from in/out/cache).
+	addToKey := func(key, label string, in, out, cr, cw, total int) {
 		e, ok := accumByKey[key]
 		if !ok {
 			e = &accumEntry{label: label}
@@ -197,6 +253,7 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 		e.out += out
 		e.cacheRead += cr
 		e.cacheWrite += cw
+		e.total += total
 	}
 
 	for _, sm := range metas {
@@ -249,27 +306,31 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 		switch opts.Dimension {
 		case UsageDimensionAgent:
 			label := resolveLabel(agentID, opts)
-			addToKey(agentID, label, s.TokensIn, s.TokensOut, s.TokensCacheRead, s.TokensCacheWrite)
+			addToKey(agentID, label, s.TokensIn, s.TokensOut, s.TokensCacheRead, s.TokensCacheWrite, s.TokensTotal)
 
 		case UsageDimensionModel:
-			if len(s.ByModel) == 0 {
-				// No per-model data: attribute this session's totals to "(unknown)".
-				// This ensures the dimension-level sum always reconciles with Total.
-				const unknownKey = "(unknown)"
-				addToKey(unknownKey, unknownKey, s.TokensIn, s.TokensOut, s.TokensCacheRead, s.TokensCacheWrite)
-			} else {
-				for model, mt := range s.ByModel {
-					// mt.In and mt.Out may be 0 for sessions that only accumulated
-					// per-model CacheRead/CacheWrite (pre-Wave-1 stats accumulation path
-					// in unified.go).  We use the mt values directly as recorded.
-					// For model dimension, session-level TokensIn/Out are NOT added
-					// separately since ByModel is meant to be the authoritative split.
-					key := model
-					if key == "" {
-						key = "(unknown)"
-					}
-					addToKey(key, key, mt.In, mt.Out, mt.CacheRead, mt.CacheWrite)
+			// ByModel records only CacheRead/CacheWrite/Total per model on the
+			// assistant-turn write path (In/Out stay 0 — see daypartition.go
+			// AppendMessage). We therefore key the bucket Total off mt.Total (the
+			// authoritative per-model token count), not a derived sum. Any portion
+			// of the session total NOT attributed to a model (input-side tokens,
+			// or assistant turns with an empty Model) is attributed to "(unknown)"
+			// so the model dimension's bucket-Total sum always reconciles exactly
+			// with report.Total.Total.
+			const unknownKey = "(unknown)"
+			modeled := 0
+			for model, mt := range s.ByModel {
+				key := model
+				if key == "" {
+					key = unknownKey
 				}
+				addToKey(key, key, mt.In, mt.Out, mt.CacheRead, mt.CacheWrite, mt.Total)
+				modeled += mt.Total
+			}
+			if rem := s.TokensTotal - modeled; rem > 0 {
+				// Unmodeled remainder (typically session input tokens). Carries
+				// Total only; In/Out/cache stay 0 (informational fields).
+				addToKey(unknownKey, unknownKey, 0, 0, 0, 0, rem)
 			}
 
 		case UsageDimensionSession:
@@ -277,7 +338,7 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 			if label == "" {
 				label = sm.ID
 			}
-			addToKey(sm.ID, label, s.TokensIn, s.TokensOut, s.TokensCacheRead, s.TokensCacheWrite)
+			addToKey(sm.ID, label, s.TokensIn, s.TokensOut, s.TokensCacheRead, s.TokensCacheWrite, s.TokensTotal)
 		}
 	}
 
@@ -288,7 +349,6 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 		if label == "" {
 			label = key
 		}
-		total := e.in + e.out + e.cacheRead + e.cacheWrite
 		buckets = append(buckets, UsageBucket{
 			Key:        key,
 			Label:      label,
@@ -296,7 +356,7 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 			Out:        e.out,
 			CacheRead:  e.cacheRead,
 			CacheWrite: e.cacheWrite,
-			Total:      total,
+			Total:      e.total,
 		})
 	}
 

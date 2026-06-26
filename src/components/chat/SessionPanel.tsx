@@ -37,6 +37,7 @@ import {
 } from '@/lib/api'
 import type { Agent, Session } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { formatTokens } from '@/lib/formatTokens'
 
 function sessionButtonClass(isActive: boolean): string {
   return isActive
@@ -133,13 +134,6 @@ function taskStatusStyle(status: string | undefined): { color: string; label: st
     default:
       return { color: 'text-[var(--color-warning)]', label: 'running' }
   }
-}
-
-/** Human-readable token count: 44.0k / 1.2M. Values under 1000 show as-is. */
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return n.toString()
 }
 
 function formatRelativeTime(dateStr: string): string {

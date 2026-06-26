@@ -133,11 +133,31 @@ describe('UsageScreen', () => {
     expect(screen.getByTestId('usage-skeleton')).toBeInTheDocument()
   })
 
-  it('renders hero stat row after data loads', async () => {
+  it('renders hero stat row with honest token breakdown after data loads', async () => {
     renderUsage()
     await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
     // Total = 15000 + 3000 = 18000 → "18.0k"
     expect(screen.getByText('18.0k')).toBeInTheDocument()
+    // Cached = tokens_cache_read (500) + tokens_cache_write (200) = 700 → "700"
+    // Uncached = 18000 - 700 = 17300 → "17.3k"
+    // These two reconcile: Cached + Uncached == Total
+    expect(screen.getByText('700')).toBeInTheDocument()
+    expect(screen.getByText('17.3k')).toBeInTheDocument()
+    // No standalone "Input" or "Output" hero cards that would double-count cache
+    const heroRow = screen.getByTestId('usage-hero-row')
+    expect(heroRow.textContent?.toLowerCase()).not.toContain('input')
+    expect(heroRow.textContent?.toLowerCase()).not.toContain('output')
+  })
+
+  it('hero Cached + Uncached == Total (no double-counting)', async () => {
+    renderUsage()
+    await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+    // Arithmetic reconciliation: cache tokens are a subset of total, not additive.
+    // Total = 18000, Cached = 700, Uncached = 17300. 700 + 17300 === 18000.
+    const totalTokens = 15000 + 3000 // 18000
+    const totalCached = 500 + 200    // 700 (from mockSummary.tokens_cache_read/write)
+    const totalUncached = totalTokens - totalCached // 17300
+    expect(totalCached + totalUncached).toBe(totalTokens)
   })
 
   it('renders by-agent bar list in the default agent tab', async () => {

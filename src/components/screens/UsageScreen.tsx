@@ -5,15 +5,9 @@ import { ChartBar, ChatCircle } from '@phosphor-icons/react'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod } from '@/lib/api'
+import { formatTokens } from '@/lib/formatTokens'
 
-// ── Formatting helpers ─────────────────────────────────────────────────────────
-
-/** Human-readable token count: 44.0k / 1.2M. Values under 1000 show as-is. */
-export function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return n.toString()
-}
+export { formatTokens }
 
 // ── StatCard ──────────────────────────────────────────────────────────────────
 
@@ -226,13 +220,15 @@ export function UsageScreen() {
 
   const isLoading = statsLoading || sessionsLoading
 
-  // Derive totals
+  // Derive totals.
+  // tokens_cache_read and tokens_cache_write are a SUBSET of tokens_total
+  // (already counted in it — NOT additive). totalUncached reconciles with
+  // totalCached so that Cached + Uncached == Total and neither double-counts.
   const totalTokens = summary?.agents?.reduce((acc, a) => acc + (a.tokens_total ?? 0), 0) ?? 0
-  const totalIn = summary?.agents?.reduce((acc, a) => acc + (a.tokens_in ?? 0), 0) ?? 0
-  const totalOut = summary?.agents?.reduce((acc, a) => acc + (a.tokens_out ?? 0), 0) ?? 0
   const totalCacheRead = summary?.tokens_cache_read ?? 0
   const totalCacheWrite = summary?.tokens_cache_write ?? 0
   const totalCached = totalCacheRead + totalCacheWrite
+  const totalUncached = totalTokens - totalCached
 
   const agentCount = summary?.agents?.length ?? 0
   const topAgent = summary?.agents
@@ -344,7 +340,8 @@ export function UsageScreen() {
         {/* Main content */}
         {!isLoading && !statsError && !isEmpty && (
           <>
-            {/* Hero stat row */}
+            {/* Hero stat row — Total / Cached (subset of total) / Uncached / Sessions */}
+            {/* Cached + Uncached == Total. Cache tokens are a subset, not additive. */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4" data-testid="usage-hero-row">
               <StatCard
                 label="Total tokens"
@@ -353,31 +350,30 @@ export function UsageScreen() {
                 hero
               />
               <StatCard
-                label="Input"
-                value={formatTokens(totalIn)}
-                unit="in"
-              />
-              <StatCard
-                label="Output"
-                value={formatTokens(totalOut)}
-                unit="out"
-              />
-              <StatCard
                 label="Cached"
                 value={formatTokens(totalCached)}
-                unit="cached"
+                unit="of total"
               />
-            </div>
-
-            {/* Secondary stats */}
-            <div className="grid grid-cols-2 gap-4">
+              <StatCard
+                label="Uncached"
+                value={formatTokens(totalUncached)}
+                unit="of total"
+              />
               <StatCard
                 label="Active agents"
                 value={agentCount.toString()}
               />
+            </div>
+
+            {/* Secondary stat */}
+            <div className="grid grid-cols-2 gap-4">
               <StatCard
                 label="Top agent"
                 value={topAgent ? (topAgent.agent_name ?? topAgent.agent_id) : '—'}
+              />
+              <StatCard
+                label="Cache breakdown"
+                value={totalCached > 0 ? `${formatTokens(totalCacheRead)} r / ${formatTokens(totalCacheWrite)} w` : '—'}
               />
             </div>
 

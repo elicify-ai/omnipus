@@ -8,10 +8,32 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/session"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 )
+
+// newTestDepsWithEmptySessions returns a Deps whose ListSessions is wired to
+// return an empty slice (no errors).  Use this for tests that need the
+// get_usage happy path but don't care about session data.
+func newTestDepsWithEmptySessions() *systools.Deps {
+	cfg := config.DefaultConfig()
+	var mu sync.Mutex
+	getCfg := func() *config.Config { return cfg }
+	return &systools.Deps{
+		Home:             "/tmp/omnipus-test",
+		ConfigPath:       "/tmp/omnipus-test/config.json",
+		GetCfg:           getCfg,
+		MutateConfig:     testMutateConfig(&mu, getCfg),
+		SaveConfigLocked: func(*config.Config) error { return nil },
+		ListSessions: func() ([]*session.UnifiedMeta, []error) {
+			return nil, nil
+		},
+	}
+}
 
 // resultJSON unmarshals a tool result's ForLLM payload into a generic map.
 func resultJSON(t *testing.T, forLLM string) map[string]any {
@@ -134,7 +156,9 @@ func TestMCPAdd_TransportValidation(t *testing.T) {
 // the retired query_cost stub) executes successfully and returns a well-formed
 // usage report — no dollar amounts, no NOT_IMPLEMENTED error.
 func TestGetUsageTool_BasicBehaviour(t *testing.T) {
-	deps, _ := newTestDeps()
+	// Use a deps with a wired (empty) ListSessions so the happy-path subtests
+	// reach the aggregator rather than the nil-guard error.
+	deps := newTestDepsWithEmptySessions()
 	ctx := context.Background()
 
 	tool := systools.NewUsageQueryTool(deps)
@@ -229,11 +253,21 @@ func TestGetUsageTool_BasicBehaviour(t *testing.T) {
 	})
 
 	t.Run("nil_list_sessions_handled", func(t *testing.T) {
-		// Ensure tool does not panic when ListSessions is nil (unwired in tests).
-		// newTestDeps does not set ListSessions, so this covers the nil path.
-		result := tool.Execute(ctx, map[string]any{"period": "month"})
+		// A nil ListSessions wiring is a configuration bug that must fail loudly
+		// with USAGE_UNAVAILABLE rather than returning a fake-zero empty report.
+		nilDeps, _ := newTestDeps() // newTestDeps does NOT wire ListSessions
+		nilTool := systools.NewUsageQueryTool(nilDeps)
+		result := nilTool.Execute(ctx, map[string]any{"period": "month"})
 		if result == nil {
 			t.Fatal("get_usage must return a non-nil ToolResult even with nil ListSessions")
+		}
+		m := resultJSON(t, result.ForLLM)
+		if m["success"] != false {
+			t.Fatalf("nil ListSessions must return success=false (USAGE_UNAVAILABLE), got: %v", m)
+		}
+		errObj, _ := m["error"].(map[string]any)
+		if code, _ := errObj["code"].(string); code != "USAGE_UNAVAILABLE" {
+			t.Errorf("nil ListSessions must return USAGE_UNAVAILABLE, got code=%q", code)
 		}
 	})
 }
