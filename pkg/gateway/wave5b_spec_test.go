@@ -42,6 +42,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 )
 
@@ -51,8 +52,12 @@ import (
 
 // newWave5bTestAPI creates a restAPI using the existing restMockProvider declared
 // in rest_test.go (same package). Both files compile together in the test binary.
-// Agents are seeded (omnipus-system + 4 base core agents) to mirror the production
-// startup path in gateway.go (Spec-3: Mia·Assistant, Jim·Orchestrator, Ray·Scout, Ava·Builder).
+// It seeds the PRODUCTION roster via coreagent.SeedConfig — Mia·Assistant,
+// Jim·Orchestrator, Ray·Scout, Ava·Builder, plus the planner/explorer/researcher
+// specialists (Spec-3; Max retired). It deliberately does NOT seed the retired
+// "omnipus-system" agent (the shared seedTestAgents helper injects that synthetic
+// fixture for the dedicated system/locked-agent tests; this roster check must
+// mirror what production actually seeds).
 func newWave5bTestAPI(t *testing.T) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -67,9 +72,9 @@ func newWave5bTestAPI(t *testing.T) *restAPI {
 			},
 		},
 	}
-	// Seed omnipus-system and core agents to mirror gateway startup (issue #45).
-	// seedTestAgents is declared in rest_test.go (same package — gateway_test binary).
-	seedTestAgents(cfg)
+	// Production-faithful seeding: the 4 base core agents + 3 specialists, no
+	// synthetic system agent.
+	coreagent.SeedConfig(cfg)
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	return &restAPI{
@@ -226,14 +231,15 @@ func TestOnboardingNeverReshow(t *testing.T) {
 // TestCoreAgentDefaults
 // --------------------------------------------------------------------------
 
-// TestCoreAgentDefaults verifies agent defaults on fresh install (Spec-3 roster
-// re-cast + S3 specialist seeding).
-//
-// The agent list is seeded via SeedConfig and includes:
-//   - omnipus-system (wire type 'system')
+// TestCoreAgentDefaults verifies the fresh-install agent roster as production
+// actually seeds it (Spec-3 roster re-cast + S3 specialist seeding):
 //   - 4 base core agents: mia, jim, ava, ray (wire type 'core'). Max was retired.
 //   - 3 seeded specialist subagents: planner, explorer, researcher (wire type
-//     'Subagent' — they are subagent-tier, native executor).
+//     'Subagent' — subagent-tier, native executor).
+//
+// The retired "omnipus-system" agent is NOT seeded by production SeedConfig and is
+// therefore not asserted here (system/locked-agent handling is covered separately
+// in rest_test.go using a synthetic fixture).
 //
 // Traces to: Spec-3 (v0.1.0 roster re-cast) + S3 specialist seeding.
 func TestCoreAgentDefaults(t *testing.T) {
@@ -256,12 +262,10 @@ func TestCoreAgentDefaults(t *testing.T) {
 		agentsByID[a.ID] = a.Type
 	}
 
-	// System agent must always be present with type "system".
-	sysType, sysFound := agentsByID["omnipus-system"]
-	require.True(t, sysFound,
-		"omnipus-system must be present in agent list on fresh install (seeded at startup)")
-	assert.Equal(t, "system", sysType,
-		"omnipus-system type must be 'system'")
+	// The retired system agent must NOT be in the production-seeded roster.
+	_, sysFound := agentsByID["omnipus-system"]
+	assert.False(t, sysFound,
+		"omnipus-system (retired system agent) must NOT be seeded by production SeedConfig")
 
 	// Spec-3 4-base core agents must all be present with type "core". Max was retired.
 	coreAgents := []string{"mia", "jim", "ava", "ray"}
