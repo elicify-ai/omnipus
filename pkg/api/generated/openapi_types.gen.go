@@ -3633,13 +3633,22 @@ func (e ClearAllSessions200JSONResponseBodyStatus) Valid() bool {
 
 // Defines values for GetTokenStatsParamsPeriod.
 const (
-	Month GetTokenStatsParamsPeriod = "month"
+	GetTokenStatsParamsPeriodAll   GetTokenStatsParamsPeriod = "all"
+	GetTokenStatsParamsPeriodDay   GetTokenStatsParamsPeriod = "day"
+	GetTokenStatsParamsPeriodMonth GetTokenStatsParamsPeriod = "month"
+	GetTokenStatsParamsPeriodWeek  GetTokenStatsParamsPeriod = "week"
 )
 
 // Valid indicates whether the value is a known member of the GetTokenStatsParamsPeriod enum.
 func (e GetTokenStatsParamsPeriod) Valid() bool {
 	switch e {
-	case Month:
+	case GetTokenStatsParamsPeriodAll:
+		return true
+	case GetTokenStatsParamsPeriodDay:
+		return true
+	case GetTokenStatsParamsPeriodMonth:
+		return true
+	case GetTokenStatsParamsPeriodWeek:
 		return true
 	default:
 		return false
@@ -3699,19 +3708,19 @@ func (e ListTasksParamsSurface) Valid() bool {
 
 // Defines values for ListWorkspacesParamsStatus.
 const (
-	Active   ListWorkspacesParamsStatus = "active"
-	All      ListWorkspacesParamsStatus = "all"
-	Archived ListWorkspacesParamsStatus = "archived"
+	ListWorkspacesParamsStatusActive   ListWorkspacesParamsStatus = "active"
+	ListWorkspacesParamsStatusAll      ListWorkspacesParamsStatus = "all"
+	ListWorkspacesParamsStatusArchived ListWorkspacesParamsStatus = "archived"
 )
 
 // Valid indicates whether the value is a known member of the ListWorkspacesParamsStatus enum.
 func (e ListWorkspacesParamsStatus) Valid() bool {
 	switch e {
-	case Active:
+	case ListWorkspacesParamsStatusActive:
 		return true
-	case All:
+	case ListWorkspacesParamsStatusAll:
 		return true
-	case Archived:
+	case ListWorkspacesParamsStatusArchived:
 		return true
 	default:
 		return false
@@ -4361,11 +4370,35 @@ type AgentStats struct {
 
 // AgentTokenEntry Per-agent token usage entry within a TokenUsageSummary.
 type AgentTokenEntry struct {
-	AgentId     string `json:"agent_id"`
-	AgentName   string `json:"agent_name"`
-	TokensIn    int    `json:"tokens_in"`
-	TokensOut   int    `json:"tokens_out"`
-	TokensTotal int    `json:"tokens_total"`
+	AgentId   string `json:"agent_id"`
+	AgentName string `json:"agent_name"`
+
+	// ByModel Per-model breakdown for this agent. Absent when no model data is available.
+	ByModel *map[string]struct {
+		// CacheRead Cache-read tokens (served from KV cache) for this model.
+		CacheRead *int `json:"cache_read,omitempty"`
+
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+		CacheWrite *int `json:"cache_write,omitempty"`
+
+		// In Uncached input tokens for this model.
+		In *int `json:"in,omitempty"`
+
+		// Out Output (completion) tokens for this model.
+		Out *int `json:"out,omitempty"`
+
+		// Total Total tokens (in + out + cache_read + cache_write) for this model.
+		Total int `json:"total"`
+	} `json:"by_model,omitempty"`
+
+	// TokensCacheRead Total cache-read tokens for this agent in the period.
+	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
+
+	// TokensCacheWrite Total cache-write tokens for this agent in the period.
+	TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
+	TokensIn         int  `json:"tokens_in"`
+	TokensOut        int  `json:"tokens_out"`
+	TokensTotal      int  `json:"tokens_total"`
 }
 
 // AgentToolEntry Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective policy so the SPA can display policy downgrades, plus the manifest tier so the panel can show which tools are always-callable versus loaded on demand.
@@ -5885,6 +5918,24 @@ type MilestoneUpdateRequest struct {
 	Name *string `json:"name,omitempty"`
 }
 
+// ModelTokens Per-model token breakdown within a session or usage summary.
+type ModelTokens struct {
+	// CacheRead Cache-read tokens (served from KV cache) for this model.
+	CacheRead *int `json:"cache_read,omitempty"`
+
+	// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+	CacheWrite *int `json:"cache_write,omitempty"`
+
+	// In Uncached input tokens for this model.
+	In *int `json:"in,omitempty"`
+
+	// Out Output (completion) tokens for this model.
+	Out *int `json:"out,omitempty"`
+
+	// Total Total tokens (in + out + cache_read + cache_write) for this model.
+	Total int `json:"total"`
+}
+
 // Notification A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
 	// AgentId The agent the notification concerns.
@@ -6848,11 +6899,35 @@ type Session struct {
 
 	// Stats Aggregated statistics for a session transcript.
 	Stats struct {
+		// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
+		ByModel *map[string]struct {
+			// CacheRead Cache-read tokens (served from KV cache) for this model.
+			CacheRead *int `json:"cache_read,omitempty"`
+
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+			CacheWrite *int `json:"cache_write,omitempty"`
+
+			// In Uncached input tokens for this model.
+			In *int `json:"in,omitempty"`
+
+			// Out Output (completion) tokens for this model.
+			Out *int `json:"out,omitempty"`
+
+			// Total Total tokens (in + out + cache_read + cache_write) for this model.
+			Total int `json:"total"`
+		} `json:"by_model,omitempty"`
+
 		// Cost Total USD cost for this session (based on provider pricing).
 		Cost float64 `json:"cost"`
 
 		// MessageCount Number of transcript entries in this session.
 		MessageCount int `json:"message_count"`
+
+		// TokensCacheRead Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
+		TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
+
+		// TokensCacheWrite Total cache-write tokens across all assistant turns (tokens written into a new cache entry, Anthropic only). 0 when the provider does not report them.
+		TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
 
 		// TokensIn Total input tokens consumed across all messages in this session.
 		TokensIn int `json:"tokens_in"`
@@ -7042,11 +7117,35 @@ type SessionDetail struct {
 
 		// Stats Aggregated statistics for a session transcript.
 		Stats struct {
+			// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
+			ByModel *map[string]struct {
+				// CacheRead Cache-read tokens (served from KV cache) for this model.
+				CacheRead *int `json:"cache_read,omitempty"`
+
+				// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+				CacheWrite *int `json:"cache_write,omitempty"`
+
+				// In Uncached input tokens for this model.
+				In *int `json:"in,omitempty"`
+
+				// Out Output (completion) tokens for this model.
+				Out *int `json:"out,omitempty"`
+
+				// Total Total tokens (in + out + cache_read + cache_write) for this model.
+				Total int `json:"total"`
+			} `json:"by_model,omitempty"`
+
 			// Cost Total USD cost for this session (based on provider pricing).
 			Cost float64 `json:"cost"`
 
 			// MessageCount Number of transcript entries in this session.
 			MessageCount int `json:"message_count"`
+
+			// TokensCacheRead Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
+			TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
+
+			// TokensCacheWrite Total cache-write tokens across all assistant turns (tokens written into a new cache entry, Anthropic only). 0 when the provider does not report them.
+			TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
 
 			// TokensIn Total input tokens consumed across all messages in this session.
 			TokensIn int `json:"tokens_in"`
@@ -7146,11 +7245,35 @@ type SessionScopeUpdateResponse struct {
 
 // SessionStats Aggregated statistics for a session transcript.
 type SessionStats struct {
+	// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
+	ByModel *map[string]struct {
+		// CacheRead Cache-read tokens (served from KV cache) for this model.
+		CacheRead *int `json:"cache_read,omitempty"`
+
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+		CacheWrite *int `json:"cache_write,omitempty"`
+
+		// In Uncached input tokens for this model.
+		In *int `json:"in,omitempty"`
+
+		// Out Output (completion) tokens for this model.
+		Out *int `json:"out,omitempty"`
+
+		// Total Total tokens (in + out + cache_read + cache_write) for this model.
+		Total int `json:"total"`
+	} `json:"by_model,omitempty"`
+
 	// Cost Total USD cost for this session (based on provider pricing).
 	Cost float64 `json:"cost"`
 
 	// MessageCount Number of transcript entries in this session.
 	MessageCount int `json:"message_count"`
+
+	// TokensCacheRead Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
+	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
+
+	// TokensCacheWrite Total cache-write tokens across all assistant turns (tokens written into a new cache entry, Anthropic only). 0 when the provider does not report them.
+	TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
 
 	// TokensIn Total input tokens consumed across all messages in this session.
 	TokensIn int `json:"tokens_in"`
@@ -7724,21 +7847,69 @@ type Todo struct {
 // TodoStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TodoStatus string
 
-// TokenUsageSummary Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files.
+// TokenUsageSummary Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files. subagent_3p (external CLI workers) are excluded — they run on a separate engine and their tokens are not tracked.
 type TokenUsageSummary struct {
 	Agents []struct {
-		AgentId     string `json:"agent_id"`
-		AgentName   string `json:"agent_name"`
-		TokensIn    int    `json:"tokens_in"`
-		TokensOut   int    `json:"tokens_out"`
-		TokensTotal int    `json:"tokens_total"`
+		AgentId   string `json:"agent_id"`
+		AgentName string `json:"agent_name"`
+
+		// ByModel Per-model breakdown for this agent. Absent when no model data is available.
+		ByModel *map[string]struct {
+			// CacheRead Cache-read tokens (served from KV cache) for this model.
+			CacheRead *int `json:"cache_read,omitempty"`
+
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+			CacheWrite *int `json:"cache_write,omitempty"`
+
+			// In Uncached input tokens for this model.
+			In *int `json:"in,omitempty"`
+
+			// Out Output (completion) tokens for this model.
+			Out *int `json:"out,omitempty"`
+
+			// Total Total tokens (in + out + cache_read + cache_write) for this model.
+			Total int `json:"total"`
+		} `json:"by_model,omitempty"`
+
+		// TokensCacheRead Total cache-read tokens for this agent in the period.
+		TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
+
+		// TokensCacheWrite Total cache-write tokens for this agent in the period.
+		TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
+		TokensIn         int  `json:"tokens_in"`
+		TokensOut        int  `json:"tokens_out"`
+		TokensTotal      int  `json:"tokens_total"`
 	} `json:"agents"`
+
+	// ByModel Cross-agent per-model breakdown for the period. Keys are model name strings. Absent when no model data is available.
+	ByModel *map[string]struct {
+		// CacheRead Cache-read tokens (served from KV cache) for this model.
+		CacheRead *int `json:"cache_read,omitempty"`
+
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+		CacheWrite *int `json:"cache_write,omitempty"`
+
+		// In Uncached input tokens for this model.
+		In *int `json:"in,omitempty"`
+
+		// Out Output (completion) tokens for this model.
+		Out *int `json:"out,omitempty"`
+
+		// Total Total tokens (in + out + cache_read + cache_write) for this model.
+		Total int `json:"total"`
+	} `json:"by_model,omitempty"`
 
 	// PeriodEnd End of the aggregation period (exclusive), UTC.
 	PeriodEnd time.Time `json:"period_end"`
 
 	// PeriodStart Start of the aggregation period (inclusive), UTC.
 	PeriodStart time.Time `json:"period_start"`
+
+	// TokensCacheRead Grand total cache-read tokens across all agents in the period.
+	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
+
+	// TokensCacheWrite Grand total cache-write tokens across all agents in the period.
+	TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
 }
 
 // ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it.
@@ -8239,7 +8410,7 @@ type SearchSkillsParams struct {
 
 // GetTokenStatsParams defines parameters for GetTokenStats.
 type GetTokenStatsParams struct {
-	// Period Aggregation period.
+	// Period Aggregation period. day=current calendar day UTC; week=current ISO week (Mon–Sun) UTC; month=current calendar month UTC; all=all time.
 	Period *GetTokenStatsParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
 }
 

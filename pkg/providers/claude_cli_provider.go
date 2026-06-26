@@ -137,11 +137,18 @@ func (p *ClaudeCliProvider) parseClaudeCliResponse(output string) (*LLMResponse,
 	}
 
 	var usage *UsageInfo
-	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 ||
+		resp.Usage.CacheCreationInputTokens > 0 || resp.Usage.CacheReadInputTokens > 0 {
+		// PromptTokens = plain (uncached) input only; cache tokens are tracked separately
+		// so callers can display the full breakdown without double-counting.
+		total := resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens +
+			resp.Usage.CacheReadInputTokens + resp.Usage.OutputTokens
 		usage = &UsageInfo{
-			PromptTokens:     resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.CacheReadInputTokens,
+			PromptTokens:     resp.Usage.InputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.OutputTokens,
+			CacheWriteTokens: resp.Usage.CacheCreationInputTokens,
+			CacheReadTokens:  resp.Usage.CacheReadInputTokens,
+			TotalTokens:      total,
 		}
 	}
 

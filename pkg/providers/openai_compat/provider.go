@@ -311,7 +311,7 @@ func parseStreamResponse(
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
-			Usage *UsageInfo `json:"usage"`
+			Usage *openaiUsageChunk `json:"usage"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -320,7 +320,7 @@ func parseStreamResponse(
 		}
 
 		if chunk.Usage != nil {
-			usage = chunk.Usage
+			usage = chunk.Usage.toUsageInfo()
 		}
 
 		if len(chunk.Choices) == 0 {
@@ -443,6 +443,43 @@ func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {
 		result = append(result, map[string]any{"type": "web_search_preview"})
 	}
 	return result
+}
+
+// openaiUsageChunk is the intermediate struct used when deserializing the usage
+// chunk from an OpenAI-compatible SSE stream. It captures prompt_tokens_details
+// so cached tokens can be separated from plain (uncached) prompt tokens.
+type openaiUsageChunk struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
+}
+
+// toUsageInfo converts an openaiUsageChunk to a UsageInfo.
+// PromptTokens in the returned struct is UNCACHED only (cached tokens subtracted).
+// CacheReadTokens holds the cached portion; CacheWriteTokens is always 0 for OpenAI
+// (the API does not report cache write counts).
+func (c *openaiUsageChunk) toUsageInfo() *UsageInfo {
+	cachedTokens := 0
+	if c.PromptTokensDetails != nil {
+		cachedTokens = c.PromptTokensDetails.CachedTokens
+	}
+	promptUncached := c.PromptTokens - cachedTokens
+	if promptUncached < 0 {
+		promptUncached = 0
+	}
+	total := c.TotalTokens
+	if total == 0 {
+		total = promptUncached + cachedTokens + c.CompletionTokens
+	}
+	return &UsageInfo{
+		PromptTokens:     promptUncached,
+		CompletionTokens: c.CompletionTokens,
+		CacheReadTokens:  cachedTokens,
+		TotalTokens:      total,
+	}
 }
 
 func (p *Provider) SupportsNativeSearch() bool {

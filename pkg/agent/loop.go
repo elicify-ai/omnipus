@@ -5736,6 +5736,8 @@ turnLoop:
 			// Accumulate turn-level stats so the "done" WS frame can surface
 			// real token counts and cost to the chat UI (issue #12).
 			ts.AddTurnStats(int64(response.Usage.TotalTokens), callCost)
+			// Accumulate cache token split for transcript entry (Wave 1 token tracking).
+			ts.AddTurnCacheStats(response.Usage.CacheReadTokens, response.Usage.CacheWriteTokens)
 			if al.costTracker != nil {
 				if saveErr := al.costTracker.SaveFromRegistry(al.rateLimiter); saveErr != nil {
 					logger.ErrorCF("agent", "SEC-26: failed to persist daily cost after LLM call — cap may under-count on restart",

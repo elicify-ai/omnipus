@@ -41,10 +41,30 @@ type ReasoningDetail struct {
 	Text   string `json:"text"`
 }
 
+// UsageInfo records token counts for one LLM call.
+//
+// Token accounting convention:
+//   - PromptTokens    = UNCACHED input tokens only (new tokens sent to the model).
+//   - CacheReadTokens = input tokens served from the provider's KV cache
+//     (Anthropic: cache_read_input_tokens; OpenAI: prompt_tokens_details.cached_tokens).
+//   - CacheWriteTokens = input tokens written into a new cache entry
+//     (Anthropic: cache_creation_input_tokens; OpenAI: not reported, stays 0).
+//   - CompletionTokens = output tokens.
+//   - TotalTokens = PromptTokens + CacheReadTokens + CacheWriteTokens + CompletionTokens.
+//
+// Providers that previously collapsed cache tokens into PromptTokens now keep them
+// separate. Callers must use TotalTokens for the full usage count; summing
+// PromptTokens + CompletionTokens will UNDER-count when caching is active.
 type UsageInfo struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// CacheReadTokens holds tokens served from the provider's prompt cache
+	// (not re-computed). Populated when the provider reports them; 0 otherwise.
+	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+	// CacheWriteTokens holds tokens written into a new cache entry this call.
+	// Populated when the provider reports them (Anthropic only); 0 otherwise.
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.
