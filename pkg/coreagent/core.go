@@ -219,10 +219,11 @@ func GetPrompt(id string) string {
 // or "deny". sandboxProfile is the default SandboxProfile for the agent;
 // empty string means "use global default (workspace)".
 //
-// All core agents share the rail: default_policy=allow plus system.*→deny.
-// Ava additionally has explicit system.* allows for her 4 agent-CRUD tools.
-// Jim gets sandbox_profile=workspace+net with workspace_shell,
-// workspace_shell_bg, and serve_web explicitly allowed.
+// All four base agents (Mia, Jim, Ava, Ray) are LEAST-PRIVILEGE: deny-by-default
+// with an explicit allow-list for exactly the tools their role needs. The legacy
+// allow-by-default + "system.*" deny rail was retired from all base agents; it
+// still applies to the worker tier (IDWorker, IDPlanner, IDExplorer, IDResearcher)
+// which have narrower, well-understood surfaces.
 //
 // The returned maps are independent allocations — callers may mutate them safely.
 func coreAgentSeed(
@@ -243,17 +244,17 @@ func coreAgentSeed(
 		"serve_web":         config.ToolPolicyAllow,
 	}
 	// Browser automation: explicitly allow the navigate/capture tools (NOT
-	// browser_evaluate, which stays denied by the builtin policy) for the agents
-	// that actually drive a real browser — Jim, Ray, and the delegation
-	// workers/specialists (Worker, Explorer, Researcher). default_policy is already
-	// "allow", so this is belt-and-suspenders (like serve_web/workspace_shell): it
-	// documents intent, surfaces these tools in the per-agent tool picker, and
-	// survives any future default_policy change. Mia (router) and Ava (builder) are
+	// browser_evaluate, which stays denied by the builtin policy) for the delegation
+	// workers/specialists (Worker, Explorer, Researcher) that still ride the legacy
+	// allow rail. Ray and Jim are handled by their own deny-by-default branches below
+	// (browser tools allowed explicitly there). Mia (router) and Ava (builder) are
 	// excluded by design — they delegate browser work; Planner only decomposes.
 	switch id {
-	case IDJim, IDWorker, IDExplorer, IDResearcher:
-		// Ray is handled by his own deny-by-default branch below (browser tools
-		// allowed explicitly there); the others still ride the legacy allow rail.
+	case IDWorker, IDExplorer, IDResearcher:
+		// Jim is now deny-by-default (handled in the IDJim case below).
+		// Ray is handled by his own deny-by-default branch below.
+		// Workers/specialists still ride the legacy allow rail with belt-and-suspenders
+		// browser entries so the tools appear in the tool picker.
 		for _, b := range []string{
 			"browser_navigate", "browser_click", "browser_type",
 			"browser_screenshot", "browser_get_text", "browser_wait",
@@ -403,13 +404,84 @@ func coreAgentSeed(
 			"set_todos":   allow,
 		}, ""
 	case IDJim:
-		// Jim additionally uses workspace_shell and workspace_shell_bg (all
-		// explicitly allowed so the policy passes through even when
-		// default_policy is allow — belt-and-suspenders). serve_web is already
-		// in the base map above so it is not repeated here.
-		base["workspace_shell"] = config.ToolPolicyAllow
-		base["workspace_shell_bg"] = config.ToolPolicyAllow
-		return config.ToolPolicyAllow, base, config.SandboxProfileWorkspaceNet
+		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
+		// allow only the tools his role needs (plan, delegate, manage tasks +
+		// workspaces, run shell/browser, manage MCP servers). This replaces
+		// the old allow-by-default + "system.*" deny rail, which the §7 tool
+		// rename silently broke — renamed management tools (create_workspace,
+		// set_config, …) no longer match the "system.*" glob, so every
+		// former-system tool fell through to allow.
+		// The shared `base` map (allow-rail with memory + serve_web) does NOT
+		// leak into Jim's return — we return an entirely new map here.
+		allow := config.ToolPolicyAllow
+		ask := config.ToolPolicyAsk
+		return config.ToolPolicyDeny, map[string]config.ToolPolicy{
+			// File operations — read, write, and navigate the workspace.
+			"read_file":      allow,
+			"write_file":     allow,
+			"edit_file":      allow,
+			"append_file":    allow,
+			"list_directory": allow,
+			// External lookups.
+			"search_web": allow,
+			"fetch_url":  allow,
+			// Web serving — scaffolds and serves web apps in the sandbox.
+			"serve_web": allow,
+			// Shell execution — sandboxed workspace shell (foreground + background).
+			"exec":               allow,
+			"workspace_shell":    allow,
+			"workspace_shell_bg": allow,
+			// Communication / routing.
+			"send_message":      allow,
+			"send_file":         allow,
+			"hand_off":          allow,
+			"return_to_default": allow,
+			// Persistent memory (carries planning context across sessions).
+			"remember":          allow,
+			"recall_memory":     allow,
+			"run_retrospective": allow,
+			"set_todos":         allow,
+			// Delegation — spawn subagents, poll them, list who's available.
+			"spawn":              allow,
+			"run_subagent":       allow,
+			"check_spawn_status": allow,
+			"list_agents":        allow,
+			// Task management (current workspace).
+			"create_task": allow,
+			"list_tasks":  allow,
+			"update_task": allow,
+			// Task management (cross-workspace).
+			"create_task_in_workspace": allow,
+			"list_tasks_in_workspace":  allow,
+			"update_task_in_workspace": allow,
+			// Workspace lifecycle — Jim manages workspaces (not just reads them).
+			"get_workspace":    allow,
+			"list_workspaces":  allow,
+			"update_workspace": allow,
+			"create_workspace": allow,
+			// Skill discovery + installation (NOT authoring — that's Ava's domain).
+			"find_skills":   allow,
+			"list_skills":   allow,
+			"install_skill": allow,
+			// MCP server management.
+			"list_mcp_servers": allow,
+			"add_mcp_server":   allow,
+			// Browser automation (interactive/visual work in the sandboxed browser).
+			// browser_evaluate (arbitrary JS) is operator-approved for Jim and stays
+			// runtime-gated by sandbox.browser_evaluate_enabled regardless of policy.
+			"browser_navigate":   allow,
+			"browser_click":      allow,
+			"browser_type":       allow,
+			"browser_wait":       allow,
+			"browser_get_text":   allow,
+			"browser_screenshot": allow,
+			"browser_evaluate":   allow,
+			// Delete / remove operations are consent-gated (ask) — standing rule.
+			"delete_task":              ask,
+			"delete_task_in_workspace": ask,
+			"delete_workspace":         ask,
+			"remove_mcp_server":        ask,
+		}, config.SandboxProfileWorkspaceNet
 	}
 	return config.ToolPolicyAllow, base, ""
 }
@@ -954,6 +1026,8 @@ var prompts = map[string]string{
 
 You are the planning and coordination hub. When a goal is complex you decompose it into a clear task DAG, delegate each task to the right specialist, and track progress through blocked_by dependencies until the work is done. You also handle everyday requests yourself when no delegation is needed — you're a capable generalist who knows when to plan, when to delegate, and when to just act.
 
+You operate on a least-privilege basis: you have exactly the tools your coordination role needs and nothing more. You do NOT manage agents, channels, or providers (that's Ava and admin); you do NOT author skills (that's Ava); you do NOT navigate the UI (that's Mia). When something is outside your scope, hand off immediately to the right agent.
+
 ## How you work
 
 - **Concise by default.** Give the answer, not a lecture. Expand only when asked or when the topic genuinely requires it.
@@ -964,16 +1038,22 @@ You are the planning and coordination hub. When a goal is complex you decompose 
 
 ## Planning & delegation
 
-You can handle most things yourself. Decompose and delegate when the goal is multi-step or genuinely needs a specialist. Your delegation roster:
+You coordinate by DELEGATING to specialists — spawn/run_subagent/create_task to hand work off, then poll check_spawn_status until the DAG resolves. Your delegation roster:
 
 - **Explorer** — internal context: reads the workspace's files and memory and reports what already exists. Delegate here before building something new.
 - **Researcher** — external research: web search + fetch with citations. Delegate for up-to-date facts and multi-source investigation.
 - **Worker** — general-purpose labor: executes a single concrete task and returns a result. Delegate self-contained units of work.
 - **Planner** — deep decomposition: hand off a large, ambiguous goal when you want a dedicated task-DAG built before execution.
-- **Ava** — builds custom agents (you cannot create agents yourself).
+- **Ava** — builds and maintains custom agents; assigns workspace teams. You do NOT create, update, or delete agents.
 - **Ray** — the chat-facing Scout for research the user wants to follow interactively.
 
-Use spawn/run_subagent/create_task to delegate; monitor blocked_by until the DAG resolves. NEVER deflect a simple request to a specialist — if someone asks "what's the capital of France?" just answer it.
+NEVER deflect a simple request to a specialist — if someone asks "what's the capital of France?" just answer it.
+
+## Task & workspace management
+
+You own the task and workspace lifecycle. Use create_task / update_task / list_tasks for the current workspace, and create_task_in_workspace / update_task_in_workspace / list_tasks_in_workspace for cross-workspace work. Deletion is consent-gated — delete_task, delete_task_in_workspace, and delete_workspace always require explicit confirmation before you call them.
+
+You can also manage workspaces directly: get_workspace / list_workspaces / update_workspace / create_workspace. Installing MCP servers is in scope: list_mcp_servers / add_mcp_server (remove_mcp_server is consent-gated).
 
 ## Browser automation
 
@@ -1013,6 +1093,10 @@ sandbox-aware end-to-end and gives clearer error messages on policy denial.
 
 ## What you never do
 
+- NEVER create, update, or delete agents — hand off to Ava for that
+- NEVER manage channels or providers — those are admin operations
+- NEVER author or edit skills — Ava owns skill authoring (you can install and discover skills)
+- NEVER navigate the UI (navigate tool) — hand off to Mia for that
 - NEVER add unnecessary caveats, disclaimers, or "as an AI" hedges
 - NEVER refuse a reasonable request by suggesting another agent when you can handle it yourself
 - NEVER produce walls of text when a few sentences suffice

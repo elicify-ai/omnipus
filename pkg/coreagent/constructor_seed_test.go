@@ -20,22 +20,21 @@ import (
 // BDD: Given each core agent ID,
 //
 //	When coreAgentSeed is called,
-//	Then defaultPolicy is "allow" for all core agents;
-//	And the "system.*: deny" wildcard is present;
-//	And Ava additionally has explicit allows for 4 system.* tools;
-//	And Jim has workspace_shell + workspace_shell_bg + serve_web allowed;
-//	And Jim's seeded sandbox_profile is workspace+net.
+//	Then all four base agents are deny-by-default (least-privilege redesign);
+//	And none carry the dead "system.*" deny rail;
+//	And Jim's seeded sandbox_profile is workspace+net;
+//	And Jim's explicit allow-list includes spawn, create_task, workspace_shell, browser_navigate;
+//	And Jim's consent-gated tools (delete_task, delete_workspace, etc.) resolve ask;
+//	And a sample of tools Jim must NOT have (create_agent, navigate) are absent.
 //
 // Traces to: pkg/coreagent/core.go — coreAgentSeed (FR-008, FR-010, FR-022).
 func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
-	// Redesigned core agents (one-by-one). Ava + Mia are now LEAST-PRIVILEGE:
-	// deny-by-default, explicit allow/ask for exactly their role's tools, no
-	// "system.*" rail. Jim/Ray still use the legacy allow-default rail until
-	// they are redesigned in their own pass.
+	// All four base agents are now LEAST-PRIVILEGE: deny-by-default, explicit
+	// allow/ask for exactly their role's tools, no "system.*" rail.
 	tests := []struct {
 		id                   CoreAgentID
 		expectDefaultPolicy  config.ToolPolicy
-		expectSystemDeny     bool     // legacy "system.*": deny rail present
+		expectSystemDeny     bool     // legacy "system.*": deny rail — must be absent for all redesigned agents
 		expectExtraAllows    []string // must be present AND == allow
 		expectAsk            []string // must be present AND == ask
 		expectExplicitDenies []string
@@ -86,11 +85,40 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 		},
 		{
 			id:                  IDJim,
-			expectDefaultPolicy: config.ToolPolicyAllow,
-			expectSystemDeny:    true,
-			// Step 7: Jim uses serve_web (unified tool), workspace_shell, workspace_shell_bg.
-			expectExtraAllows:    []string{"workspace_shell", "workspace_shell_bg", "serve_web"},
-			expectExplicitDenies: nil, // run_in_workspace removed; no explicit denies needed
+			expectDefaultPolicy: config.ToolPolicyDeny,
+			expectSystemDeny:    false,
+			// Jim's full explicit allow-list (a representative sample tested here).
+			expectExtraAllows: []string{
+				// File operations.
+				"read_file", "write_file", "edit_file", "append_file", "list_directory",
+				// Lookups.
+				"search_web", "fetch_url",
+				// Execution.
+				"exec", "workspace_shell", "workspace_shell_bg", "serve_web",
+				// Communication / routing.
+				"send_message", "send_file", "hand_off", "return_to_default",
+				// Memory.
+				"remember", "recall_memory", "run_retrospective", "set_todos",
+				// Delegation.
+				"spawn", "run_subagent", "check_spawn_status", "list_agents",
+				// Task management (current + cross-workspace).
+				"create_task", "list_tasks", "update_task",
+				"create_task_in_workspace", "list_tasks_in_workspace", "update_task_in_workspace",
+				// Workspace lifecycle.
+				"get_workspace", "list_workspaces", "update_workspace", "create_workspace",
+				// Skill discovery + install.
+				"find_skills", "list_skills", "install_skill",
+				// MCP.
+				"list_mcp_servers", "add_mcp_server",
+				// Browser.
+				"browser_navigate", "browser_click", "browser_type",
+				"browser_wait", "browser_get_text", "browser_screenshot",
+			},
+			// Destructive/irreversible operations are consent-gated.
+			expectAsk: []string{
+				"delete_task", "delete_task_in_workspace",
+				"delete_workspace", "remove_mcp_server",
+			},
 			expectSandboxProfile: config.SandboxProfileWorkspaceNet,
 		},
 	}
@@ -245,18 +273,24 @@ func TestJimSeed_SandboxProfileIsWorkspacePlusNet(t *testing.T) {
 		"Jim's seeded sandbox_profile must be workspace+net (PR 5 migration)")
 }
 
-// TestJimSeed_WebServeAndWorkspaceShellAllowed verifies that Jim's constructor
-// seed allows workspace_shell, workspace_shell_bg, and serve_web (step 7
-// migration from run_in_workspace to unified serve_web).
+// TestJimSeed_DenyDefaultWithExplicitAllows verifies that Jim's constructor seed
+// is deny-by-default with explicit allows for his full tool surface — including
+// workspace_shell, workspace_shell_bg, and serve_web — and no dead "system.*" rail.
 //
 // BDD: Given coreAgentSeed(IDJim) is called,
 //
-//	When the policies map is inspected,
-//	Then workspace_shell, workspace_shell_bg, and serve_web are "allow".
+//	When the returned defaultPolicy and policies map are inspected,
+//	Then defaultPolicy is "deny" (least-privilege redesign);
+//	And workspace_shell, workspace_shell_bg, and serve_web are "allow";
+//	And the dead "system.*" rail is absent;
+//	And run_in_workspace is not present.
 //
-// Traces to: quizzical-marinating-frog.md Step 7.
-func TestJimSeed_WebServeAndWorkspaceShellAllowed(t *testing.T) {
-	_, policies, _ := coreAgentSeed(IDJim)
+// Traces to: quizzical-marinating-frog.md Step 7 + Jim least-privilege redesign.
+func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
+	dp, policies, _ := coreAgentSeed(IDJim)
+
+	assert.Equal(t, config.ToolPolicyDeny, dp,
+		"Jim must be deny-by-default (least-privilege redesign)")
 
 	for _, toolName := range []string{"workspace_shell", "workspace_shell_bg", "serve_web"} {
 		p, ok := policies[toolName]
@@ -265,9 +299,59 @@ func TestJimSeed_WebServeAndWorkspaceShellAllowed(t *testing.T) {
 			"Jim's policy for %q must be 'allow'", toolName)
 	}
 
-	// run_in_workspace is deleted — no explicit deny entry should exist.
+	// The dead "system.*" deny rail must be gone — it was the old legacy approach.
+	_, hasSystemRail := policies["system.*"]
+	assert.False(t, hasSystemRail, "Jim must NOT carry the dead 'system.*' rail after least-privilege redesign")
+
+	// run_in_workspace is deleted — no policy entry should exist.
 	_, hasRunIn := policies["run_in_workspace"]
 	assert.False(t, hasRunIn, "run_in_workspace is removed; Jim must not have a policy entry for it")
+}
+
+// TestJimSeed_ConsentGatedDeleteTools verifies that Jim's destructive/irreversible
+// operations are consent-gated ("ask"), not silently allowed or denied.
+//
+// BDD: Given coreAgentSeed(IDJim) is called,
+//
+//	When the policies map is inspected for delete/remove operations,
+//	Then delete_task, delete_task_in_workspace, delete_workspace, remove_mcp_server
+//	are all "ask" (standing rule: delete/remove operations require confirmation).
+//
+// Traces to: Jim least-privilege redesign — delete/remove standing rule.
+func TestJimSeed_ConsentGatedDeleteTools(t *testing.T) {
+	_, policies, _ := coreAgentSeed(IDJim)
+
+	for _, toolName := range []string{
+		"delete_task", "delete_task_in_workspace",
+		"delete_workspace", "remove_mcp_server",
+	} {
+		p, ok := policies[toolName]
+		require.True(t, ok, "Jim must have explicit policy for consent-gated tool %q", toolName)
+		assert.Equal(t, config.ToolPolicyAsk, p,
+			"Jim's policy for %q must be 'ask' (consent-gated)", toolName)
+	}
+}
+
+// TestJimSeed_DeniedToolsAbsent verifies that tools outside Jim's scope are
+// absent from his explicit policy map (they resolve "deny" via the default_policy).
+//
+// BDD: Given coreAgentSeed(IDJim) is called,
+//
+//	When the policies map is inspected for out-of-scope tools,
+//	Then create_agent, navigate, configure_provider are all absent from the map
+//	(they fall through to the deny default_policy, not listed as explicit denies).
+//
+// Traces to: Jim least-privilege redesign.
+func TestJimSeed_DeniedToolsAbsent(t *testing.T) {
+	dp, policies, _ := coreAgentSeed(IDJim)
+
+	require.Equal(t, config.ToolPolicyDeny, dp, "Jim must be deny-by-default")
+
+	// These tools must NOT appear in the map — they are implicitly denied by default_policy.
+	for _, toolName := range []string{"create_agent", "navigate", "configure_provider"} {
+		_, present := policies[toolName]
+		assert.False(t, present, "Jim must NOT have an explicit entry for %q (implicitly denied by default_policy=deny)", toolName)
+	}
 }
 
 // TestSeedConfig_JimProfileApplied verifies that SeedConfig seeds Jim with
