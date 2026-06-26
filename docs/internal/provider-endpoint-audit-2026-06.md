@@ -5,6 +5,13 @@ providers for the same class of problem: (a) onboarding-probe id ↔ backend-bas
 mismatches, and (b) providers that have **multiple regional API endpoints** (China vs
 international) where only one is wired or surfaced.
 
+> **Status (2026-06-26):** Categories A–C and the China/intl variant gaps (B) were
+> implemented after this audit — `anthropic`/`azure` bases, `moonshot-cn`/`minimax-cn`,
+> surfaced `qwen-intl`/`qwen-us`, the custom-endpoint field, the `friendlyProbeError`
+> rework, and four CI invariants that lock the whole class (commits `373e0d2c`,
+> `524e806a`, `0fb38687`). The **Findings** below are kept as the original audit
+> snapshot; forward-looking work lives in the **Open Points Backlog** at the end.
+
 ## How the probe resolves a base (the root mechanism)
 
 `POST /onboarding/probe-provider` (`pkg/gateway/rest_onboarding.go`) resolves the
@@ -116,3 +123,69 @@ next "id known in one place, unknown in another" bug.
 ## Evidence
 All rows above were live-probed via `POST /api/v1/onboarding/probe-provider` against the
 fresh gateway and direct `curl` to each vendor's `/models` endpoint on 2026-06-26.
+
+---
+
+# Open Points Backlog
+
+Deeper investigations spun out of this audit (and the not-fully-implemented-tools
+review). Not blockers — research + design items to drill into before we claim full
+multi-provider / multi-protocol coverage. Each was sanity-checked live on 2026-06-26.
+
+## OP-1 — Anthropic API, especially for Chinese providers (dual OpenAI + Anthropic endpoints)
+Today we treat almost every provider as OpenAI-compatible (`/chat/completions`), and only
+a few as native Anthropic Messages (`/messages`): `anthropic-messages`,
+`coding-plan-anthropic`/`alibaba-coding-anthropic`, `anthropic` in OAuth mode, `claude-cli`.
+But **several Chinese providers expose BOTH an OpenAI-compatible AND an Anthropic-compatible
+endpoint** (the Anthropic one mainly so Claude Code / Anthropic-SDK clients can point at
+them). Live-confirmed (401 = endpoint exists, needs auth) on 2026-06-26:
+- DeepSeek — `https://api.deepseek.com/anthropic/v1/messages`
+- Zhipu / GLM — `https://open.bigmodel.cn/api/anthropic/v1/messages` (z.ai has the intl twin)
+- Moonshot / Kimi — `https://api.moonshot.ai/anthropic/v1/messages`
+- (likely also MiniMax; Qwen already wired via `coding-plan-anthropic`)
+
+We currently wire only the **OpenAI-compatible** variant for these (`zhipu`/`z-ai`,
+`moonshot`(+cn), `minimax`(+cn), `deepseek`, `qwen`). Drill into:
+1. Which Chinese providers offer an Anthropic-compatible endpoint, at what path, and
+   whether it accepts the same key as their OpenAI endpoint.
+2. Whether to offer an explicit Anthropic-format variant id per vendor (e.g.
+   `deepseek-anthropic`, `zhipu-anthropic`) or auto-detect — mirroring how
+   `coding-plan-anthropic` already does it for Alibaba. Trade-off: more ids vs a
+   protocol toggle on one id.
+3. The nuance that **`anthropic` with an API key uses Anthropic's OpenAI-compat shim**, not
+   the native Messages API (`anthropic-messages` is the native one) — document/clarify in
+   the onboarding UI so users pick the right format.
+4. Probe/model-list implications: Anthropic-format endpoints don't reliably expose an
+   OpenAI-shaped `/models` (e.g. the Alibaba `…/apps/anthropic` one) → model dropdown may
+   need a per-protocol probe or a graceful free-text fallback.
+
+## OP-2 — Google ecosystem (Gemini) deep-dive
+1. The OpenAI-compat `/v1beta/openai/models` returned **404 unauth / 400 with a dummy key**
+   in this audit → Gemini model selection may not populate via the standard probe. Verify
+   with a real Google key; if it genuinely lacks an OpenAI-shaped `/models`, add a
+   Gemini-native model-list probe (`/v1beta/models`) or a free-text fallback.
+2. Native Gemini API (`/v1beta/...`, `x-goog-api-key` / `?key=`) vs the OpenAI-compat layer
+   (`/v1beta/openai/`, Bearer) — we use the latter; map which features each supports.
+3. **Vertex AI** (GCP-hosted Gemini, OAuth/service-account auth, region hosts) is not a
+   provider — separate from the public Gemini API. Assess demand.
+4. `antigravity` provider defaults to `gemini-3-flash` — clarify its relationship to the
+   Google ecosystem and whether it should surface in onboarding.
+
+## OP-3 — xAI (Grok) ecosystem — NOT currently supported
+xAI / Grok is **not a provider at all** today (absent from `GetDefaultAPIBase`,
+`knownProtocols`, the factory switch, the probe enum, and onboarding). xAI ships an
+OpenAI-compatible API at `https://api.x.ai/v1` (and an Anthropic-compatible endpoint).
+Drill into:
+1. Add `xai` (OpenAI-compatible, `https://api.x.ai/v1`) as a first-class provider — it
+   should be a near-trivial addition that the four CI invariants will immediately cover.
+2. Whether to also offer xAI's Anthropic-compatible endpoint (ties into OP-1).
+3. Grok model naming / `/models` shape verification with a real key.
+
+## OP-4 — Generalize the "dual-protocol provider" model
+OP-1 and OP-3 share a root question: a growing number of vendors expose the **same models
+under both an OpenAI-compatible and an Anthropic-compatible endpoint**. Rather than minting
+two ids per vendor forever, consider a per-provider **protocol** field
+(`openai` | `anthropic`) that selects the wire format + endpoint path, with the base
+resolver and factory keyed on (vendor, protocol). This would make adding the Anthropic
+variant of any Chinese provider (or xAI) a data change, not new switch cases — and the
+existing invariant tests would extend to cover the matrix.
