@@ -4375,19 +4375,19 @@ type AgentTokenEntry struct {
 
 	// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 	ByModel *map[string]struct {
-		// CacheRead Cache-read tokens (served from KV cache) for this model.
+		// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
 		CacheRead *int `json:"cache_read,omitempty"`
 
-		// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
-		// In Uncached input tokens for this model.
+		// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
 		In *int `json:"in,omitempty"`
 
-		// Out Output (completion) tokens for this model.
+		// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
 		Out *int `json:"out,omitempty"`
 
-		// Total Total tokens (in + out + cache_read + cache_write) for this model.
+		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
@@ -5920,19 +5920,19 @@ type MilestoneUpdateRequest struct {
 
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
-	// CacheRead Cache-read tokens (served from KV cache) for this model.
+	// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
 	CacheRead *int `json:"cache_read,omitempty"`
 
-	// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+	// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 	CacheWrite *int `json:"cache_write,omitempty"`
 
-	// In Uncached input tokens for this model.
+	// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
 	In *int `json:"in,omitempty"`
 
-	// Out Output (completion) tokens for this model.
+	// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
 	Out *int `json:"out,omitempty"`
 
-	// Total Total tokens (in + out + cache_read + cache_write) for this model.
+	// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
 	Total int `json:"total"`
 }
 
@@ -6901,19 +6901,19 @@ type Session struct {
 	Stats struct {
 		// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 		ByModel *map[string]struct {
-			// CacheRead Cache-read tokens (served from KV cache) for this model.
+			// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
 			CacheRead *int `json:"cache_read,omitempty"`
 
-			// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 			CacheWrite *int `json:"cache_write,omitempty"`
 
-			// In Uncached input tokens for this model.
+			// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
 			In *int `json:"in,omitempty"`
 
-			// Out Output (completion) tokens for this model.
+			// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
 			Out *int `json:"out,omitempty"`
 
-			// Total Total tokens (in + out + cache_read + cache_write) for this model.
+			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
@@ -7119,19 +7119,19 @@ type SessionDetail struct {
 		Stats struct {
 			// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 			ByModel *map[string]struct {
-				// CacheRead Cache-read tokens (served from KV cache) for this model.
+				// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
 				CacheRead *int `json:"cache_read,omitempty"`
 
-				// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+				// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 				CacheWrite *int `json:"cache_write,omitempty"`
 
-				// In Uncached input tokens for this model.
+				// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
 				In *int `json:"in,omitempty"`
 
-				// Out Output (completion) tokens for this model.
+				// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
 				Out *int `json:"out,omitempty"`
 
-				// Total Total tokens (in + out + cache_read + cache_write) for this model.
+				// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
 				Total int `json:"total"`
 			} `json:"by_model,omitempty"`
 
@@ -7247,19 +7247,19 @@ type SessionScopeUpdateResponse struct {
 type SessionStats struct {
 	// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 	ByModel *map[string]struct {
-		// CacheRead Cache-read tokens (served from KV cache) for this model.
+		// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
 		CacheRead *int `json:"cache_read,omitempty"`
 
-		// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
-		// In Uncached input tokens for this model.
+		// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
 		In *int `json:"in,omitempty"`
 
-		// Out Output (completion) tokens for this model.
+		// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
 		Out *int `json:"out,omitempty"`
 
-		// Total Total tokens (in + out + cache_read + cache_write) for this model.
+		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
@@ -7855,19 +7855,19 @@ type TokenUsageSummary struct {
 
 		// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 		ByModel *map[string]struct {
-			// CacheRead Cache-read tokens (served from KV cache) for this model.
+			// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
 			CacheRead *int `json:"cache_read,omitempty"`
 
-			// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 			CacheWrite *int `json:"cache_write,omitempty"`
 
-			// In Uncached input tokens for this model.
+			// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
 			In *int `json:"in,omitempty"`
 
-			// Out Output (completion) tokens for this model.
+			// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
 			Out *int `json:"out,omitempty"`
 
-			// Total Total tokens (in + out + cache_read + cache_write) for this model.
+			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
@@ -7883,19 +7883,19 @@ type TokenUsageSummary struct {
 
 	// ByModel Cross-agent per-model breakdown for the period. Keys are model name strings. Absent when no model data is available.
 	ByModel *map[string]struct {
-		// CacheRead Cache-read tokens (served from KV cache) for this model.
+		// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
 		CacheRead *int `json:"cache_read,omitempty"`
 
-		// CacheWrite Cache-write tokens (written into a new cache entry) for this model.
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
-		// In Uncached input tokens for this model.
+		// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
 		In *int `json:"in,omitempty"`
 
-		// Out Output (completion) tokens for this model.
+		// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
 		Out *int `json:"out,omitempty"`
 
-		// Total Total tokens (in + out + cache_read + cache_write) for this model.
+		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
