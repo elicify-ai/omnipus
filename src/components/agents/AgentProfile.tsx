@@ -1689,14 +1689,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <StatCard label="Sessions" value={agent.stats.total_sessions.toString()} />
                 <StatCard
-                  label="Tokens"
+                  label="Total tokens"
                   value={
-                    agent.stats.total_tokens >= 1000
-                      ? `${(agent.stats.total_tokens / 1000).toFixed(1)}k`
-                      : agent.stats.total_tokens.toString()
+                    agent.stats.total_tokens >= 1_000_000
+                      ? `${(agent.stats.total_tokens / 1_000_000).toFixed(1)}M`
+                      : agent.stats.total_tokens >= 1_000
+                        ? `${(agent.stats.total_tokens / 1_000).toFixed(1)}k`
+                        : agent.stats.total_tokens.toString()
                   }
                 />
-                <StatCard label="Cost" value={`$${agent.stats.total_cost.toFixed(4)}`} />
                 <StatCard
                   label="Last active"
                   value={

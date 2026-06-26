@@ -23,12 +23,6 @@ function formatTimestamp(ts: string): string {
   }
 }
 
-function formatCost(cost?: number): string {
-  if (!cost) return ''
-  if (cost < 0.001) return `<$0.001`
-  return `$${cost.toFixed(4)}`
-}
-
 export function MessageItem({ message }: MessageItemProps) {
   const { toolCalls } = useChatStore()
   const isUser = message.role === 'user'
@@ -192,9 +186,6 @@ export function MessageItem({ message }: MessageItemProps) {
           )}
           {message.status === 'error' && (
             <span className="text-[10px] text-[var(--color-error)]">Error</span>
-          )}
-          {message.cost != null && message.cost > 0 && (
-            <span className="text-[10px] text-[var(--color-muted)]">{formatCost(message.cost)}</span>
           )}
           {message.role === 'assistant' && <ModelFooter model={message.model} />}
         </div>

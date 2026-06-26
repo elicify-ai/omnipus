@@ -135,6 +135,13 @@ function taskStatusStyle(status: string | undefined): { color: string; label: st
   }
 }
 
+/** Human-readable token count: 44.0k / 1.2M. Values under 1000 show as-is. */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return n.toString()
+}
+
 function formatRelativeTime(dateStr: string): string {
   const date = new Date(dateStr)
   if (isNaN(date.getTime())) return ''
@@ -302,7 +309,7 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
         )}
       </div>
 
-      {/* Right side: task status badge + relative time + delete */}
+      {/* Right side: task status badge + token chip + relative time + delete */}
       {!isEditing && (
         <div className="flex items-center gap-1.5 shrink-0">
           {isTask && (
@@ -312,6 +319,15 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
             >
               {taskStatusStyle(session.status).label}
             </Badge>
+          )}
+          {session.total_tokens != null && session.total_tokens > 0 && (
+            <span
+              data-testid="session-token-chip"
+              className="text-[9px] font-mono text-[var(--color-muted)] tabular-nums"
+              aria-label={`${session.total_tokens} tokens`}
+            >
+              {formatTokens(session.total_tokens)}
+            </span>
           )}
           <span className="text-[10px] text-[var(--color-muted)] tabular-nums">
             {formatRelativeTime(session.updated_at)}
@@ -340,6 +356,7 @@ export function SessionPanel() {
   const { sessionPanelOpen, closeSessionPanel } = useUiStore()
   const { activeSessionId, activeAgentId, setActiveSession, attachToSession, setActiveAgentType } = useSessionStore()
   const sessionsById = useChatStore((s) => s.sessionsById)
+  const seedSessionTokens = useChatStore((s) => s.seedSessionTokens)
   const queryClient = useQueryClient()
 
   const [searchValue, setSearchValue] = useState('')
@@ -430,6 +447,11 @@ export function SessionPanel() {
     // isReplaying=true and attachedSessionType).
     const agentId = session.active_agent_id ?? session.agent_id
     attachToSession(session.id, session.type, session.title, agentId)
+    // Seed the token counter from the persisted total so historic sessions
+    // show their total immediately rather than starting at 0.
+    if (session.total_tokens && session.total_tokens > 0) {
+      seedSessionTokens(session.total_tokens)
+    }
     if (session.type !== 'task') {
       // Track the active agent type for composer behavior (chat-only concern).
       // Set directly via the store — no reset, no double-attach.

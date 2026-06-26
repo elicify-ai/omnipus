@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Robot, CurrencyDollar, ArrowsClockwise, CaretDown, PencilSimpleLine } from '@phosphor-icons/react'
+import { Robot, ArrowsClockwise, CaretDown, PencilSimpleLine } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
   DropdownMenu,
@@ -15,20 +15,16 @@ import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
 
-function formatCost(cost: number): string {
-  if (cost === 0) return '$0.00'
-  if (cost < 0.001) return '<$0.001'
-  return `$${cost.toFixed(4)}`
-}
-
-function formatTokens(tokens: number): string {
-  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`
+/** Human-readable token count: 44.0k / 1.2M. Values under 1000 show as-is. */
+export function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`
   return tokens.toString()
 }
 
 export function SessionBar() {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
-  const { sessionTokens, sessionCost, isStreaming } = useChatStore()
+  const { sessionTokens, isStreaming } = useChatStore()
   const navigate = useNavigate()
 
   // New Chat just navigates to "/". RootChatScreen owns the new-session
@@ -212,20 +208,22 @@ export function SessionBar() {
       <div className="h-4 w-px bg-[var(--color-border)] hidden sm:block" />
 
       {/* Token counter */}
-      <div className="hidden sm:flex items-center gap-1 text-xs text-[var(--color-muted)]">
+      <div
+        className="hidden sm:flex items-center gap-1 text-xs text-[var(--color-muted)]"
+        data-testid="session-token-counter"
+        aria-label={`${sessionTokens} tokens used`}
+      >
         <ArrowsClockwise
           size={11}
           className={isStreaming ? 'animate-spin text-[var(--color-accent)]' : ''}
+          aria-hidden="true"
         />
-        <span className={isStreaming ? 'text-[var(--color-secondary)]' : ''}>
-          {formatTokens(sessionTokens)}
+        <span
+          className={`font-mono tabular-nums${isStreaming ? ' text-[var(--color-secondary)]' : ''}`}
+          data-testid="session-token-value"
+        >
+          {formatTokens(sessionTokens)} tokens
         </span>
-      </div>
-
-      {/* Cost */}
-      <div className="hidden md:flex items-center gap-1 text-xs text-[var(--color-muted)]">
-        <CurrencyDollar size={11} />
-        <span>{formatCost(sessionCost)}</span>
       </div>
 
     </div>
