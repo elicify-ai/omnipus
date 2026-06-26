@@ -399,3 +399,89 @@ func TestProviderConfigure_CloudProviderRequiresAPIKey(t *testing.T) {
 	errBlock, _ := m["error"].(map[string]any)
 	require.Equal(t, "INVALID_INPUT", errBlock["code"])
 }
+
+// ---- configure_provider: api_base URL validation (BUG FIX) ----
+
+// TestProviderConfigure_APIBaseValidation verifies that configure_provider validates
+// the api_base parameter when non-empty: scheme-less URLs and non-http(s) schemes
+// must be rejected with INVALID_INPUT; valid https URLs must be accepted; empty
+// api_base must pass through (meaning "use provider default").
+//
+// Traces to: bug report "configure_provider stores api_base with no validation"
+func TestProviderConfigure_APIBaseValidation(t *testing.T) {
+	cases := []struct {
+		name      string
+		apiBase   string
+		wantError bool
+		wantCode  string
+	}{
+		{
+			name:      "valid https URL accepted",
+			apiBase:   "https://openrouter.ai/api/v1",
+			wantError: false,
+		},
+		{
+			name:      "valid http URL accepted",
+			apiBase:   "http://localhost:11434/v1",
+			wantError: false,
+		},
+		{
+			name:      "empty api_base allowed (use provider default)",
+			apiBase:   "",
+			wantError: false,
+		},
+		{
+			name:      "scheme-less host rejected",
+			apiBase:   "api.openai.com",
+			wantError: true,
+			wantCode:  "INVALID_INPUT",
+		},
+		{
+			name:      "scheme-less host with path rejected",
+			apiBase:   "api.openai.com/v1",
+			wantError: true,
+			wantCode:  "INVALID_INPUT",
+		},
+		{
+			name:      "ftp scheme rejected",
+			apiBase:   "ftp://api.example.com/v1",
+			wantError: true,
+			wantCode:  "INVALID_INPUT",
+		},
+		{
+			name:      "bare hostname without scheme rejected",
+			apiBase:   "localhost:8080",
+			wantError: true,
+			wantCode:  "INVALID_INPUT",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			deps, _, _ := newProviderTestDeps(t, cfg)
+
+			args := map[string]any{
+				"name":    "openai",
+				"api_key": "sk-test",
+			}
+			if tc.apiBase != "" {
+				args["api_base"] = tc.apiBase
+			}
+
+			res := NewProviderConfigureTool(deps).Execute(context.Background(), args)
+
+			if tc.wantError {
+				require.True(t, res.IsError,
+					"api_base=%q should be rejected; got: %s", tc.apiBase, res.ForLLM)
+				m := unmarshalProviderResult(t, res.ForLLM)
+				errBlock, _ := m["error"].(map[string]any)
+				require.Equal(t, tc.wantCode, errBlock["code"],
+					"error code must be %s for api_base=%q", tc.wantCode, tc.apiBase)
+			} else {
+				require.False(t, res.IsError,
+					"api_base=%q should be accepted; got: %s", tc.apiBase, res.ForLLM)
+			}
+		})
+	}
+}

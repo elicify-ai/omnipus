@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -75,6 +76,12 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 	}
 	apiKey, _ := args["api_key"].(string)
 	apiBase, _ := args["api_base"].(string)
+	if apiBase != "" {
+		if err := validateAPIBase(apiBase); err != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(),
+				`Provide a full URL with scheme, e.g. "https://api.openai.com/v1"`))
+		}
+	}
 	if cloudProviders[name] && apiKey == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT",
 			fmt.Sprintf("api_key is required for cloud provider %q", name),
@@ -380,6 +387,22 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 		result["warnings"] = warnings
 	}
 	return tools.NewToolResult(successJSON(result))
+}
+
+// validateAPIBase checks that s is a valid http:// or https:// URL with a non-empty host.
+// Empty s is accepted (means "use provider default").
+func validateAPIBase(s string) error {
+	u, err := url.Parse(s)
+	if err != nil {
+		return fmt.Errorf("api_base %q is not a valid URL: %w", s, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("api_base %q must use http:// or https:// scheme (got %q)", s, u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("api_base %q has no host — provide a full URL, e.g. https://api.example.com/v1", s)
+	}
+	return nil
 }
 
 // fetchProviderModels fetches models from an OpenAI-compatible /models endpoint.
