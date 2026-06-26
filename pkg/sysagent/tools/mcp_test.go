@@ -130,44 +130,110 @@ func TestMCPAdd_TransportValidation(t *testing.T) {
 	}
 }
 
-// TestHonestStubTools_ReturnNotImplemented asserts the genuinely-unbuilt tools
-// no longer fake success: they return an explicit NOT_IMPLEMENTED error and
-// their description warns the model.
-func TestHonestStubTools_ReturnNotImplemented(t *testing.T) {
+// TestGetUsageTool_BasicBehaviour asserts that get_usage (the replacement for
+// the retired query_cost stub) executes successfully and returns a well-formed
+// usage report — no dollar amounts, no NOT_IMPLEMENTED error.
+func TestGetUsageTool_BasicBehaviour(t *testing.T) {
 	deps, _ := newTestDeps()
 	ctx := context.Background()
 
-	type honest struct {
-		name string
-		exec func() string
-		desc string
-	}
-	cost := systools.NewCostQueryTool(deps)
+	tool := systools.NewUsageQueryTool(deps)
 
-	tools := []honest{
-		{
-			"cost.query",
-			func() string { return cost.Execute(ctx, map[string]any{"period": "today"}).ForLLM },
-			cost.Description(),
-		},
-	}
+	t.Run("name_is_get_usage", func(t *testing.T) {
+		if tool.Name() != "get_usage" {
+			t.Errorf("want Name()=get_usage, got %q", tool.Name())
+		}
+	})
 
-	for _, tl := range tools {
-		t.Run(tl.name, func(t *testing.T) {
-			// Description must warn the model it is not implemented.
-			if !strings.Contains(tl.desc, "NOT IMPLEMENTED") {
-				t.Fatalf("%s description must say NOT IMPLEMENTED, got: %q", tl.name, tl.desc)
+	t.Run("description_mentions_token_not_dollars", func(t *testing.T) {
+		desc := tool.Description()
+		if strings.Contains(desc, "NOT IMPLEMENTED") {
+			t.Fatalf("get_usage description must not say NOT IMPLEMENTED: %q", desc)
+		}
+		// The description must not mention dollar signs or USD.
+		if strings.Contains(desc, "$") || strings.Contains(strings.ToLower(desc), "usd") {
+			t.Fatalf("get_usage description must not mention dollar/USD: %q", desc)
+		}
+		if !strings.Contains(strings.ToLower(desc), "token") {
+			t.Fatalf("get_usage description must mention tokens: %q", desc)
+		}
+	})
+
+	t.Run("default_params_succeed", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{})
+		m := resultJSON(t, result.ForLLM)
+		if m["success"] == false {
+			t.Fatalf("get_usage with default params must succeed, got: %v", m)
+		}
+	})
+
+	t.Run("output_has_no_dollar_cost_fields", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{"period": "month", "by": "agent"})
+		raw := result.ForLLM
+		lower := strings.ToLower(raw)
+		for _, forbidden := range []string{"\"cost\"", "\"usd\"", "\"dollars\""} {
+			if strings.Contains(lower, forbidden) {
+				t.Errorf("get_usage output must not contain %q; got: %s", forbidden, raw)
 			}
-			// Execute must return an error envelope with code NOT_IMPLEMENTED —
-			// never a fake success.
-			m := resultJSON(t, tl.exec())
-			if m["success"] != false {
-				t.Fatalf("%s must return success=false, got: %v", tl.name, m)
+		}
+	})
+
+	t.Run("invalid_period_returns_error", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{"period": "yesterday"})
+		m := resultJSON(t, result.ForLLM)
+		if m["success"] != false {
+			t.Fatalf("invalid period must return success=false, got: %v", m)
+		}
+		errObj, _ := m["error"].(map[string]any)
+		if errObj["code"] != "INVALID_PARAM" {
+			t.Fatalf("invalid period must return INVALID_PARAM, got: %v", errObj)
+		}
+	})
+
+	t.Run("invalid_by_returns_error", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{"by": "category"})
+		m := resultJSON(t, result.ForLLM)
+		if m["success"] != false {
+			t.Fatalf("invalid by must return success=false, got: %v", m)
+		}
+	})
+
+	t.Run("valid_periods_accepted", func(t *testing.T) {
+		for _, period := range []string{"day", "week", "month", "all"} {
+			result := tool.Execute(ctx, map[string]any{"period": period})
+			m := resultJSON(t, result.ForLLM)
+			if m["success"] == false {
+				t.Errorf("period=%q must succeed, got: %v", period, m)
 			}
-			errObj, _ := m["error"].(map[string]any)
-			if errObj["code"] != "NOT_IMPLEMENTED" {
-				t.Fatalf("%s must return code NOT_IMPLEMENTED, got: %v", tl.name, errObj)
+		}
+	})
+
+	t.Run("valid_dimensions_accepted", func(t *testing.T) {
+		for _, by := range []string{"agent", "model", "session"} {
+			result := tool.Execute(ctx, map[string]any{"by": by})
+			m := resultJSON(t, result.ForLLM)
+			if m["success"] == false {
+				t.Errorf("by=%q must succeed, got: %v", by, m)
 			}
-		})
-	}
+		}
+	})
+
+	t.Run("output_shape_has_required_fields", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{"period": "month", "by": "agent"})
+		m := resultJSON(t, result.ForLLM)
+		for _, key := range []string{"period", "by", "period_end", "total", "breakdown"} {
+			if _, ok := m[key]; !ok {
+				t.Errorf("output must have field %q; full output: %s", key, result.ForLLM)
+			}
+		}
+	})
+
+	t.Run("nil_list_sessions_handled", func(t *testing.T) {
+		// Ensure tool does not panic when ListSessions is nil (unwired in tests).
+		// newTestDeps does not set ListSessions, so this covers the nil path.
+		result := tool.Execute(ctx, map[string]any{"period": "month"})
+		if result == nil {
+			t.Fatal("get_usage must return a non-nil ToolResult even with nil ListSessions")
+		}
+	})
 }

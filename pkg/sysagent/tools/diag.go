@@ -7,11 +7,13 @@ package systools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/security"
+	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
@@ -119,35 +121,189 @@ func (t *DoctorRunTool) Execute(_ context.Context, _ map[string]any) *tools.Tool
 	}))
 }
 
-// ---- system.cost.query ----
+// ---- get_usage ----
 
-type CostQueryTool struct{ deps *Deps }
+// UsageQueryTool implements the get_usage system tool.  It reads all sessions
+// via deps.ListSessions, aggregates token usage using session.AggregateUsage,
+// and returns a JSON report.  No dollar amounts are included.
+type UsageQueryTool struct{ deps *Deps }
 
-func NewCostQueryTool(d *Deps) *CostQueryTool   { return &CostQueryTool{deps: d} }
-func (t *CostQueryTool) Name() string           { return "query_cost" }
-func (t *CostQueryTool) Scope() tools.ToolScope { return tools.ScopeCore }
-func (t *CostQueryTool) Description() string {
-	return "[NOT IMPLEMENTED] Querying LLM cost data by period/agent is not yet built. " +
-		"The only cost data Omnipus persists today is a single running total for the current UTC day " +
-		"(no historical periods, per-agent breakdown, or grouping). This tool always returns a NOT_IMPLEMENTED error."
+func NewUsageQueryTool(d *Deps) *UsageQueryTool  { return &UsageQueryTool{deps: d} }
+func (t *UsageQueryTool) Name() string           { return "get_usage" }
+func (t *UsageQueryTool) Scope() tools.ToolScope { return tools.ScopeCore }
+func (t *UsageQueryTool) Description() string {
+	return "Query token usage by period, agent, model, or session.\n" +
+		"Parameters:\n" +
+		"  period   — time window: day, week, month (default), or all\n" +
+		"  by       — grouping dimension: agent (default), model, or session\n" +
+		"  agent_id — optional: restrict to a single agent\n" +
+		"  session_id — optional: restrict to a single session\n" +
+		"Returns input, output, cache-read, cache-write, and total token counts.\n" +
+		"No dollar amounts — token counts only.\n" +
+		"External CLI subagents (subagent_3p) run on a separate engine and are excluded."
 }
 
-func (t *CostQueryTool) Parameters() map[string]any {
+func (t *UsageQueryTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"period":     map[string]any{"type": "string"},
-			"start_date": map[string]any{"type": "string"},
-			"end_date":   map[string]any{"type": "string"},
-			"agent_id":   map[string]any{"type": "string"},
-			"group_by":   map[string]any{"type": "string"},
+			"period": map[string]any{
+				"type":        "string",
+				"enum":        []string{"day", "week", "month", "all"},
+				"description": "Time window to aggregate (default: month)",
+			},
+			"by": map[string]any{
+				"type":        "string",
+				"enum":        []string{"agent", "model", "session"},
+				"description": "Grouping dimension (default: agent)",
+			},
+			"agent_id": map[string]any{
+				"type":        "string",
+				"description": "Optional: restrict report to a single agent ID",
+			},
+			"session_id": map[string]any{
+				"type":        "string",
+				"description": "Optional: restrict report to a single session ID",
+			},
 		},
 	}
 }
 
-func (t *CostQueryTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
-	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
-		"query_cost is not implemented: no per-period cost store exists. "+
-			"Omnipus persists only a single running total for the current UTC day.",
-		"View today's spend in the UI; a queryable cost-history store is not yet built."))
+func (t *UsageQueryTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+	// Parse period (default: month).
+	periodStr, _ := args["period"].(string)
+	if periodStr == "" {
+		periodStr = "month"
+	}
+	var period session.UsagePeriod
+	switch periodStr {
+	case "day":
+		period = session.UsagePeriodDay
+	case "week":
+		period = session.UsagePeriodWeek
+	case "month":
+		period = session.UsagePeriodMonth
+	case "all":
+		period = session.UsagePeriodAll
+	default:
+		return tools.ErrorResult(errorJSON("INVALID_PARAM",
+			"period must be one of: day, week, month, all",
+			"Pass period=month to use the default monthly window."))
+	}
+
+	// Parse by (default: agent).
+	byStr, _ := args["by"].(string)
+	if byStr == "" {
+		byStr = "agent"
+	}
+	var dim session.UsageDimension
+	switch byStr {
+	case "agent":
+		dim = session.UsageDimensionAgent
+	case "model":
+		dim = session.UsageDimensionModel
+	case "session":
+		dim = session.UsageDimensionSession
+	default:
+		return tools.ErrorResult(errorJSON("INVALID_PARAM",
+			"by must be one of: agent, model, session",
+			"Pass by=agent to group by agent (the default)."))
+	}
+
+	// Optional filters.
+	agentID, _ := args["agent_id"].(string)
+	sessionID, _ := args["session_id"].(string)
+
+	// Collect sessions.  Handle nil ListSessions gracefully.
+	var metas []*session.UnifiedMeta
+	if t.deps != nil && t.deps.ListSessions != nil {
+		var errs []error
+		metas, errs = t.deps.ListSessions()
+		for _, e := range errs {
+			// Non-fatal: log and proceed with partial data.
+			slog.Warn("get_usage: partial session list error", "error", e)
+		}
+	}
+
+	// Build NameResolver and Exclude from live config.
+	var nameResolver func(string) string
+	var excludeFn func(string) bool
+	if t.deps != nil && t.deps.GetCfg != nil {
+		cfg := t.deps.GetCfg()
+		nameResolver = func(id string) string {
+			for i := range cfg.Agents.List {
+				if cfg.Agents.List[i].ID == id {
+					return cfg.Agents.List[i].Name
+				}
+			}
+			return ""
+		}
+		excludeFn = func(id string) bool {
+			for i := range cfg.Agents.List {
+				a := &cfg.Agents.List[i]
+				if a.ID != id {
+					continue
+				}
+				// Exclude external CLI workers: Type=="worker" AND Subagents.Executor.Kind=="external-cli".
+				if a.IsWorker() && a.Subagents != nil &&
+					a.Subagents.Executor != nil && a.Subagents.Executor.Kind == "external-cli" {
+					return true
+				}
+			}
+			return false
+		}
+	}
+
+	report := session.AggregateUsage(metas, session.UsageOptions{
+		Period:       period,
+		Now:          time.Now().UTC(),
+		Dimension:    dim,
+		AgentID:      agentID,
+		SessionID:    sessionID,
+		NameResolver: nameResolver,
+		Exclude:      excludeFn,
+	})
+
+	// Build the breakdown slice.
+	type bucketJSON struct {
+		Key        string `json:"key"`
+		Label      string `json:"label"`
+		In         int    `json:"in"`
+		Out        int    `json:"out"`
+		CacheRead  int    `json:"cache_read"`
+		CacheWrite int    `json:"cache_write"`
+		Total      int    `json:"total"`
+	}
+	breakdown := make([]bucketJSON, 0, len(report.Buckets))
+	for _, b := range report.Buckets {
+		breakdown = append(breakdown, bucketJSON{
+			Key:        b.Key,
+			Label:      b.Label,
+			In:         b.In,
+			Out:        b.Out,
+			CacheRead:  b.CacheRead,
+			CacheWrite: b.CacheWrite,
+			Total:      b.Total,
+		})
+	}
+
+	periodStart := ""
+	if !report.PeriodStart.IsZero() {
+		periodStart = report.PeriodStart.Format(time.RFC3339)
+	}
+
+	return tools.NewToolResult(successJSON(map[string]any{
+		"period":       periodStr,
+		"by":           byStr,
+		"period_start": periodStart,
+		"period_end":   report.PeriodEnd.Format(time.RFC3339),
+		"total": map[string]any{
+			"in":          report.Total.In,
+			"out":         report.Total.Out,
+			"cache_read":  report.Total.CacheRead,
+			"cache_write": report.Total.CacheWrite,
+			"total":       report.Total.Total,
+		},
+		"breakdown": breakdown,
+	}))
 }

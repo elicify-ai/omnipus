@@ -685,7 +685,7 @@ func TestToolPermissionsMapCoversAll35Tools(t *testing.T) {
 		// Config (2)
 		"get_config", "set_config",
 		// Diagnostics / utility (3)
-		"run_doctor", "query_cost", "navigate",
+		"run_doctor", "get_usage", "navigate",
 	}
 
 	assert.Len(t, expectedTools, 35,

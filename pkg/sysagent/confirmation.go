@@ -43,7 +43,7 @@ var toolConfirmation = map[string]ConfirmationLevel{
 	"list_models":              ConfirmationNone,
 	"get_config":               ConfirmationNone,
 	"run_doctor":               ConfirmationNone,
-	"query_cost":               ConfirmationNone,
+	"get_usage":                ConfirmationNone,
 	"navigate":                 ConfirmationNone,
 
 	// UI confirmation required — destructive operations and consent-gated writes.

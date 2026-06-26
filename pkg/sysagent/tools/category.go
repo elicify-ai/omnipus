@@ -34,8 +34,8 @@ func (*ConfigSetTool) Category() tools.ToolCategory { return tools.CategoryPlatf
 
 // Diagnostics tools
 
-func (*DoctorRunTool) Category() tools.ToolCategory { return tools.CategoryPlatform }
-func (*CostQueryTool) Category() tools.ToolCategory { return tools.CategoryPlatform }
+func (*DoctorRunTool) Category() tools.ToolCategory  { return tools.CategoryPlatform }
+func (*UsageQueryTool) Category() tools.ToolCategory { return tools.CategoryPlatform }
 
 // MCP tools
 

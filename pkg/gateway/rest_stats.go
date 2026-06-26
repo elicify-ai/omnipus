@@ -13,17 +13,26 @@ import (
 	"time"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/session"
 )
 
 // HandleTokenStats handles GET /api/v1/stats/tokens.
-// It returns per-agent token usage aggregated from SessionMeta.Stats across
-// all sessions. The ?period query parameter must be "month" or absent (defaults
-// to "month"). Unrecognized period values are rejected with 400.
+//
+// It returns per-agent token usage aggregated from SessionMeta.Stats across all
+// sessions using session.AggregateUsage. The response shape matches
+// gen.TokenUsageSummary (contracts/components/schemas/TokenUsageSummary.yaml).
+//
+// The ?period query parameter accepts "day", "week", "month" (default), or
+// "all". Unrecognized values are rejected with 400.
 //
 // Token attribution: tokens are charged to sm.ActiveAgentID (the most-recent
 // agent active in the session). For sessions that pre-date the multi-agent
 // model, PostLoad backfills ActiveAgentID from the legacy single AgentID.
 // Attributing to each sm.AgentIDs entry would double-count on handoffs.
+//
+// subagent_3p (external CLI workers) are excluded — they run on a separate
+// engine and their tokens are not tracked through Omnipus's provider layer.
 func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -31,26 +40,24 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate and normalise the period query parameter.
-	period := r.URL.Query().Get("period")
-	if period == "" {
-		period = "month"
+	periodStr := r.URL.Query().Get("period")
+	if periodStr == "" {
+		periodStr = "month"
 	}
-	if period != "month" {
-		jsonErr(w, http.StatusBadRequest, "period must be 'month'")
+	var period session.UsagePeriod
+	switch periodStr {
+	case "day":
+		period = session.UsagePeriodDay
+	case "week":
+		period = session.UsagePeriodWeek
+	case "month":
+		period = session.UsagePeriodMonth
+	case "all":
+		period = session.UsagePeriodAll
+	default:
+		jsonErr(w, http.StatusBadRequest, "period must be one of: day, week, month, all")
 		return
 	}
-
-	now := time.Now().UTC()
-	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	periodEnd := periodStart.AddDate(0, 1, 0)
-
-	// agentAccum accumulates per-agent token counts during session traversal.
-	type agentAccum struct { // not-wire-format: internal accumulator only, never serialized over the wire
-		name         string
-		inputTokens  int
-		outputTokens int
-	}
-	byAgent := make(map[string]*agentAccum)
 
 	// ListAllSessions merges the shared store (new sessions) with all per-agent
 	// legacy stores, deduplicates, and returns a slice of *UnifiedMeta.
@@ -61,53 +68,201 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 
 	registry := a.agentLoop.GetRegistry()
 
+	// Build NameResolver (agent display name from registry) and Exclude
+	// predicate (skip subagent_3p — external CLI workers).
+	nameResolver := func(agentID string) string {
+		name, _ := registry.GetAgentName(agentID)
+		return name
+	}
+	cfg := a.agentLoop.GetConfig()
+	excludeFn := func(agentID string) bool {
+		return isSubagent3p(cfg, agentID)
+	}
+
+	// Aggregate by-agent dimension for the response.
+	report := session.AggregateUsage(allSessions, session.UsageOptions{
+		Period:       period,
+		Now:          time.Now().UTC(),
+		Dimension:    session.UsageDimensionAgent,
+		NameResolver: nameResolver,
+		Exclude:      excludeFn,
+	})
+
+	// Build per-agent entries from report buckets.
+	// We also need per-agent by-model breakdowns; compute them with a second
+	// model-keyed pass limited to each agent's sessions.
+	//
+	// agentModelMap[agentID][model] = accumulated ModelTokens.
+	agentModelMap := make(map[string]map[string]session.ModelTokens)
 	for _, sm := range allSessions {
-		// Apply month filter: keep sessions whose UpdatedAt falls within [periodStart, periodEnd).
-		if sm.UpdatedAt.Before(periodStart) || !sm.UpdatedAt.Before(periodEnd) {
-			continue
-		}
-
-		// PostLoad backfills ActiveAgentID from legacy AgentID for sessions that
-		// pre-date the multi-agent model.
 		sm.PostLoad()
-
-		// Attribute tokens to ActiveAgentID only (the last-active agent in the
-		// session). Using AgentIDs would double-count on agent handoffs — each
-		// entry in that slice would receive the full session token total.
 		agentID := sm.ActiveAgentID
 		if agentID == "" && len(sm.AgentIDs) > 0 {
-			agentID = sm.AgentIDs[0] // fallback to first agent
+			agentID = sm.AgentIDs[0]
 		}
 		if agentID == "" {
 			continue
 		}
-
-		acc, ok := byAgent[agentID]
-		if !ok {
-			name, _ := registry.GetAgentName(agentID)
-			if name == "" {
-				name = agentID
-			}
-			acc = &agentAccum{name: name}
-			byAgent[agentID] = acc
+		if excludeFn(agentID) {
+			continue
 		}
-		acc.inputTokens += sm.Stats.TokensIn
-		acc.outputTokens += sm.Stats.TokensOut
+		// Apply same period filter the aggregator uses.
+		if !report.PeriodStart.IsZero() {
+			if sm.UpdatedAt.Before(report.PeriodStart) || !sm.UpdatedAt.Before(report.PeriodEnd) {
+				continue
+			}
+		}
+		for model, mt := range sm.Stats.ByModel {
+			if _, ok := agentModelMap[agentID]; !ok {
+				agentModelMap[agentID] = make(map[string]session.ModelTokens)
+			}
+			existing := agentModelMap[agentID][model]
+			existing.In += mt.In
+			existing.Out += mt.Out
+			existing.CacheRead += mt.CacheRead
+			existing.CacheWrite += mt.CacheWrite
+			existing.Total += mt.Total
+			agentModelMap[agentID][model] = existing
+		}
 	}
 
-	// Build the per-agent entries using the generated AgentTokenEntry type.
-	entries := make([]gen.AgentTokenEntry, 0, len(byAgent))
-	for agentID, acc := range byAgent {
-		entries = append(entries, gen.AgentTokenEntry{
-			AgentId:     agentID,
-			AgentName:   acc.name,
-			TokensIn:    acc.inputTokens,
-			TokensOut:   acc.outputTokens,
-			TokensTotal: acc.inputTokens + acc.outputTokens,
-		})
+	// Build cross-agent by_model totals.
+	crossModelMap := make(map[string]session.ModelTokens)
+	for _, perAgent := range agentModelMap {
+		for model, mt := range perAgent {
+			existing := crossModelMap[model]
+			existing.In += mt.In
+			existing.Out += mt.Out
+			existing.CacheRead += mt.CacheRead
+			existing.CacheWrite += mt.CacheWrite
+			existing.Total += mt.Total
+			crossModelMap[model] = existing
+		}
 	}
 
+	// Build the per-agent Agents slice.  We use report.Buckets (already sorted
+	// and deduplicated by AggregateUsage) as the authoritative source.
+	//
+	// The gen.TokenUsageSummary.Agents is an inline anonymous struct generated by
+	// oapi-codegen that inlines the AgentTokenEntry fields rather than aliasing
+	// the named component — so we build the parallel gen.AgentTokenEntry slice
+	// and wrap it in the existing not-wire-format pattern.
+	entries := make([]gen.AgentTokenEntry, 0, len(report.Buckets))
+	for _, b := range report.Buckets {
+		entry := gen.AgentTokenEntry{
+			AgentId:     b.Key,
+			AgentName:   b.Label,
+			TokensIn:    b.In,
+			TokensOut:   b.Out,
+			TokensTotal: b.Total,
+		}
+		if b.CacheRead != 0 {
+			cr := b.CacheRead
+			entry.TokensCacheRead = &cr
+		}
+		if b.CacheWrite != 0 {
+			cw := b.CacheWrite
+			entry.TokensCacheWrite = &cw
+		}
+		// Attach per-agent by_model breakdown.
+		if modelMap, ok := agentModelMap[b.Key]; ok && len(modelMap) > 0 {
+			byModel := make(map[string]struct {
+				CacheRead  *int `json:"cache_read,omitempty"`
+				CacheWrite *int `json:"cache_write,omitempty"`
+				In         *int `json:"in,omitempty"`
+				Out        *int `json:"out,omitempty"`
+				Total      int  `json:"total"`
+			}, len(modelMap))
+			for model, mt := range modelMap {
+				cell := struct { // not-wire-format: local accumulator mirroring AgentTokenEntry.ByModel inline schema; never independently serialized
+					CacheRead  *int `json:"cache_read,omitempty"`
+					CacheWrite *int `json:"cache_write,omitempty"`
+					In         *int `json:"in,omitempty"`
+					Out        *int `json:"out,omitempty"`
+					Total      int  `json:"total"`
+				}{Total: mt.Total}
+				if mt.In != 0 {
+					v := mt.In
+					cell.In = &v
+				}
+				if mt.Out != 0 {
+					v := mt.Out
+					cell.Out = &v
+				}
+				if mt.CacheRead != 0 {
+					v := mt.CacheRead
+					cell.CacheRead = &v
+				}
+				if mt.CacheWrite != 0 {
+					v := mt.CacheWrite
+					cell.CacheWrite = &v
+				}
+				byModel[model] = cell
+			}
+			entry.ByModel = &byModel
+		}
+		entries = append(entries, entry)
+	}
+
+	// Sort entries by AgentId for stable output (matches prior behaviour).
 	sort.Slice(entries, func(i, j int) bool { return entries[i].AgentId < entries[j].AgentId })
+
+	// Build cross-agent by_model for the top-level response field.
+	var crossModelOut *map[string]struct {
+		CacheRead  *int `json:"cache_read,omitempty"`
+		CacheWrite *int `json:"cache_write,omitempty"`
+		In         *int `json:"in,omitempty"`
+		Out        *int `json:"out,omitempty"`
+		Total      int  `json:"total"`
+	}
+	if len(crossModelMap) > 0 {
+		m := make(map[string]struct {
+			CacheRead  *int `json:"cache_read,omitempty"`
+			CacheWrite *int `json:"cache_write,omitempty"`
+			In         *int `json:"in,omitempty"`
+			Out        *int `json:"out,omitempty"`
+			Total      int  `json:"total"`
+		}, len(crossModelMap))
+		for model, mt := range crossModelMap {
+			cell := struct { // not-wire-format: local accumulator mirroring TokenUsageSummary.ByModel inline schema; never independently serialized
+				CacheRead  *int `json:"cache_read,omitempty"`
+				CacheWrite *int `json:"cache_write,omitempty"`
+				In         *int `json:"in,omitempty"`
+				Out        *int `json:"out,omitempty"`
+				Total      int  `json:"total"`
+			}{Total: mt.Total}
+			if mt.In != 0 {
+				v := mt.In
+				cell.In = &v
+			}
+			if mt.Out != 0 {
+				v := mt.Out
+				cell.Out = &v
+			}
+			if mt.CacheRead != 0 {
+				v := mt.CacheRead
+				cell.CacheRead = &v
+			}
+			if mt.CacheWrite != 0 {
+				v := mt.CacheWrite
+				cell.CacheWrite = &v
+			}
+			m[model] = cell
+		}
+		crossModelOut = &m
+	}
+
+	// Grand-total cache fields (optional — omit when zero for wire-compat with
+	// receivers that don't yet read cache fields).
+	var totalCR, totalCW *int
+	if report.Total.CacheRead != 0 {
+		v := report.Total.CacheRead
+		totalCR = &v
+	}
+	if report.Total.CacheWrite != 0 {
+		v := report.Total.CacheWrite
+		totalCW = &v
+	}
 
 	// gen.TokenUsageSummary.Agents is an inline anonymous struct generated by
 	// oapi-codegen (it inlines $ref'd object items rather than aliasing them to
@@ -115,15 +270,40 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	// gen.AgentTokenEntry items and reproduces the TokenUsageSummary JSON shape;
 	// the AgentTokenEntry element type is the contract source of truth that
 	// make verify-contracts tracks for drift.
-	type tokenUsageResp struct { // not-wire-format: wrapper over gen.AgentTokenEntry items, mirrors TokenUsageSummary
-		Agents      []gen.AgentTokenEntry `json:"agents"`
-		PeriodEnd   time.Time             `json:"period_end"`
-		PeriodStart time.Time             `json:"period_start"`
+	type tokenUsageResp struct { // not-wire-format: wrapper over gen.AgentTokenEntry items, mirrors TokenUsageSummary with cache+by_model extensions
+		Agents           []gen.AgentTokenEntry `json:"agents"`
+		ByModel          interface{}           `json:"by_model,omitempty"`
+		PeriodEnd        time.Time             `json:"period_end"`
+		PeriodStart      time.Time             `json:"period_start"`
+		TokensCacheRead  *int                  `json:"tokens_cache_read,omitempty"`
+		TokensCacheWrite *int                  `json:"tokens_cache_write,omitempty"`
 	}
 
 	jsonOK(w, tokenUsageResp{
-		Agents:      entries,
-		PeriodEnd:   periodEnd,
-		PeriodStart: periodStart,
+		Agents:           entries,
+		ByModel:          crossModelOut,
+		PeriodEnd:        report.PeriodEnd,
+		PeriodStart:      report.PeriodStart,
+		TokensCacheRead:  totalCR,
+		TokensCacheWrite: totalCW,
 	})
+}
+
+// isSubagent3p reports whether the agent with the given ID is a subagent_3p
+// (external CLI worker).  Subagent_3p agents have Type=="worker" AND
+// Executor.Kind=="external-cli".  They run on a separate engine and their
+// token usage is not tracked through Omnipus's provider layer.
+func isSubagent3p(cfg *config.Config, agentID string) bool {
+	if cfg == nil {
+		return false
+	}
+	for i := range cfg.Agents.List {
+		a := &cfg.Agents.List[i]
+		if a.ID != agentID {
+			continue
+		}
+		return a.IsWorker() && a.Subagents != nil &&
+			a.Subagents.Executor != nil && a.Subagents.Executor.Kind == "external-cli"
+	}
+	return false
 }
