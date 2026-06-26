@@ -18,7 +18,6 @@ import (
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
-	"github.com/dapicom-ai/omnipus/pkg/sysagent"
 )
 
 // =====================================================================
@@ -280,21 +279,11 @@ func TestCoreAgentByIDNotFound(t *testing.T) {
 	assert.Nil(t, result, "ByID must return nil for unknown agent IDs")
 }
 
-// TestAdminRBACAllowedToCallDelete verifies RBAC permits admin to reach
-// delete_agent — the tool itself enforces IsCoreAgent protection.
-//
-// Traces to: wave5b-system-agent-spec.md — Scenario: Core agent cannot be deleted (US-8 AC4)
-// BDD: "Given admin role, When delete_agent RBAC checked,
-//
-//	Then RBAC allows it — core agent protection is enforced at the tool level"
-func TestAdminRBACAllowedToCallDelete(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 679
-	// Admin CAN reach delete_agent via RBAC; the tool implementation
-	// must then check IsCoreAgent and return PERMISSION_DENIED for core IDs.
-	err := sysagent.CheckRBAC(sysagent.RoleAdmin, "delete_agent")
-	assert.NoError(t, err,
-		"admin RBAC check for delete must pass — core agent protection is at the tool level, not RBAC")
-}
+// Core-agent delete protection (US-8 AC4: "Core agent cannot be deleted") is
+// enforced at the TOOL level via IsCoreAgent and covered by
+// pkg/sysagent/tools/agent_test.go::TestAgentDelete_RefusesLockedAgent. The
+// former RBAC-layer assertion here was dropped with the retired sysagent package
+// (its CheckRBAC was the dead Omnipus system-agent enforcement layer).
 
 // =====================================================================
 // Test: SeedConfig
