@@ -14,6 +14,13 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
+// SystemAgentName is the AgentID stamped on audit entries for system-tool (platform
+// management) operations. The standalone "Omnipus" system agent was retired — its
+// tools are now ordinary policy-governed builtins held by the core agents — but the
+// name is kept as a stable audit-attribution label so management-tool actions remain
+// distinguishable in the audit log.
+const SystemAgentName = "Omnipus"
+
 // ConfirmationFunc is called by the handler before executing a destructive tool.
 // It must return (true, nil) only when the user has clicked the UI confirmation button.
 // Returns (false, nil) when the user canceled, or (false, err) on error.
