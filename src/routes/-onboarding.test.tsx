@@ -61,7 +61,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
 import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
-import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, sortProvidersByPriority, AVAILABLE_PROVIDERS } from './onboarding'
+import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, sortProvidersByPriority, AVAILABLE_PROVIDERS, PLAN_LABELS, REGION_LABELS, type ProviderVariant } from './onboarding'
 import { ProbeProviderRequest } from '@/lib/api/generated/schemas'
 
 // Cache the dynamically imported component across all tests so the first import's
@@ -504,7 +504,15 @@ describe('sortProvidersByPriority — provider list ordering', () => {
 // Provider list — China/intl variants present in the UI
 // =====================================================================
 
-describe('OnboardingWizard — provider list (China + intl variants)', () => {
+// =====================================================================
+// Scenario: Grouped picker — company grid (L1)
+// =====================================================================
+//
+// The new UI shows ONE tile per company (not per variant). Multi-variant
+// companies (Moonshot/Kimi, MiniMax, Qwen, Zhipu/GLM, DeepSeek) each get
+// one tile with a ▾ affordance. The old flat-variant button names are gone.
+
+describe('OnboardingWizard — company grid (grouped picker)', () => {
   async function goToStep3() {
     await renderWizard()
     const username = screen.getByLabelText(/username/i)
@@ -518,29 +526,123 @@ describe('OnboardingWizard — provider list (China + intl variants)', () => {
     await waitFor(() => screen.getByText(/add a model key/i))
   }
 
-  it('shows Moonshot intl and China variants separately', async () => {
+  it('renders one tile per company (multi-variant companies collapsed into one)', async () => {
     await goToStep3()
-    expect(screen.getByRole('button', { name: /Moonshot \/ Kimi \(International\)/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Moonshot \/ Kimi \(China\)/i })).toBeInTheDocument()
+    // Multi-variant companies show one tile each.
+    expect(screen.getByRole('button', { name: /Moonshot \/ Kimi/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^MiniMax$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Zhipu \/ GLM/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Qwen \/ Alibaba/i })).toBeInTheDocument()
+    // Old flat variant names should NOT appear as separate tiles.
+    expect(screen.queryByRole('button', { name: /Moonshot \/ Kimi \(International\)/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /MiniMax \(International\)/i })).not.toBeInTheDocument()
   })
 
-  it('shows MiniMax intl and China variants separately', async () => {
+  it('shows Plan controls (api/coding/anthropic) when Zhipu/GLM tile is clicked', async () => {
     await goToStep3()
-    expect(screen.getByRole('button', { name: /MiniMax \(International\)/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /MiniMax \(China\)/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: PLAN_LABELS.api })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: PLAN_LABELS.coding })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: PLAN_LABELS.anthropic })).toBeInTheDocument()
+    })
   })
 
-  it('shows Qwen China, International, and US variants', async () => {
+  it('shows Region controls (intl/china) for Zhipu/GLM on api plan', async () => {
     await goToStep3()
-    expect(screen.getByRole('button', { name: /Qwen \(China\)/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Qwen \(International\)/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Qwen \(US\)/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: REGION_LABELS.intl })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: REGION_LABELS.china })).toBeInTheDocument()
+    })
   })
 
-  it('shows Z.ai international and Zhipu China variants', async () => {
+  it('resolves the correct id for Zhipu/GLM api+intl: z-ai', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
     await goToStep3()
-    expect(screen.getByRole('button', { name: /Z\.ai \(GLM, International\)/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Zhipu \(GLM, China\)/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    await waitFor(() => screen.getByRole('button', { name: PLAN_LABELS.api }))
+    // Plan defaults to api, region defaults to intl → id should be z-ai.
+    // Enter a key and connect — probeProvider should be called with 'z-ai'.
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+    await waitFor(() => {
+      expect(probeProvider).toHaveBeenCalledWith('z-ai', 'test-key', undefined)
+    })
+  })
+
+  it('resolves the correct id for Zhipu/GLM coding+china: zhipu-coding', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    await waitFor(() => screen.getByRole('button', { name: PLAN_LABELS.coding }))
+    fireEvent.click(screen.getByRole('button', { name: PLAN_LABELS.coding }))
+    await waitFor(() => screen.getByRole('button', { name: REGION_LABELS.china }))
+    fireEvent.click(screen.getByRole('button', { name: REGION_LABELS.china }))
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+    await waitFor(() => {
+      expect(probeProvider).toHaveBeenCalledWith('zhipu-coding', 'test-key', undefined)
+    })
+  })
+
+  it('shows no Plan/Region for single-option OpenAI (one click → API key)', async () => {
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /^OpenAI$/i }))
+    await waitFor(() => screen.getByLabelText('API Key'))
+    // No plan selector should appear for single-option companies.
+    expect(screen.queryByRole('button', { name: PLAN_LABELS.api })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: PLAN_LABELS.coding })).not.toBeInTheDocument()
+  })
+
+  it('search filters by alias: "kimi" shows Moonshot/Kimi tile', async () => {
+    await goToStep3()
+    fireEvent.change(screen.getByLabelText(/search providers/i), { target: { value: 'kimi' } })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Moonshot \/ Kimi/i })).toBeInTheDocument()
+    })
+    // Non-matching companies should be filtered out.
+    expect(screen.queryByRole('button', { name: /^OpenAI$/i })).not.toBeInTheDocument()
+  })
+
+  it('search filters by alias: "glm" shows Zhipu/GLM tile', async () => {
+    await goToStep3()
+    fireEvent.change(screen.getByLabelText(/search providers/i), { target: { value: 'glm' } })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Zhipu \/ GLM/i })).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('button', { name: /^Groq$/i })).not.toBeInTheDocument()
+  })
+
+  it('changing plan resets the loaded model list', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({
+      success: true,
+      models: ['model-a', 'model-b'],
+    })
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    await waitFor(() => screen.getByLabelText('API Key'))
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+    await waitFor(() => screen.getByText(/connected successfully/i))
+    // Now switch plan — model list should reset.
+    fireEvent.click(screen.getByRole('button', { name: PLAN_LABELS.coding }))
+    await waitFor(() => {
+      // The "connected successfully" message disappears when model list is reset.
+      expect(screen.queryByText(/connected successfully/i)).not.toBeInTheDocument()
+    })
+  })
+
+  it('DeepSeek shows Plan (api/anthropic) but no Region controls', async () => {
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /DeepSeek/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: PLAN_LABELS.api })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: PLAN_LABELS.anthropic })).toBeInTheDocument()
+    })
+    // DeepSeek has no regional split.
+    expect(screen.queryByRole('button', { name: REGION_LABELS.intl })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: REGION_LABELS.china })).not.toBeInTheDocument()
   })
 })
 
@@ -786,8 +888,12 @@ describe('AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest enum (UI never offers an 
   // zod ZodEnum exposes its allowed values via `.options`.
   const enumValues: string[] = (ProbeProviderRequest.shape.id as { options: readonly string[] }).options.slice()
 
-  it('every onboarding provider id is a valid probe-enum value', () => {
-    const offending = AVAILABLE_PROVIDERS.map((p) => p.id).filter((id) => !enumValues.includes(id))
+  // AVAILABLE_PROVIDERS is now ProviderVariant[] — each entry still has `.id`.
+  // This invariant checks that every variant id resolves to a known probe enum value.
+  it('every onboarding provider variant id is a valid probe-enum value', () => {
+    const offending = AVAILABLE_PROVIDERS.map((p: ProviderVariant) => p.id).filter(
+      (id) => !enumValues.includes(id),
+    )
     expect(
       offending,
       `onboarding offers provider id(s) not in the ProbeProviderRequest enum: ${offending.join(', ')} — ` +
@@ -799,5 +905,23 @@ describe('AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest enum (UI never offers an 
     for (const id of ['z-ai', 'moonshot-cn', 'minimax-cn', 'qwen-intl', 'qwen-us']) {
       expect(enumValues, `${id} must be in the probe enum`).toContain(id)
     }
+  })
+
+  it('AVAILABLE_PROVIDERS has a variant for every multi-variant company combination', () => {
+    // Zhipu/GLM: 3 plans × 2 regions = 6 variants
+    const zhipuVariants = AVAILABLE_PROVIDERS.filter((v) => v.company === 'Zhipu / GLM')
+    expect(zhipuVariants).toHaveLength(6)
+    // Moonshot/Kimi: 2 plans × 2 regions = 4 variants
+    const moonshotVariants = AVAILABLE_PROVIDERS.filter((v) => v.company === 'Moonshot / Kimi')
+    expect(moonshotVariants).toHaveLength(4)
+    // MiniMax: 2 plans × 2 regions = 4 variants
+    const minimaxVariants = AVAILABLE_PROVIDERS.filter((v) => v.company === 'MiniMax')
+    expect(minimaxVariants).toHaveLength(4)
+    // DeepSeek: 2 plans, no region = 2 variants
+    const deepseekVariants = AVAILABLE_PROVIDERS.filter((v) => v.company === 'DeepSeek')
+    expect(deepseekVariants).toHaveLength(2)
+    // Qwen: 3 api regions + 1 anthropic = 4 variants
+    const qwenVariants = AVAILABLE_PROVIDERS.filter((v) => v.company === 'Qwen / Alibaba')
+    expect(qwenVariants).toHaveLength(4)
   })
 })

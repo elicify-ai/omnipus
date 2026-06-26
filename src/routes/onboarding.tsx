@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { createFileRoute, redirect, useNavigate, useRouteContext } from '@tanstack/react-router'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -13,6 +13,9 @@ import {
   Key,
   Star,
   ChatCircle,
+  CaretDown,
+  Info,
+  MagnifyingGlass,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -35,42 +38,265 @@ import { useAuthStore } from '@/store/auth'
 type Step = 1 | 2 | 3
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 
-// All supported providers. Providers with /v1/models get a searchable dropdown;
-// providers without it get a text input for manual model slug entry.
+// ── Provider data model ────────────────────────────────────────────────────────
 //
-// Dual-endpoint vendors (China vs international) are listed as separate entries
-// so users pick the one matching their key/region. The ids below are all valid
-// values in the ProbeProviderRequest enum (src/lib/api/generated/).
-export const AVAILABLE_PROVIDERS = [
-  { id: 'openai', display_name: 'OpenAI' },
-  { id: 'openrouter', display_name: 'OpenRouter' },
-  { id: 'anthropic', display_name: 'Anthropic' },
-  { id: 'google', display_name: 'Google Gemini' },
-  { id: 'groq', display_name: 'Groq' },
-  { id: 'deepseek', display_name: 'DeepSeek' },
-  { id: 'mistral', display_name: 'Mistral' },
-  { id: 'azure', display_name: 'Azure OpenAI' },
-  // Zhipu / Z.ai: two separate platforms. z-ai = international (api.z.ai);
-  // zhipu = China-mainland (open.bigmodel.cn). Pick the one matching your key.
-  { id: 'z-ai', display_name: 'Z.ai (GLM, International)' },
-  { id: 'zhipu', display_name: 'Zhipu (GLM, China)' },
-  // GLM Coding Plan (subscription) — billed against the coding endpoint, NOT the
-  // pay-per-token API. A Coding Plan key gets "insufficient balance" on z-ai/zhipu.
-  { id: 'z-ai-coding', display_name: 'Z.ai GLM Coding Plan' },
-  // Moonshot / Kimi: api.moonshot.ai (intl) vs api.moonshot.cn (China).
-  { id: 'moonshot', display_name: 'Moonshot / Kimi (International)' },
-  { id: 'moonshot-cn', display_name: 'Moonshot / Kimi (China)' },
-  { id: 'nvidia', display_name: 'NVIDIA' },
-  // MiniMax: api.minimax.io (intl) vs api.minimaxi.com (China).
-  { id: 'minimax', display_name: 'MiniMax (International)' },
-  { id: 'minimax-cn', display_name: 'MiniMax (China)' },
-  // Qwen / DashScope: China (dashscope.aliyuncs.com), International, and US
-  // are all separate platforms — pick the one matching your Alibaba Cloud region.
-  { id: 'qwen', display_name: 'Qwen (China)' },
-  { id: 'qwen-intl', display_name: 'Qwen (International)' },
-  { id: 'qwen-us', display_name: 'Qwen (US)' },
-  { id: 'ollama', display_name: 'Ollama' },
-  { id: 'cerebras', display_name: 'Cerebras' },
+// Two-level grouped picker (spec: docs/internal/design/provider-picker-grouped-2026-06.md):
+//   L1 — Company tiles (one per distinct company); multi-variant companies show ▾
+//   L2 — Plan + Region segmented controls (inline, only for multi-variant companies)
+//
+// Each ProviderVariant maps (company, plan, region) → backend probe id. The ids
+// below are all valid values in the ProbeProviderRequest enum (src/lib/api/generated/).
+
+export type ProviderVariant = {
+  /** Backend probe id — sent to probeProvider() and completeOnboardingTransaction() */
+  id: string
+  /** Company name — the L1 tile label and grouping key */
+  company: string
+  /** Additional search aliases (e.g. "glm", "kimi"). The company name itself is
+   *  always searched; aliases are extra terms. */
+  aliases?: string[]
+  /** Billing plan — drives the Plan segmented control */
+  plan: 'api' | 'coding' | 'anthropic'
+  /** Deployment region — drives the Region segmented control.
+   *  Omit for companies that have no regional split (DeepSeek, etc.). */
+  region?: 'intl' | 'china' | 'us'
+  /** Human-readable base URL shown small below the plan/region controls for
+   *  recognition + debuggability (spec: "show the resolved endpoint"). */
+  endpointHint?: string
+}
+
+// All supported providers as variants. AVAILABLE_PROVIDERS is kept exported
+// because the invariant test imports it and checks every `.id` is in the enum.
+// Single-option companies have exactly one variant; multi-variant companies
+// have multiple (UI derives Plan and Region options from the list).
+export const AVAILABLE_PROVIDERS: ProviderVariant[] = [
+  // ── Single-option companies ────────────────────────────────────────────────
+  {
+    id: 'openai',
+    company: 'OpenAI',
+    plan: 'api',
+    endpointHint: 'api.openai.com/v1',
+  },
+  {
+    id: 'anthropic',
+    company: 'Anthropic',
+    plan: 'api',
+    endpointHint: 'api.anthropic.com/v1',
+  },
+  {
+    id: 'google',
+    company: 'Google Gemini',
+    aliases: ['gemini', 'google'],
+    plan: 'api',
+    endpointHint: 'generativelanguage.googleapis.com',
+  },
+  {
+    id: 'openrouter',
+    company: 'OpenRouter',
+    plan: 'api',
+    endpointHint: 'openrouter.ai/api/v1',
+  },
+  {
+    id: 'groq',
+    company: 'Groq',
+    plan: 'api',
+    endpointHint: 'api.groq.com/openai/v1',
+  },
+  {
+    id: 'mistral',
+    company: 'Mistral',
+    plan: 'api',
+    endpointHint: 'api.mistral.ai/v1',
+  },
+  {
+    id: 'nvidia',
+    company: 'NVIDIA',
+    plan: 'api',
+    endpointHint: 'integrate.api.nvidia.com/v1',
+  },
+  {
+    id: 'cerebras',
+    company: 'Cerebras',
+    plan: 'api',
+    endpointHint: 'api.cerebras.ai/v1',
+  },
+  {
+    id: 'ollama',
+    company: 'Ollama (local)',
+    aliases: ['ollama', 'local'],
+    plan: 'api',
+    endpointHint: 'localhost:11434',
+  },
+  {
+    id: 'azure',
+    company: 'Azure OpenAI',
+    aliases: ['azure', 'microsoft'],
+    plan: 'api',
+    endpointHint: '<resource>.openai.azure.com',
+  },
+  // ── Zhipu / GLM (multi-variant: plan × region) ────────────────────────────
+  {
+    id: 'z-ai',
+    company: 'Zhipu / GLM',
+    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
+    plan: 'api',
+    region: 'intl',
+    endpointHint: 'api.z.ai/api/paas/v4',
+  },
+  {
+    id: 'zhipu',
+    company: 'Zhipu / GLM',
+    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
+    plan: 'api',
+    region: 'china',
+    endpointHint: 'open.bigmodel.cn/api/paas/v4',
+  },
+  {
+    id: 'z-ai-coding',
+    company: 'Zhipu / GLM',
+    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
+    plan: 'coding',
+    region: 'intl',
+    endpointHint: 'api.z.ai/api/coding/paas/v4',
+  },
+  {
+    id: 'zhipu-coding',
+    company: 'Zhipu / GLM',
+    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
+    plan: 'coding',
+    region: 'china',
+    endpointHint: 'open.bigmodel.cn/api/coding/paas/v4',
+  },
+  {
+    id: 'z-ai-anthropic',
+    company: 'Zhipu / GLM',
+    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
+    plan: 'anthropic',
+    region: 'intl',
+    endpointHint: 'api.z.ai/api/anthropic/v1',
+  },
+  {
+    id: 'zhipu-anthropic',
+    company: 'Zhipu / GLM',
+    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
+    plan: 'anthropic',
+    region: 'china',
+    endpointHint: 'open.bigmodel.cn/api/anthropic/v1',
+  },
+  // ── Moonshot / Kimi (multi-variant: plan × region) ────────────────────────
+  {
+    id: 'moonshot',
+    company: 'Moonshot / Kimi',
+    aliases: ['kimi', 'moonshot'],
+    plan: 'api',
+    region: 'intl',
+    endpointHint: 'api.moonshot.ai/v1',
+  },
+  {
+    id: 'moonshot-cn',
+    company: 'Moonshot / Kimi',
+    aliases: ['kimi', 'moonshot'],
+    plan: 'api',
+    region: 'china',
+    endpointHint: 'api.moonshot.cn/v1',
+  },
+  {
+    id: 'moonshot-anthropic',
+    company: 'Moonshot / Kimi',
+    aliases: ['kimi', 'moonshot'],
+    plan: 'anthropic',
+    region: 'intl',
+    endpointHint: 'api.moonshot.ai/anthropic/v1',
+  },
+  {
+    id: 'moonshot-cn-anthropic',
+    company: 'Moonshot / Kimi',
+    aliases: ['kimi', 'moonshot'],
+    plan: 'anthropic',
+    region: 'china',
+    endpointHint: 'api.moonshot.cn/anthropic/v1',
+  },
+  // ── MiniMax (multi-variant: plan × region) ────────────────────────────────
+  {
+    id: 'minimax',
+    company: 'MiniMax',
+    aliases: ['minimax'],
+    plan: 'api',
+    region: 'intl',
+    endpointHint: 'api.minimax.io/v1',
+  },
+  {
+    id: 'minimax-cn',
+    company: 'MiniMax',
+    aliases: ['minimax'],
+    plan: 'api',
+    region: 'china',
+    endpointHint: 'api.minimaxi.com/v1',
+  },
+  {
+    id: 'minimax-anthropic',
+    company: 'MiniMax',
+    aliases: ['minimax'],
+    plan: 'anthropic',
+    region: 'intl',
+    endpointHint: 'api.minimax.io/anthropic/v1',
+  },
+  {
+    id: 'minimax-cn-anthropic',
+    company: 'MiniMax',
+    aliases: ['minimax'],
+    plan: 'anthropic',
+    region: 'china',
+    endpointHint: 'api.minimaxi.com/anthropic/v1',
+  },
+  // ── DeepSeek (multi-variant: plan only, no region) ────────────────────────
+  {
+    id: 'deepseek',
+    company: 'DeepSeek',
+    aliases: ['deepseek'],
+    plan: 'api',
+    endpointHint: 'api.deepseek.com/v1',
+  },
+  {
+    id: 'deepseek-anthropic',
+    company: 'DeepSeek',
+    aliases: ['deepseek'],
+    plan: 'anthropic',
+    endpointHint: 'api.deepseek.com/anthropic/v1',
+  },
+  // ── Qwen / Alibaba (multi-variant: plan × region, anthropic has no region) ─
+  {
+    id: 'qwen',
+    company: 'Qwen / Alibaba',
+    aliases: ['qwen', 'dashscope', 'alibaba', 'tongyi'],
+    plan: 'api',
+    region: 'china',
+    endpointHint: 'dashscope.aliyuncs.com/compatible-mode/v1',
+  },
+  {
+    id: 'qwen-intl',
+    company: 'Qwen / Alibaba',
+    aliases: ['qwen', 'dashscope', 'alibaba', 'tongyi'],
+    plan: 'api',
+    region: 'intl',
+    endpointHint: 'dashscope-intl.aliyuncs.com/compatible-mode/v1',
+  },
+  {
+    id: 'qwen-us',
+    company: 'Qwen / Alibaba',
+    aliases: ['qwen', 'dashscope', 'alibaba', 'tongyi'],
+    plan: 'api',
+    region: 'us',
+    endpointHint: 'dashscope-us.aliyuncs.com/compatible-mode/v1',
+  },
+  {
+    id: 'coding-plan-anthropic',
+    company: 'Qwen / Alibaba',
+    aliases: ['qwen', 'dashscope', 'alibaba', 'tongyi'],
+    plan: 'anthropic',
+    // No region for Qwen anthropic (single endpoint)
+    endpointHint: 'coding-intl.dashscope.aliyuncs.com/apps/anthropic',
+  },
 ]
 
 // Providers that REQUIRE a custom endpoint to function. The probe will always
@@ -85,6 +311,7 @@ const PROVIDER_PRIORITY = ['openai', 'anthropic', 'openrouter']
 
 // Stable sort that moves PROVIDER_PRIORITY entries to the front (in priority
 // order) and leaves every other provider in its original relative position.
+// Works on any list that has an `id` field (ProviderVariant or legacy shape).
 export function sortProvidersByPriority<T extends { id: string }>(list: T[]): T[] {
   const rank = (id: string) => {
     const i = PROVIDER_PRIORITY.indexOf(id)
@@ -94,6 +321,98 @@ export function sortProvidersByPriority<T extends { id: string }>(list: T[]): T[
     .map((p, index) => ({ p, index }))
     .sort((a, b) => rank(a.p.id) - rank(b.p.id) || a.index - b.index)
     .map(({ p }) => p)
+}
+
+// ── Grouped-picker helpers ─────────────────────────────────────────────────────
+
+/** Human labels for the plan dimension. */
+export const PLAN_LABELS: Record<ProviderVariant['plan'], string> = {
+  api: 'Pay-as-you-go API',
+  coding: 'Coding Plan',
+  anthropic: 'Anthropic API',
+}
+
+/** Human labels for the region dimension. */
+export const REGION_LABELS: Record<NonNullable<ProviderVariant['region']>, string> = {
+  intl: 'International',
+  china: 'China',
+  us: 'US',
+}
+
+/** Derive unique company names from the variant list (in declaration order). */
+function uniqueCompanies(variants: ProviderVariant[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const v of variants) {
+    if (!seen.has(v.company)) {
+      seen.add(v.company)
+      result.push(v.company)
+    }
+  }
+  return result
+}
+
+/** All variants for a given company. */
+function variantsForCompany(variants: ProviderVariant[], company: string): ProviderVariant[] {
+  return variants.filter((v) => v.company === company)
+}
+
+/** True when a company has more than one variant (needs L2 plan/region UI). */
+function isMultiVariant(variants: ProviderVariant[], company: string): boolean {
+  return variantsForCompany(variants, company).length > 1
+}
+
+/** Resolve a variant id from (company, plan, region). Returns undefined when no
+ *  exact match exists (e.g. a plan has no regional split). */
+function resolveVariantId(
+  variants: ProviderVariant[],
+  company: string,
+  plan: ProviderVariant['plan'],
+  region: ProviderVariant['region'],
+): ProviderVariant | undefined {
+  const candidates = variantsForCompany(variants, company).filter((v) => v.plan === plan)
+  // If the plan has no regional split, region doesn't matter — return the single candidate.
+  if (candidates.every((c) => c.region === undefined)) return candidates[0]
+  return candidates.find((v) => v.region === region)
+}
+
+/** Plans offered by a company (in declaration order, unique). */
+function plansForCompany(
+  variants: ProviderVariant[],
+  company: string,
+): ProviderVariant['plan'][] {
+  const seen = new Set<ProviderVariant['plan']>()
+  const result: ProviderVariant['plan'][] = []
+  for (const v of variantsForCompany(variants, company)) {
+    if (!seen.has(v.plan)) {
+      seen.add(v.plan)
+      result.push(v.plan)
+    }
+  }
+  return result
+}
+
+/** Regions offered by a company for a given plan (undefined = no regional split). */
+function regionsForPlan(
+  variants: ProviderVariant[],
+  company: string,
+  plan: ProviderVariant['plan'],
+): Array<NonNullable<ProviderVariant['region']>> {
+  return variantsForCompany(variants, company)
+    .filter((v) => v.plan === plan && v.region !== undefined)
+    .map((v) => v.region as NonNullable<ProviderVariant['region']>)
+}
+
+/** Filter company tiles by a search term (name + aliases, case-insensitive). */
+function filterCompanies(variants: ProviderVariant[], query: string): string[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return uniqueCompanies(variants)
+  const companies = uniqueCompanies(variants)
+  return companies.filter((company) => {
+    if (company.toLowerCase().includes(q)) return true
+    const aliases = variants.find((v) => v.company === company)?.aliases ?? []
+    return aliases.some((a) => a.toLowerCase().includes(q))
+  })
 }
 
 // Lightweight, dependency-free password strength heuristic. Scores on length
@@ -224,7 +543,12 @@ function OnboardingWizard() {
   // numbered step indicator is hidden and the unnumbered "Meet your Assistant"
   // completion screen is rendered instead.
   const [completed, setCompleted] = useState(false)
+  // selectedProvider is the resolved backend id (the leaf of the L1→L2 selection).
+  // selectedCompany is the L1 company tile; selectedPlan/Region are the L2 controls.
   const [selectedProvider, setSelectedProvider] = useState('')
+  const [selectedCompany, setSelectedCompany] = useState('')
+  const [selectedPlan, setSelectedPlan] = useState<ProviderVariant['plan']>('api')
+  const [selectedRegion, setSelectedRegion] = useState<ProviderVariant['region']>('intl')
   const [apiKey, setApiKey] = useState('')
   const [endpoint, setEndpoint] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -252,6 +576,77 @@ function OnboardingWizard() {
     setStep(next)
   }
 
+  // Reset connection state (called when company, plan, or region changes).
+  const resetConnection = () => {
+    setApiKey('')
+    setEndpoint('')
+    setTestStatus('idle')
+    setTestError('')
+    setSelectedModel('')
+    setAvailableModels([])
+  }
+
+  // L1: User clicks a company tile. For single-option companies, this immediately
+  // sets the provider id. For multi-variant companies, the L2 panel expands and
+  // the plan/region defaults resolve the first id.
+  const handleSelectCompany = (company: string) => {
+    if (selectedCompany === company) return // already selected, no-op
+    setSelectedCompany(company)
+
+    // Default plan to 'api'; default region to 'intl' (spec defaults).
+    const newPlan: ProviderVariant['plan'] = 'api'
+    const newRegion: ProviderVariant['region'] = 'intl'
+    setSelectedPlan(newPlan)
+    setSelectedRegion(newRegion)
+
+    // Resolve the backend id from the defaults.
+    const variant = resolveVariantId(providers, company, newPlan, newRegion)
+    const resolvedId = variant?.id ?? variantsForCompany(providers, company)[0]?.id ?? ''
+    setSelectedProvider(resolvedId)
+    resetConnection()
+  }
+
+  // L2: User changes the plan. Re-resolve the id and reset the model list
+  // (stale models from a different endpoint are wrong picks — spec requirement).
+  const handleSelectPlan = (plan: ProviderVariant['plan']) => {
+    setSelectedPlan(plan)
+    // Check if this plan has regions.
+    const regions = regionsForPlan(providers, selectedCompany, plan)
+    let newRegion = selectedRegion
+    if (regions.length > 0 && !regions.includes(selectedRegion as NonNullable<ProviderVariant['region']>)) {
+      // Current region not valid for this plan — default to intl or first available.
+      newRegion = regions.includes('intl') ? 'intl' : regions[0]
+      setSelectedRegion(newRegion)
+    }
+    const variant = resolveVariantId(providers, selectedCompany, plan, newRegion)
+    const resolvedId = variant?.id ?? variantsForCompany(providers, selectedCompany).find(v => v.plan === plan)?.id ?? ''
+    setSelectedProvider(resolvedId)
+    // Reset model list — changing plan means a different endpoint and different models.
+    setAvailableModels([])
+    setSelectedModel('')
+    if (testStatus !== 'idle') {
+      setTestStatus('idle')
+      setTestError('')
+    }
+  }
+
+  // L2: User changes the region. Re-resolve the id and reset the model list.
+  const handleSelectRegion = (region: ProviderVariant['region']) => {
+    setSelectedRegion(region)
+    const variant = resolveVariantId(providers, selectedCompany, selectedPlan, region)
+    const resolvedId = variant?.id ?? ''
+    setSelectedProvider(resolvedId)
+    // Reset model list — different region = different endpoint + different models.
+    setAvailableModels([])
+    setSelectedModel('')
+    if (testStatus !== 'idle') {
+      setTestStatus('idle')
+      setTestError('')
+    }
+  }
+
+  // Legacy: direct provider id selection (kept for backward compat with tests
+  // that click a single-option tile and expect a provider id set).
   const handleSelectProvider = (id: string) => {
     setSelectedProvider(id)
     setApiKey('')
@@ -529,6 +924,12 @@ function OnboardingWizard() {
               <ModelKeyStep
                 providers={providers}
                 selectedProvider={selectedProvider}
+                selectedCompany={selectedCompany}
+                selectedPlan={selectedPlan}
+                selectedRegion={selectedRegion}
+                onSelectCompany={handleSelectCompany}
+                onSelectPlan={handleSelectPlan}
+                onSelectRegion={handleSelectRegion}
                 onSelect={handleSelectProvider}
                 apiKey={apiKey}
                 onApiKeyChange={handleApiKeyChange}
@@ -835,7 +1236,13 @@ function PasswordStep({
 function ModelKeyStep({
   providers,
   selectedProvider,
-  onSelect,
+  selectedCompany,
+  selectedPlan,
+  selectedRegion,
+  onSelectCompany,
+  onSelectPlan,
+  onSelectRegion,
+  onSelect: _onSelect,
   apiKey,
   onApiKeyChange,
   endpoint,
@@ -854,8 +1261,15 @@ function ModelKeyStep({
   isSaving,
   finishError,
 }: {
-  providers: { id: string; display_name: string }[]
+  providers: ProviderVariant[]
   selectedProvider: string
+  selectedCompany: string
+  selectedPlan: ProviderVariant['plan']
+  selectedRegion: ProviderVariant['region']
+  onSelectCompany: (company: string) => void
+  onSelectPlan: (plan: ProviderVariant['plan']) => void
+  onSelectRegion: (region: ProviderVariant['region']) => void
+  /** Kept for backward-compat paths (Azure direct click, etc.) */
   onSelect: (id: string) => void
   apiKey: string
   onApiKeyChange: (k: string) => void
@@ -875,26 +1289,57 @@ function ModelKeyStep({
   isSaving: boolean
   finishError: string
 }) {
-  // Order the rendered provider list with the popular providers first (stable).
-  const orderedProviders = sortProvidersByPriority(providers)
-  // Build providerGroups for the ModelSelector — single group in onboarding (one provider at a time)
-  const providerDef = providers.find((p) => p.id === selectedProvider)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  // Derive filtered company list (search + stable priority order for the grid).
+  const filteredCompanies = useMemo(() => {
+    const companies = filterCompanies(providers, searchQuery)
+    // Keep openai, anthropic, openrouter first within the filtered set.
+    const priorityCompanies = ['OpenAI', 'Anthropic', 'OpenRouter']
+    const rank = (c: string) => {
+      const i = priorityCompanies.indexOf(c)
+      return i === -1 ? priorityCompanies.length : i
+    }
+    return [...companies].sort((a, b) => rank(a) - rank(b) || 0)
+  }, [providers, searchQuery])
+
+  // Derive L2 options for the selected company.
+  const companyPlans = selectedCompany ? plansForCompany(providers, selectedCompany) : []
+  const currentPlanRegions = selectedCompany
+    ? regionsForPlan(providers, selectedCompany, selectedPlan)
+    : []
+  const hasRegionForPlan = currentPlanRegions.length > 0
+  const multiVariant = selectedCompany ? isMultiVariant(providers, selectedCompany) : false
+
+  // The resolved variant (for endpointHint display).
+  const resolvedVariant = selectedCompany
+    ? resolveVariantId(providers, selectedCompany, selectedPlan, selectedRegion) ??
+      variantsForCompany(providers, selectedCompany)[0]
+    : undefined
+
+  // Build providerGroups for the ModelSelector.
   const providerGroups: ModelGroup[] =
-    availableModels.length > 0 && providerDef
-      ? [{ providerName: providerDef.display_name, models: availableModels }]
+    availableModels.length > 0 && selectedCompany
+      ? [{ providerName: selectedCompany, models: availableModels }]
       : []
+
   const continueEnabled = testStatus === 'success' && !!selectedModel.trim()
   const requiresEndpoint = PROVIDERS_REQUIRING_ENDPOINT.has(selectedProvider)
-  // The Connect button is blocked when a required endpoint is missing.
   const connectDisabled =
     !apiKey.trim() ||
     testStatus === 'testing' ||
     (requiresEndpoint && !endpoint.trim())
+
+  // Friendly name for the error message — use company name if available.
+  const providerDisplayName = selectedCompany || 'the provider'
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       <div>
-        <h2 className="font-headline text-2xl font-bold mb-1"
-          style={{ color: 'var(--color-secondary)' }}>
+        <h2
+          className="font-headline text-2xl font-bold mb-1"
+          style={{ color: 'var(--color-secondary)' }}
+        >
           Add a model key
         </h2>
         <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
@@ -905,34 +1350,195 @@ function ModelKeyStep({
         </p>
       </div>
 
-      {/* Provider selection grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {orderedProviders.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => onSelect(p.id)}
-            className="px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 text-left focus-visible:outline-none focus-visible:ring-2"
-            style={
-              selectedProvider === p.id
-                ? {
-                    borderColor: 'var(--color-accent)',
-                    backgroundColor: 'rgba(212,175,55,0.09)',
-                    color: 'var(--color-accent)',
-                  }
-                : {
-                    borderColor: 'var(--color-border)',
-                    backgroundColor: 'var(--color-surface-1)',
-                    color: 'var(--color-secondary)',
-                  }
-            }
-          >
-            {p.display_name}
-          </button>
-        ))}
+      {/* ── L1: Search + company grid ───────────────────────────────────── */}
+      <div className="space-y-2">
+        {/* Search box — spec: >25 items → searchable (NN/g) */}
+        <div className="relative">
+          <MagnifyingGlass
+            size={13}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+            style={{ color: 'var(--color-muted)' }}
+          />
+          <Input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search providers… (e.g. kimi, glm, qwen)"
+            className="pl-8 text-sm h-8"
+            aria-label="Search providers"
+          />
+        </div>
+
+        {/* Company tiles grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" role="group" aria-label="Choose your provider">
+          {filteredCompanies.map((company) => {
+            const isSelected = selectedCompany === company
+            const multi = isMultiVariant(providers, company)
+            return (
+              <button
+                key={company}
+                type="button"
+                onClick={() => onSelectCompany(company)}
+                className="px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 text-left focus-visible:outline-none focus-visible:ring-2 flex items-center justify-between gap-1"
+                aria-pressed={isSelected}
+                style={
+                  isSelected
+                    ? {
+                        borderColor: 'var(--color-accent)',
+                        backgroundColor: 'rgba(212,175,55,0.09)',
+                        color: 'var(--color-accent)',
+                      }
+                    : {
+                        borderColor: 'var(--color-border)',
+                        backgroundColor: 'var(--color-surface-1)',
+                        color: 'var(--color-secondary)',
+                      }
+                }
+              >
+                <span className="truncate">{company}</span>
+                {multi && (
+                  <CaretDown
+                    size={11}
+                    weight="bold"
+                    className="shrink-0 opacity-60"
+                    aria-hidden
+                  />
+                )}
+              </button>
+            )
+          })}
+          {filteredCompanies.length === 0 && (
+            <p
+              className="col-span-2 sm:col-span-3 text-xs text-center py-2"
+              style={{ color: 'var(--color-muted)' }}
+            >
+              No providers match &ldquo;{searchQuery}&rdquo;
+            </p>
+          )}
+        </div>
       </div>
 
-      {/* API key — animates in when provider is selected */}
+      {/* ── L2: Plan + Region (inline, only for multi-variant companies) ── */}
+      <AnimatePresence>
+        {selectedCompany && multiVariant && (
+          <motion.div
+            key="plan-region"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
+          >
+            <div
+              className="rounded-lg border p-3 space-y-3"
+              style={{
+                borderColor: 'var(--color-border)',
+                backgroundColor: 'var(--color-surface-1)',
+              }}
+            >
+              {/* Plan selector */}
+              <div>
+                <p
+                  className="text-xs font-medium mb-1.5"
+                  style={{ color: 'var(--color-muted)' }}
+                >
+                  Plan
+                </p>
+                <div className="flex flex-wrap gap-1.5" role="group" aria-label="Select plan">
+                  {companyPlans.map((plan) => (
+                    <button
+                      key={plan}
+                      type="button"
+                      onClick={() => onSelectPlan(plan)}
+                      className="px-2.5 py-1 rounded text-xs font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2"
+                      aria-pressed={selectedPlan === plan}
+                      style={
+                        selectedPlan === plan
+                          ? {
+                              backgroundColor: 'var(--color-accent)',
+                              color: 'var(--color-primary)',
+                              fontWeight: 700,
+                            }
+                          : {
+                              borderColor: 'var(--color-border)',
+                              border: '1px solid',
+                              backgroundColor: 'transparent',
+                              color: 'var(--color-secondary)',
+                            }
+                      }
+                    >
+                      {PLAN_LABELS[plan]}
+                    </button>
+                  ))}
+                </div>
+                {/* Anti-1113 helper — error-prevention copy (spec §"Error prevention") */}
+                <div
+                  className="flex items-start gap-1.5 mt-2 text-[10px] leading-snug"
+                  style={{ color: 'var(--color-muted)' }}
+                >
+                  <Info size={11} className="shrink-0 mt-px" aria-hidden />
+                  <span>
+                    <strong style={{ color: 'var(--color-secondary)' }}>Coding Plan</strong>{' '}
+                    = your subscription (separate billing).{' '}
+                    <strong style={{ color: 'var(--color-secondary)' }}>
+                      Pay-as-you-go API
+                    </strong>{' '}
+                    bills per token. Wrong plan returns &ldquo;insufficient balance&rdquo;.
+                  </span>
+                </div>
+              </div>
+
+              {/* Region selector — only when the chosen plan has a regional split */}
+              {hasRegionForPlan && (
+                <div>
+                  <p
+                    className="text-xs font-medium mb-1.5"
+                    style={{ color: 'var(--color-muted)' }}
+                  >
+                    Region
+                  </p>
+                  <div className="flex flex-wrap gap-1.5" role="group" aria-label="Select region">
+                    {currentPlanRegions.map((region) => (
+                      <button
+                        key={region}
+                        type="button"
+                        onClick={() => onSelectRegion(region)}
+                        className="px-2.5 py-1 rounded text-xs font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2"
+                        aria-pressed={selectedRegion === region}
+                        style={
+                          selectedRegion === region
+                            ? {
+                                backgroundColor: 'var(--color-accent)',
+                                color: 'var(--color-primary)',
+                                fontWeight: 700,
+                              }
+                            : {
+                                borderColor: 'var(--color-border)',
+                                border: '1px solid',
+                                backgroundColor: 'transparent',
+                                color: 'var(--color-secondary)',
+                              }
+                        }
+                      >
+                        {REGION_LABELS[region]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Resolved endpoint hint — recognition + debuggability (spec requirement) */}
+              {resolvedVariant?.endpointHint && (
+                <p className="text-[10px] font-mono" style={{ color: 'var(--color-muted)' }}>
+                  → {resolvedVariant.endpointHint}
+                </p>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── API key — animates in when a provider is resolved ────────────── */}
       <AnimatePresence>
         {selectedProvider && (
           <motion.div
@@ -973,15 +1579,16 @@ function ModelKeyStep({
                     {showKey ? <EyeSlash size={14} /> : <Eye size={14} />}
                   </button>
                 </div>
-                <p className="text-[10px] mt-1.5 font-mono" style={{ color: 'var(--color-muted)' }}>
+                <p
+                  className="text-[10px] mt-1.5 font-mono"
+                  style={{ color: 'var(--color-muted)' }}
+                >
                   Stored encrypted with AES-256-GCM — never in plaintext
                 </p>
               </div>
 
               {/* Endpoint input — required for providers with no fixed default
-                  base (e.g. Azure, where each resource has its own host). The
-                  field is mandatory for PROVIDERS_REQUIRING_ENDPOINT; for others
-                  it is not shown (they use the well-known default). */}
+                  base (e.g. Azure, where each resource has its own host). */}
               {requiresEndpoint && (
                 <div>
                   <label
@@ -1010,8 +1617,7 @@ function ModelKeyStep({
 
               {/* Connection feedback — friendly, actionable message at the display
                   layer; the raw upstream string is preserved behind a collapsible
-                  "Technical details" disclosure. role="alert" + aria-live make the
-                  failure announced to screen readers (a11y). */}
+                  "Technical details" disclosure. */}
               {testStatus === 'error' && (
                 <div
                   data-testid="onboarding-error"
@@ -1024,10 +1630,7 @@ function ModelKeyStep({
                   <div className="min-w-0 space-y-1">
                     <span>
                       <span className="sr-only">Error: </span>
-                      {friendlyProbeError(
-                        testError,
-                        providerDef?.display_name ?? 'the provider',
-                      )}
+                      {friendlyProbeError(testError, providerDisplayName)}
                     </span>
                     {testError && (
                       <details className="text-xs" style={{ color: 'var(--color-muted)' }}>
@@ -1041,9 +1644,7 @@ function ModelKeyStep({
                 </div>
               )}
 
-              {/* Connect & Load Models — the main CTA before model selection.
-                  Disabled when the key is empty, the test is running, or a
-                  required endpoint has not been filled in (azure). */}
+              {/* Connect & Load Models CTA */}
               {testStatus !== 'success' && (
                 <Button
                   className="w-full gap-2 font-headline font-bold"
@@ -1074,7 +1675,10 @@ function ModelKeyStep({
                     transition={{ duration: 0.2 }}
                     className="overflow-hidden space-y-3"
                   >
-                    <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-success)' }}>
+                    <div
+                      className="flex items-center gap-2 text-sm"
+                      style={{ color: 'var(--color-success)' }}
+                    >
                       <CheckCircle size={14} weight="fill" />
                       <span>Connected successfully</span>
                     </div>
@@ -1138,39 +1742,29 @@ function ModelKeyStep({
           <ArrowLeft size={14} />
           Back
         </Button>
-        {(() => {
-          // Until Connect succeeds AND a model is chosen, render Complete setup
-          // with a clearly-disabled outline treatment (not dimmed gold, which
-          // reads as enabled on touch). Once enabled it becomes the gold CTA,
-          // so the Connect-then-Complete sequence is visually obvious. Scoped
-          // to the onboarding CTA — does NOT touch the global button.tsx
-          // disabled style.
-          return (
-            <Button
-              variant={continueEnabled ? 'default' : 'outline'}
-              className="flex-1 gap-2 font-headline font-bold"
-              onClick={onComplete}
-              disabled={!continueEnabled || isSaving}
-            >
-              {isSaving ? (
-                <>
-                  <SpinnerGap size={14} className="animate-spin" />
-                  Setting up...
-                </>
-              ) : finishError ? (
-                <>
-                  Retry Setup
-                  <ArrowRight size={14} weight="bold" />
-                </>
-              ) : (
-                <>
-                  Complete Setup
-                  <ArrowRight size={14} weight="bold" />
-                </>
-              )}
-            </Button>
-          )
-        })()}
+        <Button
+          variant={continueEnabled ? 'default' : 'outline'}
+          className="flex-1 gap-2 font-headline font-bold"
+          onClick={onComplete}
+          disabled={!continueEnabled || isSaving}
+        >
+          {isSaving ? (
+            <>
+              <SpinnerGap size={14} className="animate-spin" />
+              Setting up...
+            </>
+          ) : finishError ? (
+            <>
+              Retry Setup
+              <ArrowRight size={14} weight="bold" />
+            </>
+          ) : (
+            <>
+              Complete Setup
+              <ArrowRight size={14} weight="bold" />
+            </>
+          )}
+        </Button>
       </div>
     </div>
   )
