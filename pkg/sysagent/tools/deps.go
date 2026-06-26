@@ -21,6 +21,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/skills"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
@@ -134,6 +135,14 @@ type Deps struct {
 	// The production gateway MUST wire this; see gateway.go where sysAgentDeps is
 	// constructed.
 	DelegationDeny func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial
+
+	// ListSessions returns all sessions across all stores (shared + legacy per-agent),
+	// deduplicating entries that appear in both. Errors are per-store and non-fatal;
+	// the slice may be partial on error. Nil in tests or when not wired — the
+	// get_usage tool handles nil gracefully (returns an empty report).
+	//
+	// The production gateway wires this to agentLoop.ListAllSessions.
+	ListSessions func() ([]*session.UnifiedMeta, []error)
 }
 
 // clearMaps recursively walks v and zeros every map field it finds. Called

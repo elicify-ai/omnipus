@@ -94,7 +94,7 @@ var toolPermissions = map[string]ToolPermission{
 
 	// Diagnostics / utility.
 	"run_doctor": {MinRole: RoleViewer},
-	"query_cost": {MinRole: RoleViewer},
+	"get_usage":  {MinRole: RoleViewer},
 	"navigate":   {MinRole: RoleViewer},
 }
 

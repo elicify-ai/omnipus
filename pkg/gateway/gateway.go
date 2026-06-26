@@ -858,6 +858,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// bound at construction). MUST be wired in production — leaving it nil
 		// fails OPEN.
 		DelegationDeny: agentLoop.NewSysagentDelegationDeny(),
+		ListSessions:   agentLoop.ListAllSessions,
 	}
 	agentLoop.WireSysagentDeps(sysAgentDeps)
 

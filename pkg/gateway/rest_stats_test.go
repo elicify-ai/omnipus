@@ -53,23 +53,22 @@ func TestHandleTokenStats_EmptyReturns200(t *testing.T) {
 }
 
 // TestHandleTokenStats_PeriodValidation verifies period query parameter validation.
-// BDD: Given GET /api/v1/stats/tokens?period=week,
-// When the request is handled,
-// Then 400.
-// Given GET /api/v1/stats/tokens (no period),
-// When the request is handled,
-// Then 200 (defaults to month).
-// Traces to: FR-013
+// BDD: Given GET /api/v1/stats/tokens?period=<day|week|month|all>, Then 200.
+// Given GET /api/v1/stats/tokens (no period), Then 200 (defaults to month).
+// Given GET /api/v1/stats/tokens?period=garbage, Then 400.
+// Traces to: token-usage-tracking-2026-06.md (period enum day/week/month/all).
 func TestHandleTokenStats_PeriodValidation(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	// period=week → 400.
-	wBad := httptest.NewRecorder()
-	rBad := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens?period=week", nil)
-	rBad.URL.RawQuery = "period=week"
-	api.HandleTokenStats(wBad, rBad)
-	assert.Equal(t, http.StatusBadRequest, wBad.Code,
-		"GET /stats/tokens?period=week must return 400; body=%s", wBad.Body.String())
+	// Each valid period (incl. day/week/all, previously rejected) → 200.
+	for _, period := range []string{"day", "week", "month", "all"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens", nil)
+		r.URL.RawQuery = "period=" + period
+		api.HandleTokenStats(w, r)
+		assert.Equalf(t, http.StatusOK, w.Code,
+			"GET /stats/tokens?period=%s must return 200; body=%s", period, w.Body.String())
+	}
 
 	// no period → 200 (defaults to month).
 	wDefault := httptest.NewRecorder()
@@ -78,13 +77,13 @@ func TestHandleTokenStats_PeriodValidation(t *testing.T) {
 	assert.Equal(t, http.StatusOK, wDefault.Code,
 		"GET /stats/tokens without period must return 200 (defaults to month); body=%s", wDefault.Body.String())
 
-	// period=day → 400 (only "month" is supported per implementation).
-	wDay := httptest.NewRecorder()
-	rDay := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens?period=day", nil)
-	rDay.URL.RawQuery = "period=day"
-	api.HandleTokenStats(wDay, rDay)
-	assert.Equal(t, http.StatusBadRequest, wDay.Code,
-		"GET /stats/tokens?period=day must return 400")
+	// unrecognized period → 400.
+	wBad := httptest.NewRecorder()
+	rBad := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens", nil)
+	rBad.URL.RawQuery = "period=garbage"
+	api.HandleTokenStats(wBad, rBad)
+	assert.Equal(t, http.StatusBadRequest, wBad.Code,
+		"GET /stats/tokens?period=garbage must return 400; body=%s", wBad.Body.String())
 }
 
 // TestHandleTokenStats_MethodNotAllowed verifies POST /api/v1/stats/tokens returns 405.
@@ -280,14 +279,12 @@ func TestHandleTokenStats_ExcludesOutOfPeriodSessions(t *testing.T) {
 }
 
 // TestHandleTokenStats_StatusValidation verifies period parameter validation:
-// no period defaults to month (200), and period=week returns 400.
-// BDD: Given GET /api/v1/stats/tokens with no period,
-// When the request is handled,
-// Then 200 (defaults to month).
-// Given GET /api/v1/stats/tokens?period=week,
-// When the request is handled,
-// Then 400.
-// Traces to: project-task-management-level1-spec.md FG-H5
+// no period defaults to month (200); the four valid periods (day/week/month/all)
+// each return 200; an unrecognized period returns 400.
+// BDD: Given GET /api/v1/stats/tokens with no period, Then 200 (defaults to month).
+// Given GET /api/v1/stats/tokens?period=<day|week|month|all>, Then 200.
+// Given GET /api/v1/stats/tokens?period=garbage, Then 400.
+// Traces to: token-usage-tracking-2026-06.md (period enum day/week/month/all).
 func TestHandleTokenStats_StatusValidation(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
@@ -298,11 +295,21 @@ func TestHandleTokenStats_StatusValidation(t *testing.T) {
 	assert.Equal(t, http.StatusOK, wDefault.Code,
 		"GET /stats/tokens without period must return 200; body=%s", wDefault.Body.String())
 
-	// period=week → 400.
-	wWeek := httptest.NewRecorder()
-	rWeek := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens?period=week", nil)
-	rWeek.URL.RawQuery = "period=week"
-	api.HandleTokenStats(wWeek, rWeek)
-	assert.Equal(t, http.StatusBadRequest, wWeek.Code,
-		"GET /stats/tokens?period=week must return 400; body=%s", wWeek.Body.String())
+	// Each valid period → 200.
+	for _, period := range []string{"day", "week", "month", "all"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens", nil)
+		r.URL.RawQuery = "period=" + period
+		api.HandleTokenStats(w, r)
+		assert.Equalf(t, http.StatusOK, w.Code,
+			"GET /stats/tokens?period=%s must return 200; body=%s", period, w.Body.String())
+	}
+
+	// Unrecognized period → 400.
+	wBad := httptest.NewRecorder()
+	rBad := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens", nil)
+	rBad.URL.RawQuery = "period=garbage"
+	api.HandleTokenStats(wBad, rBad)
+	assert.Equal(t, http.StatusBadRequest, wBad.Code,
+		"GET /stats/tokens?period=garbage must return 400; body=%s", wBad.Body.String())
 }

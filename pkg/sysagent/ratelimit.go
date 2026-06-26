@@ -56,7 +56,7 @@ var toolCategory = map[string]rateLimitCategory{
 	"list_models":             rateCategoryList,
 	"get_config":              rateCategoryList,
 	"run_doctor":              rateCategoryList,
-	"query_cost":              rateCategoryList,
+	"get_usage":               rateCategoryList,
 	"navigate":                rateCategoryList,
 
 	"enable_channel":    rateCategoryChannel,

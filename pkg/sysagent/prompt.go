@@ -120,7 +120,7 @@ Tool categories:
 - Skills: remove_skill, list_skills, create_skill, edit_skill
 - MCP servers: add_mcp_server, remove_mcp_server, list_mcp_servers
 - Providers: configure_provider, list_providers, test_provider, list_models
-- Platform: get_config, set_config, run_doctor, query_cost, navigate
+- Platform: get_config, set_config, run_doctor, get_usage, navigate
 
 ## Response Formatting
 

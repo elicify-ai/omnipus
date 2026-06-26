@@ -98,6 +98,13 @@
     "source": "builtin"
   },
   {
+    "name": "get_usage",
+    "description": "Query token usage by period, agent, model, or session.\nParameters:\n  period   — time window: day, week, month (default), or all\n  by       — grouping dimension: agent (default), model, or session\n  agent_id — optional: restrict to a single agent\n  session_id — optional: restrict to a single session\nReturns input, output, cache-read, cache-write, and total token counts.\nNo dollar amounts — token counts only.\nExternal CLI subagents (subagent_3p) run on a separate engine and are excluded.",
+    "scope": "core",
+    "category": "platform",
+    "source": "builtin"
+  },
+  {
     "name": "get_workspace",
     "description": "Get a single workspace by ID including its live task count. Use this to refresh workspace data after creating tasks.\nParameters: id (required, from list_workspaces).",
     "scope": "core",
@@ -156,13 +163,6 @@
   {
     "name": "navigate",
     "description": "Navigate the UI to a specific screen.\nParameters: screen (chat/command-center/agents/skills/settings), agent_id (optional), section (optional).",
-    "scope": "core",
-    "category": "platform",
-    "source": "builtin"
-  },
-  {
-    "name": "query_cost",
-    "description": "[NOT IMPLEMENTED] Querying LLM cost data by period/agent is not yet built. The only cost data Omnipus persists today is a single running total for the current UTC day (no historical periods, per-agent breakdown, or grouping). This tool always returns a NOT_IMPLEMENTED error.",
     "scope": "core",
     "category": "platform",
     "source": "builtin"

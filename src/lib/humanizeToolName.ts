@@ -84,6 +84,8 @@ const EXPLICIT_LABELS: Record<string, string> = {
   delete_agent: 'Delete agent',
   read_agent_metadata: 'Read agent metadata',
   write_agent_metadata: 'Write agent metadata',
+  // Token usage
+  get_usage: 'Get token usage',
   // Tool discovery — unified multi-action tool (§-consolidation: load_tool +
   // search_tools_bm25 + search_tools_regex → single `tools` tool, 2026-06-25).
   tools: 'Tools (search & load)',
