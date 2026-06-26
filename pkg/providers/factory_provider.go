@@ -198,7 +198,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		}
 		return p, modelID, nil
 
-	case "litellm", "groq", "zhipu", "z-ai", "z.ai", "zai", "gemini", "google", "nvidia",
+	case "litellm", "groq", "zhipu", "z-ai", "z.ai", "zai", "z-ai-coding", "glm-coding", "gemini", "google", "nvidia",
 		"ollama", "moonshot", "moonshot-cn", "shengsuanyun", "deepseek", "cerebras",
 		"vivgrid", "volcengine", "vllm", "qwen", "qwen-intl", "qwen-international", "dashscope-intl",
 		"qwen-us", "dashscope-us", "mistral", "avian", "longcat", "modelscope", "novita",
@@ -366,6 +366,8 @@ var knownProtocols = map[string]bool{
 	"z-ai":                     true,
 	"z.ai":                     true,
 	"zai":                      true,
+	"z-ai-coding":              true,
+	"glm-coding":               true,
 	"gemini":                   true,
 	"google":                   true,
 	"nvidia":                   true,
@@ -439,6 +441,12 @@ func GetDefaultAPIBase(protocol string) string {
 		// International Z.ai (GLM) endpoint — distinct from the China-mainland
 		// Zhipu host above. The onboarding "Z.ai (GLM)" option sends id "z-ai".
 		return "https://api.z.ai/api/paas/v4"
+	case "z-ai-coding", "glm-coding":
+		// GLM Coding Plan (subscription) endpoint — OpenAI-compatible. Billed
+		// against the Coding Plan, NOT the pay-per-token api/paas/v4 above (a
+		// Coding Plan key gets 1113 "insufficient balance" on the pay-per-token
+		// host). Distinct base so subscription users can actually run.
+		return "https://api.z.ai/api/coding/paas/v4"
 	case "gemini", "google":
 		return "https://generativelanguage.googleapis.com/v1beta/openai"
 	case "nvidia":

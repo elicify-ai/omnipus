@@ -54,6 +54,9 @@ export const AVAILABLE_PROVIDERS = [
   // zhipu = China-mainland (open.bigmodel.cn). Pick the one matching your key.
   { id: 'z-ai', display_name: 'Z.ai (GLM, International)' },
   { id: 'zhipu', display_name: 'Zhipu (GLM, China)' },
+  // GLM Coding Plan (subscription) — billed against the coding endpoint, NOT the
+  // pay-per-token API. A Coding Plan key gets "insufficient balance" on z-ai/zhipu.
+  { id: 'z-ai-coding', display_name: 'Z.ai GLM Coding Plan' },
   // Moonshot / Kimi: api.moonshot.ai (intl) vs api.moonshot.cn (China).
   { id: 'moonshot', display_name: 'Moonshot / Kimi (International)' },
   { id: 'moonshot-cn', display_name: 'Moonshot / Kimi (China)' },

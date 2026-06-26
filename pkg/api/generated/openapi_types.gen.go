@@ -1855,6 +1855,7 @@ const (
 	Deepseek               ProbeProviderRequestId = "deepseek"
 	Gemini                 ProbeProviderRequestId = "gemini"
 	GithubCopilot          ProbeProviderRequestId = "github-copilot"
+	GlmCoding              ProbeProviderRequestId = "glm-coding"
 	Google                 ProbeProviderRequestId = "google"
 	Groq                   ProbeProviderRequestId = "groq"
 	Litellm                ProbeProviderRequestId = "litellm"
@@ -1881,6 +1882,7 @@ const (
 	Vllm                   ProbeProviderRequestId = "vllm"
 	Volcengine             ProbeProviderRequestId = "volcengine"
 	ZAi                    ProbeProviderRequestId = "z-ai"
+	ZAiCoding              ProbeProviderRequestId = "z-ai-coding"
 	Zai                    ProbeProviderRequestId = "zai"
 	Zhipu                  ProbeProviderRequestId = "zhipu"
 )
@@ -1931,6 +1933,8 @@ func (e ProbeProviderRequestId) Valid() bool {
 	case Gemini:
 		return true
 	case GithubCopilot:
+		return true
+	case GlmCoding:
 		return true
 	case Google:
 		return true
@@ -1983,6 +1987,8 @@ func (e ProbeProviderRequestId) Valid() bool {
 	case Volcengine:
 		return true
 	case ZAi:
+		return true
+	case ZAiCoding:
 		return true
 	case Zai:
 		return true

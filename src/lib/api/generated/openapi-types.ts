@@ -2492,7 +2492,7 @@ export interface components {
              * @example openrouter
              * @enum {string}
              */
-            id: "anthropic" | "anthropic-messages" | "openai" | "openrouter" | "gemini" | "google" | "ollama" | "azure" | "azure-openai" | "bedrock" | "litellm" | "groq" | "zhipu" | "z-ai" | "zai" | "nvidia" | "moonshot" | "moonshot-cn" | "shengsuanyun" | "deepseek" | "cerebras" | "vivgrid" | "volcengine" | "vllm" | "qwen" | "qwen-intl" | "qwen-international" | "dashscope-intl" | "qwen-us" | "dashscope-us" | "mistral" | "avian" | "longcat" | "modelscope" | "novita" | "coding-plan" | "alibaba-coding" | "qwen-coding" | "mimo" | "minimax" | "minimax-cn" | "coding-plan-anthropic" | "alibaba-coding-anthropic" | "antigravity" | "claude-cli" | "claudecli" | "codex-cli" | "codexcli" | "github-copilot" | "copilot";
+            id: "anthropic" | "anthropic-messages" | "openai" | "openrouter" | "gemini" | "google" | "ollama" | "azure" | "azure-openai" | "bedrock" | "litellm" | "groq" | "zhipu" | "z-ai" | "zai" | "z-ai-coding" | "glm-coding" | "nvidia" | "moonshot" | "moonshot-cn" | "shengsuanyun" | "deepseek" | "cerebras" | "vivgrid" | "volcengine" | "vllm" | "qwen" | "qwen-intl" | "qwen-international" | "dashscope-intl" | "qwen-us" | "dashscope-us" | "mistral" | "avian" | "longcat" | "modelscope" | "novita" | "coding-plan" | "alibaba-coding" | "qwen-coding" | "mimo" | "minimax" | "minimax-cn" | "coding-plan-anthropic" | "alibaba-coding-anthropic" | "antigravity" | "claude-cli" | "claudecli" | "codex-cli" | "codexcli" | "github-copilot" | "copilot";
             /**
              * @description API key to test against the provider.
              * @example sk-or-...

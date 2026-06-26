@@ -1020,6 +1020,9 @@ func TestGetDefaultAPIBase_ExactBases(t *testing.T) {
 		// Zhipu / Z.ai — existing, confirmed in TestGetDefaultAPIBase_ZAI; add zhipu here for cross-reference
 		{"zhipu", "https://open.bigmodel.cn/api/paas/v4"},
 		{"z-ai", "https://api.z.ai/api/paas/v4"},
+		// GLM Coding Plan (subscription) — distinct from the pay-per-token z-ai base.
+		{"z-ai-coding", "https://api.z.ai/api/coding/paas/v4"},
+		{"glm-coding", "https://api.z.ai/api/coding/paas/v4"},
 		// Qwen / DashScope variants
 		{"qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 		{"qwen-intl", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},
