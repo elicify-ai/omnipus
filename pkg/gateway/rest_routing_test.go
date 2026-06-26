@@ -38,7 +38,6 @@ func newRoutingTestAPI(t *testing.T) (*restAPI, string) {
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
 
-	enabledTrue := true
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -49,8 +48,8 @@ func newRoutingTestAPI(t *testing.T) (*restAPI, string) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
-				{ID: "agent-a", Name: "Agent A", Default: true, Enabled: &enabledTrue},
-				{ID: "agent-b", Name: "Agent B", Default: false, Enabled: &enabledTrue},
+				{ID: "agent-a", Name: "Agent A", Default: true},
+				{ID: "agent-b", Name: "Agent B", Default: false},
 			},
 		},
 	}
@@ -173,7 +172,6 @@ func TestUpdateAgent_RejectsWorkerAsDefault(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
 
-	enabledTrue := true
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -184,8 +182,8 @@ func TestUpdateAgent_RejectsWorkerAsDefault(t *testing.T) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true, Enabled: &enabledTrue},
-				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker, Enabled: &enabledTrue},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
 			},
 		},
 	}
@@ -217,7 +215,6 @@ func newChannelRoutingTestAPI(t *testing.T) (*restAPI, string) {
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
 
-	enabledTrue := true
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -228,8 +225,8 @@ func newChannelRoutingTestAPI(t *testing.T) (*restAPI, string) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
-				{ID: "bot-agent", Name: "Bot Agent", Default: true, Enabled: &enabledTrue},
-				{ID: "other-agent", Name: "Other Agent", Enabled: &enabledTrue},
+				{ID: "bot-agent", Name: "Bot Agent", Default: true},
+				{ID: "other-agent", Name: "Other Agent"},
 			},
 		},
 	}
@@ -452,7 +449,6 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
 
-	enabledTrue := true
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -463,8 +459,8 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true, Enabled: &enabledTrue},
-				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker, Enabled: &enabledTrue},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
 			},
 		},
 	}
@@ -739,7 +735,6 @@ func TestChannelRouting_BindingWinsOverNoGlobalDefault(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
-	enabledTrue := true
 
 	// No agent has Default=true.
 	cfg := &config.Config{
@@ -752,7 +747,7 @@ func TestChannelRouting_BindingWinsOverNoGlobalDefault(t *testing.T) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
-				{ID: "bot-agent", Name: "Bot Agent", Enabled: &enabledTrue}, // Default=false (zero-value)
+				{ID: "bot-agent", Name: "Bot Agent"}, // Default=false (zero-value)
 			},
 		},
 	}

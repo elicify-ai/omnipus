@@ -47,8 +47,6 @@ var toolPermissions = map[string]ToolPermission{
 	"create_agent":         {MinRole: RoleOperator},
 	"update_agent":         {MinRole: RoleOperator},
 	"delete_agent":         {MinRole: RoleAdmin},
-	"activate_agent":       {MinRole: RoleOperator},
-	"deactivate_agent":     {MinRole: RoleOperator},
 	"read_agent_metadata":  {MinRole: RoleViewer},
 	"write_agent_metadata": {MinRole: RoleOperator},
 

@@ -299,36 +299,35 @@ func (r *RouteResolver) resolveDefaultAgentID() string {
 		return DefaultAgentID
 	}
 	// Primary: use the agent explicitly marked as default, but only if it is
-	// active AND a chat target. A disabled default must not receive messages, and
-	// a worker is never a chat target (it is invoked only via delegation) — in
-	// either case fall through to the first-enabled-agent fallback so routing
+	// a chat target. A worker is never a chat target (it is invoked only via
+	// delegation) — fall through to the first-available-agent fallback so routing
 	// never silently drops inbound work and never points it at a worker.
 	for _, a := range agents {
-		if a.Default && a.IsActive() && a.IsChatTarget() {
+		if a.Default && a.IsChatTarget() {
 			id := strings.TrimSpace(a.ID)
 			if id != "" {
 				return NormalizeAgentID(id)
 			}
 		}
 	}
-	// Fallback: no agent is marked as default. Pick the first enabled chat-target
+	// Fallback: no agent is marked as default. Pick the first chat-target
 	// agent so inbound messages are never silently dropped. Workers are skipped —
 	// they must never be resolved as the default. Log a warning so operators can
 	// detect misconfigured setups.
 	for _, a := range agents {
-		if a.IsActive() && a.IsChatTarget() {
+		if a.IsChatTarget() {
 			id := strings.TrimSpace(a.ID)
 			if id == "" {
 				continue
 			}
 			normalized := NormalizeAgentID(id)
-			logger.WarnCF("routing", "No agent marked as default; falling back to first enabled agent",
+			logger.WarnCF("routing", "No agent marked as default; falling back to first available agent",
 				map[string]any{"fallback_agent_id": normalized, "custom_agent_count": len(agents)})
 			return normalized
 		}
 	}
-	// All agents disabled or have empty IDs — last resort is the DefaultAgentID constant.
-	logger.WarnCF("routing", "No enabled agent found; routing falls back to built-in default",
+	// No chat-target agents with valid IDs — last resort is the DefaultAgentID constant.
+	logger.WarnCF("routing", "No available agent found; routing falls back to built-in default",
 		map[string]any{"custom_agent_count": len(agents)})
 	return DefaultAgentID
 }

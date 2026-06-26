@@ -946,10 +946,10 @@ func (h *WSHandler) handleChatMessage(
 			}
 		}
 		if targetAgentID == "" {
-			// Fall back to the first enabled agent (mirrors handleBoardTaskStart /
-			// resolveDefaultAgentID in pkg/routing/route.go). firstEnabledAgentID
+			// Fall back to the first chat-target agent (mirrors handleBoardTaskStart /
+			// resolveDefaultAgentID in pkg/routing/route.go). firstChatTargetAgentID
 			// already skips workers, so this fallback never lands on one.
-			targetAgentID = firstEnabledAgentID(h.agentLoop.GetConfig())
+			targetAgentID = firstChatTargetAgentID(h.agentLoop.GetConfig())
 		}
 	} else if isWorkerAgentID(h.agentLoop.GetConfig(), targetAgentID) {
 		// An explicit agent_id that resolves to a worker is illegitimate: a worker

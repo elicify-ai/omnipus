@@ -193,10 +193,9 @@ func TestAgentRegistry_GetDefaultAgent_RoutingDefaultOverridesOverride(t *testin
 // (hand-edited config) is skipped — a worker is never a chat target — and
 // resolution falls through to a non-worker agent, never the worker.
 func TestAgentRegistry_GetDefaultAgent_OverrideToWorkerSkipped(t *testing.T) {
-	enabled := true
 	cfg := testCfg([]config.AgentConfig{
-		{ID: "base", Enabled: &enabled},
-		{ID: "worker", Type: config.AgentTypeWorker, Enabled: &enabled},
+		{ID: "base"},
+		{ID: "worker", Type: config.AgentTypeWorker},
 	})
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
 	// Hand-edited override pointing at the worker.
@@ -219,10 +218,9 @@ func TestAgentRegistry_GetDefaultAgent_OverrideToWorkerSkipped(t *testing.T) {
 // GetDefaultAgent returns the base agent, never the worker. This exercises the
 // Priority-4 first-non-worker fallback.
 func TestAgentRegistry_GetDefaultAgent_OnlyWorkerAndBaseSkipsWorker(t *testing.T) {
-	enabled := true
 	cfg := testCfg([]config.AgentConfig{
-		{ID: "abase", Enabled: &enabled},
-		{ID: "zworker", Type: config.AgentTypeWorker, Enabled: &enabled},
+		{ID: "abase"},
+		{ID: "zworker", Type: config.AgentTypeWorker},
 	})
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
 

@@ -30,15 +30,14 @@ func TestResolveMessageRoute_ExplicitWorkerAgentIDDegradesToDefault(t *testing.T
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	enabled := true
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	// The route cascade reads cfg.Agents.List to resolve the default — give it a
 	// chat-target default and a worker.
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true, Enabled: &enabled},
-		{ID: "hans", Type: config.AgentTypeWorker, Enabled: &enabled},
+		{ID: "mia", Default: true},
+		{ID: "hans", Type: config.AgentTypeWorker},
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -77,13 +76,12 @@ func TestResolveMessageRoute_WorkerHandoffPinClearedAndFallsBack(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	enabled := true
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true, Enabled: &enabled},
-		{ID: "hans", Type: config.AgentTypeWorker, Enabled: &enabled},
+		{ID: "mia", Default: true},
+		{ID: "hans", Type: config.AgentTypeWorker},
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -125,13 +123,12 @@ func TestResolveMessageRoute_ExplicitBaseAgentIDStillResolves(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	enabled := true
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true, Enabled: &enabled},
-		{ID: "jim", Enabled: &enabled},
+		{ID: "mia", Default: true},
+		{ID: "jim"},
 	}
 
 	msgBus := bus.NewMessageBus()

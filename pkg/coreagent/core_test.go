@@ -338,10 +338,6 @@ func TestSeedConfigAddsAllCoreAgents(t *testing.T) {
 				"agent %s must have Type=%s", ca.ID, wantType)
 			assert.Equal(t, ca.Name, ac.Name,
 				"agent %s name must match compiled metadata", ca.ID)
-			require.NotNil(t, ac.Enabled,
-				"agent %s must have Enabled set", ca.ID)
-			assert.True(t, *ac.Enabled,
-				"agent %s must be enabled=true by default", ca.ID)
 		})
 	}
 }

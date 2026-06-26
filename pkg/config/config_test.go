@@ -1201,34 +1201,6 @@ func TestFilterSensitiveData_AllTokenTypes(t *testing.T) {
 	}
 }
 
-// TestAgentConfig_IsActive_NilDefaultsToTrue verifies the backward-compat
-// rule: an AgentConfig with no Enabled field (nil pointer) is treated as
-// active so existing configs without the field continue to work.
-//
-// Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 enabled semantics
-func TestAgentConfig_IsActive_NilDefaultsToTrue(t *testing.T) {
-	trueVal := true
-	falseVal := false
-
-	tests := []struct {
-		name    string
-		enabled *bool
-		want    bool
-	}{
-		{"nil pointer is active", nil, true},
-		{"explicit true is active", &trueVal, true},
-		{"explicit false is inactive", &falseVal, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a := AgentConfig{ID: "test", Enabled: tt.enabled}
-			if got := a.IsActive(); got != tt.want {
-				t.Errorf("IsActive() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 // --- ResolveType tests ---
 
 // TestResolveType_ExplicitType verifies that when AgentConfig.Type is set, it

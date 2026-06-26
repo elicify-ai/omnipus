@@ -8,7 +8,7 @@
 // gateway session-binding and execution-binding chokepoints:
 //   - createSessionHTTP rejects a worker agent_id (RESIDUAL PATH 5)
 //   - POST /api/v1/tasks rejects a direct worker agent_id assignment (RESIDUAL PATH 7 - Sprint 2)
-//   - firstEnabledAgentID skips a worker (RESIDUAL PATH 6)
+//   - firstChatTargetAgentID skips a worker (RESIDUAL PATH 6)
 //   - delegation-created worker task still succeeds (control: Jim→worker works)
 //
 // Sprint 2 changes: validateBoardTaskAgentID and handleBoardTaskPost are DELETED
@@ -45,7 +45,6 @@ func newWorkerTestRestAPI(t *testing.T) (*restAPI, string) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
 
-	enabledTrue := true
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -56,8 +55,8 @@ func newWorkerTestRestAPI(t *testing.T) (*restAPI, string) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true, Enabled: &enabledTrue},
-				{ID: "hans", Name: "Hans", Type: config.AgentTypeWorker, Enabled: &enabledTrue},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "hans", Name: "Hans", Type: config.AgentTypeWorker},
 			},
 		},
 	}
@@ -188,23 +187,22 @@ func TestDelegationWorkerTaskStillSucceeds(t *testing.T) {
 		"the delegated task title must match the original")
 }
 
-// TestFirstEnabledAgentID_SkipsWorker verifies RESIDUAL PATH 6: the last-resort
-// fallback never lands on a worker even when the worker is the first ACTIVE agent
-// in the list. It returns the first enabled chat-target agent instead.
-func TestFirstEnabledAgentID_SkipsWorker(t *testing.T) {
-	enabled := true
+// TestFirstChatTargetAgentID_SkipsWorker verifies RESIDUAL PATH 6: the last-resort
+// fallback never lands on a worker even when the worker appears first in the list.
+// It returns the first chat-target agent instead.
+func TestFirstChatTargetAgentID_SkipsWorker(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			List: []config.AgentConfig{
-				// Worker appears first and is active, but must be skipped.
-				{ID: "hans", Type: config.AgentTypeWorker, Enabled: &enabled},
-				{ID: "mia", Enabled: &enabled},
+				// Worker appears first but must be skipped — workers are never chat targets.
+				{ID: "hans", Type: config.AgentTypeWorker},
+				{ID: "mia"},
 			},
 		},
 	}
-	got := firstEnabledAgentID(cfg)
-	assert.NotEqual(t, "hans", got, "firstEnabledAgentID must never return a worker")
-	assert.Equal(t, "mia", got, "firstEnabledAgentID must return the first enabled chat-target agent")
+	got := firstChatTargetAgentID(cfg)
+	assert.NotEqual(t, "hans", got, "firstChatTargetAgentID must never return a worker")
+	assert.Equal(t, "mia", got, "firstChatTargetAgentID must return the first chat-target agent")
 }
 
 // TestHandleChatMessage_RejectsWorkerAgentID verifies RESIDUAL PATH 4: a chat
@@ -251,19 +249,18 @@ func TestHandleChatMessage_RejectsWorkerAgentID(t *testing.T) {
 	}
 }
 
-// TestFirstEnabledAgentID_AllWorkersReturnsEmpty verifies the degenerate case:
-// when every enabled agent is a worker, the fallback returns "" rather than a
+// TestFirstChatTargetAgentID_AllWorkersReturnsEmpty verifies the degenerate case:
+// when every agent is a worker, the fallback returns "" rather than a
 // worker (the caller then surfaces a "no agent configured" error).
-func TestFirstEnabledAgentID_AllWorkersReturnsEmpty(t *testing.T) {
-	enabled := true
+func TestFirstChatTargetAgentID_AllWorkersReturnsEmpty(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			List: []config.AgentConfig{
-				{ID: "w1", Type: config.AgentTypeWorker, Enabled: &enabled},
-				{ID: "w2", Type: config.AgentTypeWorker, Enabled: &enabled},
+				{ID: "w1", Type: config.AgentTypeWorker},
+				{ID: "w2", Type: config.AgentTypeWorker},
 			},
 		},
 	}
-	assert.Equal(t, "", firstEnabledAgentID(cfg),
+	assert.Equal(t, "", firstChatTargetAgentID(cfg),
 		"when all agents are workers, the fallback must return empty, never a worker")
 }

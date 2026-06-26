@@ -648,22 +648,22 @@ func TestSystemPromptHardcoded(t *testing.T) {
 }
 
 // =====================================================================
-// Supplementary: 41 tools coverage check
+// Supplementary: 35 tools coverage check
 // =====================================================================
 
-// TestToolPermissionsMapCoversAll37Tools verifies that the RBAC permission map
-// covers exactly the 37 tools returned by AllTools() per BRD Appendix D §D.4.
+// TestToolPermissionsMapCoversAll35Tools verifies that the RBAC permission map
+// covers exactly the 35 tools returned by AllTools() per BRD Appendix D §D.4.
 //
 // Traces to: wave5b-system-agent-spec.md — FR-002 (system tools)
-func TestToolPermissionsMapCoversAll37Tools(t *testing.T) {
-	// The 37 tools in AllTools() as of the §7 tool rename (system.* → verb-first;
-	// system.agent.list, system.skill.install, system.skill.search retired).
-	// Count: 7 agent + 5 workspace + 4 task + 5 channel + 4 skill + 3 mcp +
-	//        4 provider + 2 config + 3 diagnostics = 37.
+func TestToolPermissionsMapCoversAll35Tools(t *testing.T) {
+	// The 35 tools in AllTools() as of the §7 tool rename (system.* → verb-first;
+	// system.agent.list, system.skill.install, system.skill.search, activate_agent,
+	// deactivate_agent retired).
+	// Count: 5 agent + 5 workspace + 4 task + 5 channel + 4 skill + 3 mcp +
+	//        4 provider + 2 config + 3 diagnostics = 35.
 	expectedTools := []string{
-		// Agent management (7: list retired; 2 metadata accessors from issue #240)
+		// Agent management (5: list, activate, deactivate retired; 2 metadata accessors from issue #240)
 		"create_agent", "update_agent", "delete_agent",
-		"activate_agent", "deactivate_agent",
 		"read_agent_metadata", "write_agent_metadata",
 		// Workspace management (5)
 		"create_workspace", "update_workspace",
@@ -688,8 +688,8 @@ func TestToolPermissionsMapCoversAll37Tools(t *testing.T) {
 		"run_doctor", "query_cost", "navigate",
 	}
 
-	assert.Len(t, expectedTools, 37,
-		"AllTools() returns 37 RBAC-mapped system tools — test dataset must reflect this")
+	assert.Len(t, expectedTools, 35,
+		"AllTools() returns 35 RBAC-mapped system tools — test dataset must reflect this")
 
 	// Every expected tool must have an RBAC permission entry.
 	for _, tool := range expectedTools {
@@ -703,7 +703,7 @@ func TestToolPermissionsMapCoversAll37Tools(t *testing.T) {
 		})
 	}
 
-	// Verify all 37 tools have sort-stable ordering (no duplicates).
+	// Verify all 35 tools have sort-stable ordering (no duplicates).
 	sorted := make([]string, len(expectedTools))
 	copy(sorted, expectedTools)
 	sort.Strings(sorted)
@@ -715,7 +715,7 @@ func TestToolPermissionsMapCoversAll37Tools(t *testing.T) {
 			prev = s
 		}
 	}
-	assert.Len(t, unique, 37, "tool list must not contain duplicates")
+	assert.Len(t, unique, 35, "tool list must not contain duplicates")
 }
 
 // =====================================================================

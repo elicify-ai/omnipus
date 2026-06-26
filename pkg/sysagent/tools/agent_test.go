@@ -202,85 +202,6 @@ func TestAgentDelete_RequiresConfirm(t *testing.T) {
 	}
 }
 
-// TestAgentActivate_PersistsEnabled creates an agent with Enabled=false, calls
-// activate, and asserts the Enabled pointer is true after the call.
-//
-// Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.activate
-func TestAgentActivate_PersistsEnabled(t *testing.T) {
-	deps, cfg := newTestDeps()
-	disabled := false
-	cfg.Agents.List = []config.AgentConfig{
-		{ID: "target-agent", Name: "Target", Enabled: &disabled},
-	}
-
-	saveCalled := false
-	deps.SaveConfigLocked = func(cfg *config.Config) error {
-		saveCalled = true
-		return nil
-	}
-
-	tool := systools.NewAgentActivateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{"id": "target-agent"})
-
-	if result.IsError {
-		t.Fatalf("activate failed: %s", result.ForLLM)
-	}
-
-	if !saveCalled {
-		t.Error("SaveConfig was not called by activate")
-	}
-
-	agent := cfg.Agents.List[0]
-	if agent.Enabled == nil {
-		t.Fatal("Enabled is nil after activate; expected non-nil pointer")
-	}
-	if !*agent.Enabled {
-		t.Errorf("Enabled = false after activate; expected true")
-	}
-	if !agent.IsActive() {
-		t.Error("IsActive() returned false after activate")
-	}
-}
-
-// TestAgentDeactivate_PersistsEnabled is the inverse of TestAgentActivate_PersistsEnabled.
-//
-// Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.deactivate
-func TestAgentDeactivate_PersistsEnabled(t *testing.T) {
-	deps, cfg := newTestDeps()
-	enabled := true
-	cfg.Agents.List = []config.AgentConfig{
-		{ID: "target-agent", Name: "Target", Enabled: &enabled},
-	}
-
-	saveCalled := false
-	deps.SaveConfigLocked = func(cfg *config.Config) error {
-		saveCalled = true
-		return nil
-	}
-
-	tool := systools.NewAgentDeactivateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{"id": "target-agent"})
-
-	if result.IsError {
-		t.Fatalf("deactivate failed: %s", result.ForLLM)
-	}
-
-	if !saveCalled {
-		t.Error("SaveConfig was not called by deactivate")
-	}
-
-	agent := cfg.Agents.List[0]
-	if agent.Enabled == nil {
-		t.Fatal("Enabled is nil after deactivate; expected non-nil pointer")
-	}
-	if *agent.Enabled {
-		t.Errorf("Enabled = true after deactivate; expected false")
-	}
-	if agent.IsActive() {
-		t.Error("IsActive() returned true after deactivate")
-	}
-}
-
 // TestAgentUpdate_PartialFields verifies that updating only `name` does not
 // clobber color and icon already set on the agent.
 //
@@ -360,67 +281,6 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 	}
 }
 
-// TestAgentActivate_RoundTripDisk verifies activate/deactivate persist to disk correctly.
-func TestAgentActivate_RoundTripDisk(t *testing.T) {
-	deps, cfgPath := newTestDepsWithRealSave(t)
-	disabled := false
-	deps.GetCfg().Agents.List = []config.AgentConfig{{ID: "my-agent", Name: "My Agent", Enabled: &disabled}}
-	// seed the config on disk with the pre-populated agent
-	if err := deps.SaveConfigLocked(deps.GetCfg()); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	result := systools.NewAgentActivateTool(deps).Execute(context.Background(), map[string]any{"id": "my-agent"})
-	if result.IsError {
-		t.Fatalf("activate failed: %s", result.ForLLM)
-	}
-
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	agents, _ := raw["agents"].(map[string]any)
-	list, _ := agents["list"].([]any)
-	if len(list) == 0 {
-		t.Fatal("list empty on disk")
-	}
-	entry, _ := list[0].(map[string]any)
-	if entry["enabled"] != true {
-		t.Errorf("disk enabled = %v, want true", entry["enabled"])
-	}
-}
-
-// TestAgentDeactivate_RefusesLockedAgent verifies locked (core) agents cannot be deactivated.
-// The guard is now based on the Locked field, not on a hardcoded agent ID (FR-045).
-//
-// Traces to: architect finding #3 — self-deactivation guard
-func TestAgentDeactivate_RefusesLockedAgent(t *testing.T) {
-	deps, cfg := newTestDeps()
-	// Seed a locked core agent into config.
-	enabled := true
-	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
-		ID:      "locked-core",
-		Name:    "Locked Core",
-		Locked:  true,
-		Enabled: &enabled,
-	})
-	result := systools.NewAgentDeactivateTool(deps).Execute(context.Background(), map[string]any{
-		"id": "locked-core",
-	})
-	if !result.IsError {
-		t.Fatal("expected error when deactivating locked agent, got success")
-	}
-	m := parseError(t, result.ForLLM)
-	errBlock, _ := m["error"].(map[string]any)
-	if errBlock["code"] != "SAVE_FAILED" && errBlock["code"] != "INVALID_OPERATION" {
-		t.Errorf("error code = %v, want SAVE_FAILED or INVALID_OPERATION", errBlock["code"])
-	}
-}
-
 // TestAgentDelete_RefusesLockedAgent verifies locked (core) agents cannot be deleted.
 // The guard is now based on the Locked field, not on a hardcoded agent ID (FR-045).
 //
@@ -428,12 +288,10 @@ func TestAgentDeactivate_RefusesLockedAgent(t *testing.T) {
 func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 	deps, cfg := newTestDeps()
 	// Seed a locked core agent into config.
-	enabled := true
 	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
-		ID:      "locked-core",
-		Name:    "Locked Core",
-		Locked:  true,
-		Enabled: &enabled,
+		ID:     "locked-core",
+		Name:   "Locked Core",
+		Locked: true,
 	})
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
 		"id":      "locked-core",
@@ -509,38 +367,6 @@ func TestAgentUpdate_RejectsInvalidColor(t *testing.T) {
 	errBlock, _ := m["error"].(map[string]any)
 	if errBlock["code"] != "INVALID_COLOR" {
 		t.Errorf("code = %v, want INVALID_COLOR", errBlock["code"])
-	}
-}
-
-// TestAgentActivate_RollbackOnSaveFailure verifies that on SaveConfig failure,
-// the in-memory state is rolled back to its pre-activation state.
-//
-// Traces to: silent-failure-hunter H4 — rollback on save failure
-func TestAgentActivate_RollbackOnSaveFailure(t *testing.T) {
-	cfg := config.DefaultConfig()
-	disabled := false
-	cfg.Agents.List = []config.AgentConfig{
-		{ID: "my-agent", Name: "My Agent", Enabled: &disabled},
-	}
-	var mu sync.Mutex
-	getCfg := func() *config.Config { return cfg }
-	deps := &systools.Deps{
-		Home:             "/tmp/omnipus-test",
-		ConfigPath:       "/tmp/omnipus-test/config.json",
-		GetCfg:           getCfg,
-		MutateConfig:     testMutateConfig(&mu, getCfg),
-		SaveConfigLocked: func(cfg *config.Config) error { return errors.New("disk full") },
-		CredStore:        nil,
-	}
-
-	result := systools.NewAgentActivateTool(deps).Execute(context.Background(), map[string]any{"id": "my-agent"})
-	if !result.IsError {
-		t.Fatal("expected error on save failure, got success")
-	}
-	// The in-memory state must be rolled back: Enabled must still be false.
-	agent := cfg.Agents.List[0]
-	if agent.Enabled == nil || *agent.Enabled {
-		t.Error("in-memory state was not rolled back after save failure; Enabled should still be false")
 	}
 }
 

@@ -44,10 +44,8 @@ type channelChecker interface {
 }
 
 // agentChecker reports whether an agent id is available to run a schedule:
-// registered AND enabled. The registry registers all agents regardless of
-// Enabled, so the gateway's concrete checker additionally consults the agent's
-// config IsActive() flag (see newOwnerAwareCron in gateway.go). Kept narrow so
-// the runner can be tested with a stub.
+// registered in the runtime registry. Kept narrow so the runner can be tested
+// with a stub.
 type agentChecker interface {
 	IsRegistered(agentID string) bool
 }
@@ -122,13 +120,12 @@ func newScheduledRunner(
 func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (string, error) {
 	owner := job.AgentID
 
-	// Owner pinning: a missing or disabled owner is a failure, never a default
-	// fallback (FR-001). The checker reports availability = registered AND
-	// enabled (the gateway checker consults config IsActive()), so a
-	// disabled-but-registered owner is rejected here with no fallback. The lane
+	// Owner pinning: a missing owner is a failure, never a default fallback
+	// (FR-001). The checker reports availability = registered in the runtime
+	// registry. A missing owner is rejected here with no fallback. The lane
 	// records the (string,error) failure, which drives the alert path below.
 	if owner == "" || r.checker == nil || !r.checker.IsRegistered(owner) {
-		err := fmt.Errorf("owner unavailable: agent %q is not registered or is disabled", owner)
+		err := fmt.Errorf("owner unavailable: agent %q is not registered", owner)
 		r.onFailure(job, "", err)
 		return "", err
 	}

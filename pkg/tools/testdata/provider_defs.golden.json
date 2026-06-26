@@ -1,12 +1,5 @@
 [
   {
-    "name": "activate_agent",
-    "description": "Activate a core or custom agent, persisting the enabled state.\nParameters: id (required).",
-    "scope": "core",
-    "category": "agents",
-    "source": "builtin"
-  },
-  {
     "name": "add_mcp_server",
     "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is persisted to config.json and connects on next reload.\nParameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
     "scope": "core",
@@ -53,13 +46,6 @@
     "description": "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace), repository (optional, git URL).",
     "scope": "core",
     "category": "workspaces",
-    "source": "builtin"
-  },
-  {
-    "name": "deactivate_agent",
-    "description": "Deactivate an agent (makes it unavailable for new sessions), persisting the disabled state.\nParameters: id (required).",
-    "scope": "core",
-    "category": "agents",
     "source": "builtin"
   },
   {

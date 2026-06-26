@@ -46,8 +46,6 @@ var toolCategory = map[string]rateLimitCategory{
 	"read_agent_metadata":  rateCategoryList,
 	"write_agent_metadata": rateCategoryConfig,
 
-	"activate_agent":          rateCategoryList,
-	"deactivate_agent":        rateCategoryList,
 	"list_workspaces":         rateCategoryList,
 	"get_workspace":           rateCategoryList,
 	"list_tasks_in_workspace": rateCategoryList,

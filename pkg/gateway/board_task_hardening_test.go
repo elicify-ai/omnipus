@@ -51,7 +51,6 @@ func newTestRestAPIWithAgent(t *testing.T) *restAPI {
 	tmpDir := t.TempDir()
 	agentWorkspace := filepath.Join(tmpDir, "agents", "01JXTESTAGENTSTARTTEST001")
 	require.NoError(t, os.MkdirAll(agentWorkspace, 0o700))
-	agentEnabled := true
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -65,7 +64,6 @@ func newTestRestAPIWithAgent(t *testing.T) *restAPI {
 					ID:        "01JXTESTAGENTSTARTTEST001",
 					Name:      "Test Agent",
 					Default:   true,
-					Enabled:   &agentEnabled,
 					Type:      config.AgentTypeCustom,
 					Workspace: agentWorkspace,
 				},

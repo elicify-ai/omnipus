@@ -16,8 +16,6 @@ import "github.com/dapicom-ai/omnipus/pkg/tools"
 func (*AgentCreateTool) Category() tools.ToolCategory        { return tools.CategoryAgents }
 func (*AgentUpdateTool) Category() tools.ToolCategory        { return tools.CategoryAgents }
 func (*AgentDeleteTool) Category() tools.ToolCategory        { return tools.CategoryAgents }
-func (*AgentActivateTool) Category() tools.ToolCategory      { return tools.CategoryAgents }
-func (*AgentDeactivateTool) Category() tools.ToolCategory    { return tools.CategoryAgents }
 func (*AgentReadMetadataTool) Category() tools.ToolCategory  { return tools.CategoryAgents }
 func (*AgentWriteMetadataTool) Category() tools.ToolCategory { return tools.CategoryAgents }
 

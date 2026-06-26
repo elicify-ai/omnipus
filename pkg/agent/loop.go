@@ -3574,7 +3574,7 @@ func (al *AgentLoop) SetAllowGodMode(allow bool) {
 	setGodModeAvailable(allow && sandbox.GodModeAvailable)
 }
 
-// WireSysagentDeps registers all 41 system.* tools on every agent in the
+// WireSysagentDeps registers all 35 system.* tools on every agent in the
 // current registry (FR-001, FR-002). Mirrors the WireTier13Deps pattern:
 // called once at boot after NewAgentLoop, and again on hot-reload. The deps
 // pointer is stashed so hot-reload can re-apply the wiring on the rebuilt registry.
@@ -3900,17 +3900,10 @@ func (al *AgentLoop) ProcessScheduled(
 	}
 
 	// Owner pinning (FR-001): a missing owner is a hard error — NEVER fall back
-	// to GetDefaultAgent. Note GetAgent registers ALL agents regardless of
-	// Enabled, so registration alone does not imply the owner is active; the
-	// config IsActive() check below rejects a disabled owner.
+	// to GetDefaultAgent.
 	agent, ok := al.GetRegistry().GetAgent(ownerAgentID)
 	if !ok || agent == nil {
 		return "", fmt.Errorf("owner unavailable: agent %q not found", ownerAgentID)
-	}
-	// Disabled-owner guard (FR-001): a registered-but-disabled agent must not
-	// run. The runtime registry keeps disabled agents, so consult config.
-	if ac := findAgentConfig(al.GetConfig(), ownerAgentID); ac != nil && !ac.IsActive() {
-		return "", fmt.Errorf("owner unavailable: agent %q is disabled", ownerAgentID)
 	}
 
 	// Per-owner session key (collision-free across isolated runs). Built here

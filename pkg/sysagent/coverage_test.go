@@ -15,7 +15,7 @@
 // security posture. This test catches rename/add regressions that forget to
 // update one of the three maps.
 //
-// After fixes A and the metadata-tool additions, all 37 tools pass.
+// After fixes A and the metadata-tool additions, all 35 tools pass.
 
 package sysagent
 
@@ -27,22 +27,22 @@ import (
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 )
 
-// TestMapCoverageAll37Tools asserts that every tool in AllTools() has an entry
+// TestMapCoverageAll35Tools asserts that every tool in AllTools() has an entry
 // in all three gating maps (toolPermissions, toolConfirmation, toolCategory).
 //
 // Traces to: gating-gap fix — list_models was missing from toolCategory
 // (fail-open); create_skill/edit_skill were absent from toolConfirmation.
 //
-// BDD: Given the 37 tools returned by AllTools(nil, nil),
+// BDD: Given the 35 tools returned by AllTools(nil, nil),
 //
 //	When each tool name is looked up in toolPermissions, toolConfirmation,
 //	and toolCategory,
 //	Then every lookup must succeed (no missing entries).
-func TestMapCoverageAll37Tools(t *testing.T) {
+func TestMapCoverageAll35Tools(t *testing.T) {
 	tools := systools.AllTools(nil, nil)
 
-	if len(tools) != 37 {
-		t.Errorf("AllTools returned %d tools; expected 37 — update test if tool count changed intentionally", len(tools))
+	if len(tools) != 35 {
+		t.Errorf("AllTools returned %d tools; expected 35 — update test if tool count changed intentionally", len(tools))
 	}
 
 	for _, tool := range tools {

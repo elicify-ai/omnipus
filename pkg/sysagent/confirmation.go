@@ -21,8 +21,6 @@ var toolConfirmation = map[string]ConfirmationLevel{
 	// No confirmation required — safe/additive operations.
 	"create_agent":             ConfirmationNone,
 	"update_agent":             ConfirmationNone,
-	"activate_agent":           ConfirmationNone,
-	"deactivate_agent":         ConfirmationNone,
 	"read_agent_metadata":      ConfirmationNone,
 	"write_agent_metadata":     ConfirmationNone,
 	"create_workspace":         ConfirmationNone,

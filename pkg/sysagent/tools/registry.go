@@ -15,12 +15,10 @@ import (
 // agent metadata files.
 func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 	return []tools.Tool{
-		// Agent management (7: 5 original + 2 metadata accessors from issue #240; list retired)
+		// Agent management (5: 3 original + 2 metadata accessors from issue #240; list, activate, deactivate retired)
 		NewAgentCreateTool(d),
 		NewAgentUpdateTool(d),
 		NewAgentDeleteTool(d),
-		NewAgentActivateTool(d),
-		NewAgentDeactivateTool(d),
 		NewAgentReadMetadataTool(d),
 		NewAgentWriteMetadataTool(d),
 
@@ -74,7 +72,7 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 37 system tools.
+// BuildRegistry creates a ToolRegistry containing all 35 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps, navCb NavigateCallback) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()
