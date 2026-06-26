@@ -61,7 +61,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
 import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
-import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, sortProvidersByPriority } from './onboarding'
+import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, sortProvidersByPriority, AVAILABLE_PROVIDERS } from './onboarding'
+import { ProbeProviderRequest } from '@/lib/api/generated/schemas'
 
 // Cache the dynamically imported component across all tests so the first import's
 // transform cost (~20s) only pays once and doesn't time out individual tests.
@@ -778,5 +779,25 @@ describe('OnboardingWizard — finish', () => {
       expect(screen.getByText(/Mia — Assistant/i)).toBeInTheDocument()
     })
     expect(screen.queryByTestId('onboarding-error')).not.toBeInTheDocument()
+  })
+})
+
+describe('AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest enum (UI never offers an unsupported provider)', () => {
+  // zod ZodEnum exposes its allowed values via `.options`.
+  const enumValues: string[] = (ProbeProviderRequest.shape.id as { options: readonly string[] }).options.slice()
+
+  it('every onboarding provider id is a valid probe-enum value', () => {
+    const offending = AVAILABLE_PROVIDERS.map((p) => p.id).filter((id) => !enumValues.includes(id))
+    expect(
+      offending,
+      `onboarding offers provider id(s) not in the ProbeProviderRequest enum: ${offending.join(', ')} — ` +
+        `add them to contracts/components/schemas/ProbeProviderRequest.yaml + regenerate, or remove from AVAILABLE_PROVIDERS`,
+    ).toEqual([])
+  })
+
+  it('the new intl/China variants are present in the enum', () => {
+    for (const id of ['z-ai', 'moonshot-cn', 'minimax-cn', 'qwen-intl', 'qwen-us']) {
+      expect(enumValues, `${id} must be in the probe enum`).toContain(id)
+    }
   })
 })

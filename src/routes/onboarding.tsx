@@ -41,7 +41,7 @@ type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 // Dual-endpoint vendors (China vs international) are listed as separate entries
 // so users pick the one matching their key/region. The ids below are all valid
 // values in the ProbeProviderRequest enum (src/lib/api/generated/).
-const AVAILABLE_PROVIDERS = [
+export const AVAILABLE_PROVIDERS = [
   { id: 'openai', display_name: 'OpenAI' },
   { id: 'openrouter', display_name: 'OpenRouter' },
   { id: 'anthropic', display_name: 'Anthropic' },
