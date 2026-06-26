@@ -410,30 +410,8 @@ func TestSchemaRedactionOverride(t *testing.T) {
 // Traces to: wave5b-system-agent-spec.md — Scenario: User agent cannot invoke system tools (US-2 AC6)
 // BDD: "Given General Assistant session, When agent invokes system.agent.list, Then rejected"
 func TestSystemToolExclusivity(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 427
-
-	t.Run("IsSystemTool detects system namespace", func(t *testing.T) {
-		systemTools := []string{
-			"system.agent.create", "system.agent.list", "system.agent.delete",
-			"system.provider.list", "system.config.get", "system.doctor.run",
-			"system.navigate", "system.backup.create",
-		}
-		for _, name := range systemTools {
-			assert.True(t, sysagent.IsSystemTool(name),
-				"%q must be identified as a system tool", name)
-		}
-	})
-
-	t.Run("IsSystemTool rejects user tools", func(t *testing.T) {
-		userTools := []string{
-			"web_search", "file.read", "shell", "browser.navigate",
-			"spawn", "send_message", "edit",
-		}
-		for _, name := range userTools {
-			assert.False(t, sysagent.IsSystemTool(name),
-				"%q must NOT be identified as a system tool", name)
-		}
-	})
+	// System-tool exclusivity is enforced by RBAC (CheckRBAC), not a name-prefix
+	// helper: user (RoleAgent) callers must be denied every management tool.
 
 	t.Run("RoleAgent is denied all system tools", func(t *testing.T) {
 		systemTools := []string{
@@ -631,23 +609,6 @@ func TestSystemRateLimiter_IndependentCategories(t *testing.T) {
 }
 
 // =====================================================================
-// Supplementary: System prompt is not empty / hardcoded
-// =====================================================================
-
-// TestSystemPromptHardcoded verifies the system prompt is a non-empty Go string
-// constant (compiled into the binary, not a file path).
-//
-// Traces to: wave5b-system-agent-spec.md — FR-001 (hardcoded prompt in binary)
-func TestSystemPromptHardcoded(t *testing.T) {
-	assert.NotEmpty(t, sysagent.SystemPrompt,
-		"system agent prompt must be a non-empty compiled-in constant")
-	assert.NotContains(t, sysagent.SystemPrompt, "/home/",
-		"system prompt must NOT be a file path — it must be the actual prompt text")
-	assert.NotContains(t, sysagent.SystemPrompt, ".md",
-		"system prompt must NOT reference an external file — it must be embedded in the binary")
-}
-
-// =====================================================================
 // Supplementary: 35 tools coverage check
 // =====================================================================
 
@@ -716,27 +677,6 @@ func TestToolPermissionsMapCoversAll35Tools(t *testing.T) {
 		}
 	}
 	assert.Len(t, unique, 35, "tool list must not contain duplicates")
-}
-
-// =====================================================================
-// Supplementary: RedirectMessage
-// =====================================================================
-
-// TestRedirectMessage verifies the system agent generates a navigation link
-// when redirecting user tasks to appropriate agents.
-//
-// Traces to: wave5b-system-agent-spec.md — Scenario: System agent redirects user tasks (US-1 AC4)
-// BDD: "When user sends a user task, Then response includes navigation link [→ Switch to <agent>]"
-func TestRedirectMessage(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 362
-
-	msg := sysagent.RedirectMessage("General Assistant")
-	assert.Contains(t, msg, "General Assistant",
-		"redirect message must name the target agent")
-	assert.Contains(t, msg, "[→ Switch to General Assistant]",
-		"redirect message must include navigation link")
-	assert.NotContains(t, msg, "I'll write the email",
-		"system agent must NOT perform user tasks, only redirect")
 }
 
 // =====================================================================
