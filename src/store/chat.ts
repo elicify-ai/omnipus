@@ -416,6 +416,12 @@ interface ChatStore {
   resolveApproval: (id: string, status: 'allowed' | 'denied' | 'always_allowed') => void
 
   updateSessionStats: (tokens: number, cost: number) => void
+  /**
+   * Seed sessionTokens from the persisted total_tokens on a historic session
+   * attach. Only sets the value when the bucket is fresh (sessionTokens === 0)
+   * so live deltas from the `done` frame are never double-counted.
+   */
+  seedSessionTokens: (total: number) => void
   setRateLimitEvent: (event: RateLimitEventData) => void
   clearRateLimitEvent: () => void
 
@@ -1050,6 +1056,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
         sessionTokens: b.sessionTokens + tokens,
         sessionCost: b.sessionCost + cost,
       }))
+    },
+
+    seedSessionTokens: (total) => {
+      const sid = getActiveSid()
+      if (!sid) return
+      withBucket(sid, (b) => {
+        // Only seed when bucket is fresh — don't overwrite live-accumulated totals.
+        if (b.sessionTokens !== 0) return {}
+        return { sessionTokens: total }
+      })
     },
 
     setRateLimitEvent: (event) => {

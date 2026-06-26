@@ -5,6 +5,7 @@ import {
   Robot,
   PlugsConnected,
   PuzzlePiece,
+  ChartBar,
   Gear,
   PushPin,
   PushPinSlash,
@@ -34,6 +35,7 @@ const LIBRARY_ITEMS = [
   { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
+  { to: '/usage', label: 'Usage', Icon: ChartBar },
 ] as const
 
 const PROJECT_COLLAPSE_THRESHOLD = 5

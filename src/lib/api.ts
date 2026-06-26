@@ -2788,17 +2788,20 @@ export function deleteMilestone(workspaceId: string, milestoneId: string): Promi
 // Token usage summary by agent for the current month.
 // See contracts/components/schemas/TokenUsageSummary.yaml.
 
+export type TokenStatsPeriod = 'day' | 'week' | 'month' | 'all'
+
 export const tokenStatsQueryKeys = {
   monthly: () => ['token-stats', 'month'] as const,
+  byPeriod: (period: TokenStatsPeriod) => ['token-stats', period] as const,
 }
 
 export const auditLogQueryKeys = {
   list: () => ['audit-log'] as const,
 }
 
-export function fetchTokenStats(): Promise<TokenUsageSummary> {
+export function fetchTokenStats(period: TokenStatsPeriod = 'month'): Promise<TokenUsageSummary> {
   return request<TokenUsageSummary>(
-    '/stats/tokens?period=month',
+    `/stats/tokens?period=${period}`,
     undefined,
     TokenUsageSummarySchema as ZodType<TokenUsageSummary>,
   )
