@@ -4,17 +4,28 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Wave 5b system agent spec tests.
+// Wave 5b system-agent spec tests — surviving live coverage.
 //
-// Coverage of the 23 remaining TDD-plan tests from wave5b-system-agent-spec.md
-// (tests 1-3, 7-19, 21-27) not covered by:
-//   - pkg/security/wave5b_sysagent_ratelimit_test.go (tests 4-6)
-//   - pkg/audit/wave5b_system_tools_test.go (test 20)
+// History: this file originally held 23 stubs from wave5b-system-agent-spec.md,
+// most BLOCKED/skipped pending the standalone "Omnipus" system agent
+// (pkg/sysagent.SystemToolHandler / RBACChecker / SchemaRedactor /
+// ConfirmationGateway). That system agent was retired — its tools became ordinary
+// policy-governed builtins on the core agents (see pkg/sysagent/tools), and its
+// enforcement moved to the main agent loop. The 18 skipped stubs were removed
+// because their behaviours are now covered by live tests on the new path:
+//   - error contract / RBAC deny / exclusivity → pkg/tools/compositor_*_test.go,
+//     pkg/coreagent/*_seed_test.go, pkg/sysagent/tools/*_test.go
+//   - confirmation / approval gating          → pkg/gateway/{approvals,reauth_gate,
+//     rest_tool_policies}_test.go
+//   - single-user bypass                       → pkg/gateway/{rest_auth,routes_admin}_test.go
+//   - create/delete-agent, configure-provider  → pkg/sysagent/tools/{agent,provider}_test.go
+//   - core-agent-cannot-delete                 → pkg/sysagent/tools/agent_test.go::TestAgentDelete_RefusesLockedAgent
+//   - onboarding / doctor / system-agent E2E   → the Playwright e2e suite (e2e gate)
+//   - schema redaction (cloud/local/override)  → RETIRED feature (superseded by the
+//     compressed tool manifest); the system-agent chat E2E → RETIRED.
 //
-// Test status:
-//   REAL:    TestProviderCredentialsWriteOnly, TestCoreAgentDefaults (partial),
-//            TestOnboardingStateDetection, TestOnboardingStateResume, TestOnboardingNeverReshow
-//   BLOCKED: all others — pending pkg/sysagent, pkg/coreagent
+// What remains here is the live, runnable subset: credential write-only behaviour,
+// onboarding-state detection/resume/never-reshow, and the seeded-agent roster.
 
 package gateway
 
@@ -68,118 +79,14 @@ func newWave5bTestAPI(t *testing.T) *restAPI {
 }
 
 // --------------------------------------------------------------------------
-// Test #1 — TestSystemToolErrorContract
-// --------------------------------------------------------------------------
-
-// TestSystemToolErrorContract verifies that all system tool error categories return
-// a consistent {success: false, error: {code, message, suggestion}} contract.
-//
-// Traces to: wave5b-system-agent-spec.md line 438 (Scenario: System tool error responses)
-// BDD: "When <tool> called with <params>, Then success:false AND error.code set AND suggestion present"
-func TestSystemToolErrorContract(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.SystemToolHandler not yet implemented — error contract test requires Handle() method")
-	// When implemented, test the following dataset rows:
-	//   delete_agent {id:"nonexistent", confirm:true} → AGENT_NOT_FOUND
-	//   create_agent {name:"General Assistant"} → AGENT_ALREADY_EXISTS
-	//   enable_channel {id:"signal"} (no Java) → DEPENDENCY_MISSING
-	//   delete_agent {id:"omnipus-system", confirm:true} → PERMISSION_DENIED
-	//   delete_agent {id:"general-assistant", confirm:true} → PERMISSION_DENIED
-	//   configure_provider {api_key:"invalid"} → CONNECTION_FAILED
-	//   set_config {key:"invalid.key"} → INVALID_INPUT
-	//   create_agent {name:""} → INVALID_INPUT (name required)
-	//   create_agent {name:"a"*256} → INVALID_INPUT (max length exceeded)
-}
-
-// --------------------------------------------------------------------------
-// Test #2 — TestRBACEnforcement
-// --------------------------------------------------------------------------
-
-// TestRBACEnforcement verifies that system tool invocations are gated by RBAC role.
-//
-// Traces to: wave5b-system-agent-spec.md line 473 (Scenario: RBAC enforcement on system tools)
-// BDD: "Given device with <role>, When agent attempts <tool>, Then <outcome>"
-func TestRBACEnforcement(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent RBAC gating not yet implemented — RBACChecker.Check() needed")
-	// Dataset rows (wave5b spec line 483):
-	//   viewer  + create_agent → PERMISSION_DENIED
-	//   viewer  + list_agents   → Success
-	//   viewer  + run_doctor   → Success (read-only)
-	//   viewer  + system.navigate     → Success (safe)
-	//   operator + create_agent → Success
-	//   operator + delete_agent → PERMISSION_DENIED
-	//   operator + set_config(security.*) → PERMISSION_DENIED
-	//   admin   + delete_agent → Success (with UI confirmation)
-	//   admin   + set_config(security.*) → Success (with UI confirmation)
-	//   agent   + list_agents   → PERMISSION_DENIED (agents have no system access)
-}
-
-// --------------------------------------------------------------------------
-// Test #3 — TestRBACBypassSingleUser
-// --------------------------------------------------------------------------
-
-// TestRBACBypassSingleUser verifies that in single-user mode (no RBAC configured),
-// all operations proceed to UI confirmation rather than being RBAC-rejected.
-//
-// Traces to: wave5b-system-agent-spec.md line 498 (Scenario: Single-user mode bypasses RBAC)
-// BDD: "Given RBAC not configured, When delete_agent called, Then no RBAC rejection"
-func TestRBACBypassSingleUser(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent RBAC gating not yet implemented — single-user bypass logic needed")
-}
-
-// --------------------------------------------------------------------------
-// Test #7 — TestSchemaRedactionCloud
-// --------------------------------------------------------------------------
-
-// TestSchemaRedactionCloud verifies cloud providers receive summarized tool schemas.
-//
-// Traces to: wave5b-system-agent-spec.md line 549 (Scenario: Cloud provider receives summarized schemas)
-// BDD: "Given Anthropic configured, When system agent prompt assembled,
-//
-//	Then schemas have only: name, one-line description, parameter names; total < 4K tokens"
-func TestSchemaRedactionCloud(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.SchemaRedactor not yet implemented — Summarize() method needed")
-	// Dataset row 1: Cloud (Anthropic), full_schemas=false → Summarized, <4K tokens
-	// Dataset row 2: Cloud (OpenAI), full_schemas=false → Summarized, <4K tokens
-}
-
-// --------------------------------------------------------------------------
-// Test #8 — TestSchemaRedactionLocal
-// --------------------------------------------------------------------------
-
-// TestSchemaRedactionLocal verifies local providers receive full tool schemas.
-//
-// Traces to: wave5b-system-agent-spec.md line 562 (Scenario: Local provider receives full schemas)
-// BDD: "Given Ollama configured, When prompt assembled, Then full schemas with descriptions + examples"
-func TestSchemaRedactionLocal(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.SchemaRedactor not yet implemented — full schema mode needed")
-	// Dataset row 3: Local (Ollama), full_schemas=false → Full, ~10-15K tokens
-}
-
-// --------------------------------------------------------------------------
-// Test #9 — TestSchemaRedactionOverride
-// --------------------------------------------------------------------------
-
-// TestSchemaRedactionOverride verifies system_agent.full_schemas:true overrides cloud summarization.
-//
-// Traces to: wave5b-system-agent-spec.md line 574 (Scenario: User override sends full schemas to cloud)
-// BDD: "Given full_schemas:true AND cloud provider, When prompt assembled, Then full schemas sent"
-func TestSchemaRedactionOverride(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.SchemaRedactor not yet implemented — config override needed")
-	// Dataset row 4: Cloud (Anthropic), full_schemas=true → Full schemas sent
-}
-
-// --------------------------------------------------------------------------
-// Test #10 — TestProviderCredentialsWriteOnly
+// TestProviderCredentialsWriteOnly
 // --------------------------------------------------------------------------
 
 // TestProviderCredentialsWriteOnly verifies that credential values never appear
-// in API responses. Uses the existing config endpoint (which has redactSensitiveFields)
-// as a proxy for the write-only requirement until list_providers is implemented.
+// in API responses (the /config endpoint redacts sensitive fields).
 //
 // Traces to: wave5b-system-agent-spec.md line 460 (Scenario: Provider credentials are write-only)
-// BDD: "When list_providers called, Then api_key NOT included in response"
 func TestProviderCredentialsWriteOnly(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 460 (Provider credentials are write-only)
 	api := newWave5bTestAPI(t)
 
 	w := httptest.NewRecorder()
@@ -204,30 +111,10 @@ func TestProviderCredentialsWriteOnly(t *testing.T) {
 	var configMap map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &configMap),
 		"config response must be valid JSON even after redaction")
-
-	// TODO [INFERRED]: Once list_providers is implemented, add:
-	//   result := handler.Handle("list_providers", nil, callerRole="admin")
-	//   assert result["providers"] contains {name:"anthropic", status:"connected"}
-	//   assert result["providers"][0] does NOT contain "api_key" key
-	t.Log("NOTE: list_providers (system tool) not yet implemented — full test pending pkg/sysagent")
 }
 
 // --------------------------------------------------------------------------
-// Test #11 — TestSystemToolExclusivity
-// --------------------------------------------------------------------------
-
-// TestSystemToolExclusivity verifies that only omnipus-system can invoke system.* tools.
-//
-// Traces to: wave5b-system-agent-spec.md line 427 (Scenario: User agent cannot invoke system tools)
-// BDD: "Given General Assistant session, When agent invokes list_agents, Then rejected"
-func TestSystemToolExclusivity(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.SystemToolHandler not yet implemented — exclusivity guard needed")
-	// When implemented: calling Handle() with callerAgentID = "general-assistant"
-	// must return an error: system tools exclusive to omnipus-system.
-}
-
-// --------------------------------------------------------------------------
-// Test #12 — TestOnboardingStateDetection
+// TestOnboardingStateDetection
 // --------------------------------------------------------------------------
 
 // TestOnboardingStateDetection verifies first-launch detection from state.json.
@@ -284,7 +171,7 @@ func TestOnboardingStateDetection(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// Test #13 — TestOnboardingStateResume
+// TestOnboardingStateResume
 // --------------------------------------------------------------------------
 
 // TestOnboardingStateResume verifies onboarding resumes from the correct step.
@@ -311,7 +198,7 @@ func TestOnboardingStateResume(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// Test #14 — TestOnboardingNeverReshow
+// TestOnboardingNeverReshow
 // --------------------------------------------------------------------------
 
 // TestOnboardingNeverReshow verifies onboarding_complete:true permanently skips onboarding.
@@ -336,7 +223,7 @@ func TestOnboardingNeverReshow(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// Test #15 — TestCoreAgentDefaults (partial)
+// TestCoreAgentDefaults
 // --------------------------------------------------------------------------
 
 // TestCoreAgentDefaults verifies agent defaults on fresh install (Spec-3 roster
@@ -348,15 +235,7 @@ func TestOnboardingNeverReshow(t *testing.T) {
 //   - 3 seeded specialist subagents: planner, explorer, researcher (wire type
 //     'Subagent' — they are subagent-tier, native executor).
 //
-// The legacy ad-hoc 'content-creator'/'general-assistant' roster is removed.
-// NOTE: 'researcher' is NOT a removed legacy ID any more — it is a seeded S3
-// specialist, so it is asserted PRESENT here.
-//
 // Traces to: Spec-3 (v0.1.0 roster re-cast) + S3 specialist seeding.
-// BDD: "Given default config seeded with SeedConfig, When agent list loaded,
-//
-//	Then omnipus-system present with type 'system'; 4 base core agents present
-//	with type 'core'; 3 specialists present with type 'Subagent'."
 func TestCoreAgentDefaults(t *testing.T) {
 	api := newWave5bTestAPI(t)
 
@@ -384,10 +263,6 @@ func TestCoreAgentDefaults(t *testing.T) {
 	assert.Equal(t, "system", sysType,
 		"omnipus-system type must be 'system'")
 
-	// NOTE: The status of omnipus-system is BLOCKED (see TestAgentListStatus_SystemAlwaysActive).
-	// computeAgentStatus() returns 'draft' for locked agents with no soul and no active turn.
-	// Production fix needed in pkg/gateway/rest.go. Not asserted here to keep this test passing.
-
 	// Spec-3 4-base core agents must all be present with type "core". Max was retired.
 	coreAgents := []string{"mia", "jim", "ava", "ray"}
 	for _, id := range coreAgents {
@@ -402,8 +277,7 @@ func TestCoreAgentDefaults(t *testing.T) {
 		})
 	}
 	// S3 seeded specialist subagents must all be present with wire type "Subagent"
-	// (subagent-tier, native executor). The S3 agent added planner/explorer/
-	// researcher to SeedConfig; this gateway test must reflect that roster.
+	// (subagent-tier, native executor).
 	specialists := []string{"planner", "explorer", "researcher"}
 	for _, id := range specialists {
 		t.Run(id+" specialist is present with type Subagent", func(t *testing.T) {
@@ -430,123 +304,4 @@ func TestCoreAgentDefaults(t *testing.T) {
 		assert.False(t, found,
 			"old agent %q must NOT be present — removed in issue #45", oldID)
 	}
-}
-
-// --------------------------------------------------------------------------
-// Test #16 — TestCoreAgentCannotDelete
-// --------------------------------------------------------------------------
-
-// TestCoreAgentCannotDelete verifies that deleting a core or system agent returns
-// PERMISSION_DENIED with explanation.
-//
-// Traces to: wave5b-system-agent-spec.md line 679 (Scenario: Core agent cannot be deleted)
-func TestCoreAgentCannotDelete(t *testing.T) {
-	t.Skip("BLOCKED: Ava's delete_agent tool not yet wired — core agent delete protection " +
-		"will be enforced when Ava's CRUD tools are implemented. " +
-		"IDs to protect (Spec-3 4-base roster): mia, jim, ava, ray")
-}
-
-// --------------------------------------------------------------------------
-// Test #17 — TestConfirmationRequired
-// --------------------------------------------------------------------------
-
-// TestConfirmationRequired verifies that destructive ops require UI-level confirmation
-// and that LLM text is NOT accepted as confirmation.
-//
-// Traces to: wave5b-system-agent-spec.md line 509 (Scenario: Confirmation dialog for agent deletion)
-func TestConfirmationRequired(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.ConfirmationGateway not yet implemented — confirmation mechanism needed")
-	// Without confirm=true from UI: delete_agent must return CONFIRMATION_REQUIRED.
-	// LLM text like "I confirm the deletion" must NOT satisfy the confirmation check.
-	// Non-destructive ops (create_agent, create_task_in_workspace) must NOT require confirmation.
-}
-
-// --------------------------------------------------------------------------
-// Test #18 — TestAgentCreateIntegration
-// --------------------------------------------------------------------------
-
-// TestAgentCreateIntegration verifies end-to-end create_agent:
-// config file updated, workspace directory created, audit entry written.
-//
-// Traces to: wave5b-system-agent-spec.md line 389 (Scenario: Create a custom agent via system tool)
-func TestAgentCreateIntegration(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.SystemToolHandler not yet implemented — integration test requires Handle()")
-}
-
-// --------------------------------------------------------------------------
-// Test #19 — TestAgentDeleteIntegration
-// --------------------------------------------------------------------------
-
-// TestAgentDeleteIntegration verifies end-to-end delete_agent:
-// agent, sessions, memory, workspace all cleaned up, audit entry written.
-//
-// Traces to: wave5b-system-agent-spec.md line 401 (Scenario: Delete an agent with confirmation)
-func TestAgentDeleteIntegration(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.SystemToolHandler not yet implemented — integration test requires Handle()")
-}
-
-// --------------------------------------------------------------------------
-// Test #21 — TestProviderConfigureIntegration
-// --------------------------------------------------------------------------
-
-// TestProviderConfigureIntegration verifies configure_provider encrypts and
-// saves the API key to credentials.json and tests the connection.
-//
-// Traces to: wave5b-system-agent-spec.md line 600 (Scenario: Successful provider connection transitions to chat)
-func TestProviderConfigureIntegration(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.SystemToolHandler not yet implemented — provider configure integration needed")
-}
-
-// --------------------------------------------------------------------------
-// Test #22 — TestConfirmationFlowIntegration
-// --------------------------------------------------------------------------
-
-// TestConfirmationFlowIntegration verifies the complete confirmation flow:
-// tool call → gateway intercept → mock user confirms → operation completes.
-//
-// Traces to: wave5b-system-agent-spec.md line 509 (Scenario: Confirmation dialog — user clicks Delete)
-func TestConfirmationFlowIntegration(t *testing.T) {
-	t.Skip("Blocked: pkg/sysagent.ConfirmationGateway not yet implemented — full flow integration needed")
-}
-
-// --------------------------------------------------------------------------
-// Test #23 — TestDoctorRunIntegration
-// --------------------------------------------------------------------------
-
-// TestDoctorRunIntegration verifies run_doctor updates state.json with
-// last_doctor_run and last_doctor_score.
-//
-// Traces to: wave5b-system-agent-spec.md line 730 (Scenario: Run doctor from Settings UI)
-func TestDoctorRunIntegration(t *testing.T) {
-	t.Skip(
-		"Blocked: pkg/sysagent.SystemToolHandler and state.json last_doctor_run/last_doctor_score fields not yet implemented",
-	)
-}
-
-// --------------------------------------------------------------------------
-// E2E Tests #24-27
-// --------------------------------------------------------------------------
-
-// TestOnboardingE2E verifies the complete onboarding journey end-to-end.
-// Traces to: wave5b-system-agent-spec.md line 598 (Scenario: Successful provider connection transitions to chat)
-func TestOnboardingE2E(t *testing.T) {
-	t.Skip("Blocked: E2E — requires frontend OnboardingWizard component + pkg/onboarding + running server")
-}
-
-// TestSystemAgentConversationE2E verifies a full system agent conversation via the UI.
-// Traces to: wave5b-system-agent-spec.md line 350 (Scenario: System agent responds to natural language request)
-func TestSystemAgentConversationE2E(t *testing.T) {
-	t.Skip("Blocked: E2E — requires pkg/sysagent full agent loop + running server + Playwright")
-}
-
-// TestDoctorUIE2E verifies the Settings → Security → Diagnostics panel in the UI.
-// Traces to: wave5b-system-agent-spec.md line 730 (Scenario: Run doctor from Settings UI)
-func TestDoctorUIE2E(t *testing.T) {
-	t.Skip("Blocked: E2E — requires frontend DoctorPanel component in src/components/settings/ + running server")
-}
-
-// TestDestructiveConfirmationE2E verifies LLM text cannot bypass confirmation.
-// Traces to: wave5b-system-agent-spec.md line 522 (Scenario: LLM text is not accepted as confirmation)
-func TestDestructiveConfirmationE2E(t *testing.T) {
-	t.Skip("Blocked: E2E — requires pkg/sysagent ConfirmationGateway + full agent loop + Playwright")
 }
