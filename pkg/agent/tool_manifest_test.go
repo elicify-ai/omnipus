@@ -1442,8 +1442,9 @@ func TestManifestDeterminism_LoadChurn(t *testing.T) {
 // until promoted) is surfaced by tools{query} search but the load path's canLoad
 // gate used only GetAll() — so it rejected the hidden tool as "unknown", breaking
 // search→load→use for MCP. canLoad is now hidden-aware (GetIncludingHidden +
-// per-tool policy). An allow-default agent (Jim) must be able to load a
-// policy-allowed hidden tool; a deny-default agent (Ava) must not.
+// per-tool policy). An allow-default agent (the seeded worker tier) must be able to load a
+// policy-allowed hidden tool; a deny-default agent (Ava) must not. The 4 core
+// agents are all deny-default now, so a worker is the allow-default fixture.
 func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -1464,10 +1465,13 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 		return tt.Execute(ctx, map[string]any{"names": []any{"mock_custom"}})
 	}
 
-	t.Run("jim_allow_default_loads_hidden", func(t *testing.T) {
-		res := loadHidden(t, "jim")
+	// The 4 core agents are now all deny-default; the seeded worker tier
+	// (worker/explorer/researcher) still rides the allow rail, so it is the
+	// allow-default fixture for "an allowed hidden tool loads".
+	t.Run("allow_default_agent_loads_hidden", func(t *testing.T) {
+		res := loadHidden(t, "worker")
 		require.NotNil(t, res)
-		require.False(t, res.IsError, "jim (allow-default) must load the hidden tool, got error: %s", res.ForLLM)
+		require.False(t, res.IsError, "worker (allow-default) must load the hidden tool, got error: %s", res.ForLLM)
 		require.Contains(t, res.ForLLM, "mock_custom", "result should report the loaded hidden tool")
 		require.Contains(t, res.ForLLM, "\"loaded\"")
 	})
