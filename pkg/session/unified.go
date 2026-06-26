@@ -439,6 +439,18 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 	}
 	if entry.Role == "assistant" {
 		meta.Stats.TokensOut += entry.Tokens
+		meta.Stats.TokensCacheRead += entry.CacheReadTokens
+		meta.Stats.TokensCacheWrite += entry.CacheWriteTokens
+		if entry.Model != "" {
+			if meta.Stats.ByModel == nil {
+				meta.Stats.ByModel = make(map[string]ModelTokens)
+			}
+			mt := meta.Stats.ByModel[entry.Model]
+			mt.CacheRead += entry.CacheReadTokens
+			mt.CacheWrite += entry.CacheWriteTokens
+			mt.Total += entry.Tokens
+			meta.Stats.ByModel[entry.Model] = mt
+		}
 	} else {
 		meta.Stats.TokensIn += entry.Tokens
 	}

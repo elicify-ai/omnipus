@@ -110,6 +110,16 @@ func (m *SessionMeta) PostLoad() {
 	}
 }
 
+// ModelTokens holds per-model token breakdown for a session.
+// All fields are additive across turns that used the same model name.
+type ModelTokens struct {
+	In         int `json:"in"`
+	Out        int `json:"out"`
+	CacheRead  int `json:"cache_read"`
+	CacheWrite int `json:"cache_write"`
+	Total      int `json:"total"`
+}
+
 // SessionStats aggregates usage across all partitions.
 type SessionStats struct {
 	TokensIn     int     `json:"tokens_in"`
@@ -118,6 +128,13 @@ type SessionStats struct {
 	Cost         float64 `json:"cost"`
 	ToolCalls    int     `json:"tool_calls"`
 	MessageCount int     `json:"message_count"`
+	// Cache token breakdown (Wave 1). Omitted from JSON when zero so legacy
+	// meta.json files without these fields round-trip cleanly.
+	TokensCacheRead  int `json:"tokens_cache_read,omitempty"`
+	TokensCacheWrite int `json:"tokens_cache_write,omitempty"`
+	// ByModel maps model name → per-model token breakdown.
+	// nil on old sessions; the reader must treat nil as empty.
+	ByModel map[string]ModelTokens `json:"by_model,omitempty"`
 }
 
 // TranscriptEntry represents one line in a partition JSONL file.
@@ -140,6 +157,12 @@ type TranscriptEntry struct {
 	// omits the model span entirely for those (FR-014) — there is no
 	// "(model not recorded)" placeholder string rendered.
 	Model string `json:"model,omitempty"`
+	// CacheReadTokens and CacheWriteTokens carry the provider cache split for
+	// this assistant turn. Both are 0 for non-assistant entries and for legacy
+	// entries written before Wave 1 token tracking. Used to accumulate
+	// SessionStats.TokensCacheRead/Write and ByModel per-model breakdown.
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 
 	// For compaction entries.
 	MessagesCompacted int `json:"messages_compacted,omitempty"`
@@ -266,8 +289,24 @@ func (ps *PartitionStore) AppendMessage(sessionID string, entry TranscriptEntry)
 
 	// Update aggregated stats. Assistant messages contribute to TokensOut;
 	// all other roles (user, system) contribute to TokensIn (FR-013).
+	// For assistant entries, entry.Tokens is the full turn total
+	// (uncached input + cache_read + cache_write + completion).
+	// TokensOut tracks the output-side total (full turn tokens for assistant turns)
+	// consistent with the existing convention. Cache tokens are tracked separately.
 	if entry.Role == "assistant" {
 		meta.Stats.TokensOut += entry.Tokens
+		meta.Stats.TokensCacheRead += entry.CacheReadTokens
+		meta.Stats.TokensCacheWrite += entry.CacheWriteTokens
+		if entry.Model != "" {
+			if meta.Stats.ByModel == nil {
+				meta.Stats.ByModel = make(map[string]ModelTokens)
+			}
+			mt := meta.Stats.ByModel[entry.Model]
+			mt.CacheRead += entry.CacheReadTokens
+			mt.CacheWrite += entry.CacheWriteTokens
+			mt.Total += entry.Tokens
+			meta.Stats.ByModel[entry.Model] = mt
+		}
 	} else {
 		meta.Stats.TokensIn += entry.Tokens
 	}
@@ -300,6 +339,22 @@ func (ps *PartitionStore) UpdateStats(sessionID string, delta SessionStats) erro
 	meta.Stats.Cost += delta.Cost
 	meta.Stats.ToolCalls += delta.ToolCalls
 	meta.Stats.MessageCount += delta.MessageCount
+	meta.Stats.TokensCacheRead += delta.TokensCacheRead
+	meta.Stats.TokensCacheWrite += delta.TokensCacheWrite
+	if delta.ByModel != nil {
+		if meta.Stats.ByModel == nil {
+			meta.Stats.ByModel = make(map[string]ModelTokens)
+		}
+		for model, d := range delta.ByModel {
+			mt := meta.Stats.ByModel[model]
+			mt.In += d.In
+			mt.Out += d.Out
+			mt.CacheRead += d.CacheRead
+			mt.CacheWrite += d.CacheWrite
+			mt.Total += d.Total
+			meta.Stats.ByModel[model] = mt
+		}
+	}
 	meta.UpdatedAt = time.Now().UTC()
 
 	return writeMeta(sessionDir, meta)

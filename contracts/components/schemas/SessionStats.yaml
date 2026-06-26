@@ -39,3 +39,26 @@ properties:
     minimum: 0
     description: Number of transcript entries in this session.
     example: 8
+  tokens_cache_read:
+    type: integer
+    minimum: 0
+    description: >
+      Total cache-read tokens across all assistant turns (tokens served from
+      provider KV cache, not re-computed). 0 for sessions without caching or
+      created before Wave 1 token tracking.
+    example: 300
+  tokens_cache_write:
+    type: integer
+    minimum: 0
+    description: >
+      Total cache-write tokens across all assistant turns (tokens written into
+      a new cache entry, Anthropic only). 0 when the provider does not report them.
+    example: 50
+  by_model:
+    type: object
+    description: >
+      Per-model token breakdown. Keys are model name strings (e.g.
+      "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns
+      are excluded (they run on a separate engine).
+    additionalProperties:
+      $ref: './ModelTokens.yaml'

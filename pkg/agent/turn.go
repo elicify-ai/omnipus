@@ -148,6 +148,11 @@ type turnState struct {
 	// Used to populate the "done" WS frame for the session UI (issue #12).
 	turnTokens  int64
 	turnCostUSD float64
+	// Cache token split accumulated across all LLM iterations in this turn.
+	// Populated from UsageInfo.CacheReadTokens / CacheWriteTokens so the
+	// transcript entry can carry the full breakdown for SessionStats.ByModel.
+	turnCacheRead  int
+	turnCacheWrite int
 
 	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
 	al *AgentLoop
@@ -777,15 +782,18 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 	// non-websocket turns record real usage, mirroring the wsStreamer.Finalize
 	// path (#411). GetTurnStats is safe to call here — the turn is finishing.
 	turnTokens, turnCost := ts.GetTurnStats()
+	turnCacheRead, turnCacheWrite := ts.GetTurnCacheStats()
 	entry := session.TranscriptEntry{
-		ID:        uuid.New().String(),
-		Role:      "assistant",
-		AgentID:   agentID,
-		Content:   content,
-		Timestamp: time.Now().UTC(),
-		Tokens:    int(turnTokens),
-		Cost:      turnCost,
-		Model:     model,
+		ID:               uuid.New().String(),
+		Role:             "assistant",
+		AgentID:          agentID,
+		Content:          content,
+		Timestamp:        time.Now().UTC(),
+		Tokens:           int(turnTokens),
+		Cost:             turnCost,
+		Model:            model,
+		CacheReadTokens:  turnCacheRead,
+		CacheWriteTokens: turnCacheWrite,
 	}
 	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
 		logger.WarnCF("agent", "could not record assistant message to transcript",
@@ -1022,11 +1030,31 @@ func (ts *turnState) AddTurnStats(tokens int64, costUSD float64) {
 	ts.turnCostUSD += costUSD
 }
 
+// AddTurnCacheStats accumulates cache token counts from a single LLM iteration.
+// Must be called alongside AddTurnStats for each LLM call that reports cache usage.
+// B4: suppressed when the turn is marked abandoned.
+func (ts *turnState) AddTurnCacheStats(cacheRead, cacheWrite int) {
+	if ts.abandoned.Load() {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.turnCacheRead += cacheRead
+	ts.turnCacheWrite += cacheWrite
+}
+
 // GetTurnStats returns the accumulated turn stats.
 func (ts *turnState) GetTurnStats() (tokens int64, costUSD float64) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 	return ts.turnTokens, ts.turnCostUSD
+}
+
+// GetTurnCacheStats returns the accumulated cache token split for this turn.
+func (ts *turnState) GetTurnCacheStats() (cacheRead, cacheWrite int) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.turnCacheRead, ts.turnCacheWrite
 }
 
 // Context helper functions for SubTurn

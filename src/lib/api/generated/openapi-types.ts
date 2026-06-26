@@ -2795,6 +2795,20 @@ export interface components {
              * @example 8
              */
             message_count: number;
+            /**
+             * @description Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
+             * @example 300
+             */
+            tokens_cache_read?: number;
+            /**
+             * @description Total cache-write tokens across all assistant turns (tokens written into a new cache entry, Anthropic only). 0 when the provider does not report them.
+             * @example 50
+             */
+            tokens_cache_write?: number;
+            /** @description Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine). */
+            by_model?: {
+                [key: string]: components["schemas"]["ModelTokens"];
+            };
         };
         /** @description Full session detail as returned by GET /sessions/{id}. Contains the session metadata plus the complete ordered transcript. */
         SessionDetail: {
@@ -7147,8 +7161,22 @@ export interface components {
             tokens_out: number;
             /** @example 19134 */
             tokens_total: number;
+            /**
+             * @description Total cache-read tokens for this agent in the period.
+             * @example 3000
+             */
+            tokens_cache_read?: number;
+            /**
+             * @description Total cache-write tokens for this agent in the period.
+             * @example 500
+             */
+            tokens_cache_write?: number;
+            /** @description Per-model breakdown for this agent. Absent when no model data is available. */
+            by_model?: {
+                [key: string]: components["schemas"]["ModelTokens"];
+            };
         };
-        /** @description Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files. */
+        /** @description Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files. subagent_3p (external CLI workers) are excluded — they run on a separate engine and their tokens are not tracked. */
         TokenUsageSummary: {
             agents: components["schemas"]["AgentTokenEntry"][];
             /**
@@ -7163,6 +7191,48 @@ export interface components {
              * @example 2026-07-01T00:00:00Z
              */
             period_end: string;
+            /**
+             * @description Grand total cache-read tokens across all agents in the period.
+             * @example 8000
+             */
+            tokens_cache_read?: number;
+            /**
+             * @description Grand total cache-write tokens across all agents in the period.
+             * @example 1200
+             */
+            tokens_cache_write?: number;
+            /** @description Cross-agent per-model breakdown for the period. Keys are model name strings. Absent when no model data is available. */
+            by_model?: {
+                [key: string]: components["schemas"]["ModelTokens"];
+            };
+        };
+        /** @description Per-model token breakdown within a session or usage summary. */
+        ModelTokens: {
+            /**
+             * @description Uncached input tokens for this model.
+             * @example 800
+             */
+            in?: number;
+            /**
+             * @description Output (completion) tokens for this model.
+             * @example 200
+             */
+            out?: number;
+            /**
+             * @description Cache-read tokens (served from KV cache) for this model.
+             * @example 150
+             */
+            cache_read?: number;
+            /**
+             * @description Cache-write tokens (written into a new cache entry) for this model.
+             * @example 25
+             */
+            cache_write?: number;
+            /**
+             * @description Total tokens (in + out + cache_read + cache_write) for this model.
+             * @example 1175
+             */
+            total: number;
         };
         /**
          * @description Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
@@ -12220,8 +12290,8 @@ export interface operations {
     getTokenStats: {
         parameters: {
             query?: {
-                /** @description Aggregation period. */
-                period?: "month";
+                /** @description Aggregation period. day=current calendar day UTC; week=current ISO week (Mon–Sun) UTC; month=current calendar month UTC; all=all time. */
+                period?: "day" | "week" | "month" | "all";
             };
             header?: never;
             path?: never;
@@ -12438,3 +12508,4 @@ export type MilestoneUpdateRequest = components["schemas"]["MilestoneUpdateReque
 export type MilestoneListResponse = components["schemas"]["MilestoneListResponse"];
 export type AgentTokenEntry = components["schemas"]["AgentTokenEntry"];
 export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];
+export type ModelTokens = components["schemas"]["ModelTokens"];

@@ -204,6 +204,45 @@ func parseDataAudioURL(mediaURL string) (format, data string, ok bool) {
 
 // --- Response parsing ---
 
+// openaiNonStreamUsage is the intermediate struct for non-streaming OpenAI-compatible
+// usage objects. It captures prompt_tokens_details.cached_tokens to separate uncached
+// prompt tokens from cached ones before populating UsageInfo.
+type openaiNonStreamUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
+}
+
+// toUsageInfo converts a non-streaming usage chunk to UsageInfo.
+// PromptTokens in the result is uncached input only. CacheReadTokens holds the
+// cached portion. CacheWriteTokens stays 0 (OpenAI does not report cache writes).
+func (u *openaiNonStreamUsage) toUsageInfo() *UsageInfo {
+	if u == nil {
+		return nil
+	}
+	cachedTokens := 0
+	if u.PromptTokensDetails != nil {
+		cachedTokens = u.PromptTokensDetails.CachedTokens
+	}
+	promptUncached := u.PromptTokens - cachedTokens
+	if promptUncached < 0 {
+		promptUncached = 0
+	}
+	total := u.TotalTokens
+	if total == 0 {
+		total = promptUncached + cachedTokens + u.CompletionTokens
+	}
+	return &UsageInfo{
+		PromptTokens:     promptUncached,
+		CompletionTokens: u.CompletionTokens,
+		CacheReadTokens:  cachedTokens,
+		TotalTokens:      total,
+	}
+}
+
 // ParseResponse parses a JSON chat completion response body into an LLMResponse.
 func ParseResponse(body io.Reader) (*LLMResponse, error) {
 	var apiResponse struct {
@@ -229,7 +268,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage *UsageInfo `json:"usage"`
+		Usage *openaiNonStreamUsage `json:"usage"`
 	}
 
 	if err := json.NewDecoder(body).Decode(&apiResponse); err != nil {
@@ -282,7 +321,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 		ReasoningDetails: choice.Message.ReasoningDetails,
 		ToolCalls:        toolCalls,
 		FinishReason:     normalizeFinishReason(choice.FinishReason),
-		Usage:            apiResponse.Usage,
+		Usage:            apiResponse.Usage.toUsageInfo(),
 	}, nil
 }
 

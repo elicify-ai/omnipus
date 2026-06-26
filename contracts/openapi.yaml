@@ -502,6 +502,8 @@ components:
       $ref: ./components/schemas/AgentTokenEntry.yaml
     TokenUsageSummary:
       $ref: ./components/schemas/TokenUsageSummary.yaml
+    ModelTokens:
+      $ref: ./components/schemas/ModelTokens.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -5471,9 +5473,11 @@ paths:
         required: false
         schema:
           type: string
-          enum: [month]
+          enum: [day, week, month, all]
           default: month
-        description: Aggregation period.
+        description: >
+          Aggregation period. day=current calendar day UTC; week=current ISO
+          week (Mon–Sun) UTC; month=current calendar month UTC; all=all time.
       responses:
         '200':
           description: Token usage summary

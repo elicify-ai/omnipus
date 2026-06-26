@@ -2,6 +2,8 @@ type: object
 description: >
   Per-agent token usage summary for a given time period.
   Aggregated from SessionMeta.Stats across all session files.
+  subagent_3p (external CLI workers) are excluded — they run on a separate
+  engine and their tokens are not tracked.
 required:
   - agents
   - period_start
@@ -21,3 +23,20 @@ properties:
     format: date-time
     description: End of the aggregation period (exclusive), UTC.
     example: "2026-07-01T00:00:00Z"
+  tokens_cache_read:
+    type: integer
+    minimum: 0
+    description: Grand total cache-read tokens across all agents in the period.
+    example: 8000
+  tokens_cache_write:
+    type: integer
+    minimum: 0
+    description: Grand total cache-write tokens across all agents in the period.
+    example: 1200
+  by_model:
+    type: object
+    description: >
+      Cross-agent per-model breakdown for the period. Keys are model name strings.
+      Absent when no model data is available.
+    additionalProperties:
+      $ref: './ModelTokens.yaml'

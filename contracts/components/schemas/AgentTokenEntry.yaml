@@ -22,3 +22,18 @@ properties:
   tokens_total:
     type: integer
     example: 19134
+  tokens_cache_read:
+    type: integer
+    minimum: 0
+    description: Total cache-read tokens for this agent in the period.
+    example: 3000
+  tokens_cache_write:
+    type: integer
+    minimum: 0
+    description: Total cache-write tokens for this agent in the period.
+    example: 500
+  by_model:
+    type: object
+    description: Per-model breakdown for this agent. Absent when no model data is available.
+    additionalProperties:
+      $ref: './ModelTokens.yaml'

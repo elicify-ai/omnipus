@@ -381,15 +381,25 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		finishReason = "stop"
 	}
 
+	// PromptTokens = plain (uncached) input; cache tokens are tracked separately.
+	// TotalTokens = plain input + cache_creation + cache_read + output.
+	cacheWrite := int(resp.Usage.CacheCreationInputTokens)
+	cacheRead := int(resp.Usage.CacheReadInputTokens)
+	promptTokens := int(resp.Usage.InputTokens)
+	completionTokens := int(resp.Usage.OutputTokens)
+	total := promptTokens + cacheWrite + cacheRead + completionTokens
+
 	return &LLMResponse{
 		Content:      content.String(),
 		Reasoning:    reasoning.String(),
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage: &UsageInfo{
-			PromptTokens:     int(resp.Usage.InputTokens),
-			CompletionTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:      int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			CacheWriteTokens: cacheWrite,
+			CacheReadTokens:  cacheRead,
+			TotalTokens:      total,
 		},
 	}
 }

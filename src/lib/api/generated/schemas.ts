@@ -36,6 +36,16 @@ type SessionStats = {
   cost: number;
   tool_calls: number;
   message_count: number;
+  tokens_cache_read?: number | undefined;
+  tokens_cache_write?: number | undefined;
+  by_model?: {} | undefined;
+};
+type ModelTokens = {
+  in?: number | undefined;
+  out?: number | undefined;
+  cache_read?: number | undefined;
+  cache_write?: number | undefined;
+  total: number;
 };
 type SessionDetail = {
   session: Session;
@@ -662,17 +672,23 @@ type Milestone = {
   owner?: string | undefined;
   progress?: number | undefined;
 };
-type TokenUsageSummary = {
-  agents: Array<AgentTokenEntry>;
-  period_start: string;
-  period_end: string;
-};
 type AgentTokenEntry = {
   agent_id: string;
   agent_name: string;
   tokens_in: number;
   tokens_out: number;
   tokens_total: number;
+  tokens_cache_read?: number | undefined;
+  tokens_cache_write?: number | undefined;
+  by_model?: {} | undefined;
+};
+type TokenUsageSummary = {
+  agents: Array<AgentTokenEntry>;
+  period_start: string;
+  period_end: string;
+  tokens_cache_read?: number | undefined;
+  tokens_cache_write?: number | undefined;
+  by_model?: {} | undefined;
 };
 
 export const LoginRequest = z.object({
@@ -830,6 +846,15 @@ export const ProbeProviderResponse = z
     error: z.string().optional(),
   })
   .passthrough();
+export const ModelTokens: z.ZodType<ModelTokens> = z
+  .object({
+    in: z.number().int().gte(0).optional(),
+    out: z.number().int().gte(0).optional(),
+    cache_read: z.number().int().gte(0).optional(),
+    cache_write: z.number().int().gte(0).optional(),
+    total: z.number().int().gte(0),
+  })
+  .passthrough();
 export const SessionStats: z.ZodType<SessionStats> = z
   .object({
     tokens_in: z.number().int().gte(0),
@@ -838,6 +863,9 @@ export const SessionStats: z.ZodType<SessionStats> = z
     cost: z.number().gte(0),
     tool_calls: z.number().int().gte(0),
     message_count: z.number().int().gte(0),
+    tokens_cache_read: z.number().int().gte(0).optional(),
+    tokens_cache_write: z.number().int().gte(0).optional(),
+    by_model: z.record(ModelTokens).optional(),
   })
   .passthrough();
 export const Session: z.ZodType<Session> = z.object({
@@ -2145,6 +2173,9 @@ export const AgentTokenEntry: z.ZodType<AgentTokenEntry> = z
     tokens_in: z.number().int(),
     tokens_out: z.number().int(),
     tokens_total: z.number().int(),
+    tokens_cache_read: z.number().int().gte(0).optional(),
+    tokens_cache_write: z.number().int().gte(0).optional(),
+    by_model: z.record(ModelTokens).optional(),
   })
   .passthrough();
 export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
@@ -2152,6 +2183,9 @@ export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
     agents: z.array(AgentTokenEntry),
     period_start: z.string().datetime({ offset: true }),
     period_end: z.string().datetime({ offset: true }),
+    tokens_cache_read: z.number().int().gte(0).optional(),
+    tokens_cache_write: z.number().int().gte(0).optional(),
+    by_model: z.record(ModelTokens).optional(),
   })
   .passthrough();
 export const CliDetect = z
@@ -5400,7 +5434,10 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "period",
         type: "Query",
-        schema: z.literal("month").optional().default("month"),
+        schema: z
+          .enum(["day", "week", "month", "all"])
+          .optional()
+          .default("month"),
       },
     ],
     response: TokenUsageSummary,
