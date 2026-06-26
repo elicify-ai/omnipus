@@ -767,14 +767,9 @@ func TestContract_Session_NilPartitionsRejected(t *testing.T) {
 		Channel:    "webchat",
 		Partitions: nil, // THE BUG: nil slice → JSON null → schema violation
 		Type:       &sessionType,
-		Stats: struct {
-			Cost         float64 `json:"cost"`
-			MessageCount int     `json:"message_count"`
-			TokensIn     int     `json:"tokens_in"`
-			TokensOut    int     `json:"tokens_out"`
-			TokensTotal  int     `json:"tokens_total"`
-			ToolCalls    int     `json:"tool_calls"`
-		}{},
+		// Stats left as its zero value — this test asserts the partitions:null
+		// rejection; the Stats shape is irrelevant here (and is exercised by the
+		// dedicated stats tests).
 	}
 
 	raw, err := json.Marshal(fixture)

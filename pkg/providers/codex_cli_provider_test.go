@@ -34,13 +34,19 @@ func TestParseJSONLEvents_AgentMessage(t *testing.T) {
 	if resp.Usage == nil {
 		t.Fatal("Usage should not be nil")
 	}
-	if resp.Usage.PromptTokens != 150 {
-		t.Errorf("PromptTokens = %d, want 150", resp.Usage.PromptTokens)
+	// Convention (token-usage-tracking / ADR-023): PromptTokens is the UNCACHED
+	// input only (input_tokens); cached_input_tokens are tracked as CacheReadTokens.
+	// TotalTokens = input + cached_input + output (unchanged: 100 + 50 + 20 = 170).
+	if resp.Usage.PromptTokens != 100 { // uncached input_tokens only
+		t.Errorf("PromptTokens = %d, want 100 (uncached input)", resp.Usage.PromptTokens)
+	}
+	if resp.Usage.CacheReadTokens != 50 {
+		t.Errorf("CacheReadTokens = %d, want 50", resp.Usage.CacheReadTokens)
 	}
 	if resp.Usage.CompletionTokens != 20 {
 		t.Errorf("CompletionTokens = %d, want 20", resp.Usage.CompletionTokens)
 	}
-	if resp.Usage.TotalTokens != 170 {
+	if resp.Usage.TotalTokens != 170 { // 100 + 50 + 20
 		t.Errorf("TotalTokens = %d, want 170", resp.Usage.TotalTokens)
 	}
 	if len(resp.ToolCalls) != 0 {
@@ -443,8 +449,13 @@ func TestCodexCliProvider_MockCLI_Success(t *testing.T) {
 	if resp.Usage == nil {
 		t.Fatal("Usage should not be nil")
 	}
-	if resp.Usage.PromptTokens != 60 {
-		t.Errorf("PromptTokens = %d, want 60", resp.Usage.PromptTokens)
+	// PromptTokens is the UNCACHED input only (input_tokens=50); cached_input_tokens
+	// (10) are tracked as CacheReadTokens. See ADR-023.
+	if resp.Usage.PromptTokens != 50 { // uncached input_tokens only
+		t.Errorf("PromptTokens = %d, want 50 (uncached input)", resp.Usage.PromptTokens)
+	}
+	if resp.Usage.CacheReadTokens != 10 {
+		t.Errorf("CacheReadTokens = %d, want 10", resp.Usage.CacheReadTokens)
 	}
 	if resp.Usage.CompletionTokens != 15 {
 		t.Errorf("CompletionTokens = %d, want 15", resp.Usage.CompletionTokens)

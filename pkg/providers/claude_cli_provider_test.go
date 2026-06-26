@@ -152,13 +152,24 @@ func TestChat_Success(t *testing.T) {
 	if resp.Usage == nil {
 		t.Fatal("Usage should not be nil")
 	}
-	if resp.Usage.PromptTokens != 110 { // 10 + 100 + 0
-		t.Errorf("PromptTokens = %d, want 110", resp.Usage.PromptTokens)
+	// Convention (token-usage-tracking / ADR-023): PromptTokens is the UNCACHED
+	// input only; cache_creation→CacheWriteTokens, cache_read→CacheReadTokens are
+	// tracked separately (a subset of the total). Fixture: input=10,
+	// cache_creation=100, cache_read=0, output=5. TotalTokens = uncached_input +
+	// cache_write + cache_read + completion (unchanged: 10 + 100 + 0 + 5 = 115).
+	if resp.Usage.PromptTokens != 10 { // uncached input only
+		t.Errorf("PromptTokens = %d, want 10 (uncached input)", resp.Usage.PromptTokens)
+	}
+	if resp.Usage.CacheWriteTokens != 100 { // cache_creation_input_tokens
+		t.Errorf("CacheWriteTokens = %d, want 100", resp.Usage.CacheWriteTokens)
+	}
+	if resp.Usage.CacheReadTokens != 0 { // cache_read_input_tokens
+		t.Errorf("CacheReadTokens = %d, want 0", resp.Usage.CacheReadTokens)
 	}
 	if resp.Usage.CompletionTokens != 5 {
 		t.Errorf("CompletionTokens = %d, want 5", resp.Usage.CompletionTokens)
 	}
-	if resp.Usage.TotalTokens != 115 { // 110 + 5
+	if resp.Usage.TotalTokens != 115 { // 10 + 100 + 0 + 5
 		t.Errorf("TotalTokens = %d, want 115", resp.Usage.TotalTokens)
 	}
 }
