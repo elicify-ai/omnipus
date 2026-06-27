@@ -521,6 +521,240 @@ func (te *TaskExecutor) failTask(taskID, reason string) {
 	te.emitStatusChanged(updated, task.StatusFailed)
 }
 
+// StartTaskNow creates the task session, sets session_id on the task, registers
+// the cancel in the running map, and launches the agent goroutine — all without
+// requiring the task to be in `next` first (the caller has already transitioned
+// it to `in_progress` via a PATCH). It is the path taken when the UI hits
+// "Run" on a task that already has an assigned agent.
+//
+// Idempotency: if the task already has a SessionID the call is a no-op and
+// returns the existing session ID immediately without launching a second agent.
+//
+// Returns the session ID that was created (or already existed) on success, or
+// an empty string and an error when the task cannot be found, already has no
+// agent, or the concurrency cap is exhausted.
+func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string, error) {
+	t, err := te.store.Get(taskID)
+	if err != nil {
+		return "", fmt.Errorf("task_executor: StartTaskNow get task %q: %w", taskID, err)
+	}
+	if t.AgentID == "" {
+		return "", fmt.Errorf("task_executor: StartTaskNow: task %q has no agent assigned", taskID)
+	}
+
+	// Idempotency guard: if a session already exists, don't create another one.
+	if t.SessionID != "" {
+		return t.SessionID, nil
+	}
+
+	// Also guard if there is already a cancel registered (goroutine running).
+	te.mu.Lock()
+	_, alreadyRunning := te.running[taskID]
+	te.mu.Unlock()
+	if alreadyRunning {
+		// A goroutine is live; the session_id may have been written by now — re-read.
+		fresh, rerr := te.store.Get(taskID)
+		if rerr == nil && fresh.SessionID != "" {
+			return fresh.SessionID, nil
+		}
+		return "", fmt.Errorf("task_executor: StartTaskNow: task %q goroutine already running", taskID)
+	}
+
+	// Check that the assigned agent is known.
+	registry := te.agentLoop.GetRegistry()
+	if registry == nil {
+		return "", fmt.Errorf("task_executor: StartTaskNow: agent registry is not available")
+	}
+	if _, ok := registry.GetAgent(t.AgentID); !ok {
+		return "", fmt.Errorf("task_executor: StartTaskNow: agent %q not found for task %q", t.AgentID, taskID)
+	}
+
+	ok, release := te.dispatchSema.TryAcquire()
+	if !ok {
+		return "", fmt.Errorf(
+			"task_executor: StartTaskNow: global dispatch cap reached (%d/%d in flight), retry later",
+			te.dispatchSema.InFlight(), te.dispatchSema.Cap(),
+		)
+	}
+
+	// Create the session synchronously so we can return the session_id to the
+	// caller before the goroutine starts.
+	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	var taskSessionID string
+	if sessStore != nil {
+		meta, sessErr := sessStore.NewSession(session.SessionTypeTask, "system", t.AgentID)
+		if sessErr != nil {
+			release()
+			return "", fmt.Errorf("task_executor: StartTaskNow: create session for task %q: %w", taskID, sessErr)
+		}
+		taskSessionID = meta.ID
+
+		title := t.Title
+		tid := t.ID
+		wsID := t.WorkspaceID
+		metaPatch := session.MetaPatch{Title: &title, TaskID: &tid}
+		if wsID != "" {
+			metaPatch.WorkspaceID = &wsID
+		}
+		if setErr := sessStore.SetMeta(meta.ID, metaPatch); setErr != nil {
+			logger.ErrorCF("task_executor", "StartTaskNow: could not set task session meta",
+				map[string]any{"task_id": taskID, "error": setErr.Error()})
+		}
+		updated, updateErr := te.store.Update(taskID, task.Patch{SessionID: &taskSessionID})
+		if updateErr != nil {
+			logger.ErrorCF("task_executor", "StartTaskNow: could not persist session_id on task",
+				map[string]any{"task_id": taskID, "session_id": taskSessionID, "error": updateErr.Error()})
+		} else {
+			t = updated
+		}
+		if err := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+			ID:        t.ID + "-prompt",
+			Role:      "user",
+			Content:   te.buildPrompt(t),
+			Timestamp: time.Now().UTC(),
+		}); err != nil {
+			logger.ErrorCF("task_executor", "StartTaskNow: transcript write failed",
+				map[string]any{"task_id": taskID, "error": err.Error()})
+		}
+	} else {
+		logger.WarnCF("task_executor", "StartTaskNow: no agent store found, task will have no session",
+			map[string]any{"task_id": taskID, "agent_id": t.AgentID})
+	}
+
+	te.emitStatusChanged(t, task.StatusInProgress)
+
+	taskCtx, cancel := context.WithCancel(ctx)
+	te.mu.Lock()
+	te.running[taskID] = cancel
+	te.mu.Unlock()
+
+	go te.runTaskFromInProgress(taskCtx, t, taskSessionID, cancel, release)
+	return taskSessionID, nil
+}
+
+// runTaskFromInProgress is the goroutine body for tasks launched via
+// StartTaskNow. The session has already been created and the session_id
+// persisted; it skips the session-creation block that runTask performs and
+// goes straight to execution, reusing the shared completion logic.
+func (te *TaskExecutor) runTaskFromInProgress(
+	ctx context.Context,
+	t *task.Task,
+	taskSessionID string,
+	cancel context.CancelFunc,
+	release func(),
+) {
+	defer release()
+	defer cancel()
+	defer func() {
+		te.mu.Lock()
+		delete(te.running, t.ID)
+		te.mu.Unlock()
+	}()
+
+	logger.InfoCF("task_executor", "runTaskFromInProgress started",
+		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "session_id": taskSessionID})
+
+	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+
+	taskCtx := tools.WithAgentID(ctx, t.AgentID)
+	if t.WorkspaceID != "" {
+		taskCtx = tools.WithWorkspaceID(taskCtx, t.WorkspaceID)
+	}
+	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
+
+	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
+	prompt := te.buildPrompt(t)
+
+	taskChatID := taskSessionID
+	if taskChatID == "" {
+		taskChatID = "task:" + t.ID
+	}
+	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
+	if err != nil {
+		logger.ErrorCF("task_executor", "Agent execution failed (StartTaskNow path)",
+			map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "error": err.Error()})
+		if taskSessionID != "" && sessStore != nil {
+			if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+				ID:        t.ID + "-error",
+				Role:      "assistant",
+				Content:   fmt.Sprintf("Task execution failed: %v", err),
+				Status:    "error",
+				Timestamp: time.Now().UTC(),
+			}); appendErr != nil {
+				logger.WarnCF("task_executor", "Transcript write failed",
+					map[string]any{"task_id": t.ID, "error": appendErr.Error()})
+			}
+			status := session.StatusInterrupted
+			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &status}); setErr != nil {
+				logger.WarnCF("task_executor", "Meta update failed",
+					map[string]any{"task_id": t.ID, "error": setErr.Error()})
+			}
+		}
+		te.failTask(t.ID, fmt.Sprintf("execution error: %v", err))
+		failedTask := *t
+		failedTask.Status = task.StatusFailed
+		failedTask.Result = fmt.Sprintf("execution error: %v", err)
+		te.notifySourceChannel(&failedTask)
+		return
+	}
+
+	if taskSessionID != "" && resp != "" && sessStore != nil {
+		if err := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+			ID:        t.ID + "-response",
+			Role:      "assistant",
+			Content:   resp,
+			Timestamp: time.Now().UTC(),
+		}); err != nil {
+			logger.WarnCF("task_executor", "Transcript write failed",
+				map[string]any{"task_id": t.ID, "error": err.Error()})
+		}
+	}
+
+	current, lerr := te.store.Get(t.ID)
+	if lerr != nil {
+		logger.WarnCF("task_executor", "Could not re-read task after execution",
+			map[string]any{"task_id": t.ID, "error": lerr.Error()})
+		return
+	}
+	if task.IsTerminal(current.Status) {
+		if taskSessionID != "" && sessStore != nil {
+			statusCompleted := session.StatusArchived
+			if err := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusCompleted}); err != nil {
+				logger.WarnCF("task_executor", "Meta update failed",
+					map[string]any{"task_id": t.ID, "error": err.Error()})
+			}
+		}
+		te.notifySourceChannel(current)
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	result := resp
+	if result == "" {
+		result = "Task completed"
+	}
+	doneStatus := task.StatusDone
+	final, uerr := te.store.Update(t.ID, task.Patch{
+		Status:      &doneStatus,
+		Result:      &result,
+		CompletedAt: &now,
+	})
+	if uerr != nil {
+		logger.ErrorCF("task_executor", "Auto-complete task failed",
+			map[string]any{"task_id": t.ID, "error": uerr.Error()})
+		return
+	}
+	if taskSessionID != "" && sessStore != nil {
+		statusArchived := session.StatusArchived
+		if err := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusArchived}); err != nil {
+			logger.WarnCF("task_executor", "Meta update failed",
+				map[string]any{"task_id": t.ID, "error": err.Error()})
+		}
+	}
+	te.onTaskComplete(final)
+	te.notifySourceChannel(final)
+}
+
 // SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just
 // fired. The task has already been reset to `next` by Store.SpawnReset; this
 // claims and dispatches it via the normal ExecuteTask path. ExecuteTask already
