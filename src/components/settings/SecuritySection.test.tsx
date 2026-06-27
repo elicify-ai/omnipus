@@ -54,14 +54,14 @@ import {
   fetchConfig,
   fetchGatewayStatus,
   fetchCredentials,
+  addCredential,
+  deleteCredential,
   fetchBuiltinTools,
   fetchGlobalToolPolicies,
   updateGlobalToolPolicies,
   fetchDoctorResults,
   fetchSkillTrust,
   reAuth,
-  addCredential,
-  deleteCredential,
   rotateCredentials,
   ApiError,
 } from '@/lib/api'
@@ -511,6 +511,124 @@ describe('SecuritySection — global tool-policy re-auth gate', () => {
       expect(reAuth).toHaveBeenCalledWith('mypassword')
       expect(updateGlobalToolPolicies).toHaveBeenCalledTimes(2)
       expect(vi.mocked(updateGlobalToolPolicies).mock.calls[1][1]).toBe('reauth_tok')
+    })
+  })
+})
+
+// ── Credential vault re-auth gate (B4 bug fix) ───────────────────────────────
+
+describe('SecuritySection — credential vault re-auth gate', () => {
+  it('addCredential: opens the re-auth dialog on 403, retries with token, fires success toast', async () => {
+    // First attempt (token '') is rejected by the re-auth gate; the retry succeeds.
+    vi.mocked(addCredential)
+      .mockRejectedValueOnce(reAuth403())
+      .mockResolvedValueOnce(undefined)
+    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'cred_tok', expires_in: 300 } as never)
+
+    const mockToast = vi.fn()
+    vi.mocked(useUiStore).mockReturnValue({ addToast: mockToast } as never)
+
+    renderSection()
+
+    // Wait for the section to be fully loaded.
+    await waitFor(() => {
+      expect(screen.getByText(/add key/i)).toBeInTheDocument()
+    })
+
+    // Open the "Add Credential" modal.
+    fireEvent.click(screen.getByText(/add key/i))
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/e\.g\. OPENAI_API_KEY/i)).toBeInTheDocument()
+    })
+
+    // Fill in the credential form.
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. OPENAI_API_KEY/i), {
+      target: { value: 'MY_SECRET_KEY' },
+    })
+    fireEvent.change(screen.getByPlaceholderText(/sk-\.\.\./i), {
+      target: { value: 'super-secret-value' },
+    })
+
+    // Submit — first attempt will 403 and open the re-auth dialog.
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    // Re-auth dialog must appear.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+
+    // Confirm the first attempt passed no token.
+    expect(vi.mocked(addCredential).mock.calls[0][2]).toBe('')
+
+    // Enter password and confirm.
+    fireEvent.change(screen.getByTestId('reauth-password-input'), {
+      target: { value: 'mypassword' },
+    })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    // The retry is issued with the minted token and a success toast fires.
+    await waitFor(() => {
+      expect(reAuth).toHaveBeenCalledWith('mypassword')
+      expect(vi.mocked(addCredential)).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(addCredential).mock.calls[1][2]).toBe('cred_tok')
+      expect(mockToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'success' }),
+      )
+    })
+  })
+
+  it('deleteCredential: opens the re-auth dialog on 403, retries with token, fires success toast', async () => {
+    vi.mocked(fetchCredentials).mockResolvedValue([{ key: 'SOME_KEY' }])
+    vi.mocked(deleteCredential)
+      .mockRejectedValueOnce(reAuth403())
+      .mockResolvedValueOnce(undefined)
+    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'del_tok', expires_in: 300 } as never)
+
+    const mockToast = vi.fn()
+    vi.mocked(useUiStore).mockReturnValue({ addToast: mockToast } as never)
+
+    renderSection()
+
+    // Wait for the credential to appear in the list.
+    await waitFor(() => {
+      expect(screen.getByText('SOME_KEY')).toBeInTheDocument()
+    })
+
+    // Click the trash/delete button to open the confirmation modal.
+    // Find the delete icon button via the credential row's DOM proximity.
+    const credRow = screen.getByText('SOME_KEY').closest('div[class*="flex"]')!
+    const deleteBtn = credRow.querySelector('button')!
+    fireEvent.click(deleteBtn)
+
+    // Confirm the "Remove credential?" dialog.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^remove$/i })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^remove$/i }))
+
+    // Re-auth dialog must appear.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+
+    // Confirm the first delete attempt passed no token.
+    expect(vi.mocked(deleteCredential).mock.calls[0][1]).toBe('')
+
+    // Enter password and confirm re-auth.
+    fireEvent.change(screen.getByTestId('reauth-password-input'), {
+      target: { value: 'mypassword' },
+    })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    // The retry is issued with the minted token and a success toast fires.
+    await waitFor(() => {
+      expect(reAuth).toHaveBeenCalledWith('mypassword')
+      expect(vi.mocked(deleteCredential)).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(deleteCredential).mock.calls[1][1]).toBe('del_tok')
+      expect(mockToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'success' }),
+      )
     })
   })
 })
