@@ -2244,26 +2244,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/workspaces/{id}/sessions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List sessions auto-linked to this workspace
-         * @description Returns sessions that were auto-linked when an agent created or updated a GTD task with this workspace_id. Returns 200 with empty array when workspace exists but has no links. Returns 404 when workspace does not exist.
-         */
-        get: operations["listWorkspaceSessions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/workspaces/{id}/delegation": {
         parameters: {
             query?: never;
@@ -7075,20 +7055,6 @@ export interface components {
             pin_order?: number;
             core_team?: string[];
             repository?: string;
-        };
-        /** @description A session that has been auto-linked to a workspace via tool use. */
-        WorkspaceSessionLink: {
-            /**
-             * @description Session identifier.
-             * @example sess_abc123
-             */
-            session_id: string;
-            /**
-             * Format: date-time
-             * @description RFC3339 UTC timestamp when the link was first created.
-             * @example 2026-06-08T14:22:00Z
-             */
-            created_at: string;
         };
         /** @description A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster. */
         WorkspaceDelegationEdge: {
@@ -12138,31 +12104,6 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    listWorkspaceSessions: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Linked sessions */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceSessionLink"][];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-        };
-    };
     getWorkspaceDelegation: {
         parameters: {
             query?: never;
@@ -12646,7 +12587,6 @@ export type NotificationList = components["schemas"]["NotificationList"];
 export type Workspace = components["schemas"]["Workspace"];
 export type WorkspaceCreateRequest = components["schemas"]["WorkspaceCreateRequest"];
 export type WorkspaceUpdateRequest = components["schemas"]["WorkspaceUpdateRequest"];
-export type WorkspaceSessionLink = components["schemas"]["WorkspaceSessionLink"];
 export type WorkspaceDelegationEdge = components["schemas"]["WorkspaceDelegationEdge"];
 export type WorkspaceDelegation = components["schemas"]["WorkspaceDelegation"];
 export type WorkspaceDelegationUpdateRequest = components["schemas"]["WorkspaceDelegationUpdateRequest"];

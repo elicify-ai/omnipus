@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { useQuery, useQueries, useQueryClient, useMutation } from '@tanstack/react-query'
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   Circle,
   ListChecks,
@@ -19,7 +19,6 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import {
   fetchAgents,
   fetchSessions,
-  fetchWorkspaceSessions,
   fetchWorkspaces,
   renameSession,
   deleteSession,
@@ -469,36 +468,20 @@ export function SessionPanel() {
     return active?.is_default === true
   }, [activeWorkspaceId, workspaces])
 
-  // Only scope (and scoped-fetch) when a non-default workspace is active.
+  // Only scope when a non-default workspace is active.
   const scopeToWorkspace = !!activeWorkspaceId && !activeIsDefaultWorkspace
 
-  // Fan out workspace session link queries for each known workspace.
-  // This builds the sessionId→workspaceId map needed for workspace grouping.
-  // Each query is individually cached; staleTime=30s avoids repeated fetches.
-  const workspaceLinkQueries = useQueries({
-    queries: workspaces.map((w) => ({
-      queryKey: workspacesQueryKeys.sessions(w.id),
-      queryFn: () => fetchWorkspaceSessions(w.id),
-      enabled: sessionPanelOpen && workspaces.length > 0,
-      staleTime: 30_000,
-    })),
-  })
-
-  // Build sessionId → workspaceId reverse map from all link query results.
+  // Build sessionId → workspaceId map directly from each session's own workspace_id.
+  // Sessions without workspace_id fall under the NO_WORKSPACE_KEY sentinel.
   const sessionToWorkspace = useMemo<Map<string, string>>(() => {
     const map = new Map<string, string>()
-    workspaceLinkQueries.forEach((q, idx) => {
-      if (q.data) {
-        const workspaceId = workspaces[idx]?.id
-        if (workspaceId) {
-          for (const link of q.data) {
-            map.set(link.session_id, workspaceId)
-          }
-        }
+    for (const s of sessions) {
+      if (s.workspace_id) {
+        map.set(s.id, s.workspace_id)
       }
-    })
+    }
     return map
-  }, [workspaceLinkQueries, workspaces])
+  }, [sessions])
 
   const handleSelectSession = (session: Session) => {
     // Always trigger the WS attach_session flow so the replay pipeline
@@ -536,18 +519,10 @@ export function SessionPanel() {
     }
   }
 
-  // Scope to the active workspace's sessions first (when a workspace is active
-  // and its links have loaded), then sort by updated_at descending.
-  const workspaceSessionIds = useMemo(() => {
-    if (!scopeToWorkspace) return null
-    const links = workspaceLinkQueries.find(
-      (_q, idx) => workspaces[idx]?.id === activeWorkspaceId,
-    )?.data
-    return links ? new Set(links.map((l) => l.session_id)) : null
-  }, [scopeToWorkspace, workspaceLinkQueries, workspaces, activeWorkspaceId])
-
-  const scopedSessions = workspaceSessionIds
-    ? sessions.filter((s) => workspaceSessionIds.has(s.id))
+  // Scope to the active workspace's sessions (by workspace_id) when a non-default
+  // workspace is active. Sort by updated_at descending.
+  const scopedSessions = scopeToWorkspace
+    ? sessions.filter((s) => s.workspace_id === activeWorkspaceId)
     : sessions
   const sortedSessions = [...scopedSessions].sort(
     (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
@@ -647,7 +622,7 @@ export function SessionPanel() {
             <div className="px-4 py-6 text-xs text-[var(--color-muted)] text-center">
               {searchLower
                 ? 'No results.'
-                : workspaceSessionIds
+                : scopeToWorkspace
                   ? 'No conversations in this workspace yet. Start a chat to begin.'
                   : 'No sessions yet. Start a conversation to begin.'}
             </div>

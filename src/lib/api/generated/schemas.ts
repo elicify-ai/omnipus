@@ -2136,12 +2136,6 @@ export const WorkspaceUpdateRequest = z
   })
   .partial()
   .passthrough();
-export const WorkspaceSessionLink = z
-  .object({
-    session_id: z.string(),
-    created_at: z.string().datetime({ offset: true }),
-  })
-  .passthrough();
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
@@ -6960,39 +6954,6 @@ Returns HTTP 201 on success.
     ],
     response: z.void(),
     errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/workspaces/:id/sessions",
-    alias: "listWorkspaceSessions",
-    description: `Returns sessions that were auto-linked when an agent created or updated a GTD task with this workspace_id. Returns 200 with empty array when workspace exists but has no links. Returns 404 when workspace does not exist.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: z.array(WorkspaceSessionLink),
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,

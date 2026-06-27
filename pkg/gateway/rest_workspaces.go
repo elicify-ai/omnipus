@@ -27,7 +27,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
@@ -377,17 +376,6 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// /api/v1/workspaces/{id}/milestones[/{milestoneId}] — delegate to HandleMilestones.
 	if strings.Contains(rest, "/milestones") {
 		a.HandleMilestones(w, r)
-		return
-	}
-
-	// /api/v1/workspaces/{id}/sessions
-	if strings.HasSuffix(rest, "/sessions") {
-		id := strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/sessions")
-		if r.Method != http.MethodGet {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.handleWorkspaceSessions(w, r, id)
 		return
 	}
 
@@ -752,7 +740,6 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
 		return
 	}
-	systools.RemoveLinksForProject(a.homePath, id)
 
 	path := filepath.Join(a.homePath, "workspaces", id+".json")
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -795,37 +782,6 @@ func deleteMilestonesForWorkspace(home, workspaceID string) {
 				"milestone_id", m.ID, "workspace_id", workspaceID, "error", err)
 		}
 	}
-}
-
-func (a *restAPI) handleWorkspaceSessions(w http.ResponseWriter, r *http.Request, id string) {
-	if err := validateEntityID(id); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
-		return
-	}
-
-	// Verify workspace exists.
-	_, ok := a.loadWorkspace(w, id)
-	if !ok {
-		return
-	}
-
-	// FR-1.9: no access gate — owner is attribution only.
-
-	links := systools.ReadLinks(a.homePath, id)
-	result := make([]gen.WorkspaceSessionLink, 0, len(links))
-	for _, l := range links {
-		createdAt, err := time.Parse(time.RFC3339, l.CreatedAt)
-		if err != nil {
-			slog.Warn("rest: workspace sessions: invalid link created_at",
-				"workspace_id", id, "session_id", l.SessionID, "raw", l.CreatedAt)
-			createdAt = time.Now().UTC()
-		}
-		result = append(result, gen.WorkspaceSessionLink{
-			SessionId: l.SessionID,
-			CreatedAt: createdAt,
-		})
-	}
-	jsonOK(w, result)
 }
 
 // deduplicateStrings removes duplicate strings (case-sensitive) while preserving

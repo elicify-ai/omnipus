@@ -1,7 +1,7 @@
 //go:build !cgo
 
 // BDD: workspace REST API tests.
-// Traces to: FR-001 (workspaces CRUD), FR-007 (cascade delete), FR-008 (sessions sub-resource).
+// Traces to: FR-001 (workspaces CRUD), FR-007 (cascade delete).
 
 package gateway
 
@@ -23,7 +23,6 @@ import (
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 )
 
 // contextWithUserRole returns a new context that carries the given username (as a
@@ -260,39 +259,6 @@ func TestHandleWorkspaces_CascadeDelete_RemovesTasks(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "task file must be removed by cascade delete; stat err: %v", err)
 }
 
-// TestHandleWorkspaces_Sessions verifies GET /api/v1/workspaces/{id}/sessions returns links.
-// BDD: Given a project with session links,
-// When GET /api/v1/workspaces/{id}/sessions is called,
-// Then 200 with array containing the links.
-// Traces to: FR-008
-func TestHandleWorkspaces_Sessions(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	id := createWorkspaceViaAPI(t, api, "ProjectWithSessions", "")
-
-	// Write session link entries using the linker.
-	linker := systools.NewProjectSessionLinker(api.homePath)
-	linker.LinkSession(id, "sess-alpha-001")
-	linker.LinkSession(id, "sess-alpha-002")
-
-	// GET /api/v1/workspaces/{id}/sessions → 200 with links.
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id+"/sessions", nil)
-	r.URL.Path = "/api/v1/workspaces/" + id + "/sessions"
-	api.HandleWorkspaces(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "GET /workspaces/{id}/sessions must return 200; body=%s", w.Body.String())
-	var links []gen.WorkspaceSessionLink
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &links))
-	assert.Len(t, links, 2, "sessions sub-resource must return 2 linked sessions")
-
-	sessionIDs := make([]string, 0, len(links))
-	for _, l := range links {
-		sessionIDs = append(sessionIDs, l.SessionId)
-	}
-	assert.Contains(t, sessionIDs, "sess-alpha-001")
-	assert.Contains(t, sessionIDs, "sess-alpha-002")
-}
-
 // TestHandleWorkspaces_List_SortOrder verifies pinned projects come first.
 // BDD: Given 3 projects where one is pinned with pin_order=1,
 // When GET /api/v1/workspaces is called,
@@ -445,77 +411,6 @@ func TestHandleWorkspaces_InvalidStatusFilter(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code,
 		"GET /workspaces?status=garbage must return 400; body=%s", w.Body.String())
-}
-
-// TestHandleWorkspaces_CascadeDelete_TasksAndLinksGone verifies that DELETE /api/v1/workspaces/{id}
-// removes the project, all its associated board tasks, and all its session links.
-// BDD: Given a project P, a board task T associated with P, and a session link for P,
-// When DELETE /api/v1/workspaces/{P} is called,
-// Then 204, task file T is gone, ReadLinks for P returns nil, GET /workspaces/{P} returns 404.
-// Traces to: project-task-management-level1-spec.md FG-M8
-func TestHandleWorkspaces_CascadeDelete_TasksAndLinksGone(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	// Step 1: Create a project via REST → get project ID P.
-	projID := createWorkspaceViaAPI(t, api, "CascadeProject", "cascade test project")
-
-	// Step 2: Create a unified task via REST with workspace_id=P → get task ID T.
-	// Sprint 2: POST /api/v1/tasks (replaces /board/tasks); "title" + "action" required.
-	taskBody := fmt.Sprintf(`{"title":"CascadeTask","action":"llm","workspace_id":%q}`, projID)
-	wTask := httptest.NewRecorder()
-	rTask := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(taskBody))
-	rTask.Header.Set("Content-Type", "application/json")
-	rTask.URL.Path = "/api/v1/tasks"
-	api.HandleTasks(wTask, rTask)
-	require.Equal(t, http.StatusCreated, wTask.Code, "create task must return 201; body=%s", wTask.Body.String())
-	var createdTask gen.Task
-	require.NoError(t, json.Unmarshal(wTask.Body.Bytes(), &createdTask))
-	taskID := createdTask.Id
-	require.NotEmpty(t, taskID, "created task must have non-empty id")
-
-	// Verify the task file exists before delete.
-	taskPath := filepath.Join(api.homePath, "tasks", taskID+".json")
-	_, statErr := os.Stat(taskPath)
-	require.NoError(t, statErr, "task file must exist before cascade delete; path=%s", taskPath)
-
-	// Step 3: Link a session to the project using the systools linker.
-	linker := systools.NewProjectSessionLinker(api.homePath)
-	linker.LinkSession(projID, "sess-cascade-1")
-
-	// Verify the link exists before delete.
-	linksBefore := systools.ReadLinks(api.homePath, projID)
-	require.NotEmpty(t, linksBefore, "session links must exist before cascade delete")
-
-	// Step 4: DELETE /api/v1/workspaces/{P} → 204.
-	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+projID, nil)
-	rDel.URL.Path = "/api/v1/workspaces/" + projID
-	api.HandleWorkspaces(wDel, rDel)
-	require.Equal(
-		t,
-		http.StatusNoContent,
-		wDel.Code,
-		"DELETE /workspaces/{id} must return 204; body=%s",
-		wDel.Body.String(),
-	)
-
-	// Step 5: Assert task file at tasks/{T}.json does NOT exist.
-	_, statAfterErr := os.Stat(taskPath)
-	assert.True(t, os.IsNotExist(statAfterErr),
-		"task file must be removed by cascade delete; path=%s, stat error=%v", taskPath, statAfterErr)
-
-	// Step 6: Assert ReadLinks returns nil or empty for the deleted project.
-	linksAfter := systools.ReadLinks(api.homePath, projID)
-	assert.Empty(t, linksAfter,
-		"session links must be removed by cascade delete; got %d links", len(linksAfter))
-
-	// Step 7: Assert GET /api/v1/workspaces/{P} returns 404.
-	wGet := httptest.NewRecorder()
-	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+projID, nil)
-	rGet.URL.Path = "/api/v1/workspaces/" + projID
-	api.HandleWorkspaces(wGet, rGet)
-	assert.Equal(t, http.StatusNotFound, wGet.Code,
-		"GET /workspaces/{id} after delete must return 404; body=%s", wGet.Body.String())
 }
 
 // TestHandleWorkspaces_ConcurrentDelete verifies that two simultaneous DELETE requests

@@ -7,7 +7,7 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { fetchSessions, fetchWorkspaces, fetchWorkspaceSessions } from '@/lib/api'
+import { fetchSessions, fetchWorkspaces } from '@/lib/api'
 
 // W2-1: SessionPanel chat-session routing regression test.
 //
@@ -64,12 +64,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
       },
     ]),
     createSession: vi.fn(),
-    // Default: no workspaces and no links. Individual workspace-scoping tests
-    // override these with mockResolvedValueOnce. With no active workspace the
-    // panel never calls them, so the default value is irrelevant for the
-    // non-workspace tests above.
+    // Default: no workspaces. Individual workspace-grouping tests override via
+    // mockResolvedValueOnce. With no active workspace the panel uses unscoped mode.
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
-    fetchWorkspaceSessions: vi.fn().mockResolvedValue([]),
   }
 })
 
@@ -316,37 +313,13 @@ describe('SessionPanel — per-session isStreaming dot (F-S11)', () => {
 
 // ── Workspace grouping tests ──────────────────────────────────────────────────
 //
-// These tests exercise the session list grouped BY WORKSPACE. Each group is
-// collapsible and its header shows the workspace name + session count.
-// Sessions with no workspace link fall under a "No workspace" fallback group.
+// Grouping is now driven by each session's own workspace_id field (set by the
+// backend and passed through rawToSession). No link-store fan-out queries are
+// needed; the grouping map is built directly from session.workspace_id.
+// Sessions without workspace_id fall under a "No workspace" fallback group.
 // The active workspace (when set) is placed first in the list.
 
-// Helper sessions for workspace grouping tests
-const wsGroupSessions = [
-  {
-    id: 'sess-ws1-1',
-    agent_id: 'agent-chat-1',
-    active_agent_id: 'agent-chat-1',
-    title: 'Alpha Project Session',
-    type: 'chat' as const,
-    channel: 'webchat',
-    created_at: '2026-04-01T00:00:00Z',
-    updated_at: '2026-04-01T02:00:00Z',
-    message_count: 2,
-  },
-  {
-    id: 'sess-ws2-1',
-    agent_id: 'agent-chat-1',
-    active_agent_id: 'agent-chat-1',
-    title: 'Beta Project Session',
-    type: 'chat' as const,
-    channel: 'webchat',
-    created_at: '2026-04-01T00:00:00Z',
-    updated_at: '2026-04-01T01:00:00Z',
-    message_count: 3,
-  },
-]
-
+// Helper workspaces for workspace grouping tests
 const wsGroupWorkspaces = [
   { id: 'ws-alpha', name: 'Alpha Project', is_default: false, status: 'active' as const, pinned: false, pin_order: 0, task_count: 0, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
   { id: 'ws-beta',  name: 'Beta Project',  is_default: false, status: 'active' as const, pinned: false, pin_order: 0, task_count: 0, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
@@ -355,16 +328,26 @@ const wsGroupWorkspaces = [
 // Test A: all sessions in one workspace → grouped view with workspace header (showGroups=true)
 describe('SessionPanel — workspace grouping: single workspace renders group header (Test A)', () => {
   beforeEach(() => {
-    // One workspace, one session linked to it — one group, showGroups=true (always grouped now).
+    // One workspace; the session carries workspace_id='ws-alpha' directly.
     vi.mocked(fetchWorkspaces).mockResolvedValue([wsGroupWorkspaces[0]] as never)
-    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([
-      { workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' } as never,
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-ws1-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Alpha Project Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-alpha',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 2,
+      },
     ])
-    vi.mocked(fetchSessions).mockResolvedValue([wsGroupSessions[0]])
   })
 
   it('renders a collapsible workspace group header even when there is only one workspace', async () => {
-    // BDD: Given all sessions belong to the same (single) workspace
+    // BDD: Given all sessions belong to the same (single) workspace (via workspace_id)
     // BDD: Then showGroups=true and a collapsible group header button is rendered for that workspace
     // BDD: And the session appears under that group header
     renderPanel()
@@ -403,12 +386,11 @@ describe('SessionPanel — workspace grouping: single workspace renders group he
     expect(groupHeader).toHaveAttribute('aria-expanded', 'true')
   })
 
-  it('renders sessions under "No workspace" group header when sessions have no workspace links', async () => {
-    // BDD: Given sessions have no workspace links (legacy/global sessions)
+  it('renders sessions under "No workspace" group header when sessions have no workspace_id', async () => {
+    // BDD: Given sessions have no workspace_id (legacy/global sessions)
     // BDD: Then all sessions land in the "No workspace" fallback group
     // BDD: And the "No workspace" group header button IS rendered (always-on grouping)
     vi.mocked(fetchWorkspaces).mockResolvedValue([] as never)
-    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([] as never)
     vi.mocked(fetchSessions).mockResolvedValue([
       {
         id: 'sess-legacy-1',
@@ -438,15 +420,37 @@ describe('SessionPanel — workspace grouping: single workspace renders group he
 describe('SessionPanel — workspace grouping: multi-workspace renders group headers (Test B)', () => {
   beforeEach(() => {
     vi.mocked(fetchWorkspaces).mockResolvedValue(wsGroupWorkspaces as never)
-    // fetchWorkspaceSessions is called once per workspace; return the appropriate link for each.
-    vi.mocked(fetchWorkspaceSessions)
-      .mockResolvedValueOnce([{ workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' }] as never)
-      .mockResolvedValueOnce([{ workspace_id: 'ws-beta',  session_id: 'sess-ws2-1' }] as never)
-    vi.mocked(fetchSessions).mockResolvedValue(wsGroupSessions)
+    // Sessions carry workspace_id directly — no link-store queries needed.
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-ws1-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Alpha Project Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-alpha',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 2,
+      },
+      {
+        id: 'sess-ws2-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Beta Project Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-beta',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 3,
+      },
+    ])
   })
 
   it('renders a group header button for each workspace', async () => {
-    // BDD: Given sessions span 2 workspaces (Alpha Project, Beta Project)
+    // BDD: Given sessions span 2 workspaces (Alpha Project, Beta Project) via workspace_id
     // BDD: Then showGroups=true and a header button is rendered for each workspace
     renderPanel()
 
@@ -482,10 +486,32 @@ describe('SessionPanel — workspace grouping: multi-workspace renders group hea
 describe('SessionPanel — workspace grouping: collapse/expand toggle (Test C)', () => {
   beforeEach(() => {
     vi.mocked(fetchWorkspaces).mockResolvedValue(wsGroupWorkspaces as never)
-    vi.mocked(fetchWorkspaceSessions)
-      .mockResolvedValueOnce([{ workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' }] as never)
-      .mockResolvedValueOnce([{ workspace_id: 'ws-beta',  session_id: 'sess-ws2-1' }] as never)
-    vi.mocked(fetchSessions).mockResolvedValue(wsGroupSessions)
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-ws1-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Alpha Project Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-alpha',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 2,
+      },
+      {
+        id: 'sess-ws2-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Beta Project Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-beta',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 3,
+      },
+    ])
   })
 
   it('collapses a workspace group on first click and expands it on second click', async () => {
@@ -527,10 +553,32 @@ describe('SessionPanel — workspace grouping: search filters and hides empty gr
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     vi.mocked(fetchWorkspaces).mockResolvedValue(wsGroupWorkspaces as never)
-    vi.mocked(fetchWorkspaceSessions)
-      .mockResolvedValueOnce([{ workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' }] as never)
-      .mockResolvedValueOnce([{ workspace_id: 'ws-beta',  session_id: 'sess-ws2-1' }] as never)
-    vi.mocked(fetchSessions).mockResolvedValue(wsGroupSessions)
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-ws1-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Alpha Project Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-alpha',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 2,
+      },
+      {
+        id: 'sess-ws2-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Beta Project Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-beta',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 3,
+      },
+    ])
   })
 
   afterEach(() => {
@@ -561,17 +609,25 @@ describe('SessionPanel — workspace grouping: search filters and hides empty gr
   })
 })
 
-// Test E: sessions with no workspace link appear under "No workspace" fallback
+// Test E: sessions with no workspace_id appear under "No workspace" fallback
 describe('SessionPanel — workspace grouping: ungrouped sessions go to "No workspace" (Test E)', () => {
-  it('renders unlinked sessions under "No workspace" group alongside workspace-linked sessions', async () => {
-    // BDD: Given one session is linked to ws-alpha and another has no workspace link
+  it('renders sessions without workspace_id under "No workspace" alongside workspace-linked sessions', async () => {
+    // BDD: Given one session has workspace_id='ws-alpha' and another has no workspace_id
     // BDD: Then two workspace groups appear: "Alpha Project" and "No workspace"
     vi.mocked(fetchWorkspaces).mockResolvedValue([wsGroupWorkspaces[0]] as never)
-    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([
-      { workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' } as never,
-    ])
     vi.mocked(fetchSessions).mockResolvedValue([
-      wsGroupSessions[0],
+      {
+        id: 'sess-ws1-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Alpha Project Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-alpha',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 2,
+      },
       {
         id: 'sess-unlinked-1',
         agent_id: 'agent-chat-1',
@@ -602,24 +658,18 @@ describe('SessionPanel — workspace grouping: ungrouped sessions go to "No work
 //
 // Regression for the IA reframe: the global "/" front door redirects into the
 // DEFAULT workspace's chat, which sets activeWorkspaceId. The panel must NOT
-// strip unlinked / global / REST-created sessions while in the default
-// workspace (the home/inbox), otherwise those sessions become unreachable —
-// this broke the iframe-preview / warmup e2e specs whose seedAndOpenSession
-// helper creates a session via REST (no workspace→task link) and then opens it
-// from the panel. A NON-default workspace, by contrast, must scope strictly to
-// its own link set.
+// strip sessions without workspace_id while in the default workspace (the
+// home/inbox), otherwise those sessions become unreachable. A NON-default
+// workspace scopes strictly to sessions whose workspace_id matches.
 describe('SessionPanel — workspace scoping (IA reframe)', () => {
-  it('default workspace shows unlinked sessions (no scoping)', async () => {
+  it('default workspace shows sessions without workspace_id (no scoping)', async () => {
     // BDD: Given the active workspace is the default workspace
-    //      And a session exists that is NOT in any workspace→session link set
+    //      And a session exists that has NO workspace_id
     //      When the panel renders
-    //      Then the unlinked session is still listed (inbox behaviour)
+    //      Then the session is still listed (inbox behaviour)
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-default', name: 'Inbox', is_default: true } as never,
     ])
-    // The link set for the default workspace is empty — the REST-created
-    // session has no link. Strict scoping would hide it; we must not.
-    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([])
     vi.mocked(fetchSessions).mockResolvedValue([
       {
         id: 'sess-global-1',
@@ -645,17 +695,14 @@ describe('SessionPanel — workspace scoping (IA reframe)', () => {
     ).toBeTruthy()
   })
 
-  it('non-default workspace scopes to its own link set, hiding unlinked sessions', async () => {
+  it('non-default workspace scopes to sessions with matching workspace_id, hiding others', async () => {
     // BDD: Given the active workspace is a NON-default workspace
-    //      And a linked session plus an unlinked session both exist
+    //      And a session with workspace_id='ws-project' plus a session without workspace_id both exist
     //      When the panel renders
-    //      Then only the linked session is listed
+    //      Then only the session with workspace_id='ws-project' is listed
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-default', name: 'Inbox', is_default: true } as never,
       { id: 'ws-project', name: 'Project', is_default: false } as never,
-    ])
-    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([
-      { workspace_id: 'ws-project', session_id: 'sess-linked-1' } as never,
     ])
     vi.mocked(fetchSessions).mockResolvedValue([
       {
@@ -664,6 +711,7 @@ describe('SessionPanel — workspace scoping (IA reframe)', () => {
         active_agent_id: 'agent-chat-1',
         title: 'Linked Project Session',
         type: 'chat',
+        workspace_id: 'ws-project',
         channel: 'webchat',
         created_at: '2026-04-01T00:00:00Z',
         updated_at: '2026-04-01T01:00:00Z',

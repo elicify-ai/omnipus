@@ -474,8 +474,6 @@ components:
       $ref: ./components/schemas/WorkspaceCreateRequest.yaml
     WorkspaceUpdateRequest:
       $ref: ./components/schemas/WorkspaceUpdateRequest.yaml
-    WorkspaceSessionLink:
-      $ref: ./components/schemas/WorkspaceSessionLink.yaml
     WorkspaceDelegationEdge:
       $ref: ./components/schemas/WorkspaceDelegationEdge.yaml
     WorkspaceDelegation:
@@ -5187,40 +5185,6 @@ paths:
       responses:
         '204':
           description: Deleted
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-
-  /workspaces/{id}/sessions:
-    get:
-      operationId: listWorkspaceSessions
-      summary: List sessions auto-linked to this workspace
-      description: >
-        Returns sessions that were auto-linked when an agent created or updated
-        a GTD task with this workspace_id. Returns 200 with empty array when workspace
-        exists but has no links. Returns 404 when workspace does not exist.
-      tags:
-      - Workspaces
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Linked sessions
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/WorkspaceSessionLink'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':

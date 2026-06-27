@@ -371,10 +371,7 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 		}
 	}
 
-	// Step 2: remove session links for this workspace
-	RemoveLinksForProject(t.deps.Home, id)
-
-	// Step 3: delete the workspace file (last)
+	// Step 2: delete the workspace file (last)
 	if err := deleteEntity(workspacesDir(t.deps.Home), id); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}

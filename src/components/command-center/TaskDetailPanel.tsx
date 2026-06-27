@@ -227,14 +227,10 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       if (!task) return Promise.reject(new Error('No task selected'))
       return updateTask(task.id, { status: 'in_progress' })
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
-      if (data.session_id) {
-        void navigate({ to: '/sessions/$sessionId', params: { sessionId: data.session_id } })
-      } else {
-        addToast({ message: 'Task started.', variant: 'success' })
-      }
+      addToast({ message: 'Task started.', variant: 'success' })
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),

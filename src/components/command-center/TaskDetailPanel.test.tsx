@@ -211,6 +211,52 @@ describe('TaskDetailPanel — 7-state status rendering', () => {
   })
 })
 
+// ── Start does NOT auto-navigate ──────────────────────────────────────────────
+//
+// FIX B1: Pressing "Start Task" stays on the board — no auto-navigation to
+// the session. The user reaches the session via the "Open in Chat" button that
+// appears once the task has a session_id.
+
+describe('TaskDetailPanel — Start Task does NOT auto-navigate (FIX B1)', () => {
+  it('pressing Start Task calls updateTask but does NOT call navigate', async () => {
+    // BDD: Given a task in "next" status (startable)
+    //      When the user clicks "Start Task"
+    //      Then updateTask is called with status: in_progress
+    //      And navigate() is NOT called (user stays on the board)
+    const { updateTask } = await import('@/lib/api')
+    vi.mocked(updateTask).mockResolvedValue({} as never)
+
+    renderPanel(makeTask({ id: 'task-start-no-nav', status: 'next' }))
+
+    const startBtn = await screen.findByRole('button', { name: /Start Task/i })
+    await act(async () => { fireEvent.click(startBtn) })
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
+
+    // navigate must NOT have been called — the user stays on the board
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('"Open in Chat" is the intended path to the session — present only when task has session_id', async () => {
+    // BDD: Given a task with a session_id (already running)
+    //      When the panel renders
+    //      Then "Open in Chat" button is present and clicking it navigates to the session
+    const onClose = vi.fn()
+    renderPanel(taskWithSession, onClose)
+
+    const openBtn = await screen.findByRole('button', { name: /Open in Chat/i })
+    await act(async () => { fireEvent.click(openBtn) })
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: '/sessions/$sessionId',
+        params: { sessionId: SESSION_ID },
+      }),
+    )
+    expect(onClose).toHaveBeenCalled()
+  })
+})
+
 // ── Prompt field tests ────────────────────────────────────────────────────────
 
 const taskWithPrompt: Task = makeTask({
