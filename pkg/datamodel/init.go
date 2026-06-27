@@ -27,7 +27,7 @@ type dirEntry struct {
 // Matches the layout in Appendix E §E.3.
 var omnipusDirs = []dirEntry{
 	{"agents", 0o700},
-	{"projects", 0o700},
+	{"workspaces", 0o700},
 	{"sessions", 0o700},
 	{"tasks", 0o700},
 	{"pins", 0o700},

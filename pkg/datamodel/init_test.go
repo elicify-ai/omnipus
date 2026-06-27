@@ -31,7 +31,7 @@ func TestDirectoryInitialization(t *testing.T) {
 	// Verify all required subdirectories exist.
 	expectedDirs := []string{
 		"agents",
-		"projects",
+		"workspaces",
 		"tasks",
 		"pins",
 		"channels",
