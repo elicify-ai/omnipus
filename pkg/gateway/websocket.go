@@ -32,9 +32,46 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/pairing"
 	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
 	"github.com/dapicom-ai/omnipus/pkg/validation"
 	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
+
+// resolveApprovalToolPolicy resolves the effective tool policy consulted by the WS
+// approval hook (the gateway-side exec gate). Infra tools (load_tool) are
+// registration-gated, NOT policy-gated: they must be executable by EVERY agent —
+// including deny-by-default agents (Ava/Mia/Ray) — or every lazy/load-on-demand
+// tool becomes unreachable at EXECUTION time (the model is shown load_tool in its
+// defs but the approval hook denies it, so it can never load create_agent /
+// list_models / etc.). This mirrors ensureInfraToolsExecutable (pkg/agent/loop.go)
+// at the approval-hook layer; the tools that load_tool *loads* stay independently
+// policy-gated when they are actually called. All other tools use strictest-wins
+// (deny > ask > allow) of the sandbox global floor and the agent's builtin policy.
+func resolveApprovalToolPolicy(cfg *config.Config, toolName, agentID string) string {
+	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
+		return "allow"
+	}
+	if cfg == nil {
+		return "ask"
+	}
+	// Global policy (floor) — derived from sandbox config.
+	globalPolicy := "allow"
+	if p, ok := cfg.Sandbox.ToolPolicies[toolName]; ok {
+		globalPolicy = p
+	} else if cfg.Sandbox.DefaultToolPolicy != "" {
+		globalPolicy = cfg.Sandbox.DefaultToolPolicy
+	}
+	// Agent-level policy.
+	agentPolicy := "allow"
+	for _, ac := range cfg.Agents.List {
+		if ac.ID == agentID && ac.Tools != nil {
+			agentPolicy = string(ac.Tools.Builtin.ResolvePolicy(toolName))
+			break
+		}
+	}
+	// Strictest wins: deny > ask > allow.
+	return resolveEffectivePolicy(globalPolicy, agentPolicy)
+}
 
 // replayLiveBufferCap is the capacity of replayDivertCh (FR-I-009).
 // Frames are diverted here via sendConnGenFrame when isReplayingLive is set;
@@ -472,24 +509,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		registry: h.approvalRegistry,
 		timeout:  wsApprovalTimeout,
 		policyResolver: func(toolName string, agentID string) string {
-			cfg := h.agentLoop.GetConfig()
-			// Global policy (floor) — derived from sandbox config.
-			globalPolicy := "allow"
-			if p, ok := cfg.Sandbox.ToolPolicies[toolName]; ok {
-				globalPolicy = p
-			} else if cfg.Sandbox.DefaultToolPolicy != "" {
-				globalPolicy = cfg.Sandbox.DefaultToolPolicy
-			}
-			// Agent-level policy.
-			agentPolicy := "allow"
-			for _, ac := range cfg.Agents.List {
-				if ac.ID == agentID && ac.Tools != nil {
-					agentPolicy = string(ac.Tools.Builtin.ResolvePolicy(toolName))
-					break
-				}
-			}
-			// Strictest wins: deny > ask > allow.
-			return resolveEffectivePolicy(globalPolicy, agentPolicy)
+			return resolveApprovalToolPolicy(h.agentLoop.GetConfig(), toolName, agentID)
 		},
 	}
 	if err := h.agentLoop.MountHook(agent.NamedHook(hookName, approvalHook)); err != nil {
