@@ -322,3 +322,30 @@ func jsonifyYAML(v any) any {
 		return v
 	}
 }
+
+// TestUnifiedMetaToGenSession_MapsUpdatedAt pins the regression where the session
+// wire mapper omitted UpdatedAt, so every session serialized Go's zero time
+// ("0001-01-01T00:00:00Z") — breaking ListSessions sort order and the SPA's
+// relative-time display.
+func TestUnifiedMetaToGenSession_MapsUpdatedAt(t *testing.T) {
+	created := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	updated := time.Date(2026, 4, 2, 12, 30, 0, 0, time.UTC)
+	m := &session.UnifiedMeta{
+		SessionMeta: session.SessionMeta{
+			ID:        "sess-1",
+			AgentID:   "jim",
+			Channel:   "webchat",
+			Title:     "hello",
+			Status:    session.SessionStatus("active"),
+			CreatedAt: created,
+			UpdatedAt: updated,
+		},
+		Type: session.SessionTypeChat,
+	}
+	s := unifiedMetaToGenSession(m)
+	require.False(t, s.UpdatedAt.IsZero(),
+		"UpdatedAt must not be the Go zero time — the wire mapper used to drop it")
+	assert.True(t, s.UpdatedAt.Equal(updated),
+		"UpdatedAt should map from meta: got %v, want %v", s.UpdatedAt, updated)
+	assert.True(t, s.CreatedAt.Equal(created), "CreatedAt should still map correctly")
+}

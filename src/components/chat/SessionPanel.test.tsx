@@ -746,3 +746,27 @@ describe('SessionPanel — workspace scoping (IA reframe)', () => {
     })
   })
 })
+
+describe('SessionPanel — scheduled session badge', () => {
+  beforeEach(() => {
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-sched-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Heartbeat run',
+        type: 'scheduled' as const,
+        channel: 'scheduled',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 2,
+      },
+    ] as never)
+  })
+
+  it('renders a "Scheduled" badge and the session for a scheduled-type session', async () => {
+    renderPanel()
+    expect(await screen.findByLabelText('Open session: Heartbeat run')).toBeTruthy()
+    expect(await screen.findByText('Scheduled')).toBeInTheDocument()
+  })
+})

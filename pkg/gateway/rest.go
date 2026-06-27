@@ -592,6 +592,11 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 		AgentId:   m.AgentID,
 		Channel:   m.Channel,
 		CreatedAt: m.CreatedAt,
+		// UpdatedAt was previously omitted, so every session serialized Go's
+		// zero time ("0001-01-01T00:00:00Z") — breaking session sort order and
+		// the relative-time display. The meta carries a real UpdatedAt (stamped
+		// on every message append; ListSessions sorts by it), so map it through.
+		UpdatedAt: m.UpdatedAt,
 		Title:     m.Title,
 		Status:    gen.SessionStatus(m.Status),
 		Partitions: func() []string {
