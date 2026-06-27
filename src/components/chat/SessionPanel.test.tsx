@@ -352,10 +352,10 @@ const wsGroupWorkspaces = [
   { id: 'ws-beta',  name: 'Beta Project',  is_default: false, status: 'active' as const, pinned: false, pin_order: 0, task_count: 0, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
 ]
 
-// Test A: all sessions in one workspace → flat list (showGroups=false)
-describe('SessionPanel — workspace grouping: single workspace renders flat list (Test A)', () => {
+// Test A: all sessions in one workspace → grouped view with workspace header (showGroups=true)
+describe('SessionPanel — workspace grouping: single workspace renders group header (Test A)', () => {
   beforeEach(() => {
-    // One workspace, one session linked to it — only one group, so showGroups=false.
+    // One workspace, one session linked to it — one group, showGroups=true (always grouped now).
     vi.mocked(fetchWorkspaces).mockResolvedValue([wsGroupWorkspaces[0]] as never)
     vi.mocked(fetchWorkspaceSessions).mockResolvedValue([
       { workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' } as never,
@@ -363,21 +363,50 @@ describe('SessionPanel — workspace grouping: single workspace renders flat lis
     vi.mocked(fetchSessions).mockResolvedValue([wsGroupSessions[0]])
   })
 
-  it('renders sessions as a flat list with no group header buttons when there is only one workspace', async () => {
-    // BDD: Given all sessions belong to the same workspace
-    // BDD: Then showGroups=false and no collapsible group header buttons are rendered
+  it('renders a collapsible workspace group header even when there is only one workspace', async () => {
+    // BDD: Given all sessions belong to the same (single) workspace
+    // BDD: Then showGroups=true and a collapsible group header button is rendered for that workspace
+    // BDD: And the session appears under that group header
     renderPanel()
 
-    await screen.findByText('Alpha Project Session')
+    // The workspace group header must be present
+    const groupHeader = await screen.findByRole('button', { name: /Alpha Project workspace sessions/i })
+    expect(groupHeader).toBeTruthy()
+    expect(groupHeader).toHaveAttribute('aria-expanded', 'true')
 
-    // No workspace group header buttons should be present
-    const groupButtons = screen.queryAllByRole('button', { name: /workspace sessions, (collapse|expand)/i })
-    expect(groupButtons).toHaveLength(0)
+    // Session is visible under the group
+    await screen.findByLabelText('Open session: Alpha Project Session')
   })
 
-  it('renders flat list when sessions have no workspace links (all go to fallback)', async () => {
+  it('collapses and expands the single workspace group on click', async () => {
+    // BDD: Given a single-workspace panel (Alpha Project)
+    // BDD: When the user clicks the group header
+    // BDD: Then the group collapses (session leaves the DOM) and aria-expanded=false
+    // BDD: When the user clicks again, the group expands
+    renderPanel()
+
+    const groupHeader = await screen.findByRole('button', { name: /Alpha Project workspace sessions/i })
+
+    // Initially expanded
+    await screen.findByLabelText('Open session: Alpha Project Session')
+
+    // Collapse
+    fireEvent.click(groupHeader)
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Open session: Alpha Project Session')).toBeNull()
+    })
+    expect(groupHeader).toHaveAttribute('aria-expanded', 'false')
+
+    // Expand again
+    fireEvent.click(groupHeader)
+    await screen.findByLabelText('Open session: Alpha Project Session')
+    expect(groupHeader).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('renders sessions under "No workspace" group header when sessions have no workspace links', async () => {
     // BDD: Given sessions have no workspace links (legacy/global sessions)
-    // BDD: Then all sessions land in the "No workspace" fallback — one group, showGroups=false
+    // BDD: Then all sessions land in the "No workspace" fallback group
+    // BDD: And the "No workspace" group header button IS rendered (always-on grouping)
     vi.mocked(fetchWorkspaces).mockResolvedValue([] as never)
     vi.mocked(fetchWorkspaceSessions).mockResolvedValue([] as never)
     vi.mocked(fetchSessions).mockResolvedValue([
@@ -395,10 +424,13 @@ describe('SessionPanel — workspace grouping: single workspace renders flat lis
 
     renderPanel()
 
-    await screen.findByText('Legacy Session One')
+    // "No workspace" group header must be present
+    const noWsHeader = await screen.findByRole('button', { name: /No workspace workspace sessions/i })
+    expect(noWsHeader).toBeTruthy()
+    expect(noWsHeader).toHaveAttribute('aria-expanded', 'true')
 
-    const groupButtons = screen.queryAllByRole('button', { name: /workspace sessions, (collapse|expand)/i })
-    expect(groupButtons).toHaveLength(0)
+    // Session is visible under the fallback group
+    await screen.findByLabelText('Open session: Legacy Session One')
   })
 })
 

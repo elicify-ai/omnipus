@@ -712,6 +712,17 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		patch.CompletedAt = &ca
 	}
 
+	// Capture the pre-update status to detect the in_progress transition below.
+	var preUpdateStatus task.Status
+	if req.Status != nil {
+		// Read the current status before applying the patch so we can detect
+		// transitions rather than just the new state. We need the original status
+		// to distinguish "was already in_progress" from "just moved to in_progress".
+		if existing, gErr := a.taskStore.Get(id); gErr == nil {
+			preUpdateStatus = existing.Status
+		}
+	}
+
 	updated, err := a.taskStore.Update(id, patch)
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -725,6 +736,32 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		slog.Error("rest: task update failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not update task")
 		return
+	}
+
+	// If the task transitioned INTO in_progress (from a different state) and has
+	// an assigned agent, launch the agent immediately via StartTaskNow. The
+	// idempotency guard inside StartTaskNow prevents a double-launch if the task
+	// already has a session_id. After StartTaskNow returns, re-read the task so
+	// the response carries the newly-minted session_id.
+	if updated.Status == task.StatusInProgress &&
+		preUpdateStatus != task.StatusInProgress &&
+		updated.AgentID != "" &&
+		updated.SessionID == "" {
+		if a.taskExecutor != nil {
+			sessID, startErr := a.taskExecutor.StartTaskNow(r.Context(), id)
+			if startErr != nil {
+				slog.Warn("rest: StartTaskNow failed; task is in_progress but agent not launched",
+					"id", id, "agent_id", updated.AgentID, "error", startErr)
+			} else if sessID != "" {
+				// Re-read the persisted task so the response contains the session_id.
+				if fresh, rerr := a.taskStore.Get(id); rerr == nil {
+					updated = fresh
+				}
+			}
+		} else {
+			slog.Warn("rest: taskExecutor is nil; task moved to in_progress without agent launch",
+				"id", id, "agent_id", updated.AgentID)
+		}
 	}
 
 	// If the task reached `done`, advance any dependents (blocked → next).

@@ -577,8 +577,10 @@ export function SessionPanel() {
     [filteredSessions, sessionToWorkspace, workspaces, activeWorkspaceId],
   )
 
-  // Only show grouped view when there is more than one distinct workspace group.
-  const showGroups = workspaceGroups.length > 1
+  // Always show workspace group headers as long as there is at least one group
+  // (i.e. there are sessions to display). A single workspace still gets its
+  // collapsible header so "My Workspace" is always visible.
+  const showGroups = workspaceGroups.length > 0
 
   const toggleWorkspace = (key: string) => {
     setCollapsedWorkspaces((prev) => {
@@ -650,7 +652,9 @@ export function SessionPanel() {
                   : 'No sessions yet. Start a conversation to begin.'}
             </div>
           ) : showGroups ? (
-            // Multi-workspace view: collapsible group headers + sessions within each group
+            // Grouped view: collapsible workspace-group headers + sessions within each group.
+            // Always rendered when there are sessions — including the single-workspace case
+            // so "My Workspace" is always visible as a collapsible header.
             <div className="py-1">
               {workspaceGroups.map((group) => (
                 <WorkspaceGroup
@@ -675,22 +679,7 @@ export function SessionPanel() {
                 </WorkspaceGroup>
               ))}
             </div>
-          ) : (
-            // Single workspace (or no workspace data) — flat list, no headers
-            <div className="py-1 space-y-0.5 px-2">
-              {filteredSessions.map((session) => (
-                <SessionItem
-                  key={session.id}
-                  session={session}
-                  agents={agents}
-                  isActive={session.id === activeSessionId}
-                  isStreaming={sessionsById[session.id]?.isStreaming ?? false}
-                  onSelect={() => handleSelectSession(session)}
-                  onDeleted={handleSessionDeleted}
-                />
-              ))}
-            </div>
-          )}
+          ) : null}
         </div>
       </SheetContent>
     </Sheet>
