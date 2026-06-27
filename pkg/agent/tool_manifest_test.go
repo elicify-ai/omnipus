@@ -1081,17 +1081,20 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 			allTools := agentInst.Tools.GetAll()
 			policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, agentInst.AgentType, agentInst.LoadToolPolicy())
 
-			// Precondition (the bug): raw policy does NOT authorize `load_tool` for a
-			// deny-default agent. (If a future seed adds it explicitly this just
-			// makes the test trivially pass — still correct.)
-			_, rawAllowed := policyMap["load_tool"]
+			// Post-unification (#438): the single authoritative resolver
+			// (tools.EffectiveToolPolicy via FilterToolsByPolicy) force-allows infra
+			// UNCONDITIONALLY, so even a deny-default agent already has `load_tool`
+			// authorized in the snapshot here. We capture it to prove the fix holds
+			// at the resolver layer (no longer requiring ensureInfraToolsExecutable).
+			rawVerdict, rawAllowed := policyMap["load_tool"]
 
-			// Apply the fix: force infra tools into the exec snapshot.
+			// ensureInfraToolsExecutable is now an idempotent backstop; calling it
+			// must leave the (already-allow) verdict and slice unchanged.
 			policyFiltered = ensureInfraToolsExecutable(true, agentInst.Tools, policyFiltered, policyMap)
 
-			// After the fix: `load_tool` is in the snapshot as "allow".
+			// `load_tool` is authorized as "allow" in the exec snapshot.
 			require.Equal(t, "allow", policyMap["load_tool"],
-				"agent %q: `load_tool` must be allow in the exec policy snapshot (was rawAllowed=%v)", agentID, rawAllowed)
+				"agent %q: `load_tool` must be allow in the exec policy snapshot (rawAllowed=%v rawVerdict=%q)", agentID, rawAllowed, rawVerdict)
 			require.Contains(t, toolNameSet(policyFiltered), "load_tool",
 				"agent %q: `load_tool` must be in the sent defs surface", agentID)
 
@@ -1114,9 +1117,18 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 	}
 }
 
-// TestEnsureInfraToolsExecutable_NoopWhenCompressedOff verifies the legacy path
-// is untouched: with compressed=false, infra tools are NOT force-allowed.
-func TestEnsureInfraToolsExecutable_NoopWhenCompressedOff(t *testing.T) {
+// TestEnsureInfraToolsExecutable_IdempotentAfterUnifiedResolver verifies the
+// post-unification (#438) invariant. The single authoritative resolver
+// (tools.EffectiveToolPolicy via FilterToolsByPolicy) now force-allows infra
+// tools UNCONDITIONALLY, so `load_tool` is already present in policyMap as
+// "allow" after the filter — even for a deny-default agent (Ava). Therefore
+// ensureInfraToolsExecutable is an idempotent no-op (it must not double-add the
+// tool nor change the "allow" verdict), regardless of the compressed flag.
+//
+// The OBSERVABLE behavior on the non-compressed path (load_tool never surfaced to
+// the model) is preserved by stripInfraToolDefs, asserted in
+// TestStripInfraToolDefs_RemovesLoadTool below — not by gating the policy verdict.
+func TestEnsureInfraToolsExecutable_IdempotentAfterUnifiedResolver(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
@@ -1124,11 +1136,46 @@ func TestEnsureInfraToolsExecutable_NoopWhenCompressedOff(t *testing.T) {
 	require.True(t, ok)
 	allTools := ava.Tools.GetAll()
 	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, ava.LoadToolPolicy())
+
+	// Unified resolver already force-allowed infra, even for deny-default Ava.
+	require.Equal(t, "allow", policyMap["load_tool"],
+		"unified resolver must force-allow load_tool for a deny-default agent")
 	before := len(policyFiltered)
-	out := ensureInfraToolsExecutable(false, ava.Tools, policyFiltered, policyMap)
-	require.Len(t, out, before, "compressed=false must not add infra tools")
-	_, ok = policyMap["load_tool"]
-	require.False(t, ok, "compressed=false must not allow the unified `load_tool` infra tool")
+
+	// Idempotent for both compressed values: nothing added, verdict unchanged.
+	for _, compressed := range []bool{false, true} {
+		out := ensureInfraToolsExecutable(compressed, ava.Tools, policyFiltered, policyMap)
+		require.Len(t, out, before,
+			"ensureInfraToolsExecutable must not double-add infra (compressed=%v)", compressed)
+		require.Equal(t, "allow", policyMap["load_tool"],
+			"load_tool must remain allow (compressed=%v)", compressed)
+	}
+}
+
+// TestStripInfraToolDefs_RemovesLoadTool proves the observable behavior on the
+// NON-compressed defs path is preserved: load_tool (manifest infra) is stripped
+// from the surfaced tool set, so the model never sees it when compression is off
+// — byte-for-byte the pre-unification behavior.
+func TestStripInfraToolDefs_RemovesLoadTool(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+	ava, ok := al.registry.GetAgent("ava")
+	require.True(t, ok)
+	allTools := ava.Tools.GetAll()
+	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, ava.LoadToolPolicy())
+
+	// Precondition: the unified resolver kept load_tool in the filtered slice.
+	require.Contains(t, toolNameSet(policyFiltered), "load_tool")
+	require.Equal(t, "allow", policyMap["load_tool"])
+
+	// Non-compressed defs path strips it.
+	stripped := stripInfraToolDefs(policyFiltered)
+	require.NotContains(t, toolNameSet(stripped), "load_tool",
+		"stripInfraToolDefs must remove load_tool from the non-compressed surfaced set")
+	// And it strips ONLY infra — every non-infra tool survives.
+	require.Len(t, stripped, len(policyFiltered)-1,
+		"exactly one infra tool (load_tool) must be removed")
 }
 
 // toolNameSet is a tiny helper for membership assertions.
@@ -1897,32 +1944,79 @@ func TestLoadTool_LiveToggle_CompressedDefsWork(t *testing.T) {
 
 // TestLoadTool_UncompressedDefs_LoadToolNotSentToModel proves that in uncompressed
 // mode (Compressed=false), the load_tool infra tool does NOT appear in the provider
-// defs for deny-default agents (it is filtered out by FilterToolsByPolicy). This
-// ensures unconditional registration does not cause spurious callables in the
-// uncompressed path.
+// defs surfaced to the model — for ANY agent, REGARDLESS of its default policy.
+//
+// Post-unification (#438): the single authoritative resolver now force-allows
+// infra UNCONDITIONALLY, so load_tool IS present in policyFiltered for every
+// agent. The observable behavior (load_tool never surfaced when compression is
+// off) is preserved by stripInfraToolDefs on the non-compressed defs path in
+// runTurn. This is NOT byte-for-byte the old behavior in every case:
+//   - deny-default agents: the old filter ALSO dropped load_tool uncompressed, so
+//     the surfaced set is unchanged.
+//   - allow-default agents: the OLD path SENT load_tool uncompressed (allow-default
+//     kept it); the new path strips it. This is a deliberate, narrow change —
+//     load_tool has no function in an uncompressed turn (no manifest block tells
+//     the model to use it), so removing it is correct.
+//
+// The test mirrors the real path (ToolsToProviderDefs(stripInfraToolDefs(...)))
+// and covers both default-policy classes.
 func TestLoadTool_UncompressedDefs_LoadToolNotSentToModel(t *testing.T) {
 	cfg := newUncompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// All 4 core agents are deny-default; load_tool is not in their allow-list.
+	// Subgroup 1: the 4 seeded core agents are deny-default; load_tool is not in
+	// their allow-list. Old behavior already excluded it — surfaced set unchanged.
 	for _, agentID := range []string{"mia", "jim", "ava", "ray"} {
-		t.Run(agentID, func(t *testing.T) {
+		t.Run("deny-default/"+agentID, func(t *testing.T) {
 			agentInst, ok := al.registry.GetAgent(agentID)
 			require.True(t, ok)
 
 			allTools := agentInst.Tools.GetAll()
-			policyFiltered, _ := tools.FilterToolsByPolicy(allTools, agentInst.AgentType, agentInst.LoadToolPolicy())
+			policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, agentInst.AgentType, agentInst.LoadToolPolicy())
 
-			// The uncompressed path: ToolsToProviderDefs(policyFiltered).
-			// ensureInfraToolsExecutable is NOT called (compressed=false at turn time).
-			uncompressedDefs := tools.ToolsToProviderDefs(policyFiltered)
+			// Unified resolver keeps load_tool in the filtered slice (force-allow)...
+			require.Equal(t, "allow", policyMap["load_tool"],
+				"agent %q: resolver force-allows load_tool", agentID)
 
+			// ...but the real uncompressed path strips it before surfacing.
+			uncompressedDefs := tools.ToolsToProviderDefs(stripInfraToolDefs(policyFiltered))
 			for _, d := range uncompressedDefs {
 				assert.NotEqual(t, "load_tool", d.Function.Name,
-					"agent %q: load_tool must NOT appear in uncompressed defs for deny-default agent "+
-						"(policy gate strips it from policyFiltered)", agentID)
+					"agent %q: load_tool must NOT appear in uncompressed surfaced defs", agentID)
 			}
 		})
 	}
+
+	// Subgroup 2: an ALLOW-DEFAULT agent. The OLD uncompressed path SENT load_tool
+	// for an allow-default agent (allow-default kept it through the filter); the NEW
+	// path strips it. We synthesize the allow-default policy directly so the case is
+	// hermetic (no dependency on a seeded allow-default agent). load_tool must be
+	// registered to be force-allowed; we borrow Ava's registry (load_tool is always
+	// registered) and apply an allow-default ToolPolicyCfg.
+	t.Run("allow-default/synthetic", func(t *testing.T) {
+		ava, ok := al.registry.GetAgent("ava")
+		require.True(t, ok)
+		allTools := ava.Tools.GetAll()
+
+		allowDefault := &tools.ToolPolicyCfg{
+			DefaultPolicy:       "allow",
+			GlobalDefaultPolicy: "allow",
+		}
+		policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, allowDefault)
+
+		// Allow-default keeps load_tool (it would have been SENT uncompressed under
+		// the old code).
+		require.Equal(t, "allow", policyMap["load_tool"],
+			"allow-default: load_tool is allow in the filtered set")
+		require.Contains(t, toolNameSet(policyFiltered), "load_tool",
+			"allow-default: load_tool present in policyFiltered (old code would send it)")
+
+		// The new uncompressed path strips it regardless of the allow-default policy.
+		uncompressedDefs := tools.ToolsToProviderDefs(stripInfraToolDefs(policyFiltered))
+		for _, d := range uncompressedDefs {
+			assert.NotEqual(t, "load_tool", d.Function.Name,
+				"allow-default: load_tool must NOT be surfaced uncompressed (stripped regardless of default policy)")
+		}
+	})
 }
