@@ -8362,15 +8362,6 @@ type WorkspaceInstructionsResponse struct {
 	Content string `json:"content"`
 }
 
-// WorkspaceSessionLink A session that has been auto-linked to a workspace via tool use.
-type WorkspaceSessionLink struct {
-	// CreatedAt RFC3339 UTC timestamp when the link was first created.
-	CreatedAt time.Time `json:"created_at"`
-
-	// SessionId Session identifier.
-	SessionId string `json:"session_id"`
-}
-
 // WorkspaceUpdateRequest Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged.
 type WorkspaceUpdateRequest struct {
 	CoreTeam    *[]string `json:"core_team,omitempty"`

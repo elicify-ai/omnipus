@@ -36,6 +36,13 @@ type TaskExecutor struct {
 
 	// parentFollowUp is a test seam ONLY — production leaves it nil.
 	parentFollowUp func(parentID string)
+
+	// goroutineCtxHook is a test seam ONLY — production leaves it nil.
+	// When non-nil, runTaskFromInProgress calls it with the goroutine's context
+	// and returns immediately without performing real agent execution. This lets
+	// tests observe the context that the goroutine received (e.g. to verify it is
+	// not derived from the HTTP request context and survives request cancellation).
+	goroutineCtxHook func(ctx context.Context, taskID string)
 }
 
 // newTaskExecutor creates a TaskExecutor over the unified task store.
@@ -623,7 +630,11 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 
 	te.emitStatusChanged(t, task.StatusInProgress)
 
-	taskCtx, cancel := context.WithCancel(ctx)
+	// Detach from the caller's context (typically an HTTP request context that
+	// gets canceled as soon as the response is sent). The goroutine must outlive
+	// the HTTP request; the explicit cancel stored in te.running[taskID] is the
+	// intended cancellation path (called by Stop or a future "cancel task" API).
+	taskCtx, cancel := context.WithCancel(context.Background())
 	te.mu.Lock()
 	te.running[taskID] = cancel
 	te.mu.Unlock()
@@ -650,6 +661,14 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		delete(te.running, t.ID)
 		te.mu.Unlock()
 	}()
+
+	// Test seam: when goroutineCtxHook is set, invoke it and return without
+	// performing real agent execution. The hook receives the goroutine's context so
+	// tests can assert it is not canceled by the originating request context.
+	if te.goroutineCtxHook != nil {
+		te.goroutineCtxHook(ctx, t.ID)
+		return
+	}
 
 	logger.InfoCF("task_executor", "runTaskFromInProgress started",
 		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "session_id": taskSessionID})

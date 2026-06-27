@@ -107,7 +107,6 @@ import {
   NotificationList as NotificationListSchema,
   // Level-1 workspaces + unified tasks + token stats (contract-first #8):
   Workspace as WorkspaceSchema,
-  WorkspaceSessionLink as WorkspaceSessionLinkSchema,
   // M5 per-workspace delegation graph (contract-first #8):
   WorkspaceDelegation as WorkspaceDelegationSchema,
   // Workspace / Project Instructions (contract-first #8):
@@ -308,7 +307,6 @@ import type {
   Workspace,
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
-  WorkspaceSessionLink,
   // M5 per-workspace delegation graph (contract-first #8):
   WorkspaceDelegation,
   WorkspaceDelegationEdge,
@@ -442,7 +440,6 @@ export type {
   Workspace,
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
-  WorkspaceSessionLink,
   // M5 per-workspace delegation graph:
   WorkspaceDelegation,
   WorkspaceDelegationEdge,
@@ -772,6 +769,7 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   type: 'chat' | 'task' | 'channel'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
+  workspace_id?: string
   created_at: string
   updated_at: string
   message_count: number
@@ -794,6 +792,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   type?: 'chat' | 'task' | 'channel'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
+  workspace_id?: string
   created_at: string
   updated_at: string
   channel?: string
@@ -821,6 +820,7 @@ function rawToSession(raw: RawSession): Session {
     type: raw.type ?? 'chat',
     status: raw.status,
     task_id: raw.task_id,
+    workspace_id: raw.workspace_id,
     created_at: raw.created_at,
     updated_at: raw.updated_at,
     message_count: raw.stats?.message_count ?? 0,
@@ -2749,14 +2749,6 @@ export function updateWorkspaceInstructions(
     `/workspaces/${encodeURIComponent(workspaceId)}/instructions`,
     { method: 'PUT', body: JSON.stringify(body) },
     WorkspaceInstructionsResponseSchema as ZodType<WorkspaceInstructionsResponse>,
-  )
-}
-
-export function fetchWorkspaceSessions(id: string): Promise<WorkspaceSessionLink[]> {
-  return request<WorkspaceSessionLink[]>(
-    `/workspaces/${encodeURIComponent(id)}/sessions`,
-    undefined,
-    z.array(WorkspaceSessionLinkSchema) as ZodType<WorkspaceSessionLink[]>,
   )
 }
 

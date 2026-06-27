@@ -114,7 +114,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
         message_count: 0,
       } as Session,
     ]),
-    fetchWorkspaceSessions: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     renameSession: vi.fn(),
     deleteSession: vi.fn(),
