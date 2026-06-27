@@ -56,7 +56,6 @@ vi.mock('@/store/ui', () => ({
 }))
 
 import * as api from '@/lib/api'
-import * as autoSaveModule from '@/hooks/useAutoSave'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -244,10 +243,11 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
     })
   })
 
-  it('disables auto-save when isLocked=true — useAutoSave receives disabled:true', async () => {
-    const useAutoSaveSpy = vi.spyOn(autoSaveModule, 'useAutoSave')
-    useAutoSaveSpy.mockReturnValue({ status: 'idle', error: undefined, lastSavedAt: undefined, saveNow: vi.fn() })
-
+  it('saves are blocked for locked agents — no updateAgentTools on open (replaces old autoSave disabled:true test)', async () => {
+    // ToolsAndPermissions no longer uses useAutoSave — it uses a re-auth-gated
+    // useMutation instead. The equivalent guard is: for a locked agent,
+    // handleEditorChange early-returns (isLocked check) so updateAgentTools
+    // is NEVER called regardless of how the editor state changes.
     render(
       <ToolsAndPermissions
         agentId="mia"
@@ -260,13 +260,11 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
     )
 
     await waitFor(() => {
-      // The auto-save hook must have been called with disabled:true
-      const calls = useAutoSaveSpy.mock.calls
-      const lastCall = calls[calls.length - 1]
-      expect(lastCall[2]).toMatchObject({ disabled: true })
+      expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
     })
 
-    useAutoSaveSpy.mockRestore()
+    // No save on open — locked agents never trigger updateAgentTools
+    expect(api.updateAgentTools).not.toHaveBeenCalled()
   })
 
   it('does NOT call updateAgentTools for a locked agent', async () => {

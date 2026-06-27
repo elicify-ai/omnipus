@@ -2600,9 +2600,19 @@ export function fetchAgentTools(agentId: string): Promise<AgentToolsResponse> {
   return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, undefined, AgentToolsResponseSchema as ZodType<AgentToolsResponse>)
 }
 
-export function updateAgentTools(agentId: string, cfg: AgentToolsCfg): Promise<AgentToolsResponse> {
+// updateAgentTools persists per-agent tool policies. It is re-auth gated
+// server-side (requireReAuth): pass a consent token from useReAuthGate/runGated
+// via reAuthToken to replay it in the X-Reauth-Token header. The first call
+// may pass '' (no token); if the server demands re-auth, runGated opens the
+// dialog and retries with the minted token. // not-wire-format
+export function updateAgentTools(
+  agentId: string,
+  cfg: AgentToolsCfg,
+  reAuthToken?: string,
+): Promise<AgentToolsResponse> {
   return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, {
     method: 'PUT',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(cfg),
   }, AgentToolsResponseSchema as ZodType<AgentToolsResponse>)
 }

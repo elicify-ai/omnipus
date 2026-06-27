@@ -14,12 +14,14 @@
 //  3. Shell/fs conflict banner (still rendered by ToolsAndPermissions directly)
 //  4. ToolPolicyEditor role preset buttons (Cautious/Balanced/Full access) present
 //  5. No write fires for locked agents (B-2 / #332)
+//  6. NO spurious PUT fires when opening Tools tab (server hydration ≠ user edit)
+//  7. Real policy change triggers the re-auth-gated save path (not a bare 403)
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-// Mock the API module
+// Mock the API module. updateAgentTools now accepts an optional reAuthToken.
 vi.mock('@/lib/api', () => ({
   fetchRegistryTools: vi.fn(),
   fetchBuiltinTools: vi.fn(),
@@ -27,11 +29,22 @@ vi.mock('@/lib/api', () => ({
   fetchMcpServersForAgent: vi.fn(),
   updateAgentTools: vi.fn(),
   fetchGlobalToolPolicies: vi.fn(),
+  reAuth: vi.fn(),
+  isApiError: vi.fn(() => false),
+  REAUTH_HEADER: 'X-Reauth-Token',
 }))
 
-// Mock useAutoSave to prevent debounce side effects in tests
-vi.mock('@/hooks/useAutoSave', () => ({
-  useAutoSave: () => ({ status: 'idle', error: undefined, saveNow: vi.fn() }),
+// Mock the useReAuthGate module so runGated is a controllable spy.
+// The factory returns a fresh spy per test (reset in beforeEach).
+const mockRunGated = vi.fn(async (fn: (token: string) => unknown) => fn(''))
+
+vi.mock('@/components/settings/useReAuthGate', () => ({
+  useReAuthGate: () => ({
+    runGated: mockRunGated,
+    dialog: null,
+    open: false,
+  }),
+  isReAuthCancelled: vi.fn(() => false),
 }))
 
 import * as api from '@/lib/api'
@@ -46,6 +59,12 @@ vi.mock('./MCPServerPicker', () => ({
 // AutoSaveIndicator — mock to simplify
 vi.mock('@/components/ui/AutoSaveIndicator', () => ({
   AutoSaveIndicator: () => null,
+}))
+
+// useUiStore — mock addToast to avoid real store setup
+vi.mock('@/store/ui', () => ({
+  useUiStore: (selector: (s: { addToast: () => void }) => unknown) =>
+    selector({ addToast: vi.fn() }),
 }))
 
 function makeQueryClient() {
@@ -101,6 +120,9 @@ const NOOP_CHANGE = () => {}
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Reset the runGated spy back to the pass-through default each test.
+  mockRunGated.mockImplementation(async (fn: (token: string) => unknown) => fn(''))
+
   vi.mocked(api.fetchRegistryTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL])
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL])
   vi.mocked(api.fetchAgentTools).mockResolvedValue({
@@ -111,6 +133,11 @@ beforeEach(() => {
   vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
     default_policy: 'allow',
     policies: {},
+  })
+  // Default: updateAgentTools succeeds and returns the same config
+  vi.mocked(api.updateAgentTools).mockResolvedValue({
+    config: DEFAULT_TOOLS_CFG,
+    tools: [],
   })
 })
 
@@ -360,14 +387,13 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
     })
   })
 
-  it('clicking Cautious preset calls onChange with ask default', async () => {
-    const onChange = vi.fn()
+  it('clicking Cautious preset calls updateAgentTools via runGated (re-auth gated)', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
-        onChange={onChange}
+        onChange={NOOP_CHANGE}
       />
     )
     await waitFor(() => {
@@ -376,14 +402,17 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
 
     fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
 
+    // The real save goes through updateAgentTools (re-auth gated mutation).
     await waitFor(() => {
-      expect(onChange).toHaveBeenCalledWith(
+      expect(api.updateAgentTools).toHaveBeenCalledWith(
+        'agent-1',
         expect.objectContaining({
           builtin: expect.objectContaining({
             default_policy: 'ask',
             policies: {},
           }),
-        })
+        }),
+        '', // empty reAuthToken on first attempt (runGated optimistic call)
       )
     })
   })
@@ -419,5 +448,155 @@ describe('ToolsAndPermissions — locked agent (B-2 / US-D5 / #332)', () => {
       expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
     })
     expect(api.updateAgentTools).not.toHaveBeenCalled()
+  })
+})
+
+describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => {
+  it('does NOT call updateAgentTools when the Tools tab opens and data arrives from server', async () => {
+    // This is the core regression test. When agentToolsData arrives from the
+    // GET /agents/{id}/tools query, the component must hydrate its local editorValue
+    // without triggering updateAgentTools. Previously, the load-sync useEffect
+    // called onChange(agentToolsData.config) which caused the parent to mark
+    // formData dirty and fire the autoSave PUT — resulting in a 403 because no
+    // re-auth token was present.
+    const serverConfig: AgentToolsCfg = {
+      builtin: {
+        default_policy: 'allow',
+        policies: {},
+      },
+    }
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({ config: serverConfig, tools: [] })
+
+    // Parent starts with a slightly different config (simulates the gap between
+    // agent.tools_cfg from the main GET and the dedicated tools GET result).
+    const parentConfig: AgentToolsCfg = {
+      builtin: { default_policy: 'allow', policies: {} },
+    }
+
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="react-dev"
+        agentType="Main"
+        tools={parentConfig}
+        onChange={NOOP_CHANGE}
+      />
+    )
+
+    // Wait for the tools query to settle.
+    await waitFor(() => {
+      expect(api.fetchAgentTools).toHaveBeenCalledWith('react-dev')
+    })
+
+    // Give time for any spurious mutation to fire.
+    await new Promise((r) => setTimeout(r, 50))
+
+    // ZERO writes must have fired — this is the regression guard.
+    expect(api.updateAgentTools).not.toHaveBeenCalled()
+    // And runGated must NOT have been called (no user interaction occurred).
+    expect(mockRunGated).not.toHaveBeenCalled()
+  })
+
+  it('does NOT call updateAgentTools when agentToolsData differs from parent tools on open', async () => {
+    // More adversarial case: server data has extra per-tool overrides that the
+    // parent's toolsCfg does not. The load-sync must still not fire a PUT.
+    const serverConfig: AgentToolsCfg = {
+      builtin: {
+        default_policy: 'deny',
+        policies: { read_file: 'allow', write_file: 'deny' },
+      },
+    }
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({ config: serverConfig, tools: [] })
+
+    const parentConfig: AgentToolsCfg = {
+      builtin: { default_policy: 'allow', policies: {} },
+    }
+
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="react-dev"
+        agentType="Main"
+        tools={parentConfig}
+        onChange={NOOP_CHANGE}
+      />
+    )
+
+    await waitFor(() => {
+      expect(api.fetchAgentTools).toHaveBeenCalledWith('react-dev')
+    })
+
+    await new Promise((r) => setTimeout(r, 50))
+
+    // No PUT — even when the server data differs from the parent prop.
+    expect(api.updateAgentTools).not.toHaveBeenCalled()
+    expect(mockRunGated).not.toHaveBeenCalled()
+  })
+})
+
+describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
+  it('calls runGated then updateAgentTools when user changes policy', async () => {
+    // When the user clicks a preset (a real policy change), the save must flow
+    // through runGated → updateAgentTools(agentId, cfg, token). The mock
+    // runGated passes '' as the token on the optimistic first attempt.
+    vi.mocked(api.updateAgentTools).mockResolvedValue({ config: DEFAULT_TOOLS_CFG, tools: [] })
+
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+    })
+
+    // No runGated before user interaction
+    expect(mockRunGated).not.toHaveBeenCalled()
+
+    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+
+    await waitFor(() => {
+      // runGated must have been called (re-auth gate ran for the user's edit)
+      expect(mockRunGated).toHaveBeenCalledTimes(1)
+    })
+
+    // updateAgentTools was called through the gate with the token
+    await waitFor(() => {
+      expect(api.updateAgentTools).toHaveBeenCalledWith(
+        'agent-1',
+        expect.objectContaining({ builtin: expect.objectContaining({ default_policy: 'ask' }) }),
+        '', // token from runGated's optimistic pass
+      )
+    })
+  })
+
+  it('calls runGated then updateAgentTools when switching to Balanced preset', async () => {
+    vi.mocked(api.updateAgentTools).mockResolvedValue({ config: DEFAULT_TOOLS_CFG, tools: [] })
+
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="preset-balanced"]')).toBeInTheDocument()
+    })
+
+    fireEvent.click(document.querySelector('[data-testid="preset-balanced"]')!)
+
+    await waitFor(() => {
+      expect(mockRunGated).toHaveBeenCalledTimes(1)
+      expect(api.updateAgentTools).toHaveBeenCalledWith(
+        'agent-1',
+        expect.any(Object),
+        '', // token arg always present (re-auth gate path)
+      )
+    })
   })
 })
