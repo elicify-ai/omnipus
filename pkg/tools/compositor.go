@@ -179,9 +179,11 @@ func resolveEffectivePolicyWith(
 
 // ResolveEffectivePolicy returns the combined global+agent effective policy
 // ("allow", "ask", or "deny") for a single tool name. It applies the same
-// resolution order as FilterToolsByPolicy without iterating all tools.
-// Callers that need to make one-off policy decisions (e.g. repair.go H3) use
-// this rather than spinning up a full filter pass.
+// global×agent resolution order as FilterToolsByPolicy without iterating all
+// tools. It deliberately does NOT apply the infra force-allow or the scope
+// gate — it is the bare global×agent merge. Callers that need the FULL
+// per-tool verdict (infra + scope + merge) must use EffectiveToolPolicy.
+// Callers that need only the merge (e.g. repair.go H3) use this.
 func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 	if cfg == nil {
 		return "allow"
@@ -198,6 +200,105 @@ func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 	globalWildcards := buildWildcardIndex(cfg.GlobalPolicies)
 	return resolveEffectivePolicyWith(
 		cfg, toolName, agentWildcards, globalWildcards,
+		defaultAgentPolicy, defaultGlobalPolicy,
+	)
+}
+
+// effectiveToolPolicyWith is the unified single-tool resolver: it produces the
+// FULL per-tool verdict ("allow"/"ask"/"deny") for one (tool, scope, agentType)
+// in this exact order:
+//
+//  1. INFRA FORCE-ALLOW (unconditional): if ToolManifestTier(toolName) ==
+//     ManifestInfra (currently exactly {load_tool}), the verdict is "allow" no
+//     matter what the agent or global policy says. Infra tools are
+//     registration-gated, not policy-gated — a deny-by-default agent (Ava/Mia/
+//     Ray) never lists load_tool in its allow-set, so without this force-allow
+//     every lazy/load-on-demand tool becomes unreachable at EXECUTION time (the
+//     model is shown load_tool but the exec gate denies it). The force-allow is
+//     UNCONDITIONAL — it does NOT depend on cfg.Tools.Manifest.Compressed. This
+//     is safe: when Compressed is off, load_tool is never surfaced to the model
+//     (buildCompressedToolDefs is not invoked, and the manifest block that
+//     advertises load_tool is not injected), so its resolution is moot and
+//     force-allowing it changes no observable behavior. When Compressed is on,
+//     this is exactly the reachability fix.
+//
+//  2. SCOPE GATE (fail-closed): the structural guard that policy cannot bypass.
+//     A tool whose scope is neither ScopeCore nor ScopeGeneral (unknown/zero
+//     value) is denied outright. ScopeCore on a custom agent and ScopeGeneral on
+//     any agent both defer to the global×agent merge below — preserving the
+//     EXACT behavior FilterToolsByPolicy had before this primitive existed
+//     (where the ScopeCore-on-custom branch dropped the tool iff the merged
+//     policy was "deny", i.e. identically to the merge verdict).
+//
+//  3. GLOBAL×AGENT MERGE (strictest-wins, deny > ask > allow): the standard
+//     resolveEffectivePolicyWith path, including god-mode override and wildcard
+//     resolution (most-specific-wins among wildcards, exact name beats wildcard).
+//
+// This is the SINGLE authority both the agent-loop tool filter
+// (FilterToolsByPolicy) and the gateway WS approval hook (resolveApprovalToolPolicy)
+// resolve through, so the two can never drift again.
+func effectiveToolPolicyWith(
+	cfg *ToolPolicyCfg,
+	scope ToolScope,
+	agentType, toolName string,
+	agentWildcards, globalWildcards []wildcardEntry,
+	defaultAgentPolicy, defaultGlobalPolicy string,
+) string {
+	// 1. Infra force-allow (unconditional). See doc comment.
+	if ToolManifestTier(toolName) == ManifestInfra {
+		return "allow"
+	}
+
+	// 2. Scope gate (fail-closed for unknown scopes). The structural guard that
+	//    policy cannot bypass. We deny here ONLY for the cases the prior
+	//    FilterToolsByPolicy denied independently of the merge — i.e. a scope that
+	//    fails the gate AND is not ScopeCore. ScopeCore on a custom agent fails
+	//    passesScopeGate but is intentionally NOT denied here: the old code
+	//    deferred it to the merge (dropping it iff the merged policy was "deny"),
+	//    so we do the same. ScopeGeneral always passes the gate. Unknown/zero
+	//    scopes fail the gate, are not ScopeCore, and are denied (fail-closed).
+	if !passesScopeGate(scope, agentType) && scope != ScopeCore {
+		return "deny"
+	}
+
+	// 3. Global×agent strictest-wins merge (god-mode + wildcards inside).
+	return resolveEffectivePolicyWith(
+		cfg, toolName, agentWildcards, globalWildcards,
+		defaultAgentPolicy, defaultGlobalPolicy,
+	)
+}
+
+// EffectiveToolPolicy is the exported single-tool resolver — the ONE
+// authoritative primitive for a single (tool, scope, agentType) verdict
+// ("allow"/"ask"/"deny"). Both FilterToolsByPolicy (the agent-loop tool filter)
+// and the gateway WS approval hook resolve through this, so the loop's sent-defs
+// view and the gateway's exec gate cannot diverge.
+//
+// Resolution order (see effectiveToolPolicyWith for the full rationale):
+//  1. infra force-allow (load_tool → "allow", unconditional)
+//  2. scope gate (unknown scope → "deny"; ScopeCore/ScopeGeneral defer to merge)
+//  3. global×agent strictest-wins merge (deny > ask > allow, god-mode, wildcards)
+//
+// A nil cfg is treated as an all-allow agent with an all-allow global floor
+// (matching FilterToolsByPolicy's nil handling), so infra still force-allows and
+// a known-scope tool resolves to "allow".
+func EffectiveToolPolicy(cfg *ToolPolicyCfg, scope ToolScope, agentType, toolName string) string {
+	if cfg == nil {
+		cfg = &ToolPolicyCfg{DefaultPolicy: "allow"}
+	}
+	defaultAgentPolicy := cfg.DefaultPolicy
+	if defaultAgentPolicy == "" {
+		defaultAgentPolicy = "allow"
+	}
+	defaultGlobalPolicy := cfg.GlobalDefaultPolicy
+	if defaultGlobalPolicy == "" {
+		defaultGlobalPolicy = "allow"
+	}
+	agentWildcards := buildWildcardIndex(cfg.Policies)
+	globalWildcards := buildWildcardIndex(cfg.GlobalPolicies)
+	return effectiveToolPolicyWith(
+		cfg, scope, agentType, toolName,
+		agentWildcards, globalWildcards,
 		defaultAgentPolicy, defaultGlobalPolicy,
 	)
 }
@@ -256,48 +357,28 @@ func FilterToolsByPolicy(allTools []Tool, agentType string, cfg *ToolPolicyCfg) 
 	agentWildcards := buildWildcardIndex(cfg.Policies)
 	globalWildcards := buildWildcardIndex(cfg.GlobalPolicies)
 
-	// Single shared resolver — same merge rule as ResolveEffectivePolicy
-	// (deny > ask > allow with default-fill). Defined once here so the
-	// security-critical precedence logic is not duplicated.
-	resolveEffective := func(toolName string) string {
-		return resolveEffectivePolicyWith(
-			cfg, toolName, agentWildcards, globalWildcards,
-			defaultAgentPolicy, defaultGlobalPolicy,
-		)
-	}
-
 	out := make([]Tool, 0, len(allTools))
 	policyMap := make(map[string]string)
 
 	for _, t := range allTools {
-		scope := t.Scope()
-
-		// Layer 1: scope gate (structural constraint — cannot be bypassed by policy).
-		// For ScopeCore tools, core agents pass through; custom agents are let through
-		// only when their effective policy is not "deny" (the policy layer governs access).
-		// ScopeGeneral tools always pass.
-		if scope == ScopeCore && !passesScopeGate(scope, agentType) {
-			// Custom agent: allowed only if effective policy is not "deny".
-			p := resolveEffective(t.Name())
-			if p == "deny" {
-				activeToolMetricsRecorder.IncFilterTotal(agentType, "deny")
-				continue
-			}
-		} else if !passesScopeGate(scope, agentType) {
+		// Resolve the FULL per-tool verdict through the single shared primitive
+		// (infra force-allow → scope gate → global×agent strictest-wins). Routing
+		// every per-tool decision through effectiveToolPolicyWith is what makes the
+		// loop's sent-defs view and the gateway's exec gate provably identical —
+		// they cannot diverge because they run the SAME function.
+		verdict := effectiveToolPolicyWith(
+			cfg, t.Scope(), agentType, t.Name(),
+			agentWildcards, globalWildcards,
+			defaultAgentPolicy, defaultGlobalPolicy,
+		)
+		if verdict == "deny" {
 			activeToolMetricsRecorder.IncFilterTotal(agentType, "deny")
 			continue
 		}
 
-		// Layer 2: effective policy gate — deny removes the tool entirely.
-		effectivePolicy := resolveEffective(t.Name())
-		if effectivePolicy == "deny" {
-			activeToolMetricsRecorder.IncFilterTotal(agentType, "deny")
-			continue
-		}
-
-		activeToolMetricsRecorder.IncFilterTotal(agentType, effectivePolicy)
+		activeToolMetricsRecorder.IncFilterTotal(agentType, verdict)
 		out = append(out, t)
-		policyMap[t.Name()] = effectivePolicy
+		policyMap[t.Name()] = verdict
 	}
 	return out, policyMap
 }

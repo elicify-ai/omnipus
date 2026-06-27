@@ -3274,6 +3274,105 @@ func (al *AgentLoop) GetConfig() *config.Config {
 	return al.cfg
 }
 
+// ResolveApprovalToolPolicy returns the effective tool policy ("allow"/"ask"/
+// "deny") the WS approval hook consults for one (agentID, toolName) at exec time.
+//
+// Unification (#438): this routes the gateway exec gate through the SAME
+// authoritative primitive (tools.EffectiveToolPolicy) AND the SAME live policy
+// snapshot (the agent instance's LoadToolPolicy) that the agent loop's
+// FilterToolsByPolicy uses at defs-assembly time, so the two can never diverge.
+// It encapsulates, in order: (1) infra force-allow (load_tool → allow,
+// unconditional), (2) the scope gate (fail-closed for unknown scopes), and
+// (3) global×agent strictest-wins (deny > ask > allow, god-mode, wildcards).
+//
+// BEHAVIOR CHANGE (intentional): this ALIGNS the exec gate to the agent loop's
+// wildcard-aware verdict. The OLD gateway resolver matched policy keys by
+// exact-name only (it ignored ".*"/"_*" wildcard keys on both the global floor
+// and the agent policy); routing through tools.EffectiveToolPolicy now honors
+// those wildcards exactly as FilterToolsByPolicy always did. It only narrows or
+// matches the loop's verdict — it never widens past it.
+//
+// Inputs are sourced from the registry when the agent is known (the exact
+// snapshot the loop uses); when the agent is not in the registry it falls back
+// to building a ToolPolicyCfg from the global config (sandbox floor + the agent's
+// builtin policy from cfg.Agents.List) so the gate still enforces correctly
+// pre-registration. The tool's scope is resolved from the agent's registry when
+// the tool is registered; otherwise ScopeGeneral is assumed (a tool that reached
+// the exec gate was already surfaced to the model, so it is not an unknown-scope
+// tool — ScopeGeneral imposes no extra restriction beyond the policy merge).
+func (al *AgentLoop) ResolveApprovalToolPolicy(agentID, toolName string) string {
+	// Infra fast-path: force-allow regardless of agent/config resolution so the
+	// gate behaves correctly even before the registry/config are wired.
+	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
+		return "allow"
+	}
+
+	// Preferred path: resolve through the agent instance's LIVE policy snapshot
+	// (LoadToolPolicy — the same *ToolPolicyCfg, including any GodMode flag, that
+	// FilterToolsByPolicy receives) and the tool's real scope, so this verdict
+	// equals the loop's defs-filter verdict for this tool.
+	if al.registry != nil {
+		if inst, ok := al.registry.GetAgent(agentID); ok && inst != nil {
+			scope := tools.ScopeGeneral
+			if inst.Tools != nil {
+				if t, found := inst.Tools.Get(toolName); found {
+					scope = t.Scope()
+				}
+			}
+			return tools.EffectiveToolPolicy(inst.LoadToolPolicy(), scope, inst.AgentType, toolName)
+		}
+	}
+
+	// Fallback: build the policy inputs from the global config. Used when the
+	// agent is not (yet) in the registry. This path is wildcard-aware (it routes
+	// through tools.EffectiveToolPolicy) but is intentionally NOT god-mode-aware
+	// (no GodMode flag set on polCfg) and assumes ScopeGeneral (we cannot resolve
+	// the tool's real scope without the registry). Both omissions make this
+	// fallback strictly MORE restrictive (fail-closed) than the live registry
+	// path, never more permissive: under god mode it may "ask"/"deny" a tool the
+	// live path would allow. The divergence is transient (only until the agent is
+	// registered) and never widens, so it is safe.
+	cfg := al.GetConfig()
+	if cfg == nil {
+		return "ask"
+	}
+	polCfg := &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	if len(cfg.Sandbox.ToolPolicies) > 0 {
+		gp := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
+		for k, v := range cfg.Sandbox.ToolPolicies {
+			gp[k] = v
+		}
+		polCfg.GlobalPolicies = gp
+	}
+	polCfg.GlobalDefaultPolicy = cfg.Sandbox.DefaultToolPolicy
+	agentType := "custom"
+	for i := range cfg.Agents.List {
+		ac := &cfg.Agents.List[i]
+		if ac.ID != agentID {
+			continue
+		}
+		if ac.Type != "" {
+			agentType = string(ac.Type)
+		}
+		if ac.Tools != nil {
+			dp := string(ac.Tools.Builtin.DefaultPolicy)
+			if dp == "" {
+				dp = "allow"
+			}
+			polCfg.DefaultPolicy = dp
+			if len(ac.Tools.Builtin.Policies) > 0 {
+				ap := make(map[string]string, len(ac.Tools.Builtin.Policies))
+				for k, v := range ac.Tools.Builtin.Policies {
+					ap[k] = string(v)
+				}
+				polCfg.Policies = ap
+			}
+		}
+		break
+	}
+	return tools.EffectiveToolPolicy(polCfg, tools.ScopeGeneral, agentType, toolName)
+}
+
 // GetSessionActiveAgent returns the agent that the handoff tool last switched
 // the given session to. Returns ("", false) if no handoff override is active
 // for this session_id.
@@ -5236,7 +5335,16 @@ turnLoop:
 		if cfg.Tools.Manifest.Compressed {
 			providerToolDefs = al.buildCompressedToolDefs(ts, policyFilteredTools)
 		} else {
-			providerToolDefs = tools.ToolsToProviderDefs(policyFilteredTools)
+			// Non-compressed defs path: strip manifest infra tools (load_tool)
+			// before surfacing defs to the model. The unified resolver
+			// (tools.EffectiveToolPolicy) force-allows infra UNCONDITIONALLY, so
+			// load_tool is now present in policyFilteredTools even when
+			// compression is off; but load_tool exists only to drive the
+			// compressed manifest mechanism and has no function when compression is
+			// off, so the model never sees it here regardless of the agent's
+			// default policy (see stripInfraToolDefs for the deny- vs allow-default
+			// behavior note) (#438).
+			providerToolDefs = tools.ToolsToProviderDefs(stripInfraToolDefs(policyFilteredTools))
 		}
 
 		// Native web search support

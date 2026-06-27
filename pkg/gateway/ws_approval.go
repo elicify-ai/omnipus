@@ -260,20 +260,6 @@ func (h *wsApprovalHook) ApproveTool(
 	}
 }
 
-// resolveEffectivePolicy returns the strictest policy from global and agent-level values.
-// Priority order: deny > ask > allow. This ensures a global "deny" cannot be
-// overridden by a permissive agent policy, and a global "ask" cannot be lowered
-// to "allow" by an agent policy.
-func resolveEffectivePolicy(global, agent string) string {
-	if global == "deny" || agent == "deny" {
-		return "deny"
-	}
-	if global == "ask" || agent == "ask" {
-		return "ask"
-	}
-	return "allow"
-}
-
 // autoApproveSafeTool returns true for tools that are pre-approved without interactive confirmation.
 // These are low-risk tools: read-only operations, workspace-scoped writes, web research,
 // and agent orchestration (spawn/subagent).

@@ -30,22 +30,31 @@ type infraToolGetter interface {
 	Get(name string) (tools.Tool, bool)
 }
 
-// ensureInfraToolsExecutable force-allows the manifest infra tool (`tools`)
-// for execution when compressed mode is on. Infra tools are
-// registration-gated, not policy-gated: a deny-by-default agent never lists them
-// in its allow-set, so FilterToolsByPolicy omits them from policyMap and the
-// execution gate (resolveToolPolicyAtExec) would deny load_tool even though the
-// model was shown it — making every lazy tool unreachable. This appends each
-// registered infra tool to policyFiltered and marks it "allow" in policyMap.
-// No-op when compressed is false or the tool is already present. Returns the
-// (possibly extended) policyFiltered slice.
+// ensureInfraToolsExecutable guarantees the manifest infra tools (`load_tool`)
+// are present in the policy-filtered slice and marked "allow" in policyMap so
+// the execution gate authorizes them for EVERY agent — including deny-by-default
+// agents (Ava/Mia/Ray).
+//
+// Unification note (#438): the single authoritative resolver
+// tools.EffectiveToolPolicy (via FilterToolsByPolicy) now force-allows infra
+// tools UNCONDITIONALLY, so by the time this function runs the infra tool is
+// already in policyFiltered with policyMap[name]=="allow" in the common path.
+// This function therefore degrades to a safe idempotent backstop: it re-adds an
+// infra tool only if the resolver somehow omitted it (e.g. a test that builds a
+// policy map by hand and passes a registry whose Get returns the tool). The
+// `compressed` parameter is retained for call-site/signature compatibility but
+// is no longer a gate on the force-allow itself — infra reachability does not
+// depend on the manifest being compressed (when compressed is off, load_tool is
+// stripped from the SENT defs on the non-compressed path in runTurn, so its
+// allow verdict is moot and surfacing nothing to the model). agentTools==nil
+// is still a no-op (nothing to look the tool up from).
 func ensureInfraToolsExecutable(compressed bool, agentTools infraToolGetter, policyFiltered []tools.Tool, policyMap map[string]string) []tools.Tool {
-	if !compressed || agentTools == nil {
+	if agentTools == nil {
 		return policyFiltered
 	}
 	for _, infraName := range tools.InfraManifestToolNames() {
 		if _, ok := policyMap[infraName]; ok {
-			continue // already allowed by the agent's policy
+			continue // already authorized (by EffectiveToolPolicy or a prior pass)
 		}
 		if t, ok := agentTools.Get(infraName); ok {
 			policyFiltered = append(policyFiltered, t)
@@ -53,6 +62,33 @@ func ensureInfraToolsExecutable(compressed bool, agentTools infraToolGetter, pol
 		}
 	}
 	return policyFiltered
+}
+
+// stripInfraToolDefs returns the subset of tools with manifest infra tools
+// (load_tool) removed. Used on the NON-compressed defs path: load_tool is the
+// driver of the compressed manifest mechanism and has no function when
+// compression is off, so the model never sees it there — regardless of the
+// agent's default policy.
+//
+// Unification note (#438): the single resolver now force-allows infra
+// UNCONDITIONALLY, so FilterToolsByPolicy keeps load_tool in the filtered slice
+// for EVERY agent. This path strips it so it is not surfaced uncompressed. For a
+// deny-default agent this matches the old behavior (the old filter dropped
+// load_tool, so it was never sent uncompressed). For an allow-default agent it
+// is a deliberate, narrow change: the old path DID send load_tool uncompressed,
+// the new path does not — correct, because an uncompressed turn has no
+// load_tool affordance (no manifest block telling the model to use it). The
+// strip touches ONLY infra tools; every other tool's surfaced verdict is
+// unchanged.
+func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
+	out := make([]tools.Tool, 0, len(in))
+	for _, t := range in {
+		if tools.ToolManifestTier(t.Name()) == tools.ManifestInfra {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // buildCompressedToolDefs partitions policyFilteredTools into full/lazy/infra

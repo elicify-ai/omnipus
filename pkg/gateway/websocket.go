@@ -38,39 +38,88 @@ import (
 )
 
 // resolveApprovalToolPolicy resolves the effective tool policy consulted by the WS
-// approval hook (the gateway-side exec gate). Infra tools (load_tool) are
-// registration-gated, NOT policy-gated: they must be executable by EVERY agent —
-// including deny-by-default agents (Ava/Mia/Ray) — or every lazy/load-on-demand
-// tool becomes unreachable at EXECUTION time (the model is shown load_tool in its
-// defs but the approval hook denies it, so it can never load create_agent /
-// list_models / etc.). This mirrors ensureInfraToolsExecutable (pkg/agent/loop.go)
-// at the approval-hook layer; the tools that load_tool *loads* stay independently
-// policy-gated when they are actually called. All other tools use strictest-wins
-// (deny > ask > allow) of the sandbox global floor and the agent's builtin policy.
+// approval hook (the gateway-side exec gate) from the global config alone.
+//
+// Unification (#438): this delegates to the ONE authoritative single-tool
+// resolver tools.EffectiveToolPolicy — the SAME primitive the agent loop's
+// FilterToolsByPolicy uses at defs-assembly time — so the gateway exec gate and
+// the loop's sent-defs view can never drift. It builds the resolver inputs (the
+// sandbox global floor + the agent's builtin policy) from cfg. The primitive
+// encapsulates, in order: (1) infra force-allow (load_tool → allow,
+// unconditional — infra tools are registration-gated, not policy-gated, so they
+// stay executable for EVERY agent including deny-by-default Ava/Mia/Ray, or
+// every lazy tool becomes unreachable at exec time), (2) the scope gate, and
+// (3) global×agent strictest-wins (deny > ask > allow). The tools that load_tool
+// *loads* stay independently policy-gated when they are actually called.
+//
+// BEHAVIOR CHANGE (intentional): this does NOT preserve the OLD gateway exec
+// gate verdict byte-for-byte. The old gateway resolved policy by EXACT-MATCH
+// only — cfg.Sandbox.ToolPolicies[name] for the floor and
+// AgentBuiltinToolsCfg.ResolvePolicy(name) for the agent layer, both of which
+// ignore wildcard keys. By routing through tools.EffectiveToolPolicy
+// (buildWildcardIndex/resolveFromMap), this path now ALIGNS the exec gate to the
+// agent loop's wildcard-aware verdict: ".*"/"_*" policy keys on the global floor
+// AND the agent policy are now honored (most-specific-wins). This is the correct
+// reconciliation — FilterToolsByPolicy always honored wildcards, so the old gate
+// could ALLOW at exec time a tool the loop's defs filter had denied via a
+// wildcard (or vice-versa). It only narrows or matches; it never widens past the
+// loop's verdict.
+//
+// This config-only entry point cannot know a tool's real scope (it has only a
+// name), so it passes ScopeGeneral — no extra scope restriction beyond the
+// policy merge. It is also intentionally NOT god-mode-aware (no GodMode flag on
+// the built ToolPolicyCfg): when god mode is active this fallback is therefore
+// strictly more restrictive (fail-closed) than the live registry path, never
+// more permissive. The live hook prefers AgentLoop.ResolveApprovalToolPolicy,
+// which resolves the tool's real scope and the agent's live (god-mode-aware)
+// policy snapshot from the registry; both paths funnel through
+// tools.EffectiveToolPolicy so they agree on the wildcard-aware verdict.
 func resolveApprovalToolPolicy(cfg *config.Config, toolName, agentID string) string {
 	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
 		return "allow"
 	}
 	if cfg == nil {
+		// No config to build a floor from: an infra tool was already handled
+		// above; everything else defaults to interactive approval.
 		return "ask"
 	}
-	// Global policy (floor) — derived from sandbox config.
-	globalPolicy := "allow"
-	if p, ok := cfg.Sandbox.ToolPolicies[toolName]; ok {
-		globalPolicy = p
-	} else if cfg.Sandbox.DefaultToolPolicy != "" {
-		globalPolicy = cfg.Sandbox.DefaultToolPolicy
-	}
-	// Agent-level policy.
-	agentPolicy := "allow"
-	for _, ac := range cfg.Agents.List {
-		if ac.ID == agentID && ac.Tools != nil {
-			agentPolicy = string(ac.Tools.Builtin.ResolvePolicy(toolName))
-			break
+	polCfg := &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	// Global sandbox floor.
+	if len(cfg.Sandbox.ToolPolicies) > 0 {
+		gp := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
+		for k, v := range cfg.Sandbox.ToolPolicies {
+			gp[k] = v
 		}
+		polCfg.GlobalPolicies = gp
 	}
-	// Strictest wins: deny > ask > allow.
-	return resolveEffectivePolicy(globalPolicy, agentPolicy)
+	polCfg.GlobalDefaultPolicy = cfg.Sandbox.DefaultToolPolicy
+	// Agent builtin policy.
+	agentType := "custom"
+	for i := range cfg.Agents.List {
+		ac := &cfg.Agents.List[i]
+		if ac.ID != agentID {
+			continue
+		}
+		if ac.Type != "" {
+			agentType = string(ac.Type)
+		}
+		if ac.Tools != nil {
+			dp := string(ac.Tools.Builtin.DefaultPolicy)
+			if dp == "" {
+				dp = "allow"
+			}
+			polCfg.DefaultPolicy = dp
+			if len(ac.Tools.Builtin.Policies) > 0 {
+				ap := make(map[string]string, len(ac.Tools.Builtin.Policies))
+				for k, v := range ac.Tools.Builtin.Policies {
+					ap[k] = string(v)
+				}
+				polCfg.Policies = ap
+			}
+		}
+		break
+	}
+	return tools.EffectiveToolPolicy(polCfg, tools.ScopeGeneral, agentType, toolName)
 }
 
 // replayLiveBufferCap is the capacity of replayDivertCh (FR-I-009).
@@ -509,7 +558,13 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		registry: h.approvalRegistry,
 		timeout:  wsApprovalTimeout,
 		policyResolver: func(toolName string, agentID string) string {
-			return resolveApprovalToolPolicy(h.agentLoop.GetConfig(), toolName, agentID)
+			// Unification (#438): resolve through the agent loop, which prefers the
+			// agent's LIVE policy snapshot + real tool scope from the registry and
+			// funnels through the SAME tools.EffectiveToolPolicy primitive the loop's
+			// FilterToolsByPolicy uses — so the gateway exec gate and the loop's
+			// sent-defs view cannot drift. Falls back to config-derived inputs inside
+			// the method when the agent is not in the registry.
+			return h.agentLoop.ResolveApprovalToolPolicy(agentID, toolName)
 		},
 	}
 	if err := h.agentLoop.MountHook(agent.NamedHook(hookName, approvalHook)); err != nil {
