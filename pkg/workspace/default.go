@@ -77,7 +77,7 @@ func ResolveDefaultID(home string) (string, error) {
 // Exists reports whether a workspace file with the given id exists under home.
 // Returns false for an empty id or any read/stat error.
 func Exists(home, id string) bool {
-	if id == "" || strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+	if !safeID(id) {
 		return false
 	}
 	_, err := os.Stat(filepath.Join(dirFor(home), id+".json"))

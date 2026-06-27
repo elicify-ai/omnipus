@@ -400,6 +400,10 @@ components:
       $ref: ./components/schemas/UserContextRequest.yaml
     UserContextResponse:
       $ref: ./components/schemas/UserContextResponse.yaml
+    WorkspaceInstructionsRequest:
+      $ref: ./components/schemas/WorkspaceInstructionsRequest.yaml
+    WorkspaceInstructionsResponse:
+      $ref: ./components/schemas/WorkspaceInstructionsResponse.yaml
     TaskCreateRequest:
       $ref: ./components/schemas/TaskCreateRequest.yaml
     TaskUpdateRequest:
@@ -5295,6 +5299,93 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/instructions:
+    get:
+      operationId: getWorkspaceInstructions
+      summary: Get a workspace's Project Instructions (AGENT.md content)
+      description: >
+        Returns the current content of the workspace's AGENT.md (Workspace /
+        Project Instructions) from workspaces/<id>/AGENT.md. This text is injected
+        as a per-turn context layer for every agent acting in the workspace.
+        Returns empty string when the file does not exist. Returns 404 when the
+        workspace does not exist. Requires authentication.
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      responses:
+        '200':
+          description: Current AGENT.md content (may be empty string).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceInstructionsResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    put:
+      operationId: putWorkspaceInstructions
+      summary: Set a workspace's Project Instructions (replace AGENT.md content)
+      description: >
+        Replaces the entire content of the workspace's AGENT.md
+        (workspaces/<id>/AGENT.md) with the provided string. Passing an empty
+        string clears the file. The new content is returned in the response.
+        Returns 404 when the workspace does not exist. Requires authentication.
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceInstructionsRequest'
+      responses:
+        '200':
+          description: Updated AGENT.md content (echoed back).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceInstructionsResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /workspaces/{id}/milestones:
     get:

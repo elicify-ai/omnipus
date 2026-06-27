@@ -1,0 +1,17 @@
+title: WorkspaceInstructionsResponse
+description: >
+  Response from GET and PUT /api/v1/workspaces/{id}/instructions. Returns the
+  current content of the workspace's AGENT.md (Workspace / Project Instructions)
+  at workspaces/<id>/AGENT.md. An empty string means the file does not exist or
+  has not been written yet.
+type: object
+required:
+  - content
+additionalProperties: false
+properties:
+  content:
+    type: string
+    description: >
+      Current content of the workspace's AGENT.md. Empty string when the file
+      does not exist or has not been set yet.
+    example: "Use TypeScript. Prefer functional components. Ship small PRs."

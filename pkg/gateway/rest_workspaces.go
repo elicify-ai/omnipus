@@ -405,6 +405,13 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/v1/workspaces/{id}/instructions — per-workspace Project Instructions (AGENT.md).
+	if strings.HasSuffix(rest, "/instructions") {
+		id := strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/instructions")
+		a.HandleWorkspaceInstructions(w, r, id)
+		return
+	}
+
 	// /api/v1/workspaces/{id}
 	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")

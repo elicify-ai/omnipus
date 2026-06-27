@@ -110,6 +110,8 @@ import {
   WorkspaceSessionLink as WorkspaceSessionLinkSchema,
   // M5 per-workspace delegation graph (contract-first #8):
   WorkspaceDelegation as WorkspaceDelegationSchema,
+  // Workspace / Project Instructions (contract-first #8):
+  WorkspaceInstructionsResponse as WorkspaceInstructionsResponseSchema,
   Task as TaskSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
   // Milestones (contract-first #8):
@@ -311,6 +313,9 @@ import type {
   WorkspaceDelegation,
   WorkspaceDelegationEdge,
   WorkspaceDelegationUpdateRequest,
+  // Workspace / Project Instructions (contract-first #8):
+  WorkspaceInstructionsResponse,
+  WorkspaceInstructionsRequest,
   TokenUsageSummary,
   // Unified task types (Sprint 2) — imported once here (Task was already imported above):
   TaskCreateRequest,
@@ -442,6 +447,9 @@ export type {
   WorkspaceDelegation,
   WorkspaceDelegationEdge,
   WorkspaceDelegationUpdateRequest,
+  // Workspace / Project Instructions:
+  WorkspaceInstructionsResponse,
+  WorkspaceInstructionsRequest,
   TokenUsageSummary,
   // Unified task types (Sprint 2) — Task already exported above, add new ones:
   TaskCreateRequest,
@@ -2661,6 +2669,7 @@ export const workspacesQueryKeys = {
   detail: (id: string) => ['workspaces', id] as const,
   sessions: (id: string) => ['workspaces', id, 'sessions'] as const,
   delegation: (id: string) => ['workspaces', id, 'delegation'] as const,
+  instructions: (id: string) => ['workspaces', id, 'instructions'] as const,
 }
 
 export function fetchWorkspaces(params?: { status?: string }): Promise<Workspace[]> {
@@ -2714,6 +2723,32 @@ export function updateWorkspaceDelegation(
     `/workspaces/${encodeURIComponent(id)}/delegation`,
     { method: 'PUT', body: JSON.stringify(body) },
     WorkspaceDelegationSchema as ZodType<WorkspaceDelegation>,
+  )
+}
+
+// ── Workspace / Project Instructions ─────────────────────────────────────────
+//
+// Per-workspace AGENT.md content — applied to every agent working in the
+// workspace, on top of their persona. Contract-first per Constraint #8.
+// See contracts/components/schemas/WorkspaceInstructions*.yaml.
+
+export function fetchWorkspaceInstructions(workspaceId: string): Promise<WorkspaceInstructionsResponse> {
+  return request<WorkspaceInstructionsResponse>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/instructions`,
+    undefined,
+    WorkspaceInstructionsResponseSchema as ZodType<WorkspaceInstructionsResponse>,
+  )
+}
+
+export function updateWorkspaceInstructions(
+  workspaceId: string,
+  content: string,
+): Promise<WorkspaceInstructionsResponse> {
+  const body: WorkspaceInstructionsRequest = { content }
+  return request<WorkspaceInstructionsResponse>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/instructions`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    WorkspaceInstructionsResponseSchema as ZodType<WorkspaceInstructionsResponse>,
   )
 }
 

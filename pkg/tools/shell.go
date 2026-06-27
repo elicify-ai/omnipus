@@ -553,10 +553,26 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	cwd := t.workingDir
+	// Resolve the base working directory for this call. When the turn re-roots
+	// to a workspace dir (experimental.workspace_rooted_filesystem), the base
+	// becomes workspaces/<id>/ for this turn only; otherwise it is the fixed
+	// agent dir — byte-for-byte the old behavior. All workspace-escape guards
+	// below are evaluated relative to baseDir, so cross-workspace traversal is
+	// still blocked, just relative to the re-rooted root.
+	//
+	// Security (STEP 0): this only changes cmd.Dir. Both agents/<id>/ and
+	// workspaces/<id>/ are under $OMNIPUS_HOME, which the boot Landlock policy
+	// already grants RWX; the kernel sandbox is NOT widened — anything outside
+	// $OMNIPUS_HOME remains denied at the kernel layer.
+	baseDir := t.workingDir
+	if d := TurnWorkspaceDir(ctx); d != "" {
+		baseDir = d
+	}
+
+	cwd := baseDir
 	if wd, ok := args["cwd"].(string); ok && wd != "" {
-		if t.restrictToWorkspace && t.workingDir != "" {
-			resolvedWD, err := validatePathWithAllowPaths(wd, t.workingDir, true, t.allowedPathPatterns)
+		if t.restrictToWorkspace && baseDir != "" {
+			resolvedWD, err := validatePathWithAllowPaths(wd, baseDir, true, t.allowedPathPatterns)
 			if err != nil {
 				return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
 			}
@@ -601,7 +617,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 
 	// Re-resolve symlinks immediately before execution to shrink the TOCTOU window
 	// between validation and cmd.Dir assignment.
-	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
+	if t.restrictToWorkspace && baseDir != "" && cwd != baseDir {
 		resolved, err := filepath.EvalSymlinks(cwd)
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
@@ -609,7 +625,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 		if isAllowedPath(resolved, t.allowedPathPatterns) {
 			cwd = resolved
 		} else {
-			absWorkspace, absErr := filepath.Abs(t.workingDir)
+			absWorkspace, absErr := filepath.Abs(baseDir)
 			if absErr != nil {
 				return ErrorResult(
 					fmt.Sprintf("Command blocked by safety guard (workspace path resolution failed: %v)", absErr),

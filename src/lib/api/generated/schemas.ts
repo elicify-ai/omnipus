@@ -2152,6 +2152,10 @@ export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
 });
 export const WorkspaceDelegationUpdateRequest: z.ZodType<WorkspaceDelegationUpdateRequest> =
   z.object({ edges: z.array(WorkspaceDelegationEdge) });
+export const WorkspaceInstructionsResponse = z.object({ content: z.string() });
+export const WorkspaceInstructionsRequest = z.object({
+  content: z.string().max(262144),
+});
 export const Milestone: z.ZodType<Milestone> = z
   .object({
     id: z.string(),
@@ -6711,6 +6715,92 @@ Returns HTTP 201 on success.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/instructions",
+    alias: "getWorkspaceInstructions",
+    description: `Returns the current content of the workspace&#x27;s AGENT.md (Workspace / Project Instructions) from workspaces/&lt;id&gt;/AGENT.md. This text is injected as a per-turn context layer for every agent acting in the workspace. Returns empty string when the file does not exist. Returns 404 when the workspace does not exist. Requires authentication.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.object({ content: z.string() }),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/workspaces/:id/instructions",
+    alias: "putWorkspaceInstructions",
+    description: `Replaces the entire content of the workspace&#x27;s AGENT.md (workspaces/&lt;id&gt;/AGENT.md) with the provided string. Passing an empty string clears the file. The new content is returned in the response. Returns 404 when the workspace does not exist. Requires authentication.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ content: z.string().max(262144) }),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.object({ content: z.string() }),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],

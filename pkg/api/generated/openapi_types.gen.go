@@ -8344,6 +8344,18 @@ type WorkspaceDelegationUpdateRequest struct {
 // WorkspaceDelegationUpdateRequestEdgesModes defines model for WorkspaceDelegationUpdateRequest.Edges.Modes.
 type WorkspaceDelegationUpdateRequestEdgesModes string
 
+// WorkspaceInstructionsRequest Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. Passing an empty string clears the file.
+type WorkspaceInstructionsRequest struct {
+	// Content Full replacement content for the workspace's AGENT.md. May be empty to clear the file. Maximum 262144 bytes (256 KB). The underlying filesystem write via fileutil.WriteFileAtomic provides the physical limit; this schema constraint enforces a reasonable upper bound at the API layer.
+	Content string `json:"content"`
+}
+
+// WorkspaceInstructionsResponse Response from GET and PUT /api/v1/workspaces/{id}/instructions. Returns the current content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. An empty string means the file does not exist or has not been written yet.
+type WorkspaceInstructionsResponse struct {
+	// Content Current content of the workspace's AGENT.md. Empty string when the file does not exist or has not been set yet.
+	Content string `json:"content"`
+}
+
 // WorkspaceSessionLink A session that has been auto-linked to a workspace via tool use.
 type WorkspaceSessionLink struct {
 	// CreatedAt RFC3339 UTC timestamp when the link was first created.
@@ -8695,6 +8707,9 @@ type UpdateWorkspaceJSONRequestBody = WorkspaceUpdateRequest
 
 // UpdateWorkspaceDelegationJSONRequestBody defines body for UpdateWorkspaceDelegation for application/json ContentType.
 type UpdateWorkspaceDelegationJSONRequestBody = WorkspaceDelegationUpdateRequest
+
+// PutWorkspaceInstructionsJSONRequestBody defines body for PutWorkspaceInstructions for application/json ContentType.
+type PutWorkspaceInstructionsJSONRequestBody = WorkspaceInstructionsRequest
 
 // CreateWorkspaceMilestoneJSONRequestBody defines body for CreateWorkspaceMilestone for application/json ContentType.
 type CreateWorkspaceMilestoneJSONRequestBody = MilestoneCreateRequest

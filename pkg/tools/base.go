@@ -113,6 +113,7 @@ var (
 	ctxKeyProcTracker         = &toolCtxKey{"procTracker"}
 	ctxKeySessionOwner        = &toolCtxKey{"sessionOwner"}
 	ctxKeyWorkspaceID         = &toolCtxKey{"workspaceID"}
+	ctxKeyTurnWorkspaceDir    = &toolCtxKey{"turnWorkspaceDir"}
 	ctxKeyCitationTracker     = &toolCtxKey{"citationTracker"}
 	ctxKeyDelegationDepth     = &toolCtxKey{"delegationDepth"}
 )
@@ -225,6 +226,30 @@ func WithWorkspaceID(ctx context.Context, workspaceID string) context.Context {
 // Workspace; the memory store falls back to the private room only.
 func ToolWorkspaceID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyWorkspaceID).(string)
+	return v
+}
+
+// WithTurnWorkspaceDir returns a child context carrying the absolute filesystem
+// directory that the current turn's file/exec tools should be rooted in
+// (experimental.workspace_rooted_filesystem). The agent loop sets this only
+// when the flag is ON and the turn is bound to a Workspace; otherwise it leaves
+// the context untouched so file/exec tools fall back to their fixed agent root,
+// preserving byte-for-byte the pre-flag behavior.
+//
+// An empty dir is treated as "unset" (the loop never sets it to ""), so passing
+// "" is a no-op rather than re-rooting to the process cwd.
+func WithTurnWorkspaceDir(ctx context.Context, dir string) context.Context {
+	if dir == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyTurnWorkspaceDir, dir)
+}
+
+// TurnWorkspaceDir extracts the per-turn workspace filesystem root from ctx, or
+// "" if unset. "" means no re-rooting: file/exec tools use their fixed agent
+// root exactly as before the flag existed.
+func TurnWorkspaceDir(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyTurnWorkspaceDir).(string)
 	return v
 }
 

@@ -1,0 +1,19 @@
+title: WorkspaceInstructionsRequest
+description: >
+  Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire
+  content of the workspace's AGENT.md (Workspace / Project Instructions) at
+  workspaces/<id>/AGENT.md. Passing an empty string clears the file.
+type: object
+required:
+  - content
+additionalProperties: false
+properties:
+  content:
+    type: string
+    maxLength: 262144
+    description: >
+      Full replacement content for the workspace's AGENT.md. May be empty to
+      clear the file. Maximum 262144 bytes (256 KB). The underlying filesystem
+      write via fileutil.WriteFileAtomic provides the physical limit; this
+      schema constraint enforces a reasonable upper bound at the API layer.
+    example: "Use TypeScript. Prefer functional components. Ship small PRs."
