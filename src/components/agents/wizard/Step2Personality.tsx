@@ -1,10 +1,10 @@
 // Step2Personality — wizard step ② (Personality).
 //
 // Per spec §5.3-§5.5: soul (required for all three types — for External it's
-// passed as CLI prompt content), instructions (optional), heartbeat body +
-// enabled + interval (Main only), voice (Main only — routed through
-// `<VoiceProviderSub>` so the widget auto-switches between dropdown /
-// free-text / disabled based on Settings → Voice provider detection).
+// passed as CLI prompt content), heartbeat body + enabled + interval (Main
+// only), voice (Main only — routed through `<VoiceProviderSub>` so the widget
+// auto-switches between dropdown / free-text / disabled based on Settings →
+// Voice provider detection).
 //
 // The Heartbeat body + enabled + interval sub-fields use the spec §4.9
 // conditional: heartbeat body shows only when non-empty (Main only),
@@ -37,18 +37,6 @@ export function Step2Personality({ payload, setField, initialType }: StepProps) 
           rows={10}
           placeholder="You are a focused research assistant. You answer concisely..."
           aria-required="true"
-        />
-      </div>
-      <div className="space-y-2">
-        <label htmlFor="wizard-instructions" className="text-sm font-medium">
-          Instructions (optional)
-        </label>
-        <Textarea
-          id="wizard-instructions"
-          value={payload.instructions}
-          onChange={(e) => setField('instructions', e.target.value)}
-          rows={4}
-          placeholder="Additional runtime instructions..."
         />
       </div>
       {!isWorker && (

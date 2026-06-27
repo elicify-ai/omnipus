@@ -20,7 +20,6 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     description: 'General purpose assistant',
     soul: '',
     heartbeat: '',
-    instructions: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
     steering_mode: 'one-at-a-time',

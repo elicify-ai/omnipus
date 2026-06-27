@@ -429,7 +429,7 @@ export interface paths {
         };
         /**
          * List all configured agents
-         * @description Returns all agents from config.json (core + custom). Core agents return empty soul/heartbeat/instructions (compiled-in prompts are not exposed). Custom agents return SOUL.md content only (not heartbeat/instructions) for efficient list rendering.
+         * @description Returns all agents from config.json (core + custom). Core agents return empty soul/heartbeat (compiled-in prompts are not exposed). Custom agents return SOUL.md content only (not heartbeat) for efficient list rendering.
          */
         get: operations["listAgents"];
         put?: never;
@@ -453,12 +453,12 @@ export interface paths {
         };
         /**
          * Get a single agent configuration
-         * @description Returns the full agent configuration including soul, heartbeat, and instructions. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+         * @description Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed).
          */
         get: operations["getAgent"];
         /**
          * Update agent configuration
-         * @description Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+         * @description Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
          */
         put: operations["updateAgent"];
         post?: never;
@@ -3025,7 +3025,7 @@ export interface components {
              */
             mime_type: string;
         };
-        /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul/instructions in list responses and forbid identity mutations via PUT. */
+        /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
             /**
              * @description Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
@@ -3044,7 +3044,7 @@ export interface components {
              */
             type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
             /**
-             * @description When true, name, description, soul, heartbeat, and instructions are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
+             * @description When true, name, description, soul, and heartbeat are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
              * @example false
              */
             locked: boolean;
@@ -3089,11 +3089,6 @@ export interface components {
              * @example Every hour, check for new tasks in the queue.
              */
             heartbeat: string;
-            /**
-             * @description Body of AGENT.md (everything after the closing frontmatter delimiter) — additional runtime instructions. Empty string when not set. Always present on detail responses (never null).
-             * @example Focus on TypeScript and Go projects only.
-             */
-            instructions: string;
             /**
              * @description Non-fatal advisory (e.g. config reload failed after create/update).
              * @example config reload failed: ...
@@ -3468,11 +3463,6 @@ export interface components {
              * @example 1800
              */
             heartbeat_interval?: number;
-            /**
-             * @description Initial AGENT.md body (after frontmatter). Optional.
-             * @example Focus on TypeScript and Go projects only.
-             */
-            instructions?: string;
             delegation_policy?: components["schemas"]["DelegationPolicy"];
             /**
              * @description Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
@@ -3504,7 +3494,7 @@ export interface components {
              */
             steering_mode?: "one-at-a-time" | "queue-and-process";
         };
-        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
+        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat. model, timeout_seconds, max_tool_iterations, steering_mode, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
         AgentUpdateRequest: {
             /**
              * Format: date-time
@@ -3542,11 +3532,6 @@ export interface components {
              * @example Check queue every hour.
              */
             heartbeat?: string;
-            /**
-             * @description New AGENT.md body (after frontmatter). Rejected on locked agents. Writing this triggers a config reload.
-             * @example Focus on Python only.
-             */
-            instructions?: string;
             /**
              * @description New timeout in seconds per turn. Allowed on all agents.
              * @example 600

@@ -37,7 +37,6 @@ import { fetchAgents } from '@/lib/api'
 const agentDefaults = {
   soul: '',
   heartbeat: '',
-  instructions: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
   steering_mode: 'one-at-a-time' as const,

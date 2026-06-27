@@ -1,4 +1,4 @@
-import { Scroll, NotePencil, Microphone } from '@phosphor-icons/react'
+import { Scroll, Microphone } from '@phosphor-icons/react'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { SmartSelect } from '@/components/ui/smart-select'
@@ -29,12 +29,6 @@ export interface BehaviorFieldsProps {
   /** Soul setter alias — accepts the conventional `setSoul` name from
    *  consumers that already use that name in their state hooks. */
   setSoul?: (next: string) => void
-  /** The current AGENT.md instructions content. Optional in both tiers. */
-  instructions: string
-  /** Instructions setter. Either `onInstructionsChange` or `setInstructions` may be supplied. */
-  onInstructionsChange?: (next: string) => void
-  /** Instructions setter alias — accepts the conventional `setInstructions` name. */
-  setInstructions?: (next: string) => void
   /**
    * Per-agent persona voice identifier (e.g. TTS voice name or voice model ID).
    * Schema-pinned; not active until v0.2.0 TTS. Optional in both tiers — empty
@@ -48,33 +42,29 @@ export interface BehaviorFieldsProps {
   setVoice?: (next: string) => void
   /**
    * Optional upload button — the profile renders one, the modal does not
-   * (the modal has no file upload affordance for soul/instructions).
+   * (the modal has no file upload affordance for soul).
    */
-  renderUploadButton?: (target: 'soul' | 'instructions', onUpload: (content: string) => void) => React.ReactNode
+  renderUploadButton?: (target: 'soul', onUpload: (content: string) => void) => React.ReactNode
 }
 
 /**
  * Renders the "Behavior" form section: SOUL.md (with worker-relabelled
- * "Task prompt" copy when `isWorker`) + Additional Instructions. Heartbeat
- * is intentionally NOT included — the modal never shows it, and the profile
- * renders heartbeat only for base agents. Keeping the field set tight lets
- * the modal and profile share this exact block.
+ * "Task prompt" copy when `isWorker`) + Voice. Heartbeat is intentionally
+ * NOT included — the modal never shows it, and the profile renders heartbeat
+ * only for base agents. Keeping the field set tight lets the modal and
+ * profile share this exact block.
  */
 export function BehaviorFields({
   isWorker,
   soul,
   onSoulChange,
   setSoul,
-  instructions,
-  onInstructionsChange,
-  setInstructions,
   voice,
   onVoiceChange,
   setVoice,
   renderUploadButton,
 }: BehaviorFieldsProps) {
   const handleSoul = onSoulChange ?? setSoul
-  const handleInstructions = onInstructionsChange ?? setInstructions
   const handleVoice = onVoiceChange ?? setVoice
   return (
     <div className="space-y-5">
@@ -118,29 +108,6 @@ export function BehaviorFields({
           aria-required={isWorker ? 'true' : 'false'}
         />
         {renderUploadButton?.('soul', (v) => handleSoul?.(v))}
-      </div>
-
-      <Separator />
-
-      {/* Additional Instructions — same in both tiers, optional. */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <NotePencil size={13} className="text-[var(--color-accent)]" />
-          <p className="text-xs font-medium text-[var(--color-secondary)]">
-            Additional Instructions
-          </p>
-        </div>
-        <p className="text-xs text-[var(--color-muted)]">
-          Extra instructions appended to the {isWorker ? "worker's" : "agent's"} context.
-        </p>
-        <Textarea
-          value={instructions}
-          onChange={(e) => handleInstructions?.(e.target.value)}
-          placeholder="Add specific instructions, constraints, or domain knowledge..."
-          rows={4}
-          className="text-xs font-mono resize-none"
-        />
-        {renderUploadButton?.('instructions', (v) => handleInstructions?.(v))}
       </div>
 
       {/* W6-B4 / G1: Voice — per-agent persona voice identifier (TTS voice name

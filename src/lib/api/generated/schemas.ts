@@ -104,7 +104,6 @@ type Agent = {
   status: "active" | "idle" | "draft" | "error";
   soul: string;
   heartbeat: string;
-  instructions: string;
   warning?: string | undefined;
   timeout_seconds: number;
   max_tool_iterations: number;
@@ -216,7 +215,6 @@ type AgentCreateRequest = {
   heartbeat?: string | undefined;
   heartbeat_enabled?: boolean | undefined;
   heartbeat_interval?: number | undefined;
-  instructions?: string | undefined;
   delegation_policy?: delegation_policy | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
@@ -250,7 +248,6 @@ type AgentUpdateRequest = Partial<{
   provider: string;
   soul: string;
   heartbeat: string;
-  instructions: string;
   timeout_seconds: number;
   max_tool_iterations: number;
   steering_mode: "one-at-a-time" | "queue-and-process";
@@ -1101,7 +1098,6 @@ export const Agent: z.ZodType<Agent> = z
     status: z.enum(["active", "idle", "draft", "error"]),
     soul: z.string(),
     heartbeat: z.string(),
-    instructions: z.string(),
     warning: z.string().optional(),
     timeout_seconds: z.number().int().gte(0),
     max_tool_iterations: z.number().int().gte(0),
@@ -1190,7 +1186,6 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   heartbeat: z.string().optional(),
   heartbeat_enabled: z.boolean().optional(),
   heartbeat_interval: z.number().int().gte(0).optional(),
-  instructions: z.string().optional(),
   delegation_policy: delegation_policy.optional(),
   voice: z.string().nullish(),
   executor: ExecutorConfig.optional(),
@@ -1209,7 +1204,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     provider: z.string().max(64),
     soul: z.string().min(1),
     heartbeat: z.string(),
-    instructions: z.string(),
     timeout_seconds: z.number().int(),
     max_tool_iterations: z.number().int(),
     steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
@@ -2313,7 +2307,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/agents",
     alias: "listAgents",
-    description: `Returns all agents from config.json (core + custom). Core agents return empty soul/heartbeat/instructions (compiled-in prompts are not exposed). Custom agents return SOUL.md content only (not heartbeat/instructions) for efficient list rendering.
+    description: `Returns all agents from config.json (core + custom). Core agents return empty soul/heartbeat (compiled-in prompts are not exposed). Custom agents return SOUL.md content only (not heartbeat) for efficient list rendering.
 `,
     requestFormat: "json",
     response: z.array(Agent),
@@ -2372,7 +2366,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/agents/:id",
     alias: "getAgent",
-    description: `Returns the full agent configuration including soul, heartbeat, and instructions. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+    description: `Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed).
 `,
     requestFormat: "json",
     parameters: [
@@ -2405,7 +2399,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id",
     alias: "updateAgent",
-    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
 `,
     requestFormat: "json",
     parameters: [

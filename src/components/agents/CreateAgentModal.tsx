@@ -70,8 +70,8 @@ function normalizeWizardType(
 
 /** Convert the wizard's submit payload to a wire AgentCreateRequest.
  *
- *  - Description / instructions are omitted when empty (Main agents
- *    treat them as optional; the server schema accepts `undefined`).
+ *  - Description is omitted when empty (Main agents treat it as optional;
+ *    the server schema accepts `undefined`).
  *  - Executor block is only emitted when at least one of cli / path /
  *    env_overrides / cli_args is set; the server defaults `kind` to
  *    `native` for non-External agents when the block is absent.
@@ -103,7 +103,6 @@ function payloadToCreateRequest(
   // Model omitted when inherited (server falls back to the caller/global model).
   if (!inheritModel && payload.model.trim()) req.model = payload.model.trim()
   if (payload.description.trim()) req.description = payload.description.trim()
-  if (payload.instructions.trim()) req.instructions = payload.instructions.trim()
   // O3 two-field: forward provider only when non-empty and not inheriting model.
   if (!inheritModel && payload.provider && payload.provider.trim() !== '') req.provider = payload.provider.trim()
   if (payload.heartbeat !== undefined) req.heartbeat = payload.heartbeat
