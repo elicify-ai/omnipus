@@ -387,22 +387,69 @@ func TestWebFetchTool_PayloadTooLarge(t *testing.T) {
 
 // TestWebTool_WebSearch_NoApiKey verifies that an error is returned when no search provider is configured.
 func TestWebTool_WebSearch_NoApiKey(t *testing.T) {
-	// BraveEnabled but no keys: falls through to "no provider configured"
+	// BraveEnabled but no keys: Brave is skipped (needs a key), and with no
+	// other keyed provider we fall back to the keyless DuckDuckGo rather than
+	// failing — web search must never be unavailable for lack of an API key.
 	tool, err := NewWebSearchTool(WebSearchToolOptions{BraveEnabled: true, BraveAPIKeys: nil})
-	if err == nil {
-		t.Fatal("Expected error when Brave API key is empty, got nil")
+	if err != nil {
+		t.Fatalf("expected DuckDuckGo fallback (no error) when Brave has no key, got: %v", err)
 	}
-	if tool != nil {
-		t.Errorf("Expected nil tool on error")
+	if tool == nil {
+		t.Fatal("expected a tool from the DuckDuckGo fallback, got nil")
+	}
+	if _, ok := tool.provider.(*DuckDuckGoSearchProvider); !ok {
+		t.Errorf("provider type = %T, want *DuckDuckGoSearchProvider (keyless fallback)", tool.provider)
 	}
 
-	// Nothing enabled: should also error
+	// Nothing enabled at all: also falls back to DuckDuckGo.
 	tool, err = NewWebSearchTool(WebSearchToolOptions{})
-	if err == nil {
-		t.Fatal("Expected error when no provider is enabled, got nil")
+	if err != nil {
+		t.Fatalf("expected DuckDuckGo fallback (no error) when nothing is enabled, got: %v", err)
 	}
-	if tool != nil {
-		t.Errorf("Expected nil tool on error")
+	if tool == nil {
+		t.Fatal("expected a tool from the DuckDuckGo fallback, got nil")
+	}
+	if _, ok := tool.provider.(*DuckDuckGoSearchProvider); !ok {
+		t.Errorf("provider type = %T, want *DuckDuckGoSearchProvider (keyless fallback)", tool.provider)
+	}
+}
+
+// TestNewWebSearchTool_DuckDuckGoFallback validates that DuckDuckGo is the
+// built-in keyless default whenever no other provider is available — so the
+// research agents always have a working search_web. Regression guard for the
+// "Ray can't research / no web search provider configured" bug: a config that
+// never wrote a tools.web section (DuckDuckGoEnabled defaults to false) must
+// still get a working DuckDuckGo-backed search tool, not a dropped tool.
+func TestNewWebSearchTool_DuckDuckGoFallback(t *testing.T) {
+	// (1) Empty options (no provider flags, no keys) → DuckDuckGo fallback.
+	tool, err := NewWebSearchTool(WebSearchToolOptions{})
+	if err != nil {
+		t.Fatalf("empty options: want DuckDuckGo fallback, got error: %v", err)
+	}
+	if _, ok := tool.provider.(*DuckDuckGoSearchProvider); !ok {
+		t.Fatalf("empty options: provider = %T, want *DuckDuckGoSearchProvider", tool.provider)
+	}
+
+	// (2) DuckDuckGo explicitly NOT enabled (the migrated/minimal-config case)
+	//     and no other provider → still falls back to DuckDuckGo.
+	tool, err = NewWebSearchTool(WebSearchToolOptions{DuckDuckGoEnabled: false})
+	if err != nil {
+		t.Fatalf("DuckDuckGoEnabled=false: want DuckDuckGo fallback, got error: %v", err)
+	}
+	if _, ok := tool.provider.(*DuckDuckGoSearchProvider); !ok {
+		t.Fatalf("DuckDuckGoEnabled=false: provider = %T, want *DuckDuckGoSearchProvider", tool.provider)
+	}
+
+	// (3) A keyed provider IS configured → it wins; the fallback is NOT used.
+	tool, err = NewWebSearchTool(WebSearchToolOptions{
+		TavilyEnabled: true,
+		TavilyAPIKeys: []string{"test-key"},
+	})
+	if err != nil {
+		t.Fatalf("Tavily configured: unexpected error: %v", err)
+	}
+	if _, ok := tool.provider.(*TavilySearchProvider); !ok {
+		t.Errorf("Tavily configured: provider = %T, want *TavilySearchProvider (keyed provider takes priority over fallback)", tool.provider)
 	}
 }
 

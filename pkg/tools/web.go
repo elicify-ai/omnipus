@@ -1040,7 +1040,22 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			maxResults = min(opts.GLMSearchMaxResults, 10)
 		}
 	} else {
-		return nil, fmt.Errorf("no web search provider configured")
+		// No keyed or explicitly-enabled provider was selected — fall back to
+		// DuckDuckGo, the built-in keyless provider. DuckDuckGo is the default
+		// whenever no other provider is available: it needs no API key, so web
+		// search must never be unavailable for lack of one. This guarantees
+		// search_web always registers and works — including for a config that
+		// never wrote a tools.web section (a minimal or v0->v1-migrated config,
+		// where DuckDuckGoEnabled defaults to false) — instead of silently
+		// dropping the tool and leaving research agents (Ray) with no search.
+		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create HTTP client for DuckDuckGo fallback: %w", err)
+		}
+		provider = &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client}
+		if opts.DuckDuckGoMaxResults > 0 {
+			maxResults = min(opts.DuckDuckGoMaxResults, 10)
+		}
 	}
 
 	return &WebSearchTool{
