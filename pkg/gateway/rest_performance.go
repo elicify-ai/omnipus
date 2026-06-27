@@ -47,9 +47,13 @@ func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
 	if configured < 2 {
 		configured = effective
 	}
+	// tools_on_demand mirrors cfg.Tools.Manifest.Compressed:
+	// true (default) = load tools on demand; false = all tools every message.
+	toolsOnDemand := cfg.Tools.Manifest.Compressed
 	jsonOK(w, gen.PerformanceSettings{
 		MaxParallelAgents:          &configured,
 		EffectiveMaxParallelAgents: &effective,
+		ToolsOnDemand:              &toolsOnDemand,
 	})
 }
 
@@ -77,20 +81,32 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.MaxParallelAgents == nil {
-		jsonErr(w, http.StatusBadRequest, "max_parallel_agents is required")
+	// At least one field must be present — a PUT with no recognized fields is
+	// a no-op that almost certainly indicates a client bug.
+	if req.MaxParallelAgents == nil && req.ToolsOnDemand == nil {
+		jsonErr(w, http.StatusBadRequest, "at least one of max_parallel_agents or tools_on_demand is required")
 		return
 	}
-	requested := *req.MaxParallelAgents
-	// Accept 0 as "reset to auto-detect"; values < 0 are rejected.
-	if requested < 0 {
+
+	// Validate max_parallel_agents when present.
+	if req.MaxParallelAgents != nil && *req.MaxParallelAgents < 0 {
 		jsonErr(w, http.StatusBadRequest, "max_parallel_agents must be >= 0")
 		return
 	}
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		perf := ensureMap(m, "performance")
-		perf["max_parallel_agents"] = requested
+		// Partial update: only touch the fields that were provided.
+		if req.MaxParallelAgents != nil {
+			// Accept 0 as "reset to auto-detect"; values < 0 rejected above.
+			perf := ensureMap(m, "performance")
+			perf["max_parallel_agents"] = *req.MaxParallelAgents
+		}
+		if req.ToolsOnDemand != nil {
+			// tools_on_demand == true ⇔ cfg.Tools.Manifest.Compressed == true
+			tools := ensureMap(m, "tools")
+			manifest := ensureMap(tools, "manifest")
+			manifest["compressed"] = *req.ToolsOnDemand
+		}
 		return nil
 	}); err != nil {
 		jsonErr(w, http.StatusInternalServerError,
@@ -98,8 +114,8 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resize the in-memory dispatch semaphore immediately so the new cap takes
-	// effect without a restart.
+	// Resize the in-memory dispatch semaphore immediately so the new parallel cap
+	// takes effect without a restart (no-op when max_parallel_agents was not updated).
 	te := agent.GetTaskExecutor(a.agentLoop)
 	if te != nil {
 		newCfg := a.agentLoop.GetConfig()
@@ -109,8 +125,10 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	newCfg := a.agentLoop.GetConfig()
 	configured := newCfg.Performance.MaxParallelAgents
 	effective := newCfg.Performance.EffectiveMaxParallelAgents()
+	toolsOnDemand := newCfg.Tools.Manifest.Compressed
 	jsonOK(w, gen.PerformanceSettings{
 		MaxParallelAgents:          &configured,
 		EffectiveMaxParallelAgents: &effective,
+		ToolsOnDemand:              &toolsOnDemand,
 	})
 }

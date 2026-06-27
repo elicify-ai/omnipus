@@ -8,11 +8,16 @@ import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 
-// SessionBar now uses useNavigate (fix for #417 — New Chat must update the URL).
+// SessionBar now uses useNavigate and useLocation.
 const mockNavigate = vi.fn()
+let mockPathname = '/'
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  return { ...actual, useNavigate: () => mockNavigate }
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useLocation: () => ({ pathname: mockPathname }),
+  }
 })
 
 // test_session_bar_elements (test #11)
@@ -46,6 +51,7 @@ function renderBar() {
 
 beforeEach(() => {
   mockNavigate.mockReset()
+  mockPathname = '/'
   act(() => {
     useSessionStore.setState({
       activeAgentId: 'general-assistant',
@@ -62,6 +68,7 @@ beforeEach(() => {
 
 afterEach(() => {
   mockNavigate.mockReset()
+  mockPathname = '/'
 })
 
 describe('SessionBar — rendering (test #11)', () => {
@@ -93,17 +100,11 @@ describe('SessionBar — rendering (test #11)', () => {
     })
   })
 
-  it('navigates to "/" when New Chat is clicked (fix #417)', async () => {
-    // #417 is fixed structurally in RootChatScreen (the "/" route), NOT here:
-    // New Chat simply navigates to "/", exactly like the sidebar "Chat" link,
-    // and RootChatScreen owns the new-session lifecycle (clear on mount + a
-    // stale-safe forward-navigation guard). See -index.test.tsx for the
-    // no-bounce regression coverage. This test pins SessionBar's only
-    // responsibility: route to "/".
-    //
-    // SessionBar must NOT pre-clear the store itself — doing so would resurrect
-    // the dual-source reconciliation the structural fix removed — so we also
-    // assert it does not call startNewSession.
+  it('navigates to "/" when New Chat is clicked on the global chat route', async () => {
+    // On the global chat route ("/"), New Chat navigates to "/" and lets
+    // DefaultWorkspaceRedirect / WorkspaceChatTab own the new-session lifecycle.
+    // SessionBar must NOT pre-clear the store itself on this path.
+    mockPathname = '/'
     const startNewSessionSpy = vi.spyOn(useSessionStore.getState(), 'startNewSession')
 
     try {
@@ -119,13 +120,41 @@ describe('SessionBar — rendering (test #11)', () => {
 
       fireEvent.click(newChatBtn)
 
-      // New Chat routes to "/" — RootChatScreen takes it from there.
+      // New Chat routes to "/" — the route lifecycle handles new-session setup.
       expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
       // It does NOT clear the store itself (the route owns that now).
       expect(startNewSessionSpy).not.toHaveBeenCalled()
     } finally {
       startNewSessionSpy.mockRestore()
     }
+  })
+
+  it('calls startNewSession (in-place) when New Chat is clicked inside a workspace chat tab', async () => {
+    // Inside /workspaces/<id>/chat, New Chat must start a fresh session in-place
+    // (preserving the workspace context and the active agent) rather than navigating
+    // away to "/" which triggers a full page transition.
+    mockPathname = '/workspaces/ws-123/chat'
+
+    renderBar()
+    const [newChatBtn] = await vi.waitFor(() => {
+      const btns = screen.getAllByRole('button', { name: /new chat/i })
+      if (btns.length === 0) throw new Error('not rendered')
+      return btns
+    })
+
+    // Precondition: a session is active.
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_1')
+
+    fireEvent.click(newChatBtn)
+
+    // In workspace context, navigate is NOT called — the session clears in-place.
+    expect(mockNavigate).not.toHaveBeenCalled()
+    // The session is cleared (activeSessionId becomes null via startNewSession).
+    await vi.waitFor(() => {
+      expect(useSessionStore.getState().activeSessionId).toBeNull()
+    })
+    // The agent is preserved (startNewSession was called with the active agent).
+    expect(useSessionStore.getState().activeAgentId).toBe('general-assistant')
   })
 })
 

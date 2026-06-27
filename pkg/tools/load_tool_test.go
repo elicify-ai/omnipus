@@ -264,8 +264,8 @@ func TestToolsTool_Load_SliceOfStringsDirect(t *testing.T) {
 
 func TestToolsTool_Metadata(t *testing.T) {
 	tt := NewToolsTool(nil, 5, 10)
-	if tt.Name() != "tools" {
-		t.Errorf("Name() = %q, want %q", tt.Name(), "tools")
+	if tt.Name() != "load_tool" {
+		t.Errorf("Name() = %q, want %q", tt.Name(), "load_tool")
 	}
 	if tt.Scope() != ScopeGeneral {
 		t.Errorf("Scope() = %q, want ScopeGeneral", tt.Scope())
@@ -315,20 +315,20 @@ func TestToolsTool_Metadata(t *testing.T) {
 }
 
 func TestToolsTool_TierIsInfra(t *testing.T) {
-	if ToolManifestTier("tools") != ManifestInfra {
-		t.Error("'tools' must have ManifestInfra tier")
+	if ToolManifestTier("load_tool") != ManifestInfra {
+		t.Error("'load_tool' must have ManifestInfra tier")
 	}
 }
 
 func TestToolsTool_NotInManifest(t *testing.T) {
-	// A manifest built with the 'tools' infra tool present should not list it as an entry.
+	// A manifest built with the 'load_tool' infra tool present should not list it as an entry.
 	toolList := []Tool{
 		NewToolsTool(nil, 5, 10),
 		&fakeManifestTool{name: "create_agent", desc: "Create.", cat: CategoryAgents},
 	}
 	got := BuildCompressedManifest(toolList, nil)
-	if strings.Contains(got, "  - tools") {
-		t.Error("BuildCompressedManifest must NOT include 'tools' (infra) as a manifest entry")
+	if strings.Contains(got, "  - load_tool") {
+		t.Error("BuildCompressedManifest must NOT include 'load_tool' (infra) as a manifest entry")
 	}
 }
 

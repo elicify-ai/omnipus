@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useLocation } from '@tanstack/react-router'
 import { Robot, ArrowsClockwise, CaretDown, PencilSimpleLine } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
@@ -18,17 +18,35 @@ import { formatTokens } from '@/lib/formatTokens'
 
 export { formatTokens }
 
+// Matches /workspaces/<id>/chat so New Chat can stay in-workspace.
+const WORKSPACE_CHAT_RE = /^\/workspaces\/[^/]+\/chat$/
+
 export function SessionBar() {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
+  const startNewSession = useSessionStore((s) => s.startNewSession)
   const { sessionTokens, isStreaming } = useChatStore()
   const navigate = useNavigate()
+  const location = useLocation()
 
-  // New Chat just navigates to "/". RootChatScreen owns the new-session
-  // lifecycle: it clears the active session on mount and only advances the URL
-  // when a session is genuinely minted there, so a stale activeSessionId can no
-  // longer bounce the URL back to the old conversation (#417). This is identical
-  // to clicking the sidebar "Chat" link — the route is the single source of truth.
+  // When the user is already inside a workspace chat tab, New Chat should start
+  // a fresh session in-place (clears activeSessionId → next message mints a new
+  // one) rather than navigating away to "/".  Navigating to "/" works too —
+  // DefaultWorkspaceRedirect will bring the user back — but it causes a full
+  // page transition.  The in-place path is instant and preserves the workspace
+  // context and the active agent.
+  //
+  // Outside a workspace chat tab (global /sessions/* deep-links, etc.) we keep
+  // the original behaviour: navigate to "/" so the route lifecycle handles
+  // session teardown.
+  const isWorkspaceChat = WORKSPACE_CHAT_RE.test(location.pathname)
+
   const handleNewChat = () => {
+    if (isWorkspaceChat) {
+      // Stay in workspace — preserve the active agent, clear the session.
+      startNewSession(activeAgentId, null)
+      return
+    }
+    // Global chat route: let the route lifecycle own new-session setup.
     void navigate({ to: '/' })
   }
 

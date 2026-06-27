@@ -3009,7 +3009,8 @@ type ToolsConfig struct {
 type ManifestConfig struct {
 	// Compressed controls whether the manifest optimization is active.
 	// Default: true (enabled). When false, every tool is sent full (legacy behavior).
-	Compressed bool `json:"compressed" yaml:"compressed,omitempty" env:"OMNIPUS_TOOLS_MANIFEST_COMPRESSED"`
+	// Controlled at runtime via PUT /api/v1/performance (tools_on_demand field).
+	Compressed bool `json:"compressed" yaml:"compressed,omitempty"`
 }
 
 // RunInWorkspaceConfig holds dev-mode configuration for the web_serve tool.

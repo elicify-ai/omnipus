@@ -327,6 +327,35 @@ func TestClassifyError_NoEndpointsFoundStillFatal(t *testing.T) {
 	}
 }
 
+// TestClassifyError_GoAwayPatternsClassifiedAsTimeout verifies that HTTP/2
+// GOAWAY error strings are classified as FailoverTimeout (retriable). These
+// were previously unmatched by connectionDropPatterns, causing ClassifyError to
+// return nil → the agent loop treated them as terminal → 0-token turns.
+func TestClassifyError_GoAwayPatternsClassifiedAsTimeout(t *testing.T) {
+	goawayPatterns := []string{
+		// net/http GoAwayError.Error() non-graceful form.
+		`http2: server sent GOAWAY and closed the connection; LastStreamID=5, ErrCode=INTERNAL_ERROR, debug=""`,
+		// net/http GoAwayError.Error() graceful-shutdown form (load-balancer recycle).
+		"http2: Transport received Server's graceful shutdown GOAWAY",
+		// Wrapped in the openai_compat "streaming read error:" prefix.
+		`streaming read error: http2: server sent GOAWAY and closed the connection; LastStreamID=0, ErrCode=INTERNAL_ERROR, debug=""`,
+	}
+	for _, msg := range goawayPatterns {
+		err := errors.New(msg)
+		result := ClassifyError(err, "openrouter", "z-ai/glm-5-turbo")
+		if result == nil {
+			t.Errorf("GOAWAY pattern %q: expected non-nil (must classify as FailoverTimeout)", msg)
+			continue
+		}
+		if result.Reason != FailoverTimeout {
+			t.Errorf("GOAWAY pattern %q: reason = %q, want %q", msg, result.Reason, FailoverTimeout)
+		}
+		if !result.IsRetriable() {
+			t.Errorf("GOAWAY pattern %q: expected retriable", msg)
+		}
+	}
+}
+
 func TestClassifyError_CleanEOFNotMisclassified(t *testing.T) {
 	// A clean io.EOF marks normal stream completion. It must NOT be classified
 	// as an error (the bare "EOF" substring is deliberately not in the

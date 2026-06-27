@@ -7,7 +7,7 @@
 // The manifest optimization cuts per-turn token cost by sending only the
 // high-frequency "full" tools as callable defs; all other allowed tools appear
 // in a compact text block in the system context and are loaded on demand via
-// the unified `tools` infra tool (action='load'). See
+// the `load_tool` infra tool. See
 // docs/internal/design/tool-manifest-optimization-2026-06.md and
 // docs/internal/design/unified-tools-tool-2026-06.md.
 
@@ -27,9 +27,9 @@ const (
 	// ManifestFull — high-frequency tools always sent as callable defs every turn.
 	ManifestFull ManifestTier = iota
 	// ManifestLazy — all other allowed tools; appear in the compact manifest block
-	// and are made callable on demand via the `tools` infra tool (action='load').
+	// and are made callable on demand via the `load_tool` infra tool.
 	ManifestLazy
-	// ManifestInfra — infrastructure tools (the unified `tools` tool) that are
+	// ManifestInfra — infrastructure tools (the `load_tool` infra tool) that are
 	// always callable when registered but never appear in the manifest block itself.
 	ManifestInfra
 )
@@ -52,13 +52,17 @@ var fullManifestToolNames = map[string]struct{}{
 	"remember":          {},
 	"recall_memory":     {},
 	"set_todos":         {},
+	"navigate":          {},
+	"create_task":       {},
+	"list_tasks":        {},
+	"update_task":       {},
 }
 
 // infraManifestToolNames is the set of infrastructure tools that are always
 // callable when registered but must never appear in the manifest block (they
 // exist to drive the manifest mechanism itself).
 var infraManifestToolNames = map[string]struct{}{
-	"tools": {},
+	"load_tool": {},
 }
 
 // ToolManifestTier returns the ManifestTier for the given tool name. This
@@ -96,7 +100,7 @@ func FullManifestToolNames() []string {
 }
 
 // InfraManifestToolNames returns a sorted copy of the infrastructure tool name
-// set (currently just "tools"). These are always callable when registered and
+// set (currently just "load_tool"). These are always callable when registered and
 // never appear in the manifest block. Exported as the single source of truth so
 // the agent loop's force-include logic does not re-list the names.
 func InfraManifestToolNames() []string {
@@ -168,7 +172,7 @@ func BuildCompressedManifest(lazyTools []Tool, loaded map[string]bool) string {
 
 	var sb strings.Builder
 	sb.WriteString("# More tools (load before use)\n")
-	sb.WriteString("These tools are available but not loaded. To use one, call `tools` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.\n")
+	sb.WriteString("These tools are available but not loaded. To use one, call `load_tool` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.\n")
 
 	for _, cat := range cats {
 		entries := grouped[ToolCategory(cat)]

@@ -4568,6 +4568,11 @@ export interface components {
              * @example 4
              */
             effective_max_parallel_agents?: number;
+            /**
+             * @description Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
+             * @example true
+             */
+            tools_on_demand?: boolean;
         };
         /**
          * PerformanceSettingsUpdate
@@ -4579,6 +4584,11 @@ export interface components {
              * @example 6
              */
             max_parallel_agents?: number;
+            /**
+             * @description New tool-loading mode. true = load tools on demand (fewer tokens per message); false = all allowed tools sent every message (no loading step). Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
+             * @example true
+             */
+            tools_on_demand?: boolean;
         };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {

@@ -1,23 +1,14 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { useQuery, useQueries, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   Circle,
   ListChecks,
   Trash,
   MagnifyingGlass,
-  ChatCircle,
-  PaperPlaneTilt,
-  DiscordLogo,
-  SlackLogo,
-  WhatsappLogo,
-  Hash,
-  Terminal,
-  GoogleLogo,
-  ChatDots,
   CaretDown,
   CaretRight,
+  Folder,
 } from '@phosphor-icons/react'
-import type { Icon } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Badge } from '@/components/ui/badge'
@@ -35,7 +26,7 @@ import {
   isApiError,
   workspacesQueryKeys,
 } from '@/lib/api'
-import type { Agent, Session } from '@/lib/api'
+import type { Agent, Session, Workspace } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { formatTokens } from '@/lib/formatTokens'
 
@@ -46,41 +37,7 @@ function sessionButtonClass(isActive: boolean): string {
 }
 
 const UNTITLED_SESSION = 'Untitled Session'
-
-// ── Channel metadata helper ────────────────────────────────────────────────────
-
-interface ChannelMeta {
-  icon: Icon
-  label: string
-}
-
-function getChannelMeta(channel: string): ChannelMeta {
-  switch (channel) {
-    case 'webchat':
-      return { icon: ChatCircle, label: 'Web Chat' }
-    case 'telegram':
-      return { icon: PaperPlaneTilt, label: 'Telegram' }
-    case 'discord':
-      return { icon: DiscordLogo, label: 'Discord' }
-    case 'slack':
-      return { icon: SlackLogo, label: 'Slack' }
-    case 'whatsapp_native':
-      return { icon: WhatsappLogo, label: 'WhatsApp' }
-    case 'matrix':
-      return { icon: Hash, label: 'Matrix' }
-    case 'irc':
-      return { icon: Terminal, label: 'IRC' }
-    case 'google-chat':
-      return { icon: GoogleLogo, label: 'Google Chat' }
-    default: {
-      // Capitalise first letter, replace hyphens/underscores with spaces
-      const label = channel
-        .replace(/[-_]/g, ' ')
-        .replace(/^\w/, (c) => c.toUpperCase())
-      return { icon: ChatDots, label }
-    }
-  }
-}
+const NO_WORKSPACE_KEY = '__no_workspace__'
 
 // ── Agent participation badges ────────────────────────────────────────────────
 
@@ -344,6 +301,118 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
   )
 }
 
+// ── Workspace group header ────────────────────────────────────────────────────
+
+interface WorkspaceGroupProps {
+  groupKey: string
+  label: string
+  count: number
+  isCollapsed: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}
+
+function WorkspaceGroup({ groupKey: _groupKey, label, count, isCollapsed, onToggle, children }: WorkspaceGroupProps) {
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
+        aria-expanded={!isCollapsed}
+        aria-label={`${label} workspace sessions, ${isCollapsed ? 'expand' : 'collapse'}`}
+      >
+        {isCollapsed ? (
+          <CaretRight size={10} className="shrink-0 transition-transform" />
+        ) : (
+          <CaretDown size={10} className="shrink-0 transition-transform" />
+        )}
+        <Folder size={14} className="shrink-0" />
+        <span className="flex-1 text-left truncate">{label}</span>
+        <Badge variant="secondary" className="text-[9px] h-4 px-1.5 rounded-full shrink-0">
+          {count}
+        </Badge>
+      </button>
+      {!isCollapsed && (
+        <div className="space-y-0.5 px-2 pb-1">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Workspace session grouping helpers ────────────────────────────────────────
+
+interface WorkspaceSessionGroup {
+  key: string           // workspace id or NO_WORKSPACE_KEY
+  label: string         // workspace name or "No workspace"
+  sessions: Session[]
+}
+
+/**
+ * Build workspace-keyed groups from a flat session list.
+ *
+ * sessionToWorkspace: sessionId → workspaceId (may be absent for unlinked sessions)
+ * workspaces: list of all Workspace objects (for name lookup)
+ * activeWorkspaceId: shown first in the list
+ */
+function buildWorkspaceGroups(
+  sessions: Session[],
+  sessionToWorkspace: Map<string, string>,
+  workspaces: Workspace[],
+  activeWorkspaceId: string | null,
+): WorkspaceSessionGroup[] {
+  const groups = new Map<string, Session[]>()
+
+  for (const s of sessions) {
+    const wsId = sessionToWorkspace.get(s.id) ?? NO_WORKSPACE_KEY
+    const existing = groups.get(wsId) ?? []
+    groups.set(wsId, [...existing, s])
+  }
+
+  const workspaceById = new Map(workspaces.map((w) => [w.id, w]))
+
+  const result: WorkspaceSessionGroup[] = []
+
+  // Active workspace first
+  if (activeWorkspaceId && groups.has(activeWorkspaceId)) {
+    result.push({
+      key: activeWorkspaceId,
+      label: workspaceById.get(activeWorkspaceId)?.name ?? activeWorkspaceId,
+      sessions: groups.get(activeWorkspaceId)!,
+    })
+  }
+
+  // Other named workspaces sorted by name, excluding active and the no-workspace sentinel
+  const otherKeys = [...groups.keys()]
+    .filter((k) => k !== activeWorkspaceId && k !== NO_WORKSPACE_KEY)
+    .sort((a, b) => {
+      const nameA = workspaceById.get(a)?.name ?? a
+      const nameB = workspaceById.get(b)?.name ?? b
+      return nameA.localeCompare(nameB)
+    })
+
+  for (const key of otherKeys) {
+    result.push({
+      key,
+      label: workspaceById.get(key)?.name ?? key,
+      sessions: groups.get(key)!,
+    })
+  }
+
+  // Sessions with no workspace at the end
+  if (groups.has(NO_WORKSPACE_KEY)) {
+    result.push({
+      key: NO_WORKSPACE_KEY,
+      label: 'No workspace',
+      sessions: groups.get(NO_WORKSPACE_KEY)!,
+    })
+  }
+
+  return result
+}
+
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export function SessionPanel() {
@@ -356,8 +425,8 @@ export function SessionPanel() {
   const [searchValue, setSearchValue] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Collapsed channel group keys; default: all expanded (empty set)
-  const [collapsedChannels, setCollapsedChannels] = useState<Set<string>>(() => new Set())
+  // Collapsed workspace group keys; default: all expanded (empty set)
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => new Set())
 
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
@@ -384,50 +453,52 @@ export function SessionPanel() {
     enabled: sessionPanelOpen,
   })
 
-  // Scope the panel to the active workspace's conversations (IA reframe): the
-  // history opened from a workspace chat shows only that project's sessions,
-  // resolved via the workspace→session links. When no workspace is active the
-  // panel shows every session (global / deep-link case).
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
 
-  // The global "/" front door redirects into the DEFAULT workspace's chat, so
-  // the active workspace is almost never null in practice — it is the default
-  // workspace. The default workspace is the home/inbox: it must keep the
-  // pre-IA "show every session" behaviour, otherwise global / deep-linked /
-  // REST-created sessions (which carry no workspace→task link until the agent
-  // creates a task) silently vanish from the only panel that can reach them.
-  // We therefore scope strictly ONLY for non-default workspaces.
-  const { data: workspaces } = useQuery({
+  // Fetch all workspaces (active) to build the name map and check default status.
+  const { data: workspaces = [] } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
-    enabled: sessionPanelOpen && !!activeWorkspaceId,
+    enabled: sessionPanelOpen,
     staleTime: 30_000,
   })
+
   const activeIsDefaultWorkspace = useMemo(() => {
-    if (!activeWorkspaceId || !workspaces) return false
+    if (!activeWorkspaceId || !workspaces.length) return false
     const active = workspaces.find((w) => w.id === activeWorkspaceId)
     return active?.is_default === true
   }, [activeWorkspaceId, workspaces])
 
-  // Only fetch (and apply) the workspace→session link set for a non-default
-  // workspace. In the default workspace we never scope, so the link query is
-  // unnecessary.
+  // Only scope (and scoped-fetch) when a non-default workspace is active.
   const scopeToWorkspace = !!activeWorkspaceId && !activeIsDefaultWorkspace
-  const { data: workspaceLinks } = useQuery({
-    queryKey: workspacesQueryKeys.sessions(activeWorkspaceId ?? ''),
-    queryFn: () => fetchWorkspaceSessions(activeWorkspaceId!),
-    enabled: sessionPanelOpen && scopeToWorkspace,
-    staleTime: 30_000,
+
+  // Fan out workspace session link queries for each known workspace.
+  // This builds the sessionId→workspaceId map needed for workspace grouping.
+  // Each query is individually cached; staleTime=30s avoids repeated fetches.
+  const workspaceLinkQueries = useQueries({
+    queries: workspaces.map((w) => ({
+      queryKey: workspacesQueryKeys.sessions(w.id),
+      queryFn: () => fetchWorkspaceSessions(w.id),
+      enabled: sessionPanelOpen && workspaces.length > 0,
+      staleTime: 30_000,
+    })),
   })
-  // A session may be tagged with >1 workspace (cross-project edge case), so we
-  // include any session whose id appears in this workspace's link set.
-  const workspaceSessionIds = useMemo(
-    () =>
-      scopeToWorkspace && workspaceLinks
-        ? new Set(workspaceLinks.map((l) => l.session_id))
-        : null,
-    [scopeToWorkspace, workspaceLinks],
-  )
+
+  // Build sessionId → workspaceId reverse map from all link query results.
+  const sessionToWorkspace = useMemo<Map<string, string>>(() => {
+    const map = new Map<string, string>()
+    workspaceLinkQueries.forEach((q, idx) => {
+      if (q.data) {
+        const workspaceId = workspaces[idx]?.id
+        if (workspaceId) {
+          for (const link of q.data) {
+            map.set(link.session_id, workspaceId)
+          }
+        }
+      }
+    })
+    return map
+  }, [workspaceLinkQueries, workspaces])
 
   const handleSelectSession = (session: Session) => {
     // Always trigger the WS attach_session flow so the replay pipeline
@@ -467,6 +538,14 @@ export function SessionPanel() {
 
   // Scope to the active workspace's sessions first (when a workspace is active
   // and its links have loaded), then sort by updated_at descending.
+  const workspaceSessionIds = useMemo(() => {
+    if (!scopeToWorkspace) return null
+    const links = workspaceLinkQueries.find(
+      (_q, idx) => workspaces[idx]?.id === activeWorkspaceId,
+    )?.data
+    return links ? new Set(links.map((l) => l.session_id)) : null
+  }, [scopeToWorkspace, workspaceLinkQueries, workspaces, activeWorkspaceId])
+
   const scopedSessions = workspaceSessionIds
     ? sessions.filter((s) => workspaceSessionIds.has(s.id))
     : sessions
@@ -492,30 +571,22 @@ export function SessionPanel() {
       })
     : sortedSessions
 
-  // Group sessions by channel: webchat first, then other channels alphabetically.
-  // Sessions without a channel field default to "webchat".
-  const groupedSessions = useMemo(() => {
-    const groups = new Map<string, Session[]>()
-    for (const s of filteredSessions) {
-      const ch = s.channel || 'webchat'
-      const existing = groups.get(ch) ?? []
-      groups.set(ch, [...existing, s])
-    }
-    // Sort: webchat first, then alphabetical
-    return [...groups.entries()].sort(([a], [b]) => {
-      if (a === 'webchat') return -1
-      if (b === 'webchat') return 1
-      return a.localeCompare(b)
-    })
-  }, [filteredSessions])
+  // Group sessions by workspace.
+  const workspaceGroups = useMemo(
+    () => buildWorkspaceGroups(filteredSessions, sessionToWorkspace, workspaces, activeWorkspaceId),
+    [filteredSessions, sessionToWorkspace, workspaces, activeWorkspaceId],
+  )
 
-  const toggleChannel = (ch: string) => {
-    setCollapsedChannels((prev) => {
+  // Only show grouped view when there is more than one distinct workspace group.
+  const showGroups = workspaceGroups.length > 1
+
+  const toggleWorkspace = (key: string) => {
+    setCollapsedWorkspaces((prev) => {
       const next = new Set(prev)
-      if (next.has(ch)) {
-        next.delete(ch)
+      if (next.has(key)) {
+        next.delete(key)
       } else {
-        next.add(ch)
+        next.add(key)
       }
       return next
     })
@@ -523,9 +594,6 @@ export function SessionPanel() {
 
   // Resolve the default agent ID (used for active indicator in header)
   const activeAgent = agents.find((a) => a.id === activeAgentId)
-
-  // Whether to render grouped view: only when more than one distinct channel exists
-  const showGroups = groupedSessions.length > 1
 
   return (
     <Sheet open={sessionPanelOpen} onOpenChange={(open) => !open && closeSessionPanel()}>
@@ -582,56 +650,33 @@ export function SessionPanel() {
                   : 'No sessions yet. Start a conversation to begin.'}
             </div>
           ) : showGroups ? (
-            // Multi-channel view: collapsible group headers + sessions within each group
+            // Multi-workspace view: collapsible group headers + sessions within each group
             <div className="py-1">
-              {groupedSessions.map(([ch, groupSessions]) => {
-                const meta = getChannelMeta(ch)
-                const ChannelIcon = meta.icon
-                const isCollapsed = collapsedChannels.has(ch)
-                return (
-                  <div key={ch}>
-                    {/* Group header */}
-                    <button
-                      type="button"
-                      onClick={() => toggleChannel(ch)}
-                      className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
-                      aria-expanded={!isCollapsed}
-                      aria-label={`${meta.label} sessions, ${isCollapsed ? 'expand' : 'collapse'}`}
-                    >
-                      {isCollapsed ? (
-                        <CaretRight size={10} className="shrink-0 transition-transform" />
-                      ) : (
-                        <CaretDown size={10} className="shrink-0 transition-transform" />
-                      )}
-                      <ChannelIcon size={14} className="shrink-0" />
-                      <span className="flex-1 text-left truncate">{meta.label}</span>
-                      <Badge variant="secondary" className="text-[9px] h-4 px-1.5 rounded-full shrink-0">
-                        {groupSessions.length}
-                      </Badge>
-                    </button>
-
-                    {/* Sessions within this group */}
-                    {!isCollapsed && (
-                      <div className="space-y-0.5 px-2 pb-1">
-                        {groupSessions.map((session) => (
-                          <SessionItem
-                            key={session.id}
-                            session={session}
-                            agents={agents}
-                            isActive={session.id === activeSessionId}
-                            isStreaming={sessionsById[session.id]?.isStreaming ?? false}
-                            onSelect={() => handleSelectSession(session)}
-                            onDeleted={handleSessionDeleted}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+              {workspaceGroups.map((group) => (
+                <WorkspaceGroup
+                  key={group.key}
+                  groupKey={group.key}
+                  label={group.label}
+                  count={group.sessions.length}
+                  isCollapsed={collapsedWorkspaces.has(group.key)}
+                  onToggle={() => toggleWorkspace(group.key)}
+                >
+                  {group.sessions.map((session) => (
+                    <SessionItem
+                      key={session.id}
+                      session={session}
+                      agents={agents}
+                      isActive={session.id === activeSessionId}
+                      isStreaming={sessionsById[session.id]?.isStreaming ?? false}
+                      onSelect={() => handleSelectSession(session)}
+                      onDeleted={handleSessionDeleted}
+                    />
+                  ))}
+                </WorkspaceGroup>
+              ))}
             </div>
           ) : (
-            // Single-channel view: flat list, no headers (no regression)
+            // Single workspace (or no workspace data) — flat list, no headers
             <div className="py-1 space-y-0.5 px-2">
               {filteredSessions.map((session) => (
                 <SessionItem

@@ -86,14 +86,14 @@ const EXPLICIT_LABELS: Record<string, string> = {
   write_agent_metadata: 'Write agent metadata',
   // Token usage
   get_usage: 'Get token usage',
-  // Tool discovery — unified multi-action tool (§-consolidation: load_tool +
-  // search_tools_bm25 + search_tools_regex → single `tools` tool, 2026-06-25).
-  tools: 'Tools (search & load)',
+  // Tool discovery — canonical loader tool (renamed tools → load_tool, 2026-06-26).
+  // The canonical name is `load_tool`; it finds and loads tool schemas on demand.
+  load_tool: 'Find & load tools',
   // Legacy names kept for backward compat with old session transcripts only.
-  // Do NOT use these names for new tool calls — the canonical name is `tools`.
+  // Do NOT use these names for new tool calls — the canonical name is `load_tool`.
   /* retired: search_tools_bm25 → 'Search tools (BM25)' */
   /* retired: search_tools_regex → 'Search tools (regex)' */
-  /* retired: load_tool → fallback produces 'Load tool' correctly */
+  /* retired: tools → 'Tools (search & load)' (§-consolidation intermediate name) */
 }
 
 /**

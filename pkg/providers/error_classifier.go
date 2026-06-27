@@ -68,8 +68,17 @@ var (
 	//
 	// IMPORTANT: only "unexpected EOF" is matched, never a bare "EOF". A clean
 	// io.EOF marks normal stream completion and must not be treated as an error.
+	//
+	// HTTP/2 GOAWAY frames: Go's net/http emits two GOAWAY error strings.
+	//   - "http2: server sent GOAWAY and closed the connection; ..." (GoAwayError.Error())
+	//   - "http2: Transport received Server's graceful shutdown GOAWAY"
+	// Neither is matched by the other substrings in this list, so they are
+	// listed explicitly. Both indicate the upstream server reset the connection
+	// and the request can be safely retried.
 	connectionDropPatterns = []errorPattern{
 		substr("http2: response body closed"),
+		substr("http2: server sent goaway"),
+		substr("http2: transport received server's graceful shutdown goaway"),
 		substr("unexpected eof"),
 		substr("connection reset by peer"),
 		substr("broken pipe"),

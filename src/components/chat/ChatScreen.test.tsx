@@ -203,7 +203,7 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
     expect(screen.getByText('/cancel')).toBeInTheDocument()
   })
 
-  it('does NOT show non-streaming commands (/clear, /help, /session new) when streaming', async () => {
+  it('does NOT show non-streaming commands (/new, /clear, /help, /session new) when streaming', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: true })
     })
@@ -220,12 +220,13 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
     })
 
     // These commands must NOT appear while streaming
+    expect(screen.queryByText('/new')).not.toBeInTheDocument()
     expect(screen.queryByText('/clear')).not.toBeInTheDocument()
     expect(screen.queryByText('/help')).not.toBeInTheDocument()
     expect(screen.queryByText('/session new')).not.toBeInTheDocument()
   })
 
-  it('shows all commands (including /cancel) when NOT streaming', async () => {
+  it('shows all commands (including /cancel and /new) when NOT streaming', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
     })
@@ -245,6 +246,40 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
     expect(screen.getByText('/clear')).toBeInTheDocument()
     expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/session new')).toBeInTheDocument()
+    expect(screen.getByText('/new')).toBeInTheDocument()
+  })
+
+  it('/new slash command calls startNewSession and clears the composer', async () => {
+    // /new must clear the session in-place and NOT send a literal "/new" message.
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+      useSessionStore.setState({ activeAgentId: 'general-assistant', activeSessionId: 'sess_1' })
+    })
+
+    render(<OmnipusComposer />)
+
+    const input = screen.getByTestId('composer-input')
+
+    // Type "/new" to trigger the slash menu.
+    act(() => {
+      fireEvent.change(input, { target: { value: '/new' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+
+    // "/new" must appear in the menu.
+    expect(screen.getByText('/new')).toBeInTheDocument()
+
+    // Press Enter to execute the command.
+    act(() => {
+      fireEvent.keyDown(input, { key: 'Enter' })
+    })
+
+    // After executing /new, the active session should be cleared.
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    // The active agent is preserved.
+    expect(useSessionStore.getState().activeAgentId).toBe('general-assistant')
   })
 
   it('does not show slash menu at all when streaming and there is no matching streaming-safe command', async () => {

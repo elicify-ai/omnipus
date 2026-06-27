@@ -14,3 +14,10 @@ properties:
       The runtime clamps the stored value to [2, min(NumCPU-2, RAM_GB/1.5)]
       with a hard ceiling of 16. Set to 0 to restore the auto-detected default.
     example: 6
+  tools_on_demand:
+    type: boolean
+    description: >
+      New tool-loading mode. true = load tools on demand (fewer tokens per
+      message); false = all allowed tools sent every message (no loading step).
+      Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
+    example: true
