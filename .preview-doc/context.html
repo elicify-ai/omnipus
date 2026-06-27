@@ -1,0 +1,301 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context Builder · Omnipus concept</title><link rel="stylesheet" href="style.css">
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="tools-catalog.html">Tool Catalog</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="context.html" class="active">Context</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Context Builder</div>
+  <div class="eyebrow">How an agent's mind is assembled · grounded in code</div>
+  <h1>Context — <span class="gold">what the model actually sees</span></h1>
+  <p class="lede">Every turn, Omnipus builds the agent's <b style="color:#fff">system prompt</b> by stacking a fixed sequence of <b style="color:#fff">layers</b> — some <b style="color:#fff">universal</b> (every agent gets them), some <b style="color:#fff">per-agent</b> (its soul, files, skills, memory). Then, at send time, it wraps that prompt with the <b style="color:#fff">message array</b> and a compact <b style="color:#fff">tool manifest</b>. This page shows every element, where it comes from, and how it differs by agent type.</p>
+  <div class="pillrow">
+    <span class="pill">Built by <b>ContextBuilder.BuildSystemPrompt()</b></span>
+    <span class="pill">Layers joined by <b>--- </b></span>
+    <span class="pill">Cached, <b>mtime-invalidated</b></span>
+    <span class="pill">Source: <b>pkg/agent/context.go</b></span>
+  </div>
+</div></div>
+
+<!-- ─────────────────────────── THE BIG PICTURE ─────────────────────────── -->
+<section><div class="wrap">
+  <div class="eyebrow">The whole picture · one diagram</div>
+  <h2>Two assemblies: the <span class="gold">system prompt</span>, then the <span class="gold">request</span></h2>
+  <p class="sub">First the <b>system prompt</b> is assembled from layers (left). Then, at request time, that prompt becomes message <span class="mono">[0]</span>, a tool manifest is injected at <span class="mono">[1]</span>, and history + the user turn follow — alongside the always-callable tool defs (right).</p>
+  <div class="fig">
+  <svg viewBox="0 0 1000 470" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs>
+      <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#D4AF37"/></marker>
+      <linearGradient id="gp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#D4AF37"/><stop offset="1" stop-color="#7a5f12"/></linearGradient>
+    </defs>
+
+    <!-- LEFT: layered system prompt -->
+    <text x="40" y="34" fill="#8b8b97" font-size="11" font-family="JetBrains Mono" letter-spacing="2">BUILD-TIME · BuildSystemPrompt() — layers joined by "---"</text>
+    <g font-size="11.5">
+      <!-- universal layers in blue, per-agent in gold -->
+      <g><rect x="40" y="48" width="380" height="34" rx="7" fill="#16161c" stroke="#60a5fa"/><text x="54" y="69" fill="#60a5fa" font-family="JetBrains Mono" font-size="10">U</text><text x="78" y="69" fill="#E2E8F0">1 · Environment preamble (model, date, runtime)</text></g>
+      <g><rect x="40" y="86" width="380" height="34" rx="7" fill="#16161c" stroke="#60a5fa"/><text x="54" y="107" fill="#60a5fa" font-family="JetBrains Mono" font-size="10">U</text><text x="78" y="107" fill="#E2E8F0">2 · Identity + workspace + general ## Rules</text></g>
+      <g><rect x="40" y="124" width="380" height="34" rx="7" fill="#1a1612" stroke="#D4AF37"/><text x="54" y="145" fill="#D4AF37" font-family="JetBrains Mono" font-size="10">A</text><text x="78" y="145" fill="#E2E8F0">3 · SOUL / bootstrap (compiled or on-disk)</text></g>
+      <g><rect x="40" y="162" width="380" height="34" rx="7" fill="#1a1612" stroke="#D4AF37"/><text x="54" y="183" fill="#D4AF37" font-family="JetBrains Mono" font-size="10">A</text><text x="78" y="183" fill="#E2E8F0">4 · Agent resources (e.g. Ava's tool catalog)</text></g>
+      <g><rect x="40" y="200" width="380" height="34" rx="7" fill="#1a1612" stroke="#D4AF37"/><text x="54" y="221" fill="#D4AF37" font-family="JetBrains Mono" font-size="10">A</text><text x="78" y="221" fill="#E2E8F0"># Skills (per-agent allowlist summary)</text></g>
+      <g><rect x="40" y="238" width="380" height="34" rx="7" fill="#1a1612" stroke="#D4AF37"/><text x="54" y="259" fill="#D4AF37" font-family="JetBrains Mono" font-size="10">A</text><text x="78" y="259" fill="#E2E8F0"># Memory (recalled context, both rooms)</text></g>
+      <g><rect x="40" y="276" width="380" height="34" rx="7" fill="#16161c" stroke="#2a2a31" stroke-dasharray="4 3"/><text x="78" y="297" fill="#8b8b97">+ Multi-message rule (if channel splits)</text></g>
+    </g>
+    <text x="40" y="332" fill="#5f5f6b" font-size="10.5" font-family="JetBrains Mono">U = universal · A = per-agent</text>
+
+    <!-- arrow to request -->
+    <path d="M424,180 C470,180 470,150 512,150" stroke="#D4AF37" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+    <text x="430" y="138" fill="#8b8b97" font-size="10" font-family="JetBrains Mono">becomes msg[0]</text>
+
+    <!-- RIGHT: request / message array -->
+    <text x="520" y="34" fill="#8b8b97" font-size="11" font-family="JetBrains Mono" letter-spacing="2">SEND-TIME · the request to the model</text>
+    <g font-size="11.5">
+      <g><rect x="520" y="48" width="440" height="34" rx="7" fill="#1a1612" stroke="#D4AF37"/><text x="534" y="69" fill="#D4AF37" font-family="JetBrains Mono" font-size="10">[0]</text><text x="566" y="69" fill="#E2E8F0">system — the assembled system prompt ◀</text></g>
+      <g><rect x="520" y="86" width="440" height="34" rx="7" fill="#161a16" stroke="#34d399"/><text x="534" y="107" fill="#34d399" font-family="JetBrains Mono" font-size="10">[1]</text><text x="566" y="107" fill="#E2E8F0"># More tools (load before use) — manifest note</text></g>
+      <g><rect x="520" y="124" width="440" height="34" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="534" y="145" fill="#8b8b97" font-family="JetBrains Mono" font-size="10">[…]</text><text x="566" y="145" fill="#E2E8F0">conversation history (compressed past ~50%)</text></g>
+      <g><rect x="520" y="162" width="440" height="34" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="534" y="183" fill="#8b8b97" font-family="JetBrains Mono" font-size="10">[n]</text><text x="566" y="183" fill="#E2E8F0">user — the current turn</text></g>
+    </g>
+
+    <!-- tools[] param -->
+    <text x="520" y="234" fill="#8b8b97" font-size="11" font-family="JetBrains Mono" letter-spacing="2">+ tools[] PARAM (callable defs)</text>
+    <g font-size="11">
+      <g><rect x="520" y="248" width="210" height="64" rx="8" fill="url(#gp)" opacity=".14" stroke="#D4AF37"/><text x="534" y="270" fill="#D4AF37" font-family="Outfit" font-weight="700" font-size="12">Full — 13 always sent</text><text x="534" y="289" fill="#cdd3de" font-size="10">read/write/edit · exec · search_web</text><text x="534" y="304" fill="#cdd3de" font-size="10">send_message · hand_off · remember…</text></g>
+      <g><rect x="750" y="248" width="210" height="64" rx="8" fill="#161a16" stroke="#34d399"/><text x="764" y="270" fill="#34d399" font-family="Outfit" font-weight="700" font-size="12">Infra — `tools` loader</text><text x="764" y="289" fill="#cdd3de" font-size="10">always callable, drives the</text><text x="764" y="304" fill="#cdd3de" font-size="10">manifest — load(names/query)</text></g>
+    </g>
+    <g font-size="11">
+      <g><rect x="520" y="320" width="440" height="44" rx="8" fill="#1b1614" stroke="#fbbf24"/><text x="534" y="340" fill="#fbbf24" font-family="Outfit" font-weight="700" font-size="12">Lazy — everything else (~60 tools)</text><text x="534" y="357" fill="#cdd3de" font-size="10">listed in the manifest note only · unlocked on demand via `tools`</text></g>
+    </g>
+  </svg>
+  <div class="figcap">Left: the system prompt is stacked from layers (blue = universal, gold = per-agent). Right: at send time it becomes msg[0], a manifest note is injected at msg[1], history + user follow, and the tools[] param carries the Full tier always + the loader.</div>
+  </div>
+  <div class="callout b">The split that trips people up: <b>visibility ≠ callability</b>. The manifest note (msg[1]) makes ~60 lazy tools <b>discoverable</b> as names; only the <b>13 Full tools + the `tools` loader</b> are <b>callable defs</b> from turn one. A lazy tool must be <span class="mono">load</span>ed (by name or search) before the model can invoke it — that is why an agent sometimes says it "can't" do something it is in fact permitted to do.</div>
+</div></section>
+
+<!-- ─────────────────────────── THE LAYERS TABLE ─────────────────────────── -->
+<section><div class="wrap">
+  <div class="eyebrow">Every element · where it comes from</div>
+  <h2>The seven layers, <span class="gold">in order</span></h2>
+  <p class="sub">Assembled top-to-bottom and joined with <span class="mono">\n\n---\n\n</span>. <b class="blue">Universal</b> layers are identical for every agent; <b class="gold">per-agent</b> layers vary by who the agent is. All from <span class="mono">pkg/agent/context.go::BuildSystemPrompt</span>.</p>
+  <table>
+    <thead><tr><th>#</th><th>Layer</th><th>Scope</th><th>What it contains</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">1</td><td><b>Environment preamble</b></td><td><span class="tag t-info">universal</span></td><td>Model name, current date, runtime/OS, capabilities. Prepended only when a provider is wired.</td><td class="mono src">GetEnvironmentContext()</td></tr>
+      <tr><td class="mono">2</td><td><b>Identity + Workspace + ## Rules</b></td><td><span class="tag t-info">universal</span></td><td>Agent name header, workspace paths, memory-room paths, skills path, and the 5 general <b>## Rules</b> (use tools · artifacts-over-chat &gt;15 lines · be helpful · memory tools · context-summary caveat).</td><td class="mono src">getWorkspaceAndRules()</td></tr>
+      <tr><td class="mono">3</td><td><b>SOUL / bootstrap</b></td><td><span class="tag t-part">per-agent</span></td><td>The agent's persona &amp; operating instructions. <b>Core</b> agents: a <b>compiled</b> prompt (no file on disk). <b>Custom</b> agents: <span class="mono">SOUL.md</span> + <span class="mono">AGENT.md</span> / <span class="mono">USER.md</span> / <span class="mono">IDENTITY.md</span> read from the workspace.</td><td class="mono src">GetPrompt(id) · loadBootstrapFiles</td></tr>
+      <tr><td class="mono">4</td><td><b>Agent resources</b></td><td><span class="tag t-part">per-agent</span></td><td>Optional injected block — e.g. Ava (the Builder) receives the live <b>tool/agent catalog</b> she authors from. Most agents inject nothing.</td><td class="mono src">resourcesInjector()</td></tr>
+      <tr><td class="mono">5</td><td><b># Skills</b></td><td><span class="tag t-part">per-agent</span></td><td>A summary of the skills this agent <b>is allowed</b> to use (per-agent allowlist, progressive disclosure). The model reads full <span class="mono">SKILL.md</span> on demand with read_file.</td><td class="mono src">BuildSkillsSummaryFunc(allow)</td></tr>
+      <tr><td class="mono">6</td><td><b># Memory</b></td><td><span class="tag t-part">per-agent</span></td><td>Recalled durable memory — private room (agent-only) + shared room (workspace) — plus last-session continuity.</td><td class="mono src">memory.GetMemoryContext()</td></tr>
+      <tr><td class="mono">7</td><td><b># Multi-message rule</b></td><td><span class="tag t-info">conditional</span></td><td>Only when the agent's channel splits output — instructs use of the <span class="mono">&lt;|[SPLIT]|&gt;</span> marker.</td><td class="mono src">if cb.splitOnMarker</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">The general <b>## Rules</b> (layer 2) and the <b>SOUL</b> (layer 3) are <b>different things</b>: Rules are the universal harness contract every agent obeys; SOUL is the individual persona. A confused agent usually has a tension between the two — not a missing rule.</div>
+</div></section>
+
+<!-- ─────────── BREAKDOWN · LAYER 1 + LAYER 2 (table of contents) ─────────── -->
+<section><div class="wrap">
+  <div class="eyebrow">Drill-down · what's literally inside layers 1 &amp; 2</div>
+  <h2>Inside the <span class="gold">universal</span> layers — a table of contents <span class="tag t-new" style="vertical-align:middle">draft proposal</span></h2>
+  <p class="sub">The two layers every agent shares, expanded to the exact headings the code emits. <b class="blue">Layer 1</b> is the environment preamble (<span class="mono">envcontext.render</span>); <b class="blue">Layer 2</b> is identity + workspace + the general rules (<span class="mono">getWorkspaceAndRules</span>). They're <b>byte-identical for every agent</b> — only resolved values (paths, sandbox mode, agent name) differ.</p>
+
+  <div class="callout r"><b>Draft thesis (proposed change, not yet built).</b> The environment preamble is the natural home for <b>everything about the harness</b> — it's the one block that's the same for every agent, every turn. Today it explains only <b>paths · sandbox · network</b>. The <b>memory model</b> and the <b>tool system</b> are equally universal harness facts, yet they're scattered (memory across 3 places, tool-loading only in an ephemeral turn-time note + a <i>stale</i> rule citing retired tools). The draft below <b>folds Memory and Tools into <span class="mono">## Environment</span></b> so an agent reads "how this harness works" once, coherently. Items tagged <span class="tag t-new">draft</span> are proposed additions.</div>
+
+  <div class="grid g2">
+    <!-- LAYER 1 -->
+    <div class="card" style="border-color:var(--gold-dim)">
+      <h3>① <span class="mono">## Environment</span> preamble <span class="tag t-info">universal</span></h3>
+      <p class="note" style="margin-bottom:10px"><span class="mono src">pkg/agent/envcontext/render.go</span> · "new-office onboarding" — tells the agent where it can and cannot work. Redacted, capped at <b>2000 runes</b>; emitted only when a provider is wired; fully <b>suppressed</b> when <span class="mono">OMNIPUS_PENTEST_HIDE_SANDBOX=1</span>.</p>
+      <ul class="clean" style="font-size:.86rem">
+        <li><span class="mono blue">## Environment</span> — intro: "You are running inside the Omnipus agent harness…"</li>
+        <li><span class="mono blue">### Paths you can use</span>
+          <ul class="clean" style="margin:4px 0 0">
+            <li>Workspace (your working directory): <span class="mono">&lt;path&gt;</span></li>
+            <li>Omnipus home (framework data; read-only): <span class="mono">&lt;path&gt;</span></li>
+          </ul>
+        </li>
+        <li><span class="mono blue">### Paths you cannot use</span>
+          <ul class="clean" style="margin:4px 0 0">
+            <li>Everything outside the workspace — denied unless allow-listed</li>
+            <li><span class="mono">/dev/tty</span> &amp; other TTY devices — blocked</li>
+            <li>System paths (<span class="mono">/etc · /usr · /root · $HOME</span> outside ws) — denied</li>
+          </ul>
+        </li>
+        <li><span class="mono blue">### Sandbox &amp; network</span>
+          <ul class="clean" style="margin:4px 0 0">
+            <li>Sandbox: <span class="mono">enforce | permissive | off | &lt;unknown&gt;</span></li>
+            <li>Network: <span class="mono">outbound-allowed | outbound-denied</span></li>
+          </ul>
+        </li>
+        <li><span class="mono green">### Memory</span> <span class="tag t-new">draft · folded in</span>
+          <ul class="clean" style="margin:4px 0 0">
+            <li>You have <b>durable cross-turn memory</b> (markdown on disk) — separate from this chat's history</li>
+            <li>Two rooms: <b>Private</b> (agent-only, follows you across workspaces) · <b>Shared</b> (workspace-wide, read in a workspace session)</li>
+            <li>Relevant memories are <b>pre-loaded</b> into your prompt; <span class="mono">recall_memory(query[, room])</span> to search for more</li>
+            <li>Persist with <span class="mono">remember(content, category[, room])</span>; record reviewed lessons with <span class="mono">run_retrospective(…)</span></li>
+            <li>Never <span class="mono">write_file</span> a memory file — always use <span class="mono">remember</span></li>
+          </ul>
+        </li>
+        <li><span class="mono green">### Tools</span> <span class="tag t-new">draft · folded in</span>
+          <ul class="clean" style="margin:4px 0 0">
+            <li>A few core tools are always callable; everything else loads on demand via the <span class="mono">tools</span> loader</li>
+            <li><span class="mono">tools{query:"what you need"}</span> to search · <span class="mono">tools{names:["exact_name"]}</span> to load by name — then call the tool</li>
+            <li>This is also how you find <b>connected MCP servers' tools</b> — they're discovered and loaded the same way</li>
+            <li>If you don't see a tool you need, <b>load it first</b> — don't refuse or ask for approval just because it isn't visible</li>
+          </ul>
+        </li>
+        <li><span class="mono blue">### Active warnings</span> <span class="muted">— only if any are live (degraded boot, missing key…)</span></li>
+      </ul>
+    </div>
+
+    <!-- LAYER 2 -->
+    <div class="card" style="border-color:var(--gold-dim)">
+      <h3>② Identity + <span class="mono">## Workspace</span> + <span class="mono">## Rules</span> <span class="tag t-info">universal</span></h3>
+      <p class="note" style="margin-bottom:10px"><span class="mono src">pkg/agent/context.go · getWorkspaceAndRules / getIdentity / getWorkspaceInfo</span>. The <b>identity header</b> differs by branch (below); the workspace block &amp; rules are shared.</p>
+      <ul class="clean" style="font-size:.86rem">
+        <li><span class="mono blue"># &lt;Agent name&gt;</span> — identity header
+          <ul class="clean" style="margin:4px 0 0">
+            <li>core / custom-with-SOUL → bare <span class="mono"># &lt;name&gt;</span> (persona comes from SOUL)</li>
+            <li>no-SOUL agent → full default: "You are &lt;name&gt;, a helpful AI assistant powered by Omnipus."</li>
+          </ul>
+        </li>
+        <li><span class="mono">Omnipus &lt;version&gt;</span> · <span class="mono">Agent ID: &lt;id&gt;</span></li>
+        <li><span class="mono blue">## Workspace</span> <span class="tag t-part">naming collision — see below</span>
+          <ul class="clean" style="margin:4px 0 0">
+            <li>Your workspace is at: <span class="mono">&lt;path&gt;</span> <span class="red">→ actually <span class="mono">agents/&lt;id&gt;/</span> (agent's <b>own</b> dir)</span></li>
+            <li>Private memory room: <span class="mono">agents/&lt;id&gt;/.omnipus/memories/</span> (agent-only) <span class="green">✓</span></li>
+            <li>Shared memory room: <span class="mono">workspace</span> .omnipus/memories/ <span class="red">→ actually <span class="mono">workspaces/&lt;ws_id&gt;/.omnipus/</span> — a <b>different</b> tree, wired per-turn</span></li>
+            <li>Skills: <span class="mono">agents/&lt;id&gt;/skills/{skill-name}/SKILL.md</span> <span class="green">✓ path</span></li>
+          </ul>
+        </li>
+        <li><span class="mono blue">## Rules</span>
+          <ul class="clean" style="margin:4px 0 0">
+            <li><b>1.</b> ALWAYS use tools (don't pretend to act) <span class="muted">— stays</span></li>
+            <li><b>2.</b> Artifacts over chat — &gt;15 lines → <span class="mono">write_file</span> <span class="muted">— stays</span></li>
+            <li><b>3.</b> Be helpful &amp; accurate (briefly explain tool use) <span class="muted">— stays</span></li>
+            <li><b>4.</b> Memory — <span class="mono">remember · recall_memory · run_retrospective</span> <span class="tag t-new" style="margin-left:4px">draft → ## Environment</span></li>
+            <li><b>5.</b> Context summaries are approximate — defer to explicit instructions <span class="muted">— stays</span></li>
+            <li class="muted">+ Tool Discovery rule <span class="tag t-part">legacy · stale, cites retired tools</span> <span class="tag t-new">draft: delete → ## Environment ### Tools</span></li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout b">Read top-to-bottom this is the agent's <b>orientation</b>: <i>where am I</i> (env paths + sandbox) → <i>who am I</i> (identity) → <i>what's around me</i> (workspace, memory rooms, skills) → <i>how must I behave</i> (the 5 rules). Only after all of that does its individual <b>SOUL</b> (layer 3) begin.</div>
+
+  <h2 style="margin-top:34px">Critical review — <span class="gold">the harness is explained in too many places</span></h2>
+  <p class="sub">Every row below is a universal harness fact (true for every agent, every turn). Three of the four are fragmented; the draft consolidates them under <span class="mono">## Environment</span>.</p>
+  <table>
+    <thead><tr><th>Harness concept</th><th>Where it's explained today</th><th>Problem</th><th>Draft home</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Filesystem · sandbox · network</b></td>
+        <td class="mono">## Environment preamble</td>
+        <td><span class="green">Coherent ✓</span> — one place, clearly written</td>
+        <td><b>Stays</b> in <span class="mono">## Environment</span></td>
+      </tr>
+      <tr>
+        <td><b>Memory model</b></td>
+        <td class="mono">## Workspace (room paths) + ## Rules&nbsp;#4 (the tools) + the silent # Memory layer</td>
+        <td>Three fragments; the <b>room model</b> (private vs shared, when each is read) is never stated as a whole</td>
+        <td><span class="tag t-new">draft</span> <span class="mono">## Environment → ### Memory</span></td>
+      </tr>
+      <tr>
+        <td><b>Tool tiers + loading</b></td>
+        <td class="mono">only the ephemeral msg[1] "# More tools" note (conditional) + a stale ## Rules discovery line</td>
+        <td>Not in the always-on prompt; the <b>tier model is never stated</b>; the legacy line cites <b>retired</b> <span class="mono">tool_search_tool_bm25/regex</span> and <b>contradicts</b> the real <span class="mono">tools</span> loader → agents confabulate <i>"I can't / need approval"</i></td>
+        <td><span class="tag t-new">draft</span> <span class="mono">## Environment → ### Tools</span></td>
+      </tr>
+      <tr>
+        <td><b>Behaviour</b> (use-tools · artifacts &gt;15 lines · be helpful · summary caveat)</td>
+        <td class="mono">## Rules</td>
+        <td><span class="green">Genuinely behavioural ✓</span> — belongs with conduct, not orientation</td>
+        <td><b>Stays</b> in <span class="mono">## Rules</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>Net effect of the draft:</b> <span class="mono">## Environment</span> becomes the single "how this harness works" page (paths · sandbox · network · <b>memory</b> · <b>tools</b>) — same bytes for every agent. <span class="mono">## Rules</span> shrinks to pure conduct. The stale tool-discovery rule is deleted. Nothing per-agent moves: SOUL, skill allowlist and recalled memory <i>contents</i> stay in the per-agent layers (3–6). This is a <b>documentation/prompt-structure proposal</b> for v0.3 — no code has changed.</div>
+
+  <h2 style="margin-top:34px">The word "<span class="gold">workspace</span>" is now overloaded</h2>
+  <p class="sub">v0.3 makes <b>Workspace</b> a top-level <b>container</b> (My Workspace + named workspaces — holds agents, tasks, memory, channels). But the prompt already used "workspace" to mean the agent's <b>own directory</b>. Two meanings, one word — and they appear three lines apart. The code keeps them as <b>separate trees</b>; only the prompt vocabulary lags.</p>
+  <table>
+    <thead><tr><th>Prompt line</th><th>Resolves to</th><th>Which "workspace"?</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">Your workspace is at: …</td><td class="mono">agents/&lt;id&gt;/</td><td>agent's <b>own</b> dir (sandbox root)</td><td><span class="red">Misleading</span> — reads like the container Workspace</td></tr>
+      <tr><td class="mono">Private memory room: …</td><td class="mono">agents/&lt;id&gt;/.omnipus/memories/</td><td>agent home</td><td><span class="green">Correct</span></td></tr>
+      <tr><td class="mono">Shared memory room: workspace …</td><td class="mono">workspaces/&lt;ws_id&gt;/.omnipus/</td><td>the <b>container Workspace</b> (per-turn)</td><td><span class="red">Wrong word + no path</span> — different tree from line 1, same word</td></tr>
+      <tr><td class="mono">Skills: …/skills/</td><td class="mono">agents/&lt;id&gt;/skills/</td><td>agent home</td><td><span class="green">Path correct</span></td></tr>
+      <tr><td class="mono">env · Workspace (your working directory): …</td><td class="mono">agents/&lt;id&gt;/</td><td>agent home</td><td><span class="amber">Imprecise</span> — "workspace" ≠ "working directory"</td></tr>
+    </tbody>
+  </table>
+  <div class="callout r"><b>Draft fix — reserve "Workspace" for the container.</b> Rename the agent's own dir in every prompt to <b>"agent home"</b> (or "your working directory"); use <b>"Workspace"</b> only for the v0.3 container. So: <span class="mono">Agent home: agents/&lt;id&gt;/</span> · <span class="mono">Your private memory: agent home/.omnipus/memories/</span> · <span class="mono">Shared memory (the Workspace you're in): workspaces/&lt;ws_id&gt;/.omnipus/memories/ — present only when acting inside a Workspace</span>. The directories don't change; the <b>words</b> stop colliding. <span class="muted">Code already splits the trees — <span class="mono">memory.go</span>: private = <span class="mono">agents/&lt;id&gt;/.omnipus/</span>, shared = <span class="mono">workspaces/&lt;id&gt;/.omnipus/</span> set per-turn by <span class="mono">SetWorkspaceID</span>.</span></div>
+</div></section>
+
+<!-- ─────────────────────────── PER AGENT TYPE ─────────────────────────── -->
+<section><div class="wrap">
+  <div class="eyebrow">Where it differs · by agent type</div>
+  <h2>Same skeleton, <span class="gold">different layer 3–6</span></h2>
+  <p class="sub">Layers 1–2 are byte-identical for everyone. The personality, files, skills and memory (layers 3–6) are where a <b>core</b> base agent, a user's <b>custom</b> agent, and a delegation-only <b>sub-agent</b> diverge.</p>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>🏛️ Core base agent <span class="tag t-info">Mia · Jim · Ray · Ava</span></h3><ul class="clean">
+      <li><b>SOUL:</b> <b>compiled-in</b> prompt via <span class="mono">GetPrompt(id)</span> — invisible, no SOUL.md on disk</li>
+      <li>Uses <b>workspace-only identity</b> (the compiled SOUL carries the persona)</li>
+      <li><b>Deny-default, least-privilege</b> policy seeded per role</li>
+      <li>Per-agent skill allowlist; full memory rooms</li>
+      <li>A chat target with heartbeat &amp; durable memory</li>
+    </ul></div>
+    <div class="card"><h3>🧑‍🎨 Custom agent <span class="tag t-part">user-made (Main)</span></h3><ul class="clean">
+      <li><b>SOUL:</b> <span class="mono">SOUL.md</span> on disk (+ AGENT.md / USER.md / IDENTITY.md)</li>
+      <li>If a SOUL.md exists → workspace-only identity; if not → the <b>full default identity</b> block</li>
+      <li>Tools &amp; skills per the policy you set in the Agents screen</li>
+      <li>Own workspace, own memory rooms, a chat target</li>
+    </ul></div>
+    <div class="card"><h3>⚙️ Sub-agent / Worker <span class="tag t-new">delegation-only</span></h3><ul class="clean">
+      <li><b>SOUL:</b> compiled (Planner · Explorer · Researcher) or templated worker</li>
+      <li><b>Not a chat target</b> — spawned only via delegation</li>
+      <li>Narrower toolset; <b>no heartbeat, no own channel</b></li>
+      <li>Memory/recall surface trimmed to the delegated task</li>
+    </ul></div>
+  </div>
+  <div class="callout b">Same <b>BuildSystemPrompt</b> code path for all three — the branch is just <i>"is there a compiled prompt for this id?"</i> (core) → <i>"is there a SOUL.md on disk?"</i> (custom) → <i>else default identity</i>. Everything else (resources, skills, memory) is wired the same way and simply resolves to per-agent data.</div>
+</div></section>
+
+<!-- ─────────────────────────── TOOL TIERS ─────────────────────────── -->
+<section><div class="wrap">
+  <div class="eyebrow">The fourth input · tools, not prompt</div>
+  <h2>Tools arrive on a <span class="gold">separate channel</span> — in three tiers</h2>
+  <p class="sub">Tool definitions are <b>not</b> part of the system-prompt text; they ride the API <span class="mono">tools[]</span> parameter. To keep that payload small, the manifest optimisation (<span class="mono">pkg/tools/manifest.go</span>) splits every allowed tool into three tiers.</p>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>Full <span class="tag t-have">13 · always sent</span></h3><p class="note">Sent as callable defs every turn — the high-frequency core:</p><p class="mono" style="font-size:.78rem;color:#cdd3de">read_file · write_file · edit_file · list_directory · exec · search_web · fetch_url · send_message · hand_off · return_to_default · remember · recall_memory · set_todos</p></div>
+    <div class="card"><h3>Infra <span class="tag t-info">the loader</span></h3><p class="note">A single always-callable tool — <span class="mono">tools</span> — that drives the manifest. The agent calls <span class="mono">tools{names:[…]}</span> or <span class="mono">tools{query:"…"}</span> to unlock lazy tools for the next turn. Never appears in the manifest list itself.</p></div>
+    <div class="card"><h3>Lazy <span class="tag t-part">~60 · on demand</span></h3><p class="note">Every other allowed tool. <b>Listed by name</b> in the "# More tools (load before use)" note at msg[1], but <b>not callable</b> until loaded. This is the progressive-disclosure surface that keeps the prompt cheap.</p></div>
+  </div>
+  <div class="callout r"><b>The load gate is real.</b> If a capability (e.g. <span class="mono">create_workspace</span>, <span class="mono">spawn</span>) is policy-<i>allowed</i> but sits in the Lazy tier, the model must <span class="mono">load</span> it first. A weaker model can confabulate "I need approval / I don't have that tool" instead of loading — a <b>prompt/indirection</b> issue, not a permission denial. Verify against the audit log, not the agent's narration.</div>
+</div></section>
+
+<!-- ─────────────────────────── CACHE ─────────────────────────── -->
+<section><div class="wrap">
+  <div class="eyebrow">Performance · why edits show up</div>
+  <h2>Built once, <span class="gold">cached, mtime-invalidated</span></h2>
+  <p class="sub">The assembled prompt is cached per agent. It rebuilds automatically when any tracked source changes — a cheap <span class="mono">stat()</span> mtime check on SOUL.md / AGENT.md / USER.md / the memories dir / last-session.md / skill roots. Edit a SOUL.md and the next turn rebuilds; nothing else does.</p>
+  <div class="grid g2">
+    <div class="card"><h3>✅ Triggers a rebuild</h3><ul class="clean">
+      <li>Editing <span class="mono">SOUL.md</span> / <span class="mono">AGENT.md</span> / <span class="mono">USER.md</span> / <span class="mono">IDENTITY.md</span></li>
+      <li>A new memory written (memories dir mtime bumps)</li>
+      <li>A new / changed skill in any skill root</li>
+      <li>A new <span class="mono">last-session.md</span></li>
+    </ul></div>
+    <div class="card"><h3>♻️ Stays cached</h3><ul class="clean">
+      <li>Same files, same mtimes → served from cache (read-lock fast path)</li>
+      <li>Concurrent turns double-check under write-lock — no duplicate builds</li>
+      <li>Compiled core prompts never change at runtime → always cache-hit</li>
+    </ul></div>
+  </div>
+  <p style="margin-top:14px"><span class="mono src">Source: pkg/agent/context.go — BuildSystemPrompt · BuildSystemPromptWithCache · buildCacheBaseline · sourcePaths · pkg/tools/manifest.go · pkg/agent/tool_manifest.go::injectManifestNote</span></p>
+</div></section>
+
+<footer><div class="wrap">
+  <p>Concept page · code-grounded in <span class="mono">pkg/agent/context.go</span>, <span class="mono">pkg/coreagent/core.go</span>, <span class="mono">pkg/tools/manifest.go</span>, <span class="mono">pkg/agent/tool_manifest.go</span>. The layer order, the universal-vs-per-agent split, the 13-tool Full tier, and the cache invalidation are all read directly from the implementation on <span class="mono">feat/0.1.0-uat-fixes</span>. See also <a href="agents.html">Agents</a> · <a href="memory.html">Memory</a> · <a href="tools.html">Tools</a> · <a href="delegation.html">Delegation</a>.</p>
+</div></footer>
+</body></html>
