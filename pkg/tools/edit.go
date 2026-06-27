@@ -13,6 +13,7 @@ import (
 // The old_text must exist exactly in the file.
 type EditFileTool struct {
 	BaseTool
+	rerootable
 	fs        fileSystem
 	workspace string
 }
@@ -24,8 +25,9 @@ func NewEditFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Re
 		patterns = allowPaths[0]
 	}
 	return &EditFileTool{
-		fs:        buildFs(workspace, restrict, patterns),
-		workspace: workspace,
+		rerootable: rerootable{restrict: restrict, patterns: patterns},
+		fs:         buildFs(workspace, restrict, patterns),
+		workspace:  workspace,
 	}
 }
 
@@ -67,11 +69,14 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
+	effFs := t.effectiveFs(ctx, t.fs)
+	effWorkspace := t.effectiveWorkspace(ctx, t.workspace)
+
 	// Metadata guard: reject edits to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.write_metadata instead.
 	// Skipped only for static tools that have no agent workspace concept.
-	if t.workspace != "" {
-		if denied := guardMetadataPath(t.workspace, path, "write"); denied != nil {
+	if effWorkspace != "" {
+		if denied := guardMetadataPath(effWorkspace, path, "write"); denied != nil {
 			return denied
 		}
 	}
@@ -86,7 +91,7 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("new_text is required")
 	}
 
-	if err := editFile(t.fs, path, oldText, newText); err != nil {
+	if err := editFile(effFs, path, oldText, newText); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("File edited: %s", path))
@@ -94,6 +99,7 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 type AppendFileTool struct {
 	BaseTool
+	rerootable
 	fs        fileSystem
 	workspace string
 }
@@ -104,8 +110,9 @@ func NewAppendFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.
 		patterns = allowPaths[0]
 	}
 	return &AppendFileTool{
-		fs:        buildFs(workspace, restrict, patterns),
-		workspace: workspace,
+		rerootable: rerootable{restrict: restrict, patterns: patterns},
+		fs:         buildFs(workspace, restrict, patterns),
+		workspace:  workspace,
 	}
 }
 
@@ -143,11 +150,14 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("path is required")
 	}
 
+	effFs := t.effectiveFs(ctx, t.fs)
+	effWorkspace := t.effectiveWorkspace(ctx, t.workspace)
+
 	// Metadata guard: reject appends to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.write_metadata instead.
 	// Skipped only for static tools that have no agent workspace concept.
-	if t.workspace != "" {
-		if denied := guardMetadataPath(t.workspace, path, "write"); denied != nil {
+	if effWorkspace != "" {
+		if denied := guardMetadataPath(effWorkspace, path, "write"); denied != nil {
 			return denied
 		}
 	}
@@ -157,7 +167,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("content is required")
 	}
 
-	if err := appendFile(t.fs, path, content); err != nil {
+	if err := appendFile(effFs, path, content); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("Appended to %s", path))

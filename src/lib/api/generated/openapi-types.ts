@@ -2288,6 +2288,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{id}/instructions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a workspace's Project Instructions (AGENT.md content)
+         * @description Returns the current content of the workspace's AGENT.md (Workspace / Project Instructions) from workspaces/<id>/AGENT.md. This text is injected as a per-turn context layer for every agent acting in the workspace. Returns empty string when the file does not exist. Returns 404 when the workspace does not exist. Requires authentication.
+         */
+        get: operations["getWorkspaceInstructions"];
+        /**
+         * Set a workspace's Project Instructions (replace AGENT.md content)
+         * @description Replaces the entire content of the workspace's AGENT.md (workspaces/<id>/AGENT.md) with the provided string. Passing an empty string clears the file. The new content is returned in the response. Returns 404 when the workspace does not exist. Requires authentication.
+         */
+        put: operations["putWorkspaceInstructions"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/milestones": {
         parameters: {
             query?: never;
@@ -6135,6 +6159,28 @@ export interface components {
             /**
              * @description Current content of USER.md. Empty string when the file does not exist or has not been set yet.
              * @example I am a senior Go developer focused on distributed systems.
+             */
+            content: string;
+        };
+        /**
+         * WorkspaceInstructionsRequest
+         * @description Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. Passing an empty string clears the file.
+         */
+        WorkspaceInstructionsRequest: {
+            /**
+             * @description Full replacement content for the workspace's AGENT.md. May be empty to clear the file. Maximum 262144 bytes (256 KB). The underlying filesystem write via fileutil.WriteFileAtomic provides the physical limit; this schema constraint enforces a reasonable upper bound at the API layer.
+             * @example Use TypeScript. Prefer functional components. Ship small PRs.
+             */
+            content: string;
+        };
+        /**
+         * WorkspaceInstructionsResponse
+         * @description Response from GET and PUT /api/v1/workspaces/{id}/instructions. Returns the current content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. An empty string means the file does not exist or has not been written yet.
+         */
+        WorkspaceInstructionsResponse: {
+            /**
+             * @description Current content of the workspace's AGENT.md. Empty string when the file does not exist or has not been set yet.
+             * @example Use TypeScript. Prefer functional components. Ship small PRs.
              */
             content: string;
         };
@@ -12163,6 +12209,81 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
+    getWorkspaceInstructions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current AGENT.md content (may be empty string). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceInstructionsResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    putWorkspaceInstructions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceInstructionsRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated AGENT.md content (echoed back). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceInstructionsResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     listWorkspaceMilestones: {
         parameters: {
             query?: never;
@@ -12478,6 +12599,8 @@ export type RotateTokenResponse = components["schemas"]["RotateTokenResponse"];
 export type VersionResponse = components["schemas"]["VersionResponse"];
 export type UserContextRequest = components["schemas"]["UserContextRequest"];
 export type UserContextResponse = components["schemas"]["UserContextResponse"];
+export type WorkspaceInstructionsRequest = components["schemas"]["WorkspaceInstructionsRequest"];
+export type WorkspaceInstructionsResponse = components["schemas"]["WorkspaceInstructionsResponse"];
 export type TaskCreateRequest = components["schemas"]["TaskCreateRequest"];
 export type TaskUpdateRequest = components["schemas"]["TaskUpdateRequest"];
 export type Todo = components["schemas"]["Todo"];

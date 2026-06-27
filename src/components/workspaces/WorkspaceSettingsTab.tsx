@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowSquareOut, Archive, ArrowCounterClockwise, Trash, UsersThree, Lock } from '@phosphor-icons/react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowSquareOut, Archive, ArrowCounterClockwise, Trash, UsersThree, Lock, ArrowsClockwise } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -19,7 +19,14 @@ import {
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useUiStore } from '@/store/ui'
-import { updateWorkspace, deleteWorkspace, workspacesQueryKeys, isApiError } from '@/lib/api'
+import {
+  updateWorkspace,
+  deleteWorkspace,
+  workspacesQueryKeys,
+  isApiError,
+  fetchWorkspaceInstructions,
+  updateWorkspaceInstructions,
+} from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 
 interface WorkspaceSettingsTabProps {
@@ -41,6 +48,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   const [description, setDescription] = useState(workspace.description ?? '')
   const [repository, setRepository] = useState(workspace.repository ?? '')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [instructionsContent, setInstructionsContent] = useState('')
 
   // Re-hydrate local form state when the workspace identity changes (navigating
   // between workspaces while the Settings tab stays mounted) or when the record
@@ -50,6 +58,31 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
     setDescription(workspace.description ?? '')
     setRepository(workspace.repository ?? '')
   }, [workspace.id, workspace.name, workspace.description, workspace.repository])
+
+  // Fetch and track workspace instructions (AGENT.md content).
+  const {
+    data: instructionsData,
+    isError: instructionsError,
+    refetch: refetchInstructions,
+  } = useQuery({
+    queryKey: workspacesQueryKeys.instructions(workspace.id),
+    queryFn: () => fetchWorkspaceInstructions(workspace.id),
+  })
+
+  useEffect(() => {
+    if (instructionsData !== undefined) {
+      setInstructionsContent(instructionsData.content)
+    }
+  }, [instructionsData])
+
+  const { status: instructionsSaveStatus, error: instructionsSaveError } = useAutoSave(
+    instructionsContent,
+    async (content) => {
+      await updateWorkspaceInstructions(workspace.id, content)
+      await queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.instructions(workspace.id) })
+    },
+    { disabled: instructionsError },
+  )
 
   const isDefault = workspace.is_default === true
   const isArchived = workspace.status === 'archived'
@@ -214,6 +247,44 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
             </span>
             <span className="text-xs text-[var(--color-muted)]">Edit on Team tab →</span>
           </button>
+        </div>
+
+        {/* Workspace / Project Instructions */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="ws-instructions">
+              Workspace / Project Instructions
+            </Label>
+            {!instructionsError && (
+              <AutoSaveIndicator status={instructionsSaveStatus} error={instructionsSaveError} />
+            )}
+          </div>
+          <p className="text-xs text-[var(--color-muted)]">
+            Applied to every agent working in this workspace, on top of their persona. Like a project CLAUDE.md.
+          </p>
+          {instructionsError ? (
+            <div className="flex flex-col items-center gap-3 py-4 text-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+              <p className="text-sm text-[var(--color-error)]">Could not load project instructions.</p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void refetchInstructions()}
+                className="gap-1.5"
+              >
+                <ArrowsClockwise size={13} />
+                Retry
+              </Button>
+            </div>
+          ) : (
+            <Textarea
+              id="ws-instructions"
+              value={instructionsContent}
+              onChange={(e) => setInstructionsContent(e.target.value)}
+              placeholder={"# Project Instructions\n\nDescribe conventions, tech stack, coding standards, and team preferences that every agent should follow in this workspace."}
+              rows={10}
+              className="bg-[var(--color-surface-2)] text-xs font-mono resize-none"
+            />
+          )}
         </div>
 
         {/* Danger zone */}

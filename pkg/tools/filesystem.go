@@ -376,8 +376,48 @@ func guardMetadataPath(workspace, path, op string) *ToolResult {
 	return nil
 }
 
+// rerootable holds the construction parameters a file tool needs to rebuild its
+// confined fileSystem against a per-turn workspace root
+// (experimental.workspace_rooted_filesystem). It is embedded by every generic
+// file tool so the re-root logic lives in one place.
+//
+// When a turn carries no workspace dir (the flag is off, or the turn is not
+// bound to a Workspace), effectiveFs returns the pre-built fixed-root fs and
+// effectiveWorkspace returns the fixed agent workspace — i.e. byte-for-byte the
+// pre-flag behavior. When a turn DOES carry a workspace dir, both helpers
+// rebuild against that dir using the SAME restrict + allow-path-pattern config
+// the fixed root was built with, so every existing guard (os.Root confinement,
+// metadata guard, cross-agent guard, allow-paths) applies relative to the
+// re-rooted dir.
+type rerootable struct {
+	restrict bool
+	patterns []*regexp.Regexp
+}
+
+// effectiveFs returns the fileSystem to use for this call: the fixed fs when no
+// per-turn workspace dir is set, or a freshly-built fs rooted at the per-turn
+// workspace dir when one is. fixedFs and fixedWorkspace are the tool's
+// construction-time values.
+func (r rerootable) effectiveFs(ctx context.Context, fixedFs fileSystem) fileSystem {
+	if dir := TurnWorkspaceDir(ctx); dir != "" {
+		return buildFs(dir, r.restrict, r.patterns)
+	}
+	return fixedFs
+}
+
+// effectiveWorkspace returns the workspace root the metadata/cross-agent guards
+// should resolve against: the per-turn workspace dir when set, else the fixed
+// agent workspace.
+func (r rerootable) effectiveWorkspace(ctx context.Context, fixedWorkspace string) string {
+	if dir := TurnWorkspaceDir(ctx); dir != "" {
+		return dir
+	}
+	return fixedWorkspace
+}
+
 type ReadFileTool struct {
 	BaseTool
+	rerootable
 	fs            fileSystem
 	maxSize       int64
 	allowPathsLen int
@@ -407,6 +447,7 @@ func NewReadFileTool(
 	}
 
 	return &ReadFileTool{
+		rerootable:    rerootable{restrict: restrict, patterns: patterns},
 		fs:            buildFs(workspace, restrict, patterns),
 		maxSize:       maxSize,
 		allowPathsLen: len(patterns),
@@ -468,11 +509,21 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
+	// Resolve the effective root for this call. When the turn re-roots to a
+	// workspace dir (experimental.workspace_rooted_filesystem), effFs is a
+	// fresh fs confined to that dir and effWorkspace is that dir; otherwise
+	// they are the fixed agent fs/workspace — byte-for-byte the old behavior.
+	effFs := t.effectiveFs(ctx, t.fs)
+	effWorkspace := t.effectiveWorkspace(ctx, t.workspace)
+
 	// Metadata guard: reject reads of agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.read_metadata instead.
 	// Skipped only for static tools that have no agent workspace concept.
-	if t.workspace != "" {
-		if denied := guardMetadataPath(t.workspace, path, "read"); denied != nil {
+	// When re-rooted to a workspace dir the guard resolves against that dir; a
+	// workspace dir has no AGENT metadata files, so the guard is a safe no-op
+	// there (it only ever matches the four canonical agents/<id>/ files).
+	if effWorkspace != "" {
+		if denied := guardMetadataPath(effWorkspace, path, "read"); denied != nil {
 			return denied
 		}
 	}
@@ -498,7 +549,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		length = t.maxSize
 	}
 
-	file, err := t.fs.Open(path)
+	file, err := effFs.Open(path)
 	if err != nil {
 		// Emit a path.access_denied audit entry on workspace-guard rejections.
 		// emitPathAccessDenied is a no-op when t.auditLogger is nil (best-effort).
@@ -529,10 +580,11 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		// Before rejecting, check whether this opaque binary is actually a
 		// readable document (Word/PowerPoint/Excel/PDF). If so, return its
 		// extracted plain text instead. Extraction reads through the SAME
-		// sandboxed filesystem (t.fs) — never a raw os.Open — so it cannot
-		// escape the workspace boundary that t.fs.Open already enforced.
+		// confined filesystem this call resolved (effFs — the re-rooted
+		// workspace fs when the turn carries a workspace dir, else t.fs), never
+		// a raw os.Open, so it cannot escape the boundary effFs.Open enforced.
 		if docextract.IsExtractable("", filepath.Base(path)) {
-			return t.extractDocument(ctx, path, offset, length)
+			return t.extractDocument(ctx, effFs, path, offset, length)
 		}
 		return ErrorResult("binary file detected: use a dedicated tool to handle binary files")
 	}
@@ -640,16 +692,22 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 // returns its extracted plain text, paginated by character offset/length so the
 // caller can page through long documents the same way it pages raw files.
 //
-// Sandbox safety: the bytes are read via t.fs.Open (the same confined handle
-// read_file uses), then extraction runs purely in memory via docextract.
-// ExtractBytes — it opens no paths of its own, so it cannot read outside the
-// workspace even for archive formats that would normally re-open by path.
+// Sandbox safety: the bytes are read via effFs.Open — the same confined handle
+// the calling read_file resolved for this turn (re-rooted to the workspace dir
+// when the flag is on, else the fixed agent fs) — then extraction runs purely
+// in memory via docextract.ExtractBytes, which opens no paths of its own, so it
+// cannot read outside the workspace even for archive formats that re-open by path.
 //
 // offset and length are interpreted as character (rune) positions into the
 // extracted text, not byte positions into the binary file (byte positions are
 // meaningless once the document is decoded).
-func (t *ReadFileTool) extractDocument(ctx context.Context, path string, offset, length int64) *ToolResult {
-	file, err := t.fs.Open(path)
+func (t *ReadFileTool) extractDocument(
+	ctx context.Context,
+	effFs fileSystem,
+	path string,
+	offset, length int64,
+) *ToolResult {
+	file, err := effFs.Open(path)
 	if err != nil {
 		emitPathAccessDenied(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
 		return ErrorResult(err.Error())
@@ -753,6 +811,7 @@ func getInt64Arg(args map[string]any, key string, defaultVal int64) (int64, erro
 
 type WriteFileTool struct {
 	BaseTool
+	rerootable
 	fs        fileSystem
 	workspace string
 }
@@ -763,8 +822,9 @@ func NewWriteFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.R
 		patterns = allowPaths[0]
 	}
 	return &WriteFileTool{
-		fs:        buildFs(workspace, restrict, patterns),
-		workspace: workspace,
+		rerootable: rerootable{restrict: restrict, patterns: patterns},
+		fs:         buildFs(workspace, restrict, patterns),
+		workspace:  workspace,
 	}
 }
 
@@ -807,11 +867,14 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult("path is required")
 	}
 
+	effFs := t.effectiveFs(ctx, t.fs)
+	effWorkspace := t.effectiveWorkspace(ctx, t.workspace)
+
 	// Metadata guard: reject writes to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.write_metadata instead.
 	// Skipped only for static tools that have no agent workspace concept.
-	if t.workspace != "" {
-		if denied := guardMetadataPath(t.workspace, path, "write"); denied != nil {
+	if effWorkspace != "" {
+		if denied := guardMetadataPath(effWorkspace, path, "write"); denied != nil {
 			return denied
 		}
 	}
@@ -824,13 +887,13 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	overwrite, _ := args["overwrite"].(bool)
 
 	if !overwrite {
-		if f, err := t.fs.Open(path); err == nil {
+		if f, err := effFs.Open(path); err == nil {
 			f.Close()
 			return ErrorResult(fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path))
 		}
 	}
 
-	if err := t.fs.WriteFile(path, []byte(content)); err != nil {
+	if err := effFs.WriteFile(path, []byte(content)); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -839,6 +902,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 type ListDirTool struct {
 	BaseTool
+	rerootable
 	fs fileSystem
 }
 
@@ -847,7 +911,10 @@ func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Reg
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &ListDirTool{fs: buildFs(workspace, restrict, patterns)}
+	return &ListDirTool{
+		rerootable: rerootable{restrict: restrict, patterns: patterns},
+		fs:         buildFs(workspace, restrict, patterns),
+	}
 }
 
 func (t *ListDirTool) Name() string {
@@ -880,7 +947,7 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		path = "."
 	}
 
-	entries, err := t.fs.ReadDir(path)
+	entries, err := t.effectiveFs(ctx, t.fs).ReadDir(path)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to read directory: %v", err))
 	}

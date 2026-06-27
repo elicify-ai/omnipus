@@ -45,6 +45,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools/browser"
 	"github.com/dapicom-ai/omnipus/pkg/utils"
 	"github.com/dapicom-ai/omnipus/pkg/voice"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
 // ModelSyntheticImageRejection is the transcript-stamp value the loop sets on
@@ -4638,6 +4639,36 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// Inject the workspace ID so memory tools can route to the shared room (FR-7.1).
 	if ts.opts.WorkspaceID != "" {
 		turnCtx = tools.WithWorkspaceID(turnCtx, ts.opts.WorkspaceID)
+
+		// experimental.workspace_rooted_filesystem (default OFF): when the flag
+		// is on AND the turn is bound to a Workspace, re-root the file/exec
+		// tools at workspaces/<id>/ for this turn only. When the flag is off or
+		// no workspace_id is bound, we never set the turn-workspace dir, so
+		// file/exec behavior is byte-for-byte identical to today.
+		//
+		// Security: workspaces/<id>/ lives under $OMNIPUS_HOME, which the boot
+		// Landlock policy already grants RWX — this changes only the working
+		// directory and app-level path-validation root, never the kernel
+		// sandbox. Sessions and private agent memory stay under agents/<id>/.
+		if al.cfg != nil && al.cfg.Sandbox.Experimental.WorkspaceRootedFilesystem {
+			// Derive the re-root dir from the SAME canonical home ($OMNIPUS_HOME)
+			// the rest of the feature uses — buildWorkspaceInstructionsNote,
+			// the REST handlers, and ResolveDefaultID — so the agent's files,
+			// its injected instructions, and the shared memory room all live
+			// under one workspaces/<id>/ tree. SafeWorkspaceDir validates the id
+			// against traversal before it becomes a filesystem root (fail-closed:
+			// an unsafe id falls back to the agent root rather than re-rooting).
+			wsDir, idErr := workspace.SafeWorkspaceDir(omnipusHome(), ts.opts.WorkspaceID)
+			if idErr != nil {
+				logger.WarnCF("agent", "workspace_rooted_filesystem: invalid workspace id; falling back to agent root",
+					map[string]any{"workspace_id": ts.opts.WorkspaceID, "error": idErr.Error()})
+			} else if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
+				logger.WarnCF("agent", "workspace_rooted_filesystem: MkdirAll failed; falling back to agent root",
+					map[string]any{"workspace_id": ts.opts.WorkspaceID, "dir": wsDir, "error": mkErr.Error()})
+			} else {
+				turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
+			}
+		}
 	}
 
 	// FR-7.5 / NFR-1: install a per-turn citation tracker so recall_memory can
@@ -5071,6 +5102,12 @@ turnLoop:
 				injected = append(injected, callMessages[1:]...)
 				callMessages = injected
 			}
+			// Inject per-turn workspace instructions (AGENT.md) as an ephemeral
+			// system message immediately after the system prompt. Call BEFORE
+			// injectManifestNote so that the manifest note lands at [1] and
+			// workspace instructions land at [2] in the final message array.
+			// Empty/absent instructions are a no-op — zero behavioral change.
+			callMessages = injectWorkspaceInstructions(callMessages, buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 			// Re-inject the compressed manifest of unloaded lazy tools as an ephemeral
 			// system message. Like the scratchpad, it is rebuilt every turn (never
 			// persisted) so it is never stale and not double-counted in the cached
