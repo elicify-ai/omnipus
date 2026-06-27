@@ -11,6 +11,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -618,8 +619,9 @@ func TestCanLoad_LazyAllowedTool(t *testing.T) {
 		"find_skills must be loadable by ava; got error: %s", result.ForLLM)
 }
 
-// TestCanLoad_FullTierNotLoadable proves that a full-tier tool cannot be
-// loaded via load_tool (it is already callable — not loadable).
+// TestCanLoad_FullTierNotLoadable proves that a full-tier tool requested via
+// load_tool returns a graceful no-op SUCCESS (not an error) with a hint that
+// the tool is already callable. (C2 fix: changed from error → no-op success.)
 func TestCanLoad_FullTierNotLoadable(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -641,34 +643,44 @@ func TestCanLoad_FullTierNotLoadable(t *testing.T) {
 	require.True(t, ok)
 
 	result := tt.Execute(ctx, map[string]any{"names": []any{"send_message"}})
-	assert.True(t, result.IsError,
-		"send_message (full-tier) must not be loadable via load_tool{names:['send_message']}")
+	// C2 fix: full-tier tools must return a no-op SUCCESS so the model is not
+	// confused into thinking "send_message" is broken. The model should just call it.
+	assert.False(t, result.IsError,
+		"send_message (full-tier) must return no-op SUCCESS from load_tool; got error: %s", result.ForLLM)
+	assert.True(t, strings.Contains(result.ForLLM, "already available") || strings.Contains(result.ForLLM, "already"),
+		"no-op message must say the tool is already available; got: %s", result.ForLLM)
 }
 
-// TestCanLoad_PolicyDeniedToolRejected proves that a policy-denied tool cannot
-// be loaded via tools{action:'load'} (cannot bypass policy via load).
-// This test is structurally non-skippable: Ava is deny-by-default and read_file
-// is not in her explicit allow-list (pkg/coreagent/core.go Ava policy). If
-// read_file appears in Ava's policy-filtered set, that is itself a regression
-// that must fail loudly — not be silently skipped.
+// TestCanLoad_PolicyDeniedToolRejected proves that a policy-denied LAZY tool
+// cannot be loaded via load_tool (cannot bypass policy via load).
+//
+// Note: read_file is ManifestFull — full-tier tools now return a no-op success
+// (C2 fix) regardless of policy. This test uses send_file (ManifestLazy,
+// registered for all agents via registerSharedTools) which is NOT in Ava's
+// explicit allow-list. If send_file appears in Ava's policy-filtered set,
+// that is itself a regression that must fail loudly.
 func TestCanLoad_PolicyDeniedToolRejected(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// Ava has deny-by-default; read_file is not in her allow list.
+	// Ava has deny-by-default; send_file is a lazy tool not in her allow list.
 	avaAgent, ok := al.registry.GetAgent("ava")
 	require.True(t, ok)
 
-	// Structural guarantee: read_file must NOT be in Ava's policy-filtered set.
+	// send_file must be lazy-tier (not full-tier) for this test.
+	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("send_file"),
+		"send_file must be ManifestLazy — update this test if the tool tier changes")
+
+	// Structural guarantee: send_file must NOT be in Ava's policy-filtered set.
 	// If this assertion fails, the test should fail loudly — it means the Ava
-	// policy was changed to allow read_file, which would invalidate the security
-	// assertion below. Do NOT replace this with t.Skip.
+	// policy was changed to allow send_file, which would invalidate the
+	// security assertion below. Do NOT replace this with t.Skip.
 	allTools := avaAgent.Tools.GetAll()
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
 	for _, tool := range policyFiltered {
-		require.NotEqual(t, "read_file", tool.Name(),
-			"POLICY REGRESSION: read_file must NOT be allowed for ava (deny-by-default). "+
+		require.NotEqual(t, "send_file", tool.Name(),
+			"POLICY REGRESSION: send_file must NOT be allowed for ava (deny-by-default). "+
 				"If this assertion breaks, the Ava policy changed — verify the intent in core.go and update this test.")
 	}
 
@@ -680,9 +692,9 @@ func TestCanLoad_PolicyDeniedToolRejected(t *testing.T) {
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok)
 
-	result := tt.Execute(ctx, map[string]any{"names": []any{"read_file"}})
+	result := tt.Execute(ctx, map[string]any{"names": []any{"send_file"}})
 	assert.True(t, result.IsError,
-		"read_file must be rejected for ava (policy denied); got: %s", result.ForLLM)
+		"send_file must be rejected for ava (policy denied); got: %s", result.ForLLM)
 }
 
 // ─── FIX 2 regression: session-ID consistency ──────────────────────────────

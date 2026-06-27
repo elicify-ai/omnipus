@@ -66,7 +66,6 @@ type configV0 struct {
 	ModelList []modelConfigV0   `json:"model_list"`
 	Gateway   GatewayConfig     `json:"gateway"`
 	Tools     toolsConfigV0     `json:"tools"`
-	Heartbeat HeartbeatConfig   `json:"heartbeat"`
 	Devices   DevicesConfig     `json:"devices"`
 }
 
@@ -1071,7 +1070,6 @@ func (c *configV0) Migrate() (*Config, error) {
 	cfg.Tools.WebFetch = c.Tools.WebFetch
 	cfg.Tools.AllowReadPaths = c.Tools.AllowReadPaths
 	cfg.Tools.AllowWritePaths = c.Tools.AllowWritePaths
-	cfg.Heartbeat = c.Heartbeat
 	cfg.Devices = c.Devices
 
 	if len(c.ModelList) > 0 {

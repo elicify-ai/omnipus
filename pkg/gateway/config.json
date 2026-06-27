@@ -174,10 +174,6 @@
     "hot_reload": false,
     "port": 8080
   },
-  "heartbeat": {
-    "enabled": false,
-    "interval": 0
-  },
   "hooks": {
     "defaults": {},
     "enabled": false

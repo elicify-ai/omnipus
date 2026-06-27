@@ -15,15 +15,18 @@ import (
 )
 
 // fakeResolver builds a canLoad + markLoaded pair for testing.
-// available is the set of names that canLoad returns true for.
+// available is the set of names that canLoad returns (true, "") for.
 // markLoaded always returns a stub schema for each accepted name.
 func fakeResolver(available map[string]struct{}) (
-	canLoad func(ctx context.Context, name string) bool,
+	canLoad func(ctx context.Context, name string) (bool, string),
 	markLoaded func(ctx context.Context, names []string) (map[string]any, []string),
 ) {
-	canLoad = func(_ context.Context, name string) bool {
+	canLoad = func(_ context.Context, name string) (bool, string) {
 		_, ok := available[name]
-		return ok
+		if ok {
+			return true, ""
+		}
+		return false, name + " — not in test available set"
 	}
 	markLoaded = func(_ context.Context, names []string) (map[string]any, []string) {
 		loaded := make(map[string]any, len(names))
@@ -357,8 +360,11 @@ func TestToolsTool_Load_PromotesHiddenTool(t *testing.T) {
 	var markedLoaded []string
 	tt := NewToolsTool(reg, 5, 10)
 	tt.SetResolver(
-		func(_ context.Context, name string) bool {
-			return name == "mcp_stub_hidden"
+		func(_ context.Context, name string) (bool, string) {
+			if name == "mcp_stub_hidden" {
+				return true, ""
+			}
+			return false, name + " — not available in test"
 		},
 		func(_ context.Context, names []string) (map[string]any, []string) {
 			markedLoaded = append(markedLoaded, names...)

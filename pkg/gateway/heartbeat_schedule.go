@@ -78,13 +78,13 @@ type desiredHeartbeat struct {
 }
 
 // computeDesiredHeartbeats returns the heartbeat jobs that SHOULD exist: one per
-// Main agent (non-worker) with an enabled per-agent heartbeat. The global
-// heartbeat interval is the fallback when an agent leaves its own interval unset.
+// Main agent (non-worker) with an enabled per-agent heartbeat. The constant
+// config.DefaultHeartbeatIntervalMinutes is the fallback when an agent leaves its
+// own interval unset.
 func computeDesiredHeartbeats(cfg *config.Config, agentWorkspace agentWorkspaceFunc) []desiredHeartbeat {
 	if cfg == nil {
 		return nil
 	}
-	globalInterval := cfg.Heartbeat.Interval
 	var out []desiredHeartbeat
 	for i := range cfg.Agents.List {
 		ac := cfg.Agents.List[i]
@@ -100,7 +100,7 @@ func computeDesiredHeartbeats(cfg *config.Config, agentWorkspace agentWorkspaceF
 		}
 		out = append(out, desiredHeartbeat{
 			agentID:  ac.ID,
-			interval: ac.HeartbeatIntervalMinutes(globalInterval),
+			interval: ac.HeartbeatIntervalMinutes(config.DefaultHeartbeatIntervalMinutes),
 			message:  buildHeartbeatMessage(ws),
 		})
 	}

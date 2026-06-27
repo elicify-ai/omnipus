@@ -50,21 +50,9 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 
 **Configuration:**
 
-```json
-{
-  "heartbeat": {
-    "enabled": true,
-    "interval": 30
-  }
-}
-```
+Heartbeat is configured per-agent. The legacy top-level `"heartbeat"` config block and the `OMNIPUS_HEARTBEAT_ENABLED` / `OMNIPUS_HEARTBEAT_INTERVAL` environment variables have been removed. Use the **Agents screen** (Settings → Agents → select agent → Heartbeat) or the REST API (`PUT /api/v1/agents/{id}`) to set `heartbeat_enabled` and `heartbeat_interval` per agent.
 
-| Option     | Default | Description                        |
-| ---------- | ------- | ---------------------------------- |
-| `enabled`  | `true`  | Enable/disable heartbeat           |
-| `interval` | `30`    | Check interval in minutes (min: 5) |
-
-**Environment variables:**
-
-* `OMNIPUS_HEARTBEAT_ENABLED=false` to disable
-* `OMNIPUS_HEARTBEAT_INTERVAL=60` to change interval
+| Field                | Default | Description                        |
+| -------------------- | ------- | ---------------------------------- |
+| `heartbeat_enabled`  | `true`  | Enable/disable heartbeat           |
+| `heartbeat_interval` | `30`    | Check interval in minutes (min: 5) |

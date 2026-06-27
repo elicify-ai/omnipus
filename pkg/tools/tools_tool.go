@@ -24,6 +24,16 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
+// CanLoadAlreadyAvailablePrefix is a typed sentinel prefix returned by the
+// agent-loop canLoad callback when a full/infra tier tool is policy-allowed
+// but does not need to be loaded (it is always callable). execLoad compares
+// against this constant instead of a raw substring to eliminate cross-package
+// prose coupling. The prefix is followed by a human-readable explanation.
+//
+// loop.go builds the reason as: CanLoadAlreadyAvailablePrefix + " — just call it directly"
+// execLoad recognises it via: strings.HasPrefix(reason, CanLoadAlreadyAvailablePrefix)
+const CanLoadAlreadyAvailablePrefix = "already available"
+
 // ToolsTool is the unified tool-discovery and load infra tool.
 //
 // It holds the BM25 engine cache (moved from the former BM25SearchTool) so
@@ -33,8 +43,12 @@ type ToolsTool struct {
 	registry         *ToolRegistry
 	ttl              int
 	maxSearchResults int
-	canLoad          func(ctx context.Context, name string) bool
-	markLoaded       func(ctx context.Context, names []string) (loaded map[string]any, rejected []string)
+	// canLoad reports whether name is loadable for the calling agent.
+	// Returns (true, "") when loading is allowed.
+	// Returns (false, reason) when loading is denied; reason describes why
+	// (e.g. "denied by policy", "unknown tool (did you mean 'X'?)").
+	canLoad    func(ctx context.Context, name string) (ok bool, reason string)
+	markLoaded func(ctx context.Context, names []string) (loaded map[string]any, rejected []string)
 
 	// BM25 engine cache (version-keyed, atomic-pointer + mutex for rebuild).
 	cacheMu sync.Mutex
@@ -49,8 +63,11 @@ func NewToolsTool(r *ToolRegistry, ttl int, maxSearchResults int) *ToolsTool {
 
 // SetResolver wires the per-agent, per-session callbacks required by the load path.
 // Identical contract to the former LoadTool.SetResolver.
+//
+// canLoad must return (true, "") when the tool is loadable, or (false, reason)
+// when it is not. The reason string is surfaced verbatim in error messages.
 func (t *ToolsTool) SetResolver(
-	canLoad func(ctx context.Context, name string) bool,
+	canLoad func(ctx context.Context, name string) (ok bool, reason string),
 	markLoaded func(ctx context.Context, names []string) (map[string]any, []string),
 ) {
 	t.canLoad = canLoad
@@ -152,9 +169,9 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 	if t.canLoad != nil && t.markLoaded != nil {
 		for _, m := range matches {
 			name := m.Name
-			if !t.canLoad(ctx, name) {
-				logger.DebugCF("discovery", "load_tool(query): top hit denied by policy, trying next",
-					map[string]any{"name": name})
+			if ok, reason := t.canLoad(ctx, name); !ok {
+				logger.DebugCF("discovery", "load_tool(query): top hit not loadable, trying next",
+					map[string]any{"name": name, "reason": reason})
 				continue
 			}
 			// Promote hidden/MCP tool so it enters GetAll().
@@ -210,17 +227,73 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 		return ErrorResult("load_tool(load): resolver not set — internal configuration error")
 	}
 
-	// Validate each name against the agent's policy-filtered registry.
-	accepted := make([]string, 0, len(names))
-	preRejected := make([]string, 0)
+	// Full-tier and infra tools are already in the model's callable set — loading
+	// them is a no-op success (C2 fix: avoid confusing the model with an error).
+	// BUT we must first verify policy: a policy-denied full-tier tool must return
+	// an error (F4 fix). We call canLoad to check policy; the real agent-loop
+	// canLoad returns (false, "already available…") for allowed full-tier tools
+	// and (false, "denied…") for policy-denied ones. We interpret the reason to
+	// distinguish the two cases. (canLoad always returns false for full-tier since
+	// these tools are never truly "loaded" — they are always present.)
+	var fullTierHints []string
+	var fullTierRejections []string
+	var lazyNames []string
 	for _, n := range names {
 		n = strings.TrimSpace(n)
+		if n == "" {
+			lazyNames = append(lazyNames, n) // will be rejected below as empty
+			continue
+		}
+		tier := ToolManifestTier(n)
+		if tier == ManifestFull || tier == ManifestInfra {
+			ok, reason := t.canLoad(ctx, n)
+			// The real agent-loop canLoad returns (false, CanLoadAlreadyAvailablePrefix+"…")
+			// for policy-allowed full-tier tools and (false, "…denied…") for denied ones.
+			// Unit-test canLoads may return (true, "") for the allowed case.
+			// Treat either (true, _) or (false, CanLoadAlreadyAvailablePrefix) as no-op success;
+			// everything else is a policy denial.
+			if ok || strings.HasPrefix(reason, CanLoadAlreadyAvailablePrefix) {
+				fullTierHints = append(fullTierHints, fmt.Sprintf("'%s' is already available — just call it directly", n))
+			} else {
+				// Denied by policy or genuinely unknown at the full-tier level.
+				fullTierRejections = append(fullTierRejections, reason)
+			}
+		} else {
+			lazyNames = append(lazyNames, n)
+		}
+	}
+
+	// If every requested name was full-tier:
+	//   - All allowed → no-op success.
+	//   - Some denied → error listing all rejections.
+	//   - Mix of allowed + denied → surface the denials; the allowed ones are
+	//     described in the hints but we still return an error so the model knows
+	//     about the denied tools.
+	if len(lazyNames) == 0 {
+		if len(fullTierRejections) > 0 {
+			// Include any "already available" hints so the model still knows
+			// about the tools it CAN call.
+			allMsgs := append(fullTierRejections, fullTierHints...)
+			return ErrorResult(fmt.Sprintf("load_tool(load): %s", strings.Join(allMsgs, "; ")))
+		}
+		if len(fullTierHints) > 0 {
+			return SilentResult(strings.Join(fullTierHints, "\n"))
+		}
+	}
+
+	// Validate each lazy name against the agent's policy-filtered registry.
+	// Seed preRejected with any full-tier denials so a mixed batch (denied
+	// full-tier + allowed lazy) always surfaces the denial (Fix B).
+	accepted := make([]string, 0, len(lazyNames))
+	preRejected := make([]string, 0, len(fullTierRejections))
+	preRejected = append(preRejected, fullTierRejections...)
+	for _, n := range lazyNames {
 		if n == "" {
 			preRejected = append(preRejected, "(empty string) — invalid name")
 			continue
 		}
-		if !t.canLoad(ctx, n) {
-			preRejected = append(preRejected, n+" — unknown or not available for this agent")
+		if ok, reason := t.canLoad(ctx, n); !ok {
+			preRejected = append(preRejected, reason)
 			continue
 		}
 		accepted = append(accepted, n)
@@ -244,7 +317,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 
 	schemas, postRejected := t.markLoaded(ctx, accepted)
 
-	// Merge all rejected names.
+	// Merge all rejected names (includes full-tier denials seeded above).
 	allRejected := append(preRejected, postRejected...)
 
 	// Compute the final loaded set.
@@ -262,10 +335,16 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	sort.Strings(loadedNames)
 	sort.Strings(allRejected)
 
+	// Include full-tier "already available" acknowledgements alongside the
+	// loaded lazy tools so the model learns those names are callable too.
+	alreadyAvailable := make([]string, len(fullTierHints))
+	copy(alreadyAvailable, fullTierHints)
+
 	result := map[string]any{
-		"loaded":   loadedNames,
-		"schemas":  schemas,
-		"rejected": allRejected,
+		"loaded":            loadedNames,
+		"schemas":           schemas,
+		"rejected":          allRejected,
+		"already_available": alreadyAvailable,
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
@@ -279,6 +358,10 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 
 // getOrBuildEngine returns a cached BM25 engine, rebuilding only when the
 // registry version has changed. Lock-free fast path; cacheMu serializes rebuild.
+//
+// The corpus now includes BOTH hidden tools (RegisterHidden) AND visible lazy
+// built-in tools (Register + ManifestLazy tier) so that a BM25 query can find
+// any tool the model needs to load — not just hidden/MCP tools.
 func (t *ToolsTool) getOrBuildEngine() *bm25CachedEngine {
 	if c := t.cached.Load(); c != nil && c.version == t.registry.Version() {
 		return cachedEngineOrNil(c)
@@ -288,7 +371,8 @@ func (t *ToolsTool) getOrBuildEngine() *bm25CachedEngine {
 	defer t.cacheMu.Unlock()
 
 	// Snapshot + version under a single registry RLock (no TOCTOU).
-	snap := t.registry.SnapshotHiddenTools()
+	// SnapshotSearchableTools includes hidden tools AND visible lazy-tier tools.
+	snap := t.registry.SnapshotSearchableTools()
 
 	// Re-check after acquiring cacheMu (another goroutine may have rebuilt).
 	if c := t.cached.Load(); c != nil && c.version == snap.Version {

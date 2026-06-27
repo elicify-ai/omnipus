@@ -2563,52 +2563,6 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 	}
 }
 
-func TestProcessHeartbeat_DoesNotPublishToolFeedback(t *testing.T) {
-	tmpDir := t.TempDir()
-	heartbeatFile := filepath.Join(tmpDir, "heartbeat-task.txt")
-	if err := os.WriteFile(heartbeatFile, []byte("heartbeat task"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-				ToolFeedback: config.ToolFeedbackConfig{
-					Enabled:       true,
-					MaxArgsLength: 300,
-				},
-			},
-		},
-		Tools: config.ToolsConfig{
-			ReadFile: config.ReadFileToolConfig{
-				Enabled: true,
-			},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &toolFeedbackProvider{filePath: heartbeatFile}
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-
-	response, err := al.ProcessHeartbeat(context.Background(), "check heartbeat tasks", "telegram", "chat-1")
-	if err != nil {
-		t.Fatalf("ProcessHeartbeat() error = %v", err)
-	}
-	if response != "HEARTBEAT_OK" {
-		t.Fatalf("ProcessHeartbeat() response = %q, want %q", response, "HEARTBEAT_OK")
-	}
-
-	select {
-	case outbound := <-msgBus.OutboundChan():
-		t.Fatalf("expected no outbound tool feedback during heartbeat, got %+v", outbound)
-	case <-time.After(200 * time.Millisecond):
-	}
-}
-
 func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	heartbeatFile := filepath.Join(tmpDir, "tool-feedback.txt")

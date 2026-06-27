@@ -552,7 +552,7 @@ func TestMultiMCP_AutoLoad_TopHitQueryWithResolver(t *testing.T) {
 
 	var promotedName string
 	tt.SetResolver(
-		func(_ context.Context, name string) bool { return true },
+		func(_ context.Context, name string) (bool, string) { return true, "" },
 		func(_ context.Context, names []string) (map[string]any, []string) {
 			sc := make(map[string]any)
 			for _, n := range names {

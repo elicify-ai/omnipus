@@ -246,15 +246,6 @@ func TestConfig_BackwardCompat_NoAgentsList(t *testing.T) {
 	}
 }
 
-// TestDefaultConfig_HeartbeatEnabled verifies heartbeat is enabled by default
-func TestDefaultConfig_HeartbeatEnabled(t *testing.T) {
-	cfg := DefaultConfig()
-
-	if !cfg.Heartbeat.Enabled {
-		t.Error("Heartbeat should be enabled by default")
-	}
-}
-
 // TestDefaultConfig_WorkspacePath verifies workspace path is correctly set
 func TestDefaultConfig_WorkspacePath(t *testing.T) {
 	cfg := DefaultConfig()
@@ -501,9 +492,6 @@ func TestConfig_Complete(t *testing.T) {
 	}
 	if cfg.Gateway.Port == 0 {
 		t.Error("Gateway port should have default value")
-	}
-	if !cfg.Heartbeat.Enabled {
-		t.Error("Heartbeat should be enabled by default")
 	}
 }
 

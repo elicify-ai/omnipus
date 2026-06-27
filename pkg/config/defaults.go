@@ -452,10 +452,6 @@ func DefaultConfig() *Config {
 				Compressed: true,
 			},
 		},
-		Heartbeat: HeartbeatConfig{
-			Enabled:  true,
-			Interval: 30,
-		},
 		Schedules: SchedulesConfig{
 			MaxConcurrentRuns: DefaultSchedulesMaxConcurrentRuns,
 			RunTimeoutSeconds: DefaultSchedulesRunTimeoutSeconds,

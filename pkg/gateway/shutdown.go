@@ -52,16 +52,13 @@ func omnipusGracefulShutdown(
 		runningServices.ChannelManager.StopAll(stopCtx)
 	}
 
-	// #265: stop the turn-triggering background services (heartbeat, cron) BEFORE
+	// #265: stop the turn-triggering background services (cron) BEFORE
 	// draining active turns. If they fire during the drain, the resulting turn's
 	// cost.json / session-context writes can outlive RunContext and race
 	// t.TempDir cleanup on macOS APFS. The channel manager (above) is the other
 	// inbound source; together they guarantee no new bus message — hence no new
 	// activeRequests.Add — after this point. Device/health/preview registries
 	// have no turn side effects and stop later (step 4).
-	if runningServices.HeartbeatService != nil {
-		runningServices.HeartbeatService.Stop()
-	}
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
