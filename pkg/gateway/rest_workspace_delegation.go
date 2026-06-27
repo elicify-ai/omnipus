@@ -96,12 +96,15 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 //
 // Edges are deduplicated by (from_agent, to_agent); the last writer wins.
 //
-// This graph is the editable VIEW of the per-agent-policy enforcement cap. It is
-// the per-workspace source of truth the Team tab surfaces — but RUNTIME
-// enforcement is performed by each agent's config.DelegationPolicy (trust set +
-// modes + depth), not by this graph directly (see buildDelegationDenyChecker in
-// pkg/agent/loop.go). Editing this graph does not, by itself, change runtime
-// enforcement.
+// This graph IS the runtime authority. Per-workspace delegation enforcement reads
+// these edges directly at delegation time (see workspace.ReadDelegation +
+// buildDelegationDenyChecker in pkg/agent/loop.go): a delegation caller→target is
+// permitted ONLY when a matching edge exists in the governing workspace's graph
+// (with the edge's modes/depth applied). The per-agent config.DelegationPolicy is
+// SEED-ONLY now — it seeds each new workspace's initial graph via
+// defaultWorkspaceDelegationEdges and is no longer consulted at runtime. Because
+// the checker reads the graph per-call, editing this graph takes effect on the
+// NEXT turn — no agent rebuild or reload is required.
 func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")

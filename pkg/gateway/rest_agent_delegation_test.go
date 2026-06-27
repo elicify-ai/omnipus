@@ -330,17 +330,19 @@ func TestUpdateAgent_DelegationEmptyToDenyAll(t *testing.T) {
 	assert.Len(t, to, 0, "deny-all to-list must be empty")
 }
 
-// TestUpdateAgent_NeedsReloadRebuildsLiveDelegationCheckers is the end-to-end
-// proof for the HIGH finding: a delegation_policy edit must trigger a reload that
-// rebuilds the running agent's delegation deny-checkers, so the new policy is
-// enforced WITHOUT a process restart.
+// TestUpdateAgent_NeedsReloadRebuildsLiveDelegationCheckers proves a
+// delegation_policy edit triggers a reload that swaps the running config WITHOUT
+// a process restart.
 //
-// It wires SetReloadFunc to the SAME rebuild the gateway performs in production
-// (executeReload → ReloadProviderAndConfig → registerSharedTools, which re-calls
-// buildDelegationDenyChecker against the swapped config). After the PUT, it reads
-// the rebuilt registry's live config and applies the EXACT resolution functions
-// the runtime deny-checker captures (config.ResolveDelegationTo +
-// IsDelegationAllowed), proving allow/deny FLIPPED with no restart.
+// SCOPE NOTE (per-workspace-graph migration): the per-agent config.DelegationPolicy
+// is now SEED-ONLY — runtime delegation enforcement reads the per-workspace
+// delegation GRAPH (workspace.ReadDelegation), not config. So this test now proves
+// the CONFIG (seed source) persists and reloads in place; it asserts against
+// config.ResolveDelegationTo + IsDelegationAllowed, which remain the config-layer
+// resolution used to SEED a workspace graph. The runtime "edit takes effect with
+// no rebuild" proof now lives in pkg/agent
+// (TestDelegationGraphFlipsWithoutRebuild), which edits the graph and shows the
+// SAME checker flips because it reads the graph per-call.
 func TestUpdateAgent_NeedsReloadRebuildsLiveDelegationCheckers(t *testing.T) {
 	api := buildDelegationTestAPI(t)
 	al := api.agentLoop
