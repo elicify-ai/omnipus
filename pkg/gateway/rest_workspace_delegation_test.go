@@ -29,6 +29,7 @@ import (
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
 // buildWorkspaceDelegationTestAPI builds a restAPI with a roster (jim, ava, ray,
@@ -353,6 +354,53 @@ func TestDelegationEdgeValidate_MatchesHandlerWireMessages(t *testing.T) {
 	assert.EqualError(t,
 		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Depth: intPtrGW(99)}.Validate(team, ceiling),
 		"delegation edge depth exceeds the maximum allowed depth")
+}
+
+// TestDelegationEdgeValidate_ModesMatchConfig pins the bare-string mode literals
+// duplicated in pkg/workspace (delegationModeAwait/Background/Task) against the
+// canonical config.DelegationMode{Await,Background,Task} constants. pkg/workspace
+// is deliberately dependency-free of pkg/config (to avoid an import cycle:
+// pkg/agent imports pkg/workspace, and pkg/config is imported by both), so the
+// edge-layer literals are NOT imported from config — they are re-declared. This
+// test is the promised single, test-pinned source of truth: it lives in
+// pkg/gateway (which CAN import BOTH packages) and asserts that every canonical
+// config mode is accepted verbatim by workspace.DelegationEdge.Validate, so a
+// future rename in pkg/config can no longer silently drift the edge literals.
+func TestDelegationEdgeValidate_ModesMatchConfig(t *testing.T) {
+	team := map[string]bool{"jim": true, "ava": true}
+	const ceiling = 3
+
+	// Every canonical config mode MUST be accepted as a valid edge mode. If a
+	// config constant is renamed/retyped without updating the workspace literals,
+	// Validate will reject string(thatConstant) and this fails — exactly the drift
+	// the comment in pkg/workspace/delegation.go promises this test guards.
+	for _, mode := range []config.DelegationMode{
+		config.DelegationModeAwait,
+		config.DelegationModeBackground,
+		config.DelegationModeTask,
+	} {
+		edge := workspace.DelegationEdge{
+			FromAgent: "jim",
+			ToAgent:   "ava",
+			Modes:     []string{string(mode)},
+		}
+		assert.NoErrorf(t, edge.Validate(team, ceiling),
+			"config mode %q must be accepted by the workspace edge validator (literal drift?)",
+			string(mode))
+	}
+
+	// Negative control: a mode that is NOT one of the config constants must be
+	// rejected, proving Validate is genuinely gating on the literal set (not a
+	// vacuous accept-all that would mask a real drift).
+	bogus := workspace.DelegationEdge{
+		FromAgent: "jim",
+		ToAgent:   "ava",
+		Modes:     []string{"telepathy"},
+	}
+	err := bogus.Validate(team, ceiling)
+	require.Error(t, err, "an unknown mode must be rejected")
+	assert.Contains(t, err.Error(), "is invalid",
+		"rejection must come from the mode-validation branch")
 }
 
 // intPtrGW is a local *int helper for building delegation depth fields in the

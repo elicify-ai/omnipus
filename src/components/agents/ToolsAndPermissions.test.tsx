@@ -17,9 +17,10 @@
 //  6. NO spurious PUT fires when opening Tools tab (server hydration ≠ user edit)
 //  7. Real policy change triggers the re-auth-gated save path (not a bare 403)
 //  8. 403 re-auth path: gate detects re-auth 403, retries with token (Spec-6 FR-12.2)
+//  9. Latest-wins: edits made while a save is in-flight are not dropped (bug fix)
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // Mock the API module. updateAgentTools now accepts an optional reAuthToken.
@@ -153,6 +154,10 @@ beforeEach(() => {
     config: DEFAULT_TOOLS_CFG,
     tools: [],
   })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
@@ -710,5 +715,175 @@ describe('ToolsAndPermissions — 403 re-auth path (Spec-6 FR-12.2)', () => {
 
     expect(api.updateAgentTools).not.toHaveBeenCalled()
     expect(mockRunGated).not.toHaveBeenCalled()
+  })
+})
+
+describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight save', () => {
+  // Regression test for the isPending-drop bug. Previously, handleEditorChange
+  // had `if (saveMutation.isPending) return` which silently dropped every edit
+  // made while a save was in-flight, and the onSuccess→refetch snap-back
+  // reverted the editor to the stale saved config.
+  //
+  // The fix: useAutoSave debounces edits with a ref (latestDataRef) so the
+  // latest value is ALWAYS persisted — coalesced rapid edits into a trailing
+  // save — and isDraftReady gates hydration so the editor never snaps back.
+  //
+  // Test strategy (fake timers throughout, except during initial data load):
+  //   1. Load editor (real timers for queries to resolve).
+  //   2. Switch to fake timers.
+  //   3. Click preset A (Cautious) → debounce starts.
+  //   4. Advance 600ms → A's save fires (blocked by a deferred promise).
+  //   5. While in-flight: click preset B (Balanced) → debounce starts.
+  //   6. While in-flight: click preset C (Full access) → debounce resets.
+  //   7. Advance 600ms → C's debounce fires → second updateAgentTools
+  //      called (with C's config) before A has even resolved.
+  //   8. Resolve A's save → A completes.
+  //   9. Assert updateAgentTools was called at least twice; the final call
+  //      used Full access config (latest-wins), not Cautious (stale A).
+
+  it('latest-wins: edits B and C made while A is in-flight are not dropped; C persists', async () => {
+    // Deferred promise to block the FIRST updateAgentTools call (A's save).
+    let resolveFirstSave!: (v: { config: typeof DEFAULT_TOOLS_CFG; tools: [] }) => void
+    const firstSavePromise = new Promise<{ config: typeof DEFAULT_TOOLS_CFG; tools: [] }>(
+      (resolve) => { resolveFirstSave = resolve },
+    )
+
+    // Full access config (edit C) — this is the expected final persisted value.
+    // Balanced overrides differ from full_access (has overrides), so we can
+    // distinguish "C won" from "B or A won" in the assertion.
+    const fullAccessCfg = {
+      builtin: { default_policy: 'allow', policies: {} },
+    }
+
+    vi.mocked(api.updateAgentTools)
+      .mockReturnValueOnce(firstSavePromise) // A: blocked
+      .mockResolvedValue({ config: fullAccessCfg as typeof DEFAULT_TOOLS_CFG, tools: [] }) // C and beyond
+
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+
+    // Wait for the editor to hydrate with REAL timers (queries are async).
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+    })
+    // Confirm isDraftReady gate opened (agentToolsData arrived).
+    await waitFor(() => {
+      expect(api.fetchAgentTools).toHaveBeenCalledWith('agent-1')
+    })
+    expect(api.updateAgentTools).not.toHaveBeenCalled()
+
+    // Switch to fake timers NOW — queries have resolved; only debounce timers remain.
+    vi.useFakeTimers()
+
+    // Edit A: click Cautious preset (default_policy='ask', policies={}).
+    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+
+    // Advance past the useAutoSave debounce (500ms) → A's save fires.
+    await act(async () => { vi.advanceTimersByTime(600) })
+
+    // A's save is now in-flight (blocked by firstSavePromise).
+    expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(api.updateAgentTools).mock.calls[0][1]).toMatchObject({
+      builtin: expect.objectContaining({ default_policy: 'ask' }),
+    })
+
+    // Edit B while A is in-flight: Balanced (default_policy='allow', has overrides).
+    // Does NOT call updateAgentTools yet — the debounce resets.
+    fireEvent.click(document.querySelector('[data-testid="preset-balanced"]')!)
+    await act(async () => { vi.advanceTimersByTime(100) })
+
+    // Edit C while A is still in-flight: Full access (default_policy='allow', no overrides).
+    // B's debounce was cleared; C starts a fresh 500ms debounce.
+    fireEvent.click(document.querySelector('[data-testid="preset-full_access"]')!)
+    await act(async () => { vi.advanceTimersByTime(100) })
+
+    // A is still blocked — only 1 call so far. B and C are still debouncing.
+    expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
+
+    // Advance past C's debounce (500ms total − 100ms already passed = 400ms more).
+    // C's save fires HERE — BEFORE A has resolved. useAutoSave fires independently.
+    await act(async () => { vi.advanceTimersByTime(500) })
+
+    // C's save has now been called (second invocation). A is still pending.
+    expect(api.updateAgentTools).toHaveBeenCalledTimes(2)
+
+    // The second call must use Full access config (C wins, not A or B).
+    const secondCallCfg = vi.mocked(api.updateAgentTools).mock.calls[1][1]
+    expect(secondCallCfg).toMatchObject({
+      builtin: expect.objectContaining({
+        default_policy: 'allow',
+        policies: {}, // Full access has no overrides — distinguishes it from Balanced
+      }),
+    })
+
+    // Now resolve A — it completes after C. Order proves latest-wins.
+    resolveFirstSave({ config: DEFAULT_TOOLS_CFG, tools: [] })
+    // Allow Promise microtasks to flush.
+    await act(async () => { vi.advanceTimersByTime(100) })
+
+    // Still exactly 2 calls — resolving A did not trigger a spurious third save.
+    expect(api.updateAgentTools).toHaveBeenCalledTimes(2)
+  })
+
+  it('editor does NOT snap back to stale A config after A saves while C is the latest edit', async () => {
+    // Additional check: after A saves and invalidates the cache, the agentToolsData
+    // refetch must NOT overwrite the editor with A's stale value. The isDraftReady
+    // gate blocks the hydration useEffect once the user has edited.
+    const cautionsCfg = {
+      builtin: { default_policy: 'ask', policies: {} },
+    }
+
+    // fetchAgentTools: first call returns DEFAULT, re-fetch after A saves returns
+    // Cautious (the value A persisted). This simulates the stale snap-back scenario.
+    vi.mocked(api.fetchAgentTools)
+      .mockResolvedValueOnce({ config: DEFAULT_TOOLS_CFG, tools: [] })
+      .mockResolvedValue({ config: cautionsCfg as typeof DEFAULT_TOOLS_CFG, tools: [] })
+
+    vi.mocked(api.updateAgentTools).mockResolvedValue({
+      config: cautionsCfg as typeof DEFAULT_TOOLS_CFG,
+      tools: [],
+    })
+
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+
+    // Wait for initial hydration (real timers).
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+    })
+    await waitFor(() => expect(api.fetchAgentTools).toHaveBeenCalledWith('agent-1'))
+    expect(api.updateAgentTools).not.toHaveBeenCalled()
+
+    // Edit A: Cautious — fires after debounce (real timers, waitFor will wait).
+    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+
+    // Wait for A's save to fire (useAutoSave debounces 500ms; waitFor polls up to 2s).
+    await waitFor(() => {
+      expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
+    }, { timeout: 2000 })
+
+    // After A saves, the cache is invalidated and fetchAgentTools re-fires
+    // returning cautionsCfg. The editor must NOT revert because isDraftReady
+    // blocks the hydration effect once the user has edited.
+    // Give the refetch + any re-render time to propagate.
+    await new Promise((r) => setTimeout(r, 200))
+
+    // No second save must have fired from the snap-back. A snap-back would
+    // change editorValue → useAutoSave would see a diff → debounce → second PUT.
+    // Waiting 700ms (> debounce) to be sure no trailing save appears.
+    await new Promise((r) => setTimeout(r, 700))
+    expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
   })
 })

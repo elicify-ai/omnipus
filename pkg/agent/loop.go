@@ -2128,7 +2128,10 @@ func enforceEdgeModeAndDepth(
 			"edge_depth": *edge.Depth,
 		})
 		return &tools.DelegationDenial{
-			Reason:        "this delegation edge forbids onward delegation (depth cap 0)",
+			Reason: fmt.Sprintf(
+				"this delegation edge forbids onward delegation (edge depth %d)",
+				*edge.Depth,
+			),
 			Policy:        tools.DenyDepth,
 			TargetAgentID: targetAgentID,
 		}

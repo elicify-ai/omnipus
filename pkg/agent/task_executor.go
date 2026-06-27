@@ -93,7 +93,8 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 	ok, release := te.dispatchSema.TryAcquire()
 	if !ok {
 		return fmt.Errorf(
-			"task_executor: global dispatch cap reached (%d/%d in flight), retry later",
+			"%w (%d/%d in flight), retry later",
+			ErrDispatchCapReached,
 			te.dispatchSema.InFlight(), te.dispatchSema.Cap(),
 		)
 	}
@@ -611,21 +612,19 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 			te.mu.Unlock()
 		}
 	}
+	defer releaseSlot()
 
 	// Check that the assigned agent is known.
 	registry := te.agentLoop.GetRegistry()
 	if registry == nil {
-		releaseSlot()
 		return "", fmt.Errorf("task_executor: StartTaskNow: agent registry is not available")
 	}
 	if _, ok := registry.GetAgent(t.AgentID); !ok {
-		releaseSlot()
 		return "", fmt.Errorf("task_executor: StartTaskNow: agent %q not found for task %q", t.AgentID, taskID)
 	}
 
 	ok, release := te.dispatchSema.TryAcquire()
 	if !ok {
-		releaseSlot()
 		return "", fmt.Errorf(
 			"%w (%d/%d in flight), retry later",
 			ErrDispatchCapReached,
@@ -641,7 +640,6 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		meta, sessErr := sessStore.NewSession(session.SessionTypeTask, "system", t.AgentID)
 		if sessErr != nil {
 			release()
-			releaseSlot()
 			return "", fmt.Errorf("task_executor: StartTaskNow: create session for task %q: %w", taskID, sessErr)
 		}
 		taskSessionID = meta.ID

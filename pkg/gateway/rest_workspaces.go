@@ -712,7 +712,7 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// Cascade: (1) milestones for workspace → (2) clear milestone_id on those tasks →
-	// (3) delete tasks → (4) session links → (5) workspace file.
+	// (3) delete tasks → (4) workspace file → (5) workspace directory (AGENT.md + memory room).
 	deleteMilestonesForWorkspace(a.homePath, id)
 
 	if err := deleteTasksForWorkspace(a.homePath, id); err != nil {
@@ -726,6 +726,13 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		slog.Error("rest: delete workspace: remove file", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+
+	// Best-effort: remove the per-workspace directory (AGENT.md / memory room).
+	// The JSON removal above is the authoritative delete; a stale directory is not fatal.
+	wsDir := workspace.WorkspaceDir(a.homePath, id)
+	if err := os.RemoveAll(wsDir); err != nil {
+		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)
 	}
 
 	if a.auditor != nil {

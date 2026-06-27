@@ -17,9 +17,11 @@
 //   user edit) so the parent autoSave is never triggered on tab open.
 // - Shell/fs conflict banner and fence badge are RETAINED from the previous
 //   version; they operate at the raw-tool level and still apply.
+// - Rapid edits use useAutoSave (debounce + latest-value ref) so no edit is ever
+//   dropped and the editor never snaps back to a stale value mid-flight.
 
-import { useEffect, useMemo, useState } from 'react'
-import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info, Lock } from '@phosphor-icons/react'
 
 import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
@@ -38,7 +40,7 @@ import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
 import { useReAuthGate, isReAuthCancelled } from '@/components/settings/useReAuthGate'
 import { useUiStore } from '@/store/ui'
-import { isApiError } from '@/lib/api-error'
+import { useAutoSave } from '@/hooks/useAutoSave'
 
 interface ToolsAndPermissionsProps {
   agentId: string | null
@@ -119,41 +121,24 @@ export function ToolsAndPermissions({
     ? { default_policy: globalPolicies.default_policy, policies: globalPolicies.policies ?? {} }
     : undefined
 
-  // Save status for the AutoSaveIndicator.
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const [saveError, setSaveError] = useState<string | undefined>(undefined)
-
-  // Re-auth-gated save mutation. Fires only when the user explicitly changes a
-  // tool policy (via handleEditorChange → saveMutation.mutate). Never fires on
-  // tab open or server hydration.
-  const saveMutation = useMutation({
-    mutationFn: async (cfg: AgentToolsCfg) => {
-      setSaveStatus('saving')
-      setSaveError(undefined)
-      return await runGated((token) => updateAgentTools(agentId!, cfg, token))
-    },
-    onSuccess: (result) => {
-      setSaveStatus('saved')
-      onChange(result.config)
-      queryClient.invalidateQueries({ queryKey: ['agent-tools', agentId] })
-      // Reset to idle after a short display window.
-      setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 2000)
-    },
-    onError: (err: unknown) => {
-      if (isReAuthCancelled(err)) {
-        // User dismissed the re-auth dialog — treat as a no-op, not an error.
-        setSaveStatus('idle')
-        return
-      }
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed'
-      setSaveError(msg)
-      setSaveStatus('error')
-      addToast({ message: `Tool policy save failed: ${msg}`, variant: 'error' })
-    },
-  })
-
   // Local copy for ToolPolicyEditor (controlled).
   const [editorValue, setEditorValue] = useState<ToolPolicyValue>(() => cfgToValue(tools))
+
+  // isDraftReady gates useAutoSave: stays false until the server data has
+  // arrived and hydrated editorValue. This prevents a spurious save on open
+  // (the same pattern used in GlobalToolPoliciesSection in SecuritySection.tsx).
+  const [isDraftReady, setIsDraftReady] = useState(false)
+
+  // toolsRef always holds the latest `tools` prop. The save function reads
+  // from it so it always builds the cfg from the most recent prop snapshot
+  // without needing tools in the useAutoSave dependency array.
+  const toolsRef = useRef(tools)
+  toolsRef.current = tools
+
+  // agentIdRef always holds the latest agentId so the save closure captures
+  // the current id even if the agent changes between debounce and fire.
+  const agentIdRef = useRef(agentId)
+  agentIdRef.current = agentId
 
   // Hydrate editorValue from the dedicated GET /agents/{id}/tools response.
   // This fires once when agentToolsData arrives (and again if the agent id
@@ -167,49 +152,79 @@ export function ToolsAndPermissions({
   //
   // We compare ToolPolicyValue shapes (not raw AgentToolsCfg shapes) so the
   // comparison is apples-to-apples and key ordering never causes a false diff.
+  //
+  // Guard: only snap to server data when there are no pending user edits
+  // (isDraftReady=false means we haven't diverged from server yet). Once the
+  // user has made edits, we never snap back to stale server data.
   useEffect(() => {
     if (!agentToolsData || !agentId) return
+    if (isDraftReady) return // user has edited — do NOT snap back
     const incomingValue = cfgToValue(agentToolsData.config)
-    const incoming = JSON.stringify(incomingValue)
-    const current = JSON.stringify(editorValue)
-    if (incoming !== current) {
-      setEditorValue(incomingValue)
-    }
+    setEditorValue(incomingValue)
+    setIsDraftReady(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentToolsData, agentId])
 
-  // Keep editorValue in sync with parent `tools` prop when it changes from
-  // outside (e.g. agent navigation, role preset applied from a future parent
-  // control). This is also hydration — no save is triggered.
+  // Keep editorValue in sync with parent `tools` prop when the agent changes
+  // (e.g. navigating to a different agent). Reset isDraftReady so the next
+  // agentToolsData hydration is accepted. This is also hydration — no save.
+  const prevAgentIdRef = useRef(agentId)
   useEffect(() => {
-    const incomingValue = cfgToValue(tools)
-    const incoming = JSON.stringify(incomingValue)
-    const current = JSON.stringify(editorValue)
-    if (incoming !== current && !saveMutation.isPending) {
-      // Only resync when we're not in the middle of saving (to avoid the
-      // server response racing with a pending user edit).
-      setEditorValue(incomingValue)
+    if (agentId !== prevAgentIdRef.current) {
+      // Agent switched — reset so the incoming agentToolsData hydrates fresh.
+      prevAgentIdRef.current = agentId
+      setIsDraftReady(false)
+      setEditorValue(cfgToValue(tools))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tools])
+  }, [agentId])
+
+  // useAutoSave: debounces user edits and fires the re-auth-gated PUT with the
+  // LATEST editorValue (held in useAutoSave's internal latestDataRef). This
+  // guarantees:
+  //   - No edit is dropped (latest-wins: the ref is always up-to-date).
+  //   - No stale snap-back (isDraftReady gate prevents hydration effects from
+  //     overwriting the editor after the first user edit).
+  //   - The save is coalesced (debounce collapses rapid edits into one PUT).
+  //   - The unmount flush fires the final edit even if the user navigates away
+  //     before the debounce settles.
+  //
+  // Mirrors GlobalToolPoliciesSection in SecuritySection.tsx exactly.
+  const { status: saveStatus, error: saveError } = useAutoSave(
+    editorValue,
+    async (value) => {
+      const id = agentIdRef.current
+      if (!id) return
+      const cfg = valueToCfg(value, toolsRef.current)
+      const result = await runGated((token) => updateAgentTools(id, cfg, token))
+      // Propagate to parent and invalidate the cache after a successful save.
+      onChange(result.config)
+      queryClient.invalidateQueries({ queryKey: ['agent-tools', id] })
+    },
+    { disabled: isLocked || !isDraftReady },
+  )
+
+  // Surface runGated cancellation and API errors as toasts. useAutoSave catches
+  // errors from the saveFn and sets status='error' + error string; we also want
+  // a toast for discoverability. We use a ref to track the previous error so we
+  // only toast on transitions (new error), not on every render.
+  const prevSaveErrorRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (saveError && saveError !== prevSaveErrorRef.current) {
+      if (!isReAuthCancelled(new Error(saveError))) {
+        addToast({ message: `Tool policy save failed: ${saveError}`, variant: 'error' })
+      }
+    }
+    prevSaveErrorRef.current = saveError
+  }, [saveError, addToast])
 
   // handleEditorChange is the ONLY path for real user edits. It updates the
-  // local controlled state and fires the re-auth-gated save mutation.
-  // It does NOT call the parent onChange synchronously — the save's onSuccess
-  // handler calls it after the PUT succeeds.
-  //
-  // Guard: if a save is already in flight, skip the concurrent PUT to avoid
-  // last-writer-wins races (rapid edits — bulk allow/ask/deny, preset applies —
-  // would otherwise fire N concurrent gated PUTs; whichever onSuccess landed
-  // last would silently win). We still update local editorValue immediately so
-  // the UI is responsive; the in-flight PUT will resolve and onSuccess will
-  // call onChange(result.config), bringing the parent back into sync.
+  // local controlled state immediately (responsive UI) and lets useAutoSave
+  // observe the change and fire the debounced gated PUT with the latest value.
+  // It never skips or drops an edit regardless of in-flight saves.
   function handleEditorChange(next: ToolPolicyValue) {
     if (isLocked || !agentId) return
     setEditorValue(next)
-    if (saveMutation.isPending) return
-    const nextCfg = valueToCfg(next, tools)
-    saveMutation.mutate(nextCfg)
   }
 
   // Shell/fs conflict detection (retained from previous version).

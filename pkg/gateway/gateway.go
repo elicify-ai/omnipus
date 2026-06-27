@@ -122,8 +122,9 @@ type services struct {
 	TaskTrigger *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
 	// TaskDrain owns the queued-task (`next` → dispatch) poll unconditionally,
 	// independent of which heartbeat path is active. The now-removed global
-	// HeartbeatService used to own this poll but was tied to the per-agent
-	// heartbeat path; TaskDrain is decoupled so `next` tasks always dispatch.
+	// HeartbeatService was skipped whenever a per-agent heartbeat was active,
+	// which meant `next` tasks never dispatched on those installs; TaskDrain is
+	// decoupled from that path so `next` tasks always dispatch.
 	TaskDrain *heartbeat.TaskDrainService
 	// MailboxDrain owns the M11 unhandled-mail → Board-task poll. Like TaskDrain
 	// it is decoupled from the HEARTBEAT.md path so email work surfaces on the
@@ -1094,7 +1095,9 @@ func executeReload(
 	// Snapshot all service fields that restartServices mutates so they can be
 	// restored atomically if the reload fails. bundle and ChannelManager are
 	// mutated here in executeReload itself; the rest are mutated in
-	// restartServices (CronService, TaskTrigger, TaskDrain, MailboxDrain, MediaStore, DeviceService).
+	// restartServices (CronService, TaskTrigger, MediaStore, DeviceService).
+	// TaskDrain and MailboxDrain are also recreated by restartServices but are
+	// NOT part of this atomic rollback snapshot.
 	snap := snapshotServices(runningServices)
 
 	markDegraded := func(err error) {

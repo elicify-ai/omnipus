@@ -291,6 +291,86 @@ func TestInstructions_SizeBoundary(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// 7b. Write permissions (FIX 1)
+// ---------------------------------------------------------------------------
+
+// TestInstructions_WritePerms verifies that WriteInstructions creates AGENT.md
+// with mode 0o600 and its parent directory with mode 0o700.
+func TestInstructions_WritePerms(t *testing.T) {
+	home := t.TempDir()
+	const id = "ws-perms"
+
+	require.NoError(t, WriteInstructions(home, id, "perm check"))
+
+	// File must be 0o600.
+	agentMD := filepath.Join(home, "workspaces", id, "AGENT.md")
+	fi, err := os.Stat(agentMD)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), fi.Mode().Perm(),
+		"AGENT.md must be written with mode 0o600")
+
+	// Parent directory must be 0o700.
+	wsDir := filepath.Join(home, "workspaces", id)
+	di, err := os.Stat(wsDir)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), di.Mode().Perm(),
+		"workspace directory must be created with mode 0o700")
+}
+
+// ---------------------------------------------------------------------------
+// 7c. Read-side truncation sentinel (FIX 2)
+// ---------------------------------------------------------------------------
+
+// TestInstructions_ReadTruncationSentinel verifies that ReadInstructions
+// truncates files larger than maxInstructionsBytes and appends the in-band
+// sentinel so the model knows the content was cut.
+//
+// The oversized file is written directly via os.WriteFile (bypassing the
+// write-cap enforced by WriteInstructions) to simulate a file written outside
+// Omnipus or pre-dating the size limit.
+func TestInstructions_ReadTruncationSentinel(t *testing.T) {
+	home := t.TempDir()
+	const id = "ws-trunc"
+
+	// Create the workspace dir and write an oversized AGENT.md directly.
+	wsDir := filepath.Join(home, "workspaces", id)
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	oversized := make([]byte, maxInstructionsBytes+1)
+	for i := range oversized {
+		oversized[i] = 'x'
+	}
+	agentMD := filepath.Join(wsDir, "AGENT.md")
+	require.NoError(t, os.WriteFile(agentMD, oversized, 0o600))
+
+	// ReadInstructions must truncate to maxInstructionsBytes and append the sentinel.
+	got, err := ReadInstructions(home, id)
+	require.NoError(t, err, "ReadInstructions must not return an error on truncation")
+
+	const sentinel = "\n\n[... workspace instructions truncated at 256 KB ...]"
+
+	// The returned string must end with the sentinel.
+	require.True(t, strings.HasSuffix(got, sentinel),
+		"truncated content must end with the in-band sentinel; got suffix: %q",
+		got[max(0, len(got)-len(sentinel)-20):])
+
+	// The content before the sentinel must be exactly maxInstructionsBytes of 'x'.
+	contentPart := got[:len(got)-len(sentinel)]
+	require.Equal(t, maxInstructionsBytes, len(contentPart),
+		"content before sentinel must be exactly maxInstructionsBytes (%d) bytes, got %d",
+		maxInstructionsBytes, len(contentPart))
+	require.Equal(t, strings.Repeat("x", maxInstructionsBytes), contentPart,
+		"content before sentinel must be the first maxInstructionsBytes bytes of the file")
+}
+
+// max returns the larger of two ints (local helper; avoids Go 1.21 min/max dependency).
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// ---------------------------------------------------------------------------
 // 8. Absent read — never-written workspace returns ("", nil)
 // ---------------------------------------------------------------------------
 
