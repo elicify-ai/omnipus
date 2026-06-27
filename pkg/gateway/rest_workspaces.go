@@ -28,6 +28,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
 // errWorkspaceNotFound is returned by readWorkspaceFile when the workspace file
@@ -38,39 +39,18 @@ var errWorkspaceNotFound = errors.New("workspace not found")
 // (e.g. from two racing gateway boots) so exactly one default workspace is created.
 var defaultWorkspaceSeedMu sync.Mutex
 
-// storedWorkspace mirrors the on-disk format of ~/.omnipus/workspaces/{id}.json.
-type storedWorkspace struct { // not-wire-format: internal disk-cache struct, mapped to gen.Workspace before sending over the wire
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Status      string   `json:"status"`
-	Pinned      bool     `json:"pinned"`
-	PinOrder    int      `json:"pin_order"`
-	CoreTeam    []string `json:"core_team,omitempty"`
-	Repository  string   `json:"repository,omitempty"`
-	IsDefault   bool     `json:"is_default,omitempty"` // true only for the auto-created default workspace
-	// Owner is the username of the user who created this workspace. Set at creation;
-	// never updated. Attribution only — not an access gate (FR-1.9).
-	Owner string `json:"owner,omitempty"`
-	// Delegation is the per-workspace delegation graph (M5): the directed edges
-	// that authorize who-delegates-to-whom on this workspace. This is the editable
-	// source of truth surfaced in the workspace Team tab. nil/empty means no
-	// delegation configured. The per-agent delegation_policy remains the
-	// enforcement cap; this graph is what the UI edits.
-	Delegation []storedDelegationEdge `json:"delegation,omitempty"`
-	CreatedAt  string                 `json:"created_at"`
-	UpdatedAt  string                 `json:"updated_at"`
-}
+// storedWorkspace is an alias for the canonical on-disk workspace type.
+// The shared type lives in pkg/workspace so that the tool write path
+// (pkg/sysagent/tools) uses the same struct and can never silently drop
+// fields — including the delegation graph — written by the gateway.
+// not-wire-format: mapped to gen.Workspace before sending over the wire.
+type storedWorkspace = workspace.Workspace
 
-// storedDelegationEdge mirrors the on-disk format of a single delegation edge,
-// matching gen.WorkspaceDelegationEdge. Modes use the canonical delegation-mode
-// strings (await|background|task).
-type storedDelegationEdge struct { // not-wire-format: internal disk-cache struct, mapped to gen.WorkspaceDelegationEdge before sending over the wire
-	FromAgent string   `json:"from_agent"`
-	ToAgent   string   `json:"to_agent"`
-	Modes     []string `json:"modes,omitempty"`
-	Depth     *int     `json:"depth,omitempty"`
-}
+// storedDelegationEdge is an alias for the canonical delegation-edge type.
+// The shared type lives in pkg/workspace so gateway and tool writes stay
+// byte-for-byte compatible on the delegation field.
+// not-wire-format: mapped to gen.WorkspaceDelegationEdge before sending over the wire.
+type storedDelegationEdge = workspace.DelegationEdge
 
 // caller holds the identity of the authenticated request caller.
 // Passed by value; zero value is unauthenticated (empty username).
