@@ -368,7 +368,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       shell_policy: {
         custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
       },
-      tools_cfg: toolsCfg,
+      // tools_cfg is intentionally OMITTED here. Tool policies are saved via the
+      // dedicated PUT /agents/{id}/tools endpoint (re-auth gated) inside
+      // ToolsAndPermissions — including it in the main agent PUT would bypass the
+      // re-auth gate and cause spurious saves whenever ToolsAndPermissions syncs
+      // server-hydrated config into local state. The backend treats an absent
+      // tools_cfg as "leave unchanged" (if req.ToolsCfg != nil guard in rest.go).
       // US-E6: include the per-agent skill list in the auto-save payload.
       // Send the current list (may be empty, meaning no skills). The backend
       // treats an absent field as "leave unchanged" and an explicit empty
@@ -386,7 +391,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     maxToolCallsPerMinute, maxCostPerDay, soul, instructions, voice, heartbeat,
     timeoutPayload, timeoutSeconds, maxToolIterations, steeringMode,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
-    toolsCfg, agentSkills, executor,
+    agentSkills, executor,
   ])
 
   const { status: saveStatus, error: saveError, lastSavedAt: saveLastSavedAt } = useAutoSave(
@@ -452,7 +457,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // Locked agents: strip every field the backend treats as immutable for
       // the locked roster (see `.preview-doc/agents.html` for the current
       // 4-base roster). Identity fields plus the sandbox profile, shell
-      // policy, tools_cfg, and skills are all built-in for these agents —
+      // policy, and skills are all built-in for these agents —
       // sending them yields a 403 from the locked-field validator, and the
       // autosave indicator would surface a spurious error. Skills are
       // stripped here (B-2 defense-in-depth on the frontend side): the
@@ -462,11 +467,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // a core agent's "locked" status does not extend to its sandbox profile,
       // which is user-editable. The backend accepts sandbox_profile changes on
       // locked agents (the locked-field validator no longer guards it).
+      // Note: tools_cfg is no longer in formData (it has its own re-auth-gated
+      // endpoint via ToolsAndPermissions) so it does not need stripping here.
       const stripped = agent?.locked
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
             heartbeat: _h, instructions: _ins,
-            shell_policy: _shp, tools_cfg: _tc, skills: _sk, executor: _ex, ...rest
+            shell_policy: _shp, skills: _sk, executor: _ex, ...rest
           }) => rest)(data as Record<string, unknown>)
         : data
       // W6-contracts: include updated_at from the last GET response so the

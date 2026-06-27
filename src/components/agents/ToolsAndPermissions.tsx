@@ -9,12 +9,17 @@
 //     - Mixed summary pill for heterogeneous categories
 // - isLocked prop passed from agentType: locked core agents see the editor as
 //   read-only (disabled=true); no write is fired (B-2 fix / US-D5 / #332).
-// - autoSave is disabled for locked agents (prevents the spurious 403).
+// - Tool-policy saves are re-auth gated: when the user actually changes a policy,
+//   the save obtains a consent token via useReAuthGate/runGated and replays it in
+//   the X-Reauth-Token header (ADR-022 / Spec-6 FR-12.2).
+// - Opening the Tools tab fires ZERO writes: server-hydrated config is reconciled
+//   into the local editorValue without calling the parent onChange (hydration ≠
+//   user edit) so the parent autoSave is never triggered on tab open.
 // - Shell/fs conflict banner and fence badge are RETAINED from the previous
 //   version; they operate at the raw-tool level and still apply.
 
-import { useEffect, useMemo, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { Info, Lock } from '@phosphor-icons/react'
 
 import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
@@ -29,9 +34,11 @@ import {
   type AgentKind,
   type AgentToolsCfg,
 } from '@/lib/api'
-import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
+import { useReAuthGate, isReAuthCancelled } from '@/components/settings/useReAuthGate'
+import { useUiStore } from '@/store/ui'
+import { isApiError } from '@/lib/api-error'
 
 interface ToolsAndPermissionsProps {
   agentId: string | null
@@ -39,6 +46,12 @@ interface ToolsAndPermissionsProps {
   /** Whether the agent is locked (core/identity-locked). Read-only when true. */
   isLocked?: boolean
   tools: AgentToolsCfg
+  /**
+   * Called when the server-hydrated config has been loaded (to keep parent
+   * toolsCfg in sync for display — e.g. the overrides count badge). This is
+   * NOT used as a dirty-change signal: it fires only on server load, not on
+   * every user edit. Real saves go through the re-auth-gated mutation below.
+   */
   onChange: (tools: AgentToolsCfg) => void
 }
 
@@ -74,18 +87,15 @@ export function ToolsAndPermissions({
   onChange,
 }: ToolsAndPermissionsProps) {
   const queryClient = useQueryClient()
+  const addToast = useUiStore((s) => s.addToast)
 
-  // B-2 (US-D5 / #332): auto-save is completely disabled for locked agents.
-  // The ToolPolicyEditor is also rendered with disabled=true so the controls
-  // are non-interactive. No write ever fires.
-  const { status: saveStatus, error: saveError } = useAutoSave(
-    tools,
-    (data) => updateAgentTools(agentId!, data).then((result) => {
-      onChange(result.config)
-      queryClient.invalidateQueries({ queryKey: ['agent-tools', agentId] })
-    }),
-    { disabled: !agentId || isLocked },
-  )
+  // Re-auth gate — mirrors GlobalToolPoliciesSection (SecuritySection.tsx).
+  // The gate opens a consent dialog if the server returns a re-auth 403.
+  // On confirmation, the minted token is replayed into the mutation retry.
+  const { runGated, dialog: reAuthDialog } = useReAuthGate({
+    title: 'Confirm to change tool access',
+    description: "Re-type your password to change this agent's tool policies.",
+  })
 
   // FR-027, FR-029: central registry — includes both builtin and MCP tools.
   const { data: registryTools = [], isLoading: toolsLoading, isError: toolsError } = useQuery({
@@ -109,16 +119,96 @@ export function ToolsAndPermissions({
     ? { default_policy: globalPolicies.default_policy, policies: globalPolicies.policies ?? {} }
     : undefined
 
-  useEffect(() => {
-    if (agentToolsData && agentId) {
-      const incoming = JSON.stringify(agentToolsData.config)
-      const current = JSON.stringify(tools)
-      if (incoming !== current) {
-        onChange(agentToolsData.config)
+  // Save status for the AutoSaveIndicator.
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = useState<string | undefined>(undefined)
+
+  // Re-auth-gated save mutation. Fires only when the user explicitly changes a
+  // tool policy (via handleEditorChange → saveMutation.mutate). Never fires on
+  // tab open or server hydration.
+  const saveMutation = useMutation({
+    mutationFn: async (cfg: AgentToolsCfg) => {
+      setSaveStatus('saving')
+      setSaveError(undefined)
+      return await runGated((token) => updateAgentTools(agentId!, cfg, token))
+    },
+    onSuccess: (result) => {
+      setSaveStatus('saved')
+      onChange(result.config)
+      queryClient.invalidateQueries({ queryKey: ['agent-tools', agentId] })
+      // Reset to idle after a short display window.
+      setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 2000)
+    },
+    onError: (err: unknown) => {
+      if (isReAuthCancelled(err)) {
+        // User dismissed the re-auth dialog — treat as a no-op, not an error.
+        setSaveStatus('idle')
+        return
       }
+      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed'
+      setSaveError(msg)
+      setSaveStatus('error')
+      addToast({ message: `Tool policy save failed: ${msg}`, variant: 'error' })
+    },
+  })
+
+  // Track whether the component has completed its first server-hydration pass.
+  // Guards the editorValue sync so we don't treat the initial server GET as a
+  // user edit.
+  const hydrated = useRef(false)
+
+  // Local copy for ToolPolicyEditor (controlled).
+  const [editorValue, setEditorValue] = useState<ToolPolicyValue>(() => cfgToValue(tools))
+
+  // Hydrate editorValue from the dedicated GET /agents/{id}/tools response.
+  // This fires once when agentToolsData arrives (and again if the agent id
+  // changes). It does NOT trigger a save and does NOT call the parent
+  // onChange — server data arriving is hydration, not a user edit.
+  //
+  // The parent (AgentProfile) already hydrates toolsCfg from agent.tools_cfg
+  // in its own useEffect; the overrides-count badge is accurate without a
+  // second onChange call here. Calling onChange would also risk triggering
+  // any parent logic that treats it as a dirty-change signal.
+  //
+  // We compare ToolPolicyValue shapes (not raw AgentToolsCfg shapes) so the
+  // comparison is apples-to-apples and key ordering never causes a false diff.
+  useEffect(() => {
+    if (!agentToolsData || !agentId) return
+    const incomingValue = cfgToValue(agentToolsData.config)
+    const incoming = JSON.stringify(incomingValue)
+    const current = JSON.stringify(editorValue)
+    if (incoming !== current) {
+      setEditorValue(incomingValue)
     }
+    hydrated.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentToolsData, agentId])
+
+  // Keep editorValue in sync with parent `tools` prop when it changes from
+  // outside (e.g. agent navigation, role preset applied from a future parent
+  // control). This is also hydration — no save is triggered.
+  useEffect(() => {
+    const incomingValue = cfgToValue(tools)
+    const incoming = JSON.stringify(incomingValue)
+    const current = JSON.stringify(editorValue)
+    if (incoming !== current && !saveMutation.isPending) {
+      // Only resync when we're not in the middle of saving (to avoid the
+      // server response racing with a pending user edit).
+      setEditorValue(incomingValue)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tools])
+
+  // handleEditorChange is the ONLY path for real user edits. It updates the
+  // local controlled state and fires the re-auth-gated save mutation.
+  // It does NOT call the parent onChange synchronously — the save's onSuccess
+  // handler calls it after the PUT succeeds.
+  function handleEditorChange(next: ToolPolicyValue) {
+    if (isLocked || !agentId) return
+    const nextCfg = valueToCfg(next, tools)
+    setEditorValue(next)
+    saveMutation.mutate(nextCfg)
+  }
 
   // Shell/fs conflict detection (retained from previous version).
   // Uses the default_policy + per-tool overrides from `tools` prop.
@@ -131,32 +221,6 @@ export function ToolsAndPermissions({
     const fsTools = ['write_file', 'read_file', 'list_directory'] as const
     return fsTools.some((t) => resolvePolicy(t, policies, defaultPolicy) === 'deny')
   }, [policies, defaultPolicy])
-
-  // FR-043 preset confirmation state (now handled inside ToolPolicyEditor but
-  // we keep the preset confirmation flow via direct role preset application).
-  // The ToolPolicyEditor calls onChange synchronously so we don't need a dialog
-  // at this level — it's a role-preset selection, not a replace-semantics dialog.
-  // The ToolPolicyEditor handles its own internal state.
-
-  // Local copy for ToolPolicyEditor (controlled).
-  const [editorValue, setEditorValue] = useState<ToolPolicyValue>(() => cfgToValue(tools))
-
-  // Keep local editorValue in sync with parent `tools` prop when it changes
-  // from outside (e.g. after server load, preset apply in parent, etc.)
-  const incomingValue = cfgToValue(tools)
-  useEffect(() => {
-    const incoming = JSON.stringify(incomingValue)
-    const current = JSON.stringify(editorValue)
-    if (incoming !== current) {
-      setEditorValue(incomingValue)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tools])
-
-  function handleEditorChange(next: ToolPolicyValue) {
-    setEditorValue(next)
-    onChange(valueToCfg(next, tools))
-  }
 
   if (toolsLoading) {
     return (
@@ -213,7 +277,7 @@ export function ToolsAndPermissions({
         </div>
       )}
 
-      {/* Auto-save status — hidden for locked agents (no writes ever fire) */}
+      {/* Save status — hidden for locked agents (no writes ever fire) */}
       {!isLocked && (
         <div className="flex items-center gap-3">
           <AutoSaveIndicator status={saveStatus} error={saveError} />
@@ -237,6 +301,10 @@ export function ToolsAndPermissions({
         disabled={isLocked}
         globalPolicies={globalPolicyValue}
       />
+
+      {/* Re-auth consent dialog — rendered once here; opened by runGated when
+          the server demands re-auth on the tools PUT. */}
+      {reAuthDialog}
     </div>
   )
 }
