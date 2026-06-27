@@ -1953,96 +1953,318 @@ func currentDelegationDepth(ctx context.Context) int {
 	return 0
 }
 
-// buildDelegationDenyChecker returns the full FR-6.2 delegation gate for a
-// targeted delegation tool (spawn = "background", task_create = "task"). It
-// enforces, in order, and returns the first violation as a human-readable reason
-// (empty string = allowed):
+// resolveEffectiveWorkspaceID resolves the workspace whose delegation graph
+// governs the current turn. Every delegation check resolves to exactly one
+// workspace:
 //
-//  1. trust set — the target must be permitted by the unified DelegationPolicy.To
-//     (with the legacy CanDelegateTo / SubagentsConfig.AllowAgents fallbacks).
-//  2. mode      — the tool's delegation mode must be permitted by the policy's
-//     Modes list (empty Modes = all allowed; nil policy = unconstrained).
-//  3. depth     — the current delegation-chain depth must be below the policy's
-//     per-agent Depth cap (0 = uncapped; the global SubTurn.MaxDepth ceiling
-//     still applies independently at sub-turn dispatch).
+//  1. the workspace bound to the turn (tools.ToolWorkspaceID), when present; else
+//  2. the is_default workspace ("My Workspace"), resolved fresh from disk.
 //
-// An empty targetAgentID means "no explicit target" (the LLM omitted agent_id);
-// the trust check is then skipped here — untargeted spawns resolve to the default
-// agent and are gated by the existing allowlist semantics — while mode and depth
-// still apply.
-func buildDelegationDenyChecker(
-	currentAgentID string,
-	agentCfg *config.AgentConfig,
-	defaults config.AgentDefaults,
-	mode config.DelegationMode,
-	registry *AgentRegistry,
-) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	policy := config.ResolveDelegationPolicy(agentCfg, defaults)
-	toList := config.ResolveDelegationTo(agentCfg, defaults)
-	policyDepth := config.ResolveDelegationDepth(policy)
-
-	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-		// 1. Trust set (only when an explicit target is named AND it is not the
-		// caller itself). Self-assignment (target == caller) is NOT delegation —
-		// an agent creating/reassigning a task to itself does not consult the
-		// trust set; the 'to' allowlist governs delegation to OTHER agents only.
-		if targetAgentID != "" && targetAgentID != currentAgentID {
-			var allowed bool
-			if toList != nil {
-				allowed = config.IsDelegationAllowed(toList, targetAgentID)
-			} else {
-				// No canonical/legacy To — fall back to the registry allowlist.
-				allowed = registry.CanSpawnSubagent(currentAgentID, targetAgentID)
-			}
-			if !allowed {
-				logger.WarnCF("agent", "delegation denied: target not in trust set", map[string]any{
-					"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
-				})
-				return &tools.DelegationDenial{
-					Reason: fmt.Sprintf(
-						"agent %q is not in this agent's delegation trust set ('to' allowlist)",
-						targetAgentID,
-					),
-					Policy:        tools.DenyTrustSet,
-					TargetAgentID: targetAgentID,
-				}
+// It returns ("", denial) when NO workspace can be resolved at all — neither a
+// bound workspace nor an is_default one exists (should not happen post-seed).
+// This is a FAIL-CLOSED path: a delegation check with no governing graph DENIES
+// rather than falling open. The returned denial carries a trust_set reason and
+// the requested target (when one was named).
+func resolveEffectiveWorkspaceID(ctx context.Context, targetAgentID string) (string, *tools.DelegationDenial) {
+	wsID := tools.ToolWorkspaceID(ctx)
+	if wsID == "" {
+		// Default to My Workspace (the is_default workspace) so the delegation
+		// graph is ALWAYS consulted — never an implicit allow.
+		def, err := workspace.ResolveDefaultID(omnipusHome())
+		if err != nil || def == "" {
+			logger.WarnCF("agent", "delegation denied: no workspace to evaluate against", map[string]any{
+				"target": targetAgentID, "error": errString(err),
+			})
+			return "", &tools.DelegationDenial{
+				Reason: "delegation cannot be authorized: no workspace is bound to this turn " +
+					"and no default workspace exists to consult its delegation graph",
+				Policy:        tools.DenyTrustSet,
+				TargetAgentID: targetAgentID,
 			}
 		}
+		wsID = def
+	}
+	return wsID, nil
+}
 
-		// 2. Mode.
-		if !config.IsDelegationModeAllowed(policy, mode) {
-			logger.WarnCF("agent", "delegation denied: mode not permitted", map[string]any{
-				"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+// findDelegationEdge loads the effective workspace's delegation graph and returns
+// the edge authorizing caller→target, or a *DelegationDenial on any failure.
+// FAIL-CLOSED: a graph load error, a missing/unreadable workspace, or the absence
+// of a caller→target edge all DENY (trust_set). The graph is read per-call, so an
+// edit to the workspace graph takes effect on the next turn with no agent rebuild.
+//
+// Returns (edge, nil) when an authorizing edge exists; (nil, denial) otherwise.
+func findDelegationEdge(
+	ctx context.Context,
+	callerAgentID, targetAgentID string,
+	mode config.DelegationMode,
+) (*workspace.DelegationEdge, *tools.DelegationDenial) {
+	wsID, denial := resolveEffectiveWorkspaceID(ctx, targetAgentID)
+	if denial != nil {
+		return nil, denial
+	}
+
+	edges, err := workspace.ReadDelegation(omnipusHome(), wsID)
+	if err != nil {
+		// FAIL-CLOSED: never fall open on a security check. An unreadable graph
+		// is a closed graph.
+		logger.WarnCF("agent", "delegation denied: workspace delegation graph unreadable", map[string]any{
+			"agent_id": callerAgentID, "target": targetAgentID, "workspace_id": wsID,
+			"mode": string(mode), "error": err.Error(),
+		})
+		return nil, &tools.DelegationDenial{
+			Reason: fmt.Sprintf(
+				"delegation cannot be authorized: workspace %q delegation graph is unreadable",
+				wsID,
+			),
+			Policy:        tools.DenyTrustSet,
+			TargetAgentID: targetAgentID,
+		}
+	}
+
+	for i := range edges {
+		if edges[i].FromAgent == callerAgentID && edges[i].ToAgent == targetAgentID {
+			e := edges[i]
+			return &e, nil
+		}
+	}
+
+	logger.WarnCF("agent", "delegation denied: no edge in workspace graph", map[string]any{
+		"agent_id": callerAgentID, "target": targetAgentID, "workspace_id": wsID, "mode": string(mode),
+	})
+	return nil, &tools.DelegationDenial{
+		Reason: fmt.Sprintf(
+			"agent %q is not allowed as a delegation target in this workspace",
+			targetAgentID,
+		),
+		Policy:        tools.DenyTrustSet,
+		TargetAgentID: targetAgentID,
+	}
+}
+
+// enforceEdgeModeAndDepth applies the modes and depth constraints of a matched
+// delegation edge. Returns nil when the delegation is permitted, or a
+// *DelegationDenial (mode / depth) otherwise.
+//
+//   - modes: empty edge.Modes ⇒ all modes allowed; otherwise the current mode
+//     MUST be in edge.Modes.
+//   - depth: edge.Depth (when non-nil) is the per-edge onward-delegation cap; nil
+//     inherits — no per-edge cap. The global SubTurn.MaxDepth ceiling (passed as
+//     globalDepthCap, 0 = none) ALWAYS applies as an additional, independent cap.
+func enforceEdgeModeAndDepth(
+	ctx context.Context,
+	edge *workspace.DelegationEdge,
+	callerAgentID, targetAgentID string,
+	mode config.DelegationMode,
+	globalDepthCap int,
+) *tools.DelegationDenial {
+	// Modes.
+	if len(edge.Modes) > 0 {
+		allowed := false
+		for _, m := range edge.Modes {
+			if config.DelegationMode(m) == mode {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			logger.WarnCF("agent", "delegation denied: mode not permitted by edge", map[string]any{
+				"agent_id": callerAgentID, "target": targetAgentID, "mode": string(mode),
+				"edge_modes": edge.Modes,
 			})
 			return &tools.DelegationDenial{
 				Reason: fmt.Sprintf(
-					"delegation mode %q is not permitted by this agent's delegation policy",
+					"delegation mode %q is not permitted for this delegation edge in this workspace",
 					string(mode),
 				),
 				Policy:        tools.DenyMode,
 				TargetAgentID: targetAgentID,
 			}
 		}
+	}
 
-		// 3. Depth.
-		if policyDepth > 0 {
-			if d := currentDelegationDepth(ctx); d >= policyDepth {
-				logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
-					"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
-					"current_depth": d, "max_depth": policyDepth,
-				})
-				return &tools.DelegationDenial{
-					Reason: fmt.Sprintf(
-						"maximum delegation depth (%d) reached — cannot delegate further",
-						policyDepth,
-					),
-					Policy:        tools.DenyDepth,
-					TargetAgentID: targetAgentID,
-				}
+	// Depth.
+	//
+	// A per-edge cap of exactly 0 means "no onward delegation" — the strictest
+	// possible bound. Reject unconditionally through this edge.
+	if edge.Depth != nil && *edge.Depth == 0 {
+		logger.WarnCF("agent", "delegation denied: edge forbids onward delegation (depth 0)", map[string]any{
+			"agent_id": callerAgentID, "target": targetAgentID, "mode": string(mode),
+		})
+		return &tools.DelegationDenial{
+			Reason:        "this delegation edge forbids onward delegation (depth cap 0)",
+			Policy:        tools.DenyDepth,
+			TargetAgentID: targetAgentID,
+		}
+	}
+
+	// Otherwise enforce the TIGHTER of the per-edge cap (edge.Depth, nil =
+	// inherit) and the global SubTurn.MaxDepth ceiling. A value of 0 means
+	// "uncapped from that source".
+	depthCap := 0
+	if edge.Depth != nil && *edge.Depth > 0 {
+		depthCap = *edge.Depth
+	}
+	if globalDepthCap > 0 && (depthCap == 0 || globalDepthCap < depthCap) {
+		depthCap = globalDepthCap
+	}
+	if depthCap > 0 {
+		if d := currentDelegationDepth(ctx); d >= depthCap {
+			logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
+				"agent_id": callerAgentID, "target": targetAgentID, "mode": string(mode),
+				"current_depth": d, "max_depth": depthCap,
+			})
+			return &tools.DelegationDenial{
+				Reason: fmt.Sprintf(
+					"maximum delegation depth (%d) reached — cannot delegate further",
+					depthCap,
+				),
+				Policy:        tools.DenyDepth,
+				TargetAgentID: targetAgentID,
 			}
 		}
+	}
+	return nil
+}
 
-		return nil
+// errString returns err.Error() or "" for a nil error — a tiny helper for log
+// fields where a nil error should produce no message.
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// buildDelegationDenyChecker returns the per-workspace, graph-authoritative
+// delegation gate for a targeted delegation tool (spawn = "background",
+// task_create / update_task = "task"). The per-workspace delegation graph
+// (workspaces/<id>.json → Delegation[] edges) is the SOLE runtime authority:
+// the per-agent config.DelegationPolicy is seed-only and is NOT read here.
+//
+// It enforces, in order, returning the first violation (nil = allowed):
+//
+//  1. trust set — an edge caller→target MUST exist in the effective workspace's
+//     delegation graph. No edge ⇒ DENY (trust_set). The workspace is the one
+//     bound to the turn, defaulting to the is_default workspace when none is
+//     bound — so a graph is ALWAYS consulted (never an implicit allow).
+//  2. mode      — the tool's delegation mode must be in the edge's Modes (empty
+//     Modes = all allowed).
+//  3. depth     — the current delegation-chain depth must be below the edge's
+//     Depth cap (nil = inherit; 0 = no onward delegation). The global
+//     SubTurn.MaxDepth ceiling always applies as an additional cap.
+//
+// FAIL-CLOSED: a graph load error, a missing workspace, or no default workspace
+// all DENY — a delegation check with no readable governing graph never falls
+// open.
+//
+// An empty targetAgentID means "no explicit target" (the LLM omitted agent_id);
+// the trust check is then skipped here — untargeted spawns resolve to the default
+// agent — while mode and depth (against any one of the caller's outgoing edges)
+// still apply. Self-assignment (target == caller) is NOT delegation and is
+// always allowed without consulting the graph.
+//
+// The agentCfg / defaults / registry parameters are retained for call-site
+// compatibility but are NO LONGER consulted at runtime (the graph supersedes
+// them); they may be nil.
+func buildDelegationDenyChecker(
+	currentAgentID string,
+	_ *config.AgentConfig,
+	defaults config.AgentDefaults,
+	mode config.DelegationMode,
+	_ *AgentRegistry,
+) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+	globalDepthCap := defaults.SubTurn.MaxDepth
+
+	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+		// Self-assignment (target == caller) is NOT delegation — an agent
+		// creating/reassigning a task to itself does not consult the graph.
+		if targetAgentID == currentAgentID {
+			return nil
+		}
+
+		if targetAgentID != "" {
+			// Targeted delegation: require an authorizing edge, then enforce its
+			// modes + depth.
+			edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode)
+			if denial != nil {
+				return denial
+			}
+			return enforceEdgeModeAndDepth(ctx, edge, currentAgentID, targetAgentID, mode, globalDepthCap)
+		}
+
+		// Untargeted (agent_id omitted): trust is "can delegate at all" — the
+		// caller must have at least one outgoing edge that permits this mode.
+		// Mode + depth still apply against that edge.
+		return evalUntargetedDelegation(ctx, currentAgentID, mode, globalDepthCap)
+	}
+}
+
+// evalUntargetedDelegation gates an untargeted delegation (no explicit target)
+// against the caller's outgoing edges in the effective workspace graph. It allows
+// iff the caller has AT LEAST ONE outgoing edge whose modes permit the current
+// mode (and whose depth cap is not exceeded). FAIL-CLOSED on graph load failure.
+func evalUntargetedDelegation(
+	ctx context.Context,
+	callerAgentID string,
+	mode config.DelegationMode,
+	globalDepthCap int,
+) *tools.DelegationDenial {
+	wsID, denial := resolveEffectiveWorkspaceID(ctx, "")
+	if denial != nil {
+		return denial
+	}
+	edges, err := workspace.ReadDelegation(omnipusHome(), wsID)
+	if err != nil {
+		logger.WarnCF("agent", "delegation denied: workspace delegation graph unreadable", map[string]any{
+			"agent_id": callerAgentID, "workspace_id": wsID, "mode": string(mode), "error": err.Error(),
+		})
+		return &tools.DelegationDenial{
+			Reason: fmt.Sprintf(
+				"delegation cannot be authorized: workspace %q delegation graph is unreadable",
+				wsID,
+			),
+			Policy: tools.DenyTrustSet,
+		}
+	}
+
+	// Find any outgoing edge that permits this mode and whose depth is OK.
+	var firstModeDenial, firstDepthDenial *tools.DelegationDenial
+	for i := range edges {
+		if edges[i].FromAgent != callerAgentID {
+			continue
+		}
+		e := edges[i]
+		if d := enforceEdgeModeAndDepth(ctx, &e, callerAgentID, "", mode, globalDepthCap); d != nil {
+			switch d.Policy {
+			case tools.DenyMode:
+				if firstModeDenial == nil {
+					firstModeDenial = d
+				}
+			case tools.DenyDepth:
+				if firstDepthDenial == nil {
+					firstDepthDenial = d
+				}
+			}
+			continue
+		}
+		return nil // an edge permits this delegation
+	}
+
+	// No edge permitted it. Surface the most specific reason: a mode/depth
+	// denial if an edge existed but was constrained, else trust_set (no edge).
+	if firstModeDenial != nil {
+		return firstModeDenial
+	}
+	if firstDepthDenial != nil {
+		return firstDepthDenial
+	}
+	logger.WarnCF("agent", "delegation denied: caller has no outgoing edge", map[string]any{
+		"agent_id": callerAgentID, "workspace_id": wsID, "mode": string(mode),
+	})
+	return &tools.DelegationDenial{
+		Reason: "this agent has no permitted delegation target in this workspace",
+		Policy: tools.DenyTrustSet,
 	}
 }
 
@@ -2050,9 +2272,8 @@ func buildDelegationDenyChecker(
 // systools.Deps.DelegationDeny hook. The sysagent task tools are registered ONCE
 // on a central registry (not per-agent), so they cannot bind a per-agent checker
 // at construction the way the plain task tools do in NewAgentLoop. Instead this
-// resolver loads the CALLING agent's config from the live in-memory config at
-// Execute time and builds the full FR-6.2 task-mode delegation gate (trust set +
-// mode("task") + depth) dynamically, then evaluates the requested target.
+// resolver builds the per-workspace, graph-authoritative task-mode delegation
+// gate dynamically at Execute time and evaluates the requested target.
 //
 // This closes the §4 behavioral-parity gap: create_task_in_workspace /
 // update_task_in_workspace must enforce the SAME delegation policy the plain
@@ -2060,94 +2281,53 @@ func buildDelegationDenyChecker(
 // PRIVILEGED Orchestrator path, so it must be at least as restrictive — never
 // less — than the same-workspace path.
 //
-// If the caller's AgentConfig cannot be found in the live config, the gate falls
-// back to the registry allowlist (CanSpawnSubagent) via buildDelegationDenyChecker,
-// which fails closed (deny) when no trust relationship exists.
+// The graph is the authority (workspaces/<id>.json → Delegation[] edges); the
+// per-agent config is no longer consulted. A graph load failure or a missing
+// workspace DENIES (fail-closed) inside buildDelegationDenyChecker.
 func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
 	return func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
-		cfg := al.GetConfig()
-		registry := al.GetRegistry()
-		if cfg == nil || registry == nil {
-			// No live config/registry to resolve a policy from. Fail closed only
-			// when a cross-agent delegation is actually requested; self-assignment
-			// (target == caller or empty target) is not delegation and is allowed.
-			if targetAgentID == "" || targetAgentID == callerAgentID {
-				return nil
-			}
-			return &tools.DelegationDenial{
-				Reason:        "delegation policy unavailable (no live config) — denying cross-agent assignment",
-				Policy:        tools.DenyTrustSet,
-				TargetAgentID: targetAgentID,
-			}
+		// Self-assignment / untargeted is not delegation and is allowed before
+		// touching the graph, matching buildDelegationDenyChecker's own short
+		// circuits (the cross-workspace tools always supply a concrete target on a
+		// reassignment; an empty target here is a no-op assignment).
+		if targetAgentID == "" || targetAgentID == callerAgentID {
+			return nil
 		}
-		agentCfg := findAgentConfig(cfg, callerAgentID)
+		var defaults config.AgentDefaults
+		if cfg := al.GetConfig(); cfg != nil {
+			defaults = cfg.Agents.Defaults
+		}
 		gate := buildDelegationDenyChecker(
-			callerAgentID, agentCfg, cfg.Agents.Defaults,
-			config.DelegationModeTask, registry,
+			callerAgentID, nil, defaults,
+			config.DelegationModeTask, nil,
 		)
 		return gate(ctx, targetAgentID)
 	}
 }
 
-// buildSubagentDelegationDenyChecker returns the FR-6.2 gate for the synchronous
-// subagent tool (mode = "await"). The sync subagent tool has no explicit target,
-// so the trust check is "can this agent delegate at all" (at least one permitted
-// target), then mode and depth apply identically to the targeted path.
+// buildSubagentDelegationDenyChecker returns the per-workspace, graph-authoritative
+// gate for the synchronous subagent tool (mode = "await"). The sync subagent tool
+// has no explicit target, so the trust check is "can this agent delegate at all"
+// in the effective workspace graph (at least one outgoing edge whose modes permit
+// "await"), then mode and depth apply identically to the targeted path.
+//
+// The graph (workspaces/<id>.json) is the SOLE runtime authority; the per-agent
+// config.DelegationPolicy is seed-only and is not consulted here. FAIL-CLOSED on
+// graph load failure or a missing workspace. The agentCfg parameter is retained
+// for the call-site signature but only its ID is used; defaults supplies the
+// global depth ceiling.
 func buildSubagentDelegationDenyChecker(
 	agentCfg *config.AgentConfig,
 	defaults config.AgentDefaults,
 ) func(ctx context.Context) *tools.DelegationDenial {
-	policy := config.ResolveDelegationPolicy(agentCfg, defaults)
-	toList := config.ResolveDelegationTo(agentCfg, defaults)
-	policyDepth := config.ResolveDelegationDepth(policy)
+	var callerAgentID string
+	if agentCfg != nil {
+		callerAgentID = agentCfg.ID
+	}
+	globalDepthCap := defaults.SubTurn.MaxDepth
 
 	return func(ctx context.Context) *tools.DelegationDenial {
-		// 1. Trust: must be able to delegate at all.
-		canDelegate := false
-		if toList != nil {
-			canDelegate = config.IsDelegationAllowedAny(toList)
-		} else if agentCfg != nil && agentCfg.Subagents != nil {
-			// Legacy: a non-nil AllowAgents means the operator opted in.
-			canDelegate = agentCfg.Subagents.AllowAgents != nil
-		}
-		if !canDelegate {
-			logger.WarnCF("agent", "delegation denied: no permitted targets", map[string]any{
-				"mode": string(config.DelegationModeAwait),
-			})
-			return &tools.DelegationDenial{
-				Reason: "no target agent is permitted by this agent's delegation policy ('to' allowlist is empty)",
-				Policy: tools.DenyTrustSet,
-			}
-		}
-
-		// 2. Mode.
-		if !config.IsDelegationModeAllowed(policy, config.DelegationModeAwait) {
-			logger.WarnCF("agent", "delegation denied: mode not permitted", map[string]any{
-				"mode": string(config.DelegationModeAwait),
-			})
-			return &tools.DelegationDenial{
-				Reason: fmt.Sprintf(
-					"delegation mode %q is not permitted by this agent's delegation policy",
-					string(config.DelegationModeAwait),
-				),
-				Policy: tools.DenyMode,
-			}
-		}
-
-		// 3. Depth.
-		if policyDepth > 0 {
-			if d := currentDelegationDepth(ctx); d >= policyDepth {
-				logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
-					"mode": string(config.DelegationModeAwait), "current_depth": d, "max_depth": policyDepth,
-				})
-				return &tools.DelegationDenial{
-					Reason: fmt.Sprintf("maximum delegation depth (%d) reached — cannot delegate further", policyDepth),
-					Policy: tools.DenyDepth,
-				}
-			}
-		}
-
-		return nil
+		return evalUntargetedDelegation(ctx, callerAgentID, config.DelegationModeAwait, globalDepthCap)
 	}
 }
 
