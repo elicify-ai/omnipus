@@ -16,6 +16,7 @@
 //  5. No write fires for locked agents (B-2 / #332)
 //  6. NO spurious PUT fires when opening Tools tab (server hydration ≠ user edit)
 //  7. Real policy change triggers the re-auth-gated save path (not a bare 403)
+//  8. 403 re-auth path: gate detects re-auth 403, retries with token (Spec-6 FR-12.2)
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
@@ -49,7 +50,20 @@ vi.mock('@/components/settings/useReAuthGate', () => ({
 
 import * as api from '@/lib/api'
 import type { RegistryTool, AgentToolsCfg } from '@/lib/api'
+// ApiError must be imported from its own module, not from the @/lib/api mock,
+// because the mock factory for @/lib/api does not re-export class constructors.
+import { ApiError } from '@/lib/api-error'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
+
+// reAuth403 mirrors the exact 403 the backend's requireReAuth gate returns.
+// useReAuthGate detects it by body/message match and replays a consent token.
+function reAuth403() {
+  return new ApiError(
+    403,
+    "You don't have permission to perform this action.",
+    { body: '{"error":"this change requires re-typing your password — call POST /api/v1/auth/reauth first"}' },
+  )
+}
 
 // MCPServerPicker depends on server data — mock it to simplify tests
 vi.mock('./MCPServerPicker', () => ({
@@ -598,5 +612,103 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
         '', // token arg always present (re-auth gate path)
       )
     })
+  })
+})
+
+describe('ToolsAndPermissions — 403 re-auth path (Spec-6 FR-12.2)', () => {
+  // This suite exercises the negative path: the first save attempt returns the
+  // re-auth 403, the gate intercepts it, and the retry is replayed with the
+  // minted consent token. Mirrors SecuritySection.test.tsx ~line 476.
+  //
+  // Implementation note: useReAuthGate is mocked at the file level so dialog=null.
+  // We simulate the full 2-phase gate behavior by overriding mockRunGated to:
+  //   1. Call fn('') — the optimistic first attempt (no token).
+  //   2. If fn('') throws a re-auth 403, call fn('reauth_tok') — the retry.
+  // This validates that the component correctly wires the mutation through
+  // runGated (not calling updateAgentTools directly) so the re-auth interception
+  // point is present and the token is forwarded on retry.
+
+  it('retries updateAgentTools with consent token after 403 re-auth gate fires', async () => {
+    // First call (token='') throws the re-auth 403; second call (token='reauth_tok') succeeds.
+    vi.mocked(api.updateAgentTools)
+      .mockRejectedValueOnce(reAuth403())
+      .mockResolvedValueOnce({ config: DEFAULT_TOOLS_CFG, tools: [] })
+
+    // Override mockRunGated to simulate the 2-phase gate: detect re-auth 403,
+    // then retry fn with the minted token — mirroring what the real useReAuthGate
+    // hook does (runGated: fn('') → 403 → awaitToken → fn('reauth_tok')).
+    mockRunGated.mockImplementation(async (fn: (token: string) => unknown) => {
+      try {
+        return await fn('')
+      } catch (err) {
+        // Detect re-auth 403 by matching the body the backend sends.
+        const isReAuth =
+          err instanceof ApiError &&
+          err.status === 403 &&
+          (err.body ?? '').includes('re-typing your password')
+        if (!isReAuth) throw err
+        // Replay with a minted consent token (simulates the user completing re-auth).
+        return await fn('reauth_tok')
+      }
+    })
+
+    const onChange = vi.fn()
+
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={onChange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+    })
+
+    // No save before user interaction.
+    expect(api.updateAgentTools).not.toHaveBeenCalled()
+
+    // User clicks the Cautious preset — triggers the gated save.
+    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+
+    // The gate ran: first attempt with '' returned 403, gate retried with 'reauth_tok'.
+    await waitFor(() => {
+      expect(mockRunGated).toHaveBeenCalledTimes(1)
+      expect(api.updateAgentTools).toHaveBeenCalledTimes(2)
+    })
+
+    // First attempt: no token (optimistic).
+    expect(vi.mocked(api.updateAgentTools).mock.calls[0][2]).toBe('')
+    // Retry: consent token forwarded.
+    expect(vi.mocked(api.updateAgentTools).mock.calls[1][2]).toBe('reauth_tok')
+
+    // After success, onChange must have been called to sync parent state.
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(DEFAULT_TOOLS_CFG)
+    })
+  })
+
+  it('does NOT fire a spurious PUT when the Tools tab opens (hydration-guard still holds after fix)', async () => {
+    // Regression guard: the debounce/skip-while-pending fix must not break the
+    // hydration guard. No user interaction = no save.
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+
+    await waitFor(() => {
+      expect(api.fetchAgentTools).toHaveBeenCalledWith('agent-1')
+    })
+
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(api.updateAgentTools).not.toHaveBeenCalled()
+    expect(mockRunGated).not.toHaveBeenCalled()
   })
 })

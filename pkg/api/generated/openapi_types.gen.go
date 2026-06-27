@@ -3645,9 +3645,10 @@ func (e RestoreBackup200JSONResponseBodyStatus) Valid() bool {
 
 // Defines values for ListSessionsParamsType.
 const (
-	ListSessionsParamsTypeChannel ListSessionsParamsType = "channel"
-	ListSessionsParamsTypeChat    ListSessionsParamsType = "chat"
-	ListSessionsParamsTypeTask    ListSessionsParamsType = "task"
+	ListSessionsParamsTypeChannel   ListSessionsParamsType = "channel"
+	ListSessionsParamsTypeChat      ListSessionsParamsType = "chat"
+	ListSessionsParamsTypeScheduled ListSessionsParamsType = "scheduled"
+	ListSessionsParamsTypeTask      ListSessionsParamsType = "task"
 )
 
 // Valid indicates whether the value is a known member of the ListSessionsParamsType enum.
@@ -3656,6 +3657,8 @@ func (e ListSessionsParamsType) Valid() bool {
 	case ListSessionsParamsTypeChannel:
 		return true
 	case ListSessionsParamsTypeChat:
+		return true
+	case ListSessionsParamsTypeScheduled:
 		return true
 	case ListSessionsParamsTypeTask:
 		return true

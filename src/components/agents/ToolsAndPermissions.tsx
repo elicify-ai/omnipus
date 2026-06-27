@@ -18,7 +18,7 @@
 // - Shell/fs conflict banner and fence badge are RETAINED from the previous
 //   version; they operate at the raw-tool level and still apply.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { Info, Lock } from '@phosphor-icons/react'
 
@@ -152,11 +152,6 @@ export function ToolsAndPermissions({
     },
   })
 
-  // Track whether the component has completed its first server-hydration pass.
-  // Guards the editorValue sync so we don't treat the initial server GET as a
-  // user edit.
-  const hydrated = useRef(false)
-
   // Local copy for ToolPolicyEditor (controlled).
   const [editorValue, setEditorValue] = useState<ToolPolicyValue>(() => cfgToValue(tools))
 
@@ -180,7 +175,6 @@ export function ToolsAndPermissions({
     if (incoming !== current) {
       setEditorValue(incomingValue)
     }
-    hydrated.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentToolsData, agentId])
 
@@ -203,10 +197,18 @@ export function ToolsAndPermissions({
   // local controlled state and fires the re-auth-gated save mutation.
   // It does NOT call the parent onChange synchronously — the save's onSuccess
   // handler calls it after the PUT succeeds.
+  //
+  // Guard: if a save is already in flight, skip the concurrent PUT to avoid
+  // last-writer-wins races (rapid edits — bulk allow/ask/deny, preset applies —
+  // would otherwise fire N concurrent gated PUTs; whichever onSuccess landed
+  // last would silently win). We still update local editorValue immediately so
+  // the UI is responsive; the in-flight PUT will resolve and onSuccess will
+  // call onChange(result.config), bringing the parent back into sync.
   function handleEditorChange(next: ToolPolicyValue) {
     if (isLocked || !agentId) return
-    const nextCfg = valueToCfg(next, tools)
     setEditorValue(next)
+    if (saveMutation.isPending) return
+    const nextCfg = valueToCfg(next, tools)
     saveMutation.mutate(nextCfg)
   }
 

@@ -949,6 +949,7 @@ paths:
           - chat
           - task
           - channel
+          - scheduled
         example: chat
       responses:
         '200':

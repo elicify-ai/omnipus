@@ -4957,7 +4957,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "type",
         type: "Query",
-        schema: z.enum(["chat", "task", "channel"]).optional(),
+        schema: z.enum(["chat", "task", "channel", "scheduled"]).optional(),
       },
     ],
     response: z.union([

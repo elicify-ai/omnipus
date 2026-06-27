@@ -36,6 +36,7 @@ Pre-1.0 versions are tracked by the active release branch rather than by tagged 
 - Default gateway port unified to 5000 across `datamodel.Init`, `config.DefaultConfig`, SSE/WebSocket CORS fallback (#160)
 - README restructured — marketing-first, docs index, brand-colored SVG diagrams
 - LICENSE expanded to full attribution chain (nanobot → PicoClaw → Omnipus) under elicify.ai Pte. Ltd. copyright
+- Global heartbeat retired in favor of per-agent heartbeat. **Upgrade note:** Mia's heartbeat is enabled by default on first boot after upgrade — operators who relied on the old global `heartbeat.enabled=false` opt-out must disable it per-agent (Agents → `heartbeat_enabled=false`).
 
 ### Removed
 

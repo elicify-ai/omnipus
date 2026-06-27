@@ -248,6 +248,117 @@ func TestWorkspaceDelegation_PutDAGNoCycle_OK(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
+// TestDelegationEdgeValidate_RejectionCases exercises the shared per-edge
+// authority workspace.DelegationEdge.Validate directly (the same validator the
+// PUT handler and the update_workspace tool now call). It pins each per-edge
+// invariant in isolation: self-edge, off-team endpoint, invalid mode, and
+// negative depth are each rejected, while a well-formed edge is accepted. The
+// team set mirrors the workspace team (core_team ∪ existing-edge endpoints).
+func TestDelegationEdgeValidate_RejectionCases(t *testing.T) {
+	team := map[string]bool{"jim": true, "ava": true, "ray": true}
+	const ceiling = 3
+
+	cases := []struct {
+		name    string
+		edge    storedDelegationEdge
+		wantErr string // substring the rejection message must contain ("" = accept)
+	}{
+		{
+			name:    "self-edge",
+			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "jim"},
+			wantErr: "self-edge",
+		},
+		{
+			name:    "off-team to_agent",
+			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ghost"},
+			wantErr: "not a member of the workspace team",
+		},
+		{
+			name:    "off-team from_agent",
+			edge:    storedDelegationEdge{FromAgent: "ghost", ToAgent: "ava"},
+			wantErr: "not a member of the workspace team",
+		},
+		{
+			name:    "empty endpoints",
+			edge:    storedDelegationEdge{FromAgent: "", ToAgent: ""},
+			wantErr: "must not be empty",
+		},
+		{
+			name:    "invalid mode",
+			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []string{"telepathy"}},
+			wantErr: "is invalid",
+		},
+		{
+			name:    "negative depth",
+			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Depth: intPtrGW(-1)},
+			wantErr: "depth must be >= 0",
+		},
+		{
+			name:    "depth above ceiling",
+			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Depth: intPtrGW(99)},
+			wantErr: "exceeds the maximum allowed depth",
+		},
+		{
+			name:    "valid edge accepted",
+			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []string{"task", "background"}, Depth: intPtrGW(2)},
+			wantErr: "",
+		},
+		{
+			name:    "valid edge depth 0 accepted",
+			edge:    storedDelegationEdge{FromAgent: "ray", ToAgent: "ava", Depth: intPtrGW(0)},
+			wantErr: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.edge.Validate(team, ceiling)
+			if tc.wantErr == "" {
+				assert.NoError(t, err, "edge must be accepted")
+				return
+			}
+			require.Error(t, err, "edge must be rejected")
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestDelegationEdgeValidate_MatchesHandlerWireMessages proves the shared
+// Validate authority returns the EXACT 400 body the PUT handler surfaces, so
+// routing the gateway's per-edge checks through Validate preserved the wire
+// contract. Each Validate error string must equal the message the handler
+// historically produced inline.
+func TestDelegationEdgeValidate_MatchesHandlerWireMessages(t *testing.T) {
+	team := map[string]bool{"jim": true, "ava": true}
+	const ceiling = 3
+
+	assert.EqualError(t,
+		storedDelegationEdge{FromAgent: "jim", ToAgent: "jim"}.Validate(team, ceiling),
+		"delegation edge cannot be a self-edge (from_agent == to_agent: jim)")
+	assert.EqualError(t,
+		storedDelegationEdge{FromAgent: "jim", ToAgent: "ghost"}.Validate(team, ceiling),
+		"delegation edge to_agent ghost is not a member of the workspace team")
+	assert.EqualError(t,
+		storedDelegationEdge{FromAgent: "ghost", ToAgent: "ava"}.Validate(team, ceiling),
+		"delegation edge from_agent ghost is not a member of the workspace team")
+	assert.EqualError(t,
+		storedDelegationEdge{FromAgent: "", ToAgent: ""}.Validate(team, ceiling),
+		"delegation edge from_agent and to_agent must not be empty")
+	assert.EqualError(t,
+		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []string{"telepathy"}}.Validate(team, ceiling),
+		"delegation edge mode telepathy is invalid (valid: await, background, task)")
+	assert.EqualError(t,
+		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Depth: intPtrGW(-1)}.Validate(team, ceiling),
+		"delegation edge depth must be >= 0")
+	assert.EqualError(t,
+		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Depth: intPtrGW(99)}.Validate(team, ceiling),
+		"delegation edge depth exceeds the maximum allowed depth")
+}
+
+// intPtrGW is a local *int helper for building delegation depth fields in the
+// gateway delegation tests.
+func intPtrGW(n int) *int { return &n }
+
 // TestDefaultWorkspaceSeeder_TeamAndEdges proves ensureDefaultWorkspace seeds the
 // team + edges from a config carrying seeded per-agent delegation policies.
 func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {

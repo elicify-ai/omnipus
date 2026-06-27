@@ -320,7 +320,6 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
 // ── Workspace group header ────────────────────────────────────────────────────
 
 interface WorkspaceGroupProps {
-  groupKey: string
   label: string
   count: number
   isCollapsed: boolean
@@ -328,7 +327,7 @@ interface WorkspaceGroupProps {
   children: React.ReactNode
 }
 
-function WorkspaceGroup({ groupKey: _groupKey, label, count, isCollapsed, onToggle, children }: WorkspaceGroupProps) {
+function WorkspaceGroup({ label, count, isCollapsed, onToggle, children }: WorkspaceGroupProps) {
   return (
     <div>
       <button
@@ -369,20 +368,18 @@ interface WorkspaceSessionGroup {
 /**
  * Build workspace-keyed groups from a flat session list.
  *
- * sessionToWorkspace: sessionId → workspaceId (may be absent for unlinked sessions)
  * workspaces: list of all Workspace objects (for name lookup)
  * activeWorkspaceId: shown first in the list
  */
 function buildWorkspaceGroups(
   sessions: Session[],
-  sessionToWorkspace: Map<string, string>,
   workspaces: Workspace[],
   activeWorkspaceId: string | null,
 ): WorkspaceSessionGroup[] {
   const groups = new Map<string, Session[]>()
 
   for (const s of sessions) {
-    const wsId = sessionToWorkspace.get(s.id) ?? NO_WORKSPACE_KEY
+    const wsId = s.workspace_id ?? NO_WORKSPACE_KEY
     const existing = groups.get(wsId) ?? []
     groups.set(wsId, [...existing, s])
   }
@@ -488,18 +485,6 @@ export function SessionPanel() {
   // Only scope when a non-default workspace is active.
   const scopeToWorkspace = !!activeWorkspaceId && !activeIsDefaultWorkspace
 
-  // Build sessionId → workspaceId map directly from each session's own workspace_id.
-  // Sessions without workspace_id fall under the NO_WORKSPACE_KEY sentinel.
-  const sessionToWorkspace = useMemo<Map<string, string>>(() => {
-    const map = new Map<string, string>()
-    for (const s of sessions) {
-      if (s.workspace_id) {
-        map.set(s.id, s.workspace_id)
-      }
-    }
-    return map
-  }, [sessions])
-
   const handleSelectSession = (session: Session) => {
     // Always trigger the WS attach_session flow so the replay pipeline
     // emits tool_call_start / tool_call_result / subagent_start / subagent_end
@@ -565,8 +550,8 @@ export function SessionPanel() {
 
   // Group sessions by workspace.
   const workspaceGroups = useMemo(
-    () => buildWorkspaceGroups(filteredSessions, sessionToWorkspace, workspaces, activeWorkspaceId),
-    [filteredSessions, sessionToWorkspace, workspaces, activeWorkspaceId],
+    () => buildWorkspaceGroups(filteredSessions, workspaces, activeWorkspaceId),
+    [filteredSessions, workspaces, activeWorkspaceId],
   )
 
   // Always show workspace group headers as long as there is at least one group
@@ -651,7 +636,6 @@ export function SessionPanel() {
               {workspaceGroups.map((group) => (
                 <WorkspaceGroup
                   key={group.key}
-                  groupKey={group.key}
                   label={group.label}
                   count={group.sessions.length}
                   isCollapsed={collapsedWorkspaces.has(group.key)}

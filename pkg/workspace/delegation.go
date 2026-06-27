@@ -6,9 +6,11 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // DelegationEdge mirrors a single directed delegation edge stored in
@@ -29,6 +31,77 @@ type DelegationEdge struct {
 	ToAgent   string   `json:"to_agent"`
 	Modes     []string `json:"modes,omitempty"`
 	Depth     *int     `json:"depth,omitempty"`
+}
+
+// Canonical delegation mode names. These MUST stay in lock-step with
+// config.DelegationMode{Await,Background,Task} (pkg/config). They are duplicated
+// here as bare string literals — NOT imported from pkg/config — deliberately:
+// pkg/workspace is dependency-free of pkg/config to avoid an import cycle
+// (pkg/agent imports pkg/workspace, pkg/config is imported by both). A drift
+// between these and the config constants would be caught by
+// TestDelegationEdgeValidate_ModesMatchConfig in pkg/gateway (which CAN import
+// both), so this is a single, test-pinned source of truth at the edge layer.
+const (
+	delegationModeAwait      = "await"
+	delegationModeBackground = "background"
+	delegationModeTask       = "task"
+)
+
+// Validate enforces the per-edge invariants for a single delegation edge. It is
+// the SHARED authority for edge well-formedness across every write path (the
+// gateway PUT handler AND the update_workspace tool), so no second writer can
+// persist an illegal edge that is then trusted at runtime. The whole-graph
+// acyclicity check is NOT part of this method — that remains a graph-level
+// concern owned by the gateway (detectDelegationCycle), because it depends on
+// the full edge set, not one edge.
+//
+// Invariants enforced (fail-closed: any violation is a hard error):
+//   - from_agent and to_agent are both non-empty (after trimming)
+//   - from_agent != to_agent (no self-edge)
+//   - both endpoints are members of team (the workspace team set — core_team ∪
+//     existing-edge endpoints). A nil team treats EVERY endpoint as off-team
+//     (deny-by-default): callers MUST pass the real team set.
+//   - every mode (when Modes is non-empty) ∈ {await, background, task}
+//   - Depth, when non-nil, is >= 0 and <= ceiling
+//
+// The returned error messages are the canonical wire messages surfaced verbatim
+// as the gateway's 400 body — callers that present them to the API MUST NOT
+// rewrap them, or existing wire-contract tests break.
+//
+// NOTE: Validate trims endpoints for the membership/empty checks but does NOT
+// mutate the receiver. A caller that wants the trimmed/normalised form (as
+// buildWorkspaceDelegationEdges does) should trim explicitly before storing.
+func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
+	from := strings.TrimSpace(e.FromAgent)
+	to := strings.TrimSpace(e.ToAgent)
+	if from == "" || to == "" {
+		return errors.New("delegation edge from_agent and to_agent must not be empty")
+	}
+	if from == to {
+		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
+	}
+	if !team[from] {
+		return fmt.Errorf("delegation edge from_agent %s is not a member of the workspace team", from)
+	}
+	if !team[to] {
+		return fmt.Errorf("delegation edge to_agent %s is not a member of the workspace team", to)
+	}
+	for _, m := range e.Modes {
+		switch m {
+		case delegationModeAwait, delegationModeBackground, delegationModeTask:
+		default:
+			return fmt.Errorf("delegation edge mode %s is invalid (valid: await, background, task)", m)
+		}
+	}
+	if e.Depth != nil {
+		if *e.Depth < 0 {
+			return errors.New("delegation edge depth must be >= 0")
+		}
+		if *e.Depth > ceiling {
+			return errors.New("delegation edge depth exceeds the maximum allowed depth")
+		}
+	}
+	return nil
 }
 
 // delegationRecord is the minimal subset of the on-disk workspace JSON that

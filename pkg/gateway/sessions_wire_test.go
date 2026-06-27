@@ -270,6 +270,135 @@ func TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema(t *test
 			"body=%s", w.Body.String())
 }
 
+// TestGetSessions_ScheduledTypeFilter_RoundTrip verifies that a session of type
+// "scheduled" (minted server-side by NewScheduledSession / fired schedule) is:
+//  1. Returned by GET /api/v1/sessions with type="scheduled" in the wire JSON.
+//  2. Returned by GET /api/v1/sessions/{id} with the correct type.
+//  3. NOT returned by GET /api/v1/sessions?type=chat (exclusive filter).
+//  4. Returned by GET /api/v1/sessions?type=scheduled (positive filter).
+//
+// This pins the FIX 1 from the contract/test review: the filter enum in
+// contracts/openapi.yaml was missing "scheduled", so clients couldn't request
+// the ?type=scheduled filter even though such sessions exist. It also pins the
+// wire round-trip: gen.SessionType already includes SessionTypeScheduled (added
+// in 64e44c51), so the session must survive with type="scheduled" through the
+// handler, not be dropped or coerced.
+//
+// Traces to: contracts/openapi.yaml GET /sessions type filter param enum.
+func TestGetSessions_ScheduledTypeFilter_RoundTrip(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be available")
+
+	// Mint a scheduled session directly through the store (server-minted path —
+	// POST /sessions intentionally rejects "scheduled" from clients).
+	scheduledMeta, err := store.NewScheduledSession("main")
+	require.NoError(t, err, "NewScheduledSession must succeed")
+	require.NotEmpty(t, scheduledMeta.ID, "scheduled session must have an ID")
+	require.Equal(t, session.SessionTypeScheduled, scheduledMeta.Type,
+		"NewScheduledSession must stamp type=scheduled")
+
+	// Also mint a chat session so we can verify the exclusive filter.
+	chatMeta, err := store.NewSession(session.SessionTypeChat, "webchat", "main")
+	require.NoError(t, err, "NewSession(chat) must succeed")
+
+	// 1. GET /api/v1/sessions (no filter) — both sessions appear.
+	wAll := httptest.NewRecorder()
+	rAll := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+	rAll.URL.Path = "/api/v1/sessions"
+	api.HandleSessions(wAll, rAll)
+	require.Equal(t, http.StatusOK, wAll.Code,
+		"GET /sessions must return 200; body=%s", wAll.Body.String())
+
+	var allSessions []map[string]any
+	require.NoError(t, json.Unmarshal(wAll.Body.Bytes(), &allSessions),
+		"GET /sessions response must be a JSON array")
+
+	foundScheduledInAll := false
+	for _, s := range allSessions {
+		if s["id"] == scheduledMeta.ID {
+			foundScheduledInAll = true
+			assert.Equal(t, "scheduled", s["type"],
+				"scheduled session must appear with type=\"scheduled\" in full list")
+		}
+	}
+	assert.True(t, foundScheduledInAll,
+		"scheduled session (id=%s) must appear in unfiltered GET /sessions", scheduledMeta.ID)
+
+	// 2. GET /api/v1/sessions?type=scheduled — only the scheduled session.
+	wSched := httptest.NewRecorder()
+	rSched := httptest.NewRequest(http.MethodGet, "/api/v1/sessions?type=scheduled", nil)
+	rSched.URL.Path = "/api/v1/sessions"
+	api.HandleSessions(wSched, rSched)
+	require.Equal(t, http.StatusOK, wSched.Code,
+		"GET /sessions?type=scheduled must return 200; body=%s", wSched.Body.String())
+
+	var scheduledSessions []map[string]any
+	require.NoError(t, json.Unmarshal(wSched.Body.Bytes(), &scheduledSessions),
+		"GET /sessions?type=scheduled response must be a JSON array")
+
+	require.NotEmpty(t, scheduledSessions,
+		"GET /sessions?type=scheduled must return at least one session")
+	for _, s := range scheduledSessions {
+		assert.Equal(t, "scheduled", s["type"],
+			"GET /sessions?type=scheduled must return ONLY sessions with type=scheduled; got %v", s["type"])
+	}
+	foundScheduledInFilter := false
+	for _, s := range scheduledSessions {
+		if s["id"] == scheduledMeta.ID {
+			foundScheduledInFilter = true
+		}
+	}
+	assert.True(t, foundScheduledInFilter,
+		"the minted scheduled session must appear in ?type=scheduled results")
+
+	// 3. GET /api/v1/sessions?type=chat — must NOT include the scheduled session.
+	wChat := httptest.NewRecorder()
+	rChat := httptest.NewRequest(http.MethodGet, "/api/v1/sessions?type=chat", nil)
+	rChat.URL.Path = "/api/v1/sessions"
+	api.HandleSessions(wChat, rChat)
+	require.Equal(t, http.StatusOK, wChat.Code,
+		"GET /sessions?type=chat must return 200; body=%s", wChat.Body.String())
+
+	var chatSessions []map[string]any
+	require.NoError(t, json.Unmarshal(wChat.Body.Bytes(), &chatSessions),
+		"GET /sessions?type=chat response must be a JSON array")
+
+	for _, s := range chatSessions {
+		assert.NotEqual(t, scheduledMeta.ID, s["id"],
+			"scheduled session must NOT appear in ?type=chat results")
+	}
+	foundChatInFilter := false
+	for _, s := range chatSessions {
+		if s["id"] == chatMeta.ID {
+			foundChatInFilter = true
+			assert.Equal(t, "chat", s["type"],
+				"chat session must have type=chat in filtered results")
+		}
+	}
+	assert.True(t, foundChatInFilter,
+		"the minted chat session must appear in ?type=chat results")
+
+	// 4. GET /api/v1/sessions/{id} — scheduled session round-trips with correct type.
+	wDet := httptest.NewRecorder()
+	rDet := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+scheduledMeta.ID, nil)
+	rDet.URL.Path = "/api/v1/sessions/" + scheduledMeta.ID
+	api.HandleSessions(wDet, rDet)
+	require.Equal(t, http.StatusOK, wDet.Code,
+		"GET /sessions/{id} for scheduled session must return 200; body=%s", wDet.Body.String())
+
+	var detail map[string]any
+	require.NoError(t, json.Unmarshal(wDet.Body.Bytes(), &detail),
+		"GET /sessions/{id} response must be a JSON object")
+
+	sessionObj, ok := detail["session"].(map[string]any)
+	require.True(t, ok, "SessionDetail envelope must have a 'session' field; got %v", detail)
+	assert.Equal(t, "scheduled", sessionObj["type"],
+		"scheduled session detail must have type=\"scheduled\" on the wire")
+}
+
 // newYAMLSchemaLoader returns a jsonschema.URLLoader that resolves file://
 // URLs by parsing YAML files into map[string]any. The default loader only
 // reads JSON; this wrapper makes the test work with our YAML schemas.

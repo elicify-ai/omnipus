@@ -1842,7 +1842,7 @@ func registerSharedTools(
 						// need to be loaded. Check policy FIRST so a denied full-tier tool
 						// gets a clear "denied" signal rather than a false "already available"
 						// (F4 fix). If policy allows a full-tier tool, return the sentinel
-						// "already available; just call it directly" reason so execLoad can
+						// "already available — just call it directly" reason so execLoad can
 						// treat it as a no-op success rather than a load.
 						if tools.ToolManifestTier(name) != tools.ManifestLazy {
 							for _, t := range policyFiltered {
@@ -2116,11 +2116,16 @@ func enforceEdgeModeAndDepth(
 
 	// Depth.
 	//
-	// A per-edge cap of exactly 0 means "no onward delegation" — the strictest
-	// possible bound. Reject unconditionally through this edge.
-	if edge.Depth != nil && *edge.Depth == 0 {
-		logger.WarnCF("agent", "delegation denied: edge forbids onward delegation (depth 0)", map[string]any{
+	// A per-edge cap of 0 means "no onward delegation" — the strictest possible
+	// bound. A NEGATIVE cap is never a valid "uncapped" signal: an edge that
+	// reached runtime with depth < 0 (e.g. one that bypassed write-time
+	// validation) MUST fail closed, not silently remove the per-edge cap. So the
+	// invariant is "depth <= 0 ⇒ this edge grants no further onward delegation":
+	// reject unconditionally through this edge.
+	if edge.Depth != nil && *edge.Depth <= 0 {
+		logger.WarnCF("agent", "delegation denied: edge forbids onward delegation (depth <= 0)", map[string]any{
 			"agent_id": callerAgentID, "target": targetAgentID, "mode": string(mode),
+			"edge_depth": *edge.Depth,
 		})
 		return &tools.DelegationDenial{
 			Reason:        "this delegation edge forbids onward delegation (depth cap 0)",

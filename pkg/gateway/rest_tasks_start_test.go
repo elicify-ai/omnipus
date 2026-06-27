@@ -130,10 +130,9 @@ func TestHandleTaskPatch_InProgress_NilTaskExecutor(t *testing.T) {
 
 // TestHandleTaskPatch_InProgress_WithKnownAgent verifies that PATCH
 // status=in_progress on a task with a known agent_id returns 200 with
-// status=in_progress. StartTaskNow may not create a session in the test
-// environment (the default "main" agent has no real session store in the
-// test harness), but the PATCH must still return 200 — executor errors on the
-// session-creation path are logged as Warn and do not surface as 500.
+// status=in_progress. StartTaskNow succeeds (agent is in the registry, task is
+// found by the executor's store); the goroutine runs in the background after
+// the PATCH returns.
 //
 // BDD:
 //
@@ -141,7 +140,8 @@ func TestHandleTaskPatch_InProgress_NilTaskExecutor(t *testing.T) {
 //	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"},
 //	Then 200 and status=in_progress.
 func TestHandleTaskPatch_InProgress_WithKnownAgent(t *testing.T) {
-	api := newTestRestAPIWithTaskExecutor(t)
+	// Use aligned stores so the executor can find the task by ID.
+	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
 
 	tsk := createTaskViaAPI(t, api, "AgentTask", wsID)
@@ -241,4 +241,175 @@ func TestHandleTaskPatch_StatusPreservedWhenExecutorNil(t *testing.T) {
 	statusAfter := getTaskStatus(t, api, tsk.Id)
 	assert.Equal(t, gen.TaskStatusInProgress, statusAfter,
 		"in_progress status must persist to disk even when taskExecutor is nil")
+}
+
+// newTestRestAPIAlignedStores creates a restAPI where api.taskStore and the
+// internal taskExecutor store both resolve to the same on-disk directory. This
+// is required for tests that call StartTaskNow (which reads from the executor's
+// store) and then verify the task via the API (which reads from api.taskStore).
+//
+// The agent loop puts the task store at filepath.Dir(workspace)/tasks. We pass
+// that exact path to task.New so the two stores share the same files.
+func newTestRestAPIAlignedStores(t *testing.T) *restAPI {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	// The agent loop will place its task store at filepath.Dir(workspace)/tasks.
+	// Set workspace to tmpDir/workspace so the task store lands at tmpDir/tasks,
+	// matching what we pass to task.New below.
+	workspaceDir := tmpDir + "/workspace"
+	if err := os.MkdirAll(workspaceDir, 0o700); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspaceDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+
+	// Both the executor and the API use the same tasks directory.
+	sharedTaskStore := task.New(tmpDir + "/tasks")
+	return &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		homePath:      tmpDir,
+		taskStore:     sharedTaskStore,
+		taskLock:      task.TaskFileLock,
+		taskExecutor:  agent.GetTaskExecutor(al),
+	}
+}
+
+// TestHandleTaskPatch_RunTask_StartErrRevertsStatus verifies that when
+// StartTaskNow fails for any reason, PATCH status=in_progress returns a
+// non-2xx status code AND reverts the task to its prior status so it is not
+// left stranded as in_progress.
+//
+// BDD:
+//
+//	Given a task with an agent_id not present in the registry,
+//	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"},
+//	Then non-2xx (500), and the task is NOT in_progress.
+func TestHandleTaskPatch_RunTask_StartErrRevertsStatus(t *testing.T) {
+	api := newTestRestAPIAlignedStores(t)
+	wsID := ensureTestWorkspace(t, api)
+
+	tsk := createTaskViaAPI(t, api, "StartErrTask", wsID)
+	advanceTaskToNext(t, api, tsk.Id)
+
+	// Directly inject a non-existent agent_id via the store, bypassing the REST
+	// FK guard. This makes StartTaskNow fail at the registry check with 500.
+	unknownAgent := "nonexistent-agent-xyz"
+	_, storeErr := api.taskStore.Update(tsk.Id, task.Patch{AgentID: &unknownAgent})
+	require.NoError(t, storeErr, "direct agent_id set must succeed")
+
+	// PATCH status=in_progress — StartTaskNow will fail (agent not in registry).
+	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+	assert.NotEqual(t, http.StatusOK, w.Code,
+		"StartTaskNow failure must return non-2xx; body=%s", w.Body.String())
+	assert.GreaterOrEqual(t, w.Code, 400,
+		"response code must be >=400; body=%s", w.Body.String())
+
+	// Task must be reverted to its prior status, not left as in_progress.
+	statusAfter := getTaskStatus(t, api, tsk.Id)
+	assert.Equal(t, gen.TaskStatusNext, statusAfter,
+		"task must revert to 'next' after StartTaskNow error (not left as in_progress)")
+}
+
+// TestHandleTaskPatch_RunTask_DispatchCapReturns409 verifies that when the
+// dispatch semaphore is exhausted, PATCH status=in_progress returns 409 Conflict
+// (ErrDispatchCapReached) AND leaves the task in its prior status.
+//
+// BDD:
+//
+//	Given a task with a known agent_id and all dispatch slots occupied,
+//	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"},
+//	Then 409 Conflict and the task is NOT in_progress.
+func TestHandleTaskPatch_RunTask_DispatchCapReturns409(t *testing.T) {
+	api := newTestRestAPIAlignedStores(t)
+	wsID := ensureTestWorkspace(t, api)
+
+	tsk := createTaskViaAPI(t, api, "CapTest", wsID)
+	advanceTaskToNext(t, api, tsk.Id)
+
+	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"main"}`)
+	require.Equal(t, http.StatusOK, wAssign.Code,
+		"assign agent_id must succeed; body=%s", wAssign.Body.String())
+
+	te := api.taskExecutor
+	require.NotNil(t, te, "taskExecutor must not be nil in this test")
+
+	// Exhaust all semaphore slots by acquiring each one. cap ≥ 1 is guaranteed.
+	// All slots are released at end of test via Cleanup.
+	cap := te.DispatchSemaCap()
+	releases := make([]func(), 0, cap)
+	for i := range cap {
+		ok, rel := te.TryAcquireDispatchSema()
+		require.True(t, ok, "sema slot %d/%d must be available before exhaustion", i+1, cap)
+		releases = append(releases, rel)
+	}
+	t.Cleanup(func() {
+		for _, rel := range releases {
+			if rel != nil {
+				rel()
+			}
+		}
+	})
+
+	// PATCH status=in_progress — dispatch cap is exhausted → 409.
+	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+	assert.Equal(t, http.StatusConflict, w.Code,
+		"exhausted dispatch cap must return 409; body=%s", w.Body.String())
+
+	// Task must be reverted to its prior status, not left as in_progress.
+	statusAfter := getTaskStatus(t, api, tsk.Id)
+	assert.Equal(t, gen.TaskStatusNext, statusAfter,
+		"task must revert to 'next' after 409 (not left as in_progress)")
+}
+
+// TestHandleTaskPatch_RunTask_NilExecutorReturns503 verifies that PATCH
+// status=in_progress returns 503 Service Unavailable when taskExecutor is nil
+// (gateway degraded), AND leaves the task in its prior status.
+//
+// BDD:
+//
+//	Given a task with an agent_id and api.taskExecutor == nil,
+//	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"},
+//	Then 503 Service Unavailable, and the task status is NOT in_progress.
+func TestHandleTaskPatch_RunTask_NilExecutorReturns503(t *testing.T) {
+	// Build a restAPI with taskExecutor explicitly nil, but with a real agent in
+	// the registry so the agent-FK check does not reject the PATCH before we reach
+	// the executor branch.
+	api := newTestRestAPIWithHome(t) // taskExecutor is nil by construction
+	wsID := ensureTestWorkspace(t, api)
+
+	tsk := createTaskViaAPI(t, api, "NilExecTask503", wsID)
+	advanceTaskToNext(t, api, tsk.Id)
+
+	// Do NOT assign agent_id — the executor-nil branch is only reached when
+	// agent_id is set.  We use the internal store.Update to set agent_id so we
+	// bypass the registry FK guard that rejects unknown agents.
+	agentID := "synthetic-agent"
+	_, err := api.taskStore.Update(tsk.Id, task.Patch{AgentID: &agentID})
+	require.NoError(t, err, "direct agent_id set must succeed")
+
+	// PATCH status=in_progress with nil executor — should be 503.
+	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"nil taskExecutor must return 503; body=%s", w.Body.String())
+
+	// Task must be reverted to 'next', not left as in_progress.
+	statusAfter := getTaskStatus(t, api, tsk.Id)
+	assert.Equal(t, gen.TaskStatusNext, statusAfter,
+		"task must revert to 'next' after 503 (not left as in_progress)")
 }

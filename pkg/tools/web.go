@@ -1048,6 +1048,25 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		// never wrote a tools.web section (a minimal or v0->v1-migrated config,
 		// where DuckDuckGoEnabled defaults to false) — instead of silently
 		// dropping the tool and leaving research agents (Ray) with no search.
+		//
+		// Distinguish two cases so operators can spot misconfiguration:
+		//   • "enabled but unusable" (a provider was switched on but lost its key)
+		//     → WARN, because this almost certainly means a config migration issue.
+		//   • "nothing configured" (fresh/minimal config, no provider section at all)
+		//     → INFO, because DuckDuckGo-as-default is the expected initial state.
+		anyEnabled := opts.PerplexityEnabled || opts.BraveEnabled || opts.SearXNGEnabled ||
+			opts.TavilyEnabled || opts.DuckDuckGoEnabled || opts.BaiduSearchEnabled || opts.GLMSearchEnabled
+		if anyEnabled {
+			logger.WarnCF("tool", "no search provider configured; defaulting to keyless DuckDuckGo",
+				map[string]any{
+					"hint": "a provider was enabled but its key or base URL is missing — check tools.web config",
+				})
+		} else {
+			logger.InfoCF("tool", "no search provider configured; defaulting to keyless DuckDuckGo",
+				map[string]any{
+					"hint": "set tools.web in config to use a keyed provider",
+				})
+		}
 		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for DuckDuckGo fallback: %w", err)
