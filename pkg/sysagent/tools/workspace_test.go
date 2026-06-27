@@ -28,6 +28,188 @@ func workspaceID(t *testing.T, body string) string {
 	return id
 }
 
+// TestWorkspaceUpdate_PreservesDelegationGraph proves update_workspace does NOT
+// destroy the per-workspace delegation graph (the runtime authority for
+// who-may-delegate-to-whom). Regression for the lossy read→modify→write that
+// dropped the `delegation` field because the tool's struct didn't model it.
+func TestWorkspaceUpdate_PreservesDelegationGraph(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+
+	id := "01KW52RBV3EZZPA9H8KSZWJS0K"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A workspace WITH a delegation graph (as the gateway seeds it).
+	original := `{
+		"id": "` + id + `",
+		"name": "My Workspace",
+		"status": "active",
+		"core_team": ["mia","jim","ava","ray"],
+		"is_default": true,
+		"delegation": [
+			{"from_agent":"mia","to_agent":"worker","modes":["task","background"]},
+			{"from_agent":"jim","to_agent":"ava","modes":["task"]}
+		],
+		"created_at": "2026-06-27T17:41:35Z",
+		"updated_at": "2026-06-27T17:41:35Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Update the workspace exactly as Ava did: add a new agent to core_team.
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":        id,
+		"core_team": []any{"mia", "jim", "ava", "ray", "codereview"},
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	// The delegation graph must survive the update.
+	data, err := os.ReadFile(wsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("workspace JSON unparseable after update: %v", err)
+	}
+	edges, ok := got["delegation"].([]any)
+	if !ok || len(edges) != 2 {
+		t.Fatalf("delegation graph LOST/altered by update_workspace: got %v (want 2 edges)", got["delegation"])
+	}
+	// Sanity: the core_team change still applied.
+	if team, _ := got["core_team"].([]any); len(team) != 5 {
+		t.Errorf("core_team update did not apply: got %v", got["core_team"])
+	}
+}
+
+// TestWorkspaceUpdate_FullFieldRoundTrip asserts that a gateway-authored workspace
+// file containing EVERY on-disk field (id, name, description, status, pinned,
+// pin_order, core_team, repository, owner, is_default, delegation,
+// created_at, updated_at) survives an update_workspace round-trip with ALL
+// fields intact. This is the acceptance proof of the unified-struct fix: the
+// shared workspace.Workspace type ensures no field written by the gateway path
+// can be silently dropped by the tool write path.
+func TestWorkspaceUpdate_FullFieldRoundTrip(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+
+	id := "01KW52RBV3EZZPA9H8KSZWJS1A"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// A gateway-authored workspace containing every field the gateway ever writes.
+	original := `{
+		"id": "` + id + `",
+		"name": "Full Field Workspace",
+		"description": "all fields present",
+		"status": "active",
+		"pinned": true,
+		"pin_order": 3,
+		"core_team": ["mia","jim","ava","ray"],
+		"repository": "https://github.com/example/repo",
+		"owner": "alice",
+		"is_default": false,
+		"delegation": [
+			{"from_agent":"jim","to_agent":"ava","modes":["await","task"],"depth":2},
+			{"from_agent":"mia","to_agent":"ray"}
+		],
+		"created_at": "2026-06-20T10:00:00Z",
+		"updated_at": "2026-06-20T10:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Perform a minimal update — rename only. All other fields must be unchanged.
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":   id,
+		"name": "Renamed Workspace",
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	// Read back and assert every field survived.
+	data, err := os.ReadFile(wsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("workspace JSON unparseable after update: %v", err)
+	}
+
+	// Name must have been updated.
+	if got["name"] != "Renamed Workspace" {
+		t.Errorf("name: want %q, got %q", "Renamed Workspace", got["name"])
+	}
+	// All read-only fields must survive unchanged.
+	assertField := func(key string, want any) {
+		t.Helper()
+		switch w := want.(type) {
+		case string:
+			if got[key] != w {
+				t.Errorf("field %q: want %v, got %v", key, w, got[key])
+			}
+		case bool:
+			if got[key] != w {
+				t.Errorf("field %q: want %v, got %v", key, w, got[key])
+			}
+		case float64:
+			if got[key] != w {
+				t.Errorf("field %q: want %v, got %v", key, w, got[key])
+			}
+		}
+	}
+	assertField("description", "all fields present")
+	assertField("status", "active")
+	assertField("pinned", true)
+	assertField("pin_order", float64(3))
+	assertField("repository", "https://github.com/example/repo")
+	assertField("owner", "alice")
+	// is_default=false is omitted by json:",omitempty" — reads back as nil/absent,
+	// which correctly deserialises as the bool zero value false. Verify absence.
+	if v, present := got["is_default"]; present && v != false {
+		t.Errorf("is_default: want absent or false, got %v", v)
+	}
+	assertField("created_at", "2026-06-20T10:00:00Z")
+
+	// core_team must survive.
+	if team, ok := got["core_team"].([]any); !ok || len(team) != 4 {
+		t.Errorf("core_team: want 4 entries, got %v", got["core_team"])
+	}
+
+	// Delegation graph must survive with correct structure.
+	edges, ok := got["delegation"].([]any)
+	if !ok || len(edges) != 2 {
+		t.Fatalf("delegation: want 2 edges, got %v", got["delegation"])
+	}
+	// First edge: jim→ava with modes and depth.
+	e0, _ := edges[0].(map[string]any)
+	if e0["from_agent"] != "jim" || e0["to_agent"] != "ava" {
+		t.Errorf("delegation edge 0 from/to: got %v→%v", e0["from_agent"], e0["to_agent"])
+	}
+	if modes, ok := e0["modes"].([]any); !ok || len(modes) != 2 {
+		t.Errorf("delegation edge 0 modes: want 2, got %v", e0["modes"])
+	}
+	if depth, ok := e0["depth"].(float64); !ok || depth != 2 {
+		t.Errorf("delegation edge 0 depth: want 2, got %v", e0["depth"])
+	}
+	// Second edge: mia→ray with nil modes/depth (omitempty).
+	e1, _ := edges[1].(map[string]any)
+	if e1["from_agent"] != "mia" || e1["to_agent"] != "ray" {
+		t.Errorf("delegation edge 1 from/to: got %v→%v", e1["from_agent"], e1["to_agent"])
+	}
+	if _, hasDepth := e1["depth"]; hasDepth {
+		t.Errorf("delegation edge 1: depth should be absent (omitempty), got %v", e1["depth"])
+	}
+}
+
 // ---- create_workspace ----
 
 // TestWorkspaceCreate_Happy verifies that create_workspace returns the workspace

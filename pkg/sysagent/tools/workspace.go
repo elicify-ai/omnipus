@@ -16,23 +16,15 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/dapicom-ai/omnipus/pkg/tools"
+	workspacepkg "github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
-type workspace struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Status      string   `json:"status"` // "active" | "archived"
-	Pinned      bool     `json:"pinned"`
-	PinOrder    int      `json:"pin_order"`           // 0 = unpinned
-	CoreTeam    []string `json:"core_team,omitempty"` // agent IDs associated with this workspace
-	Repository  string   `json:"repository,omitempty"`
-	// Owner is the username of the user who created this workspace. Attribution only — not an access gate.
-	Owner     string `json:"owner,omitempty"`
-	IsDefault bool   `json:"is_default,omitempty"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-}
+// workspace is the canonical on-disk workspace type shared with pkg/gateway.
+// Using the shared type (instead of a local struct) ensures that both write
+// paths — the REST gateway and the update_workspace tool — serialise exactly
+// the same fields in exactly the same JSON tags, so neither can silently drop
+// fields (in particular the delegation graph) written by the other.
+type workspace = workspacepkg.Workspace
 
 func workspacesDir(home string) string { return filepath.Join(home, "workspaces") }
 
