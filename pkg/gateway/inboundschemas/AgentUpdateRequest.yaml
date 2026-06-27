@@ -1,7 +1,7 @@
 type: object
 description: >
   Body for PUT /agents/{id}. All fields are optional — only provided fields are updated.
-  Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions.
+  Locked (core) agents reject mutations to name, description, soul, heartbeat.
   model, timeout_seconds, max_tool_iterations, steering_mode,
   heartbeat_enabled, and heartbeat_interval may be updated on locked agents.
   At least one field must be present (minProperties: 1) — empty patches are rejected 400.
@@ -54,12 +54,6 @@ properties:
       New HEARTBEAT.md content. Rejected on locked agents.
       Writing this triggers a config reload.
     example: "Check queue every hour."
-  instructions:
-    type: string
-    description: >
-      New AGENT.md body (after frontmatter). Rejected on locked agents.
-      Writing this triggers a config reload.
-    example: "Focus on Python only."
   timeout_seconds:
     type: integer
     description: New timeout in seconds per turn. Allowed on all agents.

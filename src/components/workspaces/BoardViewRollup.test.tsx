@@ -78,7 +78,6 @@ const agentRay: Agent = {
   status: 'active',
   soul: '',
   heartbeat: '',
-  instructions: '',
   color: '#3B82F6',
   icon: 'MagnifyingGlass',
   timeout_seconds: 300,

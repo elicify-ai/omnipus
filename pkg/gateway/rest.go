@@ -1276,12 +1276,11 @@ func readSoulMD(workspace string) string {
 	return string(data)
 }
 
-// readAgentFiles returns the contents of SOUL.md, HEARTBEAT.md, and the body
-// of AGENT.md (everything after the closing frontmatter delimiter) from the
+// readAgentFiles returns the contents of SOUL.md and HEARTBEAT.md from the
 // given workspace directory. Missing files return an empty string without
 // logging an error — their absence is expected for newly created agents.
 // Permission and other I/O errors (not IsNotExist) are logged at Warn level (M11).
-func readAgentFiles(workspace string) (soul, heartbeat, instructions string) {
+func readAgentFiles(workspace string) (soul, heartbeat string) {
 	if data, err := os.ReadFile(filepath.Join(workspace, "SOUL.md")); err != nil {
 		if !os.IsNotExist(err) {
 			slog.Warn("rest: readAgentFiles: cannot read SOUL.md", "workspace", workspace, "error", err)
@@ -1296,43 +1295,7 @@ func readAgentFiles(workspace string) (soul, heartbeat, instructions string) {
 	} else {
 		heartbeat = string(data)
 	}
-	if data, err := os.ReadFile(filepath.Join(workspace, "AGENT.md")); err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("rest: readAgentFiles: cannot read AGENT.md", "workspace", workspace, "error", err)
-		}
-	} else {
-		fm, body := splitAgentMDFrontmatter(string(data))
-		if fm == "" && strings.HasPrefix(strings.TrimSpace(string(data)), "---") {
-			// M17: AGENT.md starts with --- but has no closing delimiter.
-			slog.Debug("rest: AGENT.md has opening --- delimiter but no closing ---", "workspace", workspace)
-		}
-		instructions = body
-	}
-	return soul, heartbeat, instructions
-}
-
-// splitAgentMDFrontmatter splits an AGENT.md file into its YAML frontmatter
-// and markdown body. The frontmatter is the raw YAML text between the opening
-// and closing "---" delimiters. When no valid frontmatter block is found the
-// entire content is returned as the body.
-func splitAgentMDFrontmatter(content string) (frontmatter, body string) {
-	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-	if len(lines) == 0 || lines[0] != "---" {
-		return "", content
-	}
-	end := -1
-	for i := 1; i < len(lines); i++ {
-		if lines[i] == "---" {
-			end = i
-			break
-		}
-	}
-	if end == -1 {
-		return "", content
-	}
-	frontmatter = strings.Join(lines[1:end], "\n")
-	body = strings.TrimLeft(strings.Join(lines[end+1:], "\n"), "\n")
-	return frontmatter, body
+	return soul, heartbeat
 }
 
 // steeringModeOrDefault returns the steering mode string, defaulting to "one-at-a-time"
@@ -1380,9 +1343,8 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 		HeartbeatEnabled:  false,
 		HeartbeatInterval: config.DefaultHeartbeatIntervalMinutes,
 		// Required string fields — initialized to empty (overwritten per-agent).
-		Soul:         "",
-		Heartbeat:    "",
-		Instructions: "",
+		Soul:      "",
+		Heartbeat: "",
 	}
 }
 
@@ -1485,7 +1447,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if wsErr != nil {
 				slog.Warn("rest: getAgent: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
 			}
-			soul, heartbeat, instructions := readAgentFiles(workspace)
+			soul, heartbeat := readAgentFiles(workspace)
 			// Core agents have compiled prompts — do not expose them.
 			if ac.Locked {
 				soul = ""
@@ -1510,7 +1472,6 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 			ag.Soul = soul
 			ag.Heartbeat = heartbeat
-			ag.Instructions = instructions
 			ag.Default = boolPtr(ac.Default)
 			if len(ac.Skills) > 0 {
 				skills := make([]string, len(ac.Skills))
@@ -2316,11 +2277,11 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 
 	if foundAgent.Locked {
 		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
-		// instructions, color, icon, and skills are identity/capability fields — reject on locked agents.
+		// color, icon, and skills are identity/capability fields — reject on locked agents.
 		// Skills are included here (B-2 defense-in-depth): core agents have compiled-in capability
 		// sets; allowing runtime skill assignment would silently override that invariant.
 		if req.Name != nil || req.Description != nil ||
-			req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
+			req.Soul != nil || req.Heartbeat != nil ||
 			req.Color != nil || req.Icon != nil || req.Skills != nil {
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
 			return
@@ -2739,7 +2700,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// so the new AgentInstance reads the updated files.
 	// Capture agentWorkspace into a local to avoid TOCTOU on cfg.Agents.List (M1).
 	capturedWorkspace := cfg.Agents.List[foundIdx].Workspace
-	capturedName := cfg.Agents.List[foundIdx].Name
 	workspace, wsErr := agentWorkspacePath(cfg, id, capturedWorkspace, a.homePath)
 	if wsErr != nil {
 		slog.Error("rest: agentWorkspacePath for update", "agent_id", id, "error", wsErr)
@@ -2762,34 +2722,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			return
 		}
 	}
-	if req.Instructions != nil {
-		agentMDPath := filepath.Join(workspace, "AGENT.md")
-		// Read existing AGENT.md to preserve frontmatter if it exists.
-		existingFrontmatter := ""
-		if data, err := os.ReadFile(agentMDPath); err == nil {
-			existingFrontmatter, _ = splitAgentMDFrontmatter(string(data))
-		} else if !os.IsNotExist(err) {
-			slog.Warn(
-				"rest: could not read existing AGENT.md for frontmatter preservation",
-				"agent_id",
-				id,
-				"error",
-				err,
-			)
-		}
-		if existingFrontmatter == "" {
-			existingFrontmatter = "name: " + capturedName
-		}
-		agentMDContent := "---\n" + existingFrontmatter + "\n---\n"
-		if *req.Instructions != "" {
-			agentMDContent += "\n" + *req.Instructions
-		}
-		if err := fileutil.WriteFileAtomic(agentMDPath, []byte(agentMDContent), 0o600); err != nil {
-			slog.Error("rest: write AGENT.md for agent", "agent_id", id, "error", err)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write AGENT.md: %v", err))
-			return
-		}
-	}
 	// Only trigger a full reload when structural changes require it (SOUL.md, HEARTBEAT.md,
 	// agent creation/deletion). Model, rate limit, timeout, and steering mode changes are
 	// config-only and do NOT need a reload — avoiding the WebSocket drop and context loss
@@ -2803,7 +2735,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// drop a mode) would silently not apply until a restart. TriggerReload →
 	// executeReload → ReloadProviderAndConfig → registerSharedTools reconstructs every
 	// agent's deny-checkers from the swapped config, applying the new policy live.
-	needsReload := req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
+	needsReload := req.Soul != nil || req.Heartbeat != nil ||
 		req.DelegationPolicy != nil
 	var reloadWarning string
 	if needsReload {
@@ -2845,7 +2777,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		}
 	}
 	// Re-read the files so the response reflects what was just persisted.
-	soul, heartbeat, instructions := readAgentFiles(workspace)
+	soul, heartbeat := readAgentFiles(workspace)
 	// Build the response from defaults, then override with request values.
 	agentID := cfg.Agents.List[foundIdx].ID
 	model := cfg.Agents.Defaults.ModelName
@@ -2931,7 +2863,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	ag.Soul = soul
 	ag.Heartbeat = heartbeat
-	ag.Instructions = instructions
 	if reloadWarning != "" {
 		ag.Warning = &reloadWarning
 	}

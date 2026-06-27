@@ -148,10 +148,6 @@ properties:
     minimum: 0
     description: Interval in seconds between heartbeat passes (Main only).
     example: 1800
-  instructions:
-    type: string
-    description: Initial AGENT.md body (after frontmatter). Optional.
-    example: "Focus on TypeScript and Go projects only."
   delegation_policy:
     $ref: './DelegationPolicy.yaml'
   voice:

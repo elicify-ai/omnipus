@@ -3,7 +3,7 @@
 //
 // Split into sub-components per the plan's file-ownership matrix:
 //   ./wizard/Step1Identity.tsx   — color, icon, name, description, model
-//   ./wizard/Step2Personality.tsx — soul, instructions, heartbeat, voice
+//   ./wizard/Step2Personality.tsx — soul, heartbeat, voice
 //   ./wizard/Step3Tools.tsx      — tools_cfg, skills, fallback_models
 //   ./wizard/Advanced.tsx       — model_params, sandbox, shell, etc. (deferred)
 // This file owns the Sheet shell, the type/CLI chips, the stepper, and the
@@ -49,7 +49,6 @@ export interface WizardSubmitPayload {
    *  Empty string / absent = resolve via default provider. */
   provider?: string
   soul: string
-  instructions: string
   heartbeat?: string
   heartbeat_enabled?: boolean
   heartbeat_interval?: number
@@ -174,7 +173,6 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     model: '',
     provider: '',
     soul: '',
-    instructions: '',
     heartbeat_enabled: false,
     heartbeat_interval: 1800,
     timeout_seconds: 300,

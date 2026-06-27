@@ -216,7 +216,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [maxToolCallsPerMinute, setMaxToolCallsPerMinute] = useState<number | ''>('')
   const [maxCostPerDay, setMaxCostPerDay] = useState<number | ''>('')
   const [soul, setSoul] = useState('')
-  const [instructions, setInstructions] = useState('')
   // W6-B4 / G1: per-agent persona voice identifier (TTS voice name or model ID).
   // Schema-pinned on Agent.voice; not active until v0.2.0 TTS. Empty string
   // means "not configured" — the wire payload omits the field entirely.
@@ -278,7 +277,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setMaxToolCallsPerMinute(agent.rate_limits?.max_tool_calls_per_minute ?? '')
     setMaxCostPerDay(agent.rate_limits?.max_cost_per_day ?? '')
     setSoul(agent.soul ?? '')
-    setInstructions(agent.instructions ?? '')
     // W6-B4 / G1: hydrate the persona voice. The wire field is nullable;
     // `null` and absent both render as the empty string in the input.
     // W6-B-fix: trim existing whitespace on disk so the input never
@@ -326,7 +324,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         // O3 two-field: include provider only when non-empty.
         provider: primaryProvider.trim() !== '' ? primaryProvider.trim() : undefined,
         soul,
-        instructions,
         rate_limits: rateLimits,
         timeout_seconds: timeoutPayload,
         max_tool_iterations: maxToolIterations,
@@ -344,7 +341,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       model_params: { temperature, max_tokens: maxTokens, top_p: topP },
       rate_limits: rateLimits,
       soul,
-      instructions,
       // W6-B4 / G1: voice is optional — emit only when non-empty so the backend
       // can leave the field unchanged when the user hasn't set it. An empty
       // string and `undefined` are semantically equivalent for the wire (both
@@ -388,7 +384,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   }, [
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
-    maxToolCallsPerMinute, maxCostPerDay, soul, instructions, voice, heartbeat,
+    maxToolCallsPerMinute, maxCostPerDay, soul, voice, heartbeat,
     timeoutPayload, timeoutSeconds, maxToolIterations, steeringMode,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
     agentSkills, executor,
@@ -472,7 +468,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       const stripped = agent?.locked
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
-            heartbeat: _h, instructions: _ins,
+            heartbeat: _h,
             shell_policy: _shp, skills: _sk, executor: _ex, ...rest
           }) => rest)(data as Record<string, unknown>)
         : data
@@ -1072,11 +1068,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             isWorker={isWorkerAgent}
             soul={soul}
             setSoul={(v) => { markDirty(); setSoul(v) }}
-            instructions={instructions}
-            setInstructions={(v) => { markDirty(); setInstructions(v) }}
             voice={voice}
             setVoice={(v) => { markDirty(); setVoice(v) }}
-            renderUploadButton={(_, onUpload) => <UploadButton onUpload={onUpload} />}
+            renderUploadButton={(_target, onUpload) => <UploadButton onUpload={onUpload} />}
           />
 
           {/* Heartbeat — base-only. Workers never run on a schedule. */}
@@ -1848,9 +1842,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         <TabsContent value="basics" className="space-y-6">{basicsPanel}</TabsContent>
 
         {/* ── PERSONALITY TAB ────────────────────────────────────────────
-            BehaviorFields (SOUL.md / Task prompt + Additional Instructions
-            + Voice), and the Heartbeat sub-block for base agents (workers
-            are delegation-only labour agents and never run on a schedule).
+            BehaviorFields (SOUL.md / Task prompt + Voice), and the
+            Heartbeat sub-block for base agents (workers are
+            delegation-only labour agents and never run on a schedule).
             The Execution params (timeout / max_iter / steering) live in
             the Advanced tab per the spec matrix. */}
         <TabsContent value="personality" className="space-y-5">{personalityPanel}</TabsContent>

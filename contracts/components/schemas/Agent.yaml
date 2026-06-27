@@ -4,7 +4,7 @@ description: >
   Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go
   and src/lib/api/generated/openapi-types.ts). The generated type is the single
   source of truth.
-  Core (locked) agents suppress soul/instructions in list responses and forbid
+  Core (locked) agents suppress soul in list responses and forbid
   identity mutations via PUT.
 required:
   - id
@@ -14,7 +14,6 @@ required:
   - status
   - soul
   - heartbeat
-  - instructions
   - timeout_seconds
   - max_tool_iterations
   - steering_mode
@@ -54,7 +53,7 @@ properties:
   locked:
     type: boolean
     description: >
-      When true, name, description, soul, heartbeat, and instructions are immutable
+      When true, name, description, soul, and heartbeat are immutable
       via the PUT /agents/{id} endpoint. Core agents are always locked.
     example: false
   color:
@@ -118,13 +117,6 @@ properties:
       Empty string when not set. Always present on detail responses (never null).
       Main only.
     example: "Every hour, check for new tasks in the queue."
-  instructions:
-    type: string
-    description: >
-      Body of AGENT.md (everything after the closing frontmatter delimiter) —
-      additional runtime instructions. Empty string when not set.
-      Always present on detail responses (never null).
-    example: "Focus on TypeScript and Go projects only."
   warning:
     type: string
     description: Non-fatal advisory (e.g. config reload failed after create/update).

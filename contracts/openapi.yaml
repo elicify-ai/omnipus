@@ -1391,7 +1391,7 @@ paths:
     get:
       operationId: listAgents
       summary: List all configured agents
-      description: 'Returns all agents from config.json (core + custom). Core agents return empty soul/heartbeat/instructions (compiled-in prompts are not exposed). Custom agents return SOUL.md content only (not heartbeat/instructions) for efficient list rendering.
+      description: 'Returns all agents from config.json (core + custom). Core agents return empty soul/heartbeat (compiled-in prompts are not exposed). Custom agents return SOUL.md content only (not heartbeat) for efficient list rendering.
 
         '
       tags:
@@ -1446,7 +1446,7 @@ paths:
     get:
       operationId: getAgent
       summary: Get a single agent configuration
-      description: 'Returns the full agent configuration including soul, heartbeat, and instructions. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+      description: 'Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed).
 
         '
       tags:
@@ -1477,7 +1477,7 @@ paths:
     put:
       operationId: updateAgent
       summary: Update agent configuration
-      description: 'Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+      description: 'Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
 
         '
       tags:

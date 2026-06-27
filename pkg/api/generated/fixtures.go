@@ -731,7 +731,6 @@ func FixtureAgent_Populated() Agent {
 		Status:            AgentStatusIdle,
 		Soul:              "You are Jim, a helpful assistant.",
 		Heartbeat:         "",
-		Instructions:      "",
 		TimeoutSeconds:    300,
 		MaxToolIterations: 50,
 		SteeringMode:      "one-at-a-time",
@@ -758,7 +757,6 @@ func FixtureAgent_Edge() Agent {
 		Status:            AgentStatusDraft,
 		Soul:              "",
 		Heartbeat:         "",
-		Instructions:      "# Instructions\n\nBe helpful.\n",
 		TimeoutSeconds:    0,
 		MaxToolIterations: 0,
 		SteeringMode:      "one-at-a-time",
@@ -2338,15 +2336,14 @@ func FixtureAgentCreateRequest_Populated() AgentCreateRequest {
 	maxTools := 60
 
 	return AgentCreateRequest{
-		Name:         "Research Bot",
-		Type:         &t,
-		Description:  &description,
-		Model:        &model,
-		Color:        &color,
-		Icon:         &icon,
-		Soul:         "You are a focused research assistant.",
-		Instructions: strPtr("Focus on web research and summarisation."),
-		Skills:       &[]string{"web-research"},
+		Name:        "Research Bot",
+		Type:        &t,
+		Description: &description,
+		Model:       &model,
+		Color:       &color,
+		Icon:        &icon,
+		Soul:        "You are a focused research assistant.",
+		Skills:      &[]string{"web-research"},
 		FallbackModels: &[]FallbackModel{
 			{Model: "claude-sonnet-4-6", Provider: strPtr("anthropic")},
 		},
@@ -2468,7 +2465,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	mode := AgentUpdateRequestDelegationPolicyModesBackground
 	toKind := AgentUpdateRequestDelegationPolicyToKindLocal
 	heartbeat := "Check queue every hour."
-	instructions := "Focus on Python only."
 	soul := "You are a helpful assistant."
 	voice := "alloy"
 	updatedAt := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
@@ -2483,7 +2479,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 		Default:        &vDefault,
 		Soul:           &soul,
 		Heartbeat:      &heartbeat,
-		Instructions:   &instructions,
 		Voice:          &voice,
 		SandboxProfile: &sandbox,
 		SteeringMode:   &steering,
