@@ -20,6 +20,11 @@ const (
 	maxTaskDepth                      = 10
 )
 
+// ErrDispatchCapReached is returned by StartTaskNow when the global dispatch
+// semaphore is exhausted. Callers (e.g. the REST handler) use errors.Is to
+// distinguish this retryable condition from hard failures.
+var ErrDispatchCapReached = errors.New("task_executor: global dispatch cap reached")
+
 // TaskExecutor runs dispatchable tasks by handing them to agent sessions. It
 // operates over the unified pkg/task store and 7-state vocabulary: a
 // dispatchable task is `next`, running is `in_progress`, terminal is
@@ -211,8 +216,25 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 		taskChatID = "task:" + t.ID
 	}
 	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
+	te.finishTaskRun(t, taskSessionID, resp, err, "")
+}
+
+// finishTaskRun handles the shared post-execution logic for both runTask and
+// runTaskFromInProgress. It appends the failure/success transcript entry,
+// updates the session meta, and auto-completes the task to StatusDone when
+// the agent did not call task_update itself.
+//
+// logSuffix is appended to the "Agent execution failed" log message so
+// callers can be identified in structured logs (e.g. " (StartTaskNow path)").
+//
+// Do NOT merge the pre-execution session-setup blocks of runTask and
+// runTaskFromInProgress: runTask logs-and-continues on NewSession failure while
+// runTaskFromInProgress aborts; that divergence is intentional and load-bearing.
+func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, err error, logSuffix string) {
+	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+
 	if err != nil {
-		logger.ErrorCF("task_executor", "Agent execution failed",
+		logger.ErrorCF("task_executor", "Agent execution failed"+logSuffix,
 			map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "error": err.Error()})
 		if taskSessionID != "" && sessStore != nil {
 			if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
@@ -240,14 +262,14 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 	}
 
 	if taskSessionID != "" && resp != "" && sessStore != nil {
-		if err := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+		if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
 			ID:        t.ID + "-response",
 			Role:      "assistant",
 			Content:   resp,
 			Timestamp: time.Now().UTC(),
-		}); err != nil {
+		}); appendErr != nil {
 			logger.WarnCF("task_executor", "Transcript write failed",
-				map[string]any{"task_id": t.ID, "error": err.Error()})
+				map[string]any{"task_id": t.ID, "error": appendErr.Error()})
 		}
 	}
 
@@ -261,9 +283,9 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 	if task.IsTerminal(current.Status) {
 		if taskSessionID != "" && sessStore != nil {
 			statusCompleted := session.StatusArchived
-			if err := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusCompleted}); err != nil {
+			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusCompleted}); setErr != nil {
 				logger.WarnCF("task_executor", "Meta update failed",
-					map[string]any{"task_id": t.ID, "error": err.Error()})
+					map[string]any{"task_id": t.ID, "error": setErr.Error()})
 			}
 		}
 		te.notifySourceChannel(current)
@@ -289,9 +311,9 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 	}
 	if taskSessionID != "" && sessStore != nil {
 		statusArchived := session.StatusArchived
-		if err := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusArchived}); err != nil {
+		if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusArchived}); setErr != nil {
 			logger.WarnCF("task_executor", "Meta update failed",
-				map[string]any{"task_id": t.ID, "error": err.Error()})
+				map[string]any{"task_id": t.ID, "error": setErr.Error()})
 		}
 	}
 	te.onTaskComplete(final)
@@ -554,32 +576,59 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		return t.SessionID, nil
 	}
 
-	// Also guard if there is already a cancel registered (goroutine running).
+	// Atomically claim the slot: under a single te.mu critical section, re-check
+	// whether a goroutine is already running AND insert a sentinel cancel so
+	// competing concurrent callers observe the slot as taken before we unlock.
+	// This closes the TOCTOU window where two concurrent StartTaskNow calls could
+	// both pass the running-check before either one registered its goroutine.
+	//
+	// A nil sentinel marks "slot reserved, cancel not yet set". The goroutine
+	// replaces it with the real cancel before returning. If setup fails we delete
+	// the slot so the task is not permanently locked.
 	te.mu.Lock()
-	_, alreadyRunning := te.running[taskID]
-	te.mu.Unlock()
-	if alreadyRunning {
-		// A goroutine is live; the session_id may have been written by now — re-read.
+	if _, alreadyRunning := te.running[taskID]; alreadyRunning {
+		te.mu.Unlock()
+		// A goroutine is live (or starting up); the session_id may have been
+		// written by now — re-read.
 		fresh, rerr := te.store.Get(taskID)
 		if rerr == nil && fresh.SessionID != "" {
 			return fresh.SessionID, nil
 		}
 		return "", fmt.Errorf("task_executor: StartTaskNow: task %q goroutine already running", taskID)
 	}
+	// Reserve the slot with a nil sentinel so competing callers bail above.
+	te.running[taskID] = nil
+	te.mu.Unlock()
+
+	// releaseSlot removes the reservation if setup fails so future callers can
+	// retry. A no-op after the goroutine successfully replaces the sentinel.
+	slotReleased := false
+	releaseSlot := func() {
+		if !slotReleased {
+			slotReleased = true
+			te.mu.Lock()
+			delete(te.running, taskID)
+			te.mu.Unlock()
+		}
+	}
 
 	// Check that the assigned agent is known.
 	registry := te.agentLoop.GetRegistry()
 	if registry == nil {
+		releaseSlot()
 		return "", fmt.Errorf("task_executor: StartTaskNow: agent registry is not available")
 	}
 	if _, ok := registry.GetAgent(t.AgentID); !ok {
+		releaseSlot()
 		return "", fmt.Errorf("task_executor: StartTaskNow: agent %q not found for task %q", t.AgentID, taskID)
 	}
 
 	ok, release := te.dispatchSema.TryAcquire()
 	if !ok {
+		releaseSlot()
 		return "", fmt.Errorf(
-			"task_executor: StartTaskNow: global dispatch cap reached (%d/%d in flight), retry later",
+			"%w (%d/%d in flight), retry later",
+			ErrDispatchCapReached,
 			te.dispatchSema.InFlight(), te.dispatchSema.Cap(),
 		)
 	}
@@ -592,6 +641,7 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		meta, sessErr := sessStore.NewSession(session.SessionTypeTask, "system", t.AgentID)
 		if sessErr != nil {
 			release()
+			releaseSlot()
 			return "", fmt.Errorf("task_executor: StartTaskNow: create session for task %q: %w", taskID, sessErr)
 		}
 		taskSessionID = meta.ID
@@ -634,10 +684,14 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	// gets canceled as soon as the response is sent). The goroutine must outlive
 	// the HTTP request; the explicit cancel stored in te.running[taskID] is the
 	// intended cancellation path (called by Stop or a future "cancel task" API).
+	//
+	// Replace the nil sentinel (inserted above) with the real cancel under the
+	// same mutex so Stop() callers always observe a callable value.
 	taskCtx, cancel := context.WithCancel(context.Background())
 	te.mu.Lock()
 	te.running[taskID] = cancel
 	te.mu.Unlock()
+	slotReleased = true // goroutine now owns the slot; don't let releaseSlot clear it
 
 	go te.runTaskFromInProgress(taskCtx, t, taskSessionID, cancel, release)
 	return taskSessionID, nil
@@ -673,8 +727,6 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	logger.InfoCF("task_executor", "runTaskFromInProgress started",
 		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "session_id": taskSessionID})
 
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
-
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
 		taskCtx = tools.WithWorkspaceID(taskCtx, t.WorkspaceID)
@@ -689,89 +741,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		taskChatID = "task:" + t.ID
 	}
 	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
-	if err != nil {
-		logger.ErrorCF("task_executor", "Agent execution failed (StartTaskNow path)",
-			map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "error": err.Error()})
-		if taskSessionID != "" && sessStore != nil {
-			if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
-				ID:        t.ID + "-error",
-				Role:      "assistant",
-				Content:   fmt.Sprintf("Task execution failed: %v", err),
-				Status:    "error",
-				Timestamp: time.Now().UTC(),
-			}); appendErr != nil {
-				logger.WarnCF("task_executor", "Transcript write failed",
-					map[string]any{"task_id": t.ID, "error": appendErr.Error()})
-			}
-			status := session.StatusInterrupted
-			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &status}); setErr != nil {
-				logger.WarnCF("task_executor", "Meta update failed",
-					map[string]any{"task_id": t.ID, "error": setErr.Error()})
-			}
-		}
-		te.failTask(t.ID, fmt.Sprintf("execution error: %v", err))
-		failedTask := *t
-		failedTask.Status = task.StatusFailed
-		failedTask.Result = fmt.Sprintf("execution error: %v", err)
-		te.notifySourceChannel(&failedTask)
-		return
-	}
-
-	if taskSessionID != "" && resp != "" && sessStore != nil {
-		if err := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
-			ID:        t.ID + "-response",
-			Role:      "assistant",
-			Content:   resp,
-			Timestamp: time.Now().UTC(),
-		}); err != nil {
-			logger.WarnCF("task_executor", "Transcript write failed",
-				map[string]any{"task_id": t.ID, "error": err.Error()})
-		}
-	}
-
-	current, lerr := te.store.Get(t.ID)
-	if lerr != nil {
-		logger.WarnCF("task_executor", "Could not re-read task after execution",
-			map[string]any{"task_id": t.ID, "error": lerr.Error()})
-		return
-	}
-	if task.IsTerminal(current.Status) {
-		if taskSessionID != "" && sessStore != nil {
-			statusCompleted := session.StatusArchived
-			if err := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusCompleted}); err != nil {
-				logger.WarnCF("task_executor", "Meta update failed",
-					map[string]any{"task_id": t.ID, "error": err.Error()})
-			}
-		}
-		te.notifySourceChannel(current)
-		return
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	result := resp
-	if result == "" {
-		result = "Task completed"
-	}
-	doneStatus := task.StatusDone
-	final, uerr := te.store.Update(t.ID, task.Patch{
-		Status:      &doneStatus,
-		Result:      &result,
-		CompletedAt: &now,
-	})
-	if uerr != nil {
-		logger.ErrorCF("task_executor", "Auto-complete task failed",
-			map[string]any{"task_id": t.ID, "error": uerr.Error()})
-		return
-	}
-	if taskSessionID != "" && sessStore != nil {
-		statusArchived := session.StatusArchived
-		if err := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusArchived}); err != nil {
-			logger.WarnCF("task_executor", "Meta update failed",
-				map[string]any{"task_id": t.ID, "error": err.Error()})
-		}
-	}
-	te.onTaskComplete(final)
-	te.notifySourceChannel(final)
+	te.finishTaskRun(t, taskSessionID, resp, err, " (StartTaskNow path)")
 }
 
 // SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just
@@ -794,12 +764,26 @@ func (te *TaskExecutor) DispatchSemaCap() int {
 	return te.dispatchSema.Cap()
 }
 
+// TryAcquireDispatchSema attempts to claim one dispatch slot without blocking.
+// Returns (true, release) when a slot is available; (false, nil) otherwise.
+// Callers MUST call release() when done to avoid permanently exhausting the cap.
+// Intended for testing and diagnostic tooling — production dispatch uses the
+// internal sema path inside StartTaskNow / ExecuteTask.
+func (te *TaskExecutor) TryAcquireDispatchSema() (bool, func()) {
+	return te.dispatchSema.TryAcquire()
+}
+
 // Stop cancels all running task goroutines.
+// Entries whose cancel is nil are reservation sentinels (StartTaskNow has
+// reserved the slot but has not yet launched the goroutine); they are skipped
+// since no goroutine is running yet.
 func (te *TaskExecutor) Stop() {
 	te.mu.Lock()
 	defer te.mu.Unlock()
 	for _, cancel := range te.running {
-		cancel()
+		if cancel != nil {
+			cancel()
+		}
 	}
 	te.running = make(map[string]context.CancelFunc)
 }

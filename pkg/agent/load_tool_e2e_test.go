@@ -1,0 +1,203 @@
+// Omnipus — load_tool end-to-end message-history integrity test (v0.1.0)
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+// TestLoadTool_EndToEndMessageHistoryIntegrity drives a two-turn scenario that
+// exercises the regression that commit 769c719e introduced: an orphaned tool
+// result in the message history after a load_tool call. The test:
+//
+//  1. Uses a ScenarioProvider scripted for three LLM turns:
+//     Turn 1: the model calls load_tool (a lazy tool it wants to activate).
+//     Turn 2: after load_tool succeeds, the model calls the now-loaded tool.
+//     Turn 3: the tool call resolves; the model emits a plain-text conclusion.
+//
+//  2. After the full conversation, the messages captured by the ScenarioProvider
+//     are inspected for history validity: no role="tool" message may be an orphan
+//     (ToolCallID must match a preceding assistant ToolCalls entry).
+//
+//  3. Normalization-is-noop invariant: normalizeMessagesForProvider must return
+//     the same number of messages — meaning the history the agent loop produced
+//     was already valid, not silently fixed after the fact.
+//
+// The test is unit-level (ProcessDirectWithChannel, no real LLM) and lives in
+// pkg/agent (internal package) so it can call normalizeMessagesForProvider and
+// reuse existing fakes and helpers from the package test suite.
+
+package agent
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
+	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/coreagent"
+	"github.com/dapicom-ai/omnipus/pkg/providers"
+)
+
+// assertNoOrphanToolResults verifies that every role="tool" message in msgs has
+// a ToolCallID that was declared by a preceding assistant's ToolCalls slice.
+// This is the core Rule D invariant that normalizeMessagesForProvider enforces —
+// the history passed to the LLM must already satisfy it for the normalizer to be
+// a no-op (not a silent correctness backstop).
+func assertNoOrphanToolResults(t *testing.T, label string, msgs []providers.Message) {
+	t.Helper()
+	declared := map[string]bool{}
+	var lastAssistantHasToolCalls bool
+	for _, m := range msgs {
+		switch m.Role {
+		case "assistant":
+			for _, tc := range m.ToolCalls {
+				if tc.ID != "" {
+					declared[tc.ID] = true
+				}
+			}
+			lastAssistantHasToolCalls = len(m.ToolCalls) > 0
+		case "tool":
+			if m.ToolCallID == "" {
+				// Empty ToolCallID: valid only when the immediately preceding
+				// message is an assistant with ToolCalls (single-call omitted-id).
+				assert.True(t, lastAssistantHasToolCalls,
+					"%s: role=tool with empty ToolCallID not preceded by assistant-with-toolcalls (orphan)", label)
+			} else {
+				assert.True(t, declared[m.ToolCallID],
+					"%s: role=tool ToolCallID=%q not declared by any preceding assistant (orphan)", label, m.ToolCallID)
+			}
+			lastAssistantHasToolCalls = false
+		default:
+			lastAssistantHasToolCalls = false
+		}
+	}
+}
+
+// assertNormalizationIsNoop verifies that normalizeMessagesForProvider returns
+// the same message slice length for msgs. Any change means the history was
+// already invalid when it reached the LLM — the normalizer is a last-resort
+// guard, not a substitute for the loop producing valid histories.
+func assertNormalizationIsNoop(t *testing.T, label string, msgs []providers.Message) {
+	t.Helper()
+	normalized := normalizeMessagesForProvider(msgs)
+	assert.Equal(t, len(msgs), len(normalized),
+		"%s: normalizeMessagesForProvider changed history length (%d→%d); history was invalid before normalization",
+		label, len(msgs), len(normalized))
+}
+
+// newE2ECfg builds a minimal config with Compressed=true and the four core
+// agents seeded. It mirrors newCompressedCfg but accepts an explicit workspace
+// dir so the caller can control where sessions are written.
+func newE2ECfg(t *testing.T, workspaceDir string) *config.Config {
+	t.Helper()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         workspaceDir,
+				ModelName:         "scripted-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+	cfg.Tools.Manifest.Compressed = true
+	coreagent.SeedConfig(cfg)
+	return cfg
+}
+
+// TestLoadTool_EndToEndMessageHistoryIntegrity drives the two-turn load_tool
+// scenario and asserts that the message history passed to ALL LLM calls is
+// normalization-valid (no orphan tool results, no empty assistants).
+//
+// Scripted scenario (three Chat steps via ScenarioProvider):
+//
+//	Step 1 → model calls load_tool(names:["find_skills"])
+//	Step 2 → model calls find_skills(query:"test")  [now loaded]
+//	Step 3 → model emits a plain-text conclusion
+//
+// The session is driven via ProcessDirectWithChannel, which routes through the
+// full runTurn path (same as production). LastMessages() gives us the exact
+// slice each Chat call received; the final snapshot contains the full
+// accumulated history and is the most informative to assert against.
+func TestLoadTool_EndToEndMessageHistoryIntegrity(t *testing.T) {
+	tmpHome := t.TempDir()
+	workspaceDir := filepath.Join(tmpHome, "workspace")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+
+	// find_skills is ManifestLazy and policy-allowed for Jim. It is a good
+	// candidate: it is a real registered tool, not a synthetic placeholder,
+	// so the agent loop goes through the full load_tool → register → execute path.
+	const lazyTool = "find_skills"
+
+	// ScenarioProvider: three steps as described above.
+	// WithToolCall generates the ToolCall ID as "<name>-0".
+	provider := testutil.NewScenario().
+		WithToolCall("load_tool", `{"names":["find_skills"]}`).
+		WithToolCall(lazyTool, `{"query":"test"}`).
+		WithText("Done. Here are the skills I found.")
+
+	cfg := newE2ECfg(t, workspaceDir)
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	defer al.Close()
+
+	ctx := context.Background()
+	const sessionKey = "e2e-load-tool-integrity"
+
+	// Drive a full conversation via the production entry point.
+	reply, err := al.ProcessDirectWithChannel(ctx,
+		"please load find_skills and use it to find some skills",
+		sessionKey, "cli", "test")
+	require.NoError(t, err,
+		"ProcessDirectWithChannel must not error; reply=%q", reply)
+
+	// ── Inspect the message history passed to the FINAL LLM call ────────────
+	// The final call's history contains the full accumulated messages including
+	// both tool-call/tool-result pairs — the most complete view of correctness.
+	finalMessages := provider.LastMessages()
+	require.NotEmpty(t, finalMessages,
+		"ScenarioProvider must have been called at least once")
+
+	// Structural invariant: no role=tool message may be an orphan.
+	assertNoOrphanToolResults(t, "final LLM call", finalMessages)
+
+	// Normalization-is-noop invariant: the history was valid before normalization.
+	assertNormalizationIsNoop(t, "final LLM call", finalMessages)
+
+	// ── Sanity checks ────────────────────────────────────────────────────────
+
+	// All three scripted steps must have been consumed.
+	assert.Equal(t, 0, provider.Remaining(),
+		"all 3 scripted steps must be consumed; remaining=%d", provider.Remaining())
+
+	// Exactly 3 LLM calls: one per scripted step.
+	assert.Equal(t, 3, provider.CallCount(),
+		"expected exactly 3 LLM calls (load_tool step + find_skills step + conclusion step)")
+
+	// The load_tool call must appear in the final history.
+	foundLoadTool := false
+	for _, m := range finalMessages {
+		for _, tc := range m.ToolCalls {
+			if tc.Function != nil && tc.Function.Name == "load_tool" {
+				foundLoadTool = true
+			}
+		}
+	}
+	assert.True(t, foundLoadTool,
+		"load_tool call must appear in the message history sent to the final LLM call")
+
+	// The find_skills call must also appear (proving it was loaded and invoked).
+	foundFindSkills := false
+	for _, m := range finalMessages {
+		for _, tc := range m.ToolCalls {
+			if tc.Function != nil && tc.Function.Name == lazyTool {
+				foundFindSkills = true
+			}
+		}
+	}
+	assert.True(t, foundFindSkills,
+		"find_skills call must appear in the message history sent to the final LLM call")
+}

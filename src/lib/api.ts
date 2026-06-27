@@ -2677,7 +2677,6 @@ export function fetchToolResult(sessionId: string, ref: string): Promise<unknown
 export const workspacesQueryKeys = {
   list: (params?: { status?: string }) => ['workspaces', params] as const,
   detail: (id: string) => ['workspaces', id] as const,
-  sessions: (id: string) => ['workspaces', id, 'sessions'] as const,
   delegation: (id: string) => ['workspaces', id, 'delegation'] as const,
   instructions: (id: string) => ['workspaces', id, 'instructions'] as const,
 }

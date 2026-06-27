@@ -796,6 +796,158 @@ func TestHandleWorkspaces_RepositorySchemeValidation_POST(t *testing.T) {
 	}
 }
 
+// TestHandleWorkspacePut_FullFieldRoundTrip verifies that a PUT /api/v1/workspaces/{id}
+// that mutates ONE field leaves ALL other fields intact — including delegation
+// (stored on-disk, not sent over the wire by PUT) and updated_at (must advance).
+//
+// This pins the f034a096 "update can't drop fields" fix at the REST merge path.
+// The sysagent-level analogue (TestWorkspaceUpdate_FullFieldRoundTrip) proves the
+// tool write path; this test proves the gateway PUT merge path.
+//
+// BDD:
+//
+//	Given a workspace that has been written with all fields populated
+//	  (name, description, repository, status, pinned, pin_order, core_team,
+//	   owner, is_default, delegation, created_at, updated_at),
+//	When PUT /api/v1/workspaces/{id} with {"name":"Renamed"} (one field only),
+//	Then GET /api/v1/workspaces/{id} returns the workspace with:
+//	  - name updated to "Renamed"
+//	  - description, repository, status, pinned, pin_order, core_team, owner
+//	    all unchanged from the original values
+//	  - updated_at advanced past the original value
+//	And the on-disk file still contains the delegation edges (not a GET response
+//	concern since delegation lives on /delegation; but disk integrity is verified).
+//
+// Traces to: f034a096 REST merge path, FR-001.
+func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Step 1: Create the workspace via POST to get a valid ULID id and timestamps.
+	body := `{
+		"name": "Original Name",
+		"description": "original description",
+		"repository": "https://github.com/example/full-field",
+		"core_team": ["mia","jim","ava","ray"]
+	}`
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code,
+		"POST /workspaces must return 201; body=%s", wPost.Body.String())
+	var created gen.Workspace
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &created))
+	id := created.Id
+	require.NotEmpty(t, id)
+
+	// Step 2: Back-patch the on-disk file with ALL fields (including delegation and
+	// pin_order=5, pinned=true, status=active, is_default=false) so that the PUT
+	// handler must preserve them during a partial update.
+	// We write the delegation edges directly to disk — they are not settable via
+	// PUT /workspaces/{id} (they live at /workspaces/{id}/delegation).
+	originalUpdatedAt := "2026-06-01T09:00:00Z"
+	fullJSON := fmt.Sprintf(`{
+		"id": %q,
+		"name": "Original Name",
+		"description": "original description",
+		"status": "active",
+		"pinned": true,
+		"pin_order": 5,
+		"core_team": ["mia","jim","ava","ray"],
+		"repository": "https://github.com/example/full-field",
+		"owner": "alice",
+		"is_default": false,
+		"delegation": [
+			{"from_agent":"jim","to_agent":"ava","modes":["await","task"],"depth":2},
+			{"from_agent":"mia","to_agent":"ray"}
+		],
+		"created_at": "2026-06-01T08:00:00Z",
+		"updated_at": %q
+	}`, id, originalUpdatedAt)
+	wsDir := filepath.Join(api.homePath, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, id+".json"), []byte(fullJSON), 0o600))
+
+	// Step 3: PUT — mutate only the name.
+	wPut := httptest.NewRecorder()
+	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id,
+		strings.NewReader(`{"name":"Renamed"}`))
+	rPut.Header.Set("Content-Type", "application/json")
+	rPut.URL.Path = "/api/v1/workspaces/" + id
+	api.HandleWorkspaces(wPut, rPut)
+	require.Equal(t, http.StatusOK, wPut.Code,
+		"PUT /workspaces/{id} must return 200; body=%s", wPut.Body.String())
+
+	// Step 4: GET the workspace back and assert every untouched field survived.
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	rGet.URL.Path = "/api/v1/workspaces/" + id
+	api.HandleWorkspaces(wGet, rGet)
+	require.Equal(t, http.StatusOK, wGet.Code,
+		"GET /workspaces/{id} must return 200 after PUT; body=%s", wGet.Body.String())
+
+	var got gen.Workspace
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got))
+
+	// Name must be updated.
+	assert.Equal(t, "Renamed", got.Name, "name must be updated by PUT")
+
+	// Fields the PUT did NOT touch must be identical to the original.
+	require.NotNil(t, got.Description, "description must survive the PUT (not be nil)")
+	assert.Equal(t, "original description", *got.Description,
+		"description must be unchanged after name-only PUT")
+
+	require.NotNil(t, got.Repository, "repository must survive the PUT")
+	assert.Equal(t, "https://github.com/example/full-field", *got.Repository,
+		"repository must be unchanged after name-only PUT")
+
+	assert.Equal(t, gen.WorkspaceStatusActive, got.Status,
+		"status must be unchanged after name-only PUT")
+
+	assert.True(t, got.Pinned, "pinned must be unchanged (true) after name-only PUT")
+	assert.Equal(t, 5, got.PinOrder, "pin_order must be unchanged (5) after name-only PUT")
+
+	require.NotNil(t, got.CoreTeam, "core_team must survive the PUT")
+	assert.Equal(t, []string{"mia", "jim", "ava", "ray"}, *got.CoreTeam,
+		"core_team must be unchanged after name-only PUT")
+
+	require.NotNil(t, got.Owner, "owner must survive the PUT")
+	assert.Equal(t, "alice", *got.Owner,
+		"owner must be unchanged after name-only PUT")
+
+	// updated_at must advance past the original.
+	assert.False(t, got.UpdatedAt.IsZero(), "updated_at must not be zero after PUT")
+	parsedOriginal, err := time.Parse(time.RFC3339, originalUpdatedAt)
+	require.NoError(t, err)
+	assert.True(t, got.UpdatedAt.After(parsedOriginal),
+		"updated_at must advance past %s after PUT; got %s",
+		originalUpdatedAt, got.UpdatedAt.Format(time.RFC3339))
+
+	// Step 5: Verify delegation edges survived on disk (they are not surfaced by
+	// GET /workspaces/{id} — that is /workspaces/{id}/delegation — but the merge
+	// path must not wipe them from the file).
+	diskData, err := os.ReadFile(filepath.Join(wsDir, id+".json"))
+	require.NoError(t, err, "workspace file must still exist on disk after PUT")
+	var diskObj map[string]any
+	require.NoError(t, json.Unmarshal(diskData, &diskObj),
+		"workspace file must be valid JSON after PUT")
+
+	delegation, ok := diskObj["delegation"].([]any)
+	require.True(t, ok, "delegation field must survive on disk as an array; got %T=%v",
+		diskObj["delegation"], diskObj["delegation"])
+	assert.Len(t, delegation, 2,
+		"both delegation edges must survive the name-only PUT on disk")
+
+	e0, _ := delegation[0].(map[string]any)
+	assert.Equal(t, "jim", e0["from_agent"], "delegation edge 0 from_agent must survive PUT")
+	assert.Equal(t, "ava", e0["to_agent"], "delegation edge 0 to_agent must survive PUT")
+
+	e1, _ := delegation[1].(map[string]any)
+	assert.Equal(t, "mia", e1["from_agent"], "delegation edge 1 from_agent must survive PUT")
+	assert.Equal(t, "ray", e1["to_agent"], "delegation edge 1 to_agent must survive PUT")
+}
+
 // TestHandleWorkspaces_RepositorySchemeValidation_PUT verifies SEC-5: PUT rejects
 // non-http/https repository URLs.
 // Traces to: SEC-5

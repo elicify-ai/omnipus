@@ -14,5 +14,7 @@ properties:
       - chat
       - task
       - channel
+    # Intentionally narrower than Session.type: "scheduled" is server-minted by a
+    # fired schedule (NewScheduledSession), never client-created via POST /sessions.
     description: Session type. Defaults to "chat" when omitted.
     example: "chat"

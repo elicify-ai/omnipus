@@ -7753,7 +7753,7 @@ export interface operations {
                  * @description Filter by session type.
                  * @example chat
                  */
-                type?: "chat" | "task" | "channel";
+                type?: "chat" | "task" | "channel" | "scheduled";
             };
             header?: never;
             path?: never;

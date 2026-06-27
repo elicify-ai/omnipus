@@ -299,30 +299,15 @@ func buildWorkspaceDelegationEdges(
 	for _, e := range in {
 		from := strings.TrimSpace(e.FromAgent)
 		to := strings.TrimSpace(e.ToAgent)
-		if from == "" || to == "" {
-			return nil, "delegation edge from_agent and to_agent must not be empty"
-		}
-		if from == to {
-			return nil, "delegation edge cannot be a self-edge (from_agent == to_agent: " + from + ")"
-		}
-		if !team[from] {
-			return nil, "delegation edge from_agent " + from + " is not a member of the workspace team"
-		}
-		if !team[to] {
-			return nil, "delegation edge to_agent " + to + " is not a member of the workspace team"
-		}
 
+		// Normalise the modes (trim already done by the wire layer; dedup here)
+		// BEFORE validation so the stored edge carries the canonical, deduped set.
 		var modes []string
 		if e.Modes != nil {
 			modes = make([]string, 0, len(*e.Modes))
 			seenMode := make(map[string]bool, len(*e.Modes))
 			for _, m := range *e.Modes {
 				ms := string(m)
-				switch config.DelegationMode(ms) {
-				case config.DelegationModeAwait, config.DelegationModeBackground, config.DelegationModeTask:
-				default:
-					return nil, "delegation edge mode " + ms + " is invalid (valid: await, background, task)"
-				}
 				if seenMode[ms] {
 					continue
 				}
@@ -334,16 +319,20 @@ func buildWorkspaceDelegationEdges(
 		var depth *int
 		if e.Depth != nil {
 			d := *e.Depth
-			if d < 0 {
-				return nil, "delegation edge depth must be >= 0"
-			}
-			if d > depthCeiling {
-				return nil, "delegation edge depth exceeds the maximum allowed depth"
-			}
 			depth = &d
 		}
 
+		// Single shared authority for the per-edge invariants (non-empty, no
+		// self-edge, endpoints ∈ team, modes ⊆ {await,background,task}, depth in
+		// [0, ceiling]). Validate returns the canonical wire messages verbatim, so
+		// the 400 body is byte-identical to the previous inline checks. The
+		// whole-graph acyclicity check stays below (it is graph-level, not
+		// per-edge). Build the candidate stored edge and validate it.
 		edge := storedDelegationEdge{FromAgent: from, ToAgent: to, Modes: modes, Depth: depth}
+		if err := edge.Validate(team, depthCeiling); err != nil {
+			return nil, err.Error()
+		}
+
 		key := from + "\x00" + to
 		if pos, dup := index[key]; dup {
 			out[pos] = edge

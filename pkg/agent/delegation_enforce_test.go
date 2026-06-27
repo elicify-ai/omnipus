@@ -2,11 +2,35 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
+
+// writeWorkspaceFileForTest drops an additional workspace file into an EXISTING
+// home (one already created by seedWorkspaceGraph). Unlike seedWorkspaceGraph it
+// does NOT reset OMNIPUS_HOME — it is for seeding a SECOND workspace alongside the
+// first so a single test can exercise per-workspace isolation.
+func writeWorkspaceFileForTest(t *testing.T, home, wsID string, isDefault bool, edges []graphEdge) {
+	t.Helper()
+	wsDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspaces: %v", err)
+	}
+	rec := testWorkspaceRecord{ID: wsID, IsDefault: isDefault, Delegation: edges}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("marshal workspace record: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, wsID+".json"), data, 0o644); err != nil {
+		t.Fatalf("write workspace file: %v", err)
+	}
+}
 
 // intPtr is a local helper for building *int policy/depth fields.
 func intPtr(n int) *int { return &n }
@@ -354,6 +378,88 @@ func TestDelegationGraphFlipsWithoutRebuild(t *testing.T) {
 	// The SAME checker now allows jim→ray — proving per-call graph reads.
 	if denial := check(ctxWS(testWS, 0), "ray"); denial != nil {
 		t.Fatalf("expected jim→ray ALLOWED after graph edit (no rebuild), got deny: %+v", denial)
+	}
+}
+
+// TestDelegationDenyChecker_CrossWorkspaceDenied pins the headline property of
+// commit 822202ad: delegation authority is per-WORKSPACE, not global. The SAME
+// checker closure must ALLOW mia→ray when the turn is bound to workspace WS-A
+// (which has the mia→ray edge) and DENY it when bound to workspace WS-B (which
+// has NO edges) — proving an edge in one workspace grants no authority in
+// another. Existing tests all use a single workspace, so this isolation property
+// had no direct coverage.
+func TestDelegationDenyChecker_CrossWorkspaceDenied(t *testing.T) {
+	const (
+		wsA = "01JWMYWORKSPACEAAAAAAAAAAA"
+		wsB = "01JWMYWORKSPACEBBBBBBBBBBB"
+	)
+	// seedWorkspaceGraph sets OMNIPUS_HOME to a fresh temp dir and writes WS-A
+	// (NOT default) with the single mia→ray edge. Capture the home so we can drop
+	// a SECOND workspace file (WS-B, no edges) into the same home.
+	home := seedWorkspaceGraph(t, wsA, false, []graphEdge{
+		edge("mia", "ray", []string{"background"}, nil),
+	})
+	// WS-B in the same home, no delegation edges.
+	writeWorkspaceFileForTest(t, home, wsB, false, nil)
+
+	// ONE checker, used against both workspaces. The per-call graph read is what
+	// makes the verdict workspace-scoped.
+	check := buildDelegationDenyChecker("mia", nil, config.AgentDefaults{},
+		config.DelegationModeBackground, nil)
+
+	// Bound to WS-A: the mia→ray edge authorizes the delegation → ALLOW.
+	if denial := check(ctxWS(wsA, 0), "ray"); denial != nil {
+		t.Fatalf("mia→ray must be ALLOWED when bound to WS-A (edge present), got deny: %+v", denial)
+	}
+
+	// Bound to WS-B with the IDENTICAL checker: WS-B has no mia→ray edge, so the
+	// per-workspace graph DENIES (trust_set). An edge in WS-A grants NO authority
+	// in WS-B.
+	denial := check(ctxWS(wsB, 0), "ray")
+	if denial == nil {
+		t.Fatal("mia→ray must be DENIED when bound to WS-B (no edge); cross-workspace authority leaked")
+	}
+	if denial.Policy != tools.DenyTrustSet {
+		t.Fatalf("expected trust_set denial in WS-B (no edge), got: %q (%s)", denial.Policy, denial.Reason)
+	}
+}
+
+// TestEnforceEdgeModeAndDepth_NegativeDepthFailsClosed pins FIX 1: an edge whose
+// per-edge Depth cap is NEGATIVE must fail CLOSED (treated as "no onward
+// delegation"), never fall open. Before the fix, *Depth < 0 fell through the
+// `== 0` special-case and the subsequent `*Depth > 0` guard left depthCap = 0,
+// which is interpreted as "uncapped from that source" — silently REMOVING the
+// per-edge cap (a wrong, fail-OPEN security verdict). The invariant is
+// "depth <= 0 ⇒ this edge grants no further onward delegation".
+func TestEnforceEdgeModeAndDepth_NegativeDepthFailsClosed(t *testing.T) {
+	for _, neg := range []int{-1, -3, -100} {
+		edge := &workspace.DelegationEdge{
+			FromAgent: "mia",
+			ToAgent:   "ray",
+			Modes:     []string{"background"},
+			Depth:     intPtr(neg),
+		}
+		// globalDepthCap = 0 (no global ceiling): the ONLY thing that could deny is
+		// the per-edge cap. At chain depth 0 a fail-OPEN bug would ALLOW.
+		denial := enforceEdgeModeAndDepth(
+			ctxAtDepth(0), edge, "mia", "ray", config.DelegationModeBackground, 0)
+		if denial == nil {
+			t.Fatalf("negative edge depth %d must FAIL CLOSED (deny onward delegation), got allow", neg)
+		}
+		if denial.Policy != tools.DenyDepth {
+			t.Fatalf("negative edge depth %d must deny on the depth axis, got: %q (%s)",
+				neg, denial.Policy, denial.Reason)
+		}
+	}
+
+	// Control: a POSITIVE cap above the current depth still ALLOWS (the fix must
+	// not over-deny legitimate edges).
+	okEdge := &workspace.DelegationEdge{
+		FromAgent: "mia", ToAgent: "ray", Modes: []string{"background"}, Depth: intPtr(3),
+	}
+	if denial := enforceEdgeModeAndDepth(
+		ctxAtDepth(0), okEdge, "mia", "ray", config.DelegationModeBackground, 0); denial != nil {
+		t.Fatalf("positive edge depth 3 at chain depth 0 must ALLOW, got deny: %+v", denial)
 	}
 }
 

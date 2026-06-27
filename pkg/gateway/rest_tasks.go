@@ -743,24 +743,51 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// idempotency guard inside StartTaskNow prevents a double-launch if the task
 	// already has a session_id. After StartTaskNow returns, re-read the task so
 	// the response carries the newly-minted session_id.
+	//
+	// On failure the task must NOT be left stranded in in_progress with no agent
+	// running. We revert its status back to the pre-update state so the client
+	// observes the failure and can retry. The HTTP status signals the cause:
+	//   503 — taskExecutor is nil (gateway degraded / not fully initialised)
+	//   409 — dispatch cap exhausted (retryable congestion)
+	//   500 — any other launch error
 	if updated.Status == task.StatusInProgress &&
 		preUpdateStatus != task.StatusInProgress &&
 		updated.AgentID != "" &&
 		updated.SessionID == "" {
-		if a.taskExecutor != nil {
-			sessID, startErr := a.taskExecutor.StartTaskNow(r.Context(), id)
-			if startErr != nil {
-				slog.Warn("rest: StartTaskNow failed; task is in_progress but agent not launched",
-					"id", id, "agent_id", updated.AgentID, "error", startErr)
-			} else if sessID != "" {
-				// Re-read the persisted task so the response contains the session_id.
-				if fresh, rerr := a.taskStore.Get(id); rerr == nil {
-					updated = fresh
-				}
+		if a.taskExecutor == nil {
+			// Revert the task to its prior status so it is not left stranded.
+			revertStatus := preUpdateStatus
+			if _, rErr := a.taskStore.Update(id, task.Patch{Status: &revertStatus}); rErr != nil {
+				slog.Error("rest: could not revert task status after nil-executor failure",
+					"id", id, "revert_to", revertStatus, "error", rErr)
 			}
-		} else {
-			slog.Warn("rest: taskExecutor is nil; task moved to in_progress without agent launch",
+			slog.Warn("rest: taskExecutor is nil; rejecting in_progress transition",
 				"id", id, "agent_id", updated.AgentID)
+			jsonErr(w, http.StatusServiceUnavailable, "task executor is not available; retry later")
+			return
+		}
+		sessID, startErr := a.taskExecutor.StartTaskNow(r.Context(), id)
+		if startErr != nil {
+			// Revert the task to its prior status so it is not left stranded.
+			revertStatus := preUpdateStatus
+			if _, rErr := a.taskStore.Update(id, task.Patch{Status: &revertStatus}); rErr != nil {
+				slog.Error("rest: could not revert task status after StartTaskNow failure",
+					"id", id, "revert_to", revertStatus, "error", rErr)
+			}
+			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
+				"id", id, "agent_id", updated.AgentID, "prior_status", preUpdateStatus, "error", startErr)
+			httpStatus := http.StatusInternalServerError
+			if errors.Is(startErr, agent.ErrDispatchCapReached) {
+				httpStatus = http.StatusConflict
+			}
+			jsonErr(w, httpStatus, startErr.Error())
+			return
+		}
+		if sessID != "" {
+			// Re-read the persisted task so the response contains the session_id.
+			if fresh, rerr := a.taskStore.Get(id); rerr == nil {
+				updated = fresh
+			}
 		}
 	}
 

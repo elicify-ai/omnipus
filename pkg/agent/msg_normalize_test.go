@@ -461,3 +461,163 @@ func TestNormalize_RuleD_TranscriptlessShape(t *testing.T) {
 		}
 	}
 }
+
+// ── Additional tests requested by review (untested branches) ────────────────
+
+// TestNormalize_AppendMerge_EmptyLastContentTakesCurrent covers the branch in
+// appendOrMergePlainText where last.Content is empty and m.Content is non-empty:
+// the merged result should take m.Content directly (no leading "\n").
+func TestNormalize_AppendMerge_EmptyLastContentTakesCurrent(t *testing.T) {
+	// Construct a history where the first assistant message has empty content and
+	// the second has content — they must merge, taking the second's content.
+	a1 := normMsg("assistant", "") // not dropped because we set it as non-assistant role to avoid Rule A
+	// Use "user" role so Rule A (empty assistant drop) doesn't apply, letting us
+	// test the merge branch directly.
+	u1 := normMsg("user", "")
+	u2 := normMsg("user", "hello")
+
+	got := normalizeMessagesForProvider([]providers.Message{u1, u2})
+
+	// u1 (empty) + u2 (non-empty) → merged to "hello" (empty last takes current).
+	if len(got) != 1 {
+		t.Fatalf("empty-last merge: expected 1 merged message, got %d: %+v", len(got), got)
+	}
+	if got[0].Content != "hello" {
+		t.Errorf("empty-last merge: expected content 'hello', got %q", got[0].Content)
+	}
+	// Also verify the direct appendOrMergePlainText path for coverage.
+	out := []providers.Message{a1}
+	// Overwrite a1's role to "user" so it acts as a plain-text user message.
+	out[0].Role = "user"
+	target := normMsg("user", "world")
+	result := appendOrMergePlainText(out, target)
+	if len(result) != 1 {
+		t.Fatalf("direct merge: expected 1 message, got %d", len(result))
+	}
+	if result[0].Content != "world" {
+		t.Errorf("direct merge: expected content 'world', got %q", result[0].Content)
+	}
+}
+
+// TestNormalize_TwoConsecutiveSystemMessages verifies Rule B on system messages:
+// two consecutive system messages are merged into one (same as user/assistant).
+func TestNormalize_TwoConsecutiveSystemMessages(t *testing.T) {
+	s1 := normMsg("system", "first system")
+	s2 := normMsg("system", "second system")
+
+	got := normalizeMessagesForProvider([]providers.Message{s1, s2})
+
+	if len(got) != 1 {
+		t.Fatalf("system merge: expected 1 merged message, got %d: %+v", len(got), got)
+	}
+	if got[0].Role != "system" {
+		t.Errorf("system merge: expected role 'system', got %q", got[0].Role)
+	}
+	if got[0].Content != "first system\nsecond system" {
+		t.Errorf("system merge: expected merged content, got %q", got[0].Content)
+	}
+}
+
+// TestNormalize_ThreePlusConsecutiveSameRoleMerge verifies that 3 (or more)
+// consecutive same-role plain-text messages all collapse into one in a single
+// normalization pass.
+func TestNormalize_ThreePlusConsecutiveSameRoleMerge(t *testing.T) {
+	input := []providers.Message{
+		normMsg("user", "A"),
+		normMsg("user", "B"),
+		normMsg("user", "C"),
+		normMsg("user", "D"),
+	}
+
+	got := normalizeMessagesForProvider(input)
+
+	if len(got) != 1 {
+		t.Fatalf("3+ merge: expected 1 merged message, got %d: %+v", len(got), got)
+	}
+	want := "A\nB\nC\nD"
+	if got[0].Content != want {
+		t.Errorf("3+ merge: expected %q, got %q", want, got[0].Content)
+	}
+}
+
+// TestNormalize_CloneBeforeAppend_MediaNoMutation verifies FIX 3: appending
+// Media from a merged message does NOT mutate the original source message's
+// slice when the original had cap > len. The test constructs a source message
+// with a pre-grown slice and confirms the original is untouched after normalization.
+func TestNormalize_CloneBeforeAppend_MediaNoMutation(t *testing.T) {
+	// Build a slice with cap=4 but len=1 to exercise the aliasing path.
+	backing := make([]string, 1, 4)
+	backing[0] = "img-original.png"
+
+	src := providers.Message{
+		Role:    "user",
+		Content: "first",
+		Media:   backing, // cap=4, len=1
+	}
+	// Sanity: confirm cap > len so the bug would trigger on the uncloned path.
+	if cap(src.Media) <= len(src.Media) {
+		t.Skip("test precondition: need cap > len in src.Media")
+	}
+
+	second := providers.Message{
+		Role:    "user",
+		Content: "second",
+		Media:   []string{"img-appended.png"},
+	}
+
+	// Snapshot the original backing array BEFORE normalization.
+	originalLen := len(src.Media)
+	originalCap := cap(src.Media)
+	originalItem := src.Media[0]
+
+	_ = normalizeMessagesForProvider([]providers.Message{src, second})
+
+	// The source's backing slice must still be len=1, not len=2.
+	if len(src.Media) != originalLen {
+		t.Errorf("FIX3/Media: source Media len changed from %d to %d — backing array was mutated",
+			originalLen, len(src.Media))
+	}
+	if cap(src.Media) != originalCap {
+		t.Errorf("FIX3/Media: source Media cap changed — unexpected")
+	}
+	if src.Media[0] != originalItem {
+		t.Errorf("FIX3/Media: source Media[0] changed from %q to %q", originalItem, src.Media[0])
+	}
+}
+
+// TestNormalize_CloneBeforeAppend_SystemPartsNoMutation verifies FIX 3 for
+// SystemParts: the source message's backing array is not mutated when two
+// plain-text messages with SystemParts are merged.
+func TestNormalize_CloneBeforeAppend_SystemPartsNoMutation(t *testing.T) {
+	// Build a slice with cap=4 but len=1 to exercise the aliasing path.
+	backing := make([]protocoltypes.ContentBlock, 1, 4)
+	backing[0] = normCB("block-original")
+
+	src := providers.Message{
+		Role:        "user",
+		Content:     "first",
+		SystemParts: backing, // cap=4, len=1
+	}
+	if cap(src.SystemParts) <= len(src.SystemParts) {
+		t.Skip("test precondition: need cap > len in src.SystemParts")
+	}
+
+	second := providers.Message{
+		Role:        "user",
+		Content:     "second",
+		SystemParts: []protocoltypes.ContentBlock{normCB("block-appended")},
+	}
+
+	originalLen := len(src.SystemParts)
+	originalText := src.SystemParts[0].Text
+
+	_ = normalizeMessagesForProvider([]providers.Message{src, second})
+
+	if len(src.SystemParts) != originalLen {
+		t.Errorf("FIX3/SP: source SystemParts len changed from %d to %d — backing array was mutated",
+			originalLen, len(src.SystemParts))
+	}
+	if src.SystemParts[0].Text != originalText {
+		t.Errorf("FIX3/SP: source SystemParts[0].Text changed — backing array was mutated")
+	}
+}

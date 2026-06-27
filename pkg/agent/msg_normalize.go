@@ -45,6 +45,7 @@ package agent
 import (
 	"strings"
 
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
@@ -70,11 +71,15 @@ func normalizeMessagesForProvider(msgs []providers.Message) []providers.Message 
 	declaredToolIDs := map[string]bool{}
 	out := make([]providers.Message, 0, len(msgs))
 
+	// Counters for the observability log emitted after the pass (FIX 2).
+	var droppedEmptyAssistant, droppedOrphanTool, merged int
+
 	for _, m := range msgs {
 		switch {
 		case m.Role == "assistant":
 			// Rule A: drop an empty/no-op assistant (blank Content, no ToolCalls).
 			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 {
+				droppedEmptyAssistant++
 				continue
 			}
 			// Rule C: assistant carrying ToolCalls passes through verbatim.
@@ -89,7 +94,11 @@ func normalizeMessagesForProvider(msgs []providers.Message) []providers.Message 
 				continue
 			}
 			// Plain-text assistant: apply Rule B merge.
+			prevLen := len(out)
 			out = appendOrMergePlainText(out, m)
+			if len(out) == prevLen {
+				merged++ // message was merged into the last element rather than appended
+			}
 
 		case m.Role == "tool":
 			// Rule D: drop true orphans; keep paired tool results.
@@ -97,6 +106,7 @@ func normalizeMessagesForProvider(msgs []providers.Message) []providers.Message 
 				// Non-empty ToolCallID: keep iff declared by a preceding assistant.
 				if !declaredToolIDs[m.ToolCallID] {
 					// True orphan — drop.
+					droppedOrphanTool++
 					continue
 				}
 				out = append(out, m)
@@ -105,14 +115,29 @@ func normalizeMessagesForProvider(msgs []providers.Message) []providers.Message 
 				// assistant carrying ToolCalls (single-call omitted-id case).
 				if len(out) > 0 && out[len(out)-1].Role == "assistant" && len(out[len(out)-1].ToolCalls) > 0 {
 					out = append(out, m)
+				} else {
+					// Orphan (no declared call to attach to) — drop.
+					droppedOrphanTool++
 				}
-				// Otherwise: orphan (no declared call to attach to) — drop.
 			}
 
 		default:
 			// All other roles (user, system): apply Rule B merge.
+			prevLen := len(out)
 			out = appendOrMergePlainText(out, m)
+			if len(out) == prevLen {
+				merged++
+			}
 		}
+	}
+
+	if droppedEmptyAssistant > 0 || droppedOrphanTool > 0 || merged > 0 {
+		logger.DebugCF("agent", "normalizeMessagesForProvider: messages adjusted before LLM call",
+			map[string]any{
+				"dropped_empty_assistant": droppedEmptyAssistant,
+				"dropped_orphan_tool":     droppedOrphanTool,
+				"merged":                  merged,
+			})
 	}
 
 	return out
@@ -145,13 +170,16 @@ func appendOrMergePlainText(out []providers.Message, m providers.Message) []prov
 		}
 	}
 	if len(m.Media) > 0 {
-		last.Media = append(last.Media, m.Media...)
+		// Clone before append to avoid writing into the source message's backing
+		// array when cap(last.Media) > len(last.Media) (FIX 3 — matches repair.go:157-159).
+		last.Media = append(append([]string(nil), last.Media...), m.Media...)
 	}
 	if m.ReasoningContent != "" && last.ReasoningContent == "" {
 		last.ReasoningContent = m.ReasoningContent
 	}
 	if len(m.SystemParts) > 0 && len(last.SystemParts) == 0 {
-		last.SystemParts = append(last.SystemParts, m.SystemParts...)
+		// Clone before append for the same aliasing reason as Media above.
+		last.SystemParts = append(append([]providers.ContentBlock(nil), last.SystemParts...), m.SystemParts...)
 	}
 	return out
 }

@@ -147,12 +147,17 @@ export function PerformanceSection(): React.ReactElement {
   function handleToolsOnDemandChange(checked: boolean) {
     setToolsOnDemand(checked)
     setDirty(true)
-    setSaveStatus('saving')
     if (debounceRef.current) clearTimeout(debounceRef.current)
     const body = buildBody(inputValue, checked)
     if (body) {
+      setSaveStatus('saving')
       setPending(body)
       setReauthOpen(true)
+    } else {
+      // max_parallel_agents is out of range — the toggle can't proceed until
+      // the numeric field is fixed. Clear any stale 'saving' spinner so it
+      // doesn't stick forever.
+      setSaveStatus('idle')
     }
   }
 

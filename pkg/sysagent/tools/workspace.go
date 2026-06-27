@@ -284,6 +284,30 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 		w.Repository = v
 	}
 
+	// Defensive delegation-edge validation (security boundary — fail closed).
+	//
+	// update_workspace does NOT expose a `delegation` arg today, so it cannot
+	// inject new edges: readWorkspaceFromDisk loads the existing graph and
+	// writeEntity re-serialises it verbatim. But the moment ANY write path
+	// persists the Delegation slice, it becomes a write surface — a corrupted
+	// on-disk edge being rewritten here, or a future `delegation` arg, could
+	// otherwise launder an invalid edge that is then TRUSTED at runtime (the
+	// per-workspace graph is the sole delegation authority). So validate every
+	// edge against the shared workspace.DelegationEdge.Validate authority before
+	// committing, using the same team set (core_team ∪ existing-edge endpoints)
+	// and depth ceiling the gateway PUT handler enforces. Any invalid edge
+	// aborts the whole write — we never persist an unvalidated edge.
+	if len(w.Delegation) > 0 {
+		team := workspaceDelegationTeamSet(w)
+		ceiling := workspaceDelegationDepthCeiling(t.deps)
+		for i := range w.Delegation {
+			if err := w.Delegation[i].Validate(team, ceiling); err != nil {
+				return tools.ErrorResult(errorJSON("INVALID_DELEGATION_EDGE", err.Error(),
+					"Fix the workspace delegation graph via the Team tab or the delegation API"))
+			}
+		}
+	}
+
 	w.UpdatedAt = nowISO()
 	if err := writeEntity(workspacesDir(t.deps.Home), id, w); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
@@ -295,6 +319,52 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 		"core_team": w.CoreTeam, "repository": w.Repository,
 		"task_count": tc, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
 	}))
+}
+
+// workspaceDelegationDepthCeilingFallback mirrors the gateway's
+// delegationDepthCeilingFallback (and the agent loop's getSubTurnConfig default):
+// the effective max delegation chain depth when agents.defaults.subturn.max_depth
+// is unset. Kept in lock-step so the tool's defensive edge validation applies the
+// exact same depth ceiling the gateway PUT handler does.
+const workspaceDelegationDepthCeilingFallback = 3
+
+// workspaceDelegationDepthCeiling returns the effective delegation depth ceiling
+// from the live config, mirroring gateway.delegationDepthCeiling: the configured
+// agents.defaults.subturn.max_depth when set (> 0), else the fallback of 3. A nil
+// GetCfg (tests without a wired config) yields the fallback.
+func workspaceDelegationDepthCeiling(d *Deps) int {
+	if d == nil || d.GetCfg == nil {
+		return workspaceDelegationDepthCeilingFallback
+	}
+	cfg := d.GetCfg()
+	if cfg != nil && cfg.Agents.Defaults.SubTurn.MaxDepth > 0 {
+		return cfg.Agents.Defaults.SubTurn.MaxDepth
+	}
+	return workspaceDelegationDepthCeilingFallback
+}
+
+// workspaceDelegationTeamSet computes the workspace team membership set used to
+// validate a delegation edge's endpoints, mirroring gateway.workspaceTeamSet: the
+// union of the workspace core_team and the endpoints of the workspace's existing
+// delegation edges. This is the SAME team semantics the gateway PUT handler uses,
+// so the tool's defensive validation neither over- nor under-restricts relative to
+// the API write path.
+func workspaceDelegationTeamSet(w workspace) map[string]bool {
+	team := make(map[string]bool, len(w.CoreTeam)+2*len(w.Delegation))
+	for _, id := range w.CoreTeam {
+		if id != "" {
+			team[id] = true
+		}
+	}
+	for _, e := range w.Delegation {
+		if e.FromAgent != "" {
+			team[e.FromAgent] = true
+		}
+		if e.ToAgent != "" {
+			team[e.ToAgent] = true
+		}
+	}
+	return team
 }
 
 // ---- system.workspace.delete ----
