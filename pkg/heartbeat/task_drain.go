@@ -19,15 +19,16 @@ import (
 // dispatch.
 const defaultTaskDrainInterval = time.Minute
 
+// TaskQueueChecker is the interface for polling dispatchable queued tasks.
+// Implemented by agent.TaskExecutor; defined here to avoid an import cycle.
+type TaskQueueChecker interface {
+	CheckQueuedTasks(ctx context.Context)
+}
+
 // TaskDrainService periodically drains dispatchable (`next`) tasks by polling a
-// TaskQueueChecker. It exists because the legacy global HeartbeatService — which
-// historically owned the queued-task poll — is NOT started when a per-agent
-// heartbeat is active. On those installs (which is every install after the
-// global→per-agent heartbeat migration auto-creates a per-agent heartbeat) the
-// queued-task poll would otherwise never run and `next` tasks would never
-// dispatch. This service owns the queued-task drain unconditionally, decoupled
-// from the HEARTBEAT.md execution path, so task dispatch survives regardless of
-// which heartbeat path is active.
+// TaskQueueChecker. It is the unconditional owner of the queued-task drain,
+// decoupled from the HEARTBEAT.md execution path, so task dispatch survives
+// regardless of the per-agent heartbeat schedule state.
 type TaskDrainService struct {
 	checker  TaskQueueChecker
 	interval time.Duration

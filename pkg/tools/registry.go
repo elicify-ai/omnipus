@@ -209,20 +209,40 @@ type HiddenToolDoc struct {
 	Description string
 }
 
-// SnapshotHiddenTools returns all non-core tools and the current registry
-// version under a single read-lock, guaranteeing consistency between the
-// two values.
-func (r *ToolRegistry) SnapshotHiddenTools() HiddenToolSnapshot {
+// SnapshotSearchableTools returns all tools that should be included in the
+// BM25 search corpus, and the current registry version, under a single
+// read-lock.
+//
+// The corpus includes:
+//   - Non-core (hidden/MCP) tools — always loadable on demand.
+//   - Core (visible) tools whose manifest tier is ManifestLazy — these are
+//     visible in the manifest but may need to be loaded explicitly; they were
+//     previously invisible to BM25 search, causing "exact name required" gaps.
+//
+// Full-tier and infra-tier tools are excluded: they are always callable without
+// loading and do not need to be discoverable via search.
+//
+// Deduplication by name is guaranteed by the registry's map representation.
+func (r *ToolRegistry) SnapshotSearchableTools() HiddenToolSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	docs := make([]HiddenToolDoc, 0, len(r.tools))
 	for name, entry := range r.tools {
 		if !entry.IsCore {
+			// Non-core (hidden/MCP) tools are always included.
+			docs = append(docs, HiddenToolDoc{
+				Name:        name,
+				Description: entry.Tool.Description(),
+			})
+		} else if ToolManifestTier(name) == ManifestLazy {
+			// Core (visible) tools that are lazy-tier: the model must load them
+			// explicitly, so they must be discoverable via BM25 search.
 			docs = append(docs, HiddenToolDoc{
 				Name:        name,
 				Description: entry.Tool.Description(),
 			})
 		}
+		// Full-tier and infra-tier core tools are always callable and excluded.
 	}
 	return HiddenToolSnapshot{
 		Docs:    docs,

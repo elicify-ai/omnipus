@@ -29,10 +29,12 @@ func (m *mockSearchableTool) Execute(ctx context.Context, args map[string]any) *
 func setupPopulatedRegistry() *ToolRegistry {
 	reg := NewToolRegistry()
 
-	// A core tool (NOT to be found by searches)
+	// A full-tier visible core tool — MUST NOT be found by BM25 searches
+	// (full-tier tools are always callable; no need to discover them via BM25).
+	// Using "read_file" which is ManifestFull per fullManifestToolNames.
 	reg.Register(&mockSearchableTool{
-		name: "core_search",
-		desc: "I am a visible core tool for searching files",
+		name: "read_file",
+		desc: "Read the contents of a file from disk",
 	})
 
 	// Hidden tools (must be found by searches)
@@ -118,8 +120,11 @@ func TestToolsTool_Query_AutoLoadsTopHit(t *testing.T) {
 	var markedLoaded []string
 	tt := NewToolsTool(reg, 5, 10)
 	tt.SetResolver(
-		func(_ context.Context, name string) bool {
-			return name == "mcp_findme"
+		func(_ context.Context, name string) (bool, string) {
+			if name == "mcp_findme" {
+				return true, ""
+			}
+			return false, name + " — not available in test"
 		},
 		func(_ context.Context, names []string) (map[string]any, []string) {
 			markedLoaded = append(markedLoaded, names...)
@@ -172,8 +177,11 @@ func TestToolsTool_Query_DeniedTopHitFallsThrough(t *testing.T) {
 	var loadedName string
 	tt := NewToolsTool(reg, 5, 10)
 	tt.SetResolver(
-		func(_ context.Context, name string) bool {
-			return name == "mcp_allowed"
+		func(_ context.Context, name string) (bool, string) {
+			if name == "mcp_allowed" {
+				return true, ""
+			}
+			return false, name + " — denied in test"
 		},
 		func(_ context.Context, names []string) (map[string]any, []string) {
 			sc := make(map[string]any)
@@ -240,8 +248,13 @@ func TestSearchBM25_ZeroMaxResults(t *testing.T) {
 func TestToolRegistry_SearchBM25LimitsAndCoreFiltering(t *testing.T) {
 	reg := NewToolRegistry()
 
-	// Add 1 Core and 10 Hidden, all containing the word "match"
-	reg.Register(&mockSearchableTool{"core_match", "I am core with match"})
+	// Add 1 visible lazy tool (ManifestLazy tier — SHOULD appear in BM25),
+	// 1 visible full-tier tool (ManifestFull — MUST NOT appear in BM25),
+	// and 10 hidden tools.
+	// "core_match_lazy" is not a real tool name so ToolManifestTier returns ManifestLazy.
+	reg.Register(&mockSearchableTool{"core_match_lazy", "I am visible lazy with match"})
+	// "read_file" is ManifestFull — must be excluded from BM25 corpus.
+	reg.Register(&mockSearchableTool{"read_file", "Read file with match"})
 	for i := 0; i < 10; i++ {
 		reg.RegisterHidden(&mockSearchableTool{
 			name: fmt.Sprintf("hidden_match_%d", i),
@@ -249,8 +262,9 @@ func TestToolRegistry_SearchBM25LimitsAndCoreFiltering(t *testing.T) {
 		})
 	}
 
-	t.Run("BM25 limits and core filtering", func(t *testing.T) {
-		// Search with BM25 and a limit of maxSearchResults = 3
+	t.Run("BM25 limits and full-tier filtering", func(t *testing.T) {
+		// Search with BM25 and a limit of maxSearchResults = 3.
+		// The corpus now includes hidden tools AND visible lazy-tier tools.
 		res := reg.SearchBM25("match", 3)
 
 		if len(res) != 3 {
@@ -258,10 +272,15 @@ func TestToolRegistry_SearchBM25LimitsAndCoreFiltering(t *testing.T) {
 		}
 
 		for _, r := range res {
-			if r.Name == "core_match" {
-				t.Errorf("SearchBM25 returned a Core tool, which should be excluded")
+			// Full-tier tools (ManifestFull) must NEVER appear in BM25 results
+			// (they're always callable, no need to discover them via search).
+			if r.Name == "read_file" {
+				t.Errorf("SearchBM25 must not return full-tier tool %q (ManifestFull excluded from corpus)", r.Name)
 			}
 		}
+		// core_match_lazy (visible, ManifestLazy) MAY appear — that's the new
+		// widened behavior. We don't assert it must appear since BM25 ranking
+		// may not surface it in the top-3 with 10 hidden competitors.
 	})
 }
 
@@ -403,7 +422,7 @@ func TestToolsTool_Query_AutoLoad_MakesToolCallable(t *testing.T) {
 
 	tt := NewToolsTool(reg, 5, 10)
 	tt.SetResolver(
-		func(_ context.Context, name string) bool { return true },
+		func(_ context.Context, name string) (bool, string) { return true, "" },
 		func(_ context.Context, names []string) (map[string]any, []string) {
 			sc := make(map[string]any)
 			for _, n := range names {

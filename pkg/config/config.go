@@ -124,7 +124,6 @@ type Config struct {
 	Gateway   GatewayConfig                    `json:"gateway"             yaml:"-"`
 	Hooks     HooksConfig                      `json:"hooks,omitempty"     yaml:"-"`
 	Tools     ToolsConfig                      `json:"tools"               yaml:",inline"`
-	Heartbeat HeartbeatConfig                  `json:"heartbeat"           yaml:"-"`
 	Schedules SchedulesConfig                  `json:"schedules,omitempty" yaml:"-"`
 	Devices   DevicesConfig                    `json:"devices"             yaml:"-"`
 	Voice     VoiceConfig                      `json:"voice"               yaml:"-"`
@@ -2350,11 +2349,6 @@ func ValidateMailboxesCap1(mailboxes map[string]MailboxConfig) error {
 	return nil
 }
 
-type HeartbeatConfig struct {
-	Enabled  bool `json:"enabled"  env:"OMNIPUS_HEARTBEAT_ENABLED"`
-	Interval int  `json:"interval" env:"OMNIPUS_HEARTBEAT_INTERVAL"` // minutes, min 5
-}
-
 // SchedulesConfig holds global guardrail settings for scheduled agent runs
 // (#264). These are deliberately separate from agents.defaults.timeout_seconds
 // (which is intentionally 0/disabled): scheduled runs are unattended and need
@@ -2372,6 +2366,11 @@ type SchedulesConfig struct {
 	// resuming normal cadence. Default [60000,120000,300000].
 	RetryBackoffMs []int64 `json:"retry_backoff_ms,omitempty"`
 }
+
+// DefaultHeartbeatIntervalMinutes is the fallback interval used when a per-agent
+// heartbeat has no explicit interval set. The legacy global HeartbeatConfig (which
+// carried this value) is removed; callers now pass this constant directly.
+const DefaultHeartbeatIntervalMinutes = 30
 
 // Schedules config defaults (#264).
 const (
@@ -3274,12 +3273,6 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	}
 
 	migrateProviderFields(cfg)
-	// O6 heartbeat-is-per-agent: migrate the legacy GLOBAL heartbeat (enabled +
-	// interval) onto the default Main agent so an operator who had the global
-	// heartbeat on keeps a heartbeat after the move to per-agent persistence.
-	// Idempotent and conservative (only the default agent, only when it has no
-	// per-agent heartbeat yet).
-	migrateGlobalHeartbeatToAgent(cfg)
 	// O3 two-field model: split an existing combined primary slug
 	// ("openrouter/google/gemini-2.5-flash") into {primary, provider} so routing
 	// uses the explicit provider. Idempotent; runs after migrateProviderFields so
@@ -3359,53 +3352,6 @@ func migrateProviderFields(cfg *Config) {
 			p.Provider = protocol
 			p.Model = modelID
 		}
-	}
-}
-
-// migrateGlobalHeartbeatToAgent migrates the legacy GLOBAL heartbeat config
-// (cfg.Heartbeat.Enabled / .Interval) onto a per-agent heartbeat (O6). The old
-// model ran a single workspace-wide heartbeat; the new model is per-agent for
-// Main agents. To preserve behavior without surprising the operator, the global
-// value is applied to the DEFAULT agent only, and only when that agent is a Main
-// agent (not a worker/subagent) and has not already set its own heartbeat.
-//
-// Conservative + idempotent:
-//   - no-op when the global heartbeat is disabled AND its interval is unset (the
-//     common fresh-install case — nothing to migrate);
-//   - skips a default agent that is a worker (subagents never have a heartbeat);
-//   - skips when the default agent already carries a per-agent heartbeat
-//     (HeartbeatEnabled != nil), so a re-load never clobbers a user's per-agent
-//     choice.
-//
-// The global fields are intentionally LEFT in place (read-only legacy mirror) so
-// older code paths and configs round-trip; the agent loop reads the per-agent
-// fields going forward.
-func migrateGlobalHeartbeatToAgent(cfg *Config) {
-	if !cfg.Heartbeat.Enabled && cfg.Heartbeat.Interval == 0 {
-		return
-	}
-	// Find the default agent (the one with Default=true); fall back to none.
-	idx := -1
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].Default {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return
-	}
-	a := &cfg.Agents.List[idx]
-	if a.Type == AgentTypeWorker {
-		return // subagents never have a heartbeat
-	}
-	if a.HeartbeatEnabled != nil {
-		return // already migrated / operator-set — do not clobber
-	}
-	enabled := cfg.Heartbeat.Enabled
-	a.HeartbeatEnabled = &enabled
-	if a.HeartbeatInterval == 0 && cfg.Heartbeat.Interval > 0 {
-		a.HeartbeatInterval = cfg.Heartbeat.Interval
 	}
 }
 

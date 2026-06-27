@@ -385,12 +385,12 @@ func setAgentHeartbeat(ag *gen.Agent, ac config.AgentConfig, cfg *config.Config)
 	if ac.HeartbeatEnabled != nil {
 		ag.HeartbeatEnabled = *ac.HeartbeatEnabled
 	} else {
-		ag.HeartbeatEnabled = cfg.Heartbeat.Enabled
+		ag.HeartbeatEnabled = false
 	}
 	if ac.HeartbeatInterval > 0 {
 		ag.HeartbeatInterval = ac.HeartbeatInterval
 	} else {
-		ag.HeartbeatInterval = cfg.Heartbeat.Interval
+		ag.HeartbeatInterval = config.DefaultHeartbeatIntervalMinutes
 	}
 }
 
@@ -1372,8 +1372,8 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
 		MaxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
 		SteeringMode:      sm,
-		HeartbeatEnabled:  cfg.Heartbeat.Enabled,
-		HeartbeatInterval: cfg.Heartbeat.Interval,
+		HeartbeatEnabled:  false,
+		HeartbeatInterval: config.DefaultHeartbeatIntervalMinutes,
 		// Required string fields — initialized to empty (overwritten per-agent).
 		Soul:         "",
 		Heartbeat:    "",
@@ -2714,9 +2714,9 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				delete(agentMap, "default")
 			}
 		}
-		// O6: heartbeat is now per-agent (written inside the agent-found block
-		// above), no longer a global block. The global cfg.Heartbeat mirror is
-		// left untouched for legacy round-trip.
+		// O6: heartbeat is now fully per-agent (written inside the agent-found
+		// block above). The legacy global heartbeat block was removed; there is
+		// no cfg.Heartbeat mirror to maintain.
 		return nil
 	}); err != nil {
 		if errors.Is(err, errConflict) {

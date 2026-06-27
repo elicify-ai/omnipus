@@ -496,10 +496,6 @@ omnipus agent -m "Hello"
     "cron": {
       "exec_timeout_minutes": 5
     }
-  },
-  "heartbeat": {
-    "enabled": true,
-    "interval": 30
   }
 }
 ```

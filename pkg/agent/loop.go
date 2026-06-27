@@ -1823,25 +1823,42 @@ func registerSharedTools(
 
 				toolsTool := tools.NewToolsTool(agent.Tools, ttl, maxResults)
 				toolsTool.SetResolver(
-					// canLoad: true iff name is a real policy-allowed LAZY tool for the
-					// calling agent (infra/full tools are already callable — not loadable).
-					func(ctx context.Context, name string) bool {
+					// canLoad returns (true, "") when name is a policy-allowed LAZY tool for
+					// the calling agent. Full/infra tools are handled before this call (they
+					// return a no-op success in execLoad). When denied, the returned reason
+					// string is surfaced verbatim in the load_tool error message.
+					func(ctx context.Context, name string) (bool, string) {
 						callerID := tools.ToolAgentID(ctx)
 						if callerID == "" {
 							callerID = capturedAgentID
 						}
 						callerAgent, ok := al.registry.GetAgent(callerID)
 						if !ok {
-							return false
-						}
-						if tools.ToolManifestTier(name) != tools.ManifestLazy {
-							return false
+							return false, name + " — agent not found"
 						}
 						allAgentTools := callerAgent.Tools.GetAll()
 						policyFiltered, _ := tools.FilterToolsByPolicy(allAgentTools, callerAgent.AgentType, callerAgent.LoadToolPolicy())
+						// Tier gate: full/infra tools are already callable — they never
+						// need to be loaded. Check policy FIRST so a denied full-tier tool
+						// gets a clear "denied" signal rather than a false "already available"
+						// (F4 fix). If policy allows a full-tier tool, return the sentinel
+						// "already available; just call it directly" reason so execLoad can
+						// treat it as a no-op success rather than a load.
+						if tools.ToolManifestTier(name) != tools.ManifestLazy {
+							for _, t := range policyFiltered {
+								if t.Name() == name {
+									// Policy-allowed full-tier: signal as "already available"
+									// using the typed sentinel so execLoad can distinguish
+									// this from a policy denial without substring matching.
+									return false, tools.CanLoadAlreadyAvailablePrefix + " — just call it directly"
+								}
+							}
+							// Policy-denied full-tier (or genuinely not found for this tier).
+							return false, name + " — denied by this agent's policy"
+						}
 						for _, t := range policyFiltered {
 							if t.Name() == name {
-								return true
+								return true, ""
 							}
 						}
 						// Hidden tools (deferred MCP tools registered via RegisterHidden)
@@ -1855,10 +1872,24 @@ func registerSharedTools(
 						if hiddenTool, hok := callerAgent.Tools.GetIncludingHidden(name); hok {
 							hiddenAllowed, _ := tools.FilterToolsByPolicy([]tools.Tool{hiddenTool}, callerAgent.AgentType, callerAgent.LoadToolPolicy())
 							if len(hiddenAllowed) > 0 {
-								return true
+								return true, ""
+							}
+							// Tool exists (visible or hidden) but policy denies it.
+							return false, name + " — denied by this agent's policy"
+						}
+						// Tool is not in GetAll() and not hidden — check if it's in the full
+						// registered set but policy-filtered out (i.e. registered but denied).
+						for _, t := range allAgentTools {
+							if t.Name() == name {
+								return false, name + " — denied by this agent's policy"
 							}
 						}
-						return false
+						// Genuinely unknown: suggest the closest registered name so the model
+						// can correct a hallucinated or transposed name (C4 fix).
+						if suggestion := tools.FindClosestToolName(allAgentTools, name); suggestion != "" {
+							return false, name + " — unknown tool (did you mean '" + suggestion + "'?)"
+						}
+						return false, name + " — unknown tool name"
 					},
 					// markLoaded: fetches schemas FIRST, marks only successfully resolved
 					// names as loaded, and returns any names that could not be resolved in
@@ -4012,36 +4043,6 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	return resp, err
 }
 
-// ProcessHeartbeat processes a heartbeat request without session history.
-// Each heartbeat is independent and doesn't accumulate context.
-func (al *AgentLoop) ProcessHeartbeat(
-	ctx context.Context,
-	content, channel, chatID string,
-) (string, error) {
-	if err := al.ensureHooksInitialized(ctx); err != nil {
-		return "", err
-	}
-	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return "", err
-	}
-
-	agent := al.GetRegistry().GetDefaultAgent()
-	if agent == nil {
-		return "", fmt.Errorf("no default agent for heartbeat")
-	}
-	return al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:           "heartbeat",
-		Channel:              channel,
-		ChatID:               chatID,
-		UserMessage:          content,
-		DefaultResponse:      defaultResponse,
-		EnableSummary:        false,
-		SendResponse:         false,
-		SuppressToolFeedback: true,
-		NoHistory:            true, // Don't load session history for heartbeat
-	})
-}
-
 // ProcessScheduled runs a fired schedule's message as ownerAgentID against the
 // concrete pre-created sessionID (issue #264, W-1). It is the dedicated headless
 // entry point for the cron → agent fire path and deliberately differs from the
@@ -5393,6 +5394,13 @@ turnLoop:
 			})
 
 		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
+			// Normalize at the top of every provider call — initial and every
+			// retry/recovery — so that timeout-recovery and context-overflow-recovery
+			// paths (which rebuild callMessages via BuildMessages and continue back
+			// here) are always normalized. The fast path is allocation-free on valid
+			// histories, so per-call cost is negligible.
+			messagesForCall = normalizeMessagesForProvider(messagesForCall)
+
 			providerCtx, providerCancel := context.WithCancel(turnCtx)
 			ts.setProviderCancel(providerCancel)
 			defer func() {

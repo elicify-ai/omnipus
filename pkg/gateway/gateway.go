@@ -118,9 +118,8 @@ func (r *configSelfWriteRegistry) consume(h [32]byte) bool {
 }
 
 type services struct {
-	CronService      *cron.CronService
-	TaskTrigger      *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
-	HeartbeatService *heartbeat.HeartbeatService
+	CronService *cron.CronService
+	TaskTrigger *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
 	// TaskDrain owns the queued-task (`next` → dispatch) poll unconditionally,
 	// independent of which heartbeat path is active. The legacy HeartbeatService
 	// is skipped when a per-agent heartbeat is active, so the drain cannot live
@@ -1047,24 +1046,22 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 // servicesSnapshot captures all fields that restartServices and executeReload
 // mutate, so they can be atomically restored on reload failure.
 type servicesSnapshot struct {
-	bundle           credentials.SecretBundle
-	ChannelManager   *channels.Manager
-	CronService      *cron.CronService
-	TaskTrigger      *agent.TaskTriggerScheduler
-	HeartbeatService *heartbeat.HeartbeatService
-	MediaStore       media.MediaStore
-	DeviceService    *devices.Service
+	bundle         credentials.SecretBundle
+	ChannelManager *channels.Manager
+	CronService    *cron.CronService
+	TaskTrigger    *agent.TaskTriggerScheduler
+	MediaStore     media.MediaStore
+	DeviceService  *devices.Service
 }
 
 func snapshotServices(svc *services) servicesSnapshot {
 	return servicesSnapshot{
-		bundle:           svc.bundle,
-		ChannelManager:   svc.ChannelManager,
-		CronService:      svc.CronService,
-		TaskTrigger:      svc.TaskTrigger,
-		HeartbeatService: svc.HeartbeatService,
-		MediaStore:       svc.MediaStore,
-		DeviceService:    svc.DeviceService,
+		bundle:         svc.bundle,
+		ChannelManager: svc.ChannelManager,
+		CronService:    svc.CronService,
+		TaskTrigger:    svc.TaskTrigger,
+		MediaStore:     svc.MediaStore,
+		DeviceService:  svc.DeviceService,
 	}
 }
 
@@ -1073,7 +1070,6 @@ func restoreServices(svc *services, snap servicesSnapshot) {
 	svc.ChannelManager = snap.ChannelManager
 	svc.CronService = snap.CronService
 	svc.TaskTrigger = snap.TaskTrigger
-	svc.HeartbeatService = snap.HeartbeatService
 	svc.MediaStore = snap.MediaStore
 	svc.DeviceService = snap.DeviceService
 }
@@ -1218,17 +1214,10 @@ func setupAndStartServices(
 	}
 	fmt.Println("✓ Cron service started")
 
-	// O6 — "heartbeat IS a schedule." Reconcile per-agent heartbeats into the
+	// O6 — "heartbeat IS a schedule." Per-agent heartbeats are reconciled into the
 	// cron engine: every Main agent with an enabled per-agent heartbeat gets a
 	// recurring schedule that runs its HEARTBEAT.md. Best-effort: a reconcile
 	// failure is logged but does not abort boot.
-	perAgentHeartbeatActive := false
-	for i := range cfg.Agents.List {
-		if !cfg.Agents.List[i].IsWorker() && cfg.Agents.List[i].HeartbeatIsEnabled() {
-			perAgentHeartbeatActive = true
-			break
-		}
-	}
 	if hbErr := ReconcileHeartbeatSchedules(
 		runningServices.CronService,
 		cfg,
@@ -1242,13 +1231,10 @@ func setupAndStartServices(
 	); hbErr != nil {
 		slog.Warn("gateway: heartbeat schedule reconcile failed", "error", hbErr)
 	}
+	fmt.Println("✓ Heartbeat running as per-agent schedules")
 
 	// Queued-task draining (dispatch of `next` tasks) is owned UNCONDITIONALLY by
-	// the dedicated TaskDrainService below — never by the heartbeat path. This is
-	// the fix for the silent-failure where enabling any per-agent heartbeat skipped
-	// the legacy global HeartbeatService (the historical sole caller of
-	// CheckQueuedTasks), so `next` tasks never dispatched (no log, no error). The
-	// drain runs regardless of which heartbeat path is active.
+	// the dedicated TaskDrainService — never by the heartbeat path.
 	if te := agent.GetTaskExecutor(agentLoop); te != nil {
 		runningServices.TaskDrain = heartbeat.NewTaskDrainService(te, 0)
 		runningServices.TaskDrain.Start()
@@ -1270,28 +1256,6 @@ func setupAndStartServices(
 		runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
 		runningServices.MailboxDrain.Start()
 		fmt.Println("✓ Mailbox drain owned by: MailboxDrainService (unhandled mail → Board)")
-	}
-
-	// Legacy global heartbeat service: the per-agent schedule path (above) is the
-	// O6 source of truth. To avoid double-firing, only start the legacy
-	// workspace-wide heartbeat when NO per-agent heartbeat is configured (e.g. a
-	// config that predates the migration AND has no default-agent heartbeat).
-	// NOTE: the legacy service no longer owns the queued-task poll — the
-	// TaskDrainService above does — so it runs ONLY the HEARTBEAT.md prompt half.
-	if !perAgentHeartbeatActive {
-		runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
-			cfg.WorkspacePath(),
-			cfg.Heartbeat.Interval,
-			cfg.Heartbeat.Enabled,
-		)
-		runningServices.HeartbeatService.SetBus(msgBus)
-		runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
-		if err = runningServices.HeartbeatService.Start(); err != nil {
-			return nil, fmt.Errorf("error starting heartbeat service: %w", err)
-		}
-		fmt.Println("✓ Heartbeat service started (HEARTBEAT.md prompt only)")
-	} else {
-		fmt.Println("✓ Heartbeat running as per-agent schedules (legacy global service skipped)")
 	}
 
 	// Task time-trigger executor: fires once/every/recurring task triggers via a
@@ -1842,9 +1806,6 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.DeviceService != nil {
 		runningServices.DeviceService.Stop()
 	}
-	if runningServices.HeartbeatService != nil {
-		runningServices.HeartbeatService.Stop()
-	}
 	if runningServices.TaskDrain != nil {
 		runningServices.TaskDrain.Stop()
 	}
@@ -2037,18 +1998,6 @@ func restartServices(
 		runningServices.MailboxDrain.Start()
 		fmt.Println("  ✓ Mailbox drain restarted (MailboxDrainService)")
 	}
-
-	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
-		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
-		cfg.Heartbeat.Enabled,
-	)
-	runningServices.HeartbeatService.SetBus(msgBus)
-	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(al))
-	if err = runningServices.HeartbeatService.Start(); err != nil {
-		return fmt.Errorf("error restarting heartbeat service: %w", err)
-	}
-	fmt.Println("  ✓ Heartbeat service restarted (HEARTBEAT.md prompt only)")
 
 	// N-D fix: build and wire the NEW store BEFORE stopping the old one so that
 	// any upload whose scheduleSave fires in the narrow window between the Stop
@@ -2335,23 +2284,6 @@ func shouldWarnPreviewOrigin(previewHost, previewOrigin string) bool {
 		return false
 	}
 	return previewHost == "0.0.0.0" || previewHost == "::"
-}
-
-func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, chatID string) *tools.ToolResult {
-	return func(prompt, channel, chatID string) *tools.ToolResult {
-		if channel == "" || chatID == "" {
-			channel, chatID = "cli", "direct"
-		}
-
-		response, err := agentLoop.ProcessHeartbeat(context.Background(), prompt, channel, chatID)
-		if err != nil {
-			return tools.ErrorResult(fmt.Sprintf("Heartbeat error: %v", err))
-		}
-		if response == "HEARTBEAT_OK" {
-			return tools.SilentResult("Heartbeat OK")
-		}
-		return tools.SilentResult(response)
-	}
 }
 
 // emitGHSARemovalWarn logs a WARN when any agent that has a remote channel
