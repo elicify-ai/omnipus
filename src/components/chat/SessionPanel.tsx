@@ -3,6 +3,7 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   Circle,
   ListChecks,
+  Clock,
   Trash,
   MagnifyingGlass,
   CaretDown,
@@ -184,6 +185,7 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
         : []
 
   const isTask = session.type === 'task'
+  const isScheduled = session.type === 'scheduled'
 
   if (confirmDelete) {
     return (
@@ -249,6 +251,13 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
               {isTask && (
                 <ListChecks size={10} className="text-[var(--color-accent)] shrink-0" />
               )}
+              {isScheduled && (
+                <Clock
+                  size={10}
+                  className="text-[var(--color-muted)] shrink-0"
+                  aria-label="Scheduled session"
+                />
+              )}
               <span className="truncate text-xs">{session.title || UNTITLED_SESSION}</span>
               {isStreaming && !isActive && (
                 // Background session is generating — pulse dot so the user knows work is in progress.
@@ -268,6 +277,14 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
               className={cn('text-[9px] h-4 px-1', taskStatusStyle(session.status).color)}
             >
               {taskStatusStyle(session.status).label}
+            </Badge>
+          )}
+          {isScheduled && (
+            <Badge
+              variant="outline"
+              className="text-[9px] h-4 px-1 text-[var(--color-muted)]"
+            >
+              Scheduled
             </Badge>
           )}
           {session.total_tokens != null && session.total_tokens > 0 && (

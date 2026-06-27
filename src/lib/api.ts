@@ -766,7 +766,7 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   id: string
   agent_id: string
   title: string
-  type: 'chat' | 'task' | 'channel'
+  type: 'chat' | 'task' | 'channel' | 'scheduled'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string
@@ -789,7 +789,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   id: string
   agent_id: string
   title: string
-  type?: 'chat' | 'task' | 'channel'
+  type?: 'chat' | 'task' | 'channel' | 'scheduled'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string

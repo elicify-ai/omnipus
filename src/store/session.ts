@@ -28,7 +28,7 @@ interface SessionStore {
   setActiveAgentType: (type: AgentKind | null) => void
 
   // Attached session context — tracks when viewing a task/channel session
-  attachedSessionType: 'chat' | 'task' | 'channel' | null
+  attachedSessionType: 'chat' | 'task' | 'channel' | 'scheduled' | null
   attachedTaskTitle: string | null
   attachToSession: (
     sessionId: string,
