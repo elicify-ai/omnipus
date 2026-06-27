@@ -4,7 +4,7 @@
 </head><body>
 <header><div class="wrap navrow">
   <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
-  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html" class="active">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="tools-catalog.html">Tool Catalog</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html" class="active">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="tools-catalog.html">Tool Catalog</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="context.html">Context</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
 </div></header>
 
 <div class="wrap"><div class="hero">
@@ -252,6 +252,167 @@
       <li>Agent personas stay global; only the workspace room (shared) and the private bank (agent-wide) carry per-workspace memory</li>
     </ul></div>
   </div>
+</div></section>
+
+<!-- FILESYSTEM + SANDBOX + PROMPT ENGINE (TO-BE) -->
+<section id="filesystem"><div class="wrap">
+  <div class="eyebrow">Filesystem · sandbox · prompt engine</div>
+  <h2>An agent <span class="gold">works inside the Workspace</span> <span class="tag t-new" style="vertical-align:middle">draft to-be · needs ADR</span></h2>
+  <p class="sub">Today (v0.1.0) the concept and the code disagree: an agent's files, <span class="mono">exec</span> cwd and sandbox root all live in its <b>own</b> <span class="mono">agents/&lt;id&gt;/</span> dir (FUNC-11), and the Workspace only owns tasks + shared memory. The Workspaces concept says the opposite — <b>an agent always works <i>in</i> a Workspace</b>. This draft realigns the <b>folder structure</b>, the <b>sandbox root</b>, and the <b>prompt engine</b> to the concept. <span class="red">Behavioural change — not just naming; gated behind an ADR.</span></p>
+
+  <div class="callout r"><b>The contradiction we're fixing.</b> <span class="mono">write_file</span> · <span class="mono">exec</span> · <span class="mono">edit_file</span> are built with one fixed base dir = <span class="mono">agents/&lt;id&gt;/</span> (<span class="mono">instance.go</span>). The per-turn <span class="mono">workspace_id</span> is threaded only into tasks / todos / shared-memory — never into the file tools. So an agent never actually <span class="mono">cd</span>s into the Workspace it's acting in. The word "workspace" in the prompt today means the agent's <i>own</i> dir — the legacy meaning, which collides with the container.</p></div>
+
+  <h3 style="margin-top:24px">Folder structure — as-is → to-be</h3>
+  <div class="grid g2" style="margin-top:8px">
+    <div class="fig" style="padding:18px">
+      <div class="figcap" style="text-align:left;margin:0 0 8px;color:var(--amber)">AS-IS (v0.1.0) — agent works in its own dir</div>
+      <div class="mono" style="white-space:pre;font-size:.78rem;color:#cdd3de;line-height:1.5">$OMNIPUS_HOME/
+├─ <span class="amber">agents/&lt;id&gt;/</span>            ← agent works HERE
+│   ├─ files · exec cwd · scratch
+│   ├─ skills/
+│   ├─ sessions/
+│   └─ .omnipus/memories/   private
+└─ workspaces/&lt;ws_id&gt;/      ← only bookkeeping
+    ├─ &lt;ws_id&gt;.json         record
+    └─ .omnipus/memories/   shared</div>
+    </div>
+    <div class="fig" style="padding:18px;border-color:var(--gold-dim)">
+      <div class="figcap" style="text-align:left;margin:0 0 8px;color:var(--green)">TO-BE — agent works in the Workspace</div>
+      <div class="mono" style="white-space:pre;font-size:.78rem;color:#cdd3de;line-height:1.5">$OMNIPUS_HOME/
+├─ <span class="blue">agents/&lt;id&gt;/</span>            ← identity + private bank only
+│   ├─ SOUL.md               <span class="green">persona (global ✓ stays)</span>
+│   ├─ sessions/             (tagged by workspace_id)
+│   └─ .omnipus/memories/   <span class="green">private ✓ stays</span>
+└─ <span class="gold">workspaces/&lt;ws_id&gt;/</span>      ← agent WORKS here
+    ├─ &lt;project files&gt;       <span class="green">write_file · exec cwd</span>
+    ├─ AGENT.md              <span class="gold">Project Instructions (Settings tab)</span>
+    ├─ tasks/ todos/ calendar
+    └─ .omnipus/memories/   shared
+
+<span class="muted">skills are NOT here — global registry (below):</span>
+~/.omnipus/skills/          <span class="blue">global registry (+ ClawHub)</span>
+&lt;builtin&gt;/skills/           <span class="blue">shipped</span>
+   → per-agent <span class="green">allowlist</span> (FR-9.4)</div>
+    </div>
+  </div>
+  <p class="note" style="margin-top:6px">The agent's <span class="mono">agents/&lt;id&gt;/</span> dir shrinks to what genuinely belongs to the <b>agent</b> across all Workspaces: its persona/config, its sessions (already tagged by <span class="mono">workspace_id</span>), and its <b>private cross-workspace memory</b>. Everything that is <b>work</b> moves into the Workspace.</p>
+
+  <div class="callout b"><b>Skills stay a global registry — not per-Workspace.</b> Today skills load from <b>three roots</b> (<span class="mono">skills/loader.go</span>): <b>builtin</b> (<span class="mono">&lt;cwd&gt;/skills/</span>, shipped) + <b>global</b> (<span class="mono">~/.omnipus/skills/</span>, incl. ClawHub) + a per-agent overlay (<span class="mono">agents/&lt;id&gt;/skills/</span>). Access is governed by a <b>per-agent allowlist</b> (<span class="mono">WithSkillAllowlist</span>, <b>FR-9.4</b>, default-DENY) — the prompt's <span class="mono"># Skills</span> summary is filtered to just what each agent may use, <b>exactly the selective-access model used for tools</b>. So this redesign <b>keeps skills global + allowlisted</b>; it does <b>not</b> introduce a per-Workspace skill store. <span class="muted">(Open option for the ADR: if the per-agent skills overlay re-points at the Workspace as a side effect of re-rooting, "skills available in this Workspace" could become an opt-in — but that's a deliberate choice, not today's behaviour.)</span></div>
+
+  <div class="grid g2" style="margin-top:18px">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>🛡️ Sandbox follows the Workspace</h3><ul class="clean">
+      <li><b>Writable root = the active Workspace</b> — <span class="mono">workspaces/&lt;ws_id&gt;/</span>. Landlock/seccomp grant write there, not in a per-agent dir</li>
+      <li>The agent's <b>private memory dir</b> (<span class="mono">agents/&lt;id&gt;/.omnipus/</span>) is allow-listed as a second writable path — so private recall keeps working without widening the sandbox</li>
+      <li><b>Cross-workspace isolation</b> — acting in Workspace A, the kernel denies reads/writes to Workspace B's tree. Switching Workspaces re-scopes the sandbox for the next turn</li>
+      <li>Sandbox is re-derived per turn from <span class="mono">workspace_id</span> (same signal that already routes tasks + shared memory)</li>
+    </ul></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>🧩 Prompt engine — Workspace Project Instructions <span class="tag t-new">one field · Settings tab</span></h3><ul class="clean">
+      <li>A <b>single Workspace-level</b> instruction block (the Workspace's <span class="mono">AGENT.md</span>) — <b>not per-agent</b>. Like a project <span class="mono">CLAUDE.md</span></li>
+      <li>Edited in the <b>existing Workspace → Settings tab</b> as "<b>Workspace / Project Instructions</b>" — one textarea, no new editor</li>
+      <li>Injected as a <b>context layer</b> for <b>every</b> agent acting in the Workspace; absent → nothing added (zero overhead)</li>
+      <li>The agent's <b>persona (<span class="mono">SOUL.md</span>) stays global</b>; the Workspace adds <b>"how we work on this project"</b> on top. See the <a href="context.html">Context Builder</a> layer model</li>
+    </ul></div>
+  </div>
+
+  <h3 style="margin-top:24px">Where the per-Workspace <span class="mono">AGENT.md</span> slots into the prompt</h3>
+  <table>
+    <thead><tr><th>Layer</th><th>Scope</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>① Environment (paths · sandbox · memory · tools)</td><td>universal</td><td class="mono">harness</td></tr>
+      <tr><td>② Identity + general Rules</td><td>universal</td><td class="mono">harness</td></tr>
+      <tr><td>③ SOUL — persona</td><td>per-agent (global)</td><td class="mono">agents/&lt;id&gt;/ (compiled or SOUL.md)</td></tr>
+      <tr><td class="gold"><b>③·④ Workspace Project Instructions <span class="tag t-new">Settings tab</span></b></td><td class="gold"><b>per-Workspace</b></td><td class="mono gold">workspaces/&lt;ws_id&gt;/AGENT.md</td></tr>
+      <tr><td>④ Skills · ⑤ Memory (shared room now = this Workspace)</td><td>per-agent / per-Workspace</td><td class="mono">workspace + agent</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout"><b>Net effect.</b> "An agent works in a Workspace" becomes literally true: its files, sandbox, shared memory, tasks and per-Workspace <span class="mono">AGENT.md</span> are all the Workspace it's in; only its <b>persona (SOUL)</b> and <b>private memory</b> follow the agent across Workspaces. The prompt can then honestly say <i>"You are working in Workspace &lt;name&gt;"</i> — no collision left. <span class="muted">Scope/ordering: this is a structural change (folder move + sandbox re-rooting + relocating AGENT.md) — it belongs to the Workspaces redesign and needs its own ADR + migration, not the v0.1.0 stabilization line.</span></div>
+
+  <div class="callout b"><b>Why this is the simple version.</b> Because the Workspace instruction is <b>one block for the whole Workspace</b> (not a per-agent override), the hard questions vanish: <b>no per-agent keying, no per-field merge policy</b>. It's <b>additive</b> — appended as a context layer like a project <span class="mono">CLAUDE.md</span>, on top of each agent's global persona. An agent in a Workspace with no instructions behaves exactly as today. Agents stay <b>global</b>; only the Workspace gains a setting.</div>
+</div></section>
+
+<!-- IMPACT ASSESSMENT -->
+<section id="impact-assessment"><div class="wrap">
+  <div class="eyebrow">Impact assessment · code-grounded</div>
+  <h2>What this change <span class="gold">actually touches</span></h2>
+  <p class="sub">Mapped against the live code (<span class="mono">feat/0.1.0-uat-fixes</span>). Verdict: <b>feasible, but a structural multi-layer change</b> with <b>one hard kernel constraint</b> and a <b>new frontend axis</b>. Not a v0.1.0 item — its own ADR + phased migration.</p>
+
+  <div class="callout"><b>The crux — one sentence.</b> Today <b>everything is bound once, at agent construction, to a fixed root</b>: the file/exec tools, the sandbox policy, the ContextBuilder + its prompt cache. The proposal needs them <b>per-turn, following <span class="mono">workspace_id</span></b>. Exactly one thing in the codebase already does that correctly — <b>memory's <span class="mono">SetWorkspaceID</span></b> swaps the shared room per turn under a lock. That is the template every other layer has to copy.</p></div>
+
+  <table>
+    <thead><tr><th>Layer</th><th>Key touchpoints (today)</th><th>What has to change</th><th>Effort / risk</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Filesystem</b></td>
+        <td class="mono src">resolveAgentWorkspace · agents/&lt;id&gt;/ tree</td>
+        <td>Move working files → <span class="mono">workspaces/&lt;ws_id&gt;/</span>; keep sessions + private memory in <span class="mono">agents/&lt;id&gt;/</span>; one-time migration (no framework for this today)</td>
+        <td><span class="lvl l-md"><i></i></span> <span class="amber">medium</span></td>
+      </tr>
+      <tr>
+        <td><b>Backend engine</b></td>
+        <td class="mono src">instance.go:149-162 (6 file/exec tools) · loop.go wireExecToolDeps</td>
+        <td>Tools store the root as an <b>immutable field</b> — must resolve workspace <b>at Execute-time from context</b> (the <span class="mono">WithWorkspaceID</span> signal already exists, just unused by file tools)</td>
+        <td><span class="lvl l-hi"><i></i></span> <span class="red">high</span></td>
+      </tr>
+      <tr>
+        <td><b>Sandbox</b></td>
+        <td class="mono src">loop.go:~1089 SandboxPolicy · Landlock backend</td>
+        <td><b>Landlock is one-shot &amp; process-global</b> — can't re-root per turn at the kernel. See blocker ①</td>
+        <td><span class="lvl l-hi"><i></i></span> <span class="red">critical</span></td>
+      </tr>
+      <tr>
+        <td><b>Context engine</b></td>
+        <td class="mono src">context.go (fixed cb.workspace + per-agent cache) · definition.go (single-root loader)</td>
+        <td>Inject one Workspace instruction block per turn + a per-(agent, workspace) cache key. <b>No merge policy</b> (single additive block). See blocker ②</td>
+        <td><span class="lvl l-md"><i></i></span> <span class="amber">medium</span></td>
+      </tr>
+      <tr>
+        <td><b>Frontend</b></td>
+        <td class="mono src">AgentProfile · WorkspaceTeamTab · api.ts · Agent.yaml</td>
+        <td>One new <span class="mono">instructions</span> field on the Workspace type + a textarea in the <b>existing Settings tab</b>. No per-agent editor, no new endpoint. See below</td>
+        <td><span class="lvl l-lo"><i></i></span> <span class="green">low</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="grid g2" style="margin-top:18px">
+    <div class="callout r" style="margin:0"><b>① Critical blocker — Landlock can't re-root per turn.</b> The production sandbox calls <span class="mono">landlock_restrict_self()</span> <b>once per process</b>; the ruleset is immutable afterward. A per-turn writable root <b>cannot be kernel-enforced</b>. Options: <b>(a)</b> exec children stay pinned to a static root (weakens the "works in the Workspace" promise for exec); <b>(b)</b> spawn a fresh sandboxed child process per workspace-scoped exec; <b>(c)</b> per-turn enforcement only in the app-level fallback backend (degraded security). This is the one genuinely hard problem.</div>
+    <div class="callout r" style="margin:0"><b>② Critical blocker — the prompt cache goes incoherent.</b> One <span class="mono">ContextBuilder</span> per agent holds a <b>fixed <span class="mono">workspace</span></b> + one cached prompt, shared across turns <i>and</i> sub-turns. Same agent in <span class="mono">ws1</span> then <span class="mono">ws2</span> returns the <b>stale ws1 prompt</b> — invalidation only watches <span class="mono">agents/&lt;id&gt;/</span>, never the active Workspace. Fix: key the cache per-(agent, workspace) and thread the active workspace through ~8 <span class="mono">cb.workspace</span> sites.</div>
+  </div>
+</div></section>
+
+<!-- FRONTEND DEEP-DIVE -->
+<section><div class="wrap">
+  <div class="eyebrow">Frontend · the simple path</div>
+  <h2>Edited in the <span class="gold">Workspace → Settings tab</span> that already exists</h2>
+  <p class="sub">No per-agent override, no dual-mode editor. The Workspace detail already has a <b>Settings tab</b> (<span class="mono">workspaces.$workspaceId.settings.tsx</span>), and the <span class="mono">Workspace</span> record already carries <span class="mono">name · description · core_team · repository</span>. The per-Workspace instruction is just a new <b>"Workspace / Project Instructions"</b> textarea there — one field, one place, applied to every agent in the Workspace. Agents stay global.</p>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>✅ One textarea in Settings</h3><ul class="clean">
+      <li>Add a <b>Project Instructions</b> field to the existing <span class="mono">Settings</span> tab</li>
+      <li>Saved via the <b>existing</b> Workspace <span class="mono">PUT</span> — no new editor, no per-agent UI</li>
+      <li>The global <b>Agents screen is untouched</b> — <span class="mono">AgentProfile</span> stays exactly as is</li>
+    </ul></div>
+    <div class="card"><h3>📜 One new wire field</h3><ul class="clean">
+      <li>Add <span class="mono">instructions</span> to <span class="mono">Workspace.yaml</span> — the record is already the right home</li>
+      <li>Contract-first (#8): schema → regen Go + TS + Zod</li>
+      <li><b>No new endpoint</b> — the Workspace GET/PUT already exist</li>
+    </ul></div>
+    <div class="card"><h3>🎯 What it deletes from the plan</h3><ul class="clean">
+      <li><b>No</b> <span class="mono">WorkspaceAgentOverride</span> type · <b>no</b> per-agent endpoints</li>
+      <li><b>No</b> dual-mode <span class="mono">AgentProfile</span> · <b>no</b> Team-tab routing change</li>
+      <li>Frontend effort: <b>high → low</b></li>
+    </ul></div>
+  </div>
+  <div class="callout g"><b>The simplification.</b> Treating the per-Workspace instruction as a <b>Workspace setting</b> (not a per-agent <span class="mono">AGENT.md</span> override) removes the entire "global base vs workspace override" problem from the frontend AND the merge policy from the backend. The UI change is <b>one field in a tab that already exists</b>. The only hard work left is the backend re-rooting (blocker ①) and the workspace-aware prompt cache (blocker ②) — both independent of how the instruction is edited.</div>
+
+  <h3 style="margin-top:24px">Suggested phasing</h3>
+  <div class="rail" style="grid-template-columns:repeat(4,1fr)">
+    <div class="phase"><div class="n">1</div><h4>Per-turn root</h4><p>Resolve file/exec workspace at Execute-time from <span class="mono">workspace_id</span>; sessions + private memory stay agent-scoped. Fallback backend first.</p></div>
+    <div class="phase"><div class="n">2</div><h4>Context + cache</h4><p>Inject the Workspace instruction as a context layer; per-(agent,workspace) cache key. Copy the <span class="mono">SetWorkspaceID</span> pattern. No merge policy.</p></div>
+    <div class="phase"><div class="n">3</div><h4>Sandbox decision</h4><p>ADR picks (a) static exec root, (b) per-exec child, or (c) fallback-only. The gating call.</p></div>
+    <div class="phase"><div class="n">4</div><h4>Settings field</h4><p>One <span class="mono">instructions</span> field on <span class="mono">Workspace.yaml</span> + a textarea in the existing Settings tab. Low effort, no new endpoint.</p></div>
+  </div>
+  <div class="callout"><b>Bottom line.</b> With the instruction simplified to a Workspace setting, the <b>frontend is cheap</b> and the <span class="mono">AGENT.md</span> merge policy disappears. What remains is genuinely backend: <b>re-rooting file/exec per Workspace</b> (blocker ① — the Landlock ceiling) and a <b>workspace-aware prompt cache</b> (blocker ②). Recommend an <b>ADR</b> that locks just the <b>sandbox decision</b> — everything else is now mechanical, and the existing per-turn <span class="mono">workspace_id</span> plumbing (memory/tasks/todos already ride it) means the signal is already there.</div>
 </div></section>
 
 <!-- MY WORKSPACE -->
