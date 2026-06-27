@@ -314,63 +314,79 @@ describe('SessionPanel — per-session isStreaming dot (F-S11)', () => {
   })
 })
 
-// ── Channel grouping tests ────────────────────────────────────────────────────
+// ── Workspace grouping tests ──────────────────────────────────────────────────
+//
+// These tests exercise the session list grouped BY WORKSPACE. Each group is
+// collapsible and its header shows the workspace name + session count.
+// Sessions with no workspace link fall under a "No workspace" fallback group.
+// The active workspace (when set) is placed first in the list.
 
-// Test A: webchat-only sessions render flat list (no group headers)
-describe('SessionPanel — channel grouping: webchat-only renders flat list (Test A)', () => {
+// Helper sessions for workspace grouping tests
+const wsGroupSessions = [
+  {
+    id: 'sess-ws1-1',
+    agent_id: 'agent-chat-1',
+    active_agent_id: 'agent-chat-1',
+    title: 'Alpha Project Session',
+    type: 'chat' as const,
+    channel: 'webchat',
+    created_at: '2026-04-01T00:00:00Z',
+    updated_at: '2026-04-01T02:00:00Z',
+    message_count: 2,
+  },
+  {
+    id: 'sess-ws2-1',
+    agent_id: 'agent-chat-1',
+    active_agent_id: 'agent-chat-1',
+    title: 'Beta Project Session',
+    type: 'chat' as const,
+    channel: 'webchat',
+    created_at: '2026-04-01T00:00:00Z',
+    updated_at: '2026-04-01T01:00:00Z',
+    message_count: 3,
+  },
+]
+
+const wsGroupWorkspaces = [
+  { id: 'ws-alpha', name: 'Alpha Project', is_default: false, status: 'active' as const, pinned: false, pin_order: 0, task_count: 0, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+  { id: 'ws-beta',  name: 'Beta Project',  is_default: false, status: 'active' as const, pinned: false, pin_order: 0, task_count: 0, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+]
+
+// Test A: all sessions in one workspace → flat list (showGroups=false)
+describe('SessionPanel — workspace grouping: single workspace renders flat list (Test A)', () => {
   beforeEach(() => {
-    vi.mocked(fetchSessions).mockResolvedValue([
-      {
-        id: 'sess-wc-1',
-        agent_id: 'agent-chat-1',
-        active_agent_id: 'agent-chat-1',
-        title: 'WebChat Session One',
-        type: 'chat',
-        channel: 'webchat',
-        created_at: '2026-04-01T00:00:00Z',
-        updated_at: '2026-04-01T01:00:00Z',
-        message_count: 2,
-      },
-      {
-        id: 'sess-wc-2',
-        agent_id: 'agent-chat-1',
-        active_agent_id: 'agent-chat-1',
-        title: 'WebChat Session Two',
-        type: 'chat',
-        channel: 'webchat',
-        created_at: '2026-04-01T00:00:00Z',
-        updated_at: '2026-04-01T02:00:00Z',
-        message_count: 4,
-      },
+    // One workspace, one session linked to it — only one group, so showGroups=false.
+    vi.mocked(fetchWorkspaces).mockResolvedValue([wsGroupWorkspaces[0]] as never)
+    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([
+      { workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' } as never,
     ])
+    vi.mocked(fetchSessions).mockResolvedValue([wsGroupSessions[0]])
   })
 
-  it('renders sessions as a flat list with no group header buttons', async () => {
-    // BDD: Given all sessions have channel="webchat" (single distinct channel)
-    // BDD: Then showGroups=false, so no collapsible group header buttons are rendered
-    // BDD: And both session items are listed directly
+  it('renders sessions as a flat list with no group header buttons when there is only one workspace', async () => {
+    // BDD: Given all sessions belong to the same workspace
+    // BDD: Then showGroups=false and no collapsible group header buttons are rendered
     renderPanel()
 
-    await screen.findByText('WebChat Session One')
-    await screen.findByText('WebChat Session Two')
+    await screen.findByText('Alpha Project Session')
 
-    // No group header buttons should be present.
-    // Group headers have aria-label matching "sessions, collapse" / "sessions, expand".
-    const groupButtons = screen.queryAllByRole('button', { name: /sessions, (collapse|expand)/i })
+    // No workspace group header buttons should be present
+    const groupButtons = screen.queryAllByRole('button', { name: /workspace sessions, (collapse|expand)/i })
     expect(groupButtons).toHaveLength(0)
   })
 
-  it('renders flat list for sessions with no channel field (undefined treated as webchat)', async () => {
-    // BDD: Given sessions have no channel field (legacy sessions)
-    // BDD: Then they are treated as webchat and rendered flat (showGroups=false)
+  it('renders flat list when sessions have no workspace links (all go to fallback)', async () => {
+    // BDD: Given sessions have no workspace links (legacy/global sessions)
+    // BDD: Then all sessions land in the "No workspace" fallback — one group, showGroups=false
+    vi.mocked(fetchWorkspaces).mockResolvedValue([] as never)
+    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([] as never)
     vi.mocked(fetchSessions).mockResolvedValue([
       {
         id: 'sess-legacy-1',
         agent_id: 'agent-chat-1',
         active_agent_id: 'agent-chat-1',
         title: 'Legacy Session One',
-        type: 'chat',
-        // channel field intentionally omitted
+        type: 'chat' as const,
         created_at: '2026-04-01T00:00:00Z',
         updated_at: '2026-04-01T01:00:00Z',
         message_count: 1,
@@ -381,202 +397,172 @@ describe('SessionPanel — channel grouping: webchat-only renders flat list (Tes
 
     await screen.findByText('Legacy Session One')
 
-    const groupButtons = screen.queryAllByRole('button', { name: /sessions, (collapse|expand)/i })
+    const groupButtons = screen.queryAllByRole('button', { name: /workspace sessions, (collapse|expand)/i })
     expect(groupButtons).toHaveLength(0)
   })
 })
 
-// Test B: multi-channel renders group headers
-describe('SessionPanel — channel grouping: multi-channel renders group headers (Test B)', () => {
+// Test B: sessions in multiple workspaces → workspace group headers appear
+describe('SessionPanel — workspace grouping: multi-workspace renders group headers (Test B)', () => {
   beforeEach(() => {
-    vi.mocked(fetchSessions).mockResolvedValue([
-      {
-        id: 'sess-wc-1',
-        agent_id: 'agent-chat-1',
-        active_agent_id: 'agent-chat-1',
-        title: 'WebChat Session One',
-        type: 'chat',
-        channel: 'webchat',
-        created_at: '2026-04-01T00:00:00Z',
-        updated_at: '2026-04-01T01:00:00Z',
-        message_count: 2,
-      },
-      {
-        id: 'sess-tg-1',
-        agent_id: 'agent-chat-1',
-        active_agent_id: 'agent-chat-1',
-        title: 'Telegram Session One',
-        type: 'chat',
-        channel: 'telegram',
-        created_at: '2026-04-01T00:00:00Z',
-        updated_at: '2026-04-01T02:00:00Z',
-        message_count: 3,
-      },
-    ])
+    vi.mocked(fetchWorkspaces).mockResolvedValue(wsGroupWorkspaces as never)
+    // fetchWorkspaceSessions is called once per workspace; return the appropriate link for each.
+    vi.mocked(fetchWorkspaceSessions)
+      .mockResolvedValueOnce([{ workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' }] as never)
+      .mockResolvedValueOnce([{ workspace_id: 'ws-beta',  session_id: 'sess-ws2-1' }] as never)
+    vi.mocked(fetchSessions).mockResolvedValue(wsGroupSessions)
   })
 
-  it('renders group header buttons for each distinct channel', async () => {
-    // BDD: Given sessions span 2 distinct channels (webchat, telegram)
-    // BDD: Then showGroups=true and a header button is rendered for each channel
+  it('renders a group header button for each workspace', async () => {
+    // BDD: Given sessions span 2 workspaces (Alpha Project, Beta Project)
+    // BDD: Then showGroups=true and a header button is rendered for each workspace
     renderPanel()
 
-    // Both group headers must appear
-    const webChatHeader = await screen.findByRole('button', { name: /Web Chat sessions/i })
-    const telegramHeader = await screen.findByRole('button', { name: /Telegram sessions/i })
+    const alphaHeader = await screen.findByRole('button', { name: /Alpha Project workspace sessions/i })
+    const betaHeader = await screen.findByRole('button', { name: /Beta Project workspace sessions/i })
 
-    expect(webChatHeader).toBeTruthy()
-    expect(telegramHeader).toBeTruthy()
+    expect(alphaHeader).toBeTruthy()
+    expect(betaHeader).toBeTruthy()
   })
 
-  it('renders both session items visible under their respective groups', async () => {
-    // BDD: Given the multi-channel sessions are loaded
-    // BDD: Then both session title items are visible (groups are expanded by default)
+  it('renders both session items visible under their respective workspace groups', async () => {
+    // BDD: Given 2 workspace groups, all expanded by default
+    // BDD: Then both session items are visible in the DOM
     renderPanel()
 
-    await screen.findByLabelText('Open session: WebChat Session One')
-    await screen.findByLabelText('Open session: Telegram Session One')
+    await screen.findByLabelText('Open session: Alpha Project Session')
+    await screen.findByLabelText('Open session: Beta Project Session')
   })
 
-  it('shows count badge of 1 for each group', async () => {
-    // BDD: Given 1 session per channel
+  it('shows count badge of 1 for each workspace group', async () => {
+    // BDD: Given 1 session per workspace
     // BDD: Then each group header badge shows "1"
     renderPanel()
 
-    // Wait for headers to appear
-    await screen.findByRole('button', { name: /Web Chat sessions/i })
+    await screen.findByRole('button', { name: /Alpha Project workspace sessions/i })
 
-    // Both count badges display "1"
     const badges = screen.getAllByText('1')
     expect(badges.length).toBeGreaterThanOrEqual(2)
   })
 })
 
-// Test C: group collapse/expand toggle
-describe('SessionPanel — channel grouping: collapse/expand toggle (Test C)', () => {
+// Test C: workspace group collapse/expand toggle
+describe('SessionPanel — workspace grouping: collapse/expand toggle (Test C)', () => {
   beforeEach(() => {
-    vi.mocked(fetchSessions).mockResolvedValue([
-      {
-        id: 'sess-wc-1',
-        agent_id: 'agent-chat-1',
-        active_agent_id: 'agent-chat-1',
-        title: 'WebChat Session One',
-        type: 'chat',
-        channel: 'webchat',
-        created_at: '2026-04-01T00:00:00Z',
-        updated_at: '2026-04-01T01:00:00Z',
-        message_count: 2,
-      },
-      {
-        id: 'sess-tg-1',
-        agent_id: 'agent-chat-1',
-        active_agent_id: 'agent-chat-1',
-        title: 'Telegram Session One',
-        type: 'chat',
-        channel: 'telegram',
-        created_at: '2026-04-01T00:00:00Z',
-        updated_at: '2026-04-01T02:00:00Z',
-        message_count: 3,
-      },
-    ])
+    vi.mocked(fetchWorkspaces).mockResolvedValue(wsGroupWorkspaces as never)
+    vi.mocked(fetchWorkspaceSessions)
+      .mockResolvedValueOnce([{ workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' }] as never)
+      .mockResolvedValueOnce([{ workspace_id: 'ws-beta',  session_id: 'sess-ws2-1' }] as never)
+    vi.mocked(fetchSessions).mockResolvedValue(wsGroupSessions)
   })
 
-  it('collapses a group on first click and expands it on second click', async () => {
-    // BDD: Given a multi-channel panel (webchat + telegram), all groups expanded
-    // BDD: When the user clicks the Telegram group header
-    // BDD: Then aria-expanded=false and the telegram session item is removed from the DOM
-    // BDD: When the user clicks the Telegram header again
-    // BDD: Then aria-expanded=true and the telegram session item is visible again
+  it('collapses a workspace group on first click and expands it on second click', async () => {
+    // BDD: Given a multi-workspace panel (Alpha + Beta), all groups expanded
+    // BDD: When the user clicks the Beta Project group header
+    // BDD: Then aria-expanded=false and its session item leaves the DOM
+    // BDD: When the user clicks the Beta header again
+    // BDD: Then aria-expanded=true and the session item is visible again
+    // BDD: And the Alpha group remains unaffected throughout
     renderPanel()
 
-    // Wait for groups to load
-    const telegramHeader = await screen.findByRole('button', { name: /Telegram sessions/i })
+    const betaHeader = await screen.findByRole('button', { name: /Beta Project workspace sessions/i })
 
-    // Initially expanded: session item is visible
-    await screen.findByLabelText('Open session: Telegram Session One')
-    expect(telegramHeader).toHaveAttribute('aria-expanded', 'true')
+    // Initially expanded
+    await screen.findByLabelText('Open session: Beta Project Session')
+    expect(betaHeader).toHaveAttribute('aria-expanded', 'true')
 
-    // Click to collapse
-    fireEvent.click(telegramHeader)
+    // Collapse
+    fireEvent.click(betaHeader)
 
-    // After collapse: session item gone, aria-expanded=false
     await waitFor(() => {
-      expect(screen.queryByLabelText('Open session: Telegram Session One')).toBeNull()
+      expect(screen.queryByLabelText('Open session: Beta Project Session')).toBeNull()
     })
-    expect(telegramHeader).toHaveAttribute('aria-expanded', 'false')
+    expect(betaHeader).toHaveAttribute('aria-expanded', 'false')
 
-    // Webchat session is still visible (other group unaffected)
-    expect(screen.getByLabelText('Open session: WebChat Session One')).toBeTruthy()
+    // Alpha group is unaffected
+    expect(screen.getByLabelText('Open session: Alpha Project Session')).toBeTruthy()
 
-    // Click to expand again
-    fireEvent.click(telegramHeader)
+    // Expand again
+    fireEvent.click(betaHeader)
 
-    // After expand: session item visible again, aria-expanded=true
-    await screen.findByLabelText('Open session: Telegram Session One')
-    expect(telegramHeader).toHaveAttribute('aria-expanded', 'true')
+    await screen.findByLabelText('Open session: Beta Project Session')
+    expect(betaHeader).toHaveAttribute('aria-expanded', 'true')
   })
 })
 
-// Test D: search filters sessions and collapses empty groups
-describe('SessionPanel — channel grouping: search filters and hides empty groups (Test D)', () => {
+// Test D: search filters sessions; workspace group header disappears when empty
+describe('SessionPanel — workspace grouping: search filters and hides empty groups (Test D)', () => {
   beforeEach(() => {
-    // Use fake timers but allow testing-library's internal polling to advance automatically
     vi.useFakeTimers({ shouldAdvanceTime: true })
-    vi.mocked(fetchSessions).mockResolvedValue([
-      {
-        id: 'sess-wc-1',
-        agent_id: 'agent-chat-1',
-        active_agent_id: 'agent-chat-1',
-        title: 'Webchat Alpha',
-        type: 'chat',
-        channel: 'webchat',
-        created_at: '2026-04-01T00:00:00Z',
-        updated_at: '2026-04-01T01:00:00Z',
-        message_count: 2,
-      },
-      {
-        id: 'sess-tg-1',
-        agent_id: 'agent-chat-1',
-        active_agent_id: 'agent-chat-1',
-        title: 'Telegram Beta',
-        type: 'chat',
-        channel: 'telegram',
-        created_at: '2026-04-01T00:00:00Z',
-        updated_at: '2026-04-01T02:00:00Z',
-        message_count: 3,
-      },
-    ])
+    vi.mocked(fetchWorkspaces).mockResolvedValue(wsGroupWorkspaces as never)
+    vi.mocked(fetchWorkspaceSessions)
+      .mockResolvedValueOnce([{ workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' }] as never)
+      .mockResolvedValueOnce([{ workspace_id: 'ws-beta',  session_id: 'sess-ws2-1' }] as never)
+    vi.mocked(fetchSessions).mockResolvedValue(wsGroupSessions)
   })
 
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('hides the Telegram group header when the search term matches only the webchat session', async () => {
-    // BDD: Given a multi-channel panel (webchat + telegram), both groups visible
-    // BDD: When the user types "Alpha" (matches only "Webchat Alpha")
-    // BDD: Then the Telegram group header disappears (no sessions pass the filter)
-    // BDD: And the webchat session remains visible (either flat or as the sole group)
+  it('hides a workspace group header when its sessions do not match the search term', async () => {
+    // BDD: Given a multi-workspace panel with Alpha and Beta groups visible
+    // BDD: When the user types "Alpha" (matches only "Alpha Project Session")
+    // BDD: Then the Beta Project group header disappears
+    // BDD: And the Alpha session remains visible
     renderPanel()
 
-    // Wait for both groups to load
-    await screen.findByRole('button', { name: /Telegram sessions/i })
+    await screen.findByRole('button', { name: /Beta Project workspace sessions/i })
 
-    // Type a search term that only matches the webchat session
     const searchInput = screen.getByRole('textbox', { name: /search sessions/i })
     fireEvent.change(searchInput, { target: { value: 'Alpha' } })
 
-    // Advance past the 300ms debounce
     act(() => {
       vi.advanceTimersByTime(350)
     })
 
-    // After debounce: Telegram group header must be gone
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /Telegram sessions/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /Beta Project workspace sessions/i })).toBeNull()
     })
 
-    // The webchat session must still be present
-    expect(screen.getByLabelText('Open session: Webchat Alpha')).toBeTruthy()
+    expect(screen.getByLabelText('Open session: Alpha Project Session')).toBeTruthy()
+  })
+})
+
+// Test E: sessions with no workspace link appear under "No workspace" fallback
+describe('SessionPanel — workspace grouping: ungrouped sessions go to "No workspace" (Test E)', () => {
+  it('renders unlinked sessions under "No workspace" group alongside workspace-linked sessions', async () => {
+    // BDD: Given one session is linked to ws-alpha and another has no workspace link
+    // BDD: Then two workspace groups appear: "Alpha Project" and "No workspace"
+    vi.mocked(fetchWorkspaces).mockResolvedValue([wsGroupWorkspaces[0]] as never)
+    vi.mocked(fetchWorkspaceSessions).mockResolvedValue([
+      { workspace_id: 'ws-alpha', session_id: 'sess-ws1-1' } as never,
+    ])
+    vi.mocked(fetchSessions).mockResolvedValue([
+      wsGroupSessions[0],
+      {
+        id: 'sess-unlinked-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Unlinked Session',
+        type: 'chat' as const,
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T03:00:00Z',
+        message_count: 1,
+      },
+    ])
+
+    renderPanel()
+
+    // Both workspace group headers must appear
+    const alphaHeader = await screen.findByRole('button', { name: /Alpha Project workspace sessions/i })
+    const noWsHeader  = await screen.findByRole('button', { name: /No workspace workspace sessions/i })
+    expect(alphaHeader).toBeTruthy()
+    expect(noWsHeader).toBeTruthy()
+
+    // Both sessions are visible under their respective groups
+    await screen.findByLabelText('Open session: Alpha Project Session')
+    await screen.findByLabelText('Open session: Unlinked Session')
   })
 })
 

@@ -109,20 +109,20 @@ describe('FR-076 canonical tool names', () => {
     expect(violations, `Legacy name "regex_search" found in: ${violations.join(', ')}`).toHaveLength(0)
   })
 
-  // §-consolidation (2026-06-25): load_tool + search_tools_bm25 + search_tools_regex
-  // were collapsed into a single multi-action tool `tools` (action: search|load).
-  // The two canonical-name assertions below replace the old bm25/regex pair.
-  // Backend: pkg/tools registers `tools`; InfraManifestToolNames() returns {"tools"}.
-  // Frontend: humanizeToolName maps `tools` → "Tools (search & load)".
+  // §-rename (2026-06-26): the intermediate `tools` multi-action name was renamed to
+  // `load_tool`. The canonical name assertions below guard this current name.
+  // Backend: pkg/tools registers `load_tool`; InfraManifestToolNames() returns {"load_tool"}.
+  // Frontend: humanizeToolName maps `load_tool` → "Find & load tools".
 
-  it('canonical name tools is declared in this regression test', () => {
+  it('canonical name load_tool is declared in this regression test', () => {
     // The presence of this string in this file demonstrates that the canonical
     // name is known and tracked. Backend tests assert the registry emits this name;
     // this test guards the frontend boundary against silent drift back to the old names.
     // History: tool_search_tool_bm25 (§6) → search_tools_bm25 (§7 rename) →
-    //          collapsed into `tools` multi-action (§-consolidation, 2026-06-25).
-    const canonical = 'tools'
-    expect(canonical).toBe('tools')
+    //          collapsed into `tools` multi-action (§-consolidation, 2026-06-25) →
+    //          renamed to `load_tool` (§-rename, 2026-06-26).
+    const canonical = 'load_tool'
+    expect(canonical).toBe('load_tool')
   })
 
   it('legacy name search_tools_bm25 does not appear as a non-comment literal in source files', () => {
@@ -169,7 +169,13 @@ describe('FR-076 canonical tool names', () => {
     expect(violations, `Retired name "search_tools_regex" found in: ${violations.join(', ')}`).toHaveLength(0)
   })
 
-  it('legacy name load_tool does not appear as a non-comment literal in source files', () => {
+  it('retired intermediate name "tools" (the loader) does not appear as a non-comment literal in source files', () => {
+    // After the §-rename (2026-06-26), the loader is `load_tool`; the old `tools`
+    // multi-action name must not reappear as a new code literal for the loader tool.
+    // NOTE: the string "tools" legitimately appears in non-loader contexts (tab values,
+    // query keys, route names, etc.) so we check for the exact tool-name patterns only:
+    // the explicit humanizeToolName map key and the canonicalToolNames regression constant.
+    // This test only guards against the map entry and canonical constant drifting back.
     const files = collectFiles()
     const violations: string[] = []
     for (const file of files) {
@@ -183,10 +189,16 @@ describe('FR-076 canonical tool names', () => {
       const withoutComments = content
         .replace(/\/\/[^\n]*/g, '')
         .replace(/\/\*[\s\S]*?\*\//g, '')
-      if (withoutComments.includes('load_tool')) {
+      // Only flag the exact patterns that would indicate a regressed loader tool name:
+      // a map entry `tools:` in humanizeToolName or a canonical = 'tools' constant.
+      if (
+        withoutComments.includes("tools: 'Tools (search") ||
+        withoutComments.includes('tools: "Tools (search') ||
+        /const canonical\s*=\s*['"]tools['"]/.test(withoutComments)
+      ) {
         violations.push(file)
       }
     }
-    expect(violations, `Retired name "load_tool" found in: ${violations.join(', ')}`).toHaveLength(0)
+    expect(violations, `Retired loader name "tools" regressed in: ${violations.join(', ')}`).toHaveLength(0)
   })
 })

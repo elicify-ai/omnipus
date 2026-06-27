@@ -8,6 +8,10 @@
  *
  * UAT fix #2: explicit Save button removed — autosave opens ReAuthDialog
  * automatically after the debounce (600 ms) when the input value is valid.
+ *
+ * Tool loading toggle: toggling tools_on_demand immediately opens the reauth
+ * dialog and calls updatePerformanceSettings with both fields (max_parallel_agents
+ * + tools_on_demand) after confirmation.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -37,6 +41,7 @@ import { PerformanceSection } from './PerformanceSection'
 const SETTINGS = {
   max_parallel_agents: 4,
   effective_max_parallel_agents: 4,
+  tools_on_demand: true,
 }
 
 function makeClient() {
@@ -132,7 +137,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     await waitFor(() => {
       expect(api.reAuth).toHaveBeenCalledWith('mypassword')
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
-        { max_parallel_agents: 8 },
+        { max_parallel_agents: 8, tools_on_demand: true },
         'reauth_tok',
       )
     })
@@ -161,6 +166,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       max_parallel_agents: 4,
       effective_max_parallel_agents: 4,
+      tools_on_demand: true,
     } as never)
 
     renderSection()
@@ -182,6 +188,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       max_parallel_agents: 8,
       effective_max_parallel_agents: 8,
+      tools_on_demand: true,
     } as never)
 
     renderSection()
@@ -200,5 +207,78 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     // exists in the DOM as a container even when idle.
     // Verify the label "Agent Concurrency" header is present.
     expect(screen.getByText('Agent Concurrency')).toBeInTheDocument()
+  })
+})
+
+describe('PerformanceSection — Tool loading toggle', () => {
+  it('renders the Tool loading section with the switch in the ON state by default', async () => {
+    vi.useRealTimers()
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Tool loading'))
+    const toggle = screen.getByLabelText('Tool loading')
+    expect(toggle).toBeChecked()
+    expect(screen.getByText('Load tools on demand')).toBeInTheDocument()
+    expect(screen.getByText(/Smaller messages, lower token use/)).toBeInTheDocument()
+  })
+
+  it('renders tools_on_demand=false from the API as the switch OFF state', async () => {
+    vi.useRealTimers()
+    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
+      ...SETTINGS,
+      tools_on_demand: false,
+    } as never)
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Tool loading'))
+    const toggle = screen.getByLabelText('Tool loading')
+    expect(toggle).not.toBeChecked()
+    expect(screen.getByText('Keep all tools loaded')).toBeInTheDocument()
+    expect(screen.getByText(/Every tool is always available/)).toBeInTheDocument()
+  })
+
+  it('toggling the switch immediately opens the reauth dialog', async () => {
+    vi.useRealTimers()
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Tool loading'))
+
+    fireEvent.click(screen.getByLabelText('Tool loading'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+    // PUT must NOT have been called before reauth.
+    expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+  })
+
+  it('calls updatePerformanceSettings with tools_on_demand toggled after reauth', async () => {
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok2', expires_in: 300 } as never)
+    vi.mocked(api.updatePerformanceSettings).mockResolvedValue({ ...SETTINGS, tools_on_demand: false } as never)
+
+    vi.useRealTimers()
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Tool loading'))
+
+    // Toggle OFF (from default ON).
+    fireEvent.click(screen.getByLabelText('Tool loading'))
+
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(api.reAuth).toHaveBeenCalledWith('mypassword')
+      // tools_on_demand flipped to false; max_parallel_agents still 4 (from SETTINGS).
+      expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
+        { max_parallel_agents: 4, tools_on_demand: false },
+        'reauth_tok2',
+      )
+    })
+  })
+
+  it('displays helper text about next-message effect', async () => {
+    vi.useRealTimers()
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Tool loading'))
+    expect(screen.getByText(/Takes effect on the next message/)).toBeInTheDocument()
+    expect(screen.getByText(/Applies to all agents/)).toBeInTheDocument()
   })
 })

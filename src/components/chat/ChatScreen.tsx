@@ -948,6 +948,7 @@ interface SlashCommand {
 // Built-in slash commands. Custom commands registered via 'commands' WebSocket
 // frame are not yet wired; see sprint-h-subagent-block-spec.md for the design.
 const SLASH_COMMANDS: SlashCommand[] = [
+  { label: '/new', description: 'Start a new chat with the current agent' },
   { label: '/session new', description: 'Start a new session' },
   { label: '/clear', description: 'Clear all messages' },
   { label: '/help', description: 'Show help information' },
@@ -956,6 +957,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
 ]
 
 const HELP_TEXT = `**Omnipus commands:**
+- \`/new\` — Start a new chat with the current agent
 - \`/session new\` — Start a new session
 - \`/clear\` — Clear the current chat history
 - \`/cancel\` — Cancel the current in-progress turn
@@ -1028,6 +1030,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const setMessages = useChatStore((s) => s.setMessages)
   const appendMessage = useChatStore((s) => s.appendMessage)
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
+  const startNewSession = useSessionStore((s) => s.startNewSession)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   // Phase 1 / FR-008/009/010: read the active session's messages so we
@@ -1231,6 +1234,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     closeSlash()
     composerRuntime.setText('')
     setInputValue('')
+
+    // /new — start a fresh chat with the current agent. Does NOT send a
+    // message to the LLM; the action runs entirely client-side.
+    if (cmd === '/new') {
+      startNewSession(activeAgentId, null)
+      return
+    }
 
     if (cmd === '/clear') {
       setMessages([])

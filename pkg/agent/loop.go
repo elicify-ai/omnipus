@@ -1793,18 +1793,32 @@ func registerSharedTools(
 			}
 		}
 
-		// Register the unified `tools` infra tool (action=search + action=load).
-		// Replaces the former load_tool + search_tools_bm25 + search_tools_regex trio.
+		// Register the unified `load_tool` infra tool (search + load paths).
+		// Replaces the former search_tools_bm25 + search_tools_regex + standalone load_tool trio.
 		// The resolver uses context-aware closures so per-session and per-agent state
 		// is read from the tool ctx at call time, avoiding data races on the shared
 		// instance across concurrent turns on the same agent.
-		// Register the unified `tools` infra tool when compressed manifest mode
-		// is on OR when the MCP discovery cache is enabled. The tool covers both
-		// the former load_tool (action=load) and search_tools_bm25/search_tools_regex
-		// (action=search) in one callable surface. Guard against double-registration
-		// in case the MCP init path already added it.
-		if cfg.Tools.Manifest.Compressed || (cfg.Tools.MCP.Enabled && cfg.Tools.MCP.Discovery.Enabled) {
-			if _, alreadyTools := agent.Tools.Get("tools"); !alreadyTools {
+		//
+		// ALWAYS registered unconditionally — regardless of cfg.Tools.Manifest.Compressed
+		// or MCP discovery settings. Registration is cheap and harmless when unused.
+		//
+		// Why unconditional: the tools_on_demand PUT endpoint flips Compressed live via
+		// SwapConfig without re-running agent registration. If load_tool was only registered
+		// when Compressed=true at boot, a false→true live toggle would leave load_tool absent
+		// from the registry, causing Get("load_tool") to return !ok in buildCompressedToolDefs
+		// and ensureInfraToolsExecutable — every lazy tool silently unreachable, no error logged.
+		// The "no restart needed" promise the UI makes becomes false.
+		//
+		// When Compressed is OFF at turn time, the per-turn gates (cfg.Tools.Manifest.Compressed
+		// at lines ~5049, ~5115, ~5026) skip the compressed paths entirely: load_tool is never
+		// sent to the model and never force-added to policyFiltered. For deny-default agents it
+		// is also stripped by FilterToolsByPolicy in the uncompressed path (not in allow-list),
+		// so no spurious callable appears. For allow-default workers it may appear in the
+		// uncompressed defs, which is harmless (the model has all tools anyway).
+		//
+		// Guard against double-registration in case the MCP init path already added it.
+		{
+			if _, alreadyTools := agent.Tools.Get("load_tool"); !alreadyTools {
 				capturedAgentID := agentID
 
 				ttl := cfg.Tools.MCP.Discovery.TTL
@@ -5014,9 +5028,9 @@ turnLoop:
 		allAgentTools := ts.agent.Tools.GetAll()
 		policyFilteredTools, filterTimePolicyMap := tools.FilterToolsByPolicy(allAgentTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 
-		// The unified `tools` infra tool is registration-gated, NOT policy-gated:
+		// The unified `load_tool` infra tool is registration-gated, NOT policy-gated:
 		// when compressed mode is on it must be callable by EVERY agent — including
-		// deny-by-default agents (Ava/Mia/Ray) — or the model is shown `tools` in
+		// deny-by-default agents (Ava/Mia/Ray) — or the model is shown `load_tool` in
 		// its defs but its EXECUTION is denied, leaving every lazy tool permanently
 		// unreachable. Force it into both the sent defs (policyFilteredTools) and
 		// the execution-time policy snapshot (filterTimePolicyMap, consulted by
@@ -5361,8 +5375,82 @@ turnLoop:
 			// I3: if the FallbackChain already exhausted all candidates, don't retry
 			// in the outer loop — the chain already tried everything. Break immediately
 			// so the error surfaces to the caller without redundant delay.
+			//
+			// Exception: if every attempt was a transient mid-stream reset (http2
+			// body closed, GOAWAY, connection reset, etc.) and no content was
+			// streamed to the client yet, the chain can be retried whole — a fresh
+			// connection will be attempted for each candidate. This is the primary
+			// fix for "0 tokens" turns caused by HTTP/2 pooled-connection drops:
+			// the FallbackChain marks candidates in cooldown and returns
+			// FallbackExhaustedError even for a single-candidate config, bypassing
+			// the normal ClassifyError → isTimeoutError retry path below.
 			var exhaustedErr *providers.FallbackExhaustedError
 			if errors.As(err, &exhaustedErr) {
+				// Check whether every failed attempt was a transient stream reset.
+				// Skipped-cooldown entries (Skipped==true) are not counted as
+				// streaming failures; we only need all *attempted* calls to have
+				// been transient drops.
+				allTransient := len(exhaustedErr.Attempts) > 0
+				for _, a := range exhaustedErr.Attempts {
+					if a.Skipped {
+						continue // cooldown skip — not a new attempt, ignore
+					}
+					if !isTransientStreamError(a.Error) {
+						allTransient = false
+						break
+					}
+				}
+				if allTransient && retry < maxRetries {
+					if ts.hardAbortRequested() {
+						break
+					}
+					// Apply the same "don't retry if partial content was already
+					// streamed" guard as the isTimeoutError path to avoid duplicating
+					// text in an in-progress SPA bubble.
+					if sc, ok := ts.lastStreamer.(interface{ StreamedContentLen() int }); ok && sc.StreamedContentLen() > 0 {
+						logger.WarnCF("agent", "Transient stream reset (fallback exhausted) after partial stream; not retrying to avoid duplicated text", map[string]any{
+							"agent_id":  ts.agent.ID,
+							"iteration": iteration,
+							"streamed":  sc.StreamedContentLen(),
+							"error":     err.Error(),
+						})
+						break
+					}
+					// Backoff: 500ms × 2^retry, capped at 4s (shorter than the
+					// timeout-retry backoff — streaming resets are transient and
+					// resolve quickly on a fresh connection).
+					backoff := 500 * time.Millisecond * (1 << uint(retry))
+					if backoff > 4*time.Second {
+						backoff = 4 * time.Second
+					}
+					logger.WarnCF("agent", "Transient streaming reset (fallback exhausted) — retrying LLM call", map[string]any{
+						"agent_id": ts.agent.ID,
+						"model":    llmModel,
+						"retry":    retry,
+						"backoff":  backoff.String(),
+						"error":    err.Error(),
+					})
+					al.emitEvent(
+						EventKindLLMRetry,
+						ts.eventMeta("runTurn", "turn.llm.retry"),
+						LLMRetryPayload{
+							Attempt:    retry + 1,
+							MaxRetries: maxRetries,
+							Reason:     "streaming_reset",
+							Error:      err.Error(),
+							Backoff:    backoff,
+						},
+					)
+					if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
+						if ts.hardAbortRequested() {
+							turnStatus = TurnEndStatusAborted
+							return al.abortTurn(ts)
+						}
+						err = sleepErr
+						break
+					}
+					continue
+				}
 				// All candidates failed — if the request carried a native PDF
 				// block, every provider may have rejected it. Degrade to text
 				// and try once more across the chain before surfacing.
@@ -5402,8 +5490,18 @@ turnLoop:
 					break
 				}
 			} else {
-				// ClassifyError returned nil: unknown error. Don't retry.
-				break
+				// ClassifyError returned nil: the error is not recognisable as a
+				// provider-level condition. Before giving up, check whether it is a
+				// transient mid-stream reset (e.g. a GOAWAY frame or a network drop
+				// that is wrapped by layers ClassifyError does not unwrap). If so,
+				// treat it as a timeout-equivalent so the isTimeoutError retry path
+				// below fires, rather than breaking immediately with 0 tokens.
+				if isTransientStreamError(err) {
+					isTimeoutError = true
+				} else {
+					// Genuinely unknown error. Don't retry.
+					break
+				}
 			}
 
 			if isTimeoutError && retry < maxRetries {
@@ -6849,6 +6947,57 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// isTransientStreamError reports whether err is a transient mid-stream
+// provider reset that is safe to retry from scratch. These errors arise when
+// an upstream HTTP/2 connection is recycled, GOAWAY'd, or dropped while the
+// scanner is still reading SSE chunks — they are NOT application-level
+// rejections (4xx, auth, context-overflow) and are NOT a clean end-of-stream.
+//
+// The set of matched strings is intentionally tight to avoid false positives:
+//   - "streaming read error:" — the prefix openai_compat/provider.go wraps
+//     around scanner.Err() when the body is closed mid-SSE-parse
+//   - "http2: response body closed" — Go's net/http sentinel when the HTTP/2
+//     body is closed concurrently (e.g. context cancellation or server RST)
+//   - "http2: server sent goaway" — GoAwayError from net/http; server reset the
+//     connection with GOAWAY before/during the response (INTERNAL_ERROR, etc.)
+//   - "http2: transport received server's graceful shutdown goaway" — graceful
+//     GOAWAY from a load-balancer recycling the server-side connection pool
+//   - "stream error:" — http2StreamError.Error() prefix ("stream error: stream
+//     ID N; INTERNAL_ERROR"); note: "stream" also appears in "streaming read
+//     error:" above, but they are distinct patterns
+//   - "connection reset by peer", "unexpected eof", "broken pipe" — TCP-level
+//     transport resets that appear when the OS closes the connection
+//
+// This helper is used in the retry loop (pkg/agent/loop.go) to inline-retry
+// drops that are not yet caught by ClassifyError (e.g., when wrapped inside
+// a FallbackExhaustedError or when ClassifyError returns nil for an unknown
+// wrapping). It is intentionally a superset of connectionDropPatterns so that
+// it catches wrapping layers such as "fallback: unclassified error: ...".
+func isTransientStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	for _, pat := range []string{
+		"streaming read error:",
+		"http2: response body closed",
+		"http2: server sent goaway",
+		"http2: transport received server's graceful shutdown goaway",
+		"stream error:",
+		"connection reset by peer",
+		"unexpected eof",
+		"broken pipe",
+		"use of closed network connection",
+		"server closed idle connection",
+		"connection closed",
+	} {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
 }
 
 // selectCandidates returns the model candidates and resolved model name to use
@@ -8339,7 +8488,7 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 // effective policy for toolName using FilterToolsByPolicy. Returns "" if the
 // tool is not found in the agent's registered tools.
 func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) string {
-	// The unified `tools` infra tool is registration-gated, not policy-gated:
+	// The unified `load_tool` infra tool is registration-gated, not policy-gated:
 	// it only exists on the agent when compressed mode or MCP discovery is on,
 	// and when present it MUST always be executable — it drives the manifest
 	// mechanism itself, so denying it makes every lazy tool unreachable. Treat a

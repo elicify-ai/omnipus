@@ -1564,10 +1564,14 @@ export const PerformanceSettings = z
   .object({
     max_parallel_agents: z.number().int().gte(2).lte(16),
     effective_max_parallel_agents: z.number().int().gte(2).lte(16),
+    tools_on_demand: z.boolean(),
   })
   .partial();
 export const PerformanceSettingsUpdate = z
-  .object({ max_parallel_agents: z.number().int().gte(2).lte(16) })
+  .object({
+    max_parallel_agents: z.number().int().gte(2).lte(16),
+    tools_on_demand: z.boolean(),
+  })
   .partial();
 export const ChannelId = z.enum([
   "webchat",
@@ -4085,9 +4089,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         name: "body",
         type: "Body",
-        schema: z
-          .object({ max_parallel_agents: z.number().int().gte(2).lte(16) })
-          .partial(),
+        schema: PerformanceSettingsUpdate,
       },
     ],
     response: PerformanceSettings,

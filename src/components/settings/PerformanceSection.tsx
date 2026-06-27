@@ -2,19 +2,24 @@
  * PerformanceSection — Settings → Performance tab.
  *
  * Spec-3 max-parallel fan-out gate: lets an admin configure
- * max_parallel_agents (the global dispatch semaphore capacity).
+ * max_parallel_agents (the global dispatch semaphore capacity) and
+ * tools_on_demand (the tool-loading mode).
  * Admin-only; backed by GET/PUT /api/v1/performance.
  *
  * Autosave: changes are applied automatically after a short debounce.
  * Because PUT /api/v1/performance is re-auth gated (Spec-6 FR-12.2 /
  * Spec-3 FR-6.6), the ReAuthDialog is opened automatically once the
  * debounced value settles on a valid input — the Save button is gone.
+ *
+ * Both max_parallel_agents and tools_on_demand are sent together on every
+ * PUT so neither field silently reverts when only one is changed.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Cpu, Info, Warning } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import {
   fetchPerformanceSettings,
   updatePerformanceSettings,
@@ -48,7 +53,9 @@ export function PerformanceSection(): React.ReactElement {
   const queryClient = useQueryClient()
   const [saveStatus, setSaveStatus] = useState<AutoSaveStatus>('idle')
   const [inputValue, setInputValue] = useState<string>('')
-  // dirty tracks whether the user has changed the input since the last save.
+  // toolsOnDemand mirrors the tools_on_demand field. true = load on demand (default).
+  const [toolsOnDemand, setToolsOnDemand] = useState<boolean>(true)
+  // dirty tracks whether the user has changed any field since the last save.
   const [dirty, setDirty] = useState(false)
 
   // The change waiting on a re-auth consent token, and whether the dialog is
@@ -66,11 +73,13 @@ export function PerformanceSection(): React.ReactElement {
     staleTime: 30_000,
   })
 
-  // Sync input with fetched value on first load.
+  // Sync inputs with fetched values on first load.
   useEffect(() => {
     if (data && !dirty) {
       const configured = data.max_parallel_agents ?? 0
       setInputValue(configured === 0 ? '' : String(configured))
+      // tools_on_demand defaults to true when absent from the response.
+      setToolsOnDemand(data.tools_on_demand ?? true)
     }
   }, [data, dirty])
 
@@ -93,18 +102,29 @@ export function PerformanceSection(): React.ReactElement {
     },
   })
 
+  // buildBody constructs the full update payload using the latest local state.
+  // Both fields are always sent together so neither reverts when only one changes.
+  const buildBody = useCallback((
+    rawInput: string,
+    onDemand: boolean,
+  ): PerformanceSettingsUpdate | null => {
+    const raw = rawInput.trim()
+    const parsed = raw === '' ? 0 : parseInt(raw, 10)
+    if (raw !== '' && (isNaN(parsed) || parsed < 2 || parsed > 16)) return null
+    return { max_parallel_agents: parsed, tools_on_demand: onDemand }
+  }, [])
+
   // triggerSave validates the current input and opens the ReAuthDialog.
   // The actual PUT fires from onReAuthConfirmed once the consent token is minted.
   const triggerSave = useCallback(() => {
-    const raw = inputValue.trim()
-    const parsed = raw === '' ? 0 : parseInt(raw, 10)
-    if (raw !== '' && (isNaN(parsed) || parsed < 2 || parsed > 16)) {
+    const body = buildBody(inputValue, toolsOnDemand)
+    if (!body) {
       addToast({ variant: 'error', message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).' })
       return
     }
-    setPending({ max_parallel_agents: parsed })
+    setPending(body)
     setReauthOpen(true)
-  }, [inputValue, addToast])
+  }, [inputValue, toolsOnDemand, buildBody, addToast])
 
   // Autosave: debounce on input change then open the reauth dialog.
   function handleInputChange(value: string) {
@@ -113,16 +133,27 @@ export function PerformanceSection(): React.ReactElement {
     setSaveStatus('idle')
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      // Only fire autosave when input is valid (or blank).
-      const raw = value.trim()
-      const parsed = raw === '' ? 0 : parseInt(raw, 10)
-      const isValid = raw === '' || (!isNaN(parsed) && parsed >= 2 && parsed <= 16)
-      if (isValid) {
+      const body = buildBody(value, toolsOnDemand)
+      if (body) {
         setSaveStatus('saving')
-        setPending({ max_parallel_agents: parsed })
+        setPending(body)
         setReauthOpen(true)
       }
     }, AUTOSAVE_DEBOUNCE_MS)
+  }
+
+  // handleToolsOnDemandChange fires immediately (no debounce) — a toggle is an
+  // unambiguous user action that doesn't need a settling delay.
+  function handleToolsOnDemandChange(checked: boolean) {
+    setToolsOnDemand(checked)
+    setDirty(true)
+    setSaveStatus('saving')
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    const body = buildBody(inputValue, checked)
+    if (body) {
+      setPending(body)
+      setReauthOpen(true)
+    }
   }
 
   // Cleanup debounce timer on unmount.
@@ -197,7 +228,7 @@ export function PerformanceSection(): React.ReactElement {
         </div>
       </div>
 
-      {/* Card */}
+      {/* Concurrency card */}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
         <div className="space-y-1">
           <p className="text-xs text-[var(--color-muted)] leading-relaxed">
@@ -242,6 +273,48 @@ export function PerformanceSection(): React.ReactElement {
         )}
       </div>
 
+      {/* Tool loading card */}
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
+        {/* Section heading */}
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Tool loading</h3>
+        </div>
+
+        {/* Toggle row */}
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            {toolsOnDemand ? (
+              <>
+                <p className="text-sm text-[var(--color-secondary)]">Load tools on demand</p>
+                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                  Smaller messages, lower token use. Recommended.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-[var(--color-secondary)]">Keep all tools loaded</p>
+                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                  Every tool is always available — no loading step, but larger messages.
+                </p>
+              </>
+            )}
+          </div>
+          <Switch
+            checked={toolsOnDemand}
+            onCheckedChange={handleToolsOnDemandChange}
+            disabled={mutation.isPending}
+            aria-label="Tool loading"
+            data-testid="performance-tools-on-demand-switch"
+          />
+        </div>
+
+        {/* Helper text */}
+        <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+          Applies to all agents. Takes effect on the next message — no restart required.
+          Changes apply after re-authentication.
+        </p>
+      </div>
+
       <ReAuthDialog
         open={reauthOpen}
         onOpenChange={(o) => {
@@ -251,8 +324,8 @@ export function PerformanceSection(): React.ReactElement {
             if (saveStatus === 'saving') setSaveStatus('idle')
           }
         }}
-        title="Confirm to change concurrency"
-        description="Re-type your password to change the max parallel agents setting."
+        title="Confirm to change performance settings"
+        description="Re-type your password to save the performance settings."
         onConfirmed={onReAuthConfirmed}
       />
 

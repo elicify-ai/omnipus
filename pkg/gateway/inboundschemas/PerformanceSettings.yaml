@@ -23,3 +23,12 @@ properties:
       The clamped value actually in use (after applying CPU/RAM heuristics
       and env-var override). Always present in responses; absent in requests.
     example: 4
+  tools_on_demand:
+    type: boolean
+    description: >
+      Tool-loading mode. true (default) — agents load tools on demand to keep
+      each message small (the compressed tool manifest); a load step is required
+      before a non-core tool is callable. false — every allowed tool is sent on
+      every message with no loading step (more tokens per message). Maps to
+      tools.manifest.compressed. Always present in responses.
+    example: true

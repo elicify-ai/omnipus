@@ -31,6 +31,7 @@ func TestToolManifestTier_FullSetExact(t *testing.T) {
 		"read_file", "write_file", "edit_file", "list_directory",
 		"exec", "search_web", "fetch_url", "send_message",
 		"hand_off", "return_to_default", "remember", "recall_memory", "set_todos",
+		"navigate", "create_task", "list_tasks", "update_task",
 	}
 	for _, n := range specFull {
 		if ToolManifestTier(n) != ManifestFull {
@@ -53,14 +54,14 @@ func TestIsFullManifestTool(t *testing.T) {
 	if IsFullManifestTool("create_agent") {
 		t.Error("IsFullManifestTool(create_agent) = true, want false")
 	}
-	if IsFullManifestTool("tools") {
-		t.Error("IsFullManifestTool(tools) = true, want false (it is Infra)")
+	if IsFullManifestTool("load_tool") {
+		t.Error("IsFullManifestTool(load_tool) = true, want false (it is Infra)")
 	}
 }
 
 func TestToolManifestTier_InfraSet(t *testing.T) {
-	// The unified `tools` tool is the sole infra tool.
-	infraNames := []string{"tools"}
+	// The unified `load_tool` tool is the sole infra tool.
+	infraNames := []string{"load_tool"}
 	for _, n := range infraNames {
 		got := ToolManifestTier(n)
 		if got != ManifestInfra {
@@ -68,7 +69,7 @@ func TestToolManifestTier_InfraSet(t *testing.T) {
 		}
 	}
 	// Old standalone names must be ManifestLazy (no longer infra).
-	for _, n := range []string{"load_tool", "search_tools_bm25", "search_tools_regex"} {
+	for _, n := range []string{"search_tools_bm25", "search_tools_regex"} {
 		got := ToolManifestTier(n)
 		if got != ManifestLazy {
 			t.Errorf("ToolManifestTier(%q) = %v, want ManifestLazy (no longer infra)", n, got)
@@ -78,12 +79,12 @@ func TestToolManifestTier_InfraSet(t *testing.T) {
 
 func TestToolManifestTier_LazySet(t *testing.T) {
 	// Sample of tools that must be ManifestLazy per the spec.
+	// Note: navigate/create_task/list_tasks/update_task were promoted to Full-tier
+	// and must NOT appear in this list.
 	lazySample := []string{
 		"create_agent",
 		"browser_navigate",
-		"create_task",
 		"send_email",
-		"navigate",
 		"list_agents",
 		"browser_screenshot",
 		"install_skill",
@@ -149,7 +150,7 @@ func TestBuildCompressedManifest_Basic(t *testing.T) {
 		// full tool — must be excluded
 		&fakeManifestTool{name: "read_file", desc: "Read a file.", cat: CategoryFilesystem},
 		// infra tool — must be excluded
-		&fakeManifestTool{name: "tools", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
+		&fakeManifestTool{name: "load_tool", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
 	}
 
 	got := BuildCompressedManifest(toolList, nil)
@@ -173,15 +174,15 @@ func TestBuildCompressedManifest_Basic(t *testing.T) {
 	if strings.Contains(got, "  - read_file") {
 		t.Error("manifest must NOT contain full-tier tool read_file as an entry")
 	}
-	if strings.Contains(got, "  - tools") {
-		t.Error("manifest must NOT contain infra tool 'tools' as an entry")
+	if strings.Contains(got, "  - load_tool") {
+		t.Error("manifest must NOT contain infra tool 'load_tool' as an entry")
 	}
-	// The manifest header prose uses the new param-inferred wording (names/query).
-	if strings.Contains(got, "call load_tool") {
-		t.Error("manifest header must NOT mention 'call load_tool' (old wording)")
-	}
+	// The manifest header prose uses the new tool name.
 	if strings.Contains(got, "action='load'") {
 		t.Error("manifest header must NOT mention \"action='load'\" (removed: no action param)")
+	}
+	if !strings.Contains(got, "load_tool") {
+		t.Errorf("manifest header must mention 'load_tool'; got: %s", got)
 	}
 	if !strings.Contains(got, "names") || !strings.Contains(got, "query") {
 		t.Errorf("manifest header must mention 'names' and 'query' (new param-inferred wording); got: %s", got)
@@ -208,7 +209,7 @@ func TestBuildCompressedManifest_EmptyWhenAllExcluded(t *testing.T) {
 	// Only full and infra tools — manifest must be empty.
 	toolList := []Tool{
 		&fakeManifestTool{name: "read_file", desc: "Read.", cat: CategoryFilesystem},
-		&fakeManifestTool{name: "tools", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
+		&fakeManifestTool{name: "load_tool", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
 	}
 	got := BuildCompressedManifest(toolList, nil)
 	if got != "" {
@@ -332,19 +333,39 @@ func TestBuildCompressedManifest_AllLoadedReturnsEmpty(t *testing.T) {
 	}
 }
 
+// scopeCoreFullTierTools is the set of full-tier tools that are ScopeCore sysagent
+// tools registered per-agent via the sysagent layer (pkg/sysagent/tools/), NOT via
+// GeneralBuiltinMetadata(). They are absent from the general builtin catalog by
+// design — the catalog is a general-purpose capability reference; ScopeCore tools
+// are wired into the agent loop via registerCoreAgentSysTools and related helpers.
+// Listing them here keeps TestManifestNamesResolveInCatalog honest about the
+// distinction without requiring a circular import from pkg/tools → pkg/sysagent.
+var scopeCoreFullTierTools = map[string]bool{
+	"navigate": true, // pkg/sysagent/tools/navigate.go — ScopeCore, registered by wireExecToolDeps
+}
+
 // TestManifestNamesResolveInCatalog guards against the silent-rename class of
 // regression (the §7 tool-rename bug): if a full- or infra-tier tool is renamed
 // without updating the manifest name maps, ToolManifestTier silently demotes it
 // to lazy (full tools) or breaks force-include (infra tools). This test fails
 // loudly when a manifest name no longer corresponds to a registered builtin.
+//
+// ScopeCore tools (e.g. navigate) are exempt from the GeneralBuiltinMetadata check
+// because they are registered via the sysagent layer, not the general builtin
+// catalog. They are listed in scopeCoreFullTierTools above.
 func TestManifestNamesResolveInCatalog(t *testing.T) {
 	present := make(map[string]bool)
 	for _, tool := range GeneralBuiltinMetadata() {
 		present[tool.Name()] = true
 	}
 	for _, name := range FullManifestToolNames() {
+		if scopeCoreFullTierTools[name] {
+			// ScopeCore tool registered via sysagent layer, not GeneralBuiltinMetadata.
+			// Verify it is listed in scopeCoreFullTierTools to keep the exemption explicit.
+			continue
+		}
 		if !present[name] {
-			t.Errorf("full-tier manifest tool %q is not a registered builtin (renamed or removed?) — update fullManifestToolNames", name)
+			t.Errorf("full-tier manifest tool %q is not a registered builtin (renamed or removed?) — update fullManifestToolNames or add to scopeCoreFullTierTools if it is a ScopeCore sysagent tool", name)
 		}
 	}
 	for _, name := range InfraManifestToolNames() {
@@ -354,12 +375,52 @@ func TestManifestNamesResolveInCatalog(t *testing.T) {
 	}
 }
 
+// TestManifestTier_PromotedTools_C2 is test C2 from the tier-promotion fix:
+// assert that the four everyday tools promoted from Lazy to Full-tier are
+// correctly classified, and that the infra loader is ManifestInfra (not Full).
+// This is the coverage gap that let the original bug slip: no test explicitly
+// asserted these four names were Full-tier before they were promoted.
+func TestManifestTier_PromotedTools_C2(t *testing.T) {
+	// The four tools promoted to Full-tier by the "everyday tools" fix.
+	fullTierExpected := []string{
+		"navigate",
+		"create_task",
+		"list_tasks",
+		"update_task",
+	}
+	for _, name := range fullTierExpected {
+		got := ToolManifestTier(name)
+		if got != ManifestFull {
+			t.Errorf("C2: ToolManifestTier(%q) = %v, want ManifestFull (promoted tool)", name, got)
+		}
+		if !IsFullManifestTool(name) {
+			t.Errorf("C2: IsFullManifestTool(%q) = false, want true (promoted tool)", name)
+		}
+	}
+
+	// The infra loader must be ManifestInfra (not Full, not Lazy).
+	got := ToolManifestTier("load_tool")
+	if got != ManifestInfra {
+		t.Errorf("C2: ToolManifestTier(\"load_tool\") = %v, want ManifestInfra", got)
+	}
+	if IsFullManifestTool("load_tool") {
+		t.Error("C2: IsFullManifestTool(\"load_tool\") = true, want false (it is ManifestInfra, not Full)")
+	}
+
+	// Confirm none of the four was accidentally also infra.
+	for _, name := range fullTierExpected {
+		if ToolManifestTier(name) == ManifestInfra {
+			t.Errorf("C2: ToolManifestTier(%q) = ManifestInfra, want ManifestFull", name)
+		}
+	}
+}
+
 // TestInfraManifestToolNames_Set asserts the infra accessor returns the expected
 // sorted set (single source of truth consumed by the loop's force-include).
-// After the tools-tool unification, the set is just {"tools"}.
+// The set is just {"load_tool"}.
 func TestInfraManifestToolNames_Set(t *testing.T) {
 	got := InfraManifestToolNames()
-	want := []string{"tools"}
+	want := []string{"load_tool"}
 	if len(got) != len(want) {
 		t.Fatalf("InfraManifestToolNames() = %v, want %v", got, want)
 	}
