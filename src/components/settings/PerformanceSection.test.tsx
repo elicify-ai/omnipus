@@ -281,4 +281,36 @@ describe('PerformanceSection — Tool loading toggle', () => {
     expect(screen.getByText(/Takes effect on the next message/)).toBeInTheDocument()
     expect(screen.getByText(/Applies to all agents/)).toBeInTheDocument()
   })
+
+  it('stuck-spinner fix: save status clears to idle (not stuck on saving) when max_parallel_agents is out of range and tools_on_demand is toggled', async () => {
+    // Regression test for the stuck-spinner bug: when max_parallel_agents is out
+    // of range (e.g. 99), buildBody returns null. If handleToolsOnDemandChange
+    // left saveStatus='saving' before the null guard ran, the AutoSaveIndicator
+    // would spin forever. The fix: the else-branch sets saveStatus='idle'
+    // explicitly so the spinner clears.
+    vi.useRealTimers()
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    // Put an out-of-range value (99) into the input first.
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '99' } })
+
+    // Now toggle tools_on_demand — this calls handleToolsOnDemandChange which
+    // calls buildBody(inputValue='99', checked=false) → null (out of range).
+    fireEvent.click(screen.getByLabelText('Tool loading'))
+
+    // Give React time to process state updates.
+    await new Promise((r) => setTimeout(r, 50))
+
+    // The reauth dialog must NOT have opened (no valid body → no setPending/setReauthOpen).
+    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+
+    // updatePerformanceSettings must NOT have been called.
+    expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+
+    // The AutoSaveIndicator must not be in the 'saving' state.
+    // AutoSaveIndicator renders "Saving..." text when status='saving'; it must
+    // not appear because the null buildBody guard cleared status back to 'idle'.
+    expect(screen.queryByText('Saving...')).not.toBeInTheDocument()
+  })
 })

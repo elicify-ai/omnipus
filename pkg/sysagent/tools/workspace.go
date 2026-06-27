@@ -433,10 +433,19 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 		}
 	}
 
-	// Step 2: delete the workspace file (last)
+	// Step 2: delete the workspace file.
 	if err := deleteEntity(workspacesDir(t.deps.Home), id); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
+
+	// Step 3: best-effort cascade of per-workspace directory (AGENT.md / memory room).
+	// The JSON removal above is the authoritative delete; a stale directory is not fatal.
+	wsDir := workspacepkg.WorkspaceDir(t.deps.Home, id)
+	if err := os.RemoveAll(wsDir); err != nil {
+		slog.Warn("sysagent: workspace cascade delete: failed to remove workspace dir",
+			"workspace_id", id, "dir", wsDir, "error", err)
+	}
+
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id": id, "deleted": true, "tasks_deleted": tasksDeleted,
 	}))

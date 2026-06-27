@@ -108,6 +108,7 @@ func ReadInstructions(home, id string) (string, error) {
 				"hint":         "file may have been written outside Omnipus; use PUT /api/v1/workspaces/{id}/instructions to update it",
 			})
 		data = data[:maxInstructionsBytes]
+		return string(data) + "\n\n[... workspace instructions truncated at 256 KB ...]", nil
 	}
 	return string(data), nil
 }
@@ -131,10 +132,10 @@ func WriteInstructions(home, id, content string) error {
 		}
 		return nil
 	}
-	if err := os.MkdirAll(WorkspaceDir(home, id), 0o755); err != nil {
+	if err := os.MkdirAll(WorkspaceDir(home, id), 0o700); err != nil {
 		return fmt.Errorf("workspace: ensure dir %q: %w", id, err)
 	}
-	if err := fileutil.WriteFileAtomic(path, []byte(content), 0o644); err != nil {
+	if err := fileutil.WriteFileAtomic(path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("workspace: write instructions %q: %w", id, err)
 	}
 	return nil
