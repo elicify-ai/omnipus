@@ -283,6 +283,47 @@ describe('CreateAgentWizard — Cancel button', () => {
   })
 })
 
+describe('CreateAgentWizard — missing-field hint (B3 fix)', () => {
+  it('(a) Main with empty Name + Model: hint names both missing fields and Next is disabled', () => {
+    renderWizard({ initialType: 'Main' })
+    const hint = screen.getByTestId('wizard-advance-hint')
+    expect(hint).toHaveTextContent(/Name/)
+    expect(hint).toHaveTextContent(/Model/)
+    expect(screen.getByTestId('wizard-next-1')).toBeDisabled()
+  })
+
+  it('(b) filling Name + Model removes the hint and enables Next', async () => {
+    renderWizard({ initialType: 'Main' })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'My Agent' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'gpt-4' } })
+    await waitFor(() => {
+      expect(screen.queryByTestId('wizard-advance-hint')).toBeNull()
+      expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled()
+    })
+  })
+
+  it('(c) Subagent with inherit_model ON: Model is NOT listed as missing', () => {
+    renderWizard({ initialType: 'Subagent' })
+    // Turn inherit_model ON so model is not required.
+    fireEvent.click(screen.getByTestId('wizard-inherit-model'))
+    const hint = screen.getByTestId('wizard-advance-hint')
+    // Name and Description are still missing, but Model must NOT appear.
+    expect(hint).not.toHaveTextContent(/Model/)
+    expect(hint).toHaveTextContent(/Name/)
+  })
+
+  it('(d) step 2 with empty Soul: hint names Soul', async () => {
+    renderWizard({ initialType: 'Main' })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'X' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    // On step 2 the soul field is empty — hint must name it.
+    const hint = await screen.findByTestId('wizard-advance-hint')
+    expect(hint).toHaveTextContent(/Soul/)
+    expect(screen.getByTestId('wizard-next-2')).toBeDisabled()
+  })
+})
+
 describe('CreateAgentWizard — inherit-from-caller toggles (UAT 4a)', () => {
   it('renders the Model inherit toggle on step 1 for a native Subagent (OFF by default)', () => {
     renderWizard({ initialType: 'Subagent' })
