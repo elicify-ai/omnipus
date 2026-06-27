@@ -2682,11 +2682,11 @@ export interface components {
              */
             id: string;
             /**
-             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation.
+             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
              * @example chat
              * @enum {string}
              */
-            type?: "chat" | "task" | "channel";
+            type?: "chat" | "task" | "channel" | "scheduled";
             /**
              * @description ID of the primary agent that owns this session.
              * @example jim

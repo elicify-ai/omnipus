@@ -11,7 +11,7 @@ type BearerToken = string;
 type OnboardingCompleteResponse = LoginResponse;
 type Session = {
   id: string;
-  type?: ("chat" | "task" | "channel") | undefined;
+  type?: ("chat" | "task" | "channel" | "scheduled") | undefined;
   agent_id: string;
   title: string;
   status: "active" | "archived" | "interrupted";
@@ -887,7 +887,7 @@ export const SessionStats: z.ZodType<SessionStats> = z
   .passthrough();
 export const Session: z.ZodType<Session> = z.object({
   id: z.string(),
-  type: z.enum(["chat", "task", "channel"]).optional(),
+  type: z.enum(["chat", "task", "channel", "scheduled"]).optional(),
   agent_id: z.string(),
   title: z.string(),
   status: z.enum(["active", "archived", "interrupted"]),

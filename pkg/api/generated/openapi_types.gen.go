@@ -2523,9 +2523,10 @@ func (e SessionStatus) Valid() bool {
 
 // Defines values for SessionType.
 const (
-	SessionTypeChannel SessionType = "channel"
-	SessionTypeChat    SessionType = "chat"
-	SessionTypeTask    SessionType = "task"
+	SessionTypeChannel   SessionType = "channel"
+	SessionTypeChat      SessionType = "chat"
+	SessionTypeScheduled SessionType = "scheduled"
+	SessionTypeTask      SessionType = "task"
 )
 
 // Valid indicates whether the value is a known member of the SessionType enum.
@@ -2534,6 +2535,8 @@ func (e SessionType) Valid() bool {
 	case SessionTypeChannel:
 		return true
 	case SessionTypeChat:
+		return true
+	case SessionTypeScheduled:
 		return true
 	case SessionTypeTask:
 		return true
@@ -2727,9 +2730,10 @@ func (e SessionDetailSessionStatus) Valid() bool {
 
 // Defines values for SessionDetailSessionType.
 const (
-	SessionDetailSessionTypeChannel SessionDetailSessionType = "channel"
-	SessionDetailSessionTypeChat    SessionDetailSessionType = "chat"
-	SessionDetailSessionTypeTask    SessionDetailSessionType = "task"
+	SessionDetailSessionTypeChannel   SessionDetailSessionType = "channel"
+	SessionDetailSessionTypeChat      SessionDetailSessionType = "chat"
+	SessionDetailSessionTypeScheduled SessionDetailSessionType = "scheduled"
+	SessionDetailSessionTypeTask      SessionDetailSessionType = "task"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailSessionType enum.
@@ -2738,6 +2742,8 @@ func (e SessionDetailSessionType) Valid() bool {
 	case SessionDetailSessionTypeChannel:
 		return true
 	case SessionDetailSessionTypeChat:
+		return true
+	case SessionDetailSessionTypeScheduled:
 		return true
 	case SessionDetailSessionTypeTask:
 		return true
@@ -7002,7 +7008,7 @@ type Session struct {
 	// Title Human-readable session title. May be auto-generated or user-renamed.
 	Title string `json:"title"`
 
-	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation.
+	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
 	Type *SessionType `json:"type,omitempty"`
 
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
@@ -7015,7 +7021,7 @@ type Session struct {
 // SessionStatus Current lifecycle status of the session.
 type SessionStatus string
 
-// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation.
+// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
 type SessionType string
 
 // SessionCreateRequest Body for POST /sessions. Creates a new session for an agent.
@@ -7220,7 +7226,7 @@ type SessionDetail struct {
 		// Title Human-readable session title. May be auto-generated or user-renamed.
 		Title string `json:"title"`
 
-		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation.
+		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
 		Type *SessionDetailSessionType `json:"type,omitempty"`
 
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
@@ -7252,7 +7258,7 @@ type SessionDetailMessagesType string
 // SessionDetailSessionStatus Current lifecycle status of the session.
 type SessionDetailSessionStatus string
 
-// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation.
+// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
 type SessionDetailSessionType string
 
 // SessionRenameRequest Body for PUT /sessions/{id}. Renames a session.
