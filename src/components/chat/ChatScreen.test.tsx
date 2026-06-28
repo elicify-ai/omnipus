@@ -10,7 +10,6 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
-import * as api from '@/lib/api'
 
 // ResizeObserver is required by cmdk (used inside the ModelSelector popover);
 // jsdom does not implement it. Polyfill with a noop for the tests that open
@@ -314,119 +313,15 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
 
 // ── Wave 2 / FR-008/009/010: chat composer model selector ────────────────────
 //
-// Spec §16 Wave 2 / FR-008/009/010: the composer must include a
-// <ModelSelector> showing the "next message" model. On send, the
-// selection is forwarded as `Metadata["model_name"]` in the WS
-// message frame so the server routes this turn to the chosen model.
-// On session reopen the picker auto-defaults to the last model
-// recorded in the transcript (or the agent's model when transcript
-// is empty).
+// NOTE: The ModelSelector UI (FR-008) and the nextModel seed effect (FR-009)
+// moved from OmnipusComposer → ChatControls. UI + seed tests now live in
+// src/components/chat/ChatControls.test.tsx.
 //
-// The picker is a forward-looking "next message" indicator (spec §18
-// Q3) — NOT a per-thread preference. We use local React state inside
-// OmnipusComposer, NOT useThreadModelContext from assistant-ui.
-describe('OmnipusComposer — model selector (FR-008/009/010)', () => {
-  // Per-test helpers. The composer's local state is initialised from
-  // (1) the picker value the user has selected this session, else
-  // (2) the last model from the active session's transcript, else
-  // (3) the active agent's `model` config. We stub the relevant
-  // queries/state per test.
-
-  // The composer's "send" ultimately calls chatStore.sendMessage with
-  // an opts arg that may include model_name. We can drive the composer
-  // by calling composer.setText + composer.send (assistant-ui's path)
-  // OR by triggering the native form submit. The ChatScreen composer
-  // uses ComposerPrimitive.Send; the assistant-ui runtime onNew path
-  // ends up calling store.sendMessage. We assert the model_name is
-  // forwarded by inspecting the store call directly.
-
-  // We need a way to read what `sendMessage` was called with. The
-  // chat store is created via zustand; we can spy on its `sendMessage`
-  // setter via useChatStore.setState — but the real production
-  // `sendMessage` is a closure with WS dispatch. The most direct way
-  // is to replace sendMessage via useChatStore.setState at the start
-  // of each test (the test mock layer for the attachment flow uses
-  // this pattern; see omnipus-runtime.attachments.test.tsx).
-  // For composer tests, we use the OmnipusComposer path: a real
-  // ComposerPrimitive.Send click fires onNew → sendMessage. We
-  // intercept sendMessage via setState.
-
-  // Set up an active session + a provider list (so ModelSelector has
-  // options to show). The composer auto-derives the picker value
-  // from the active agent's `model` config.
-  function primeActiveAgentAndProviders() {
-    useSessionStore.setState({
-      activeAgentId: 'general-assistant',
-    })
-    // Default to a single connected provider with 3 models
-    vi.mocked(api.fetchProviders).mockResolvedValue([
-      {
-        id: 'openrouter',
-        name: 'openrouter',
-        display_name: 'OpenRouter',
-        status: 'connected',
-        models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo', 'openai/gpt-4o'],
-      },
-    ])
-  }
-
-  it('renders a model selector in the composer action area', async () => {
-    // FR-008: the chat composer includes a model selector.
-    primeActiveAgentAndProviders()
-    render(<OmnipusComposer />)
-    // The selector trigger renders the active agent's model by default
-    const trigger = await screen.findByTestId('composer-model-selector')
-    expect(trigger).toBeInTheDocument()
-  })
-
-  it('auto-defaults the picker to the active agent model when transcript is empty', async () => {
-    // FR-009: with no transcript history, the picker defaults to the
-    // active agent's `model` config. With the test's empty useQuery
-    // mocks, the agent list is empty so the picker falls back to
-    // the activeAgentModel. The placeholder is rendered as a DOM
-    // attribute on the input element when no models are available.
-    primeActiveAgentAndProviders()
-    // Reset nextModel so the seed effect has a clean baseline to write
-    // to. (previous tests in this describe block may have left a value.)
-    act(() => {
-      useChatStore.setState({ nextModel: null, messages: [] })
-      useSessionStore.setState({
-        activeSessionId: 'sess_empty_agt',
-        activeAgentId: 'general-assistant',
-      })
-    })
-    render(<OmnipusComposer />)
-    const trigger = await screen.findByTestId('composer-model-selector')
-    // UAT model-catalog fix: the composer picker is now a CONSTRAINED
-    // dropdown. The picker element must exist (combobox when a catalogue is
-    // present, or a disabled "connect a provider" state when empty).
-    expect(trigger).toBeInTheDocument()
-    // W4-20: the FR-009 contract is that the picker stores activeAgentModel in
-    // `nextModel` on seed; assert that here so a regression that drops the
-    // activeAgentModel fallback is caught. The test fixture has no agents (the
-    // test's `useQuery` returns []), so the activeAgentModel is null and the
-    // seed effect must clear nextModel rather than leave a stale value.
-    expect(useChatStore.getState().nextModel).toBeNull()
-  })
-
-  it('renders a constrained "connect a provider" state when no catalogue is available (UAT model-catalog fix)', async () => {
-    // UAT model-catalog fix: a non-catalogue model must not be selectable.
-    // With no connected provider catalogue the composer picker renders a
-    // disabled "connect a provider" state — NOT a free-text input that would
-    // flag every value as "unresolved" (the original always-on orange badge
-    // bug). The write-to-store path is covered by the model-selector unit
-    // tests and the store-level forward test below.
-    act(() => {
-      useChatStore.setState({ nextModel: null, messages: [] })
-      useSessionStore.setState({ activeAgentId: 'general-assistant' })
-    })
-    render(<OmnipusComposer />)
-    const trigger = await screen.findByTestId('composer-model-selector')
-    expect(trigger).toBeInTheDocument()
-    // No free-text input; the unresolved badge can never appear.
-    expect(screen.queryByText(/unresolved/i)).not.toBeInTheDocument()
-    expect(trigger).toHaveTextContent(/connect a provider/i)
-  })
+// This describe block retains only the store-level contracts that are
+// independent of which component renders the picker:
+//   • FR-010: sendMessage forwards nextModel as metadata.model_name
+//   • FR-010 converse: omits metadata.model_name when nextModel is null
+describe('OmnipusComposer — model selector store contracts (FR-010)', () => {
 
   it('sendMessage forwards nextModel as metadata.model_name on the WS frame (store-level contract)', () => {
     // FR-010 / Spec §13 FR-010: the chat store's sendMessage must accept
@@ -508,73 +403,4 @@ describe('OmnipusComposer — model selector (FR-008/009/010)', () => {
     expect(last?.metadata).toBeUndefined()
   })
 
-  it('FR-009: seeds nextModel from the active session transcript when present', async () => {
-    // FR-009 (chain step 2): when the user switches into a session that
-    // has prior assistant messages, the picker should be pre-seeded with
-    // the LAST assistant model's slug. The seed effect in OmnipusComposer
-    // (useEffect keyed on activeSessionId::activeAgentId) reads
-    // `messages` from the chat store and walks bottom-up to find the
-    // last assistant message with a non-empty `model` field.
-    //
-    // This test is the converse of the empty-transcript test above —
-    // populated transcript MUST win over the agent's `model` config.
-    primeActiveAgentAndProviders()
-
-    // Reset the chat store's nextModel + messages to known values.
-    act(() => {
-      useChatStore.setState({
-        nextModel: null,
-        messages: [
-          // First message: user. Should be skipped by the bottom-up walk.
-          { id: 'u1', role: 'user', content: 'hi', timestamp: '2026-06-17T00:00:00Z' },
-          // First assistant turn uses model A. An older one that should
-          // be skipped.
-          { id: 'a1', role: 'assistant', content: 'reply 1', timestamp: '2026-06-17T00:00:01Z', model: 'openai/gpt-4o' },
-          // User turn.
-          { id: 'u2', role: 'user', content: 'follow-up', timestamp: '2026-06-17T00:00:02Z' },
-          // The LAST assistant turn uses model B. This is the model
-          // the seed effect must pick.
-          { id: 'a2', role: 'assistant', content: 'reply 2', timestamp: '2026-06-17T00:00:03Z', model: 'z-ai/glm-5-turbo' },
-        ],
-      })
-      useSessionStore.setState({
-        activeSessionId: 'sess_with_history',
-        activeAgentId: 'general-assistant',
-      })
-    })
-
-    render(<OmnipusComposer />)
-    // Wait for the seed effect to flush. The composer's useEffect runs
-    // after the first commit, so we yield a microtask.
-    await act(async () => {
-      await Promise.resolve()
-    })
-
-    // The picker's underlying store value MUST be the last assistant
-    // model's slug, not the agent's `model` config and not a prior
-    // assistant turn.
-    expect(useChatStore.getState().nextModel).toBe('z-ai/glm-5-turbo')
-  })
-
-  it('FR-009 converse: empty transcript + active agent with model → nextModel = agent.model (chain step 3)', async () => {
-    // FR-009 (chain step 3): with no transcript history, the picker
-    // derives its initial value from the active agent's `model` config.
-    //
-    // NOTE: this branch is covered indirectly by the "auto-defaults the
-    // picker to the active agent model when transcript is empty" test
-    // above (which now asserts the store contract: empty transcript
-    // + no agents loaded → nextModel = null). Driving the converse
-    // case (empty transcript + a real agent) requires a real
-    // QueryClient to back `useQuery`, which this test file does not
-    // provide. The chain is therefore verified at the unit level by
-    // inspecting the seed effect's `transcriptLastModel ??
-    // activeAgentModel ?? null` order: the test above proves the
-    // effect runs and writes to nextModel, and the transcript-last
-    // test below proves the `transcriptLastModel` branch wins over
-    // the null activeAgentModel. End-to-end coverage lives in the
-    // `agent-list.test.tsx` integration suite (Scenario 26), which
-    // boots a real QueryClient and exercises the full
-    // transcript+agents combination.
-    expect(true).toBe(true)
-  })
 })

@@ -23,6 +23,7 @@ import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchWorkspaces, updateAgent, fetchCliDetect, isApiError, isWorker } from '@/lib/api'
 import type { Agent, Workspace } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
+import { ScreenHeader } from '@/components/layout/ScreenHeader'
 
 interface HostClis {
   hasClaude: boolean
@@ -581,13 +582,16 @@ export function AgentListScreen() {
 
   if (isError) {
     return (
-      <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-        <div className="max-w-4xl mx-auto px-4 py-6">
-          <div className="flex flex-col items-center justify-center py-16 gap-3">
-            <p className="text-[var(--color-muted)] text-sm">Could not load agents.</p>
-            <Button variant="outline" size="sm" onClick={() => refetchAgents()}>
-              Retry
-            </Button>
+      <div className="absolute inset-0 flex flex-col">
+        <ScreenHeader title="Agents" />
+        <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+          <div className="max-w-4xl mx-auto px-4 py-6">
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              <p className="text-[var(--color-muted)] text-sm">Could not load agents.</p>
+              <Button variant="outline" size="sm" onClick={() => refetchAgents()}>
+                Retry
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -595,7 +599,9 @@ export function AgentListScreen() {
   }
 
   return (
-    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+    <div className="absolute inset-0 flex flex-col">
+      <ScreenHeader title="Agents" />
+      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
       <div className="max-w-4xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -649,6 +655,7 @@ export function AgentListScreen() {
         </Tabs>
 
         <CreateAgentModal />
+      </div>
       </div>
     </div>
   )

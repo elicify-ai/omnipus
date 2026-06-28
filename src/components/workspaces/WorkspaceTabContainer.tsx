@@ -1,14 +1,16 @@
 import { createContext, useContext, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
+import { List } from '@phosphor-icons/react'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useSidebarStore } from '@/store/sidebar'
+import { useSessionStore } from '@/store/session'
+import { ChatControls } from '@/components/chat/ChatControls'
 import { WorkspaceTabBar, resolveActiveSegment, WORKSPACE_TABS } from './WorkspaceTabBar'
 
-// React context carrying the resolved workspace to every tab. Tabs read the
-// workspace from here rather than re-fetching, so the container is the single
-// source of truth for workspace identity + the active-workspace binding.
+// React context carrying the resolved workspace to every tab.
 const WorkspaceContext = createContext<Workspace | null>(null)
 
 /** Hook for tab components to read the resolved workspace. */
@@ -25,17 +27,22 @@ interface WorkspaceTabContainerProps {
 }
 
 /**
- * The workspace detail shell — a tabbed container. Resolves the workspace
- * (active or archived), binds it as the active workspace (so chat/sessions/
- * tasks pick up the context), renders the sticky tab bar, and provides the
- * resolved workspace to the active tab via React context.
+ * The workspace detail shell. Resolves the workspace, binds it as the active
+ * workspace, manages session lifecycle via enterWorkspaceChat, and renders:
  *
- * Tab content (Chat/Board/List/Graph/Calendar/Team/Settings) lives in the
- * sub-route files under routes/_app/workspaces.$workspaceId.*.
+ *   Row 1 — top bar: [hamburger] [WorkspaceTabBar] [spacer] [ChatControls (chat only)]
+ *   Row 2 — breadcrumb: "WorkspaceName › ActiveTab"
+ *   Row 3 — tab content (Outlet)
+ *
+ * Session lifecycle: enterWorkspaceChat(workspace.id) fires whenever the
+ * workspaceId changes (NOT on tab switches within the same workspace), so
+ * Chat→Board→Chat preserves the active conversation (Bug 1 fix).
  */
 export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProps) {
   const navigate = useNavigate()
   const { activeWorkspaceId, setActiveWorkspaceId, setActiveMilestoneId } = useWorkspacesStore()
+  const toggle = useSidebarStore((s) => s.toggle)
+  const enterWorkspaceChat = useSessionStore((s) => s.enterWorkspaceChat)
 
   const {
     data: workspaces = [],
@@ -61,20 +68,26 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     }
   }, [workspaceId, workspaces, navigate])
 
-  // Bind the active workspace from the route — the single source of truth the
-  // chat turn, session filter, and task views read (M4 Gap 2).
+  // Bind the active workspace from the route.
   useEffect(() => {
     if (workspaceId && workspaceId !== 'inbox' && activeWorkspaceId !== workspaceId) {
       setActiveWorkspaceId(workspaceId)
     }
   }, [workspaceId, activeWorkspaceId, setActiveWorkspaceId])
 
-  // Reset milestone filter whenever the active workspace changes.
+  // Reset milestone filter on workspace change.
   useEffect(() => {
     setActiveMilestoneId(null)
   }, [workspaceId, setActiveMilestoneId])
 
-  // Direct-URL access to an archived workspace — fall back to the archived list.
+  // Bug 1 fix: manage session lifecycle at the workspace level.
+  // Fires only on workspaceId change — tab switches don't re-run this.
+  useEffect(() => {
+    if (!workspaceId || workspaceId === 'inbox') return
+    enterWorkspaceChat(workspaceId)
+  }, [workspaceId, enterWorkspaceChat])
+
+  // Fall back to archived workspace list for direct-URL access.
   const { data: archivedWorkspaces = [], isLoading: archivedLoading } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'archived' }),
     queryFn: () => fetchWorkspaces({ status: 'archived' }),
@@ -86,7 +99,6 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     workspaces.find((w) => w.id === workspaceId) ??
     archivedWorkspaces.find((w) => w.id === workspaceId)
 
-  // 'inbox' alias is redirecting — suppress render while useEffect navigates.
   if (workspaceId === 'inbox') return null
 
   if (workspacesError) {
@@ -105,10 +117,55 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
   }
 
   return (
+    <WorkspaceTabContainerView workspace={workspace} toggle={toggle} />
+  )
+}
+
+/** Inner view — extracted so useLocation can run unconditionally. */
+function WorkspaceTabContainerView({
+  workspace,
+  toggle,
+}: {
+  workspace: Workspace
+  toggle: () => void
+}) {
+  const location = useLocation()
+  const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
+
+  return (
     <WorkspaceContext.Provider value={workspace}>
       <div className="absolute inset-0 flex flex-col overflow-hidden">
+        {/* Row 1: top bar */}
+        <div
+          className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface-1)]/95 backdrop-blur-sm flex-shrink-0"
+          data-testid="workspace-top-bar"
+        >
+          <button
+            type="button"
+            id="sidebar-hamburger"
+            onClick={toggle}
+            aria-label="Toggle navigation sidebar"
+            data-testid="workspace-hamburger"
+            className="flex items-center justify-center h-11 w-10 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+          >
+            <List size={20} />
+          </button>
+
+          <WorkspaceTabBar workspaceId={workspace.id} />
+
+          <div className="flex-1 min-w-0" />
+
+          {activeSegment === 'chat' && (
+            <div className="flex-shrink-0 px-3" data-testid="workspace-chat-controls">
+              <ChatControls />
+            </div>
+          )}
+        </div>
+
+        {/* Row 2: breadcrumb */}
         <WorkspaceBreadcrumbBar workspace={workspace} />
-        <WorkspaceTabBar workspaceId={workspace.id} />
+
+        {/* Row 3: tab content */}
         <div className="flex-1 min-h-0 relative">
           <Outlet />
         </div>
@@ -117,11 +174,6 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
   )
 }
 
-/**
- * WorkspaceNotFoundState — shown when a workspace ID doesn't resolve.
- * Provides a "Back to my workspace" button that navigates to the default
- * workspace (or the workspaces list if none is found). Fix #10.
- */
 function WorkspaceNotFoundState() {
   const navigate = useNavigate()
   const { data: workspaces = [] } = useQuery({
@@ -160,11 +212,6 @@ function WorkspaceNotFoundState() {
   )
 }
 
-/**
- * WorkspaceBreadcrumbBar — slim title row above the tab bar showing
- * "WorkspaceName › ActiveTab" so users always know which workspace
- * they're in when the sidebar is closed (fix #8).
- */
 function WorkspaceBreadcrumbBar({ workspace }: { workspace: Workspace }) {
   const location = useLocation()
   const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
@@ -182,9 +229,7 @@ function WorkspaceBreadcrumbBar({ workspace }: { workspace: Workspace }) {
       {activeTab && (
         <>
           <span className="text-xs text-[var(--color-muted)]" aria-hidden="true">›</span>
-          <span className="text-xs text-[var(--color-muted)]">
-            {activeTab.label}
-          </span>
+          <span className="text-xs text-[var(--color-muted)]">{activeTab.label}</span>
         </>
       )}
     </div>

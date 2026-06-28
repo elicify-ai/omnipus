@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { fetchAgents, isWorker, updateAgent, type Agent } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
+import { ScreenHeader } from '@/components/layout/ScreenHeader'
 
 // Editable delegation graph screen (Spec-3 FR-6.2 / US-3 / NFR-7).
 //
@@ -175,6 +176,7 @@ export function TrustGraphScreen() {
 
   return (
     <div className="absolute inset-0 flex flex-col pb-[env(safe-area-inset-bottom)]">
+      <ScreenHeader title="Delegation Graph" />
       <div className="shrink-0 px-4 pt-6">
         <div className="mb-2">
           <Link

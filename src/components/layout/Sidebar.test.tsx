@@ -56,9 +56,48 @@ vi.mock('@/store/workspacesStore', () => ({
   },
 }))
 
-// Mock useAuthStore used by Sidebar (handleLogout)
-vi.mock('@/store/auth', () => ({
-  useAuthStore: { getState: () => ({ clearAuth: vi.fn() }) },
+// Mock useAuthStore used by Sidebar (handleLogout + username hook)
+vi.mock('@/store/auth', () => {
+  const mockState = { clearAuth: vi.fn(), username: 'testuser', token: null, role: null }
+  const useAuthStore = (selector?: (s: typeof mockState) => unknown) =>
+    selector ? selector(mockState) : mockState
+  useAuthStore.getState = () => mockState
+  return { useAuthStore }
+})
+
+// Mock useUiStore — Sidebar calls toggleNotificationPanel
+vi.mock('@/store/ui', () => ({
+  useUiStore: (selector?: (s: { toggleNotificationPanel: () => void }) => unknown) => {
+    const state = { toggleNotificationPanel: vi.fn() }
+    return selector ? selector(state) : state
+  },
+}))
+
+// Mock useNotificationsStore — Sidebar reads unreadCount
+vi.mock('@/store/notifications', () => ({
+  useNotificationsStore: (selector?: (s: { unreadCount: number }) => unknown) => {
+    const state = { unreadCount: 0 }
+    return selector ? selector(state) : state
+  },
+}))
+
+// Mock DropdownMenu primitives — jsdom doesn't support Radix portals
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuItem: ({ children, onSelect, 'aria-label': ariaLabel, className }: {
+    children: React.ReactNode
+    onSelect?: () => void
+    'aria-label'?: string
+    className?: string
+  }) => (
+    <button onClick={onSelect} aria-label={ariaLabel} className={className}>
+      {children}
+    </button>
+  ),
+  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
 }))
 
 // Mock NewWorkspaceSlideOver — it imports more dependencies we don't need in these tests
@@ -419,5 +458,66 @@ describe('Sidebar — Inline search (F7-F07)', () => {
     // Both projects must be visible again
     expect(screen.getByText('Alpha Project')).toBeTruthy()
     expect(screen.getByText('Beta Project')).toBeTruthy()
+  })
+})
+
+// ── Bottom section: Notifications + Profile ────────────────────────────────────
+// Traces to: feat/0.1.0-uat-fixes — sidebar bottom section (notifications + profile)
+
+describe('Sidebar — bottom section: Notifications row', () => {
+  it('renders a Notifications button when sidebar is open', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    const notifBtn = screen.getByRole('button', { name: 'Notifications' })
+    expect(notifBtn).toBeTruthy()
+    expect(notifBtn.getAttribute('data-testid')).toBe('sidebar-notifications')
+  })
+
+  it('does not show the unread badge when unreadCount is 0', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    // Badge must not appear when there are no unread notifications
+    expect(screen.queryByTestId('sidebar-notification-badge')).toBeNull()
+  })
+
+  it('Notifications button does not throw when clicked', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    const notifBtn = screen.getByRole('button', { name: 'Notifications' })
+    // The button is wired to toggleNotificationPanel — clicking must not throw
+    expect(() => act(() => { fireEvent.click(notifBtn) })).not.toThrow()
+  })
+})
+
+describe('Sidebar — bottom section: Profile row', () => {
+  it('renders the profile trigger button with the username', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    // The profile trigger shows the mocked username "testuser"
+    const profileTrigger = screen.getByTestId('sidebar-profile-trigger')
+    expect(profileTrigger).toBeTruthy()
+    expect(screen.getAllByText('testuser').length).toBeGreaterThan(0)
+  })
+
+  it('renders Profile and Appearance items in the dropdown', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    // DropdownMenuContent is mocked to render inline, so items are in the DOM
+    expect(screen.getByText('Profile')).toBeTruthy()
+    expect(screen.getByText('Appearance')).toBeTruthy()
+  })
+
+  it('renders a Sign out action in the profile dropdown', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    // Sign out is in the dropdown (mocked as a button with aria-label="Sign out")
+    const signOutBtn = screen.getByRole('button', { name: 'Sign out' })
+    expect(signOutBtn).toBeTruthy()
   })
 })

@@ -17,6 +17,15 @@ import { fetchSessions, fetchWorkspaces } from '@/lib/api'
 // Traces to: temporal-puzzling-melody.md W2-1
 // Traces to: sprint-i-historical-replay-fidelity-spec.md FR-I-014
 
+const mockNavigate = vi.fn()
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -83,6 +92,7 @@ function renderPanel() {
 }
 
 beforeEach(() => {
+  mockNavigate.mockReset()
   act(() => {
     useUiStore.setState({ sessionPanelOpen: true, createAgentModalOpen: false })
     useSessionStore.setState({
@@ -314,10 +324,9 @@ describe('SessionPanel — per-session isStreaming dot (F-S11)', () => {
 // ── Workspace grouping tests ──────────────────────────────────────────────────
 //
 // Grouping is now driven by each session's own workspace_id field (set by the
-// backend and passed through rawToSession). No link-store fan-out queries are
-// needed; the grouping map is built directly from session.workspace_id.
-// Sessions without workspace_id fall under a "No workspace" fallback group.
-// The active workspace (when set) is placed first in the list.
+// backend and passed through rawToSession). The panel is always scoped to the
+// active workspace's sessions + a "No workspace" group for orphaned/unlinked
+// sessions. Other workspaces' sessions are excluded from view.
 
 // Helper workspaces for workspace grouping tests
 const wsGroupWorkspaces = [
@@ -325,10 +334,9 @@ const wsGroupWorkspaces = [
   { id: 'ws-beta',  name: 'Beta Project',  is_default: false, status: 'active' as const, pinned: false, pin_order: 0, task_count: 0, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
 ]
 
-// Test A: all sessions in one workspace → grouped view with workspace header (showGroups=true)
+// Test A: active workspace's session renders under its group header
 describe('SessionPanel — workspace grouping: single workspace renders group header (Test A)', () => {
   beforeEach(() => {
-    // One workspace; the session carries workspace_id='ws-alpha' directly.
     vi.mocked(fetchWorkspaces).mockResolvedValue([wsGroupWorkspaces[0]] as never)
     vi.mocked(fetchSessions).mockResolvedValue([
       {
@@ -344,20 +352,22 @@ describe('SessionPanel — workspace grouping: single workspace renders group he
         message_count: 2,
       },
     ])
+    // Set ws-alpha as active so its session is visible.
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-alpha' })
+    })
   })
 
   it('renders a collapsible workspace group header even when there is only one workspace', async () => {
-    // BDD: Given all sessions belong to the same (single) workspace (via workspace_id)
-    // BDD: Then showGroups=true and a collapsible group header button is rendered for that workspace
+    // BDD: Given all sessions belong to the active workspace (via workspace_id)
+    // BDD: Then showGroups=true and a collapsible group header button is rendered
     // BDD: And the session appears under that group header
     renderPanel()
 
-    // The workspace group header must be present
     const groupHeader = await screen.findByRole('button', { name: /Alpha Project workspace sessions/i })
     expect(groupHeader).toBeTruthy()
     expect(groupHeader).toHaveAttribute('aria-expanded', 'true')
 
-    // Session is visible under the group
     await screen.findByLabelText('Open session: Alpha Project Session')
   })
 
@@ -387,9 +397,8 @@ describe('SessionPanel — workspace grouping: single workspace renders group he
   })
 
   it('renders sessions under "No workspace" group header when sessions have no workspace_id', async () => {
-    // BDD: Given sessions have no workspace_id (legacy/global sessions)
+    // BDD: Given sessions have no workspace_id (legacy/global sessions) and no active workspace
     // BDD: Then all sessions land in the "No workspace" fallback group
-    // BDD: And the "No workspace" group header button IS rendered (always-on grouping)
     vi.mocked(fetchWorkspaces).mockResolvedValue([] as never)
     vi.mocked(fetchSessions).mockResolvedValue([
       {
@@ -403,6 +412,10 @@ describe('SessionPanel — workspace grouping: single workspace renders group he
         message_count: 1,
       },
     ])
+    // No active workspace: all sessions show as "No workspace" fallback.
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: null })
+    })
 
     renderPanel()
 
@@ -411,16 +424,14 @@ describe('SessionPanel — workspace grouping: single workspace renders group he
     expect(noWsHeader).toBeTruthy()
     expect(noWsHeader).toHaveAttribute('aria-expanded', 'true')
 
-    // Session is visible under the fallback group
     await screen.findByLabelText('Open session: Legacy Session One')
   })
 })
 
-// Test B: sessions in multiple workspaces → workspace group headers appear
-describe('SessionPanel — workspace grouping: multi-workspace renders group headers (Test B)', () => {
+// Test B: no active workspace → all sessions appear in "No workspace" fallback
+describe('SessionPanel — workspace grouping: no active workspace renders "No workspace" group (Test B)', () => {
   beforeEach(() => {
     vi.mocked(fetchWorkspaces).mockResolvedValue(wsGroupWorkspaces as never)
-    // Sessions carry workspace_id directly — no link-store queries needed.
     vi.mocked(fetchSessions).mockResolvedValue([
       {
         id: 'sess-ws1-1',
@@ -447,38 +458,35 @@ describe('SessionPanel — workspace grouping: multi-workspace renders group hea
         message_count: 3,
       },
     ])
+    // No active workspace: both sessions are shown in "No workspace" fallback.
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: null })
+    })
   })
 
-  it('renders a group header button for each workspace', async () => {
-    // BDD: Given sessions span 2 workspaces (Alpha Project, Beta Project) via workspace_id
-    // BDD: Then showGroups=true and a header button is rendered for each workspace
+  it('renders all sessions under "No workspace" when no active workspace is set', async () => {
+    // BDD: Given no active workspace and sessions exist
+    // BDD: Then all sessions appear in the "No workspace" fallback group
     renderPanel()
 
-    const alphaHeader = await screen.findByRole('button', { name: /Alpha Project workspace sessions/i })
-    const betaHeader = await screen.findByRole('button', { name: /Beta Project workspace sessions/i })
-
-    expect(alphaHeader).toBeTruthy()
-    expect(betaHeader).toBeTruthy()
+    const noWsHeader = await screen.findByRole('button', { name: /No workspace workspace sessions/i })
+    expect(noWsHeader).toBeTruthy()
   })
 
-  it('renders both session items visible under their respective workspace groups', async () => {
-    // BDD: Given 2 workspace groups, all expanded by default
-    // BDD: Then both session items are visible in the DOM
+  it('renders both session items visible under the "No workspace" fallback group', async () => {
     renderPanel()
 
     await screen.findByLabelText('Open session: Alpha Project Session')
     await screen.findByLabelText('Open session: Beta Project Session')
   })
 
-  it('shows count badge of 1 for each workspace group', async () => {
-    // BDD: Given 1 session per workspace
-    // BDD: Then each group header badge shows "1"
+  it('shows count badge of 2 for the "No workspace" fallback group', async () => {
     renderPanel()
 
-    await screen.findByRole('button', { name: /Alpha Project workspace sessions/i })
+    await screen.findByRole('button', { name: /No workspace workspace sessions/i })
 
-    const badges = screen.getAllByText('1')
-    expect(badges.length).toBeGreaterThanOrEqual(2)
+    const badges = screen.getAllByText('2')
+    expect(badges.length).toBeGreaterThanOrEqual(1)
   })
 })
 
@@ -512,44 +520,42 @@ describe('SessionPanel — workspace grouping: collapse/expand toggle (Test C)',
         message_count: 3,
       },
     ])
+    // No active workspace: all sessions in "No workspace" fallback.
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: null })
+    })
   })
 
-  it('collapses a workspace group on first click and expands it on second click', async () => {
-    // BDD: Given a multi-workspace panel (Alpha + Beta), all groups expanded
-    // BDD: When the user clicks the Beta Project group header
-    // BDD: Then aria-expanded=false and its session item leaves the DOM
-    // BDD: When the user clicks the Beta header again
-    // BDD: Then aria-expanded=true and the session item is visible again
-    // BDD: And the Alpha group remains unaffected throughout
+  it('collapses the "No workspace" group on first click and expands it on second click', async () => {
+    // BDD: Given a panel with a "No workspace" fallback group
+    // BDD: When the user clicks the group header it collapses
+    // BDD: When the user clicks again it expands
     renderPanel()
 
-    const betaHeader = await screen.findByRole('button', { name: /Beta Project workspace sessions/i })
+    const noWsHeader = await screen.findByRole('button', { name: /No workspace workspace sessions/i })
 
     // Initially expanded
-    await screen.findByLabelText('Open session: Beta Project Session')
-    expect(betaHeader).toHaveAttribute('aria-expanded', 'true')
+    await screen.findByLabelText('Open session: Alpha Project Session')
+    expect(noWsHeader).toHaveAttribute('aria-expanded', 'true')
 
     // Collapse
-    fireEvent.click(betaHeader)
+    fireEvent.click(noWsHeader)
 
     await waitFor(() => {
-      expect(screen.queryByLabelText('Open session: Beta Project Session')).toBeNull()
+      expect(screen.queryByLabelText('Open session: Alpha Project Session')).toBeNull()
     })
-    expect(betaHeader).toHaveAttribute('aria-expanded', 'false')
-
-    // Alpha group is unaffected
-    expect(screen.getByLabelText('Open session: Alpha Project Session')).toBeTruthy()
+    expect(noWsHeader).toHaveAttribute('aria-expanded', 'false')
 
     // Expand again
-    fireEvent.click(betaHeader)
+    fireEvent.click(noWsHeader)
 
-    await screen.findByLabelText('Open session: Beta Project Session')
-    expect(betaHeader).toHaveAttribute('aria-expanded', 'true')
+    await screen.findByLabelText('Open session: Alpha Project Session')
+    expect(noWsHeader).toHaveAttribute('aria-expanded', 'true')
   })
 })
 
-// Test D: search filters sessions; workspace group header disappears when empty
-describe('SessionPanel — workspace grouping: search filters and hides empty groups (Test D)', () => {
+// Test D: search filters sessions
+describe('SessionPanel — workspace grouping: search filters (Test D)', () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     vi.mocked(fetchWorkspaces).mockResolvedValue(wsGroupWorkspaces as never)
@@ -579,20 +585,24 @@ describe('SessionPanel — workspace grouping: search filters and hides empty gr
         message_count: 3,
       },
     ])
+    // No active workspace: both sessions visible in fallback group.
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: null })
+    })
   })
 
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('hides a workspace group header when its sessions do not match the search term', async () => {
-    // BDD: Given a multi-workspace panel with Alpha and Beta groups visible
-    // BDD: When the user types "Alpha" (matches only "Alpha Project Session")
-    // BDD: Then the Beta Project group header disappears
-    // BDD: And the Alpha session remains visible
+  it('hides sessions that do not match the search term', async () => {
+    // BDD: Given both sessions visible
+    // BDD: When user types "Alpha" (only matches "Alpha Project Session")
+    // BDD: Then "Beta Project Session" disappears
     renderPanel()
 
-    await screen.findByRole('button', { name: /Beta Project workspace sessions/i })
+    await screen.findByLabelText('Open session: Alpha Project Session')
+    await screen.findByLabelText('Open session: Beta Project Session')
 
     const searchInput = screen.getByRole('textbox', { name: /search sessions/i })
     fireEvent.change(searchInput, { target: { value: 'Alpha' } })
@@ -602,18 +612,19 @@ describe('SessionPanel — workspace grouping: search filters and hides empty gr
     })
 
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /Beta Project workspace sessions/i })).toBeNull()
+      expect(screen.queryByLabelText('Open session: Beta Project Session')).toBeNull()
     })
 
     expect(screen.getByLabelText('Open session: Alpha Project Session')).toBeTruthy()
   })
 })
 
-// Test E: sessions with no workspace_id appear under "No workspace" fallback
+// Test E: sessions with no workspace_id appear under "No workspace" alongside workspace-scoped ones
 describe('SessionPanel — workspace grouping: ungrouped sessions go to "No workspace" (Test E)', () => {
   it('renders sessions without workspace_id under "No workspace" alongside workspace-linked sessions', async () => {
-    // BDD: Given one session has workspace_id='ws-alpha' and another has no workspace_id
-    // BDD: Then two workspace groups appear: "Alpha Project" and "No workspace"
+    // BDD: Given active workspace is ws-alpha
+    //      And one session has workspace_id='ws-alpha', another has no workspace_id
+    //      Then two groups appear: "Alpha Project" and "No workspace"
     vi.mocked(fetchWorkspaces).mockResolvedValue([wsGroupWorkspaces[0]] as never)
     vi.mocked(fetchSessions).mockResolvedValue([
       {
@@ -639,6 +650,9 @@ describe('SessionPanel — workspace grouping: ungrouped sessions go to "No work
         message_count: 1,
       },
     ])
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-alpha' })
+    })
 
     renderPanel()
 
@@ -654,19 +668,15 @@ describe('SessionPanel — workspace grouping: ungrouped sessions go to "No work
   })
 })
 
-// ── Workspace scoping (IA reframe) ────────────────────────────────────────────
+// ── Workspace scoping ────────────────────────────────────────────────────────
 //
-// Regression for the IA reframe: the global "/" front door redirects into the
-// DEFAULT workspace's chat, which sets activeWorkspaceId. The panel must NOT
-// strip sessions without workspace_id while in the default workspace (the
-// home/inbox), otherwise those sessions become unreachable. A NON-default
-// workspace scopes strictly to sessions whose workspace_id matches.
-describe('SessionPanel — workspace scoping (IA reframe)', () => {
-  it('default workspace shows sessions without workspace_id (no scoping)', async () => {
+// The panel always scopes to the active workspace + "No workspace" for orphans.
+// Sessions belonging to OTHER known workspaces are excluded from view.
+describe('SessionPanel — workspace scoping', () => {
+  it('default workspace shows sessions without workspace_id under "No workspace"', async () => {
     // BDD: Given the active workspace is the default workspace
     //      And a session exists that has NO workspace_id
-    //      When the panel renders
-    //      Then the session is still listed (inbox behaviour)
+    //      Then the session is listed under "No workspace" (orphan group)
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-default', name: 'Inbox', is_default: true } as never,
     ])
@@ -695,11 +705,13 @@ describe('SessionPanel — workspace scoping (IA reframe)', () => {
     ).toBeTruthy()
   })
 
-  it('non-default workspace scopes to sessions with matching workspace_id, hiding others', async () => {
-    // BDD: Given the active workspace is a NON-default workspace
-    //      And a session with workspace_id='ws-project' plus a session without workspace_id both exist
-    //      When the panel renders
-    //      Then only the session with workspace_id='ws-project' is listed
+  it('non-default workspace scopes to sessions with matching workspace_id; unlinked sessions appear under "No workspace"; other workspace sessions are hidden', async () => {
+    // BDD: Given the active workspace is ws-project (NON-default)
+    //      And a session with workspace_id='ws-project', a session without workspace_id,
+    //      and a session with workspace_id='ws-default' (another known workspace) all exist
+    //      Then "Linked Project Session" is visible (active workspace group)
+    //      And "Unlinked Other Session" is visible under "No workspace" (orphan group)
+    //      And "Inbox Session" (ws-default) is NOT shown (other workspace excluded)
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-default', name: 'Inbox', is_default: true } as never,
       { id: 'ws-project', name: 'Project', is_default: false } as never,
@@ -728,6 +740,18 @@ describe('SessionPanel — workspace scoping (IA reframe)', () => {
         updated_at: '2026-04-01T02:00:00Z',
         message_count: 1,
       },
+      {
+        id: 'sess-inbox-1',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Inbox Session',
+        type: 'chat',
+        workspace_id: 'ws-default',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T03:00:00Z',
+        message_count: 1,
+      },
     ])
 
     act(() => {
@@ -736,12 +760,20 @@ describe('SessionPanel — workspace scoping (IA reframe)', () => {
 
     renderPanel()
 
+    // Active workspace session is visible
     expect(
       await screen.findByLabelText('Open session: Linked Project Session'),
     ).toBeTruthy()
+
+    // Unlinked session appears under "No workspace" — visible
+    expect(
+      await screen.findByLabelText('Open session: Unlinked Other Session'),
+    ).toBeTruthy()
+
+    // Session belonging to another known workspace (ws-default) is NOT shown
     await waitFor(() => {
       expect(
-        screen.queryByLabelText('Open session: Unlinked Other Session'),
+        screen.queryByLabelText('Open session: Inbox Session'),
       ).toBeNull()
     })
   })
@@ -768,5 +800,206 @@ describe('SessionPanel — scheduled session badge', () => {
     renderPanel()
     expect(await screen.findByLabelText('Open session: Heartbeat run')).toBeTruthy()
     expect(await screen.findByText('Scheduled')).toBeInTheDocument()
+  })
+})
+
+// ── Q4: Active-workspace scoping + open-in-workspace (Bug 2) ─────────────────
+//
+// (a) Panel shows only the active workspace's sessions + a "No workspace" group.
+//     A session from another workspace is NOT shown.
+//     An orphaned (no workspace_id) session appears under "No workspace".
+//
+// (b) Opening a session in the SAME workspace attaches in place (no navigation).
+//
+// (c) Opening a session whose workspace_id is a DIFFERENT existing workspace
+//     sets the active workspace + navigates to /workspaces/{id}/chat.
+//
+// (d) Opening a "No workspace" session attaches in place without navigating.
+
+const q4Workspaces = [
+  { id: 'ws-q4-a', name: 'Project A', is_default: false, status: 'active' as const, pinned: false, pin_order: 0, task_count: 0, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+  { id: 'ws-q4-b', name: 'Project B', is_default: false, status: 'active' as const, pinned: false, pin_order: 0, task_count: 0, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+]
+
+describe('SessionPanel — Q4 active-workspace scoping', () => {
+  beforeEach(() => {
+    vi.mocked(fetchWorkspaces).mockResolvedValue(q4Workspaces as never)
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-q4-same',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Session in Project A',
+        type: 'chat' as const,
+        workspace_id: 'ws-q4-a',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T03:00:00Z',
+        message_count: 1,
+      },
+      {
+        id: 'sess-q4-other',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Session in Project B',
+        type: 'chat' as const,
+        workspace_id: 'ws-q4-b',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 1,
+      },
+      {
+        id: 'sess-q4-orphan',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Orphan Session',
+        type: 'chat' as const,
+        // no workspace_id
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 1,
+      },
+    ] as never)
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-q4-a' })
+    })
+  })
+
+  it('(a) shows only the active workspace sessions + "No workspace" orphans; hides other workspace sessions', async () => {
+    // BDD: Given active workspace is ws-q4-a
+    //      And sessions exist for ws-q4-a, ws-q4-b, and one with no workspace_id
+    //      Then "Session in Project A" is visible (active workspace)
+    //      And "Orphan Session" is visible under "No workspace"
+    //      And "Session in Project B" is NOT visible (different existing workspace)
+    renderPanel()
+
+    expect(await screen.findByLabelText('Open session: Session in Project A')).toBeTruthy()
+    expect(await screen.findByLabelText('Open session: Orphan Session')).toBeTruthy()
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Open session: Session in Project B')).toBeNull()
+    })
+  })
+})
+
+describe('SessionPanel — Q4 Bug 2: open-in-workspace', () => {
+  const attachToSessionSpy = vi.fn()
+
+  beforeEach(() => {
+    attachToSessionSpy.mockReset()
+
+    vi.mocked(fetchWorkspaces).mockResolvedValue(q4Workspaces as never)
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-same-ws',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Same Workspace Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-q4-a',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T04:00:00Z',
+        message_count: 1,
+      },
+      {
+        id: 'sess-diff-ws',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'Different Workspace Session',
+        type: 'chat' as const,
+        workspace_id: 'ws-q4-b',
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T02:00:00Z',
+        message_count: 1,
+      },
+      {
+        id: 'sess-no-ws',
+        agent_id: 'agent-chat-1',
+        active_agent_id: 'agent-chat-1',
+        title: 'No Workspace Session',
+        type: 'chat' as const,
+        // no workspace_id
+        channel: 'webchat',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T01:00:00Z',
+        message_count: 1,
+      },
+    ] as never)
+
+    act(() => {
+      useSessionStore.setState({
+        attachToSession: attachToSessionSpy,
+      } as unknown as Parameters<typeof useSessionStore.setState>[0])
+    })
+  })
+
+  it('(b) opening a same-workspace session attaches in place without navigating', async () => {
+    // BDD: Given active workspace is ws-q4-a
+    //      And a session with workspace_id='ws-q4-a' exists
+    //      When the user clicks that session
+    //      Then attachToSession is called for it
+    //      And navigate is NOT called (same workspace)
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-q4-a' })
+    })
+
+    renderPanel()
+
+    const sessionBtn = await screen.findByLabelText('Open session: Same Workspace Session')
+    fireEvent.click(sessionBtn)
+
+    expect(attachToSessionSpy).toHaveBeenCalledWith('sess-same-ws', 'chat', 'Same Workspace Session', 'agent-chat-1')
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('(c) opening a session in a different existing workspace sets active workspace and navigates', async () => {
+    // BDD: Given no active workspace (all sessions in "No workspace" fallback)
+    //      And a session with workspace_id='ws-q4-b' exists (a known existing workspace)
+    //      When the user clicks that session
+    //      Then setActiveWorkspaceId('ws-q4-b') is called
+    //      And attachToSession is called for that session
+    //      And navigate is called to /workspaces/ws-q4-b/chat
+    const setActiveWorkspaceIdSpy = vi.fn()
+    act(() => {
+      useWorkspacesStore.setState({
+        activeWorkspaceId: null,
+        setActiveWorkspaceId: setActiveWorkspaceIdSpy,
+      })
+    })
+
+    renderPanel()
+
+    const sessionBtn = await screen.findByLabelText('Open session: Different Workspace Session')
+    fireEvent.click(sessionBtn)
+
+    expect(setActiveWorkspaceIdSpy).toHaveBeenCalledWith('ws-q4-b')
+    expect(attachToSessionSpy).toHaveBeenCalledWith('sess-diff-ws', 'chat', 'Different Workspace Session', 'agent-chat-1')
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-q4-b' },
+    })
+  })
+
+  it('(d) opening a "No workspace" session attaches in place without navigating', async () => {
+    // BDD: Given active workspace is ws-q4-a
+    //      And a session with no workspace_id exists (visible under "No workspace")
+    //      When the user clicks that session
+    //      Then attachToSession is called for it
+    //      And navigate is NOT called (no workspace switch)
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-q4-a' })
+    })
+
+    renderPanel()
+
+    const sessionBtn = await screen.findByLabelText('Open session: No Workspace Session')
+    fireEvent.click(sessionBtn)
+
+    expect(attachToSessionSpy).toHaveBeenCalledWith('sess-no-ws', 'chat', 'No Workspace Session', 'agent-chat-1')
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
 })

@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
-import { Bell, Circle } from '@phosphor-icons/react'
+import { Tray, Circle } from '@phosphor-icons/react'
 
 import {
   Sheet,
@@ -95,7 +95,7 @@ export function NotificationPanel() {
         </SheetHeader>
 
         {items.length === 0 ? (
-          <EmptyState icon={<Bell size={32} />} message="No notifications yet" />
+          <EmptyState icon={<Tray size={32} />} message="No notifications yet" />
         ) : (
           <ul className="divide-y divide-[var(--color-border)]">
             {items.map((item) => (

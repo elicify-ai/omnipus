@@ -8,6 +8,7 @@ import { AboutSection } from '@/components/settings/AboutSection'
 import { useAuthStore } from '@/store/auth'
 import { DevicesSection } from '@/components/settings/DevicesSection'
 import { PerformanceSection } from '@/components/settings/PerformanceSection'
+import { ScreenHeader } from '@/components/layout/ScreenHeader'
 // O4: the passive RestartBanner at the top of Settings is replaced by the
 // modal-on-save flow (GatewaySection) + persistent Restart control in Gateway tab.
 // Operators find the restart action under Settings → Gateway.
@@ -17,7 +18,9 @@ export function SettingsScreen() {
   const isAdmin = role === 'admin'
 
   return (
-    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+    <div className="absolute inset-0 flex flex-col">
+      <ScreenHeader title="Settings" />
+      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
       <div className="max-w-3xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="mb-6">
@@ -77,6 +80,7 @@ export function SettingsScreen() {
             <AboutSection />
           </TabsContent>
         </Tabs>
+      </div>
       </div>
     </div>
   )

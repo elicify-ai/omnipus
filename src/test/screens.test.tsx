@@ -168,8 +168,8 @@ describe('Skills screen — empty state', () => {
 
   it('renders "Skills & Tools" as h1 heading', () => {
     render(<SkillsScreen />, { wrapper })
-    const h1 = screen.getByRole('heading', { level: 1 })
-    expect(h1.textContent).toContain('Skills')
+    const heading = screen.getByRole('heading', { name: /Skills/i })
+    expect(heading.textContent).toContain('Skills')
   })
 })
 

@@ -36,10 +36,14 @@ vi.mock('@tanstack/react-router', () => ({
 // Mock SVG URL import
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.svg' }))
 
-// Mock auth store
-vi.mock('@/store/auth', () => ({
-  useAuthStore: { getState: () => ({ clearAuth: vi.fn() }) },
-}))
+// Mock auth store — used as hook (username) and getState (clearAuth)
+vi.mock('@/store/auth', () => {
+  const mockState = { clearAuth: vi.fn(), username: 'testuser', token: null, role: null }
+  const useAuthStore = (selector?: (s: typeof mockState) => unknown) =>
+    selector ? selector(mockState) : mockState
+  useAuthStore.getState = () => mockState
+  return { useAuthStore }
+})
 
 // Mock fetchWorkspaces so the Sidebar's useQuery never hits the network in tests.
 vi.mock('@/lib/api', () => ({
@@ -55,6 +59,41 @@ vi.mock('@/store/workspacesStore', () => ({
     const state = { activeWorkspaceId: null, setActiveWorkspaceId: vi.fn() }
     return selector ? selector(state) : state
   },
+}))
+
+// Mock useUiStore — Sidebar calls toggleNotificationPanel
+vi.mock('@/store/ui', () => ({
+  useUiStore: (selector?: (s: { toggleNotificationPanel: () => void }) => unknown) => {
+    const state = { toggleNotificationPanel: vi.fn() }
+    return selector ? selector(state) : state
+  },
+}))
+
+// Mock useNotificationsStore — Sidebar reads unreadCount
+vi.mock('@/store/notifications', () => ({
+  useNotificationsStore: (selector?: (s: { unreadCount: number }) => unknown) => {
+    const state = { unreadCount: 0 }
+    return selector ? selector(state) : state
+  },
+}))
+
+// Mock DropdownMenu primitives — jsdom doesn't support Radix portals
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuItem: ({ children, onSelect, 'aria-label': ariaLabel, className }: {
+    children: React.ReactNode
+    onSelect?: () => void
+    'aria-label'?: string
+    className?: string
+  }) => (
+    <button onClick={onSelect} aria-label={ariaLabel} className={className}>
+      {children}
+    </button>
+  ),
+  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
 }))
 
 // Mock NewWorkspaceSlideOver — it imports more dependencies we don't need in these tests
