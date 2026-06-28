@@ -99,6 +99,7 @@ type DoneStats struct {
 	Tokens                   *float64 `json:"tokens,omitempty"`
 	TokensDropped            *float64 `json:"tokens_dropped,omitempty"`
 	TruncatedResultCount     *float64 `json:"truncated_result_count,omitempty"`
+	TurnFailed               *bool    `json:"turn_failed,omitempty"`
 }
 
 // ErrorFrame — Server → client error notification.

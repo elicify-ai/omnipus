@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -594,6 +595,71 @@ func TestRun_TimeoutDuringKeepalive(t *testing.T) {
 	// Allow up to 3× the budget for scheduling jitter; must not exceed 10×.
 	if elapsed > 10*budget {
 		t.Errorf("Run took %v, expected < %v (10× budget)", elapsed, 10*budget)
+	}
+}
+
+// TestRun_TurnFailed verifies that when the done frame carries
+// stats.turn_failed=true, Run returns ErrTurnFailed (non-zero exit) AFTER
+// the fallback content has been flushed to stdout.
+//
+// BDD: Given a done frame with stats.turn_failed=true and a preceding token,
+// When Run processes the done frame, Then Run returns ErrTurnFailed and the
+// token content is on stdout.
+func TestRun_TurnFailed(t *testing.T) {
+	t.Parallel()
+
+	const fallbackContent = "I was unable to complete the task."
+	turnFailed := true
+	frames := []any{
+		generated.SessionStartedFrame{Type: "session_started", SessionId: "sess-tf"},
+		generated.TokenFrame{Type: "token", SessionId: "sess-tf", Content: fallbackContent},
+		generated.DoneFrame{
+			Type:      "done",
+			SessionId: "sess-tf",
+			Stats: &generated.DoneStats{
+				TurnFailed: &turnFailed,
+			},
+		},
+	}
+
+	ss := newScriptedServer(t, frames, false)
+	var stdout, stderr bytes.Buffer
+	opts := makeOptions(ss, false, &stdout, &stderr)
+
+	err := run.Run(context.Background(), opts)
+	if !errors.Is(err, run.ErrTurnFailed) {
+		t.Errorf("Run returned %v, want ErrTurnFailed", err)
+	}
+
+	// The fallback content must still be on stdout — the user should see the message.
+	if !strings.Contains(stdout.String(), fallbackContent) {
+		t.Errorf("stdout does not contain fallback content %q: %q", fallbackContent, stdout.String())
+	}
+}
+
+// TestRun_TurnFailed_FalseIsNil verifies that a done frame with
+// stats.turn_failed=false is treated as a clean completion (returns nil).
+func TestRun_TurnFailed_FalseIsNil(t *testing.T) {
+	t.Parallel()
+
+	turnFailed := false
+	frames := []any{
+		generated.SessionStartedFrame{Type: "session_started", SessionId: "sess-tfn"},
+		generated.DoneFrame{
+			Type:      "done",
+			SessionId: "sess-tfn",
+			Stats: &generated.DoneStats{
+				TurnFailed: &turnFailed,
+			},
+		},
+	}
+
+	ss := newScriptedServer(t, frames, false)
+	var stdout, stderr bytes.Buffer
+	opts := makeOptions(ss, false, &stdout, &stderr)
+
+	if err := run.Run(context.Background(), opts); err != nil {
+		t.Errorf("Run returned %v for turn_failed=false, want nil", err)
 	}
 }
 

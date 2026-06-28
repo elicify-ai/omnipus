@@ -48,3 +48,12 @@ properties:
     description: >
       True when the done frame was synthesized after a replay error (W1-5).
       Replay-only.
+  turn_failed:
+    type: boolean
+    description: >
+      True when the turn ended via the engine's error/limit fallback rather
+      than a real model response. Covers two cases: (1) the LLM returned an
+      empty response after all retries and the engine substituted its default
+      error message; (2) the tool-iteration limit was reached without a final
+      response. Absent (or false) on a normal successful turn. CLI/automation
+      clients should check this field and exit non-zero when it is true.

@@ -6320,6 +6320,7 @@ turnLoop:
 			}
 			if strings.TrimSpace(responseContent) == "" {
 				responseContent = defaultResponse
+				ts.markTurnFailed()
 				logger.WarnCF("agent", "LLM returned empty response after retry; using fallback message",
 					map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
 			}
@@ -6481,6 +6482,23 @@ turnLoop:
 				})
 				if !approval.IsApproved() {
 					denyContent := hookDeniedToolContent("Tool execution denied by approval hook", approval.Reason)
+					// FR-017 audit-coverage fix: an approval hook (e.g. the gateway's
+					// wsApprovalHook) can reject a tool for policy reasons BEFORE the
+					// loop reaches the TOCTOU re-check at exec time. That branch only
+					// `continue`s, so without this call a denied tool on a WS/CLI turn
+					// would write NO attributed audit entry — the most common security
+					// event (a policy-denied tool) would be invisible in the audit log.
+					// emitPolicyDenyAudit stamps User: ts.auditUser(), so WS-originated
+					// turns carry the acting principal (e.g. "cli") and channel/non-
+					// gateway turns keep User empty. This is the ONLY tool-deny branch
+					// that did not already audit; the TOCTOU (deny), ask-auto-deny, and
+					// ask-human-deny branches below each emit their own entry, so there
+					// is no double-audit.
+					denyReason := approval.Reason
+					if denyReason == "" {
+						denyReason = "tool execution denied by approval hook"
+					}
+					al.emitPolicyDenyAudit(ts, toolName, "ask", "approval_hook_deny: "+denyReason)
 					al.emitEvent(
 						EventKindToolExecSkipped,
 						ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -7141,6 +7159,7 @@ turnLoop:
 		} else {
 			finalContent = ts.opts.DefaultResponse
 		}
+		ts.markTurnFailed()
 	}
 
 	ts.setPhase(TurnPhaseFinalizing)

@@ -19,6 +19,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -179,6 +180,23 @@ func TestHandleTaskPatch_InProgress_WithKnownAgent(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
 	assert.Equal(t, gen.TaskStatusInProgress, updated.Status,
 		"task status must be in_progress after PATCH")
+
+	// Teardown race guard: StartTaskNow launched a background goroutine that
+	// writes session + task files into the test's TempDir. Register a cleanup
+	// (LIFO → runs before al.Close and before TempDir removal) that polls until
+	// the task reaches a terminal state, guaranteeing all goroutine writes are
+	// complete before the temp directory is removed.
+	//
+	// The mock LLM returns immediately so the goroutine finishes in well under
+	// a second on any machine; the 10 s bound is a generous safety margin.
+	taskID := tsk.Id
+	t.Cleanup(func() {
+		require.Eventually(t, func() bool {
+			s := getTaskStatus(t, api, taskID)
+			return s == gen.TaskStatusDone || s == gen.TaskStatusFailed
+		}, 10*time.Second, 20*time.Millisecond,
+			"task goroutine must reach a terminal state before test teardown")
+	})
 }
 
 // TestHandleTaskPatch_InProgress_Idempotent verifies that a second PATCH with

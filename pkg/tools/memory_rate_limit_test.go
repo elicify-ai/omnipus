@@ -372,13 +372,17 @@ func TestRememberTool_RecoveryAfterRetryAfter(t *testing.T) {
 		tool.Execute(ctx, map[string]any{"content": "x", "category": "reference"}).IsError,
 		"setup proof: bucket exhausted, third call rejected")
 
-	// Sleep past the window so all timestamps evict.
-	time.Sleep(window + 50*time.Millisecond)
-
-	// Recovery: the next call must succeed.
-	recovered := tool.Execute(ctx, map[string]any{"content": "after recovery", "category": "reference"})
-	require.False(t, recovered.IsError,
-		"call after window expiry must succeed (clean recovery): %s", recovered.ForLLM)
+	// Poll until the sliding window has expired and the bucket is clear again.
+	// A fixed sleep is unreliable on loaded CI runners — the 50 ms margin
+	// can be swallowed by scheduling jitter. require.Eventually retries
+	// every 10 ms up to 5 s and stops as soon as the first call succeeds,
+	// preserving the spirit of the test (recovery must happen) without being
+	// brittle about *when* exactly the window boundary falls.
+	require.Eventually(t, func() bool {
+		r := tool.Execute(ctx, map[string]any{"content": "after recovery", "category": "reference"})
+		return !r.IsError
+	}, 5*time.Second, 10*time.Millisecond,
+		"rate limiter must recover after the %v window expires (clean recovery)", window)
 }
 
 // TestRememberTool_TwoAgents_ShareCallerIndependentAgent proves the spec

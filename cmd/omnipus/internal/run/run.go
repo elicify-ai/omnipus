@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -62,6 +63,12 @@ var (
 	// fails after one retry. Continuing to a 90 s server timeout would be a silent
 	// hang, so we exit non-zero immediately.
 	ErrApprovalFailed = errors.New("failed to resolve tool approval via REST")
+
+	// ErrTurnFailed is returned when the done frame carries stats.turn_failed=true,
+	// meaning the engine used its error/limit fallback path rather than completing
+	// the turn cleanly. The fallback content has already been flushed to stdout so
+	// the user sees the message, but the process exits non-zero.
+	ErrTurnFailed = errors.New("the agent run did not complete successfully")
 )
 
 const defaultTimeout = 300 * time.Second
@@ -165,15 +172,25 @@ func Run(ctx context.Context, o Options) error {
 	}
 	defer conn.Close()
 
+	// ctxFired is set to true by the ctx.Done() goroutine below, immediately
+	// before SetReadDeadline(now) is called. The read-error handler checks this
+	// flag to distinguish a context-deadline-triggered i/o timeout from a genuine
+	// unexpected disconnect — the net error type alone is ambiguous because the
+	// per-read deadline (min(120s, ctx)) can fire as a net i/o-timeout BEFORE
+	// ctx.Err() is observable on the calling goroutine (race between the runtime
+	// setting DeadlineExceeded and the net layer returning the error).
+	var ctxFired atomic.Bool
+
 	// Kick off a goroutine that closes the connection when the context deadline
 	// fires. Without this, a blocked ReadMessage is not interrupted by context
 	// cancellation — keep-alive frames from the server would keep refreshing the
 	// per-read deadline, so the run could outlive --timeout indefinitely.
 	// The goroutine uses SetReadDeadline(now) to unblock any in-flight read
 	// immediately; the next ReadMessage call returns an error that we map to
-	// ErrTimeout (see the ctx.Err() check after every read error below).
+	// ErrTimeout (see the ctxFired / ctx.Err() check after every read error below).
 	go func() {
 		<-ctx.Done()
+		ctxFired.Store(true)
 		_ = conn.SetReadDeadline(time.Now())
 	}()
 
@@ -255,10 +272,16 @@ func Run(ctx context.Context, o Options) error {
 	for {
 		_, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
-			// If the context fired, the ctx.Done() goroutine set a past deadline,
-			// causing this read to fail. Map to ErrTimeout regardless of the
-			// underlying net error type.
-			if ctx.Err() == context.DeadlineExceeded {
+			// Map to ErrTimeout if:
+			//   (a) ctxFired is set — the ctx.Done() goroutine already ran
+			//       SetReadDeadline(now), meaning this error is the result of that
+			//       intentional deadline kick; OR
+			//   (b) ctx.Err() is DeadlineExceeded — the context has fully propagated.
+			// We check ctxFired first because the net i/o-timeout error can arrive
+			// before ctx.Err() is visible on this goroutine (timing race), which
+			// previously caused the connection-closed-unexpectedly branch to fire
+			// instead of ErrTimeout.
+			if ctxFired.Load() || ctx.Err() == context.DeadlineExceeded {
 				return ErrTimeout
 			}
 
@@ -352,6 +375,18 @@ func Run(ctx context.Context, o Options) error {
 			// Terminal frame: the turn is complete. Write a trailing newline to
 			// stdout so the shell prompt starts on its own line (A1).
 			fmt.Fprintln(o.Stdout)
+
+			// Check whether the engine used its error/limit fallback path. The
+			// fallback content has already been streamed to stdout via token frames
+			// above; returning ErrTurnFailed causes the process to exit non-zero
+			// so the caller knows the turn did not complete cleanly.
+			var f generated.DoneFrame
+			if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil &&
+				f.Stats != nil &&
+				f.Stats.TurnFailed != nil &&
+				*f.Stats.TurnFailed {
+				return ErrTurnFailed
+			}
 			return nil
 
 		case generated.WsFrameTypeError:

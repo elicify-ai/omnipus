@@ -161,6 +161,13 @@ type turnState struct {
 	turnCacheRead  int
 	turnCacheWrite int
 
+	// turnFailed is set to true when the turn ended via the engine's error/limit
+	// fallback (empty response after retries, or tool-iteration limit reached)
+	// rather than a real model response. Threaded into the DoneStats.TurnFailed
+	// field on the done frame so CLI/automation clients can detect failure without
+	// parsing message content.
+	turnFailed bool
+
 	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
 	al *AgentLoop
 
@@ -512,6 +519,27 @@ type streamerStatsSetter interface {
 	SetTurnStats(tokens int64, costUSD float64, duration time.Duration)
 }
 
+// streamerFailedSetter is an optional interface a Streamer may implement to
+// receive the turn-failed flag before Finalize is called. When implemented,
+// finalizeStreamer calls SetTurnFailed(true) whenever the turn ended via the
+// engine's error/limit fallback (empty response after retries or tool-iteration
+// limit) so the done frame carries DoneStats.TurnFailed=true. CLI/automation
+// clients read this field to exit non-zero on a failed turn.
+type streamerFailedSetter interface {
+	SetTurnFailed(failed bool)
+}
+
+// markTurnFailed records that this turn ended via the engine's error/limit
+// fallback rather than a real model response. Called at the two fallback sites
+// in loop.go (empty-response exhaustion and tool-iteration limit). The flag is
+// read by finalizeStreamer and forwarded to the streamer's SetTurnFailed before
+// Finalize so it can set DoneStats.TurnFailed on the done WS frame.
+func (ts *turnState) markTurnFailed() {
+	ts.mu.Lock()
+	ts.turnFailed = true
+	ts.mu.Unlock()
+}
+
 // SetFinalContent records the final assistant response on the turnState so
 // finalizeStreamer can pass it through to the streamer's Finalize call.
 func (ts *turnState) SetFinalContent(content string) {
@@ -536,11 +564,15 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	cost := ts.turnCostUSD
 	duration := time.Since(ts.startedAt)
 	finalContent := ts.finalContent
+	failed := ts.turnFailed
 	ts.lastStreamer = nil
 	ts.mu.Unlock()
 	if s != nil {
 		if setter, ok := s.(streamerStatsSetter); ok {
 			setter.SetTurnStats(tokens, cost, duration)
+		}
+		if fsetter, ok := s.(streamerFailedSetter); ok {
+			fsetter.SetTurnFailed(failed)
 		}
 		// Pass finalContent so the streamer can persist the assistant message
 		// even when its own accumulated-from-token buffer is empty — happens

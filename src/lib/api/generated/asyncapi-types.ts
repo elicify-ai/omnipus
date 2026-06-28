@@ -116,6 +116,7 @@ export interface DoneStats {
   duplicate_tool_call_id_count?: number;
   truncated_result_count?: number;
   replay_error?: boolean;
+  turn_failed?: boolean;
   [key: string]: unknown;
 }
 
