@@ -330,6 +330,7 @@ type AuditEntry = {
   decision?: ("allow" | "deny" | "error") | undefined;
   agent_id?: string | undefined;
   session_id?: string | undefined;
+  user?: string | undefined;
   tool?: string | undefined;
   command?: string | undefined;
   parameters?: {} | undefined;
@@ -1517,6 +1518,7 @@ export const AuditEntry: z.ZodType<AuditEntry> = z
     decision: z.enum(["allow", "deny", "error"]).optional(),
     agent_id: z.string().optional(),
     session_id: z.string().optional(),
+    user: z.string().optional(),
     tool: z.string().optional(),
     command: z.string().optional(),
     parameters: z.object({}).partial().passthrough().optional(),

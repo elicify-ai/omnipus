@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
+	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/clitoken"
+	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/netinfo"
 	"github.com/dapicom-ai/omnipus/pkg/gateway"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
@@ -21,6 +24,7 @@ func NewGatewayCommand() *cobra.Command {
 	var noTruncate bool
 	var sandboxMode string
 	var allowGodMode bool
+	var newCLIToken bool
 	// allowEmptyDeprecated accepts the legacy --allow-empty flag silently so
 	// existing callers (CI workflows, ops scripts, eval-runner, etc.) keep
 	// working unchanged. The behavior is now unconditional: the gateway
@@ -80,6 +84,28 @@ func NewGatewayCommand() *cobra.Command {
 						"remove --allow-god-mode and restart")
 				os.Exit(2)
 			}
+
+			home := internal.GetOmnipusHome()
+
+			// FR-018: ensure the cli principal and its token file exist
+			// (create-if-absent). When --new-cli-token is set, always
+			// regenerate so the old token stops authenticating.
+			if newCLIToken {
+				if err := clitoken.ResetCLIToken(home); err != nil {
+					// Non-fatal: the token file is informational for this
+					// invocation. Log and continue so the gateway still boots.
+					fmt.Fprintf(os.Stderr, "Warning: could not rotate cli token: %v\n", err)
+				}
+			} else {
+				if _, err := clitoken.EnsureCLIToken(home); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not ensure cli token: %v\n", err)
+				}
+			}
+
+			// FR-011: print bind-aware access URL block before booting so the
+			// operator sees where to connect while the gateway starts up.
+			printStartURLBlock(home)
+
 			// AllowEmptyStartup is unconditionally true: if no provider is
 			// configured the gateway boots into limited mode so the operator
 			// can finish onboarding via the SPA wizard (or `omnipus onboard`).
@@ -88,7 +114,7 @@ func NewGatewayCommand() *cobra.Command {
 			// and the operator had to read the help text to discover the flag.
 			runErr := gateway.RunWithOptions(gateway.RunOptions{
 				Debug:             debug,
-				HomePath:          internal.GetOmnipusHome(),
+				HomePath:          home,
 				ConfigPath:        internal.GetConfigPath(),
 				AllowEmptyStartup: true,
 				SandboxMode:       sandboxMode,
@@ -134,6 +160,44 @@ func NewGatewayCommand() *cobra.Command {
 		"Allow agents to set sandbox_profile=off (disables the kernel sandbox). "+
 			"Without this flag, off is silently coerced to workspace with a stderr WARN. "+
 			"Disabled in builds with the nogodmode tag.")
+	// FR-018: --new-cli-token always regenerates the cli bearer token.
+	// Without this flag, the token is created-if-absent (idempotent).
+	cmd.Flags().BoolVar(&newCLIToken, "new-cli-token", false,
+		"Rotate the CLI bearer token (old token stops authenticating immediately)")
 
 	return cmd
+}
+
+// printStartURLBlock reads config.json for the gateway bind settings and
+// prints the bind-aware access URL block to stderr, framed as a dashboard
+// open hint. Errors are non-fatal — the URL block is purely informational.
+func printStartURLBlock(home string) {
+	configPath := home + "/config.json"
+	raw, err := os.ReadFile(configPath)
+
+	host := ""
+	port := 5000
+	publicURL := ""
+
+	if err == nil {
+		var m map[string]any
+		if jsonErr := json.Unmarshal(raw, &m); jsonErr == nil {
+			gw, _ := m["gateway"].(map[string]any)
+			if gw != nil {
+				if h, ok := gw["host"].(string); ok {
+					host = h
+				}
+				if p, ok := gw["port"].(float64); ok && p > 0 {
+					port = int(p)
+				}
+				if pu, ok := gw["public_url"].(string); ok {
+					publicURL = pu
+				}
+			}
+		}
+	}
+
+	urls := netinfo.BuildAccessURLs(host, port, publicURL, netinfo.LocalIPv4s())
+	fmt.Fprintln(os.Stderr, "Open the dashboard / log in as admin:")
+	fmt.Fprint(os.Stderr, netinfo.Render(urls))
 }

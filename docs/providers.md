@@ -189,7 +189,7 @@ If `voice.model_name` is not configured, Omnipus will continue to fall back to G
 }
 ```
 
-> Run `omnipus auth login --provider anthropic` to paste your API token.
+> Set your key with: `omnipus credentials set ANTHROPIC_API_KEY <your-key>`
 
 **Anthropic Messages API (native format)**
 
@@ -404,7 +404,7 @@ Get [API key](https://bigmodel.cn/usercenter/proj-mgmt/apikeys)
 **3. Run**
 
 ```bash
-omnipus agent -m "Hello"
+omnipus mia "Hello"
 ```
 
 </details>

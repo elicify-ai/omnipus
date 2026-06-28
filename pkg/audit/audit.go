@@ -168,11 +168,19 @@ func IsValidEventName(e EventName) bool {
 
 // Entry is a single audit log record.
 type Entry struct {
-	Timestamp  time.Time      `json:"timestamp"`
-	Event      string         `json:"event"`
-	Decision   string         `json:"decision,omitempty"`
-	AgentID    string         `json:"agent_id,omitempty"`
-	SessionID  string         `json:"session_id,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+	Event     string    `json:"event"`
+	Decision  string    `json:"decision,omitempty"`
+	AgentID   string    `json:"agent_id,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
+	// User is the authenticated gateway principal that initiated the turn this
+	// entry belongs to (FR-017). For a CLI run authenticated as the `cli`
+	// principal this is "cli"; for an admin browser session it is the admin's
+	// username. It is the WS-authenticated identity (websocket.go wc.userID),
+	// NOT the channel-platform sender — so channel-originated turns (Telegram,
+	// Discord, …) and unauthenticated env-token / dev-bypass paths leave it
+	// empty. Empty is the documented default and is never guessed.
+	User       string         `json:"user,omitempty"`
 	Tool       string         `json:"tool,omitempty"`
 	Command    string         `json:"command,omitempty"`
 	Parameters map[string]any `json:"parameters,omitempty"`

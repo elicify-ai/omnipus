@@ -61,7 +61,7 @@ There is no separate "skill registration" step — the loader scans three direct
 
 ### Builtin skills
 
-`<builtinSkillsDir>/<name>/SKILL.md`. By default `~/.omnipus/omnipus/skills/`, populated by `omnipus skills install-builtin`.
+`<builtinSkillsDir>/<name>/SKILL.md`. By default `~/.omnipus/omnipus/skills/`, populated automatically on first boot.
 
 Earlier directories win — a workspace skill with the same name as a global one shadows it. Each entry must be a directory containing a `SKILL.md`; other files in the parent directory are ignored.
 
@@ -105,7 +105,7 @@ Defined at `pkg/tools/skills_install.go:39-179`. Downloads and extracts a skill 
 
 The tool holds a per-`InstallSkillTool` `sync.Mutex` (declared at `pkg/tools/skills_install.go:25,35`, taken at `pkg/tools/skills_install.go:77-78`) while installing — not a process-wide mutex, so distinct tool instances installed in the same process are not serialized. It refuses to overwrite an existing directory unless `force=true`, then delegates to `registry.DownloadAndInstall` (`pkg/skills/clawhub_registry.go:230-308`). That call fetches metadata for the slug, streams the ZIP to a temp file capped at `MaxZipSize` bytes (default 50 MiB, `pkg/skills/clawhub_registry.go:21,400-403`), verifies the SHA-256 of the ZIP against `latestVersion.sha256` from the metadata (`pkg/skills/clawhub_registry.go:288-300`, SEC-09) — on mismatch the install aborts with `hash verification failed: expected <X> got <Y> — skill may have been tampered with` (`pkg/skills/clawhub_registry.go:295`) — then extracts via `utils.ExtractZipFile`, which rejects path-traversal entries and any entry with the symlink bit set (`pkg/utils/zip.go:17,53-55`), and finally returns an `InstallResult` with `Verified`, `IsMalwareBlocked`, `IsSuspicious`, and `Summary`. The caller blocks malware-flagged installs outright and surfaces a warning for `IsSuspicious`.
 
-Successful installs also write `.skill-origin.json` into the skill directory (`pkg/tools/skills_install.go:181-206`) recording the registry, slug, installed version, and install timestamp — `omnipus skills update` uses this to re-resolve the source registry.
+Successful installs also write `.skill-origin.json` into the skill directory (`pkg/tools/skills_install.go:181-206`) recording the registry, slug, installed version, and install timestamp — the `update` subcommand (`cmd/omnipus/internal/skills/update.go`) uses this to re-resolve the source registry.
 
 ## ClawHub registry
 
@@ -129,22 +129,22 @@ The CLI also supports installing directly from a GitHub repo (`pkg/skills/instal
 
 It walks `https://api.github.com/repos/<owner>/<repo>/contents/<path>?ref=<ref>` (`pkg/skills/installer.go:151-156`), downloads `SKILL.md` at the root plus every file under the conventional subdirectories `scripts/`, `references/`, `assets/`, `templates/`, `docs/` (`pkg/skills/installer.go:282-297`). If the API call fails it falls back to a single raw `SKILL.md` fetch from `raw.githubusercontent.com` (`pkg/skills/installer.go:222-254`). There is **no** hash verification on the GitHub path today — only ClawHub installs are SHA-256 verified.
 
-## CLI surface
+## Managing skills
 
-`omnipus skills <subcommand>` (`cmd/omnipus/internal/skills/command.go`):
+Skills are managed through the web UI or by asking an agent directly in chat:
 
-| Subcommand        | Source file        | What it does                                                                                                                      |
-| ----------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `list`            | `list.go`          | Lists installed skills across workspace / global / builtin with their source label and description.                                |
-| `install <repo>`  | `install.go`       | Installs from a GitHub reference. With `--registry <name> <slug>`, installs from the named registry (e.g. `--registry clawhub`).  |
-| `install-builtin` | `installbuiltin.go` | Copies the seeded `weather`, `news`, `stock`, `calculator` skills from `./omnipus/skills` into the workspace (`helpers.go:295-340`). |
-| `list-builtin`    | `listbuiltin.go`   | Lists skills under the builtin directory.                                                                                          |
-| `remove <name>`   | `remove.go`        | Removes a workspace skill directory. Aliases: `rm`, `uninstall`.                                                                  |
-| `update <name>`   | `update.go`        | Re-installs to the latest version using the registry recorded in `.skill-origin.json` (falls back to `clawhub`).                  |
-| `search [query]`  | `search.go`        | Runs `RegistryManager.SearchAll` against the configured registries.                                                                |
-| `show <name>`     | `show.go`          | Prints the skill body (frontmatter stripped) to stdout.                                                                            |
+**Web UI:** Go to **Skills & Tools** in the sidebar. Click **Browse Skills** to search
+the ClawHub registry, or use **Install from file** to upload a `SKILL.md`/ZIP.
 
-Both `install` (registry mode) and `update` enforce `sandbox.skill_trust` (see [Security](#security)).
+**In chat:** Ask an agent with tool access enabled:
+
+```text
+> find me a skill for working with github pull requests
+> install the github-prs one
+```
+
+The backend implementation lives at `cmd/omnipus/internal/skills/` and is exercised
+via the `find_skills` and `install_skill` tools described above.
 
 ## UI surface
 
@@ -220,14 +220,7 @@ The runtime does not auto-switch models based on a skill's preferred model.
 
 ## Quick start
 
-Install a skill from ClawHub via the CLI, list it, and use it:
-
-```bash
-omnipus skills install --registry clawhub github-prs   # downloads, hash-verifies, extracts to ~/.omnipus/skills/github-prs/
-omnipus skills list                                    # confirms 'github-prs (workspace)' is loaded
-```
-
-Or from inside a chat with an agent that has the tools enabled:
+Install a skill from inside a chat with an agent that has the tools enabled:
 
 ```text
 > find me a skill for working with github pull requests

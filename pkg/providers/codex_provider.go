@@ -247,7 +247,7 @@ func createCodexTokenSource() func() (string, string, error) {
 			return "", "", fmt.Errorf("loading auth credentials: %w", err)
 		}
 		if cred == nil {
-			return "", "", fmt.Errorf("no credentials for openai. Run: omnipus auth login --provider openai")
+			return "", "", fmt.Errorf("no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>")
 		}
 
 		if cred.AuthMethod == "oauth" && cred.NeedsRefresh() && cred.RefreshToken != "" {

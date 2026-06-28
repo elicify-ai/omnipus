@@ -24,7 +24,7 @@ func createClaudeAuthProvider() (LLMProvider, error) {
 		return nil, fmt.Errorf("loading auth credentials: %w", err)
 	}
 	if cred == nil {
-		return nil, fmt.Errorf("no credentials for anthropic. Run: omnipus auth login --provider anthropic")
+		return nil, fmt.Errorf("no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>")
 	}
 	return NewClaudeProviderWithTokenSource(cred.AccessToken, createClaudeTokenSource()), nil
 }
@@ -36,7 +36,7 @@ func createCodexAuthProvider() (LLMProvider, error) {
 		return nil, fmt.Errorf("loading auth credentials: %w", err)
 	}
 	if cred == nil {
-		return nil, fmt.Errorf("no credentials for openai. Run: omnipus auth login --provider openai")
+		return nil, fmt.Errorf("no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>")
 	}
 	return NewCodexProviderWithTokenSource(cred.AccessToken, cred.AccountID, createCodexTokenSource()), nil
 }

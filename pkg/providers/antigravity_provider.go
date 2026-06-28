@@ -579,7 +579,7 @@ func createAntigravityTokenSource() func() (string, string, error) {
 		}
 		if cred == nil {
 			return "", "", fmt.Errorf(
-				"no credentials for google-antigravity. Run: omnipus auth login --provider google-antigravity",
+				"no credentials for google-antigravity. Complete onboarding at http://localhost:5000/onboarding or run: omnipus onboard",
 			)
 		}
 
@@ -602,7 +602,7 @@ func createAntigravityTokenSource() func() (string, string, error) {
 
 		if cred.IsExpired() {
 			return "", "", fmt.Errorf(
-				"antigravity credentials expired. Run: omnipus auth login --provider google-antigravity",
+				"antigravity credentials expired. Complete onboarding at http://localhost:5000/onboarding or run: omnipus onboard",
 			)
 		}
 

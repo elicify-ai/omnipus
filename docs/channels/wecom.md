@@ -24,29 +24,12 @@ This replaces the legacy `wecom`, `wecom_app`, and `wecom_aibot` split with one 
 
 Open the Web UI, navigate to **Channels -> WeCom**, and click the QR binding button. Scan the QR code with WeCom and confirm in the app — credentials are saved automatically.
 
-### Option 2: CLI QR Login
+### Option 2: Manual credential setup
 
-Run:
+If you already have a `bot_id` and secret from the WeCom AI Bot platform, store the
+secret and configure the channel as shown in Option 3 below.
 
-```bash
-omnipus auth wecom
-```
-
-The command:
-1. Requests a QR code from WeCom and prints it in the terminal
-2. Also prints a **QR Code Link** you can open in a browser if the terminal QR is hard to scan
-3. Polls for confirmation — after scanning, you must also **confirm the login inside the WeCom app**
-4. On success, writes `bot_id` and stores the secret in the credential store under the key referenced by `secret_ref`
-
-The default timeout is **5 minutes**. Use `--timeout` to extend it:
-
-```bash
-omnipus auth wecom --timeout 10m
-```
-
-> Scanning the QR code is not enough — you must also tap **Confirm** inside the WeCom app, otherwise the command will time out.
-
-### Option 3: Configure Manually
+### Option 3: Configure manually
 
 If you already have a `bot_id` and secret from the WeCom AI Bot platform:
 
@@ -133,12 +116,11 @@ Fields can be overridden via environment variables. The parent block uses the pr
 ### QR binding times out
 
 - After scanning the QR code, you must also **confirm the login inside the WeCom app**. Scanning alone is not enough.
-- Re-run with a larger `--timeout`: `omnipus auth wecom --timeout 10m`
-- If the QR code in the terminal is hard to scan, use the **QR Code Link** printed below it to open in a browser.
+- If the QR code in the Configure panel is hard to scan, use the **QR Code Link** shown below it to open in a browser.
 
 ### QR code expired
 
-- The QR code has a limited validity. Re-run `omnipus auth wecom` to get a fresh one.
+- The QR code has a limited validity. Open **Channels → WeCom → Configure** again to get a fresh QR code.
 
 ### WebSocket connection fails
 

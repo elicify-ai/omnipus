@@ -82,6 +82,24 @@ run_gotest() {
   done
   return $rc
 }
+# CLI removed-verb guard (US-11 AC4 / FR-013).
+# Scanned: docker/ .github/ deploy/ scripts/ cmd/omnipus-launcher-tui/
+# NOT scanned: docs/ (may discuss history) or the spec file itself.
+run_cli_verb_guard() {
+  local PATTERN='(omnipus|[A-Za-z0-9_./-]*omnipus|\$[A-Z_]+)[[:space:]]+(agent|auth|status|cron|migrate|model|skills)\b'
+  local DIRS="docker .github deploy scripts cmd/omnipus-launcher-tui"
+  local FOUND
+  FOUND=$(grep -rE "$PATTERN" --include="*.sh" --include="*.yml" --include="*.yaml" \
+    --include="Dockerfile*" --include="*.go" \
+    $DIRS 2>/dev/null | grep -v "^Binary" || true)
+  if [ -n "$FOUND" ]; then
+    echo "ERROR: removed CLI verb found in infra. Update callers to use 'omnipus start', 'omnipus credentials', etc." >&2
+    echo "" >&2
+    echo "$FOUND" >&2
+    return 1
+  fi
+  echo "OK: no removed CLI verbs in infra."
+}
 run_npm()      { npm ci --no-audit --no-fund; }
 run_typecheck(){ npm run typecheck; }
 run_vitest()   { npx vitest run --maxWorkers=4; }  # cap workers: 8 oversubscribe shared vCPUs → perf-test timeouts
@@ -186,7 +204,7 @@ EOF
   #    boot without a fully-configured provider (defensive; the e2e flow configures
   #    one above).
   log "e2e: start gateway"
-  "$E2E_BIN" gateway --allow-empty > "$E2E_LOG" 2>&1 &
+  "$E2E_BIN" start --allow-empty > "$E2E_LOG" 2>&1 &
   GATEWAY_PID=$!
   sleep 0.5
   if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then
@@ -256,17 +274,19 @@ EOF
 }
 
 case "$GATE" in
-  gofmt)       step gofmt run_gofmt ;;
-  go-build)    step go-build run_gobuild ;;
-  go-vet)      step go-vet run_govet ;;
-  lint)        step golangci-lint run_lint ;;
-  go-test)     step go-build run_gobuild; step go-test run_gotest ;;
-  contracts)   step npm-ci run_npm; step verify-contracts run_contracts ;;
-  spa)         step npm-ci run_npm; step typecheck run_typecheck; step vitest run_vitest ;;
-  quick)       step gofmt run_gofmt; step go-build run_gobuild ;;
-  embed-build) step npm-ci run_npm; step spa-embed run_spaembed; step go-build run_gobuild ;;
-  e2e)         step e2e run_e2e ;;
+  gofmt)           step gofmt run_gofmt ;;
+  go-build)        step go-build run_gobuild ;;
+  go-vet)          step go-vet run_govet ;;
+  lint)            step golangci-lint run_lint ;;
+  go-test)         step go-build run_gobuild; step go-test run_gotest ;;
+  contracts)       step npm-ci run_npm; step verify-contracts run_contracts ;;
+  spa)             step npm-ci run_npm; step typecheck run_typecheck; step vitest run_vitest ;;
+  quick)           step gofmt run_gofmt; step go-build run_gobuild ;;
+  embed-build)     step npm-ci run_npm; step spa-embed run_spaembed; step go-build run_gobuild ;;
+  e2e)             step e2e run_e2e ;;
+  cli-verb-guard)  step cli-verb-guard run_cli_verb_guard ;;
   all)
+    step cli-verb-guard run_cli_verb_guard
     step npm-ci run_npm
     step gofmt run_gofmt
     step go-build run_gobuild

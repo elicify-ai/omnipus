@@ -91,4 +91,4 @@ VOLUME /home/omnipus/.omnipus
 # providers configured yet. Once onboarding completes the providers list
 # is populated and the flag is a no-op. Same default as the minimal image.
 ENTRYPOINT ["omnipus"]
-CMD ["gateway", "--allow-empty"]
+CMD ["start", "--allow-empty"]

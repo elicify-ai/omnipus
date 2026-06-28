@@ -6,19 +6,13 @@ Omnipus connects to a personal WeChat account using the Tencent iLink REST API v
 
 ## Quick Setup
 
-Use the interactive QR login command to obtain and save a token:
+Open **Channels → Weixin → Configure** in the web UI (`omnipus start`, then visit
+`http://localhost:5000`). A QR code appears in the Configure panel — scan it with the
+WeChat mobile app. On approval the token is saved to the encrypted credential store and
+the channel config is written to `~/.omnipus/config.json` automatically.
 
-```bash
-omnipus auth weixin
-```
-
-This command requests a QR code from the iLink API, renders it in your terminal, waits for you to scan it with the WeChat mobile app, and on approval saves the resulting token to the credential store and writes the channel config to `~/.omnipus/config.json`.
-
-After onboarding, start the gateway:
-
-```bash
-omnipus start
-```
+After authenticating, click **Save & Enable** in the Configure panel to activate the
+channel.
 
 ## Configuration
 
@@ -42,8 +36,8 @@ omnipus start
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `enabled` | bool | Yes | Enable the Weixin channel at startup |
-| `token_ref` | string | Yes | Credential name whose value is the iLink bot token (written automatically by `omnipus auth weixin`) |
-| `account_id` | string | No | iLink account ID (written automatically by `omnipus auth weixin`; rarely set manually) |
+| `token_ref` | string | Yes | Credential name whose value is the iLink bot token (written automatically by the web UI Configure flow) |
+| `account_id` | string | No | iLink account ID (written automatically by the web UI Configure flow; rarely set manually) |
 | `base_url` | string | No | iLink API base URL; defaults to `https://ilinkai.weixin.qq.com/` |
 | `cdn_base_url` | string | No | iLink CDN base URL for media downloads; defaults to the standard iLink CDN |
 | `proxy` | string | No | HTTP proxy URL for environments where `ilinkai.weixin.qq.com` is not directly reachable (e.g. `http://localhost:7890`) |
@@ -52,7 +46,7 @@ omnipus start
 
 ## Notes
 
-**Session binding.** The iLink token is bound to a single session. A new QR login on another device will invalidate the existing token. Re-run `omnipus auth weixin` to refresh.
+**Session binding.** The iLink token is bound to a single session. A new QR login on another device will invalidate the existing token. To refresh, open **Channels → Weixin → Configure** in the web UI and complete the QR flow again.
 
 **Long-poll loop.** The channel uses a `getUpdates`-style long poll (35-second server timeout). On consecutive failures it backs off for 30 seconds. Persisted `get_updates_buf` and context tokens survive gateway restarts (stored under `~/.omnipus/`).
 

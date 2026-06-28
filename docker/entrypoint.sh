@@ -8,4 +8,4 @@ set -e
 # The previous first-run gate that invoked `omnipus onboard` here exited the
 # container before the gateway could ever start — the CLI command was a
 # print-only stub. See issue #159.
-exec omnipus gateway "$@"
+exec omnipus start "$@"

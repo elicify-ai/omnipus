@@ -4,6 +4,7 @@
 package onboard
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
@@ -14,9 +15,15 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/clitoken"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 )
+
+// newBufioReader is a convenience wrapper used by menu tests.
+func newBufioReader(r io.Reader) *bufio.Reader {
+	return bufio.NewReader(r)
+}
 
 // TestRun_FreshInstall_WritesUsableConfig is the regression guard for
 // issue #159.
@@ -36,13 +43,15 @@ import (
 //     a non-empty password_hash + token_hash
 //   - state.json has onboarding_complete=true
 //   - the admin password bcrypt-validates
+//   - cli.token exists (mode 0600) and a cli user is in config
 func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 	home := t.TempDir()
 
+	// Provider menu: "3" selects OpenAI (3rd entry in providerMenu).
 	scripted := strings.Join([]string{
-		"openai", // provider
-		"",       // model (accept default for openai → gpt-4o)
-		"alice",  // admin username
+		"3",     // provider: OpenAI (numbered menu)
+		"",      // model (accept default for openai → gpt-4o)
+		"alice", // admin username
 	}, "\n") + "\n"
 
 	passwords := []string{
@@ -52,7 +61,7 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 	idx := 0
 
 	var stdout, stderr bytes.Buffer
-	io := wizardIO{
+	wio := wizardIO{
 		stdin:  strings.NewReader(scripted),
 		stdout: &stdout,
 		stderr: &stderr,
@@ -66,7 +75,7 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 		},
 	}
 
-	if err := Run(home, io); err != nil {
+	if err := Run(home, wio); err != nil {
 		t.Fatalf("Run failed: %v\n--- stdout ---\n%s\n--- stderr ---\n%s", err, stdout.String(), stderr.String())
 	}
 
@@ -133,24 +142,37 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 
 	gateway, _ := cfg["gateway"].(map[string]any)
 	users, _ := gateway["users"].([]any)
-	if len(users) != 1 {
-		t.Fatalf("expected 1 user, got %d", len(users))
+	// There must be at least the admin user (cli user also added by EnsureCLIToken).
+	if len(users) < 1 {
+		t.Fatalf("expected at least 1 user, got %d", len(users))
 	}
-	user, _ := users[0].(map[string]any)
-	if user["username"] != "alice" {
-		t.Errorf("username = %v, want alice", user["username"])
+
+	// Find the alice user.
+	var aliceUser map[string]any
+	for _, u := range users {
+		um, ok := u.(map[string]any)
+		if !ok {
+			continue
+		}
+		if um["username"] == "alice" {
+			aliceUser = um
+			break
+		}
 	}
-	if user["role"] != "admin" {
-		t.Errorf("role = %v, want admin", user["role"])
+	if aliceUser == nil {
+		t.Fatalf("alice user not found in gateway.users")
 	}
-	pwHash, _ := user["password_hash"].(string)
+	if aliceUser["role"] != "admin" {
+		t.Errorf("role = %v, want admin", aliceUser["role"])
+	}
+	pwHash, _ := aliceUser["password_hash"].(string)
 	if pwHash == "" {
 		t.Fatalf("password_hash missing or empty")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(pwHash), []byte("correcthorsebatterystaple")); err != nil {
 		t.Errorf("password bcrypt mismatch: %v", err)
 	}
-	tokenHash, _ := user["token_hash"].(string)
+	tokenHash, _ := aliceUser["token_hash"].(string)
 	if tokenHash == "" {
 		t.Fatalf("token_hash missing or empty")
 	}
@@ -159,6 +181,62 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 	mgr := onboarding.NewManager(home)
 	if !mgr.IsComplete() {
 		t.Errorf("state.json onboarding_complete is false; wizard did not commit")
+	}
+
+	// 5. cli.token exists with 0600 and a cli user is in config.json.
+	tokenPath := clitoken.CLITokenPath(home)
+	info, statErr := os.Stat(tokenPath)
+	if statErr != nil {
+		t.Fatalf("cli.token missing after onboard: %v", statErr)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("cli.token perm = %o, want 0600", info.Mode().Perm())
+	}
+	tok, loadErr := clitoken.LoadCLIToken(home)
+	if loadErr != nil {
+		t.Fatalf("LoadCLIToken: %v", loadErr)
+	}
+	if tok == "" {
+		t.Error("cli.token is empty")
+	}
+
+	// Verify cli user is present in config.
+	var cliUser map[string]any
+	for _, u := range users {
+		um, ok := u.(map[string]any)
+		if !ok {
+			continue
+		}
+		if um["username"] == "cli" {
+			cliUser = um
+			break
+		}
+	}
+	if cliUser == nil {
+		// Re-read config since EnsureCLIToken writes after mutateConfigFile.
+		raw2, readErr := os.ReadFile(filepath.Join(home, "config.json"))
+		if readErr != nil {
+			t.Fatalf("re-read config.json: %v", readErr)
+		}
+		var cfg2 map[string]any
+		if jsonErr := json.Unmarshal(raw2, &cfg2); jsonErr != nil {
+			t.Fatalf("re-parse config.json: %v", jsonErr)
+		}
+		gw2, _ := cfg2["gateway"].(map[string]any)
+		users2, _ := gw2["users"].([]any)
+		for _, u := range users2 {
+			um, ok := u.(map[string]any)
+			if !ok {
+				continue
+			}
+			if um["username"] == "cli" {
+				cliUser = um
+				break
+			}
+		}
+	}
+	if cliUser == nil {
+		t.Errorf("cli user not found in config.json after onboard")
 	}
 }
 
@@ -177,7 +255,7 @@ func TestRun_AlreadyComplete_NoOp(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	io := wizardIO{
+	wio := wizardIO{
 		stdin:  strings.NewReader(""),
 		stdout: &stdout,
 		stderr: &stderr,
@@ -187,7 +265,7 @@ func TestRun_AlreadyComplete_NoOp(t *testing.T) {
 		},
 	}
 
-	if err := Run(home, io); err != nil {
+	if err := Run(home, wio); err != nil {
 		t.Fatalf("Run on completed install must be a no-op, got: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "already complete") {
@@ -198,10 +276,11 @@ func TestRun_AlreadyComplete_NoOp(t *testing.T) {
 // TestPrompt_ShortPassword_Rejected confirms the 8-character minimum is
 // enforced at the CLI boundary the same way as at the REST boundary.
 func TestPrompt_ShortPassword_Rejected(t *testing.T) {
+	// Provider menu: "3" for OpenAI, then model, then username.
 	scripted := strings.Join([]string{
-		"openai", // provider
-		"",       // model default
-		"alice",  // username
+		"3",     // provider: OpenAI
+		"",      // model default
+		"alice", // username
 	}, "\n") + "\n"
 
 	passwords := []string{
@@ -209,7 +288,7 @@ func TestPrompt_ShortPassword_Rejected(t *testing.T) {
 		"short",   // password — too short, should be rejected
 	}
 	idx := 0
-	io := wizardIO{
+	wio := wizardIO{
 		stdin:  strings.NewReader(scripted),
 		stdout: io.Discard,
 		stderr: io.Discard,
@@ -223,7 +302,7 @@ func TestPrompt_ShortPassword_Rejected(t *testing.T) {
 		},
 	}
 
-	_, err := prompt(io)
+	_, err := prompt(wio)
 	if err == nil {
 		t.Fatal("expected error for password shorter than 8 chars, got nil")
 	}
@@ -232,22 +311,190 @@ func TestPrompt_ShortPassword_Rejected(t *testing.T) {
 	}
 }
 
-// TestPrompt_UnknownProvider_Rejected confirms that the same provider
-// validation the REST handler applies is also enforced at the CLI.
+// TestPrompt_UnknownProvider_Rejected confirms that choosing "Other" and
+// entering an unknown protocol id is rejected.
 func TestPrompt_UnknownProvider_Rejected(t *testing.T) {
-	scripted := "nonexistent-provider\n"
-	io := wizardIO{
+	// "7" selects "Other", then we type an unknown provider id.
+	scripted := "7\nnonexistent-provider\n"
+	wio := wizardIO{
 		stdin:        strings.NewReader(scripted),
 		stdout:       io.Discard,
 		stderr:       io.Discard,
 		readPassword: func() (string, error) { t.Fatal("should not reach password prompt"); return "", nil },
 	}
-	_, err := prompt(io)
+	_, err := prompt(wio)
 	if err == nil {
 		t.Fatal("expected unknown-provider error, got nil")
 	}
 	if !strings.Contains(err.Error(), "known protocol") {
 		t.Errorf("expected 'known protocol' error, got: %v", err)
+	}
+}
+
+// TestProviderMenu_NumberSelectionReprompt verifies FR-010/US-8:
+//   - a valid number selects the correct provider
+//   - an out-of-range number re-prompts (does not crash or return an error)
+//
+// The reprompt path is exercised by feeding "99" (out-of-range), then "0"
+// (out-of-range), then "1" (valid — OpenRouter).
+func TestProviderMenu_NumberSelectionReprompt(t *testing.T) {
+	t.Run("out-of-range re-prompts then valid selects", func(t *testing.T) {
+		// "99" → reprompt; "0" → reprompt; "1" → OpenRouter.
+		scripted := "99\n0\n1\n"
+		var out bytes.Buffer
+		reader := strings.NewReader(scripted)
+
+		import_bufio_reader := newBufioReader(reader)
+		got, err := promptProviderMenu(&out, import_bufio_reader)
+		if err != nil {
+			t.Fatalf("promptProviderMenu: %v", err)
+		}
+		if got != "openrouter" {
+			t.Errorf("expected openrouter, got %q", got)
+		}
+		outStr := out.String()
+		// The menu should have been printed 3 times (once per invalid + final).
+		if count := strings.Count(outStr, "Select your LLM provider:"); count != 3 {
+			t.Errorf("expected menu printed 3 times, got %d; output: %s", count, outStr)
+		}
+	})
+
+	t.Run("each menu entry selects correct provider", func(t *testing.T) {
+		cases := []struct {
+			input    string
+			wantID   string
+			wantName string
+		}{
+			{"1\n", "openrouter", "OpenRouter"},
+			{"2\n", "anthropic", "Anthropic"},
+			{"3\n", "openai", "OpenAI"},
+			{"4\n", "gemini", "Google / Gemini"},
+			{"5\n", "groq", "Groq"},
+			{"6\n", "deepseek", "DeepSeek"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.wantName, func(t *testing.T) {
+				var out bytes.Buffer
+				reader := strings.NewReader(tc.input)
+				got, err := promptProviderMenu(&out, newBufioReader(reader))
+				if err != nil {
+					t.Fatalf("promptProviderMenu for %q: %v", tc.wantName, err)
+				}
+				if got != tc.wantID {
+					t.Errorf("selection %q: got %q, want %q", tc.input, got, tc.wantID)
+				}
+			})
+		}
+	})
+
+	t.Run("empty input defaults to openrouter (item 1)", func(t *testing.T) {
+		var out bytes.Buffer
+		reader := strings.NewReader("\n") // empty line
+		got, err := promptProviderMenu(&out, newBufioReader(reader))
+		if err != nil {
+			t.Fatalf("promptProviderMenu: %v", err)
+		}
+		if got != "openrouter" {
+			t.Errorf("empty input should default to openrouter, got %q", got)
+		}
+	})
+}
+
+// TestOnboard_MintsCLIToken verifies FR-018/US-8 AC-1:
+// after onboarding completes, cli.token exists (0600) and a cli user
+// is present in config.json with a non-empty token_hash.
+func TestOnboard_MintsCLIToken(t *testing.T) {
+	home := t.TempDir()
+
+	// "1" selects OpenRouter (menu item 1).
+	scripted := strings.Join([]string{
+		"1",     // provider: OpenRouter
+		"",      // model default
+		"admin", // admin username
+	}, "\n") + "\n"
+
+	passwords := []string{
+		"sk-or-v1-test-key",  // API key
+		"longenoughpassword", // admin password
+	}
+	idx := 0
+
+	var stdout, stderr bytes.Buffer
+	wio := wizardIO{
+		stdin:  strings.NewReader(scripted),
+		stdout: &stdout,
+		stderr: &stderr,
+		readPassword: func() (string, error) {
+			if idx >= len(passwords) {
+				return "", io.EOF
+			}
+			out := passwords[idx]
+			idx++
+			return out, nil
+		},
+	}
+
+	if err := Run(home, wio); err != nil {
+		t.Fatalf("Run failed: %v\n--- stdout ---\n%s", err, stdout.String())
+	}
+
+	// cli.token must exist with mode 0600.
+	tokenPath := clitoken.CLITokenPath(home)
+	info, err := os.Stat(tokenPath)
+	if err != nil {
+		t.Fatalf("cli.token missing after onboard: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("cli.token perm = %o, want 0600", info.Mode().Perm())
+	}
+
+	// LoadCLIToken must return a non-empty token.
+	tok, err := clitoken.LoadCLIToken(home)
+	if err != nil {
+		t.Fatalf("LoadCLIToken: %v", err)
+	}
+	if tok == "" {
+		t.Error("cli.token is empty")
+	}
+
+	// The cli user must be in config.json with a non-empty token_hash.
+	raw, err := os.ReadFile(filepath.Join(home, "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("parse config.json: %v", err)
+	}
+	gw, _ := cfg["gateway"].(map[string]any)
+	users, _ := gw["users"].([]any)
+
+	var cliUser map[string]any
+	for _, u := range users {
+		um, ok := u.(map[string]any)
+		if !ok {
+			continue
+		}
+		if um["username"] == "cli" {
+			cliUser = um
+			break
+		}
+	}
+	if cliUser == nil {
+		t.Fatalf("cli user not found in config.json")
+	}
+	th, _ := cliUser["token_hash"].(string)
+	if th == "" {
+		t.Errorf("cli user has empty token_hash")
+	}
+	// Verify the hash matches the plaintext token.
+	if err := bcrypt.CompareHashAndPassword([]byte(th), []byte(tok)); err != nil {
+		t.Errorf("cli token_hash does not match plaintext token: %v", err)
+	}
+
+	// Token must not appear in stdout.
+	if strings.Contains(stdout.String(), tok) {
+		t.Errorf("cli token leaked to stdout — must never be printed")
 	}
 }
 
@@ -390,7 +637,7 @@ func TestRunHeadless_EndToEnd(t *testing.T) {
 	home := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	io := wizardIO{
+	wio := wizardIO{
 		stdin:  strings.NewReader(""),
 		stdout: &stdout,
 		stderr: &stderr,
@@ -407,7 +654,7 @@ func TestRunHeadless_EndToEnd(t *testing.T) {
 		Username:   "alice",
 		Password:   "correcthorsebatterystaple",
 	}
-	if err := RunHeadless(home, io, in); err != nil {
+	if err := RunHeadless(home, wio, in); err != nil {
 		t.Fatalf("RunHeadless: %v", err)
 	}
 
@@ -448,13 +695,33 @@ func TestRunHeadless_EndToEnd(t *testing.T) {
 	if len(users) == 0 {
 		t.Fatalf("config.gateway.users empty: %s", rawCfg)
 	}
-	user, _ := users[0].(map[string]any)
-	hash, _ := user["password_hash"].(string)
+
+	// Find the alice user.
+	var aliceUser map[string]any
+	for _, u := range users {
+		um, ok := u.(map[string]any)
+		if !ok {
+			continue
+		}
+		if um["username"] == "alice" {
+			aliceUser = um
+			break
+		}
+	}
+	if aliceUser == nil {
+		t.Fatalf("alice user not found in config.json")
+	}
+	hash, _ := aliceUser["password_hash"].(string)
 	if hash == "" {
 		t.Fatalf("password_hash empty")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)); err != nil {
 		t.Errorf("password_hash does not bcrypt-validate against the headless password: %v", err)
+	}
+
+	// cli.token must exist (EnsureCLIToken called during applyInput).
+	if _, err := os.Stat(clitoken.CLITokenPath(home)); err != nil {
+		t.Errorf("cli.token missing after RunHeadless: %v", err)
 	}
 
 	out := stdout.String()
@@ -475,7 +742,7 @@ func TestRunHeadless_AlreadyComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	io := wizardIO{
+	wio := wizardIO{
 		stdin:  strings.NewReader(""),
 		stdout: &stdout,
 		stderr: io.Discard,
@@ -491,7 +758,7 @@ func TestRunHeadless_AlreadyComplete(t *testing.T) {
 		Username:   "alice",
 		Password:   "longenoughpw",
 	}
-	if err := RunHeadless(home, io, in); err != nil {
+	if err := RunHeadless(home, wio, in); err != nil {
 		t.Fatalf("RunHeadless on completed install must be a no-op, got: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "already complete") {
