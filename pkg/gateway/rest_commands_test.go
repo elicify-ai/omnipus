@@ -47,7 +47,12 @@ func injectNoAuthConfig(r *http.Request) *http.Request {
 // injecting auth config to avoid nil agentLoop panics. If authed=true, the
 // request is treated as authenticated (bypass mode); if authed=false, bypass is
 // off and no users are configured, so 401 results.
-func doCommandsRequest(t *testing.T, api *restAPI, surface string, authed bool) *httptest.ResponseRecorder {
+func doCommandsRequest(
+	t *testing.T,
+	api *restAPI,
+	surface string,
+	authed bool,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	url := "/api/v1/commands"
 	if surface != "" {
@@ -88,7 +93,13 @@ func TestHandleListCommands_Web(t *testing.T) {
 		t.Errorf("web: expected 5 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
-	wantNames := map[string]bool{"clear": true, "help": true, "model": true, "skill": true, "cancel": true}
+	wantNames := map[string]bool{
+		"clear":  true,
+		"help":   true,
+		"model":  true,
+		"skill":  true,
+		"cancel": true,
+	}
 	for _, c := range cmds {
 		if !wantNames[c.Name] {
 			t.Errorf("web: unexpected command %q", c.Name)
@@ -114,7 +125,19 @@ func TestHandleListCommands_CLI(t *testing.T) {
 		t.Errorf("cli: expected 11 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
-	allCanonical := []string{"clear", "help", "model", "skill", "cancel", "agents", "tasks", "skills", "channels", "status", "config"}
+	allCanonical := []string{
+		"clear",
+		"help",
+		"model",
+		"skill",
+		"cancel",
+		"agents",
+		"tasks",
+		"skills",
+		"channels",
+		"status",
+		"config",
+	}
 	nameSet := make(map[string]bool, len(cmds))
 	for _, c := range cmds {
 		nameSet[c.Name] = true
@@ -153,7 +176,11 @@ func TestHandleListCommands_DefaultSurface(t *testing.T) {
 
 	cmds := parseCommandsResponse(t, w)
 	if len(cmds) != 5 {
-		t.Errorf("default surface (web): expected 5 commands, got %d: %v", len(cmds), commandNames(cmds))
+		t.Errorf(
+			"default surface (web): expected 5 commands, got %d: %v",
+			len(cmds),
+			commandNames(cmds),
+		)
 	}
 }
 
@@ -168,7 +195,11 @@ func TestHandleListCommands_UnknownSurface(t *testing.T) {
 
 	cmds := parseCommandsResponse(t, w)
 	if len(cmds) != 5 {
-		t.Errorf("unknown surface should default to web (5 cmds), got %d: %v", len(cmds), commandNames(cmds))
+		t.Errorf(
+			"unknown surface should default to web (5 cmds), got %d: %v",
+			len(cmds),
+			commandNames(cmds),
+		)
 	}
 }
 
@@ -210,7 +241,12 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 	for _, c := range cmds {
 		if clientCmds[c.Name] {
 			if c.Delivery != gen.SlashCommandDeliveryClient {
-				t.Errorf("%q: Delivery=%q, want %q", c.Name, c.Delivery, gen.SlashCommandDeliveryClient)
+				t.Errorf(
+					"%q: Delivery=%q, want %q",
+					c.Name,
+					c.Delivery,
+					gen.SlashCommandDeliveryClient,
+				)
 			}
 		} else if agentCmds[c.Name] {
 			if c.Delivery != gen.SlashCommandDeliveryAgent {
@@ -252,7 +288,10 @@ func TestHandleListCommands_CancelAvailableWhileStreaming(t *testing.T) {
 	for _, c := range cmds {
 		if c.Name == "cancel" {
 			if c.AvailableWhileStreaming == nil || !*c.AvailableWhileStreaming {
-				t.Errorf("cancel: AvailableWhileStreaming must be true, got %v", c.AvailableWhileStreaming)
+				t.Errorf(
+					"cancel: AvailableWhileStreaming must be true, got %v",
+					c.AvailableWhileStreaming,
+				)
 			}
 		} else {
 			if c.AvailableWhileStreaming != nil && *c.AvailableWhileStreaming {
@@ -269,8 +308,12 @@ func TestDefToSlashCommand_Mapper(t *testing.T) {
 		Description: "Force a specific installed skill for one request",
 		Usage:       "/skill <name> [message]",
 		Aliases:     []string{"use"},
-		Surfaces:    []commands.Surface{commands.SurfaceWeb, commands.SurfaceCLI, commands.SurfaceChannel},
-		Delivery:    commands.DeliveryAgent,
+		Surfaces: []commands.Surface{
+			commands.SurfaceWeb,
+			commands.SurfaceCLI,
+			commands.SurfaceChannel,
+		},
+		Delivery: commands.DeliveryAgent,
 	}
 
 	sc := defToSlashCommand(def)
@@ -331,13 +374,23 @@ func TestHandleListCommands_DeliveryValidEnum(t *testing.T) {
 		t.Run(surface, func(t *testing.T) {
 			w := doCommandsRequest(t, api, surface, true)
 			if w.Code != http.StatusOK {
-				t.Fatalf("surface=%s: status=%d, want 200\nbody: %s", surface, w.Code, w.Body.String())
+				t.Fatalf(
+					"surface=%s: status=%d, want 200\nbody: %s",
+					surface,
+					w.Code,
+					w.Body.String(),
+				)
 			}
 			cmds := parseCommandsResponse(t, w)
 			for _, c := range cmds {
-				if c.Delivery != gen.SlashCommandDeliveryClient && c.Delivery != gen.SlashCommandDeliveryAgent {
-					t.Errorf("surface=%s cmd=%q: Delivery=%q is not a valid enum value (must be 'client' or 'agent')",
-						surface, c.Name, c.Delivery)
+				if c.Delivery != gen.SlashCommandDeliveryClient &&
+					c.Delivery != gen.SlashCommandDeliveryAgent {
+					t.Errorf(
+						"surface=%s cmd=%q: Delivery=%q is not a valid enum value (must be 'client' or 'agent')",
+						surface,
+						c.Name,
+						c.Delivery,
+					)
 				}
 			}
 		})

@@ -11,7 +11,7 @@ func skillCommand() Definition {
 		Surfaces:    []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
 		Delivery:    DeliveryAgent,
 		// No backend handler: the agent loop resolves skill by name from the
-		// injected text (existing behaviour, unchanged). The SPA forwards /skill
+		// injected text (existing behavior, unchanged). The SPA forwards /skill
 		// as a message frame; CLI/channel pipelines pass through to the agent.
 	}
 }

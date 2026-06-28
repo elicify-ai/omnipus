@@ -17,7 +17,10 @@ func NewClaudeProvider(token string) *ClaudeProvider {
 	}
 }
 
-func NewClaudeProviderWithTokenSource(token string, tokenSource func() (string, error)) *ClaudeProvider {
+func NewClaudeProviderWithTokenSource(
+	token string,
+	tokenSource func() (string, error),
+) *ClaudeProvider {
 	return &ClaudeProvider{
 		delegate: anthropicprovider.NewProviderWithTokenSource(token, tokenSource),
 	}
@@ -28,7 +31,11 @@ func newClaudeProviderWithDelegate(delegate *anthropicprovider.Provider) *Claude
 }
 
 func (p *ClaudeProvider) Chat(
-	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
 ) (*LLMResponse, error) {
 	resp, err := p.delegate.Chat(ctx, messages, tools, model, options)
 	if err != nil {
@@ -48,7 +55,9 @@ func createClaudeTokenSource() func() (string, error) {
 			return "", fmt.Errorf("loading auth credentials: %w", err)
 		}
 		if cred == nil {
-			return "", fmt.Errorf("no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>")
+			return "", fmt.Errorf(
+				"no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>",
+			)
 		}
 		return cred.AccessToken, nil
 	}

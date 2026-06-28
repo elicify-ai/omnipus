@@ -56,7 +56,11 @@ func NewCodexProviderWithTokenSource(
 }
 
 func (p *CodexProvider) Chat(
-	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
 ) (*LLMResponse, error) {
 	var opts []option.RequestOption
 	accountID := p.accountID
@@ -106,7 +110,8 @@ func (p *CodexProvider) Chat(
 	var resp *responses.Response
 	for stream.Next() {
 		evt := stream.Current()
-		if evt.Type == "response.completed" || evt.Type == "response.failed" || evt.Type == "response.incomplete" {
+		if evt.Type == "response.completed" || evt.Type == "response.failed" ||
+			evt.Type == "response.incomplete" {
 			evtResp := evt.Response
 			if evtResp.ID != "" {
 				evtRespCopy := evtResp
@@ -149,7 +154,11 @@ func (p *CodexProvider) Chat(
 			"tools_count":        len(tools),
 			"account_id_present": accountID != "",
 		}
-		logger.ErrorCF("provider.codex", "Codex stream ended without completed response event", fields)
+		logger.ErrorCF(
+			"provider.codex",
+			"Codex stream ended without completed response event",
+			fields,
+		)
 		return nil, fmt.Errorf("codex API call: stream ended without completed response")
 	}
 
@@ -207,7 +216,11 @@ func resolveCodexModel(model string) (string, string) {
 }
 
 func buildCodexParams(
-	messages []Message, tools []ToolDefinition, model string, options map[string]any, enableWebSearch bool,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	enableWebSearch bool,
 ) responses.ResponseNewParams {
 	inputItems, instructions := orc.TranslateMessages(messages)
 
@@ -247,7 +260,9 @@ func createCodexTokenSource() func() (string, string, error) {
 			return "", "", fmt.Errorf("loading auth credentials: %w", err)
 		}
 		if cred == nil {
-			return "", "", fmt.Errorf("no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>")
+			return "", "", fmt.Errorf(
+				"no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>",
+			)
 		}
 
 		if cred.AuthMethod == "oauth" && cred.NeedsRefresh() && cred.RefreshToken != "" {

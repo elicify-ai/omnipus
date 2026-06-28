@@ -40,7 +40,7 @@ func TestDefinition_EffectiveUsage_WithArgsUsage(t *testing.T) {
 	}
 }
 
-// TestDefinition_EffectiveDelivery covers the defaulting behaviour introduced to
+// TestDefinition_EffectiveDelivery covers the defaulting behavior introduced to
 // fix the Constraint #8 wire bug: non-web commands leave Delivery unset (""), but
 // the SlashCommand.yaml schema requires delivery ∈ [client, agent]. EffectiveDelivery
 // must return DeliveryAgent in the zero-value case.
