@@ -1,258 +1,296 @@
-// Calendar view — shows tasks with time triggers (once/every/recurring) and milestones by date.
+// Workspace Calendar — Outlook-style FullCalendar v6 surface.
+// Spec: docs/internal/specs/workspace-calendar-fullcalendar-spec.md (v2).
 //
-// Data sources:
-//   - Tasks:       GET /api/v1/tasks?workspace_id={id}  (Task[])
-//   - Milestones:  GET /api/v1/workspaces/{id}/milestones (Milestone[])
-//
-// Only tasks with a time trigger (once/every/recurring) appear on the calendar.
-// Tasks with no trigger (manual) or surface!=user are excluded.
+// Replaces the former month-grouped list. The grid ALWAYS renders (the empty-state
+// bug is gone); supports Month/Week/Day/Agenda, drag-to-reschedule + a keyboard
+// path, and click/slot-select to create. This file is the integration hub: it maps
+// tasks/milestones → events (pure fn), hosts the wrapper + toolbar, and owns the
+// handlers/mutations (optimistic move handled by FullCalendar; revert + undo + toast
+// here).
 
-import { useQuery } from '@tanstack/react-query'
-import { CalendarBlank, Flag, ArrowClockwise } from '@phosphor-icons/react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type FullCalendar from '@fullcalendar/react'
+import type { EventClickArg, EventDropArg, DateSelectArg } from '@fullcalendar/core'
+import type { DateClickArg } from '@fullcalendar/interaction'
 import {
   fetchTasks,
   fetchMilestones,
+  updateTask,
+  updateMilestone,
   tasksQueryKeys,
   milestonesQueryKeys,
-  type Milestone,
   type Task,
 } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { useUiStore } from '@/store/ui'
+import { mapToCalendarEvents, formatLocalDate } from '@/lib/calendar/eventMapping'
+import { FullCalendarView } from '@/components/calendar/FullCalendarView'
+import { CalendarToolbar } from '@/components/calendar/CalendarToolbar'
+import { MilestoneDatePopover } from '@/components/calendar/MilestoneDatePopover'
+import type {
+  CalendarViewName,
+  CalendarEventExtProps,
+  MilestoneTarget,
+} from '@/components/calendar/types'
+import { CreateTaskSlideOver } from '@/components/workspaces/CreateTaskSlideOver'
+import { TaskDetailSlideOver } from '@/components/workspaces/TaskDetailSlideOver'
 
 interface CalendarScreenProps {
   workspaceId: string
 }
 
-// CalendarEvent is a unified view model for tasks and milestones with a date.
-// not-wire-format: internal view model only; never sent over the network.
-type CalendarEvent =
-  | { kind: 'task-trigger'; date: Date; task: Task; label: string }
-  | { kind: 'task-due'; date: Date; task: Task }
-  | { kind: 'milestone'; date: Date; milestone: Milestone }
-
-/** Parse a date string (date or date-time, ISO 8601). Returns null on failure. */
-function parseDate(s: string | null | undefined): Date | null {
-  if (!s) return null
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? null : d
-}
-
-/** Parse a unix timestamp (ms). Returns null on failure. */
-function parseMs(ms: number | null | undefined): Date | null {
-  if (!ms) return null
-  const d = new Date(ms)
-  return isNaN(d.getTime()) ? null : d
-}
-
-/** Format a Date as "Mon DD" (short month + day). */
-function formatShort(d: Date): string {
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
-}
-
-/** Format a Date as "MMMM YYYY" for section headers. */
-function formatMonth(d: Date): string {
-  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
-}
-
-/** Group events by their calendar month (YYYY-MM key). */
-function groupByMonth(events: CalendarEvent[]): Map<string, CalendarEvent[]> {
-  const map = new Map<string, CalendarEvent[]>()
-  for (const ev of events) {
-    const key = `${ev.date.getUTCFullYear()}-${String(ev.date.getUTCMonth() + 1).padStart(2, '0')}`
-    const group = map.get(key)
-    if (group) {
-      group.push(ev)
-    } else {
-      map.set(key, [ev])
-    }
-  }
-  return map
-}
-
-/** Render a single calendar event row. */
-function EventRow({ event }: { event: CalendarEvent }) {
-  if (event.kind === 'task-trigger' || event.kind === 'task-due') {
-    const { task } = event
-    const label = event.kind === 'task-trigger' ? event.label : 'Due'
-    const labelClass =
-      event.kind === 'task-trigger'
-        ? 'text-[#E2E8F0]/60 bg-white/5'
-        : 'text-[#D4AF37] bg-[#D4AF37]/10'
-    const isRecurring = task.trigger && (task.trigger.type === 'every' || task.trigger.type === 'recurring')
-
-    return (
-      <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-white/5 transition-colors">
-        <span className="w-14 shrink-0 text-right text-sm font-mono text-[#E2E8F0]/50">
-          {formatShort(event.date)}
-        </span>
-        <span
-          className={cn(
-            'shrink-0 px-1.5 py-0.5 rounded text-xs font-medium uppercase tracking-wide',
-            labelClass,
-          )}
-        >
-          {label}
-        </span>
-        <span className="flex-1 text-sm text-[#E2E8F0] truncate">{task.title}</span>
-        {isRecurring && (
-          <ArrowClockwise
-            size={14}
-            weight="regular"
-            className="shrink-0 text-[#E2E8F0]/40"
-            aria-label="Recurring"
-          />
-        )}
-        <span
-          className={cn(
-            'shrink-0 px-1.5 py-0.5 rounded text-xs capitalize',
-            task.status === 'done' && 'text-emerald-400 bg-emerald-400/10',
-            task.status === 'in_progress' && 'text-blue-400 bg-blue-400/10',
-            task.status === 'blocked' && 'text-amber-400 bg-amber-400/10',
-            task.status === 'failed' && 'text-red-400 bg-red-400/10',
-            (task.status === 'inbox' || task.status === 'next' || task.status === 'planning') &&
-              'text-[#E2E8F0]/60 bg-white/5',
-          )}
-        >
-          {task.status === 'in_progress' ? 'in progress' : task.status}
-        </span>
-      </div>
-    )
-  }
-
-  // milestone event
-  const { milestone } = event
+/** Format a Date as a `datetime-local` value ("YYYY-MM-DDTHH:mm") in LOCAL time. */
+function toDatetimeLocal(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-white/5 transition-colors">
-      <span className="w-14 shrink-0 text-right text-sm font-mono text-[#E2E8F0]/50">
-        {formatShort(event.date)}
-      </span>
-      <span className="shrink-0 px-1.5 py-0.5 rounded text-xs font-medium uppercase tracking-wide text-[#D4AF37] bg-[#D4AF37]/10">
-        Milestone
-      </span>
-      <Flag size={13} weight="fill" className="shrink-0 text-[#D4AF37]" />
-      <span className="flex-1 text-sm text-[#E2E8F0] truncate">{milestone.name}</span>
-    </div>
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
   )
 }
 
+/** Short human label for a reschedule toast ("Jun 23"). */
+function formatShort(d: Date): string {
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
-  const { data: tasks = [], isLoading: tasksLoading, isError: tasksError } = useQuery({
+  const queryClient = useQueryClient()
+  const addToast = useUiStore((s) => s.addToast)
+  const calendarRef = useRef<FullCalendar | null>(null)
+
+  // The DOM node that triggered the last create/open gesture — for focus restore (C-4).
+  const triggerElRef = useRef<HTMLElement | null>(null)
+
+  // ── Data ────────────────────────────────────────────────────────────────────
+  const {
+    data: tasks = [],
+    isLoading: tasksLoading,
+    isError: tasksError,
+  } = useQuery({
     queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
     queryFn: () => fetchTasks({ workspace_id: workspaceId }),
     staleTime: 30_000,
     enabled: !!workspaceId,
   })
 
-  const { data: milestones = [], isLoading: milestonesLoading, isError: milestonesError } = useQuery({
+  const {
+    data: milestones = [],
+    isLoading: milestonesLoading,
+    isError: milestonesError,
+  } = useQuery({
     queryKey: milestonesQueryKeys.list(workspaceId),
     queryFn: () => fetchMilestones(workspaceId),
     staleTime: 30_000,
     enabled: !!workspaceId,
   })
 
+  const events = useMemo(() => mapToCalendarEvents(tasks, milestones), [tasks, milestones])
   const isLoading = tasksLoading || milestonesLoading
-  const isError = tasksError || milestonesError
+  const isEmpty = !isLoading && events.length === 0
 
-  // Build unified event list from tasks (trigger fire time + due) and milestones (due_date).
-  const events: CalendarEvent[] = []
+  // Degrade on query failure (FR-016, I-2) — non-blocking toast, grid still renders.
+  useEffect(() => {
+    if (tasksError) addToast({ message: "Couldn't load tasks", variant: 'error' })
+  }, [tasksError, addToast])
+  useEffect(() => {
+    if (milestonesError) addToast({ message: "Couldn't load milestones", variant: 'error' })
+  }, [milestonesError, addToast])
 
-  for (const task of tasks) {
-    // Skip non-user-surface tasks
-    if (task.surface && task.surface !== 'user') continue
+  // ── Toolbar state (driven by FullCalendar's datesSet) ─────────────────────────
+  const [currentView, setCurrentView] = useState<CalendarViewName>('dayGridMonth')
+  const [title, setTitle] = useState('')
 
-    if (task.trigger) {
-      const { type, config } = task.trigger
-      if (type === 'once' && config?.at_ms) {
-        const d = parseMs(config.at_ms)
-        if (d) events.push({ kind: 'task-trigger', date: d, task, label: 'Fires' })
-      } else if (type === 'every' && config?.every_ms) {
-        // Show next fire as "now + interval" approximation
-        const d = new Date(Date.now() + config.every_ms)
-        events.push({ kind: 'task-trigger', date: d, task, label: 'Repeats' })
-      } else if (type === 'recurring' && config?.cron_expr) {
-        // No local cron parser available; skip in-calendar until Sprint 4 adds server-computed next_fire_at
+  const handleDatesSet = useCallback((nextTitle: string, view: CalendarViewName) => {
+    setTitle(nextTitle)
+    setCurrentView(view)
+  }, [])
+
+  const handleViewChange = useCallback((view: CalendarViewName) => setCurrentView(view), [])
+
+  // ── Slide-over / popover state ───────────────────────────────────────────────
+  const [createOpen, setCreateOpen] = useState(false)
+  const [initialDue, setInitialDue] = useState<string | undefined>(undefined)
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+  const [milestoneTarget, setMilestoneTarget] = useState<MilestoneTarget | null>(null)
+
+  const invalidate = useCallback(() => {
+    void queryClient.invalidateQueries({
+      queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
+    })
+    void queryClient.invalidateQueries({ queryKey: milestonesQueryKeys.list(workspaceId) })
+  }, [queryClient, workspaceId])
+
+  // Restore focus to the chip/cell that opened a dialog (C-4 / FR-013).
+  const restoreFocus = useCallback(() => {
+    const el = triggerElRef.current
+    triggerElRef.current = null
+    // best-effort — event chips are focusable; day cells may not be.
+    window.requestAnimationFrame(() => el?.focus?.())
+  }, [])
+
+  // ── Reschedule persistence (the whole-trigger + date-only rules — F-05/F-06) ──
+  const persistReschedule = useCallback(
+    async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
+      if (ext.kind === 'milestone' && ext.milestoneId) {
+        await updateMilestone(workspaceId, ext.milestoneId, { due_date: formatLocalDate(start) })
+        return
       }
-    }
+      if (ext.kind === 'task-due' && ext.taskId) {
+        // Task `due` is RFC3339 date-time (contract: format date-time), so a
+        // date-only string is rejected 400. Write the dropped day's local-midnight
+        // instant as ISO; the read side (mapToCalendarEvents) places it by LOCAL
+        // date, so this round-trips with no off-by-one in any timezone.
+        await updateTask(ext.taskId, { due: start.toISOString() })
+        return
+      }
+      if (ext.kind === 'task-fire' && ext.taskId) {
+        const task = tasks.find((t) => t.id === ext.taskId)
+        const trigger = task?.trigger
+        // Send the WHOLE trigger, preserving type + sibling config keys (F-05).
+        await updateTask(ext.taskId, {
+          trigger: {
+            type: trigger?.type ?? 'once',
+            config: { ...(trigger?.config ?? {}), at_ms: start.getTime() },
+          },
+        })
+      }
+    },
+    [tasks, workspaceId],
+  )
 
-    const dueDate = parseDate(task.due)
-    if (dueDate) {
-      events.push({ kind: 'task-due', date: dueDate, task })
-    }
-  }
+  const handleEventDrop = useCallback(
+    (arg: EventDropArg) => {
+      const ext = arg.event.extendedProps as CalendarEventExtProps
+      const newStart = arg.event.start
+      const oldStart = arg.oldEvent.start
+      if (!newStart) {
+        arg.revert()
+        return
+      }
+      void (async () => {
+        try {
+          await persistReschedule(ext, newStart)
+          invalidate()
+          addToast({
+            message: `Rescheduled to ${formatShort(newStart)}`,
+            variant: 'success',
+            duration: 5000,
+            action: oldStart
+              ? {
+                  label: 'Undo',
+                  onClick: () => {
+                    void (async () => {
+                      try {
+                        await persistReschedule(ext, oldStart)
+                        invalidate()
+                      } catch {
+                        addToast({ message: "Couldn't undo — please try again", variant: 'error' })
+                      }
+                    })()
+                  },
+                }
+              : undefined,
+          })
+        } catch {
+          arg.revert()
+          addToast({ message: "Couldn't reschedule — please try again", variant: 'error' })
+        }
+      })()
+    },
+    [persistReschedule, invalidate, addToast],
+  )
 
-  for (const milestone of milestones) {
-    const dueDate = parseDate(milestone.due_date)
-    if (dueDate) {
-      events.push({ kind: 'milestone', date: dueDate, milestone })
-    }
-  }
+  const handleEventClick = useCallback(
+    (arg: EventClickArg) => {
+      triggerElRef.current = (arg.jsEvent?.target as HTMLElement) ?? null
+      const ext = arg.event.extendedProps as CalendarEventExtProps
+      if (ext.kind === 'milestone' && ext.milestoneId) {
+        const m = milestones.find((x) => x.id === ext.milestoneId)
+        if (m) setMilestoneTarget({ id: m.id, name: m.name, due_date: m.due_date ?? null })
+        return
+      }
+      if (ext.taskId) {
+        const t = tasks.find((x) => x.id === ext.taskId)
+        if (t) setSelectedTask(t)
+      }
+    },
+    [tasks, milestones],
+  )
 
-  // Sort chronologically.
-  events.sort((a, b) => a.date.getTime() - b.date.getTime())
+  const handleDateClick = useCallback((arg: DateClickArg) => {
+    triggerElRef.current = (arg.jsEvent?.target as HTMLElement) ?? null
+    setInitialDue(arg.allDay ? `${formatLocalDate(arg.date)}T00:00` : toDatetimeLocal(arg.date))
+    setCreateOpen(true)
+  }, [])
 
-  const grouped = groupByMonth(events)
-  const monthKeys = Array.from(grouped.keys()).sort()
+  const handleDateSelect = useCallback((arg: DateSelectArg) => {
+    triggerElRef.current = (arg.jsEvent?.target as HTMLElement) ?? null
+    setInitialDue(arg.allDay ? `${formatLocalDate(arg.start)}T00:00` : toDatetimeLocal(arg.start))
+    setCreateOpen(true)
+  }, [])
+
+  const handleNewTask = useCallback(() => {
+    triggerElRef.current = null
+    setInitialDue(undefined)
+    setCreateOpen(true)
+  }, [])
 
   return (
-    <div className="flex flex-col min-h-0 h-full bg-[#0A0A0B] text-[#E2E8F0]">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-4 border-b border-white/[0.08] shrink-0">
-        <CalendarBlank size={20} weight="regular" className="text-[#D4AF37]" />
-        <h1 className="text-base font-semibold font-[Outfit]">Calendar</h1>
-        <span className="ml-auto text-xs text-[#E2E8F0]/40">
-          Recurring tasks with time triggers — set due or trigger on a task to see it here
-        </span>
+    <div className="flex flex-col h-full min-h-0 overflow-x-hidden bg-[var(--color-bg)] text-[var(--color-secondary)]">
+      <div className="@container flex-shrink-0 w-full min-w-0">
+        <CalendarToolbar
+          calendarRef={calendarRef}
+          currentView={currentView}
+          title={title}
+          onViewChange={handleViewChange}
+          onNewTask={handleNewTask}
+        />
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto px-4 py-6">
-        {isLoading && (
-          <div className="flex items-center justify-center h-40 text-sm text-[#E2E8F0]/40">
-            Loading scheduled items...
-          </div>
-        )}
-
-        {isError && !isLoading && (
-          <div className="flex items-center justify-center h-40 text-sm text-red-400">
-            Failed to load calendar data. Please try again.
-          </div>
-        )}
-
-        {!isLoading && !isError && events.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-60 gap-3 text-[#E2E8F0]/40">
-            <CalendarBlank size={40} weight="thin" />
-            <p className="text-sm">No scheduled tasks or milestones yet.</p>
-            <p className="text-xs">
-              Set a{' '}
-              <span className="font-mono text-[#E2E8F0]/60">trigger</span>
-              {' or '}
-              <span className="font-mono text-[#E2E8F0]/60">due</span>
-              {' date on a task to see it here.'}
-            </p>
-          </div>
-        )}
-
-        {!isLoading && !isError && monthKeys.length > 0 && (
-          <div className="flex flex-col gap-8 max-w-2xl mx-auto">
-            {monthKeys.map((monthKey) => {
-              const monthEvents = grouped.get(monthKey)!
-              const firstEvent = monthEvents[0]
-              return (
-                <section key={monthKey} aria-label={formatMonth(firstEvent.date)}>
-                  <h2 className="text-xs font-semibold uppercase tracking-widest text-[#E2E8F0]/40 mb-3 px-4">
-                    {formatMonth(firstEvent.date)}
-                  </h2>
-                  <div className="flex flex-col gap-0.5 rounded-xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-                    {monthEvents.map((ev, idx) => (
-                      <EventRow key={idx} event={ev} />
-                    ))}
-                  </div>
-                </section>
-              )
-            })}
-          </div>
-        )}
+      <div className="flex-1 min-h-0 min-w-0 p-3" data-testid="calendar-grid">
+        <FullCalendarView
+          events={events}
+          calendarRef={calendarRef}
+          isLoading={isLoading}
+          isEmpty={isEmpty}
+          onEventDrop={handleEventDrop}
+          onEventClick={handleEventClick}
+          onDateClick={handleDateClick}
+          onDateSelect={handleDateSelect}
+          onDatesSet={handleDatesSet}
+        />
       </div>
+
+      <CreateTaskSlideOver
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open)
+          if (!open) {
+            invalidate()
+            restoreFocus()
+          }
+        }}
+        workspaceId={workspaceId}
+        initialDue={initialDue}
+      />
+
+      <TaskDetailSlideOver
+        task={selectedTask}
+        onClose={() => {
+          setSelectedTask(null)
+          restoreFocus()
+        }}
+      />
+
+      <MilestoneDatePopover
+        workspaceId={workspaceId}
+        milestone={milestoneTarget}
+        onClose={() => {
+          setMilestoneTarget(null)
+          restoreFocus()
+        }}
+        onRescheduled={invalidate}
+      />
     </div>
   )
 }

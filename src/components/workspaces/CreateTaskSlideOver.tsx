@@ -52,6 +52,8 @@ interface CreateTaskSlideOverProps {
   workspaceId: string
   /** Pre-fill the milestone selector (from active filter pill) */
   milestoneId?: string | null
+  /** Pre-fill the due date field when the slide-over opens (datetime-local value, e.g. "2026-06-22T00:00") */
+  initialDue?: string
 }
 
 interface FormState {
@@ -93,6 +95,7 @@ export function CreateTaskSlideOver({
   onOpenChange,
   workspaceId,
   milestoneId,
+  initialDue,
 }: CreateTaskSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -105,12 +108,16 @@ export function CreateTaskSlideOver({
   const [triggerError, setTriggerError] = useState('')
   const [newTodo, setNewTodo] = useState('')
 
-  // Sync milestone pre-fill when active filter changes
+  // Sync milestone and due pre-fill when the slide-over opens or the caller's props change
   useEffect(() => {
     if (open) {
-      setForm((f) => ({ ...f, milestoneId: milestoneId ?? '__none__' }))
+      setForm((f) => ({
+        ...f,
+        milestoneId: milestoneId ?? '__none__',
+        due: initialDue ?? f.due,
+      }))
     }
-  }, [open, milestoneId])
+  }, [open, milestoneId, initialDue])
 
   const { data: milestones = [] } = useQuery({
     queryKey: milestonesQueryKeys.list(workspaceId),
