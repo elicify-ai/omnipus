@@ -74,16 +74,16 @@ func (a *restAPI) HandleToolPolicies(w http.ResponseWriter, r *http.Request) {
 // putToolPolicies is the admin-only body of PUT /api/v1/security/tool-policies.
 // It is called only after RequireAdmin has confirmed the caller holds admin role.
 func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
-	// Re-auth gate (Spec-3 FR-3.3 / Spec-6 FR-12.2): changing the global tool
-	// policy is a sensitive capability grant and requires the single-use re-auth
-	// consent token — the same gate the Integrations PUT enforces. RequireAdmin
-	// (already applied above) checks role; this re-verifies the one password.
-	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
-	if !ok || user == nil {
+	// The step-up re-auth gate (requireReAuth) was INTENTIONALLY REMOVED here for
+	// the global tool-policy PUT per UAT feedback (operator found re-typing the
+	// password to change a tool permission to be unnecessary friction). This is a
+	// deliberate, scoped loosening — do NOT restore it. Authorization is still
+	// enforced: RequireAdmin (applied in HandleToolPolicies above) confirms the
+	// caller holds the admin role, and withAuth requires a valid session. The
+	// password re-prompt is the only control removed. The same gate remains in
+	// force on Integrations/Providers/Sandbox/Credentials/Performance PUTs.
+	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); !ok || user == nil {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
-	if !a.requireReAuth(w, r, user.Username) {
 		return
 	}
 
