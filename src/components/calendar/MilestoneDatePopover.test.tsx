@@ -156,6 +156,33 @@ describe('MilestoneDatePopover — empty date disables Save (spec §9 #18)', () 
     expect(saveBtn).toBeDisabled()
   })
 
+  it('Save button is disabled after clearing a non-null due_date (clear-to-null path is unreachable via UI)', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #18 / FR-009 / C-5
+    // BDD: Given the dialog opens with a non-null due_date ("2026-06-25"),
+    // When the user clears the input to empty,
+    // Then the Save button is DISABLED — confirming the clear-to-null path is
+    // intentionally unreachable via normal UI interaction (Save is gated on !dateValue).
+    //
+    // Design intent: the component CAN send `due_date: null` programmatically (via
+    // eventDrop with an empty dateValue) but the popover UI does not allow submitting
+    // an empty date — the user cannot clear the field and save null. This test
+    // documents that invariant so any future relaxation is a deliberate, visible change.
+
+    renderPopover({ milestone: makeMilestone({ due_date: '2026-06-25' }) })
+
+    const input = screen.getByTestId('milestone-date-input') as HTMLInputElement
+    // Prefilled with "2026-06-25" — Save is enabled
+    expect(screen.getByTestId('milestone-date-save')).not.toBeDisabled()
+
+    // Clear the input — simulates the user selecting all and deleting
+    await userEvent.clear(input)
+
+    // After clearing, dateValue is '' → Save must be disabled (button disabled={!dateValue})
+    expect(screen.getByTestId('milestone-date-save')).toBeDisabled()
+    // And updateMilestone must NOT have been called (no submit with empty input)
+    expect(mockUpdateMilestone).not.toHaveBeenCalled()
+  })
+
   it('Save button becomes enabled once a date is entered', async () => {
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #18 / FR-009
 

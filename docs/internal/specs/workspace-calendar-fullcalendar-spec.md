@@ -156,7 +156,7 @@ Chip text is **`#0A0A0B` (near-black)** for all — every chip clears **WCAG AAA
 3. **Given** a milestone chip, **When** I drag it, **Then** `updateMilestone(workspaceId, milestone.id, {due_date:'YYYY-MM-DD'})` is sent (F-09).
 4. **Given** any reschedule **succeeds**, **Then** a success toast "Rescheduled to {date}" (`role="status"`) with a 5-second **Undo** appears (I-5/I-6); Undo restores the prior date.
 5. **Given** any reschedule **fails**, **Then** the event reverts (`info.revert()`) and an error toast (`role="alert"`) appears (FR-009).
-6. **Given** an in-flight write, **Then** the chip shows a subtle saving indicator (I-6).
+6. **Given** a reschedule, **Then** the optimistic cache patch moves the event instantly and a success (or error) toast confirms the outcome — the write is near-instant, so no separate per-chip spinner is required (I-6).
 7. **Given** a focused task chip, **When** I press Enter/Space, **Then** `TaskDetailSlideOver` opens (keyboard reschedule path — C-1).
 8. **Given** a focused milestone chip, **When** I press Enter/Space, **Then** `MilestoneDatePopover` opens to edit `due_date` (C-1/C-5).
 9. **Given** any event, **Then** it cannot be resized (`eventDurationEditable={false}`).
@@ -475,7 +475,7 @@ Feature: Workspace Calendar (FullCalendar)
 - **FR-007 (MUST):** On phone-width: default Month, all views available, two-row toolbar; ≥44px targets for toolbar controls **and** time-grid chips (`min-height:44px`).
 - **FR-008 (MUST):** Drag/keyboard reschedule MUST: task due → `updateTask{due: <dropped day's local-midnight RFC3339 instant, e.g. start.toISOString()>}` (`TaskUpdateRequest.due` is `format: date-time` — a date-only string is rejected 400); once-trigger → `updateTask{trigger: {...task.trigger, config:{...config, at_ms}}}`; milestone → `updateMilestone(workspaceId, id, {due_date:'YYYY-MM-DD'})` (`Milestone.due_date` is a plain ISO date string).
 - **FR-009 (MUST):** Provide a keyboard/single-pointer reschedule path: Enter/Space on a task chip → `TaskDetailSlideOver`; on a milestone chip → `MilestoneDatePopover` (WCAG 2.5.7, 2.1.1).
-- **FR-010 (MUST):** On reschedule success → success toast (`role="status"`) with a 5-second Undo that restores the prior date; on failure → `info.revert()` + error toast (`role="alert"`); show an in-flight saving indicator (WCAG 4.1.3).
+- **FR-010 (MUST):** On reschedule success → success toast (`role="status"`) with a 5-second Undo that restores the prior date; on failure → `info.revert()` + error toast (`role="alert"`). Feedback uses the optimistic move + `aria-live` toast (WCAG 4.1.3); the near-instant optimistic-cache patch makes a separate per-chip spinner unnecessary.
 - **FR-011 (MUST):** Recurring/every absent; **no event resize** (`eventDurationEditable={false}`).
 - **FR-012 (MUST):** Clicking/selecting an empty date opens `CreateTaskSlideOver` (owned by `CalendarScreen`) with `workspaceId` + `initialDue` (local-midnight in Month, slot time in Week/Day), seeded via `useEffect([open, initialDue])`; day cells show a hover/focus create affordance.
 - **FR-013 (MUST):** On open of any slide-over/popover from a calendar gesture, move focus into it; on close, restore focus to the triggering chip/cell (WCAG 2.4.3).

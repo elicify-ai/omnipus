@@ -6,7 +6,10 @@
 // path, and click/slot-select to create. This file is the integration hub: it maps
 // tasks/milestones → events (pure fn), hosts the wrapper + toolbar, and owns the
 // handlers/mutations (optimistic move handled by FullCalendar; revert + undo + toast
-// here).
+// here). It also owns the optimistic query-cache patch + per-item rollback layer that
+// keeps the TanStack Query cache in sync with FullCalendar's DOM move — cancelling
+// in-flight queries before each patch and rolling back only the changed row on failure
+// so concurrent updates to other rows are never lost.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -165,54 +168,75 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
 
   // Optimistically patch the cached item's date so the `events` memo agrees with
   // FullCalendar's DOM move — prevents a stale-data flash before the refetch lands.
-  // Returns a rollback that restores the previous cache.
+  // Returns a per-item rollback: re-reads the CURRENT cache on failure and restores
+  // only the single changed row, so concurrent updates to other rows are never lost.
   const patchCacheDate = useCallback(
     (ext: CalendarEventExtProps, start: Date): (() => void) => {
       if (ext.kind === 'milestone') {
         const key = milestonesQueryKeys.list(workspaceId)
-        const prev = queryClient.getQueryData<Milestone[]>(key)
-        if (prev) {
-          queryClient.setQueryData<Milestone[]>(
-            key,
-            prev.map((m) =>
-              m.id === ext.milestoneId ? { ...m, due_date: formatLocalDate(start) } : m,
-            ),
-          )
-        }
+        // Capture only the single prior item for a targeted rollback.
+        const prevItem = queryClient
+          .getQueryData<Milestone[]>(key)
+          ?.find((m) => m.id === ext.milestoneId)
+        queryClient.setQueryData<Milestone[]>(key, (current) =>
+          current?.map((m) =>
+            m.id === ext.milestoneId ? { ...m, due_date: formatLocalDate(start) } : m,
+          ),
+        )
         return () => {
-          if (prev) queryClient.setQueryData(key, prev)
+          if (prevItem) {
+            queryClient.setQueryData<Milestone[]>(key, (current) =>
+              current?.map((m) => (m.id === ext.milestoneId ? prevItem : m)),
+            )
+          }
         }
       }
       const key = tasksQueryKeys.list({ workspace_id: workspaceId })
-      const prev = queryClient.getQueryData<Task[]>(key)
-      if (prev) {
-        queryClient.setQueryData<Task[]>(
-          key,
-          prev.map((t) => {
-            if (t.id !== ext.taskId) return t
-            if (ext.kind === 'task-due') return { ...t, due: start.toISOString() }
-            return t.trigger
-              ? {
-                  ...t,
-                  trigger: {
-                    ...t.trigger,
-                    config: { ...(t.trigger.config ?? {}), at_ms: start.getTime() },
-                  },
-                }
-              : t
-          }),
-        )
-      }
+      // Capture only the single prior task for a targeted rollback.
+      const prevItem = queryClient
+        .getQueryData<Task[]>(key)
+        ?.find((t) => t.id === ext.taskId)
+      queryClient.setQueryData<Task[]>(key, (current) =>
+        current?.map((t) => {
+          if (t.id !== ext.taskId) return t
+          if (ext.kind === 'task-due') return { ...t, due: start.toISOString() }
+          return t.trigger
+            ? {
+                ...t,
+                trigger: {
+                  ...t.trigger,
+                  config: { ...(t.trigger.config ?? {}), at_ms: start.getTime() },
+                },
+              }
+            : t
+        }),
+      )
       return () => {
-        if (prev) queryClient.setQueryData(key, prev)
+        if (prevItem) {
+          queryClient.setQueryData<Task[]>(key, (current) =>
+            current?.map((t) => (t.id === ext.taskId ? prevItem : t)),
+          )
+        }
       }
     },
     [queryClient, workspaceId],
   )
 
-  // Optimistic reschedule: patch cache → persist → invalidate; rollback on failure.
+  // Optimistic reschedule: cancel in-flight refetches → patch cache → persist →
+  // invalidate; per-item rollback on failure.
   const runReschedule = useCallback(
     async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
+      // Cancel any in-flight query for the relevant key so a concurrent refetch
+      // cannot overwrite the optimistic write we are about to make.
+      if (ext.kind === 'milestone') {
+        await queryClient.cancelQueries({
+          queryKey: milestonesQueryKeys.list(workspaceId),
+        })
+      } else {
+        await queryClient.cancelQueries({
+          queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
+        })
+      }
       const rollback = patchCacheDate(ext, start)
       try {
         await persistReschedule(ext, start)
@@ -222,7 +246,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         throw err
       }
     },
-    [patchCacheDate, persistReschedule, invalidate],
+    [queryClient, workspaceId, patchCacheDate, persistReschedule, invalidate],
   )
 
   const handleEventDrop = useCallback(
@@ -265,7 +289,9 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
 
   const handleEventClick = useCallback(
     (arg: EventClickArg) => {
-      triggerElRef.current = (arg.jsEvent?.target as HTMLElement) ?? null
+      const raw = arg.jsEvent?.target as HTMLElement | null
+      triggerElRef.current =
+        (raw?.closest('[tabindex]') as HTMLElement | null) ?? raw ?? null
       const ext = arg.event.extendedProps as CalendarEventExtProps
       if (ext.kind === 'milestone') {
         const m = milestones.find((x) => x.id === ext.milestoneId)
@@ -282,8 +308,11 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   )
 
   // Open the create slide-over prefilled with a date (all-day → midnight; timed → slot).
+  // Store the nearest focusable ancestor of the trigger so restoreFocus() can actually
+  // focus it (WCAG 2.4.3 — raw chip divs have no tabindex, their FC harness does).
   const openCreateAt = useCallback((target: HTMLElement | null, date: Date, allDay: boolean) => {
-    triggerElRef.current = target
+    triggerElRef.current =
+      (target?.closest('[tabindex]') as HTMLElement | null) ?? target ?? null
     setInitialDue(allDay ? `${formatLocalDate(date)}T00:00` : toDatetimeLocal(date))
     setCreateOpen(true)
   }, [])

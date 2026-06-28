@@ -154,7 +154,6 @@ function LoadingOverlay() {
 function EmptyHint() {
   return (
     <div
-      aria-live="polite"
       style={{
         position: 'absolute',
         inset: 0,

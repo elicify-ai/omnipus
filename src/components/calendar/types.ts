@@ -45,9 +45,6 @@ export const CALENDAR_VIEW_LABELS: Record<CalendarViewName, string> = {
   listWeek: 'Agenda',
 }
 
-/** Which underlying item a calendar event represents (encoded in the event id). */
-export type CalendarEventKind = 'task-due' | 'task-fire' | 'milestone'
-
 /**
  * Phosphor icon keys used as the non-colour status cue on every chip (WCAG 1.4.1).
  * eventMapping.ts (pure, no React) emits the KEY; FullCalendarView maps key → component.

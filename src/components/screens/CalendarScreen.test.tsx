@@ -841,6 +841,43 @@ describe('CalendarScreen — eventClick(milestone) opens MilestoneDatePopover (s
   })
 })
 
+// ── Tasks query rejection → error toast (FR-016 tasks-fail branch) ───────────
+
+describe('CalendarScreen — tasks query failure (spec §9 / FR-016 tasks-fail branch)', () => {
+  it('shows "Couldn\'t load tasks" error toast when fetchTasks rejects (milestones OK)', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 / FR-016
+    // BDD: Given the tasks request returns 500 (milestones still succeed),
+    // When the calendar loads,
+    // Then addToast is called with message "Couldn't load tasks" and variant "error",
+    //   AND the FullCalendarView stub still renders (degradation, not a crash).
+    //
+    // Only the milestones-fail branch was previously tested (#21). This covers the
+    // symmetric tasks-fail branch.
+
+    vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
+    // Milestones still load fine — calendar must degrade gracefully
+    vi.mocked(fetchMilestones).mockResolvedValue([makeMilestone()] as never)
+
+    renderCalendarScreen()
+
+    await waitFor(() => {
+      const calls = mockAddToast.mock.calls
+      const tasksFailCall = calls.find(
+        (call) => call[0].message === "Couldn't load tasks",
+      )
+      expect(tasksFailCall).toBeDefined()
+    })
+
+    const toastCall = mockAddToast.mock.calls.find(
+      (call) => call[0].message === "Couldn't load tasks",
+    )
+    expect(toastCall![0].variant).toBe('error')
+
+    // The calendar grid stub must still render — tasks failure must not crash the calendar
+    expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
+  })
+})
+
 // ── Milestones query rejection → error toast ──────────────────────────────────
 
 describe('CalendarScreen — milestones query failure (spec §9 #21)', () => {

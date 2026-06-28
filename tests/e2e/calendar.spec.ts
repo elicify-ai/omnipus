@@ -416,11 +416,8 @@ test(
       const task = await createTaskWithDue(adminToken, workspaceId, 'E2E drag reschedule', dueDate);
       taskId = task.id;
     } catch (err) {
-      // Tasks endpoint may not be available in all builds — skip gracefully.
-      // DO NOT call test.skip() here as it silently hides the test; instead mark
-      // it as a BLOCKED gap to keep it visible. If the endpoint is present, this
-      // branch won't be reached and the test exercises real drag behavior.
-      console.warn('[calendar.spec] createTaskWithDue failed — skipping drag test:', err);
+      // Tasks endpoint not available in this build — annotated skip so the gap is visible.
+      test.skip(true, `createTaskWithDue failed — tasks endpoint unavailable: ${err}`);
       return;
     }
 
@@ -442,7 +439,7 @@ test(
       // but day-13 doesn't exist due to month length) — skip gracefully.
       const cellVisible = await targetCell.isVisible({ timeout: 5_000 }).catch(() => false);
       if (!cellVisible) {
-        console.warn('[calendar.spec] target day-13 cell not visible; skipping drag assertion');
+        test.skip(true, 'target day-13 cell not visible in current month — grid precondition unmet');
         return;
       }
 
@@ -450,10 +447,10 @@ test(
       const chipBox = await chipLocator.first().boundingBox();
       const cellBox = await targetCell.boundingBox();
 
-      if (!chipBox || !cellBox) {
-        console.warn('[calendar.spec] could not get bounding boxes; skipping drag assertion');
-        return;
-      }
+      // Precondition: bounding boxes must be obtainable from a rendered grid
+      expect(chipBox, 'chip bounding box must be obtainable from rendered grid').toBeTruthy();
+      expect(cellBox, 'target cell bounding box must be obtainable from rendered grid').toBeTruthy();
+      if (!chipBox || !cellBox) return; // type-narrowing only; test already failed above if null
 
       const fromX = chipBox.x + chipBox.width / 2;
       const fromY = chipBox.y + chipBox.height / 2;
@@ -478,16 +475,14 @@ test(
       // The chip should still be on the new day after reload
       // Verify via the API that the due date was updated
       const updatedDue = await fetchTaskDue(adminToken, taskId);
-      // If updatedDue is non-null and contains the target date, drag succeeded.
-      // We parse the local date from the ISO string for comparison.
+      // updatedDue must be non-null — a null read means the endpoint didn't persist the drag
+      expect(updatedDue, 'fetchTaskDue must return a non-null due after drag-persist').toBeTruthy();
       if (updatedDue) {
         const updatedDate = new Date(updatedDue);
         // Allow both the UTC date and local date (depending on how the server stores it)
         const updatedDateStr = `${updatedDate.getUTCFullYear()}-${String(updatedDate.getUTCMonth() + 1).padStart(2, '0')}-${String(updatedDate.getUTCDate()).padStart(2, '0')}`;
         expect(updatedDateStr).toBe(targetDate);
       }
-      // If updatedDue is null, the endpoint may not support the read — we still
-      // verify the chip is visible somewhere in the calendar grid (fallback).
       await expect(
         page.locator('.fc-event', { hasText: 'E2E drag reschedule' }),
       ).toBeVisible({ timeout: 10_000 });
@@ -518,7 +513,8 @@ test(
       const task = await createTaskWithDue(adminToken, workspaceId, 'E2E revert test', dueDate);
       taskId = task.id;
     } catch (err) {
-      console.warn('[calendar.spec] createTaskWithDue failed — skipping revert test:', err);
+      // Tasks endpoint not available in this build — annotated skip so the gap is visible.
+      test.skip(true, `createTaskWithDue failed — tasks endpoint unavailable: ${err}`);
       return;
     }
 
@@ -535,7 +531,7 @@ test(
 
       const cellVisible = await targetCell.isVisible({ timeout: 5_000 }).catch(() => false);
       if (!cellVisible) {
-        console.warn('[calendar.spec] target day-18 cell not visible; skipping revert assertion');
+        test.skip(true, 'target day-18 cell not visible in current month — grid precondition unmet');
         return;
       }
 
@@ -557,10 +553,12 @@ test(
       const chipBox = await chipLocator.first().boundingBox();
       const cellBox = await targetCell.boundingBox();
 
+      // Precondition: bounding boxes must be obtainable from a rendered grid
+      expect(chipBox, 'chip bounding box must be obtainable from rendered grid').toBeTruthy();
+      expect(cellBox, 'target cell bounding box must be obtainable from rendered grid').toBeTruthy();
       if (!chipBox || !cellBox) {
-        console.warn('[calendar.spec] could not get bounding boxes; skipping revert assertion');
         await page.unrouteAll();
-        return;
+        return; // type-narrowing only; test already failed above if null
       }
 
       const fromX = chipBox.x + chipBox.width / 2;
@@ -583,9 +581,9 @@ test(
         timeout: 10_000,
       });
 
-      // An error/alert toast must be visible — CalendarScreen uses a toast store
-      // variant "error" which renders as role="alert" (FR-010)
-      await expect(page.locator('[role="alert"]')).toBeVisible({ timeout: 10_000 });
+      // An error toast with the specific "Couldn't reschedule" message must appear.
+      // Asserting the text prevents stray success toasts from producing false positives (FR-010).
+      await expect(page.getByText("Couldn't reschedule")).toBeVisible({ timeout: 10_000 });
 
       // Remove the route intercept
       await page.unrouteAll();

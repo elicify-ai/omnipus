@@ -297,6 +297,13 @@
   }
 }
 
+/* Month/day-grid chips: 44px touch target on coarse-pointer devices (WCAG 2.5.8) */
+@media (pointer: coarse) {
+  .fc .fc-daygrid-event {
+    min-height: 44px !important;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* List view (Agenda)                                                  */
 /* ------------------------------------------------------------------ */
@@ -467,12 +474,6 @@
     animation: none !important;
   }
 
-  /* Also suppress the shimmer overlay animation */
-  @keyframes fc-sovereign-shimmer {
-    0%, 100% {
-      background-position: 0 0;
-    }
-  }
 }
 
 /* ------------------------------------------------------------------ */
