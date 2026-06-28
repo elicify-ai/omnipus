@@ -772,7 +772,7 @@ func SeedConfig(cfg *config.Config) bool {
 		// screen → heartbeat_enabled=false, which sets a non-nil false and survives
 		// this migration on subsequent boots. This asymmetry is intentional: the
 		// majority of installs had the global default ON, so we preserve that
-		// behaviour rather than silently disabling heartbeats across the upgrade.
+		// behavior rather than silently disabling heartbeats across the upgrade.
 		if ca.ID == IDMia && a.HeartbeatEnabled == nil {
 			enabled := true
 			a.HeartbeatEnabled = &enabled
@@ -829,7 +829,7 @@ func SeedConfig(cfg *config.Config) bool {
 			},
 		}
 		// Mia is the default agent and must have a heartbeat enabled on fresh
-		// installs — this preserves the behaviour previously delivered by the
+		// installs — this preserves the behavior previously delivered by the
 		// legacy global HeartbeatConfig (enabled=true, interval=30). Workers and
 		// specialists never carry a heartbeat (per IsWorkerID / IsSubagentTierID).
 		if ca.ID == IDMia {

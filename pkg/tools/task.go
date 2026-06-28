@@ -594,10 +594,12 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	}
 
 	if len(updatedFields) == 0 {
-		return ErrorResult("no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by)")
+		return ErrorResult(
+			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by)",
+		)
 	}
 
-	// Timestamps keyed off status (unchanged behaviour for the status path).
+	// Timestamps keyed off status (unchanged behavior for the status path).
 	now := time.Now().UTC().Format(time.RFC3339)
 	switch newStatus {
 	case task.StatusInProgress:

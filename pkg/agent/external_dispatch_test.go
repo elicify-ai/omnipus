@@ -487,7 +487,9 @@ func TestExternalDispatch_G2_NeverAttributesTokens(t *testing.T) {
 	// Emit a normal run (output + end). Even a token-bearing external run must not
 	// flow into the turn's stats — the dispatch path reads no usage counters.
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "external work done"}})
+		fr.InjectEvent(
+			runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "external work done"}},
+		)
 		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
 		fr.Cancel()
 	}()

@@ -467,7 +467,10 @@ func TestAggregateUsage_CacheSplit(t *testing.T) {
 	}
 	// AUTHORITATIVE: Total must be 230, not In+Out+CacheRead+CacheWrite=300.
 	if report.Total.Total != 230 {
-		t.Errorf("cache split: want Total.Total=230 (authoritative stored value), got %d — cache must NOT be double-counted", report.Total.Total)
+		t.Errorf(
+			"cache split: want Total.Total=230 (authoritative stored value), got %d — cache must NOT be double-counted",
+			report.Total.Total,
+		)
 	}
 	if len(report.Buckets) != 1 {
 		t.Fatalf("cache split: want 1 bucket, got %d", len(report.Buckets))
@@ -476,7 +479,10 @@ func TestAggregateUsage_CacheSplit(t *testing.T) {
 		t.Errorf("cache split bucket: want CacheRead=50, got %d", report.Buckets[0].CacheRead)
 	}
 	if report.Buckets[0].Total != 230 {
-		t.Errorf("cache split bucket: want Total=230, got %d — cache must NOT be double-counted", report.Buckets[0].Total)
+		t.Errorf(
+			"cache split bucket: want Total=230, got %d — cache must NOT be double-counted",
+			report.Buckets[0].Total,
+		)
 	}
 }
 
@@ -685,11 +691,18 @@ func TestAggregateUsage_ModelDimensionUnknownFallback(t *testing.T) {
 		t.Errorf("model unknown fallback: want Total=150, got %d", report.Buckets[0].Total)
 	}
 	if report.Buckets[0].In != 0 {
-		t.Errorf("model unknown fallback: (unknown) bucket In must be 0 (Total-only convention), got %d", report.Buckets[0].In)
+		t.Errorf(
+			"model unknown fallback: (unknown) bucket In must be 0 (Total-only convention), got %d",
+			report.Buckets[0].In,
+		)
 	}
 	// Total reconciles: the single (unknown) bucket covers the full session total.
 	if report.Total.Total != report.Buckets[0].Total {
-		t.Errorf("model unknown fallback: Total.Total=%d != Bucket.Total=%d", report.Total.Total, report.Buckets[0].Total)
+		t.Errorf(
+			"model unknown fallback: Total.Total=%d != Bucket.Total=%d",
+			report.Total.Total,
+			report.Buckets[0].Total,
+		)
 	}
 }
 
@@ -871,7 +884,10 @@ func TestAggregateUsage_ModelDimension_CarriesFullTokens(t *testing.T) {
 		t.Fatalf("C2 fix: want key=m1, got %s", b.Key)
 	}
 	if b.Total != 500 {
-		t.Errorf("C2 fix: m1 bucket Total must be 500 (full turn total), got %d — NOT the cache-read-only value (100)", b.Total)
+		t.Errorf(
+			"C2 fix: m1 bucket Total must be 500 (full turn total), got %d — NOT the cache-read-only value (100)",
+			b.Total,
+		)
 	}
 	if b.CacheRead != 100 {
 		t.Errorf("C2 fix: m1 CacheRead want 100, got %d", b.CacheRead)
@@ -915,7 +931,10 @@ func TestAggregateUsage_CacheNotDoubleCounted(t *testing.T) {
 	}
 	b := report.Buckets[0]
 	if b.Total != 200 {
-		t.Errorf("C1 fix: bucket Total must be 200 (authoritative stored total), got %d — cache must NOT be double-counted (200+50+20=270 is WRONG)", b.Total)
+		t.Errorf(
+			"C1 fix: bucket Total must be 200 (authoritative stored total), got %d — cache must NOT be double-counted (200+50+20=270 is WRONG)",
+			b.Total,
+		)
 	}
 	if report.Total.Total != 200 {
 		t.Errorf("C1 fix: report.Total.Total must be 200, got %d", report.Total.Total)

@@ -1,4 +1,4 @@
-// Package browser — unit tests for classifyEvalResult.
+// Unit tests for classifyEvalResult.
 //
 // These tests exercise the serialization-detection helper without a live browser,
 // proving that nil raw bytes → non-serializable note, []byte("null") → genuine null,
@@ -7,6 +7,7 @@
 // Bug: browser_evaluate returned {"result":null, IsError:false} for both DOM nodes
 // and intentional JS null, misleading the agent.
 // Fix: chromedp.Evaluate receives a *[]byte; nil means "no serializable value from CDP".
+
 package browser
 
 import (

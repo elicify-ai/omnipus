@@ -169,12 +169,12 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	// by oapi-codegen; our named byModelCell is byte-identical in JSON tags but
 	// a distinct Go type.  We embed gen.AgentTokenEntry inside agentEntryWithByModel
 	// and shadow ByModel with interface{} so json.Marshal sees byModelCell (which
-	// serialises identically) while the outer struct carries all other fields from
+	// serializes identically) while the outer struct carries all other fields from
 	// the contract type without repetition.  The shadowing rule in encoding/json:
 	// a promoted field is overridden by a field at the outer depth with the same name.
 	type agentEntryWithByModel struct { // not-wire-format: embeds gen.AgentTokenEntry, shadows ByModel with typed byModelCell map — JSON output is contract-identical to AgentTokenEntry
 		gen.AgentTokenEntry
-		ByModel interface{} `json:"by_model,omitempty"`
+		ByModel any `json:"by_model,omitempty"`
 	}
 	enriched := make([]agentEntryWithByModel, 0, len(report.Buckets))
 	for _, b := range report.Buckets {
@@ -199,11 +199,11 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 		enriched = append(enriched, e)
 	}
 
-	// Sort entries by AgentId for stable output (matches prior behaviour).
+	// Sort entries by AgentId for stable output (matches prior behavior).
 	sort.Slice(enriched, func(i, j int) bool { return enriched[i].AgentId < enriched[j].AgentId })
 
 	// Build cross-agent by_model for the top-level response field.
-	var crossModelOut interface{}
+	var crossModelOut any
 	if len(crossModelMap) > 0 {
 		m := make(map[string]byModelCell, len(crossModelMap))
 		for model, mt := range crossModelMap {
@@ -223,7 +223,7 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	// make verify-contracts tracks for drift.
 	type tokenUsageResp struct { // not-wire-format: wrapper over gen.AgentTokenEntry items, mirrors TokenUsageSummary with cache+by_model extensions
 		Agents            []agentEntryWithByModel `json:"agents"`
-		ByModel           interface{}             `json:"by_model,omitempty"`
+		ByModel           any                     `json:"by_model,omitempty"`
 		PeriodEnd         time.Time               `json:"period_end"`
 		PeriodStart       time.Time               `json:"period_start"`
 		TokensCacheRead   *int                    `json:"tokens_cache_read,omitempty"`

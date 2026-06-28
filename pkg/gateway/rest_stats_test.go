@@ -363,7 +363,7 @@ func writeTestSessionMetaWithByModel(
 // TestHandleTokenStats_WireShapeMatchesContract is the contract-drift guard for
 // HandleTokenStats. It verifies that the JSON body emitted by the handler can be
 // decoded into the oapi-codegen-generated gen.TokenUsageSummary type using
-// DisallowUnknownFields — meaning every field the handler emits is recognised by
+// DisallowUnknownFields — meaning every field the handler emits is recognized by
 // the contract type, and the field names/JSON tags are byte-identical.
 //
 // The risk this guards against: rest_stats.go uses three hand-written local types
@@ -433,7 +433,7 @@ func TestHandleTokenStats_WireShapeMatchesContract(t *testing.T) {
 
 	// BDD: Then the JSON body decodes into gen.TokenUsageSummary with
 	// DisallowUnknownFields — any field the handler emits that the contract
-	// type does not recognise causes a decode error here, catching drift.
+	// type does not recognize causes a decode error here, catching drift.
 	var decoded gen.TokenUsageSummary
 	dec := json.NewDecoder(bytes.NewReader(rawBody))
 	dec.DisallowUnknownFields()

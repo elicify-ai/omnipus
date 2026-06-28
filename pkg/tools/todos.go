@@ -261,7 +261,11 @@ func parseTodosArg(raw []any) ([]task.Todo, error) {
 		}
 		st := task.TodoStatus(statusRaw)
 		if !task.IsValidTodoStatus(st) {
-			return nil, fmt.Errorf("todos[%d]: invalid status %q (must be pending, in_progress, or completed)", i, statusRaw)
+			return nil, fmt.Errorf(
+				"todos[%d]: invalid status %q (must be pending, in_progress, or completed)",
+				i,
+				statusRaw,
+			)
 		}
 		todos = append(todos, task.Todo{Text: text, Status: st})
 	}

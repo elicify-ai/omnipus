@@ -24,7 +24,6 @@ import (
 	"testing"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/config"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
@@ -478,7 +477,7 @@ func TestToolChain_SendMessage_Differentiation(t *testing.T) {
 //
 // NOTE: The current delete_workspace implementation deletes the workspace file
 // only; it does NOT cascade-delete child tasks (that is a v0.3 concern per the
-// BRD).  This test asserts the CURRENT behaviour: after delete_workspace, the
+// BRD).  This test asserts the CURRENT behavior: after delete_workspace, the
 // workspace itself is gone (list_workspaces does not include it), while the
 // task store is still accessible separately.
 //
@@ -701,10 +700,4 @@ var _ = func() *systools.Deps {
 	// Ensure the function signature matches what chainDeps uses.
 	// This is a compile-time guard, not a runtime call.
 	return &systools.Deps{}
-}
-
-// configDefaultForChains returns a default config for chain tests that need one.
-// Defined here so chain tests do not import config directly when newTestDeps suffices.
-func configDefaultForChains() *config.Config {
-	return config.DefaultConfig()
 }

@@ -39,29 +39,9 @@ func newDeliveryManager(ctx context.Context) (*Manager, *bus.MessageBus) {
 		workers:  make(map[string]*channelWorker),
 		bus:      mb,
 	}
-	dispatchCtx, _ := m.newDispatchContext(ctx) //nolint:errcheck — cancel stored in m
+	dispatchCtx, _ := m.newDispatchContext(ctx) //nolint:errcheck // cancel stored in m
 	m.startDispatchers(dispatchCtx)
 	return m, mb
-}
-
-// waitForSent polls ch.sentMessages until it reaches wantCount or the timeout
-// fires.  Returns the snapshot at timeout.
-func waitForSent(ch *mockChannel, wantCount int, timeout time.Duration) []bus.OutboundMessage {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		ch.mu.Lock()
-		n := len(ch.sentMessages)
-		ch.mu.Unlock()
-		if n >= wantCount {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	ch.mu.Lock()
-	snap := make([]bus.OutboundMessage, len(ch.sentMessages))
-	copy(snap, ch.sentMessages)
-	ch.mu.Unlock()
-	return snap
 }
 
 // ---------------------------------------------------------------------------

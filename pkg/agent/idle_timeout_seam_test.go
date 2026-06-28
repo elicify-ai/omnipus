@@ -64,7 +64,7 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 	al.registry.mu.Unlock()
 
 	// Create a session and append a transcript entry so runRecap has something
-	// to summarise and can resolve the agent.
+	// to summarize and can resolve the agent.
 	meta, err := store.NewSession(session.SessionTypeChat, "web", agentID)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)

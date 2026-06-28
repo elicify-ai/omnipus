@@ -2,6 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
+// Package tools provides the unified tool discovery and loading infrastructure.
 // ToolsTool is the single infra tool that replaces the former search_tools_bm25
 // and search_tools_regex tools. Intent is inferred from which parameter is present:
 //
@@ -31,7 +32,7 @@ import (
 // prose coupling. The prefix is followed by a human-readable explanation.
 //
 // loop.go builds the reason as: CanLoadAlreadyAvailablePrefix + " — just call it directly"
-// execLoad recognises it via: strings.HasPrefix(reason, CanLoadAlreadyAvailablePrefix)
+// execLoad recognizes it via: strings.HasPrefix(reason, CanLoadAlreadyAvailablePrefix)
 const CanLoadAlreadyAvailablePrefix = "already available"
 
 // ToolsTool is the unified tool-discovery and load infra tool.
@@ -126,7 +127,9 @@ func (t *ToolsTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	}
 
 	// Neither provided.
-	return ErrorResult("load_tool: provide either 'names' (to load tools by name) or 'query' (to find a tool by what it does)")
+	return ErrorResult(
+		"load_tool: provide either 'names' (to load tools by name) or 'query' (to find a tool by what it does)",
+	)
 }
 
 // ── search+auto-load path ────────────────────────────────────────────────────
@@ -206,14 +209,17 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 	if loadedName != "" {
 		msg = fmt.Sprintf(
 			"Found %d tools. Loaded the best match '%s' (schema included) — call it now, or load a different one by passing its name in 'names'.\n%s",
-			len(matches), loadedName, string(encoded),
+			len(matches),
+			loadedName,
+			string(encoded),
 		)
 	} else {
 		// No resolver or all results denied by policy.
 		b, _ := json.Marshal(matches)
 		msg = fmt.Sprintf(
 			"Found %d tools:\n%s\n\nTo use one, call `load_tool` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.",
-			len(matches), string(b),
+			len(matches),
+			string(b),
 		)
 	}
 
@@ -253,7 +259,10 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 			// Treat either (true, _) or (false, CanLoadAlreadyAvailablePrefix) as no-op success;
 			// everything else is a policy denial.
 			if ok || strings.HasPrefix(reason, CanLoadAlreadyAvailablePrefix) {
-				fullTierHints = append(fullTierHints, fmt.Sprintf("'%s' is already available — just call it directly", n))
+				fullTierHints = append(
+					fullTierHints,
+					fmt.Sprintf("'%s' is already available — just call it directly", n),
+				)
 			} else {
 				// Denied by policy or genuinely unknown at the full-tier level.
 				fullTierRejections = append(fullTierRejections, reason)
@@ -327,7 +336,10 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	}
 
 	if len(loadedNames) == 0 {
-		msg := fmt.Sprintf("load_tool(load): failed to load requested tools. Rejected: %s", strings.Join(allRejected, "; "))
+		msg := fmt.Sprintf(
+			"load_tool(load): failed to load requested tools. Rejected: %s",
+			strings.Join(allRejected, "; "),
+		)
 		return ErrorResult(msg)
 	}
 

@@ -52,7 +52,7 @@ func TestSeedConfig_MiaIsDefault(t *testing.T) {
 // TestSeedConfig_MiaHeartbeatSeeded verifies that SeedConfig seeds Mia with a
 // per-agent heartbeat enabled at the default interval on a fresh install, and that
 // worker/specialist agents have no seeded heartbeat. This preserves the fresh-install
-// behaviour previously delivered by the legacy global HeartbeatConfig (removed).
+// behavior previously delivered by the legacy global HeartbeatConfig (removed).
 //
 // BDD: Given an empty config,
 //

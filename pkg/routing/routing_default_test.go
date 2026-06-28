@@ -96,7 +96,10 @@ func TestResolveRoute_NoDefaultFallsToFirstAgent(t *testing.T) {
 		t.Errorf("AgentID = %q, want 'alpha' (first agent when no default set)", route.AgentID)
 	}
 	if route.AgentID == DefaultAgentID {
-		t.Errorf("AgentID must NOT be %q — fallback must be the first available agent, not the constant", DefaultAgentID)
+		t.Errorf(
+			"AgentID must NOT be %q — fallback must be the first available agent, not the constant",
+			DefaultAgentID,
+		)
 	}
 }
 

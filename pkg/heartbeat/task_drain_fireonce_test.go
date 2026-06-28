@@ -11,7 +11,7 @@ import (
 
 // TestTaskDrainService_FireOnce_InvokesCheckerExactlyOnce verifies that a
 // single FireOnce call produces exactly one CheckQueuedTasks invocation — no
-// more, no fewer. This is the canonical behaviour contract for the seam.
+// more, no fewer. This is the canonical behavior contract for the seam.
 func TestTaskDrainService_FireOnce_InvokesCheckerExactlyOnce(t *testing.T) {
 	checker := &countingChecker{done: make(chan struct{})}
 

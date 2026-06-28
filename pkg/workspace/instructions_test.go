@@ -351,7 +351,7 @@ func TestInstructions_ReadTruncationSentinel(t *testing.T) {
 	// The returned string must end with the sentinel.
 	require.True(t, strings.HasSuffix(got, sentinel),
 		"truncated content must end with the in-band sentinel; got suffix: %q",
-		got[max(0, len(got)-len(sentinel)-20):])
+		got[maxInt(0, len(got)-len(sentinel)-20):])
 
 	// The content before the sentinel must be exactly maxInstructionsBytes of 'x'.
 	contentPart := got[:len(got)-len(sentinel)]
@@ -362,8 +362,8 @@ func TestInstructions_ReadTruncationSentinel(t *testing.T) {
 		"content before sentinel must be the first maxInstructionsBytes bytes of the file")
 }
 
-// max returns the larger of two ints (local helper; avoids Go 1.21 min/max dependency).
-func max(a, b int) int {
+// maxInt returns the larger of two ints (local helper; avoids Go 1.21 min/max dependency).
+func maxInt(a, b int) int {
 	if a > b {
 		return a
 	}

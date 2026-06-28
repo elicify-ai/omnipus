@@ -90,7 +90,7 @@ func (ds *TaskDrainService) IsRunning() bool {
 // fire. This lets tests verify checker invocation deterministically, in
 // milliseconds, with no timing dependency. Production code never calls this
 // method; the runtime drain path remains solely in runLoop. A nil checker is
-// a safe no-op, matching Start's behaviour.
+// a safe no-op, matching Start's behavior.
 func (ds *TaskDrainService) FireOnce(ctx context.Context) {
 	if ds.checker == nil {
 		return

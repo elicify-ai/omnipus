@@ -97,7 +97,7 @@ type UsageBucket struct {
 	Total int
 }
 
-// UsageOptions controls the behaviour of AggregateUsage.
+// UsageOptions controls the behavior of AggregateUsage.
 type UsageOptions struct {
 	// Period selects the time window.  Defaults to UsagePeriodMonth when zero.
 	Period UsagePeriod
@@ -171,7 +171,7 @@ func periodBounds(period UsagePeriod, now time.Time) (start, end time.Time) {
 		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 		end = start.AddDate(0, 1, 0)
 	}
-	return
+	return start, end
 }
 
 // resolveLabel returns the display name for an agent using opts.NameResolver.

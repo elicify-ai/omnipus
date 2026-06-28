@@ -337,13 +337,21 @@ func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.NewToolResult(successJSON(map[string]any{
 			"id":      id,
 			"success": false,
-			"message": fmt.Sprintf("Channel %q exists but has no credentials. Use configure_channel to set its token/credentials.", id),
+			"message": fmt.Sprintf(
+				"Channel %q exists but has no credentials. Use configure_channel to set its token/credentials.",
+				id,
+			),
 		}))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id":      id,
 		"success": true,
 		"enabled": ch.Enabled,
-		"message": fmt.Sprintf("Channel %q is configured (type=%s, enabled=%v, credentials=set).", id, ch.Type, ch.Enabled),
+		"message": fmt.Sprintf(
+			"Channel %q is configured (type=%s, enabled=%v, credentials=set).",
+			id,
+			ch.Type,
+			ch.Enabled,
+		),
 	}))
 }

@@ -88,7 +88,11 @@ func TestMultiMCP_BM25_AlphaTopForSearchRepos(t *testing.T) {
 	alphaIdx := strings.Index(res.ForLLM, "mcp_alpha_search_repos")
 	betaIdx := strings.Index(res.ForLLM, "mcp_beta_query_docs")
 	if betaIdx != -1 && alphaIdx > betaIdx {
-		t.Errorf("BM25 search(search repositories): alpha should rank before beta; alphaIdx=%d betaIdx=%d", alphaIdx, betaIdx)
+		t.Errorf(
+			"BM25 search(search repositories): alpha should rank before beta; alphaIdx=%d betaIdx=%d",
+			alphaIdx,
+			betaIdx,
+		)
 	}
 }
 
@@ -114,7 +118,11 @@ func TestMultiMCP_BM25_BetaTopForQueryDocs(t *testing.T) {
 	betaIdx := strings.Index(res.ForLLM, "mcp_beta_query_docs")
 	alphaIdx := strings.Index(res.ForLLM, "mcp_alpha_search_repos")
 	if alphaIdx != -1 && betaIdx > alphaIdx {
-		t.Errorf("BM25 search(query documentation): beta should rank before alpha; betaIdx=%d alphaIdx=%d", betaIdx, alphaIdx)
+		t.Errorf(
+			"BM25 search(query documentation): beta should rank before alpha; betaIdx=%d alphaIdx=%d",
+			betaIdx,
+			alphaIdx,
+		)
 	}
 }
 
@@ -137,7 +145,9 @@ func TestMultiMCP_BM25_Differentiation(t *testing.T) {
 
 	// The two results must differ (different top tools).
 	if res1.ForLLM == res2.ForLLM {
-		t.Errorf("BM25 differentiation: two different queries returned identical results — ranker is broken or registry is empty")
+		t.Errorf(
+			"BM25 differentiation: two different queries returned identical results — ranker is broken or registry is empty",
+		)
 	}
 
 	// "search repositories" query must find alpha, not only beta.
@@ -179,7 +189,11 @@ func TestMultiMCP_BM25_OverlappingDescriptions(t *testing.T) {
 	gammaIdx := strings.Index(res.ForLLM, "mcp_gamma_search_files")
 	deltaIdx := strings.Index(res.ForLLM, "mcp_delta_search_logs")
 	if deltaIdx != -1 && gammaIdx > deltaIdx {
-		t.Errorf("BM25 overlapping: gamma should rank before delta for 'search repository files'; gammaIdx=%d deltaIdx=%d", gammaIdx, deltaIdx)
+		t.Errorf(
+			"BM25 overlapping: gamma should rank before delta for 'search repository files'; gammaIdx=%d deltaIdx=%d",
+			gammaIdx,
+			deltaIdx,
+		)
 	}
 
 	// Query for "list" — epsilon must appear.
@@ -354,7 +368,6 @@ func TestMultiMCP_Concurrent_RegisterAndSearch(t *testing.T) {
 
 	// Writers: register new hidden tools from a "gamma" server concurrently.
 	for w := 0; w < writers; w++ {
-		w := w
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

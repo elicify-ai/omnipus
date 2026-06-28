@@ -747,7 +747,7 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// On failure the task must NOT be left stranded in in_progress with no agent
 	// running. We revert its status back to the pre-update state so the client
 	// observes the failure and can retry. The HTTP status signals the cause:
-	//   503 — taskExecutor is nil (gateway degraded / not fully initialised)
+	//   503 — taskExecutor is nil (gateway degraded / not fully initialized)
 	//   409 — dispatch cap exhausted (retryable congestion)
 	//   500 — any other launch error
 	//

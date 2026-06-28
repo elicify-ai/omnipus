@@ -22,15 +22,15 @@ const (
 type ToolCategory string
 
 const (
-	// Dumping-ground values (legacy). BaseTool's default is CategoryCore, but no
+	// CategoryCore is a dumping-ground value (legacy). BaseTool's default is CategoryCore, but no
 	// SHIPPED tool returns CategoryCore or CategorySystem after the §7 rename —
 	// every tool returns a domain category below. Kept only as the BaseTool
 	// fallback and for back-compat; not used by any shipped tool.
 	CategoryCore   ToolCategory = "core"   // default for BaseTool
 	CategorySystem ToolCategory = "system" // legacy sysagent dumping ground
 
-	// Domain categories (§7 tool-rename-map-2026-06). Every shipped builtin tool
-	// returns one of these.
+	// CategoryFilesystem and the other domain categories (§7 tool-rename-map-2026-06) are
+	// returned by every shipped builtin tool.
 	CategoryFilesystem    ToolCategory = "filesystem"
 	CategoryShell         ToolCategory = "shell"
 	CategoryWeb           ToolCategory = "web"

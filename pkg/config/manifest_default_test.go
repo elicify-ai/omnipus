@@ -13,6 +13,8 @@ import "testing"
 func TestDefaultConfig_ManifestCompressedIsTrue(t *testing.T) {
 	cfg := DefaultConfig()
 	if !cfg.Tools.Manifest.Compressed {
-		t.Errorf("DefaultConfig().Tools.Manifest.Compressed = false; want true — fresh installs must ship with compressed manifest enabled")
+		t.Errorf(
+			"DefaultConfig().Tools.Manifest.Compressed = false; want true — fresh installs must ship with compressed manifest enabled",
+		)
 	}
 }

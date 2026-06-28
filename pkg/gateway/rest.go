@@ -1162,7 +1162,7 @@ func fetchUpstreamModels(baseURL, apiKey string) ([]string, error) {
 	// Anthropic-compatible endpoints (…/anthropic/v1). Scoped to anthropic bases
 	// so we don't perturb OpenAI providers that might reject unknown headers.
 	if strings.Contains(baseURL, "anthropic") {
-		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("Anthropic-Version", "2023-06-01")
 	}
 
 	resp, err := client.Do(req)
@@ -5469,8 +5469,8 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 			return fmt.Errorf("marshal existing entry: %w", err)
 		}
 		var current config.MCPServerConfig
-		if err := json.Unmarshal(raw, &current); err != nil {
-			return fmt.Errorf("unmarshal existing entry: %w", err)
+		if uerr := json.Unmarshal(raw, &current); uerr != nil {
+			return fmt.Errorf("unmarshal existing entry: %w", uerr)
 		}
 
 		// Merge only the fields that the caller provided (non-nil pointer).

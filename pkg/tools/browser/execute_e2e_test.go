@@ -1,4 +1,4 @@
-// Package browser — tool.Execute end-to-end tests.
+// tool.Execute end-to-end tests for the browser package.
 //
 // All tests in this file drive the 7 browser tools through their public
 // tool.Execute interface (not chromedp directly), against a deterministic
@@ -8,6 +8,7 @@
 // Run locally: OMNIPUS_BROWSER_E2E=1 go test -tags goolm,stdjson -v -run TestExecute ./pkg/tools/browser/
 //
 // Issue: #445 (epic #440)  Plan §3.18/§9.5
+
 package browser
 
 import (
@@ -310,7 +311,7 @@ func TestExecute_Evaluate_Edges(t *testing.T) {
 		}
 	})
 
-	// 2e. DOM node reference — CDP cannot serialise DOM node; expects error ──
+	// 2e. DOM node reference — CDP cannot serialize DOM node; expects error ──
 	// PRODUCTION GAP NOTE: chromedp.Evaluate with AwaitPromise=false may
 	// silently return null for non-serializable values like DOM nodes rather
 	// than an error. This test documents the current behavior: if it returns

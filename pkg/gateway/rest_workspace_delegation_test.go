@@ -285,8 +285,12 @@ func TestDelegationEdgeValidate_RejectionCases(t *testing.T) {
 			wantErr: "must not be empty",
 		},
 		{
-			name:    "invalid mode",
-			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []workspace.DelegationMode{"telepathy"}},
+			name: "invalid mode",
+			edge: storedDelegationEdge{
+				FromAgent: "jim",
+				ToAgent:   "ava",
+				Modes:     []workspace.DelegationMode{"telepathy"},
+			},
 			wantErr: "is invalid",
 		},
 		{
@@ -300,8 +304,13 @@ func TestDelegationEdgeValidate_RejectionCases(t *testing.T) {
 			wantErr: "exceeds the maximum allowed depth",
 		},
 		{
-			name:    "valid edge accepted",
-			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []workspace.DelegationMode{"task", "background"}, Depth: intPtrGW(2)},
+			name: "valid edge accepted",
+			edge: storedDelegationEdge{
+				FromAgent: "jim",
+				ToAgent:   "ava",
+				Modes:     []workspace.DelegationMode{"task", "background"},
+				Depth:     intPtrGW(2),
+			},
 			wantErr: "",
 		},
 		{
@@ -345,9 +354,18 @@ func TestDelegationEdgeValidate_MatchesHandlerWireMessages(t *testing.T) {
 	assert.EqualError(t,
 		storedDelegationEdge{FromAgent: "", ToAgent: ""}.Validate(team, ceiling),
 		"delegation edge from_agent and to_agent must not be empty")
-	assert.EqualError(t,
-		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []workspace.DelegationMode{"telepathy"}}.Validate(team, ceiling),
-		"delegation edge mode telepathy is invalid (valid: await, background, task)")
+	assert.EqualError(
+		t,
+		storedDelegationEdge{
+			FromAgent: "jim",
+			ToAgent:   "ava",
+			Modes:     []workspace.DelegationMode{"telepathy"},
+		}.Validate(
+			team,
+			ceiling,
+		),
+		"delegation edge mode telepathy is invalid (valid: await, background, task)",
+	)
 	assert.EqualError(t,
 		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Depth: intPtrGW(-1)}.Validate(team, ceiling),
 		"delegation edge depth must be >= 0")

@@ -184,8 +184,13 @@ func TestGeneralBuiltinMetadata_CategoryInvariant(t *testing.T) {
 
 		t.Run("tool_"+name, func(t *testing.T) {
 			// Name must not contain a dot (dotted names are the old system.* convention).
-			assert.NotContains(t, name, ".",
-				"general builtin %q must not have a dot in its name (§7 invariant: verb-first, no namespace prefix)", name)
+			assert.NotContains(
+				t,
+				name,
+				".",
+				"general builtin %q must not have a dot in its name (§7 invariant: verb-first, no namespace prefix)",
+				name,
+			)
 
 			// Name must not start with "system." (legacy prefix, retired in §7).
 			assert.False(t, len(name) >= 7 && name[:7] == "system.",

@@ -32,29 +32,6 @@ func setupWideCorpusRegistry() *ToolRegistry {
 	return reg
 }
 
-// newWidenedToolsTool builds a ToolsTool wired to an "allowed" canLoad
-// (accepts anything in the available set).
-func newWidenedToolsTool(reg *ToolRegistry, available map[string]struct{}) *ToolsTool {
-	tt := NewToolsTool(reg, 5, 10)
-	canLoad := func(_ context.Context, name string) (bool, string) {
-		if _, ok := available[name]; ok {
-			return true, ""
-		}
-		return false, name + " — not in allowed set"
-	}
-	markLoaded := func(_ context.Context, names []string) (map[string]any, []string) {
-		loaded := make(map[string]any)
-		for _, n := range names {
-			if _, ok := available[n]; ok {
-				loaded[n] = map[string]any{"name": n}
-			}
-		}
-		return loaded, nil
-	}
-	tt.SetResolver(canLoad, markLoaded)
-	return tt
-}
-
 // ── Test: query now finds visible lazy built-in tools ────────────────────────
 
 // TestBM25_QueryFindsVisibleLazyBuiltin verifies that a BM25 query returns
@@ -72,7 +49,10 @@ func TestBM25_QueryFindsVisibleLazyBuiltin(t *testing.T) {
 		t.Fatalf("query failed unexpectedly: %s", res.ForLLM)
 	}
 	if !strings.Contains(res.ForLLM, "create_agent_visible") {
-		t.Errorf("BM25 corpus must include visible lazy built-ins; 'create_agent_visible' not in result: %s", res.ForLLM)
+		t.Errorf(
+			"BM25 corpus must include visible lazy built-ins; 'create_agent_visible' not in result: %s",
+			res.ForLLM,
+		)
 	}
 }
 
@@ -123,7 +103,10 @@ func TestBM25_QueryFindsUpdateTask(t *testing.T) {
 // registryAwareCanLoad builds a canLoad that returns a "did you mean X?"
 // suggestion by searching the registry — mirrors the real loop.go behavior
 // so tests exercise the same suggestion path as production.
-func registryAwareCanLoad(reg *ToolRegistry, available map[string]struct{}) func(ctx context.Context, name string) (bool, string) {
+func registryAwareCanLoad(
+	reg *ToolRegistry,
+	available map[string]struct{},
+) func(ctx context.Context, name string) (bool, string) {
 	return func(_ context.Context, name string) (bool, string) {
 		if _, ok := available[name]; ok {
 			return true, ""
@@ -201,7 +184,7 @@ func TestExactMissFallbackSuggestsBrowserTool(t *testing.T) {
 	}
 }
 
-// TestExactMissFallbackSuggestsViaFuzzy proves that a typo like "browser_naviagte"
+// TestExactMissFallbackSuggestsViaFuzzy proves that a typo like "browser_navigate"
 // (one transposition) suggests the correct "browser_navigate".
 func TestExactMissFallbackSuggestsViaFuzzy(t *testing.T) {
 	reg := NewToolRegistry()
@@ -215,7 +198,7 @@ func TestExactMissFallbackSuggestsViaFuzzy(t *testing.T) {
 	tt.SetResolver(registryAwareCanLoad(reg, available), markLoaded)
 
 	r := tt.Execute(context.Background(), map[string]any{
-		"names": []any{"browser_naviagte"}, // typo: transposed 'ia' → 'ai'
+		"names": []any{"browser_navigate"}, // typo: transposed 'ia' → 'ai'
 	})
 
 	if !r.IsError {
@@ -257,7 +240,10 @@ func TestBM25_CacheInvalidationOnVisibleRegistration(t *testing.T) {
 		t.Fatalf("second query failed: %s", res.ForLLM)
 	}
 	if !strings.Contains(res.ForLLM, "tool_beta_v") {
-		t.Errorf("cache invalidation: expected 'tool_beta_v' in results after visible registration; got: %s", res.ForLLM)
+		t.Errorf(
+			"cache invalidation: expected 'tool_beta_v' in results after visible registration; got: %s",
+			res.ForLLM,
+		)
 	}
 }
 
@@ -271,6 +257,8 @@ func TestBM25_CacheInvalidationOnVisibleRegistration(t *testing.T) {
 // search discoverability), but canLoad and auto-load will correctly deny them.
 // This test verifies the auto-load skip-past-denied behavior works for visible
 // lazy tools just like for hidden tools.
+//
+//nolint:dupl // near-identical to TestToolsTool_Query_DeniedTopHitFallsThrough; separate to test visible vs hidden tools
 func TestBM25_PolicyDeniedVisibleToolExcludedFromAutoLoad(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.Register(&mockSearchableTool{name: "denied_visible_tool", desc: "denied but visible tool"})

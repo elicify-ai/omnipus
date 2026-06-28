@@ -173,9 +173,11 @@ func (t *UsageQueryTool) Execute(_ context.Context, args map[string]any) *tools.
 	// Nil ListSessions is a production wiring bug — fail loudly rather than
 	// returning an empty report indistinguishable from genuine zero usage.
 	if t.deps == nil || t.deps.ListSessions == nil {
-		return tools.ErrorResult(errorJSON("USAGE_UNAVAILABLE",
+		return tools.ErrorResult(errorJSON(
+			"USAGE_UNAVAILABLE",
 			"usage data source is not available",
-			"The session store is not wired to the get_usage tool. This is a server-side configuration issue; contact your administrator."))
+			"The session store is not wired to the get_usage tool. This is a server-side configuration issue; contact your administrator.",
+		))
 	}
 
 	// Parse period via the authoritative constructor (empty → month; unrecognized → error).

@@ -21,7 +21,7 @@ import (
 
 // workspace is the canonical on-disk workspace type shared with pkg/gateway.
 // Using the shared type (instead of a local struct) ensures that both write
-// paths — the REST gateway and the update_workspace tool — serialise exactly
+// paths — the REST gateway and the update_workspace tool — serialize exactly
 // the same fields in exactly the same JSON tags, so neither can silently drop
 // fields (in particular the delegation graph) written by the other.
 type workspace = workspacepkg.Workspace
@@ -288,7 +288,7 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	//
 	// update_workspace does NOT expose a `delegation` arg today, so it cannot
 	// inject new edges: readWorkspaceFromDisk loads the existing graph and
-	// writeEntity re-serialises it verbatim. But the moment ANY write path
+	// writeEntity re-serializes it verbatim. But the moment ANY write path
 	// persists the Delegation slice, it becomes a write surface — a corrupted
 	// on-disk edge being rewritten here, or a future `delegation` arg, could
 	// otherwise launder an invalid edge that is then TRUSTED at runtime (the

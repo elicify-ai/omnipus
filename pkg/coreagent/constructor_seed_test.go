@@ -350,7 +350,12 @@ func TestJimSeed_DeniedToolsAbsent(t *testing.T) {
 	// These tools must NOT appear in the map — they are implicitly denied by default_policy.
 	for _, toolName := range []string{"create_agent", "navigate", "configure_provider"} {
 		_, present := policies[toolName]
-		assert.False(t, present, "Jim must NOT have an explicit entry for %q (implicitly denied by default_policy=deny)", toolName)
+		assert.False(
+			t,
+			present,
+			"Jim must NOT have an explicit entry for %q (implicitly denied by default_policy=deny)",
+			toolName,
+		)
 	}
 }
 

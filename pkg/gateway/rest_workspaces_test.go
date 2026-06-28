@@ -801,7 +801,7 @@ func TestHandleWorkspaces_RepositorySchemeValidation_POST(t *testing.T) {
 // (stored on-disk, not sent over the wire by PUT) and updated_at (must advance).
 //
 // This pins the f034a096 "update can't drop fields" fix at the REST merge path.
-// The sysagent-level analogue (TestWorkspaceUpdate_FullFieldRoundTrip) proves the
+// The sysagent-level analog (TestWorkspaceUpdate_FullFieldRoundTrip) proves the
 // tool write path; this test proves the gateway PUT merge path.
 //
 // BDD:

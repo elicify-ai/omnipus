@@ -134,7 +134,7 @@ func TestFilterToolsByPolicy_MCPToolRegistryRoundTrip(t *testing.T) {
 
 	filtered, _ := FilterToolsByPolicy(allFromRegistry, "custom", policyCfg)
 
-	var names []string
+	names := make([]string, 0, len(filtered))
 	for _, t := range filtered {
 		names = append(names, t.Name())
 	}
