@@ -483,8 +483,8 @@ describe('ModelSelector — variant="ghost"', () => {
     const trigger = screen.getByTestId('ghost-trigger')
     // Ghost trigger must NOT carry the form-field border class.
     expect(trigger.className).not.toContain('border')
-    // Ghost trigger must carry the compact height class.
-    expect(trigger.className).toContain('h-7')
+    // Ghost trigger must carry the compact height class (matches the h-8 header siblings).
+    expect(trigger.className).toContain('h-8')
     // Ghost trigger must carry the compact padding class.
     expect(trigger.className).toContain('px-2')
   })
