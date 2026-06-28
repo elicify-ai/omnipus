@@ -55,7 +55,10 @@ func TestIsTransientStreamError_TrueForKnownPatterns(t *testing.T) {
 		// Direct http2 body-closed sentinel.
 		{"http2 response body closed direct", "http2: response body closed"},
 		// HTTP/2 GOAWAY – non-graceful (INTERNAL_ERROR etc.).
-		{"goaway non-graceful", "http2: server sent GOAWAY and closed the connection; LastStreamID=5, ErrCode=INTERNAL_ERROR, debug=\"\""},
+		{
+			"goaway non-graceful",
+			"http2: server sent GOAWAY and closed the connection; LastStreamID=5, ErrCode=INTERNAL_ERROR, debug=\"\"",
+		},
 		// HTTP/2 GOAWAY – graceful shutdown (load-balancer recycling).
 		{"goaway graceful", "http2: Transport received Server's graceful shutdown GOAWAY"},
 		// http2StreamError.Error() format.
@@ -69,7 +72,10 @@ func TestIsTransientStreamError_TrueForKnownPatterns(t *testing.T) {
 		{"server closed idle connection", "http: server closed idle connection"},
 		{"connection closed", "connection closed before response was received"},
 		// Wrapped in provider error message.
-		{"wrapped streaming reset", "failed to send request: Post \"https://openrouter.ai/api/v1/chat/completions\": streaming read error: http2: response body closed"},
+		{
+			"wrapped streaming reset",
+			"failed to send request: Post \"https://openrouter.ai/api/v1/chat/completions\": streaming read error: http2: response body closed",
+		},
 		// Case-insensitive check.
 		{"uppercase variant", "STREAMING READ ERROR: HTTP2: RESPONSE BODY CLOSED"},
 	}
@@ -220,7 +226,9 @@ func TestRetryOnStreamingReset_SingleCandidateTurnSucceeds(t *testing.T) {
 func TestRetryOnStreamingReset_GoAwayTurnSucceeds(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	goAwayErr := errors.New(`http2: server sent GOAWAY and closed the connection; LastStreamID=5, ErrCode=INTERNAL_ERROR, debug=""`)
+	goAwayErr := errors.New(
+		`http2: server sent GOAWAY and closed the connection; LastStreamID=5, ErrCode=INTERNAL_ERROR, debug=""`,
+	)
 	provider := &failingThenSuccessProvider{
 		failures: []error{goAwayErr},
 		successResp: &providers.LLMResponse{

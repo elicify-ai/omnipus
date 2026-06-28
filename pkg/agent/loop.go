@@ -1837,7 +1837,11 @@ func registerSharedTools(
 							return false, name + " — agent not found"
 						}
 						allAgentTools := callerAgent.Tools.GetAll()
-						policyFiltered, _ := tools.FilterToolsByPolicy(allAgentTools, callerAgent.AgentType, callerAgent.LoadToolPolicy())
+						policyFiltered, _ := tools.FilterToolsByPolicy(
+							allAgentTools,
+							callerAgent.AgentType,
+							callerAgent.LoadToolPolicy(),
+						)
 						// Tier gate: full/infra tools are already callable — they never
 						// need to be loaded. Check policy FIRST so a denied full-tier tool
 						// gets a clear "denied" signal rather than a false "already available"
@@ -1870,7 +1874,11 @@ func registerSharedTools(
 						// but load rejects it as "unknown" — the chicken-and-egg the MCP UAT
 						// caught: search uses the hidden corpus, canLoad used only GetAll.)
 						if hiddenTool, hok := callerAgent.Tools.GetIncludingHidden(name); hok {
-							hiddenAllowed, _ := tools.FilterToolsByPolicy([]tools.Tool{hiddenTool}, callerAgent.AgentType, callerAgent.LoadToolPolicy())
+							hiddenAllowed, _ := tools.FilterToolsByPolicy(
+								[]tools.Tool{hiddenTool},
+								callerAgent.AgentType,
+								callerAgent.LoadToolPolicy(),
+							)
 							if len(hiddenAllowed) > 0 {
 								return true, ""
 							}
@@ -5790,7 +5798,7 @@ turnLoop:
 					break
 				}
 			} else {
-				// ClassifyError returned nil: the error is not recognisable as a
+				// ClassifyError returned nil: the error is not recognizable as a
 				// provider-level condition. Before giving up, check whether it is a
 				// transient mid-stream reset (e.g. a GOAWAY frame or a network drop
 				// that is wrapped by layers ClassifyError does not unwrap). If so,

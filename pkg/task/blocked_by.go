@@ -260,7 +260,11 @@ func (s *Store) AdvanceBlockedDependents(completedID string) (advancedIDs []stri
 		advancedIDs = append(advancedIDs, id)
 	}
 	if len(failedIDs) > 0 {
-		return advancedIDs, fmt.Errorf("task: AdvanceBlockedDependents: write failed for %d dependent(s): %v", len(failedIDs), failedIDs)
+		return advancedIDs, fmt.Errorf(
+			"task: AdvanceBlockedDependents: write failed for %d dependent(s): %v",
+			len(failedIDs),
+			failedIDs,
+		)
 	}
 	return advancedIDs, nil
 }

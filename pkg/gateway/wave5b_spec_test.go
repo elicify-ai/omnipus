@@ -12,7 +12,7 @@
 // ConfirmationGateway). That system agent was retired — its tools became ordinary
 // policy-governed builtins on the core agents (see pkg/sysagent/tools), and its
 // enforcement moved to the main agent loop. The 18 skipped stubs were removed
-// because their behaviours are now covered by live tests on the new path:
+// because their behaviors are now covered by live tests on the new path:
 //   - error contract / RBAC deny / exclusivity → pkg/tools/compositor_*_test.go,
 //     pkg/coreagent/*_seed_test.go, pkg/sysagent/tools/*_test.go
 //   - confirmation / approval gating          → pkg/gateway/{approvals,reauth_gate,
@@ -24,7 +24,7 @@
 //   - schema redaction (cloud/local/override)  → RETIRED feature (superseded by the
 //     compressed tool manifest); the system-agent chat E2E → RETIRED.
 //
-// What remains here is the live, runnable subset: credential write-only behaviour,
+// What remains here is the live, runnable subset: credential write-only behavior,
 // onboarding-state detection/resume/never-reshow, and the seeded-agent roster.
 
 package gateway

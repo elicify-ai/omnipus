@@ -55,15 +55,8 @@ func setupPopulatedRegistry() *ToolRegistry {
 }
 
 // newSearchTool builds a ToolsTool configured for search tests.
-func newSearchTool(reg *ToolRegistry, ttl, max int) *ToolsTool {
-	return NewToolsTool(reg, ttl, max)
-}
-
-// execQuery calls tools{query:q} — the new param-inferred search+auto-load path.
-func execQuery(tt *ToolsTool, ctx context.Context, query string) *ToolResult {
-	return tt.Execute(ctx, map[string]any{
-		"query": query,
-	})
+func newSearchTool(reg *ToolRegistry, ttl, maxN int) *ToolsTool {
+	return NewToolsTool(reg, ttl, maxN)
 }
 
 // execQueryNoResolver calls tools{query:q} on a ToolsTool with no resolver set.
@@ -82,7 +75,11 @@ func TestToolsTool_Query_EmptyQuery_Error(t *testing.T) {
 	for _, q := range []string{"", "   ", "\t"} {
 		res := tt.Execute(ctx, map[string]any{"query": q})
 		if !res.IsError {
-			t.Errorf("Empty/whitespace query %q must be rejected (neither names nor query provided), got: %v", q, res.ForLLM)
+			t.Errorf(
+				"Empty/whitespace query %q must be rejected (neither names nor query provided), got: %v",
+				q,
+				res.ForLLM,
+			)
 		}
 	}
 }
@@ -168,6 +165,7 @@ func TestToolsTool_Query_AutoLoadsTopHit(t *testing.T) {
 	}
 }
 
+//nolint:dupl // near-identical to TestBM25_PolicyDeniedVisibleToolExcludedFromAutoLoad; separate to test hidden vs visible tools
 func TestToolsTool_Query_DeniedTopHitFallsThrough(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "mcp_denied", desc: "denied tool"})

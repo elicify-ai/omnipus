@@ -216,7 +216,11 @@ func TestExecLoad_MixedBatch_DenialNotSilenced(t *testing.T) {
 		}
 	}
 	if !foundDenied {
-		t.Errorf("MixedBatch: %s (denied full-tier) must appear in rejected with 'denied'; got rejected=%v", deniedFull, rejectedRaw)
+		t.Errorf(
+			"MixedBatch: %s (denied full-tier) must appear in rejected with 'denied'; got rejected=%v",
+			deniedFull,
+			rejectedRaw,
+		)
 	}
 
 	// allowedFull must appear in "already_available".

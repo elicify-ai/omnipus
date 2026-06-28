@@ -78,7 +78,7 @@ func TestRun_TimeoutReapsGrandchild(t *testing.T) {
 		t.Skip("sleep not in PATH; skipping grandchild-reap test")
 	}
 
-	// Use a long, distinctive sleep duration so we can recognise the
+	// Use a long, distinctive sleep duration so we can recognize the
 	// grandchild in /proc by its argv without colliding with unrelated sleeps.
 	const tag = "987654" // unlikely-to-collide sleep duration in seconds
 	argv := []string{"sh", "-c", "echo started && sleep " + tag}

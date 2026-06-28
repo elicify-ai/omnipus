@@ -141,6 +141,9 @@ linters:
           - gocognit
           - gocyclo
         path: _test\.go$
+      - linters:
+          - golines
+        path: ^pkg/api/generated/
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

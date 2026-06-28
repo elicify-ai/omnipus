@@ -23,7 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,39 +60,12 @@ func (d *denyAuditor) EvaluateExec(agentID, command string) policy.Decision {
 	}
 }
 
-// allowAuditor is a mock ExecPolicyAuditor that always allows.
-type allowAuditor struct {
-	calls int32
-}
-
-func (a *allowAuditor) EvaluateExec(agentID, command string) policy.Decision {
-	atomic.AddInt32(&a.calls, 1)
-	return policy.Decision{
-		Allowed:    true,
-		PolicyRule: "allow-all auditor",
-	}
-}
-
 // makeExecToolOff creates an ExecTool with sandbox=off and an optional PolicyAuditor.
 func makeExecToolOff(t *testing.T, auditor ExecPolicyAuditor) *ExecTool {
 	t.Helper()
 	workspace := t.TempDir()
 	tool, err := NewExecToolWithDeps(workspace, false, nil, ExecToolDeps{
 		SandboxMode:        string(sandbox.ModeOff),
-		PolicyAuditor:      auditor,
-		ExecTimeoutSeconds: 15,
-	})
-	require.NoError(t, err, "NewExecToolWithDeps must not fail")
-	return tool
-}
-
-// makeExecToolEnforce creates an ExecTool with sandbox=enforce.
-// It is the caller's responsibility to skip on non-Linux before calling this.
-func makeExecToolEnforce(t *testing.T, auditor ExecPolicyAuditor) *ExecTool {
-	t.Helper()
-	workspace := t.TempDir()
-	tool, err := NewExecToolWithDeps(workspace, false, nil, ExecToolDeps{
-		SandboxMode:        string(sandbox.ModeEnforce),
 		PolicyAuditor:      auditor,
 		ExecTimeoutSeconds: 15,
 	})
@@ -177,7 +149,10 @@ func TestExecTool_DeniedBinaryAuditor_BlocksBeforeSpawn(t *testing.T) {
 
 			// --- No spawn occurred (sentinel absent) ---
 			if _, statErr := os.Stat(sentinelPath); statErr == nil {
-				t.Errorf("denied-binary: sentinel file %q was created; child process ran despite policy deny", sentinelPath)
+				t.Errorf(
+					"denied-binary: sentinel file %q was created; child process ran despite policy deny",
+					sentinelPath,
+				)
 			}
 		})
 	}
@@ -965,20 +940,4 @@ func TestExecTool_NprocRlimit_ForkBombAborted(t *testing.T) {
 		assert.LessOrEqual(t, len(res.Stdout)+len(res.Stderr), 10240,
 			"nproc-cap: output must be bounded regardless of fork behavior")
 	})
-}
-
-// ---------------------------------------------------------------------------
-// §7 bonus: HTTP probe helper used in item 6 (light, no actual request body)
-// ---------------------------------------------------------------------------
-
-// probeHTTPOK does a GET to url and returns true if the response is 200.
-// Used as a lightweight reachability probe in item-6 tests.
-func probeHTTPOK(url string) bool {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(url) //nolint:noctx
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
 }

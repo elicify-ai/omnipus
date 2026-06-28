@@ -41,8 +41,9 @@ package tools
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/policy"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/dapicom-ai/omnipus/pkg/policy"
 )
 
 // toolNames extracts the Name() of each tool for set assertions.

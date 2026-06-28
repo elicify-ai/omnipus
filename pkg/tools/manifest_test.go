@@ -137,6 +137,7 @@ func (f *fakeManifestTool) Scope() ToolScope       { return ScopeGeneral }
 func (f *fakeManifestTool) Parameters() map[string]any {
 	return map[string]any{"type": "object"}
 }
+
 func (f *fakeManifestTool) Execute(_ context.Context, _ map[string]any) *ToolResult {
 	return NewToolResult("ok")
 }
@@ -365,12 +366,18 @@ func TestManifestNamesResolveInCatalog(t *testing.T) {
 			continue
 		}
 		if !present[name] {
-			t.Errorf("full-tier manifest tool %q is not a registered builtin (renamed or removed?) — update fullManifestToolNames or add to scopeCoreFullTierTools if it is a ScopeCore sysagent tool", name)
+			t.Errorf(
+				"full-tier manifest tool %q is not a registered builtin (renamed or removed?) — update fullManifestToolNames or add to scopeCoreFullTierTools if it is a ScopeCore sysagent tool",
+				name,
+			)
 		}
 	}
 	for _, name := range InfraManifestToolNames() {
 		if !present[name] {
-			t.Errorf("infra-tier manifest tool %q is not a registered builtin (renamed or removed?) — update infraManifestToolNames", name)
+			t.Errorf(
+				"infra-tier manifest tool %q is not a registered builtin (renamed or removed?) — update infraManifestToolNames",
+				name,
+			)
 		}
 	}
 }

@@ -232,7 +232,9 @@ func TestAppendTranscript_TwoCacheAppendsSum(t *testing.T) {
 //	When it is unmarshalled,
 //	Then TokensCacheRead==0, TokensCacheWrite==0, ByModel==nil.
 func TestSessionStats_BackwardCompat_LegacyMetaLoadsWithZeroCacheFields(t *testing.T) {
-	legacyJSON := []byte(`{"tokens_in":500,"tokens_out":200,"tokens_total":700,"cost":0.01,"tool_calls":2,"message_count":5}`)
+	legacyJSON := []byte(
+		`{"tokens_in":500,"tokens_out":200,"tokens_total":700,"cost":0.01,"tool_calls":2,"message_count":5}`,
+	)
 	var stats SessionStats
 	require.NoError(t, jsonUnmarshal(legacyJSON, &stats))
 	assert.Equal(t, 500, stats.TokensIn)

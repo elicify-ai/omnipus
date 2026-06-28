@@ -149,7 +149,12 @@ func TestProviderTest_NotConfigured(t *testing.T) {
 	// test_provider returns a structured status body in both ok/error cases.
 	// It must NOT set IsError — that would indicate a tool-level failure, not a
 	// provider connectivity issue.
-	require.False(t, res.IsError, "test_provider should return success envelope even when key is missing: %s", res.ForLLM)
+	require.False(
+		t,
+		res.IsError,
+		"test_provider should return success envelope even when key is missing: %s",
+		res.ForLLM,
+	)
 
 	m := unmarshalProviderResult(t, res.ForLLM)
 	require.Equal(t, "openai", m["name"])

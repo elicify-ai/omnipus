@@ -783,15 +783,19 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	capMu.Unlock()
 
 	// Look for the steering message in the captured messages
+	// The steering content must reach the LLM context. It may be merged into an
+	// adjacent same-role user message by normalizeMessagesForProvider (provider
+	// compatibility), so assert on substring presence rather than a standalone
+	// message.
 	found := false
 	for _, m := range msgs {
-		if m.Content == "pre-enqueued steering" {
+		if strings.Contains(m.Content, "pre-enqueued steering") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatal("expected steering message to be injected into conversation context")
+		t.Fatalf("expected steering message to be injected into conversation context; captured messages: %+v", msgs)
 	}
 }
 
@@ -911,15 +915,21 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 		t.Fatalf("expected 2 provider calls, got %d", calls)
 	}
 
+	// The late message must reach the follow-up turn's context. It may be merged
+	// into an adjacent same-role user message by normalizeMessagesForProvider, so
+	// assert on substring presence within a user message.
 	foundLateMessage := false
 	for _, msg := range secondMessages {
-		if msg.Role == "user" && msg.Content == "late append" {
+		if msg.Role == "user" && strings.Contains(msg.Content, "late append") {
 			foundLateMessage = true
 			break
 		}
 	}
 	if !foundLateMessage {
-		t.Fatal("expected queued late message to be processed in an automatic follow-up turn")
+		t.Fatalf(
+			"expected queued late message to be processed in an automatic follow-up turn; second-call messages: %+v",
+			secondMessages,
+		)
 	}
 }
 

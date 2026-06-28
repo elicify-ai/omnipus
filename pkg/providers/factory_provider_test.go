@@ -969,14 +969,17 @@ func TestProbeEnumProvidersResolveBase(t *testing.T) {
 	t.Logf("ProbeProviderRequest enum contains %d ids", len(ids))
 
 	for _, id := range ids {
-		id := id
 		t.Run(id, func(t *testing.T) {
 			got := GetDefaultAPIBase(id)
 			switch {
 			case needsEndpointAllowlist[id]:
 				// These must NOT have a fixed default — they require per-deployment endpoints.
 				if got != "" {
-					t.Errorf("GetDefaultAPIBase(%q) = %q: id is in needsEndpointAllowlist (per-deployment host required), expected empty string", id, got)
+					t.Errorf(
+						"GetDefaultAPIBase(%q) = %q: id is in needsEndpointAllowlist (per-deployment host required), expected empty string",
+						id,
+						got,
+					)
 				}
 			case noBaseExpected[id]:
 				// CLI / local tools — no HTTP base; either "" or a localhost default is acceptable.
@@ -986,8 +989,12 @@ func TestProbeEnumProvidersResolveBase(t *testing.T) {
 				// onboarding probe can construct the upstream URL. If this fails,
 				// add a GetDefaultAPIBase case for %q or add it to needsEndpointAllowlist.
 				if got == "" {
-					t.Errorf("GetDefaultAPIBase(%q) = \"\": id is in the ProbeProviderRequest enum but has no default base — "+
-						"add a GetDefaultAPIBase case for %q or add it to needsEndpointAllowlist with a comment explaining why", id, id)
+					t.Errorf(
+						"GetDefaultAPIBase(%q) = \"\": id is in the ProbeProviderRequest enum but has no default base — "+
+							"add a GetDefaultAPIBase case for %q or add it to needsEndpointAllowlist with a comment explaining why",
+						id,
+						id,
+					)
 				}
 			}
 		})
@@ -1039,7 +1046,6 @@ func TestGetDefaultAPIBase_ExactBases(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.id, func(t *testing.T) {
 			got := GetDefaultAPIBase(tt.id)
 			if got != tt.want {
@@ -1166,7 +1172,6 @@ func TestEveryProbeProviderBuilds(t *testing.T) {
 	needsEndpoint := map[string]bool{"azure": true, "azure-openai": true}
 
 	for _, id := range probeEnumIDsFromYAML(t) {
-		id := id
 		if skipBuild[id] {
 			continue
 		}

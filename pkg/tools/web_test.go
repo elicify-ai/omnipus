@@ -449,7 +449,10 @@ func TestNewWebSearchTool_DuckDuckGoFallback(t *testing.T) {
 		t.Fatalf("Tavily configured: unexpected error: %v", err)
 	}
 	if _, ok := tool.provider.(*TavilySearchProvider); !ok {
-		t.Errorf("Tavily configured: provider = %T, want *TavilySearchProvider (keyed provider takes priority over fallback)", tool.provider)
+		t.Errorf(
+			"Tavily configured: provider = %T, want *TavilySearchProvider (keyed provider takes priority over fallback)",
+			tool.provider,
+		)
 	}
 }
 

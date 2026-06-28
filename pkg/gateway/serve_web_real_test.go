@@ -668,7 +668,7 @@ func TestServeWeb_ContentType_DifferentExtensionsDifferentMIME(t *testing.T) {
 	}
 
 	// Final guard: all three Content-Types must be distinct.
-	var mimes []string
+	mimes := make([]string, 0, len(tests))
 	for _, tc := range tests {
 		rec := getFromAPI(api, tc.path)
 		mimes = append(mimes, rec.Header().Get("Content-Type"))

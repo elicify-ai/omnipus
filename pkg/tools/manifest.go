@@ -172,7 +172,9 @@ func BuildCompressedManifest(lazyTools []Tool, loaded map[string]bool) string {
 
 	var sb strings.Builder
 	sb.WriteString("# More tools (load before use)\n")
-	sb.WriteString("These tools are available but not loaded. To use one, call `load_tool` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.\n")
+	sb.WriteString(
+		"These tools are available but not loaded. To use one, call `load_tool` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.\n",
+	)
 
 	for _, cat := range cats {
 		entries := grouped[ToolCategory(cat)]

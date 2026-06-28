@@ -36,7 +36,7 @@ func isDispatchCapReached(err error) bool {
 //	Then exactly one goroutine enters the goroutineCtxHook (one entry in
 //	     te.running) and only one session is written to the task.
 func TestStartTaskNow_NoConcurrentDoubleLaunch(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al and cleanup needed
 	defer cleanup()
 
 	dir := t.TempDir()
@@ -178,7 +178,7 @@ loop:
 //	Then the returned error satisfies errors.Is(err, ErrDispatchCapReached)
 //	and te.running has no leaked sentinel.
 func TestErrDispatchCapReached_IsDetectable(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al and cleanup needed
 	defer cleanup()
 
 	dir := t.TempDir()

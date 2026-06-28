@@ -44,7 +44,8 @@ func fakeResolver(available map[string]struct{}) (
 		}
 		return loaded, nil
 	}
-	return
+	return canLoad,
+		markLoaded
 }
 
 // newWiredToolsTool constructs a ToolsTool with resolver wired (no real registry).

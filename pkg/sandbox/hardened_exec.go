@@ -416,7 +416,7 @@ type Result struct {
 
 	// TimedOut is true when the wall-clock deadline elapsed before the
 	// child exited on its own. On timeout the child's entire process GROUP
-	// is signalled (Unix: SIGTERM, then SIGKILL after a 1-second grace —
+	// is signaled (Unix: SIGTERM, then SIGKILL after a 1-second grace —
 	// see installProcessGroupCancel; Windows: TerminateProcess on the child
 	// via the os/exec default cancel). A cross-platform cmd.WaitDelay (5s)
 	// backstops the kill so a grandchild that escaped the group-kill and
@@ -445,7 +445,7 @@ type Result struct {
 const outputCap = 4 << 20
 
 // waitDelay is the cross-platform backstop on cmd.Wait after the context is
-// cancelled. Per os/exec semantics, once the context is done the I/O copying
+// canceled. Per os/exec semantics, once the context is done the I/O copying
 // goroutines are given at most WaitDelay to finish before os/exec closes the
 // child's pipes and forcibly returns from Wait. This guarantees a grandchild
 // that escaped the process-group kill (e.g. one that called setsid and so
@@ -610,8 +610,8 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 	// cmd.Cancel to kill the whole process GROUP (Setpgid was applied above on
 	// Unix), and set cmd.WaitDelay as a cross-platform backstop so a stuck pipe
 	// can never block Wait indefinitely even if a process escapes its group
-	// (e.g. via setsid). These have no effect unless the context is cancelled
-	// (timeout fired or the caller's ctx was cancelled), so the normal-exit
+	// (e.g. via setsid). These have no effect unless the context is canceled
+	// (timeout fired or the caller's ctx was canceled), so the normal-exit
 	// path is unchanged.
 	installProcessGroupCancel(cmd)
 	cmd.WaitDelay = waitDelay

@@ -31,7 +31,7 @@ import (
 )
 
 // errNoMoreScriptedResponses is returned when Chat is called after all scripted
-// responses have been consumed.  Tests that want to verify exhaustion behaviour
+// responses have been consumed.  Tests that want to verify exhaustion behavior
 // can check for this sentinel.
 var errNoMoreScriptedResponses = errors.New("sequenceProvider: no more responses")
 
@@ -183,7 +183,7 @@ func TestScriptedProvider_ReturnsResponsesInOrder(t *testing.T) {
 	}
 }
 
-// TestScriptedProvider_ContextCancellation verifies that a cancelled context is
+// TestScriptedProvider_ContextCancellation verifies that a canceled context is
 // respected and returns ctx.Err() without consuming the next response.
 func TestScriptedProvider_ContextCancellation(t *testing.T) {
 	p := newScriptedProvider(&providers.LLMResponse{Content: "unreachable"})
@@ -192,14 +192,14 @@ func TestScriptedProvider_ContextCancellation(t *testing.T) {
 
 	_, err := p.Chat(ctx, nil, nil, "", nil)
 	if err == nil {
-		t.Fatal("expected an error from cancelled context, got nil")
+		t.Fatal("expected an error from canceled context, got nil")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
 	// The unreachable response must still be available.
 	if p.Remaining() != 1 {
-		t.Errorf("Remaining after cancelled call = %d, want 1 (response was not consumed)", p.Remaining())
+		t.Errorf("Remaining after canceled call = %d, want 1 (response was not consumed)", p.Remaining())
 	}
 }
 

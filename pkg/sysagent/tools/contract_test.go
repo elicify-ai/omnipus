@@ -45,7 +45,10 @@ func TestRegistry_AllSysagentToolsCategory(t *testing.T) {
 				t.Errorf("tool %q: Category() must NOT return CategorySystem after §7 rename (FR-059)", name)
 			}
 			if cat.Category() == tools.CategoryCore {
-				t.Errorf("tool %q: Category() must NOT return CategoryCore (legacy default) — use a domain category", name)
+				t.Errorf(
+					"tool %q: Category() must NOT return CategoryCore (legacy default) — use a domain category",
+					name,
+				)
 			}
 		} else {
 			t.Errorf("tool %q: does not implement Category()", name)

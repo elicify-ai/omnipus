@@ -45,6 +45,7 @@ func (t *registryMCPTestTool) Scope() tools.ToolScope     { return tools.ScopeGe
 func (t *registryMCPTestTool) Category() tools.ToolCategory {
 	return tools.CategoryMCP
 }
+
 func (t *registryMCPTestTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	return tools.SilentResult("ok")
 }
@@ -107,7 +108,13 @@ func TestREST_GetTools_IncludesMCPTools(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, mcpEntry, "response must contain an entry with name=%q; got %d entries total", mcpToolName, len(entries))
+	require.NotNil(
+		t,
+		mcpEntry,
+		"response must contain an entry with name=%q; got %d entries total",
+		mcpToolName,
+		len(entries),
+	)
 
 	// Assert source discriminator is "mcp" (FR-027).
 	assert.Equal(t, "mcp", mcpEntry["source"],

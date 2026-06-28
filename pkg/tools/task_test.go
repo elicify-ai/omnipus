@@ -703,6 +703,8 @@ func TestTaskUpdate_BlockedByRejectsCrossWorkspace(t *testing.T) {
 // TestTaskUpdate_DoneAdvancesBlockedDependents proves that marking the blocker
 // done advances a still-blocked dependent to `next` via
 // store.AdvanceBlockedDependents.
+//
+//nolint:dupl // symmetric to TestTaskUpdate_FailedDoesNotAdvanceDependents; parallel tests for done vs failed terminal status
 func TestTaskUpdate_DoneAdvancesBlockedDependents(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
@@ -1229,6 +1231,8 @@ func TestTaskUpdate_ResponseCarriesUpdatedFields(t *testing.T) {
 // blocker `failed` does NOT advance a dependent (it stays `blocked`). Only
 // `done` advances dependents. Catches a tool that advances on any terminal
 // status.
+//
+//nolint:dupl // symmetric to TestTaskUpdate_DoneAdvancesBlockedDependents; parallel tests for done vs failed terminal status
 func TestTaskUpdate_FailedDoesNotAdvanceDependents(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
@@ -1271,7 +1275,7 @@ func TestTaskUpdate_FailedDoesNotAdvanceDependents(t *testing.T) {
 	}
 }
 
-// TestTaskUpdate_BlockedByClearsDeps proves the new fix behaviour: passing
+// TestTaskUpdate_BlockedByClearsDeps proves the new fix behavior: passing
 // blocked_by:[] CLEARS existing deps. Set deps, then update with blocked_by:[]
 // → deps gone and the task returns to a dispatchable state.
 func TestTaskUpdate_BlockedByClearsDeps(t *testing.T) {

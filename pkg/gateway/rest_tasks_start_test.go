@@ -359,13 +359,13 @@ func TestHandleTaskPatch_RunTask_DispatchCapReturns409(t *testing.T) {
 	te := api.taskExecutor
 	require.NotNil(t, te, "taskExecutor must not be nil in this test")
 
-	// Exhaust all semaphore slots by acquiring each one. cap ≥ 1 is guaranteed.
+	// Exhaust all semaphore slots by acquiring each one. capN ≥ 1 is guaranteed.
 	// All slots are released at end of test via Cleanup.
-	cap := te.DispatchSemaCap()
-	releases := make([]func(), 0, cap)
-	for i := range cap {
+	capN := te.DispatchSemaCap()
+	releases := make([]func(), 0, capN)
+	for i := range capN {
 		ok, rel := te.TryAcquireDispatchSema()
-		require.True(t, ok, "sema slot %d/%d must be available before exhaustion", i+1, cap)
+		require.True(t, ok, "sema slot %d/%d must be available before exhaustion", i+1, capN)
 		releases = append(releases, rel)
 	}
 	t.Cleanup(func() {

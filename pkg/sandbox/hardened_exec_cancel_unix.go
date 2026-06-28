@@ -7,7 +7,7 @@
 // hardened-exec foreground path runs commands like `sh -c 'cmd1 && sleep N'`,
 // where sh forks a grandchild (sleep) that INHERITS sh's stdout/stderr pipe
 // fds. applyPlatformHardening sets Setpgid=true, so sh is a process-group
-// leader and the grandchild joins that group — but nothing ever signalled the
+// leader and the grandchild joins that group — but nothing ever signaled the
 // GROUP. On timeout the default cancel killed sh, yet the sleep grandchild
 // kept the write end of the stdout pipe open. Because cmd.WaitDelay was unset
 // (0), os/exec read the pipe until EOF, which never came until sleep exited on
@@ -58,7 +58,7 @@ func installProcessGroupCancel(cmd *exec.Cmd) {
 		// Setpgid made the child its own group leader with pgid == pid.
 		// ESRCH means the group is already gone — not an error.
 		if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
-			// Fall back to signalling just the direct child if the group
+			// Fall back to signaling just the direct child if the group
 			// signal failed for a reason other than "already gone".
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 		}

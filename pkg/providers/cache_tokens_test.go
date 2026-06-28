@@ -10,7 +10,7 @@
 //	Scenario: CodexCliProvider separates cached input tokens from plain input tokens
 //	Scenario: anthropic_messages parseResponseBody captures cache fields
 //
-// Guards against: providers collapsing cache tokens into PromptTokens (old behaviour).
+// Guards against: providers collapsing cache tokens into PromptTokens (old behavior).
 // Traces to: docs/internal/specs/token-usage-tracking-2026-06.md §Wave1 item 1
 
 package providers

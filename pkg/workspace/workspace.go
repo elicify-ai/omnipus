@@ -6,7 +6,7 @@ package workspace
 
 // Workspace is the canonical on-disk representation of a workspace record
 // (~/.omnipus/workspaces/<id>.json). It is the single source of truth for the
-// serialised format and is shared by pkg/gateway (REST CRUD) and
+// serialized format and is shared by pkg/gateway (REST CRUD) and
 // pkg/sysagent/tools (update_workspace / create_workspace / etc.) so that
 // both write paths stay byte-for-byte compatible and neither can silently drop
 // fields written by the other.
@@ -41,7 +41,7 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 	IsDefault bool `json:"is_default,omitempty"`
 
 	// Delegation is the per-workspace delegation graph (M5): the directed edges
-	// that authorise who-delegates-to-whom on this workspace. This is the
+	// that authorize who-delegates-to-whom on this workspace. This is the
 	// editable source of truth surfaced in the workspace Team tab. nil/empty
 	// means no delegation configured. The per-agent delegation_policy remains
 	// the enforcement cap; this graph is what the UI and update_workspace edit.

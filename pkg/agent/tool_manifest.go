@@ -48,7 +48,12 @@ type infraToolGetter interface {
 // stripped from the SENT defs on the non-compressed path in runTurn, so its
 // allow verdict is moot and surfacing nothing to the model). agentTools==nil
 // is still a no-op (nothing to look the tool up from).
-func ensureInfraToolsExecutable(compressed bool, agentTools infraToolGetter, policyFiltered []tools.Tool, policyMap map[string]string) []tools.Tool {
+func ensureInfraToolsExecutable(
+	compressed bool,
+	agentTools infraToolGetter,
+	policyFiltered []tools.Tool,
+	policyMap map[string]string,
+) []tools.Tool {
 	if agentTools == nil {
 		return policyFiltered
 	}

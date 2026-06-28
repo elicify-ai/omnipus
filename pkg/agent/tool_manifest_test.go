@@ -493,7 +493,7 @@ func TestReachabilityInvariant_AllCoreAgents(t *testing.T) {
 	defer al.Close()
 
 	for _, agentID := range []string{"mia", "jim", "ava", "ray"} {
-		agentID := agentID // capture
+		// capture
 		t.Run(agentID, func(t *testing.T) {
 			agentInst, ok := al.registry.GetAgent(agentID)
 			require.True(t, ok, "agent %q must be in registry", agentID)
@@ -527,10 +527,20 @@ func TestReachabilityInvariant_AllCoreAgents(t *testing.T) {
 					lazyCount++
 				}
 			}
-			require.Greater(t, fullCount, 0,
-				"agent %q: must have ≥1 full-tier tool in policyFiltered — both tier branches must be exercised", agentID)
-			require.Greater(t, lazyCount, 0,
-				"agent %q: must have ≥1 lazy-tier tool in policyFiltered — both tier branches must be exercised", agentID)
+			require.Greater(
+				t,
+				fullCount,
+				0,
+				"agent %q: must have ≥1 full-tier tool in policyFiltered — both tier branches must be exercised",
+				agentID,
+			)
+			require.Greater(
+				t,
+				lazyCount,
+				0,
+				"agent %q: must have ≥1 lazy-tier tool in policyFiltered — both tier branches must be exercised",
+				agentID,
+			)
 
 			for _, tool := range policyFiltered {
 				name := tool.Name()
@@ -746,8 +756,12 @@ func TestSessionID_NoTranscript_LoadedToolsVisible(t *testing.T) {
 	for _, d := range defs {
 		defNames[d.Function.Name] = true
 	}
-	assert.True(t, defNames[lazyName],
-		"FIX2: lazy tool %q must appear in compressed defs when loaded via session-key bucket (no transcript)", lazyName)
+	assert.True(
+		t,
+		defNames[lazyName],
+		"FIX2: lazy tool %q must appear in compressed defs when loaded via session-key bucket (no transcript)",
+		lazyName,
+	)
 
 	// Reader: buildToolManifestNote must NOT list the loaded tool (it's loaded, not pending).
 	note := al.buildToolManifestNote(ts, policyFiltered)
@@ -814,8 +828,12 @@ func TestMarkLoaded_UnregisteredNameRejected(t *testing.T) {
 	ctx := tools.WithAgentID(context.Background(), "jim")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-fix1-roundtrip")
 	result := tt.Execute(ctx, map[string]any{"names": []any{"nonexistent_phantom_xyz"}})
-	assert.True(t, result.IsError,
-		"nonexistent_phantom_xyz must be rejected by load_tool{names:['nonexistent_phantom_xyz']}; got: %s", result.ForLLM)
+	assert.True(
+		t,
+		result.IsError,
+		"nonexistent_phantom_xyz must be rejected by load_tool{names:['nonexistent_phantom_xyz']}; got: %s",
+		result.ForLLM,
+	)
 
 	// Confirm the phantom name is NOT in the loaded set.
 	loadedAfter := al.sessionLoadedTools("sess-fix1-roundtrip")
@@ -1058,8 +1076,12 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 	for _, d := range defsAfter {
 		defNamesAfter[d.Function.Name] = true
 	}
-	assert.True(t, defNamesAfter[lazyName],
-		"load→callable round-trip: lazy tool %q must be in compressed defs after load_tool{names:[...]}.Execute", lazyName)
+	assert.True(
+		t,
+		defNamesAfter[lazyName],
+		"load→callable round-trip: lazy tool %q must be in compressed defs after load_tool{names:[...]}.Execute",
+		lazyName,
+	)
 }
 
 // TestInfraToolsExecutable_DenyDefaultAgent is the regression test for the bug
@@ -1079,7 +1101,11 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 			require.True(t, ok)
 
 			allTools := agentInst.Tools.GetAll()
-			policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, agentInst.AgentType, agentInst.LoadToolPolicy())
+			policyFiltered, policyMap := tools.FilterToolsByPolicy(
+				allTools,
+				agentInst.AgentType,
+				agentInst.LoadToolPolicy(),
+			)
 
 			// Post-unification (#438): the single authoritative resolver
 			// (tools.EffectiveToolPolicy via FilterToolsByPolicy) force-allows infra
@@ -1093,8 +1119,15 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 			policyFiltered = ensureInfraToolsExecutable(true, agentInst.Tools, policyFiltered, policyMap)
 
 			// `load_tool` is authorized as "allow" in the exec snapshot.
-			require.Equal(t, "allow", policyMap["load_tool"],
-				"agent %q: `load_tool` must be allow in the exec policy snapshot (rawAllowed=%v rawVerdict=%q)", agentID, rawAllowed, rawVerdict)
+			require.Equal(
+				t,
+				"allow",
+				policyMap["load_tool"],
+				"agent %q: `load_tool` must be allow in the exec policy snapshot (rawAllowed=%v rawVerdict=%q)",
+				agentID,
+				rawAllowed,
+				rawVerdict,
+			)
 			require.Contains(t, toolNameSet(policyFiltered), "load_tool",
 				"agent %q: `load_tool` must be in the sent defs surface", agentID)
 
@@ -1640,6 +1673,7 @@ func (f *fakeNavigateTool) Name() string { return "navigate" }
 func (f *fakeNavigateTool) Description() string {
 	return "Navigate the UI to a named view (stub for manifest tier test)."
 }
+
 func (f *fakeNavigateTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
@@ -1705,7 +1739,6 @@ func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.agentID, func(t *testing.T) {
 			agentInst, ok := al.registry.GetAgent(tc.agentID)
 			require.True(t, ok, "agent %q must be in registry", tc.agentID)
@@ -1973,7 +2006,11 @@ func TestLoadTool_UncompressedDefs_LoadToolNotSentToModel(t *testing.T) {
 			require.True(t, ok)
 
 			allTools := agentInst.Tools.GetAll()
-			policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, agentInst.AgentType, agentInst.LoadToolPolicy())
+			policyFiltered, policyMap := tools.FilterToolsByPolicy(
+				allTools,
+				agentInst.AgentType,
+				agentInst.LoadToolPolicy(),
+			)
 
 			// Unified resolver keeps load_tool in the filtered slice (force-allow)...
 			require.Equal(t, "allow", policyMap["load_tool"],

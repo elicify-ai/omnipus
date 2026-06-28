@@ -49,7 +49,6 @@ func TestSeedWorker(t *testing.T) {
 	require.NotNil(t, worker.Subagents.Executor, "worker must carry an executor (Spec-4 field)")
 	assert.Equal(t, config.ExecutorKindNative, worker.Subagents.Executor.EffectiveKind(),
 		"the seeded general-purpose worker runs native")
-
 }
 
 // TestWorkerNotCoreAgent verifies the worker is classified as its own tier and is
