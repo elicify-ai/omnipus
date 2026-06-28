@@ -51,6 +51,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchWorkspaceInstructions: vi.fn(),
     updateWorkspaceInstructions: vi.fn(),
+    updateWorkspace: vi.fn(),
   }
 })
 
@@ -73,6 +74,13 @@ const mockWorkspace: Workspace = {
   core_team: [],
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
+}
+
+const mockDefaultWorkspace: Workspace = {
+  ...mockWorkspace,
+  id: 'ws-default-001',
+  name: 'My Workspace',
+  is_default: true,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -241,6 +249,57 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
 
     await waitFor(() => {
       expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(WORKSPACE_ID, '')
+    })
+  })
+})
+
+describe('WorkspaceSettingsTab — Archive / Delete protection for default workspace', () => {
+  /**
+   * Test 5 — Default workspace: Archive button is hidden and explanatory text shown.
+   * When is_default=true and the workspace is active, the Archive button must not
+   * render, and the "cannot be archived or deleted" message must appear.
+   */
+  it('hides the Archive button and shows explanatory text when workspace is default', async () => {
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <WorkspaceSettingsTab workspace={mockDefaultWorkspace} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      // Archive button must be absent.
+      expect(screen.queryByRole('button', { name: /archive workspace/i })).not.toBeInTheDocument()
+      // Delete button must be absent.
+      expect(screen.queryByRole('button', { name: /delete workspace/i })).not.toBeInTheDocument()
+      // Explanatory message must be visible.
+      expect(
+        screen.getByText(/the default workspace cannot be archived or deleted/i),
+      ).toBeInTheDocument()
+    })
+  })
+
+  /**
+   * Test 6 — Non-default workspace: Archive button is enabled.
+   * When is_default=false and the workspace is active, the Archive button must
+   * render and be enabled (not disabled), and no explanatory text must appear.
+   */
+  it('shows the Archive button and no explanatory text when workspace is not default', async () => {
+    vi.mocked(api.updateWorkspace).mockResolvedValue(mockWorkspace)
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <WorkspaceSettingsTab workspace={mockWorkspace} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      const archiveBtn = screen.getByRole('button', { name: /archive workspace/i })
+      expect(archiveBtn).toBeInTheDocument()
+      expect(archiveBtn).not.toBeDisabled()
+      // No protection message for non-default workspaces.
+      expect(
+        screen.queryByText(/cannot be archived or deleted/i),
+      ).not.toBeInTheDocument()
     })
   })
 })

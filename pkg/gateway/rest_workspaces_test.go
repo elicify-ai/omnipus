@@ -6,6 +6,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -614,6 +615,87 @@ func TestHandleWorkspaces_InboxNotDeletable(t *testing.T) {
 	api.HandleWorkspaces(wGet, rGet)
 	assert.Equal(t, http.StatusOK, wGet.Code,
 		"GET /workspaces/{inbox-id} after failed delete must still return 200")
+}
+
+// TestHandleWorkspaces_DefaultNotArchivable verifies that PUT /api/v1/workspaces/{id}
+// with status=archived is rejected with 409 for the default workspace, and that
+// archiving a non-default workspace still succeeds (200).
+// BDD: Given a default workspace with is_default=true,
+// When PUT /api/v1/workspaces/{id} sets status="archived",
+// Then 409 Conflict is returned and the workspace remains active.
+// And: Given a non-default workspace,
+// When PUT /api/v1/workspaces/{id} sets status="archived",
+// Then 200 OK is returned and the workspace is archived.
+func TestHandleWorkspaces_DefaultNotArchivable(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	require.NoError(t, ensureDefaultWorkspace(api.homePath, "", nil))
+
+	// List to find the default workspace ID.
+	wList := httptest.NewRecorder()
+	rList := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+	rList.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(wList, rList)
+	require.Equal(t, http.StatusOK, wList.Code)
+	var workspaces []gen.Workspace
+	require.NoError(t, json.Unmarshal(wList.Body.Bytes(), &workspaces))
+
+	var defaultID string
+	for _, ws := range workspaces {
+		if ws.IsDefault != nil && *ws.IsDefault {
+			defaultID = ws.Id
+		}
+	}
+	require.NotEmpty(t, defaultID, "must find default workspace in the list")
+
+	// Attempt to archive the default workspace → 409.
+	archived := gen.WorkspaceUpdateRequestStatusArchived
+	bodyBytes, err := json.Marshal(gen.WorkspaceUpdateRequest{Status: &archived})
+	require.NoError(t, err)
+	wPut := httptest.NewRecorder()
+	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+defaultID, bytes.NewReader(bodyBytes))
+	rPut.Header.Set("Content-Type", "application/json")
+	rPut.URL.Path = "/api/v1/workspaces/" + defaultID
+	api.HandleWorkspaces(wPut, rPut)
+	assert.Equal(t, http.StatusConflict, wPut.Code,
+		"PUT status=archived on the default workspace must return 409; body=%s", wPut.Body.String())
+
+	// Verify default workspace is still active.
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+defaultID, nil)
+	rGet.URL.Path = "/api/v1/workspaces/" + defaultID
+	api.HandleWorkspaces(wGet, rGet)
+	require.Equal(t, http.StatusOK, wGet.Code)
+	var still gen.Workspace
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &still))
+	assert.Equal(t, gen.WorkspaceStatusActive, still.Status,
+		"default workspace must still be active after rejected archive attempt")
+
+	// Create a non-default workspace.
+	createBody, err := json.Marshal(gen.WorkspaceCreateRequest{Name: "Non-Default"})
+	require.NoError(t, err)
+	wCreate := httptest.NewRecorder()
+	rCreate := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", bytes.NewReader(createBody))
+	rCreate.Header.Set("Content-Type", "application/json")
+	rCreate.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(wCreate, rCreate)
+	require.Equal(t, http.StatusCreated, wCreate.Code)
+	var created gen.Workspace
+	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &created))
+
+	// Archive the non-default workspace → 200.
+	bodyBytes2, err := json.Marshal(gen.WorkspaceUpdateRequest{Status: &archived})
+	require.NoError(t, err)
+	wPut2 := httptest.NewRecorder()
+	rPut2 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id, bytes.NewReader(bodyBytes2))
+	rPut2.Header.Set("Content-Type", "application/json")
+	rPut2.URL.Path = "/api/v1/workspaces/" + created.Id
+	api.HandleWorkspaces(wPut2, rPut2)
+	assert.Equal(t, http.StatusOK, wPut2.Code,
+		"PUT status=archived on a non-default workspace must return 200; body=%s", wPut2.Body.String())
+	var updatedWS gen.Workspace
+	require.NoError(t, json.Unmarshal(wPut2.Body.Bytes(), &updatedWS))
+	assert.Equal(t, gen.WorkspaceStatusArchived, updatedWS.Status,
+		"non-default workspace must be archived after PUT status=archived")
 }
 
 // ---------------------------------------------------------------------------
