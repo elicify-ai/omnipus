@@ -663,6 +663,12 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 
 	// FR-1.9: no access gate — owner is attribution only.
 
+	// Default workspace cannot be archived (mirrors the delete-protection guard below).
+	if ws.IsDefault && req.Status != nil && *req.Status == gen.WorkspaceUpdateRequestStatusArchived {
+		jsonErr(w, http.StatusConflict, "cannot archive the default workspace")
+		return
+	}
+
 	// Apply partial update (merge semantics) — track whether anything changed.
 	changed := false
 	if req.Name != nil && *req.Name != ws.Name {

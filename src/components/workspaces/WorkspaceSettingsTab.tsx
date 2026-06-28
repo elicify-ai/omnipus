@@ -293,16 +293,18 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
             Manage
           </span>
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => archiveMutation.mutate()}
-              disabled={archiveMutation.isPending}
-              className="gap-1.5"
-            >
-              {isArchived ? <ArrowCounterClockwise size={14} /> : <Archive size={14} />}
-              {isArchived ? 'Restore workspace' : 'Archive workspace'}
-            </Button>
+            {(!isDefault || isArchived) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => archiveMutation.mutate()}
+                disabled={archiveMutation.isPending}
+                className="gap-1.5"
+              >
+                {isArchived ? <ArrowCounterClockwise size={14} /> : <Archive size={14} />}
+                {isArchived ? 'Restore workspace' : 'Archive workspace'}
+              </Button>
+            )}
 
             {!isDefault && (
               <Button
@@ -318,7 +320,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
           </div>
           {isDefault && (
             <span className="text-xs text-[var(--color-muted)]">
-              The default workspace cannot be deleted.
+              The default workspace cannot be archived or deleted.
             </span>
           )}
         </div>
