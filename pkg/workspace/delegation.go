@@ -13,6 +13,36 @@ import (
 	"strings"
 )
 
+// DelegationMode is the typed name of a single delegation mode on an edge. It is
+// a string type (NOT a struct), so on the wire and on disk it marshals as a plain
+// JSON string — `["await","task"]` — exactly as the former []string did. Making it
+// a named type (instead of a bare string) eliminates primitive obsession: the
+// valid set is closed by Valid() and the constants below, so a reader can no
+// longer typo a mode into existence or accept an arbitrary string.
+//
+// These constants MUST stay in lock-step with config.DelegationMode{Await,
+// Background,Task} (pkg/config). They are duplicated here as bare string literals
+// — NOT imported from pkg/config — deliberately: pkg/workspace is dependency-free
+// of pkg/config to avoid an import cycle (pkg/agent imports pkg/workspace, and
+// pkg/config is imported by both). A drift between these and the config constants
+// is caught by TestDelegationEdgeValidate_ModesMatchConfig in pkg/gateway (which
+// CAN import both), so this is a single, test-pinned source of truth at the edge
+// layer.
+type DelegationMode string
+
+const (
+	ModeAwait      DelegationMode = "await"
+	ModeBackground DelegationMode = "background"
+	ModeTask       DelegationMode = "task"
+)
+
+// Valid reports whether m is one of the closed set of delegation modes. The
+// per-edge validator and every mode-membership check route through this single
+// authority, so an unknown mode can never be persisted or trusted at runtime.
+func (m DelegationMode) Valid() bool {
+	return m == ModeAwait || m == ModeBackground || m == ModeTask
+}
+
 // DelegationEdge mirrors a single directed delegation edge stored in
 // workspaces/<id>.json. It is the dependency-free read view of the gateway's
 // storedDelegationEdge (same JSON tags), so non-gateway packages (pkg/agent)
@@ -24,28 +54,23 @@ import (
 //     this workspace. No edge ⇒ delegation is DENIED (deny-by-default).
 //   - Modes: empty/absent ⇒ ALL delegation modes (await|background|task) are
 //     allowed for this edge. Non-empty ⇒ only the listed modes are allowed.
+//     Modes is []DelegationMode (a string type), so json:"modes" still
+//     marshals/unmarshals as a plain ["await",...] string array — the on-disk
+//     workspace JSON and the generated wire type (which stays []string) are
+//     UNCHANGED by the typing.
 //   - Depth: nil/absent ⇒ inherit the global/per-turn depth cap. A non-nil
-//     value is the per-edge onward-delegation cap (0 ⇒ no onward delegation).
+//     value is the per-edge onward-delegation cap. DEPTH INVARIANT (the single
+//     authority, mirrored at the runtime gate in pkg/agent's
+//     enforceEdgeModeAndDepth): depth <= 0 ⇒ this edge grants NO onward
+//     delegation (the strictest bound — a negative value is never an "uncapped"
+//     signal and must fail closed); depth > 0 ⇒ onward delegation is capped at
+//     that chain depth.
 type DelegationEdge struct {
-	FromAgent string   `json:"from_agent"`
-	ToAgent   string   `json:"to_agent"`
-	Modes     []string `json:"modes,omitempty"`
-	Depth     *int     `json:"depth,omitempty"`
+	FromAgent string           `json:"from_agent"`
+	ToAgent   string           `json:"to_agent"`
+	Modes     []DelegationMode `json:"modes,omitempty"`
+	Depth     *int             `json:"depth,omitempty"`
 }
-
-// Canonical delegation mode names. These MUST stay in lock-step with
-// config.DelegationMode{Await,Background,Task} (pkg/config). They are duplicated
-// here as bare string literals — NOT imported from pkg/config — deliberately:
-// pkg/workspace is dependency-free of pkg/config to avoid an import cycle
-// (pkg/agent imports pkg/workspace, pkg/config is imported by both). A drift
-// between these and the config constants would be caught by
-// TestDelegationEdgeValidate_ModesMatchConfig in pkg/gateway (which CAN import
-// both), so this is a single, test-pinned source of truth at the edge layer.
-const (
-	delegationModeAwait      = "await"
-	delegationModeBackground = "background"
-	delegationModeTask       = "task"
-)
 
 // Validate enforces the per-edge invariants for a single delegation edge. It is
 // the SHARED authority for edge well-formedness across every write path (the
@@ -87,9 +112,7 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 		return fmt.Errorf("delegation edge to_agent %s is not a member of the workspace team", to)
 	}
 	for _, m := range e.Modes {
-		switch m {
-		case delegationModeAwait, delegationModeBackground, delegationModeTask:
-		default:
+		if !m.Valid() {
 			return fmt.Errorf("delegation edge mode %s is invalid (valid: await, background, task)", m)
 		}
 	}
@@ -102,6 +125,40 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 		}
 	}
 	return nil
+}
+
+// TeamSet computes the workspace team-membership set against which a delegation
+// edge's endpoints are validated: the union of the workspace core_team and the
+// endpoints of the workspace's EXISTING (already-stored) delegation edges, each
+// trimmed of surrounding whitespace and with empties dropped. It is the SINGLE
+// canonical derivation of that set, shared by every write path (the gateway PUT
+// handler's workspaceTeamSet wrapper AND the update_workspace tool), so the team
+// argument fed to DelegationEdge.Validate has exactly one definition and the two
+// call sites can no longer diverge (they previously differed on whitespace
+// trimming).
+//
+// Semantics: an edge write may rewire edges AMONG team members but may NOT
+// silently introduce a brand-new agent that is neither in core_team nor already
+// an endpoint — that would expand the team as a side effect of an edge write,
+// which the WorkspaceDelegationEdge schema forbids. A nil/empty inputs yield an
+// empty (non-nil) set ⇒ deny-by-default at the validator (every endpoint is
+// off-team).
+func TeamSet(coreTeam []string, edges []DelegationEdge) map[string]bool {
+	team := make(map[string]bool, len(coreTeam)+2*len(edges))
+	for _, id := range coreTeam {
+		if id = strings.TrimSpace(id); id != "" {
+			team[id] = true
+		}
+	}
+	for _, e := range edges {
+		if f := strings.TrimSpace(e.FromAgent); f != "" {
+			team[f] = true
+		}
+		if t := strings.TrimSpace(e.ToAgent); t != "" {
+			team[t] = true
+		}
+	}
+	return team
 }
 
 // delegationRecord is the minimal subset of the on-disk workspace JSON that

@@ -27,7 +27,7 @@ func newTestTaskExecutor(t *testing.T) (*TaskExecutor, *task.Store) {
 	te := &TaskExecutor{
 		agentLoop:     nil, // not needed for orchestrator/store logic
 		store:         store,
-		running:       make(map[string]context.CancelFunc),
+		running:       make(map[string]*taskSlot),
 		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
 		dispatchSema:  newDispatchSemaphore(4),
 	}
@@ -397,7 +397,7 @@ func TestDispatchSema_TaskExecutor_ExecuteTask_SemaRejection(t *testing.T) {
 	te := &TaskExecutor{
 		agentLoop:     nil,
 		store:         store,
-		running:       make(map[string]context.CancelFunc),
+		running:       make(map[string]*taskSlot),
 		maxConcurrent: 5,
 		dispatchSema:  newDispatchSemaphore(1),
 	}

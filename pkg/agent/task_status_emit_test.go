@@ -5,7 +5,6 @@
 package agent
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -24,7 +23,7 @@ func newEmitTestExecutor(t *testing.T) (*TaskExecutor, *task.Store, *AgentLoop) 
 	te := &TaskExecutor{
 		agentLoop:     al,
 		store:         store,
-		running:       make(map[string]context.CancelFunc),
+		running:       make(map[string]*taskSlot),
 		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
 		dispatchSema:  newDispatchSemaphore(4),
 	}
@@ -184,7 +183,7 @@ func TestTaskStatusEmit_NilAgentLoopSkipped(t *testing.T) {
 	te := &TaskExecutor{
 		agentLoop:     nil,
 		store:         store,
-		running:       make(map[string]context.CancelFunc),
+		running:       make(map[string]*taskSlot),
 		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
 		dispatchSema:  newDispatchSemaphore(4),
 	}

@@ -29,6 +29,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,6 +41,62 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
+
+// perCallRecorder wraps a providers.LLMProvider and records the messages
+// snapshot passed to each Chat invocation in order. This allows tests to
+// assert history validity at EVERY call, not just the final one, so a transient
+// orphan at call N that gets repaired before call N+1 cannot escape detection.
+type perCallRecorder struct {
+	mu       sync.Mutex
+	inner    providers.LLMProvider
+	callMsgs [][]providers.Message // index 0 = first Chat call, etc.
+}
+
+func newPerCallRecorder(inner providers.LLMProvider) *perCallRecorder {
+	return &perCallRecorder{inner: inner}
+}
+
+// Chat records the messages for this invocation, then delegates to the inner provider.
+// Implements providers.LLMProvider.
+func (r *perCallRecorder) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	options map[string]any,
+) (*providers.LLMResponse, error) {
+	snapshot := make([]providers.Message, len(messages))
+	copy(snapshot, messages)
+	r.mu.Lock()
+	r.callMsgs = append(r.callMsgs, snapshot)
+	r.mu.Unlock()
+	return r.inner.Chat(ctx, messages, tools, model, options)
+}
+
+// GetDefaultModel delegates to the inner provider.
+func (r *perCallRecorder) GetDefaultModel() string {
+	return r.inner.GetDefaultModel()
+}
+
+// MessagesForCall returns the messages snapshot for call number n (0-indexed).
+// Returns nil if n is out of range.
+func (r *perCallRecorder) MessagesForCall(n int) []providers.Message {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if n < 0 || n >= len(r.callMsgs) {
+		return nil
+	}
+	cp := make([]providers.Message, len(r.callMsgs[n]))
+	copy(cp, r.callMsgs[n])
+	return cp
+}
+
+// CallCount returns the number of Chat calls recorded so far.
+func (r *perCallRecorder) CallCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.callMsgs)
+}
 
 // assertNoOrphanToolResults verifies that every role="tool" message in msgs has
 // a ToolCallID that was declared by a preceding assistant's ToolCalls slice.
@@ -134,14 +191,20 @@ func TestLoadTool_EndToEndMessageHistoryIntegrity(t *testing.T) {
 
 	// ScenarioProvider: three steps as described above.
 	// WithToolCall generates the ToolCall ID as "<name>-0".
-	provider := testutil.NewScenario().
+	scenario := testutil.NewScenario().
 		WithToolCall("load_tool", `{"names":["find_skills"]}`).
 		WithToolCall(lazyTool, `{"query":"test"}`).
 		WithText("Done. Here are the skills I found.")
 
+	// Wrap the scenario provider so we capture per-call message snapshots.
+	// This lets us assert history validity at call #2 independently of the
+	// final call — a transient orphan at call #2 that gets repaired before
+	// call #3 would otherwise escape the assertion.
+	recorder := newPerCallRecorder(scenario)
+
 	cfg := newE2ECfg(t, workspaceDir)
 	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	al := mustNewAgentLoop(t, cfg, msgBus, recorder)
 	defer al.Close()
 
 	ctx := context.Background()
@@ -154,12 +217,35 @@ func TestLoadTool_EndToEndMessageHistoryIntegrity(t *testing.T) {
 	require.NoError(t, err,
 		"ProcessDirectWithChannel must not error; reply=%q", reply)
 
-	// ── Inspect the message history passed to the FINAL LLM call ────────────
+	// ── Sanity checks — verify all scripted steps were consumed ─────────────
+
+	// All three scripted steps must have been consumed.
+	assert.Equal(t, 0, scenario.Remaining(),
+		"all 3 scripted steps must be consumed; remaining=%d", scenario.Remaining())
+
+	// Exactly 3 LLM calls: one per scripted step.
+	assert.Equal(t, 3, recorder.CallCount(),
+		"expected exactly 3 LLM calls (load_tool step + find_skills step + conclusion step)")
+
+	// ── Assert history validity at the SECOND LLM call (call index 1) ───────
+	// Call #2 receives the history after load_tool executed — this is the
+	// critical moment where an orphan tool-result could appear if the loop
+	// inserts a tool-result without a matching assistant ToolCall entry.
+	// Asserting here means a transient orphan cannot hide behind a subsequent
+	// normalization pass before call #3.
+	call2Messages := recorder.MessagesForCall(1)
+	require.NotNil(t, call2Messages,
+		"recorder must have captured messages for the 2nd LLM call (index 1)")
+
+	assertNoOrphanToolResults(t, "2nd LLM call (after load_tool)", call2Messages)
+	assertNormalizationIsNoop(t, "2nd LLM call (after load_tool)", call2Messages)
+
+	// ── Inspect the message history passed to the FINAL (3rd) LLM call ──────
 	// The final call's history contains the full accumulated messages including
 	// both tool-call/tool-result pairs — the most complete view of correctness.
-	finalMessages := provider.LastMessages()
-	require.NotEmpty(t, finalMessages,
-		"ScenarioProvider must have been called at least once")
+	finalMessages := recorder.MessagesForCall(2)
+	require.NotNil(t, finalMessages,
+		"recorder must have captured messages for the final (3rd) LLM call (index 2)")
 
 	// Structural invariant: no role=tool message may be an orphan.
 	assertNoOrphanToolResults(t, "final LLM call", finalMessages)
@@ -167,15 +253,7 @@ func TestLoadTool_EndToEndMessageHistoryIntegrity(t *testing.T) {
 	// Normalization-is-noop invariant: the history was valid before normalization.
 	assertNormalizationIsNoop(t, "final LLM call", finalMessages)
 
-	// ── Sanity checks ────────────────────────────────────────────────────────
-
-	// All three scripted steps must have been consumed.
-	assert.Equal(t, 0, provider.Remaining(),
-		"all 3 scripted steps must be consumed; remaining=%d", provider.Remaining())
-
-	// Exactly 3 LLM calls: one per scripted step.
-	assert.Equal(t, 3, provider.CallCount(),
-		"expected exactly 3 LLM calls (load_tool step + find_skills step + conclusion step)")
+	// ── Tool-presence sanity checks ──────────────────────────────────────────
 
 	// The load_tool call must appear in the final history.
 	foundLoadTool := false

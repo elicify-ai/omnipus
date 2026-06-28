@@ -2089,7 +2089,9 @@ func enforceEdgeModeAndDepth(
 	mode config.DelegationMode,
 	globalDepthCap int,
 ) *tools.DelegationDenial {
-	// Modes.
+	// Modes. edge.Modes is []workspace.DelegationMode (a string type); compare via
+	// a string cast to the request's config.DelegationMode. Empty edge.Modes ⇒ all
+	// modes allowed (handled by the len > 0 guard).
 	if len(edge.Modes) > 0 {
 		allowed := false
 		for _, m := range edge.Modes {
@@ -2114,7 +2116,10 @@ func enforceEdgeModeAndDepth(
 		}
 	}
 
-	// Depth.
+	// Depth. This is the runtime half of the DEPTH INVARIANT documented once on
+	// workspace.DelegationEdge (the single authority): depth <= 0 ⇒ this edge
+	// grants NO onward delegation; depth > 0 ⇒ onward delegation is capped at that
+	// chain depth.
 	//
 	// A per-edge cap of 0 means "no onward delegation" — the strictest possible
 	// bound. A NEGATIVE cap is never a valid "uncapped" signal: an edge that

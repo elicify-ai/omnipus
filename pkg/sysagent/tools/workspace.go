@@ -344,27 +344,15 @@ func workspaceDelegationDepthCeiling(d *Deps) int {
 }
 
 // workspaceDelegationTeamSet computes the workspace team membership set used to
-// validate a delegation edge's endpoints, mirroring gateway.workspaceTeamSet: the
-// union of the workspace core_team and the endpoints of the workspace's existing
-// delegation edges. This is the SAME team semantics the gateway PUT handler uses,
-// so the tool's defensive validation neither over- nor under-restricts relative to
-// the API write path.
+// validate a delegation edge's endpoints, delegating to the canonical
+// workspace.TeamSet — the SINGLE derivation shared with the gateway PUT handler
+// (gateway.workspaceTeamSet is the same thin adapter). Routing both call sites
+// through one helper guarantees the tool's defensive validation neither over- nor
+// under-restricts relative to the API write path; previously the two hand-rolled
+// copies diverged on whitespace trimming (this one did NOT trim), which TeamSet
+// now fixes uniformly.
 func workspaceDelegationTeamSet(w workspace) map[string]bool {
-	team := make(map[string]bool, len(w.CoreTeam)+2*len(w.Delegation))
-	for _, id := range w.CoreTeam {
-		if id != "" {
-			team[id] = true
-		}
-	}
-	for _, e := range w.Delegation {
-		if e.FromAgent != "" {
-			team[e.FromAgent] = true
-		}
-		if e.ToAgent != "" {
-			team[e.ToAgent] = true
-		}
-	}
-	return team
+	return workspacepkg.TeamSet(w.CoreTeam, w.Delegation)
 }
 
 // ---- system.workspace.delete ----

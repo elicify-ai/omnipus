@@ -286,7 +286,7 @@ func TestDelegationEdgeValidate_RejectionCases(t *testing.T) {
 		},
 		{
 			name:    "invalid mode",
-			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []string{"telepathy"}},
+			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []workspace.DelegationMode{"telepathy"}},
 			wantErr: "is invalid",
 		},
 		{
@@ -301,7 +301,7 @@ func TestDelegationEdgeValidate_RejectionCases(t *testing.T) {
 		},
 		{
 			name:    "valid edge accepted",
-			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []string{"task", "background"}, Depth: intPtrGW(2)},
+			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []workspace.DelegationMode{"task", "background"}, Depth: intPtrGW(2)},
 			wantErr: "",
 		},
 		{
@@ -346,7 +346,7 @@ func TestDelegationEdgeValidate_MatchesHandlerWireMessages(t *testing.T) {
 		storedDelegationEdge{FromAgent: "", ToAgent: ""}.Validate(team, ceiling),
 		"delegation edge from_agent and to_agent must not be empty")
 	assert.EqualError(t,
-		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []string{"telepathy"}}.Validate(team, ceiling),
+		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []workspace.DelegationMode{"telepathy"}}.Validate(team, ceiling),
 		"delegation edge mode telepathy is invalid (valid: await, background, task)")
 	assert.EqualError(t,
 		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Depth: intPtrGW(-1)}.Validate(team, ceiling),
@@ -382,7 +382,9 @@ func TestDelegationEdgeValidate_ModesMatchConfig(t *testing.T) {
 		edge := workspace.DelegationEdge{
 			FromAgent: "jim",
 			ToAgent:   "ava",
-			Modes:     []string{string(mode)},
+			// Cross-package equality: config.DelegationMode → workspace.DelegationMode
+			// (both string types) must be accepted verbatim by the typed validator.
+			Modes: []workspace.DelegationMode{workspace.DelegationMode(mode)},
 		}
 		assert.NoErrorf(t, edge.Validate(team, ceiling),
 			"config mode %q must be accepted by the workspace edge validator (literal drift?)",
@@ -395,12 +397,20 @@ func TestDelegationEdgeValidate_ModesMatchConfig(t *testing.T) {
 	bogus := workspace.DelegationEdge{
 		FromAgent: "jim",
 		ToAgent:   "ava",
-		Modes:     []string{"telepathy"},
+		Modes:     []workspace.DelegationMode{"telepathy"},
 	}
 	err := bogus.Validate(team, ceiling)
 	require.Error(t, err, "an unknown mode must be rejected")
 	assert.Contains(t, err.Error(), "is invalid",
 		"rejection must come from the mode-validation branch")
+
+	// Direct cross-package constant equality: the typed workspace.Mode* constants
+	// must equal the config.DelegationMode* string values. This pins the lock-step
+	// the comment in pkg/workspace/delegation.go promises — a rename of either set
+	// that breaks the string equality fails here, independent of Validate.
+	assert.Equal(t, string(config.DelegationModeAwait), string(workspace.ModeAwait))
+	assert.Equal(t, string(config.DelegationModeBackground), string(workspace.ModeBackground))
+	assert.Equal(t, string(config.DelegationModeTask), string(workspace.ModeTask))
 }
 
 // intPtrGW is a local *int helper for building delegation depth fields in the

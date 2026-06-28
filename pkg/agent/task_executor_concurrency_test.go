@@ -45,7 +45,7 @@ func TestStartTaskNow_NoConcurrentDoubleLaunch(t *testing.T) {
 	te := &TaskExecutor{
 		agentLoop:     al,
 		store:         store,
-		running:       make(map[string]context.CancelFunc),
+		running:       make(map[string]*taskSlot),
 		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
 		dispatchSema:  newDispatchSemaphore(2), // cap>1 so sema is not the bottleneck
 	}
@@ -187,7 +187,7 @@ func TestErrDispatchCapReached_IsDetectable(t *testing.T) {
 	te := &TaskExecutor{
 		agentLoop:    al,
 		store:        store,
-		running:      make(map[string]context.CancelFunc),
+		running:      make(map[string]*taskSlot),
 		dispatchSema: newDispatchSemaphore(1), // cap=1
 	}
 

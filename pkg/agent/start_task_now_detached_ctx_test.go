@@ -44,7 +44,7 @@ func newStartTaskNowWithRegistry(t *testing.T) (*TaskExecutor, *task.Store, *Age
 	te := &TaskExecutor{
 		agentLoop:     al,
 		store:         store,
-		running:       make(map[string]context.CancelFunc),
+		running:       make(map[string]*taskSlot),
 		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
 		dispatchSema:  newDispatchSemaphore(4),
 	}
@@ -186,12 +186,22 @@ func TestStartTaskNow_CancelViaRunningMap(t *testing.T) {
 	// Context must be alive before we cancel.
 	select {
 	case <-goroutineCtx.Done():
-		t.Fatal("goroutine context already canceled before Stop — unexpected")
+		t.Fatal("goroutine context already canceled before cancel — unexpected")
 	default:
 	}
 
-	// Cancel via the running map (the Stop path).
-	te.Stop()
+	// Cancel via the running map entry — the intended path for an explicit
+	// "cancel task" action. We retrieve the cancel function directly from
+	// te.running rather than through a Stop() method (which was removed because
+	// it had no production callers and would wrongly hard-cancel tasks that
+	// should drain gracefully).
+	te.mu.Lock()
+	slot, ok := te.running[tk.ID]
+	te.mu.Unlock()
+	if !ok || slot == nil || slot.cancel == nil {
+		t.Fatalf("te.running[%q] must hold a live slot with a non-nil cancel", tk.ID)
+	}
+	slot.cancel()
 	// Unblock the goroutine so it can exit cleanly.
 	close(holdGoroutine)
 
