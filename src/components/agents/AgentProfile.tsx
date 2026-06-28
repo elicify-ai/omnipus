@@ -7,7 +7,6 @@ import {
   CaretUp,
   UploadSimple,
   Info,
-  Plus,
   Sparkle,
   Star,
   Lightning,
@@ -52,21 +51,17 @@ import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader } from './AgentFormFields'
-import { SchedulesList } from '@/components/command-center/SchedulesList'
-import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
   updateAgent,
   deleteAgent,
   fetchProviders,
-  fetchAgentSessions,
   fetchActivity,
   fetchSkills,
   testAgentRunner,
   isWorker,
   type Agent,
-  type AgentSession,
   type ActivityEvent,
   type AgentToolsCfg,
   type SandboxProfile,
@@ -108,12 +103,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const { data: providers = [], isError: providersError } = useQuery({
     queryKey: ['providers'],
     queryFn: fetchProviders,
-  })
-
-  const { data: agentSessions = [], isError: sessionsError } = useQuery({
-    queryKey: ['agent-sessions', agentId],
-    queryFn: () => fetchAgentSessions(agentId as string),
-    enabled: agentId !== null,
   })
 
   const { data: allActivity = [], isError: activityError } = useQuery({
@@ -226,7 +215,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [steeringMode, setSteeringMode] = useState<'one-at-a-time' | 'queue-and-process'>('one-at-a-time')
   const [heartbeatEnabled, setHeartbeatEnabled] = useState(false)
   const [heartbeatInterval, setHeartbeatInterval] = useState(30)
-  const [creatingSchedule, setCreatingSchedule] = useState(false)
   // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
   // Opens an AlertDialog; the confirm mutation invalidates the list and
   // closes the slide-over. Locked agents do not render the trigger.
@@ -628,8 +616,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       </button>
     )
   }
-
-  const recentSessions = agentSessions.slice(0, 10)
 
   // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation. Mirrors the
   // pattern from SchedulesList (`doDelete`): the mutation invalidates
@@ -1649,41 +1635,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             </section>
           )}
 
-          {/* Sessions */}
-          <section className="space-y-3">
-            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Sessions</p>
-            {sessionsError ? (
-              <p className="text-sm text-[var(--color-error)]">Failed to load sessions</p>
-            ) : recentSessions.length > 0 ? (
-              <div className="space-y-1">
-                {recentSessions.map((s) => (
-                  <SessionRow key={s.id} session={s} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-[var(--color-muted)]">No sessions yet.</p>
-            )}
-          </section>
-
-          {/* Schedules — base-only. Workers are delegation-only labour
-              agents and never own a schedule. */}
-          {!isWorkerAgent && (
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Schedules</p>
-                <button
-                  type="button"
-                  onClick={() => setCreatingSchedule(true)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
-                >
-                  <Plus size={13} />
-                  New schedule
-                </button>
-              </div>
-              <SchedulesList agentId={resolvedAgentId} />
-            </section>
-          )}
-
           {/* Activity */}
           <section className="space-y-3">
             <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Activity</p>
@@ -1963,16 +1914,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* New schedule slide-over — owner pre-filled to this agent (#264) */}
-      {creatingSchedule && (
-        <ScheduleFormSheet
-          open={true}
-          defaultOwnerAgentId={resolvedAgentId}
-          onOpenChange={(open) => {
-            if (!open) setCreatingSchedule(false)
-          }}
-        />
-      )}
     </ProfileSheet>
   )
 }
@@ -2064,20 +2005,6 @@ function StatCard({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 text-center">
       <div className="font-headline font-bold text-base text-[var(--color-secondary)]">{value}</div>
       <div className="text-xs text-[var(--color-muted)] mt-0.5">{label}</div>
-    </div>
-  )
-}
-
-function SessionRow({ session }: { session: AgentSession }) {
-  const date = new Date(session.updated_at ?? session.created_at)
-  return (
-    <div className="flex items-center justify-between px-3 py-2 rounded-md hover:bg-[var(--color-surface-1)] transition-colors">
-      <span className="text-xs text-[var(--color-secondary)] truncate flex-1 min-w-0 mr-3">
-        {session.title || 'Untitled session'}
-      </span>
-      <span className="text-[10px] text-[var(--color-muted)] shrink-0">
-        {date.toLocaleDateString()}
-      </span>
     </div>
   )
 }
