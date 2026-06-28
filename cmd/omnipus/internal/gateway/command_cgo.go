@@ -31,8 +31,9 @@ import (
 // CGO_ENABLED=1 (i.e. when the real gateway is excluded by build constraints).
 func NewGatewayCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "gateway",
-		Short: "Start omnipus gateway (unavailable in CGO builds)",
+		Use:     "start",
+		Aliases: []string{"gateway", "g"},
+		Short:   "Start Omnipus (unavailable in CGO builds)",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			fmt.Fprintln(os.Stderr,
 				"Error: the gateway command is unavailable in CGO-enabled builds.\n"+
