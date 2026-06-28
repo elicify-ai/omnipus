@@ -26,22 +26,25 @@ var stopGracePeriod = 5 * time.Second
 // pollInterval is how often Stop polls for process death.
 var pollInterval = 100 * time.Millisecond
 
-// checkProcess returns (alive, isOmnipus).
+// checkProcess returns (alive, isOmnipus, identityErr).
 //
 // alive: the process exists and is in a running state (not zombie).
 // isOmnipus: best-effort check that the process name looks like an omnipus
-// binary.  On Linux we read /proc/<pid>/exe; on macOS and other POSIX systems
-// we fall back to checking /proc/<pid> existence or using kill(pid, 0).
-//
-// The name check is advisory: if we cannot read the process name (e.g. due to
-// permission) we conservatively assume the PID is ours so Stop will proceed.
+// binary. On Linux we read /proc/<pid>/exe; on macOS and other POSIX systems
+// we fall back to /proc/<pid>/comm or kill(pid, 0).
+// identityErr: non-nil when the identity CANNOT be determined at all (i.e.
+// we know the process is alive but cannot confirm whether it is ours). On
+// Unix this is set when resolveExeName fails; the conservative convention here
+// is to treat the error as "assume ours" (alive=true, isOmnipus=true, nil err)
+// because Unix has kill(pid,0) as a reliable liveness signal — if it's alive
+// and we can't read its name, it is most likely our own process.
 //
 // Zombie processes (State: Z in /proc/<pid>/status) are treated as dead:
 // they cannot serve traffic and the gateway PID file should be cleared.
-func checkProcess(pid int) (alive bool, isOmnipus bool) {
+func checkProcess(pid int) (alive bool, isOmnipus bool, identityErr error) {
 	// PID 0 is never a valid user-space process PID.
 	if pid <= 0 {
-		return false, false
+		return false, false, nil
 	}
 
 	// kill(pid, 0) is the canonical cross-platform POSIX existence check:
@@ -49,7 +52,7 @@ func checkProcess(pid int) (alive bool, isOmnipus bool) {
 	// have permission, or returns ESRCH if the process does not exist.
 	err := syscall.Kill(pid, 0)
 	if err == syscall.ESRCH {
-		return false, false
+		return false, false, nil
 	}
 	// Any error other than ESRCH (e.g. EPERM — process exists but we can't
 	// signal it) still means the process is alive.
@@ -58,21 +61,25 @@ func checkProcess(pid int) (alive bool, isOmnipus bool) {
 	// serve traffic; we treat it as dead so the PID file is cleared.
 	if isZombie(pid) {
 		slog.Debug("daemon: process is a zombie — treating as dead", "pid", pid)
-		return false, false
+		return false, false, nil
 	}
 
 	// Best-effort name check via /proc/<pid>/exe (Linux) or /proc/<pid>/comm.
 	// If neither is readable, we assume it is ours (conservative: avoids
-	// failing to stop our own gateway due to a /proc read error).
+	// failing to stop our own gateway due to a /proc read error). On Unix,
+	// kill(pid,0) success is already reliable proof that the process exists;
+	// a name-read failure is typically a transient permission issue on the
+	// /proc symlink, not evidence of a different process, so assuming "ours"
+	// is the safer choice (identityErr=nil signals this conservative assumption).
 	exeName, ok := resolveExeName(pid)
 	if !ok {
 		// Cannot determine the name; conservatively treat as omnipus so Stop
-		// proceeds rather than refusing to stop a running gateway.
-		return true, true
+		// proceeds rather than orphaning a running gateway.
+		return true, true, nil
 	}
 	base := strings.ToLower(filepath.Base(exeName))
 	isOmnipus = strings.Contains(base, "omnipus")
-	return true, isOmnipus
+	return true, isOmnipus, nil
 }
 
 // isZombie reports whether the process is in zombie state by reading
@@ -144,7 +151,7 @@ func spawnProcess(exe string, args []string, _ string) (int, error) {
 
 	cmd := exec.Command(exe, args...)
 	cmd.Env = childEnv
-	cmd.Stdin = nil // will be connected to /dev/null by Go runtime for Setpgid
+	cmd.Stdin = nil // Go runtime connects this to /dev/null unconditionally for background children
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true, // detach from parent process group
 	}

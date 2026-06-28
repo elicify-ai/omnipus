@@ -83,6 +83,10 @@ func printRosterAndUsage(w *os.File, roster []rosterLine) {
 // user types one of these, RunE prints a helpful message instead of the
 // confusing "unknown agent" error that would otherwise appear because the root
 // uses cobra.ArbitraryArgs (US-11/AC-1).
+//
+// Note: "stop" is intentionally NOT in this map — it is a real registered
+// subcommand. It is called out here only so nobody accidentally re-adds it as
+// a removed verb.
 var removedVerbs = map[string]bool{
 	"agent":   true,
 	"auth":    true,
@@ -91,8 +95,6 @@ var removedVerbs = map[string]bool{
 	"migrate": true,
 	"model":   true,
 	"skills":  true,
-	// "stop" is now a registered subcommand, not a removed verb; listed here
-	// only as documentation that it is reserved.
 }
 
 // autoStartPollTimeout is the maximum time to wait for the gateway to be ready
@@ -118,63 +120,102 @@ func hasNonInteractiveKeyMode(home string) bool {
 	return err == nil
 }
 
+// probeGatewayOnce tries one TCP connect + WS auth round-trip against addr.
+// It returns true when the gateway is ready to serve authenticated connections,
+// false otherwise. It is a guard-clause helper extracted from pollGatewayReady
+// to flatten nesting and enable unit testing of individual probe logic.
+func probeGatewayOnce(ctx context.Context, dialer *websocket.Dialer, addr, token string) bool {
+	// Try a TCP connect first to avoid the WS dialer's error noise on
+	// connection refused (expected during early startup).
+	tcpConn, tcpErr := net.DialTimeout("tcp", addr, 1*time.Second)
+	if tcpErr != nil {
+		return false
+	}
+	tcpConn.Close()
+
+	// TCP up — attempt WS auth round-trip.
+	wsURL := "ws://" + addr + "/api/v1/chat/ws"
+	conn, wsResp, wsErr := dialer.DialContext(ctx, wsURL, nil)
+	if wsResp != nil {
+		wsResp.Body.Close()
+	}
+	if wsErr != nil {
+		return false
+	}
+
+	// Send auth frame and read at least one frame back. A valid frame
+	// (of any type, including an error frame) proves the WS layer is up
+	// and auth is being processed. ErrKeyInvalid is fine here — the
+	// gateway is up; the caller will retry run.Run which will fail on its
+	// own auth path if the token is wrong.
+	authFrame := generated.AuthFrame{
+		Type:  string(generated.WsFrameTypeAuth),
+		Token: token,
+	}
+	authData, _ := json.Marshal(authFrame)
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	writeErr := conn.WriteMessage(websocket.TextMessage, authData)
+	if writeErr != nil {
+		conn.Close()
+		return false
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, _, readErr := conn.ReadMessage()
+	conn.Close()
+	if readErr == nil {
+		return true
+	}
+	// A close-error response (e.g. ClosePolicyViolation on bad token)
+	// still means the gateway is up and handling connections.
+	var closeErr *websocket.CloseError
+	return errors.As(readErr, &closeErr)
+}
+
 // pollGatewayReady polls until the gateway at addr accepts a full WebSocket
 // auth round-trip (TCP connect + WS upgrade + auth frame + any valid response
 // frame). This is stricter than /ready which goes green early before the auth
 // layer is up. It polls with a short interval and returns nil when the gateway
 // is fully accepting authenticated connections, or an error after timeout.
-func pollGatewayReady(ctx context.Context, addr, token string) error {
+//
+// spawnedPID is the PID returned by daemon.Spawn for the child we just
+// started. When non-zero, each poll iteration first checks whether the child
+// is still alive via daemon.Status; if the child has already exited (port
+// conflict, bad config, unlock failure) the poll aborts immediately with an
+// actionable error pointing at the gateway log rather than spinning the full
+// timeout.
+func pollGatewayReady(ctx context.Context, home, addr, token string, spawnedPID int) error {
 	ctx, cancel := context.WithTimeout(ctx, autoStartPollTimeout)
 	defer cancel()
 
 	const pollInterval = 500 * time.Millisecond
 
-	dialer := websocket.Dialer{HandshakeTimeout: 2 * time.Second}
+	dialer := &websocket.Dialer{HandshakeTimeout: 2 * time.Second}
 
 	for {
-		// Try a TCP connect first to avoid the WS dialer's error noise on
-		// connection refused (expected during early startup).
-		tcpConn, tcpErr := net.DialTimeout("tcp", addr, 1*time.Second)
-		if tcpErr == nil {
-			tcpConn.Close()
+		// If we know which PID was spawned, check it is still alive before
+		// spending time on the WS probe. A dead child means startup failed
+		// (port taken, bad config, unlock failure) and we should not wait
+		// out the full timeout.
+		if spawnedPID > 0 {
+			running, livePID, statusErr := daemon.Status(home)
+			if statusErr == nil && !running {
+				// Child is gone — the gateway failed to start. Point the
+				// operator at the log for the real error.
+				logPath := filepath.Join(home, "logs", "gateway_panic.log")
+				return fmt.Errorf(
+					"spawned gateway (pid %d) exited before becoming ready — "+
+						"check %s for details",
+					spawnedPID, logPath,
+				)
+			}
+			// If Status reports a different live PID, a new instance raced in;
+			// that is fine — keep probing the address.
+			_ = livePID
+		}
 
-			// TCP up — attempt WS auth round-trip.
-			wsURL := "ws://" + addr + "/api/v1/chat/ws"
-			conn, wsResp, wsErr := dialer.DialContext(ctx, wsURL, nil)
-			if wsResp != nil {
-				wsResp.Body.Close()
-			}
-			if wsErr == nil {
-				// Send auth frame and read at least one frame back. A valid frame
-				// (of any type, including an error frame) proves the WS layer is up
-				// and auth is being processed. ErrKeyInvalid is fine here — the
-				// gateway is up; the caller will retry run.Run which will fail on its
-				// own auth path if the token is wrong.
-				authFrame := generated.AuthFrame{
-					Type:  string(generated.WsFrameTypeAuth),
-					Token: token,
-				}
-				authData, _ := json.Marshal(authFrame)
-				_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-				writeErr := conn.WriteMessage(websocket.TextMessage, authData)
-				if writeErr == nil {
-					_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-					_, _, readErr := conn.ReadMessage()
-					conn.Close()
-					if readErr == nil {
-						// Got a response — gateway is ready.
-						return nil
-					}
-					// A close-error response (e.g. ClosePolicyViolation on bad token)
-					// still means the gateway is up and handling connections.
-					var closeErr *websocket.CloseError
-					if errors.As(readErr, &closeErr) {
-						return nil
-					}
-				} else {
-					conn.Close()
-				}
-			}
+		if probeGatewayOnce(ctx, dialer, addr, token) {
+			return nil
 		}
 
 		select {
@@ -183,6 +224,111 @@ func pollGatewayReady(ctx context.Context, addr, token string) error {
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// spawnFunc is the signature for injecting a spawn implementation in tests.
+// Returns the spawned PID and any error.
+type spawnFunc func(home string, args []string) (pid int, err error)
+
+// readyPollerFunc is the signature for injecting a ready-poller in tests.
+type readyPollerFunc func(ctx context.Context, home, addr, token string, spawnedPID int) error
+
+// statusFunc is the signature for injecting a daemon-status check in tests.
+// Matches daemon.Status(home) (running bool, pid int, err error).
+type statusFunc func(home string) (running bool, pid int, err error)
+
+// autoStartResult is the outcome of autoStartAndRetry, used to cleanly
+// separate "orchestration error (already printed, just exit)" from "retry
+// produced a run sentinel error (let the switch in RunE handle printing)".
+type autoStartResult struct {
+	// orchErr is set when the orchestration itself failed (no key, status
+	// lookup error, spawn error, poll timeout). The message has already been
+	// printed to stderr by autoStartAndRetry; the caller should os.Exit(1).
+	orchErr error
+	// runErr is set when orchestration succeeded but the retry run.Run call
+	// returned an error. The caller's sentinel switch should handle printing.
+	runErr error
+}
+
+// autoStartAndRetry is the auto-start orchestration seam (FR-016). It is
+// extracted from RunE so it can be tested without spawning real processes.
+//
+// Decision tree:
+//  1. Call keyCheck(home): if no non-interactive key mode → print guidance,
+//     return orchErr WITHOUT spawning.
+//  2. Call daemon.Status(home): if the gateway is already running → the dial
+//     error from run.Run was transient (not connection-refused); print a hint
+//     and return orchErr WITHOUT spawning.
+//  3. Spawn the gateway via daemon.Spawn(home, nil).
+//  4. Poll until ready via pollGatewayReady.
+//  5. Retry run.Run once; return its error as runErr.
+func autoStartAndRetry(
+	ctx context.Context,
+	home, addr, token string,
+	keyCheck func(string) bool,
+	opts run.Options,
+) autoStartResult {
+	return autoStartAndRetryWith(ctx, home, addr, token, keyCheck, opts,
+		daemon.Status, daemon.Spawn, pollGatewayReady)
+}
+
+// autoStartAndRetryWith is the fully-injectable version of autoStartAndRetry
+// used by tests to supply fake status, spawn, and poll implementations.
+func autoStartAndRetryWith(
+	ctx context.Context,
+	home, addr, token string,
+	keyCheck func(string) bool,
+	opts run.Options,
+	status statusFunc,
+	spawn spawnFunc,
+	poller readyPollerFunc,
+) autoStartResult {
+	// 1. Non-interactive key mode required to auto-start.
+	if !keyCheck(home) {
+		fmt.Fprintln(os.Stderr,
+			"no gateway running and no non-interactive key configured; run `omnipus start`")
+		return autoStartResult{orchErr: fmt.Errorf("no non-interactive key mode available")}
+	}
+
+	// 2. Check whether the gateway is actually running before spawning. If
+	// status reports it running, the ErrGatewayDown was a transient handshake
+	// failure on a live gateway — spawning again would orphan it.
+	running, _, statusErr := status(home)
+	if statusErr != nil {
+		// Cannot determine status — do NOT spawn; surface the ambiguity.
+		fmt.Fprintf(os.Stderr,
+			"error: could not determine gateway status: %v\n"+
+				"The gateway may be running but unreachable. Run `omnipus start` manually.\n",
+			statusErr,
+		)
+		return autoStartResult{orchErr: statusErr}
+	}
+	if running {
+		// Gateway is up but the WS dial failed transiently — don't spawn.
+		fmt.Fprintln(os.Stderr,
+			"Omnipus is running but the connection failed — "+
+				"the gateway may still be starting up. Try again shortly.")
+		return autoStartResult{orchErr: run.ErrGatewayDown}
+	}
+
+	// 3. Spawn.
+	fmt.Fprintln(os.Stderr, "Omnipus is not running — starting gateway...")
+	spawnedPID, spawnErr := spawn(home, nil)
+	if spawnErr != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to start gateway: %v\n", spawnErr)
+		return autoStartResult{orchErr: spawnErr}
+	}
+
+	// 4. Poll until the gateway accepts authenticated WS connections.
+	pollErr := poller(ctx, home, addr, token, spawnedPID)
+	if pollErr != nil {
+		fmt.Fprintf(os.Stderr, "error: gateway did not become ready: %v\n", pollErr)
+		return autoStartResult{orchErr: pollErr}
+	}
+
+	// 5. Retry. Return the run error (if any) via runErr so the caller's
+	// sentinel switch can print the appropriate message.
+	return autoStartResult{runErr: run.Run(ctx, opts)}
 }
 
 // NewOmnipusCommand builds the root cobra command with the minimized CLI tree.
@@ -365,28 +511,15 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 			// Auto-start (P1/FR-016): when the gateway is not reachable and a
 			// non-interactive unlock mode is available, spawn the gateway and retry.
 			if errors.Is(runErr, run.ErrGatewayDown) {
-				if !hasNonInteractiveKeyMode(home) {
-					fmt.Fprintln(os.Stderr,
-						"no gateway running and no non-interactive key configured; run `omnipus start`")
+				result := autoStartAndRetry(cmd.Context(), home, addr, token,
+					hasNonInteractiveKeyMode, runOptions)
+				if result.orchErr != nil {
+					// Orchestration failed; message already printed. Exit non-zero.
 					os.Exit(1)
 				}
-
-				fmt.Fprintln(os.Stderr, "Omnipus is not running — starting gateway...")
-				_, spawnErr := daemon.Spawn(home, nil)
-				if spawnErr != nil {
-					fmt.Fprintf(os.Stderr, "error: failed to start gateway: %v\n", spawnErr)
-					os.Exit(1)
-				}
-
-				// Poll until the gateway accepts authenticated WS connections.
-				pollErr := pollGatewayReady(cmd.Context(), addr, token)
-				if pollErr != nil {
-					fmt.Fprintf(os.Stderr, "error: gateway did not become ready: %v\n", pollErr)
-					os.Exit(1)
-				}
-
-				// Retry once with the same options.
-				runErr = run.Run(cmd.Context(), runOptions)
+				// Retry run error (if any) falls through to the sentinel switch
+				// below so the mapped message is printed exactly once.
+				runErr = result.runErr
 			}
 
 			if runErr == nil {

@@ -72,6 +72,10 @@ type turnResult struct {
 	finalContent string
 	status       TurnEndStatus
 	followUps    []bus.InboundMessage
+	// turnFailed mirrors turnState.turnFailed so callers of runTurn can observe
+	// whether the turn ended via the engine's error/limit fallback without holding
+	// a reference to the turnState.  Populated by runTurn before it returns.
+	turnFailed bool
 }
 
 type turnState struct {
@@ -162,10 +166,17 @@ type turnState struct {
 	turnCacheWrite int
 
 	// turnFailed is set to true when the turn ended via the engine's error/limit
-	// fallback (empty response after retries, or tool-iteration limit reached)
-	// rather than a real model response. Threaded into the DoneStats.TurnFailed
-	// field on the done frame so CLI/automation clients can detect failure without
-	// parsing message content.
+	// fallback rather than a real model response.  Three conditions trigger it:
+	//   1. The LLM returned an empty response after all retries and the engine
+	//      substituted the package-level defaultResponse sentinel.
+	//   2. The tool-iteration limit (MaxIterations) was reached without a final
+	//      response.
+	//   3. The generic empty-content exhaustion path (finalContent=="" at the
+	//      bottom of runTurn) resolved to the defaultResponse sentinel — but NOT
+	//      when the caller supplied a custom success DefaultResponse (e.g.
+	//      "Background task completed." on the heartbeat/system path).
+	// Threaded into the DoneStats.TurnFailed field on the done frame so
+	// CLI/automation clients can detect failure without parsing message content.
 	turnFailed bool
 
 	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
@@ -522,18 +533,25 @@ type streamerStatsSetter interface {
 // streamerFailedSetter is an optional interface a Streamer may implement to
 // receive the turn-failed flag before Finalize is called. When implemented,
 // finalizeStreamer calls SetTurnFailed(true) whenever the turn ended via the
-// engine's error/limit fallback (empty response after retries or tool-iteration
-// limit) so the done frame carries DoneStats.TurnFailed=true. CLI/automation
-// clients read this field to exit non-zero on a failed turn.
+// engine's error/limit fallback — (1) empty response after retries (engine
+// defaultResponse sentinel), (2) tool-iteration limit, or (3) generic
+// empty-content exhaustion that resolved to the defaultResponse sentinel
+// (excluding caller-supplied success DefaultResponse strings such as the
+// heartbeat path's "Background task completed.").
+// The done frame carries DoneStats.TurnFailed=true. CLI/automation clients
+// read this field to exit non-zero on a failed turn.
 type streamerFailedSetter interface {
 	SetTurnFailed(failed bool)
 }
 
 // markTurnFailed records that this turn ended via the engine's error/limit
-// fallback rather than a real model response. Called at the two fallback sites
-// in loop.go (empty-response exhaustion and tool-iteration limit). The flag is
-// read by finalizeStreamer and forwarded to the streamer's SetTurnFailed before
-// Finalize so it can set DoneStats.TurnFailed on the done WS frame.
+// fallback rather than a real model response.  It is called from three sites
+// in loop.go: (1) empty-response-after-retry, (2) tool-iteration limit, and
+// (3) generic empty-content exhaustion when the caller's DefaultResponse equals
+// the engine's own error sentinel (never when a success message is supplied).
+// The flag is read by finalizeStreamer and forwarded to the streamer's
+// SetTurnFailed before Finalize so it can set DoneStats.TurnFailed on the done
+// WS frame.
 func (ts *turnState) markTurnFailed() {
 	ts.mu.Lock()
 	ts.turnFailed = true

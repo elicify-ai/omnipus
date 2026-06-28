@@ -2155,6 +2155,14 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	if response != defaultResponse {
 		t.Fatalf("response = %q, want %q", response, defaultResponse)
 	}
+	// Assert that the turn is marked failed — an empty LLM response is a
+	// genuine engine failure, not a clean completion.
+	al.lastTurnResultMu.Lock()
+	gotFailed := al.lastTurnResult.turnFailed
+	al.lastTurnResultMu.Unlock()
+	if !gotFailed {
+		t.Fatal("expected lastTurnResult.turnFailed=true for empty-response turn, got false")
+	}
 }
 
 func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
@@ -2206,6 +2214,56 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	assertRoles(t, history, "user", "assistant", "tool", "assistant")
 	if history[3].Content != toolLimitResponse {
 		t.Fatalf("final assistant content = %q, want %q", history[3].Content, toolLimitResponse)
+	}
+	// Assert that the turn is marked failed — reaching the iteration ceiling
+	// without a final response is a genuine failure.
+	al.lastTurnResultMu.Lock()
+	gotFailed := al.lastTurnResult.turnFailed
+	al.lastTurnResultMu.Unlock()
+	if !gotFailed {
+		t.Fatal("expected lastTurnResult.turnFailed=true for tool-limit turn, got false")
+	}
+}
+
+// TestAgentLoop_SuccessfulTurnDoesNotSetTurnFailed verifies that a normal turn
+// (provider returns non-empty content on the first call) leaves turnFailed
+// false.  This is the false-positive guard: deleting or misplacing
+// markTurnFailed() must not silently set the flag on a clean turn.
+func TestAgentLoop_SuccessfulTurnDoesNotSetTurnFailed(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &simpleMockProvider{response: "Hello from the model"}
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+
+	response, err := al.ProcessDirectWithChannel(context.Background(), "hi", "success-turn", "test", "chat1")
+	if err != nil {
+		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
+	}
+	if response != "Hello from the model" {
+		t.Fatalf("response = %q, want %q", response, "Hello from the model")
+	}
+	// A successful turn must NOT be marked as failed.
+	al.lastTurnResultMu.Lock()
+	gotFailed := al.lastTurnResult.turnFailed
+	al.lastTurnResultMu.Unlock()
+	if gotFailed {
+		t.Fatal("expected lastTurnResult.turnFailed=false for successful turn, got true")
 	}
 }
 

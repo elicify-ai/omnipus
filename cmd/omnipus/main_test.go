@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/run"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
@@ -322,4 +325,162 @@ func TestNewOmnipusCommand_StopSubcommandPresent(t *testing.T) {
 	}
 	require.NotNil(t, stopCmd, "stop subcommand must be registered")
 	assert.Equal(t, "stop", stopCmd.Name())
+}
+
+// --------------------------------------------------------------------------
+// Auto-start orchestration seam tests (FR-016 / MAJOR-1)
+// --------------------------------------------------------------------------
+//
+// These tests exercise autoStartAndRetryWith with fully injected status, spawn,
+// and poller functions. No real daemon processes are started; the tests verify
+// the decision-tree branches without side effects.
+
+// stubPoller is a no-op poller that always reports the gateway as ready.
+func stubPoller(_ context.Context, _, _, _ string, _ int) error {
+	return nil
+}
+
+// stubSpawn records calls and returns a fixed PID or error.
+type stubSpawnRecorder struct {
+	called bool
+	retPID int
+	retErr error
+}
+
+func (s *stubSpawnRecorder) spawn(home string, args []string) (int, error) {
+	s.called = true
+	return s.retPID, s.retErr
+}
+
+// TestAutoStart_StatusRunning_NoSpawn verifies that when daemon.Status reports
+// the gateway is already running, autoStartAndRetryWith does NOT spawn a new
+// process (MAJOR-1 fix). The ErrGatewayDown from the original dial was a
+// transient error, not connection-refused.
+func TestAutoStart_StatusRunning_NoSpawn(t *testing.T) {
+	home := t.TempDir()
+
+	spawnRec := &stubSpawnRecorder{retPID: 9999}
+
+	statusRunning := func(_ string) (bool, int, error) {
+		return true, 1234, nil // gateway is alive
+	}
+
+	result := autoStartAndRetryWith(
+		context.Background(),
+		home, "localhost:9999", "tok",
+		func(_ string) bool { return true }, // key mode: yes
+		run.Options{},
+		statusRunning,
+		spawnRec.spawn,
+		stubPoller,
+	)
+
+	assert.False(t, spawnRec.called,
+		"spawn must NOT be called when daemon.Status reports the gateway is running")
+	assert.NotNil(t, result.orchErr,
+		"orchErr must be set — transient dial error, not a down gateway")
+}
+
+// TestAutoStart_NoKeyMode_NoSpawn verifies that when no non-interactive key
+// mode is available, autoStartAndRetryWith returns an orchErr and does NOT
+// spawn (the user must run `omnipus start` manually).
+func TestAutoStart_NoKeyMode_NoSpawn(t *testing.T) {
+	home := t.TempDir()
+
+	spawnRec := &stubSpawnRecorder{retPID: 9999}
+
+	statusDown := func(_ string) (bool, int, error) {
+		return false, 0, nil
+	}
+
+	result := autoStartAndRetryWith(
+		context.Background(),
+		home, "localhost:9999", "tok",
+		func(_ string) bool { return false }, // key mode: NO
+		run.Options{},
+		statusDown,
+		spawnRec.spawn,
+		stubPoller,
+	)
+
+	assert.False(t, spawnRec.called,
+		"spawn must NOT be called when no non-interactive key mode is available")
+	assert.NotNil(t, result.orchErr,
+		"orchErr must be set when key mode is absent")
+}
+
+// TestAutoStart_DownAndKeyPresent_SpawnsOnce verifies that when daemon.Status
+// reports not-running AND a non-interactive key mode is available, exactly one
+// spawn is made and the result reflects success (runErr==nil on a clean run).
+func TestAutoStart_DownAndKeyPresent_SpawnsOnce(t *testing.T) {
+	home := t.TempDir()
+
+	spawnRec := &stubSpawnRecorder{retPID: 4242}
+	spawnCount := 0
+	countingSpawn := func(h string, args []string) (int, error) {
+		spawnCount++
+		return spawnRec.spawn(h, args)
+	}
+
+	statusDown := func(_ string) (bool, int, error) {
+		return false, 0, nil
+	}
+
+	// The retry run.Run will fail because there is no real gateway, but we
+	// are only testing that spawn happened exactly once and the poller was
+	// called — not that the chat turn succeeded.
+	pollerCalled := false
+	recordingPoller := func(ctx context.Context, home, addr, token string, pid int) error {
+		pollerCalled = true
+		assert.Equal(t, 4242, pid, "poller must receive the PID returned by spawn")
+		return nil
+	}
+
+	result := autoStartAndRetryWith(
+		context.Background(),
+		home, "localhost:9999", "tok",
+		func(_ string) bool { return true }, // key mode: yes
+		run.Options{Addr: "localhost:9999", Stdout: nil, Stderr: nil},
+		statusDown,
+		countingSpawn,
+		recordingPoller,
+	)
+
+	assert.Equal(t, 1, spawnCount, "spawn must be called exactly once")
+	assert.True(t, pollerCalled, "poller must be called after spawn")
+	assert.Nil(t, result.orchErr, "orchestration must succeed (orchErr==nil)")
+	// runErr from the retry is expected non-nil (no real gateway), that is fine.
+	// We are testing the orchestration path, not the actual run.
+	_ = result.runErr
+}
+
+// TestAutoStart_StatusError_NoSpawn verifies that when daemon.Status returns
+// an error (e.g. corrupt PID file), autoStartAndRetryWith does NOT spawn —
+// it cannot determine whether an instance is already running.
+func TestAutoStart_StatusError_NoSpawn(t *testing.T) {
+	home := t.TempDir()
+
+	spawnRec := &stubSpawnRecorder{retPID: 9999}
+	statusErr := errors.New("PID file corrupted")
+
+	statusFailing := func(_ string) (bool, int, error) {
+		return false, 0, statusErr
+	}
+
+	result := autoStartAndRetryWith(
+		context.Background(),
+		home, "localhost:9999", "tok",
+		func(_ string) bool { return true }, // key mode: yes
+		run.Options{},
+		statusFailing,
+		spawnRec.spawn,
+		stubPoller,
+	)
+
+	assert.False(t, spawnRec.called,
+		"spawn must NOT be called when daemon.Status returns an error")
+	assert.NotNil(t, result.orchErr,
+		"orchErr must be set when status check fails")
+	assert.ErrorIs(t, result.orchErr, statusErr,
+		"orchErr must wrap the original status error")
 }

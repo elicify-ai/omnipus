@@ -7,6 +7,7 @@ package ui
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"time"
@@ -27,28 +28,40 @@ func omnipusHome() string {
 }
 
 // getGatewayStatus returns the current gateway status by delegating to
-// pkg/daemon. Errors from Status are treated as "not running" to keep the
-// UI polling resilient to transient I/O problems.
+// pkg/daemon. When daemon.Status returns an error (e.g. corrupt or locked PID
+// file) the status is flagged with the error so callers can surface it rather
+// than silently treating a broken PID file as "not running" — which would
+// trigger a duplicate start and orphan the existing process.
 func getGatewayStatus() gatewayStatus {
 	running, pid, err := daemon.Status(omnipusHome())
 	if err != nil {
-		return gatewayStatus{running: false}
+		slog.Warn("daemon status error; treating as unknown — will not auto-start",
+			"error", err)
+		return gatewayStatus{running: false, statusErr: err}
 	}
 	return gatewayStatus{running: running, pid: pid}
 }
 
 type gatewayStatus struct {
-	running bool
-	pid     int
+	running   bool
+	pid       int
+	statusErr error // non-nil when daemon.Status itself failed
 }
 
 // startGateway spawns the Omnipus gateway via pkg/daemon. It resolves the
 // `omnipus` binary from PATH (the launcher is a separate process from the
 // main gateway binary) and delegates the detached spawn + PID file write to
-// daemon.SpawnExe. Returns an error if the gateway is already running, if
-// `omnipus` cannot be found, or if the spawn fails.
+// daemon.SpawnExe. Returns an error if the gateway status cannot be determined,
+// if the gateway is already running, if `omnipus` cannot be found, or if the
+// spawn fails.
 func startGateway() error {
 	status := getGatewayStatus()
+	if status.statusErr != nil {
+		// A status error means we cannot safely determine whether a gateway is
+		// already running. Refuse to spawn to avoid orphaning a live process.
+		return fmt.Errorf("cannot determine gateway status (PID file may be corrupt): %w",
+			status.statusErr)
+	}
 	if status.running {
 		return fmt.Errorf("gateway is already running (PID: %d)", status.pid)
 	}
@@ -137,11 +150,20 @@ func (a *App) newGatewayPage() tview.Primitive {
 
 	updateStatus = func() {
 		status := getGatewayStatus()
-		if status.running {
+		switch {
+		case status.statusErr != nil:
+			// daemon.Status itself failed (corrupt/locked PID file). Show the
+			// error in the status line so the operator can act, and disable
+			// the START button to prevent a duplicate-spawn.
+			statusTV.SetText(fmt.Sprintf(
+				"[#ffaa00::b]STATUS ERROR[-]\n\n%s", status.statusErr))
+			buttons.SetItemText(0, " [gray]START[white]   ", "")
+			buttons.SetItemText(1, " [gray]STOP[white]    ", "")
+		case status.running:
 			statusTV.SetText(fmt.Sprintf("[#39ff14::b]GATEWAY RUNNING[-]\n\nPID: %d", status.pid))
 			buttons.SetItemText(0, " [gray]START[white]   ", "")
 			buttons.SetItemText(1, " [red]STOP[white]    ", "")
-		} else {
+		default:
 			statusTV.SetText("[#ff2a2a::b]GATEWAY STOPPED[-]\n\nPID: N/A")
 			buttons.SetItemText(0, " [lime]START[white]   ", "")
 			buttons.SetItemText(1, " [gray]STOP[white]    ", "")
