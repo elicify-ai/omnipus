@@ -1,8 +1,9 @@
 // T15: slash menu shows /cancel during streaming (FR-3a)
-// Also covers: non-streaming shows all commands; commands without
-// availableWhileStreaming are hidden during streaming.
+// US-4: palette renders from fetchCommands; delivery dispatch; streaming filter.
 //
-// Traces to: docs/internal/specs/cancel-cross-channel-spec.md FR-3a
+// Traces to:
+//   - docs/internal/specs/slash-command-harmonization-spec.md US-4, FR-008/009
+//   - docs/internal/specs/cancel-cross-channel-spec.md FR-3a
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -117,9 +118,26 @@ vi.mock('@assistant-ui/react', () => {
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
+  // The 5 web-surface commands returned by the API (US-3/AC-1).
+  // Defined inline inside the factory because vi.mock is hoisted — top-level
+  // module constants are not yet initialized when the factory runs.
+  const mockCommands = [
+    { name: 'clear',  label: '/clear',  description: 'Start a new conversation',   delivery: 'client', available_while_streaming: false },
+    { name: 'help',   label: '/help',   description: 'Show available commands',     delivery: 'client', available_while_streaming: false },
+    { name: 'model',  label: '/model',  description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
+    { name: 'skill',  label: '/skill',  description: 'Run an installed skill',      delivery: 'agent',  available_while_streaming: false },
+    { name: 'cancel', label: '/cancel', description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
+  ]
   return {
     ...actual,
-    useQuery: () => ({ data: [], isError: false, refetch: vi.fn() }),
+    useQuery: (opts: { queryKey: unknown[] }) => {
+      // Return mocked commands for the ['commands','web'] query key.
+      const key = opts?.queryKey
+      if (Array.isArray(key) && key[0] === 'commands' && key[1] === 'web') {
+        return { data: mockCommands, isError: false, refetch: vi.fn() }
+      }
+      return { data: [], isError: false, refetch: vi.fn() }
+    },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
   }
@@ -134,7 +152,13 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@/lib/api', () => ({
   fetchAgents: vi.fn().mockResolvedValue([]),
   fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  createSession: vi.fn(),
+  fetchCommands: vi.fn().mockResolvedValue([
+    { name: 'clear',  label: '/clear',  description: 'Start a new conversation',   delivery: 'client', available_while_streaming: false },
+    { name: 'help',   label: '/help',   description: 'Show available commands',     delivery: 'client', available_while_streaming: false },
+    { name: 'model',  label: '/model',  description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
+    { name: 'skill',  label: '/skill',  description: 'Run an installed skill',      delivery: 'agent',  available_while_streaming: false },
+    { name: 'cancel', label: '/cancel', description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
+  ]),
   uploadFiles: vi.fn(),
   fetchProviders: vi.fn().mockResolvedValue([]),
 }))
@@ -176,10 +200,10 @@ function resetStores() {
 
 beforeEach(resetStores)
 
-// ── T15: slash menu shows /cancel during streaming ────────────────────────────
+// ── T15 / US-4: slash menu driven by fetchCommands ────────────────────────────
 
-describe('T15: slash menu — /cancel available during streaming (FR-3a)', () => {
-  it('shows /cancel in the slash menu when streaming and input is "/"', async () => {
+describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, streaming filter', () => {
+  it('US-4/AC-1: shows /cancel in the slash menu when streaming and input is "/"', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: true })
     })
@@ -198,11 +222,11 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
-    // /cancel must appear
+    // /cancel must appear (available_while_streaming === true)
     expect(screen.getByText('/cancel')).toBeInTheDocument()
   })
 
-  it('does NOT show non-streaming commands (/new, /clear, /help, /session new) when streaming', async () => {
+  it('US-4/AC-5: streaming hides non-streaming commands; only available_while_streaming items show', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: true })
     })
@@ -218,14 +242,14 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
-    // These commands must NOT appear while streaming
-    expect(screen.queryByText('/new')).not.toBeInTheDocument()
+    // Commands without available_while_streaming must NOT appear while streaming
     expect(screen.queryByText('/clear')).not.toBeInTheDocument()
     expect(screen.queryByText('/help')).not.toBeInTheDocument()
-    expect(screen.queryByText('/session new')).not.toBeInTheDocument()
+    expect(screen.queryByText('/model')).not.toBeInTheDocument()
+    expect(screen.queryByText('/skill')).not.toBeInTheDocument()
   })
 
-  it('shows all commands (including /cancel and /new) when NOT streaming', async () => {
+  it('US-4/AC-1: non-streaming shows all 5 API commands including /cancel', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
     })
@@ -241,17 +265,18 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
+    // All 5 API commands must appear
     expect(screen.getByText('/cancel')).toBeInTheDocument()
     expect(screen.getByText('/clear')).toBeInTheDocument()
     expect(screen.getByText('/help')).toBeInTheDocument()
-    expect(screen.getByText('/session new')).toBeInTheDocument()
-    expect(screen.getByText('/new')).toBeInTheDocument()
+    expect(screen.getByText('/model')).toBeInTheDocument()
+    expect(screen.getByText('/skill')).toBeInTheDocument()
   })
 
-  it('/new slash command calls startNewSession and clears the composer', async () => {
-    // /new must clear the session in-place and NOT send a literal "/new" message.
+  it('US-4/AC-2: delivery:client /clear runs its client handler and does NOT send a message', async () => {
+    // /clear must clear messages locally and NOT send "/clear" to the backend.
     act(() => {
-      useChatStore.setState({ isStreaming: false })
+      useChatStore.setState({ isStreaming: false, messages: [{ id: 'msg1', role: 'user', content: 'hi', timestamp: '', status: 'done' }] })
       useSessionStore.setState({ activeAgentId: 'general-assistant', activeSessionId: 'sess_1' })
     })
 
@@ -259,26 +284,61 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
 
     const input = screen.getByTestId('composer-input')
 
-    // Type "/new" to trigger the slash menu.
+    // Type "/clear" to filter the menu to /clear.
     act(() => {
-      fireEvent.change(input, { target: { value: '/new' } })
+      fireEvent.change(input, { target: { value: '/clear' } })
     })
     act(() => {
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
-    // "/new" must appear in the menu.
-    expect(screen.getByText('/new')).toBeInTheDocument()
+    // "/clear" must appear in the menu.
+    expect(screen.getByText('/clear')).toBeInTheDocument()
 
     // Press Enter to execute the command.
     act(() => {
       fireEvent.keyDown(input, { key: 'Enter' })
     })
 
-    // After executing /new, the active session should be cleared.
-    expect(useSessionStore.getState().activeSessionId).toBeNull()
-    // The active agent is preserved.
-    expect(useSessionStore.getState().activeAgentId).toBe('general-assistant')
+    // After executing /clear, messages should be cleared.
+    expect(useChatStore.getState().messages).toHaveLength(0)
+  })
+
+  it('US-4/AC-3: delivery:agent /skill inserts "/skill " as text (not executed locally)', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    const mockSetText = vi.fn()
+    const { useComposerRuntime } = await import('@assistant-ui/react')
+    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
+      getState: () => ({ text: '' }),
+      setText: mockSetText,
+      addAttachment: vi.fn(),
+    })
+
+    render(<OmnipusComposer />)
+
+    const input = screen.getByTestId('composer-input')
+
+    act(() => {
+      fireEvent.change(input, { target: { value: '/skill' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+
+    expect(screen.getByText('/skill')).toBeInTheDocument()
+
+    // Press Enter to execute the command — agent delivery should insert text, not handle locally.
+    act(() => {
+      fireEvent.keyDown(input, { key: 'Enter' })
+    })
+
+    // setText must be called with "/skill " (trailing space for completion)
+    expect(mockSetText).toHaveBeenCalledWith('/skill ')
+    // Messages must not have changed (no local handler ran)
+    expect(useChatStore.getState().messages).toHaveLength(0)
   })
 
   it('does not show slash menu at all when streaming and there is no matching streaming-safe command', async () => {
@@ -290,7 +350,7 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
 
     const input = screen.getByTestId('composer-input')
 
-    // Type "/clear" — no streaming-safe command matches
+    // Type "/clear" — not a streaming-safe command
     act(() => {
       fireEvent.change(input, { target: { value: '/clear' } })
     })
@@ -302,14 +362,6 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
     expect(screen.queryByText('/cancel')).not.toBeInTheDocument()
   })
 })
-
-// NOTE: the former "Fix #1 — all uploads fail" and "#252 — upload before first
-// message" tests were removed when the hand-rolled upload bridge
-// (handleSendWithFiles + the hidden file-input) was replaced by the native
-// AssistantUI AttachmentAdapter. The equivalent behaviors — session
-// auto-creation on first upload, and surfacing a failed registration rather
-// than silently dropping the file — now live in src/lib/attachment-adapter.ts
-// and are covered by src/lib/attachment-adapter.test.ts.
 
 // ── Wave 2 / FR-008/009/010: chat composer model selector ────────────────────
 //

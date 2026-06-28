@@ -10,6 +10,8 @@ func cancelCommand() Definition {
 		Name:        "cancel",
 		Description: "Cancel the current turn",
 		Usage:       "/cancel",
+		Surfaces:    []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
+		Delivery:    DeliveryClient,
 		// No Aliases per FR-5 — /stop, /abort, /kill and any other alias are
 		// explicitly forbidden.
 		Handler: func(ctx context.Context, req Request, rt *Runtime) error {

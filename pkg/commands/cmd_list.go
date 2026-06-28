@@ -6,10 +6,15 @@ import (
 	"strings"
 )
 
+// listCommand is the deprecated /list multiplexer.
+// Hidden=true: excluded from /help, channel menus, and GET /commands.
+// Kept for one-release back-compat. Sub-handler logic is preserved verbatim
+// to maintain backward compatibility with existing callers.
 func listCommand() Definition {
 	return Definition{
 		Name:        "list",
-		Description: "List available options",
+		Description: "List available options (deprecated — use /model, /agents, /skills, or /channels)",
+		Hidden:      true,
 		SubCommands: []SubCommand{
 			{
 				Name:        "models",
@@ -50,19 +55,7 @@ func listCommand() Definition {
 			{
 				Name:        "skills",
 				Description: "Installed skills",
-				Handler: func(_ context.Context, req Request, rt *Runtime) error {
-					if rt == nil || rt.ListSkillNames == nil {
-						return req.Reply(unavailableMsg)
-					}
-					names := rt.ListSkillNames()
-					if len(names) == 0 {
-						return req.Reply("No installed skills")
-					}
-					return req.Reply(fmt.Sprintf(
-						"Installed Skills:\n- %s\n\nUse /use <skill> <message> to force one for a single request, or /use <skill> to apply it to your next message.",
-						strings.Join(names, "\n- "),
-					))
-				},
+				Handler:     listSkillsHandler(),
 			},
 		},
 	}

@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { generateId } from '@/lib/constants'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ThreadPrimitive,
   MessagePrimitive,
@@ -54,7 +54,8 @@ import type { ChatMessage } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, fetchSessionMessages, createSession, isApiError } from '@/lib/api'
+import { fetchAgents, fetchSessionMessages, fetchCommands } from '@/lib/api'
+import type { SlashCommand } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
@@ -934,39 +935,6 @@ function AssistantMessage() {
   )
 }
 
-// ── Slash command types ───────────────────────────────────────────────────────
-
-interface SlashCommand {
-  label: string
-  description: string
-  // When true, this command remains visible in the slash menu even while a
-  // response is streaming. All other commands are hidden during streaming.
-  availableWhileStreaming?: boolean
-}
-
-// Built-in slash commands. Custom commands registered via 'commands' WebSocket
-// frame are not yet wired; see sprint-h-subagent-block-spec.md for the design.
-const SLASH_COMMANDS: SlashCommand[] = [
-  { label: '/new', description: 'Start a new chat with the current agent' },
-  { label: '/session new', description: 'Start a new session' },
-  { label: '/clear', description: 'Clear all messages' },
-  { label: '/help', description: 'Show help information' },
-  // FR-3a: /cancel must be reachable mid-turn; it is the only streaming-safe command.
-  { label: '/cancel', description: 'Cancel current turn', availableWhileStreaming: true },
-]
-
-const HELP_TEXT = `**Omnipus commands:**
-- \`/new\` — Start a new chat with the current agent
-- \`/session new\` — Start a new session
-- \`/clear\` — Clear the current chat history
-- \`/cancel\` — Cancel the current in-progress turn
-- \`/help\` — Show this help message
-
-**Tips:**
-- Press **Enter** to send, **Shift+Enter** for newline
-- Click tool call headers to expand/collapse details
-- Hover over messages to copy them`
-
 // ── Composer ──────────────────────────────────────────────────────────────────
 
 function composerPlaceholder(
@@ -1028,8 +996,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const cancelStream = useChatStore((s) => s.cancelStream)
   const setMessages = useChatStore((s) => s.setMessages)
   const appendMessage = useChatStore((s) => s.appendMessage)
-  const setActiveSession = useSessionStore((s) => s.setActiveSession)
-  const startNewSession = useSessionStore((s) => s.startNewSession)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const addToast = useUiStore((s) => s.addToast)
   const composerRuntime = useComposerRuntime()
@@ -1037,21 +1003,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name ?? 'Omnipus'
-
-  const { mutate: doCreateSession, isPending: isCreatingSession } = useMutation({
-    mutationFn: () => {
-      if (!activeAgentId) throw new Error('No agent selected')
-      return createSession(activeAgentId)
-    },
-    onSuccess: (session) => {
-      // agentType is already set in the store from the agent selection in SessionBar.
-      // Passing null here preserves the existing activeAgentType via setActiveSession's fallback.
-      setActiveSession(session.id, session.agent_id, null)
-      queryClient.invalidateQueries({ queryKey: ['sessions'] })
-      addToast({ message: 'New session started', variant: 'success' })
-    },
-    onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to create session', variant: 'error' }),
-  })
 
   const [inputValue, setInputValue] = useState('')
   const [slashOpen, setSlashOpen] = useState(false)
@@ -1095,16 +1046,26 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // easy to miss when the textarea looks fully interactive.
   const inputEnabled = !agentRemoved && !isReplaying && !(reconnectPhase === 'gave_up') && isConnected
 
+  // US-4 / FR-008: fetch the web-surface command list from the single source of truth.
+  // On error the palette shows nothing — no crash (per integration boundary spec).
+  const { data: commands = [] } = useQuery<SlashCommand[]>({
+    queryKey: ['commands', 'web'],
+    queryFn: () => fetchCommands('web'),
+    staleTime: 60_000,
+    enabled: inputEnabled,
+  })
+
   // FR-3a: during streaming, show the slash menu ONLY if at least one command
-  // with availableWhileStreaming:true matches the current input prefix.
-  // Outside streaming, show all commands as before.
+  // with available_while_streaming:true matches the current input prefix.
+  // Outside streaming, show all commands.  Commands come from the API (US-4);
+  // no hardcoded list.  `label` includes the leading slash per the contract.
   const visibleSlashCommands = (() => {
     if (!inputValue.startsWith('/') || isReplaying || !inputEnabled) return []
-    const all = SLASH_COMMANDS.filter((cmd) => cmd.label.startsWith(inputValue) || inputValue === '/')
-    if (isStreaming) return all.filter((cmd) => cmd.availableWhileStreaming === true)
+    const all = commands.filter((cmd) => cmd.label.startsWith(inputValue) || inputValue === '/')
+    if (isStreaming) return all.filter((cmd) => cmd.available_while_streaming === true)
     return all
   })()
-  const shouldShowSlash = visibleSlashCommands.length > 0 && (inputValue.startsWith('/')) && !isReplaying && inputEnabled
+  const shouldShowSlash = visibleSlashCommands.length > 0 && inputValue.startsWith('/') && !isReplaying && inputEnabled
 
   // T23: record when a new stream starts so the global Escape handler can detect
   // the race window where the done frame arrived before Escape was pressed.
@@ -1139,48 +1100,72 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     setSlashHighlight(0)
   }
 
-  function executeSlashCommand(cmd: string) {
+  // executeSlashCommand — called when the user selects a palette entry.
+  // `label` is the full label string from the SlashCommand (e.g. "/clear").
+  // FR-009: dispatch by `delivery`:
+  //   - 'client' → run the local handler keyed by `name`; do NOT send to backend.
+  //   - 'agent'  → insert the label as text into the composer so the user can
+  //                complete it and forward it via the message frame on send.
+  function executeSlashCommand(label: string) {
     closeSlash()
-    composerRuntime.setText('')
-    setInputValue('')
 
-    // /new — start a fresh chat with the current agent. Does NOT send a
-    // message to the LLM; the action runs entirely client-side.
-    if (cmd === '/new') {
-      startNewSession(activeAgentId, null)
+    // Look up the full command definition by label to get the name + delivery.
+    const def = commands.find((c) => c.label === label)
+
+    if (!def) {
+      // Unknown label (shouldn't happen with API-driven palette, but be safe).
       return
     }
 
-    if (cmd === '/clear') {
+    if (def.delivery === 'agent') {
+      // Insert "/name " as text so the user can complete it and send.
+      composerRuntime.setText(`${def.label} `)
+      setInputValue(`${def.label} `)
+      return
+    }
+
+    // delivery === 'client': handle locally by name.
+    composerRuntime.setText('')
+    setInputValue('')
+
+    if (def.name === 'clear') {
+      // US-4/AC-2: start a new local chat — clears messages + query cache.
       setMessages([])
       const { activeSessionId: sid } = useSessionStore.getState()
       if (sid) queryClient.removeQueries({ queryKey: ['messages', sid] })
       return
     }
 
-    if (cmd === '/help') {
+    if (def.name === 'help') {
+      // US-4/AC-2: build the help text from the fetched command list.
+      const helpLines = commands
+        .map((c) => `- \`${c.label}\` — ${c.description}`)
+        .join('\n')
+      const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
       appendMessage({
         id: generateId(),
         role: 'system',
-        content: HELP_TEXT,
+        content: helpText,
         timestamp: new Date().toISOString(),
         status: 'done',
       })
       return
     }
 
-    if (cmd === '/session new') {
-      if (!isCreatingSession) doCreateSession()
+    if (def.name === 'model') {
+      // US-4/AC-2: open the model selector — mirrors the header dropdown.
+      // /model with no argument shows the current model via setNextModel(null)
+      // to prompt the selector to open.  The ModelSelector is rendered in
+      // ChatControls; we set the nextModel store value to drive its open state.
+      // Per A4: web-only client action; sets the chat model selector, not the
+      // server agent default.
+      useChatStore.getState().setNextModel(null)
       return
     }
 
-    // FR-3a: /cancel uses the same cancelStream() as the Stop button.
-    // Only morph the button to "Stopping..." if the turn is actively streaming.
-    // If the turn already completed, cancelStream() marks the last message as
-    // interrupted but there is no streaming button to morph — setting 'stopping'
-    // when isStreaming is already false would leave the button stuck because the
-    // useEffect([isStreaming]) will not fire again (no state change) to reset it.
-    if (cmd === '/cancel') {
+    if (def.name === 'cancel') {
+      // FR-3a: /cancel uses the same cancelStream() as the Stop button.
+      // Only morph the button to "Stopping..." if the turn is actively streaming.
       if (isStreaming) {
         stoppingStartedAt.current = Date.now()
         setStopLabel('stopping')

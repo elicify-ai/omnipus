@@ -5,10 +5,14 @@ import (
 	"fmt"
 )
 
+// checkCommand is the deprecated /check multiplexer.
+// Hidden=true: excluded from /help, channel menus, and GET /commands.
+// Kept for one-release back-compat. The /check channel logic is now reused by /channels.
 func checkCommand() Definition {
 	return Definition{
 		Name:        "check",
-		Description: "Check channel availability",
+		Description: "Check channel availability (deprecated — use /channels <name>)",
+		Hidden:      true,
 		SubCommands: []SubCommand{
 			{
 				Name:        "channel",
