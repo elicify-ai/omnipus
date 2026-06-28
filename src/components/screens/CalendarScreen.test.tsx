@@ -24,7 +24,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { EventDropArg, EventClickArg } from '@fullcalendar/core'
+import type { EventDropArg, EventClickArg, DateSelectArg } from '@fullcalendar/core'
 import type { DateClickArg } from '@fullcalendar/interaction'
 import { CalendarScreen } from './CalendarScreen'
 import type { CalendarEventExtProps } from '@/components/calendar/types'
@@ -35,18 +35,27 @@ import type { CalendarEventExtProps } from '@/components/calendar/types'
  * Module-level capture. Tests read `capturedProps` to fire synthetic events.
  * Reset in beforeEach.
  */
+
 type CapturedProps = {
   onEventDrop: ((arg: EventDropArg) => void) | null
   onEventClick: ((arg: EventClickArg) => void) | null
   onDateClick: ((arg: DateClickArg) => void) | null
+  onDateSelect: ((arg: DateSelectArg) => void) | null
   onDatesSet: ((title: string, view: string) => void) | null
+  /** isLoading prop passed to FullCalendarView on the most recent render. */
+  isLoading: boolean | undefined
+  /** isEmpty prop passed to FullCalendarView on the most recent render. */
+  isEmpty: boolean | undefined
 }
 
 const capturedProps: CapturedProps = {
   onEventDrop: null,
   onEventClick: null,
   onDateClick: null,
+  onDateSelect: null,
   onDatesSet: null,
+  isLoading: undefined,
+  isEmpty: undefined,
 }
 
 vi.mock('@/components/calendar/FullCalendarView', () => ({
@@ -54,13 +63,19 @@ vi.mock('@/components/calendar/FullCalendarView', () => ({
     onEventDrop: (arg: EventDropArg) => void
     onEventClick: (arg: EventClickArg) => void
     onDateClick: (arg: DateClickArg) => void
+    onDateSelect: (arg: DateSelectArg) => void
     onDatesSet?: (title: string, view: string) => void
+    isLoading?: boolean
+    isEmpty?: boolean
   }) => {
     // Capture handlers on every render (they may change via useCallback deps).
     capturedProps.onEventDrop = props.onEventDrop
     capturedProps.onEventClick = props.onEventClick
     capturedProps.onDateClick = props.onDateClick
+    capturedProps.onDateSelect = props.onDateSelect
     capturedProps.onDatesSet = props.onDatesSet ?? null
+    capturedProps.isLoading = props.isLoading
+    capturedProps.isEmpty = props.isEmpty
     // Increment render counter (used by waitForQueriesLoaded)
     _renderCount++
     return <div data-testid="fullcalendar-stub">FullCalendar stub</div>
@@ -337,7 +352,10 @@ beforeEach(() => {
   capturedProps.onEventDrop = null
   capturedProps.onEventClick = null
   capturedProps.onDateClick = null
+  capturedProps.onDateSelect = null
   capturedProps.onDatesSet = null
+  capturedProps.isLoading = undefined
+  capturedProps.isEmpty = undefined
 
   // Reset render counter
   _renderCount = 0
@@ -547,7 +565,7 @@ describe('CalendarScreen — eventDrop on a task-fire event (spec §9 #11)', () 
     // First drop: 14:00
     const start1 = new Date(2026, 5, 20, 14, 0, 0)
     const { arg: arg1 } = makeDropArg(
-      { kind: 'task-fire', taskId: 'task-fire-diff', icon: 'Clock' },
+      { kind: 'task-fire', taskId: 'task-fire-diff', status: 'next', icon: 'Clock' },
       start1,
       new Date(2026, 5, 20, 9, 0, 0),
     )
@@ -559,7 +577,7 @@ describe('CalendarScreen — eventDrop on a task-fire event (spec §9 #11)', () 
     // Second drop: 16:00
     const start2 = new Date(2026, 5, 20, 16, 0, 0)
     const { arg: arg2 } = makeDropArg(
-      { kind: 'task-fire', taskId: 'task-fire-diff', icon: 'Clock' },
+      { kind: 'task-fire', taskId: 'task-fire-diff', status: 'next', icon: 'Clock' },
       start2,
       new Date(2026, 5, 20, 9, 0, 0),
     )
@@ -853,5 +871,236 @@ describe('CalendarScreen — milestones query failure (spec §9 #21)', () => {
 
     // The calendar grid stub must still render (degradation — not a full failure screen)
     expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
+  })
+})
+
+// ── Undo restore (#14 / DS-2 row 5) ──────────────────────────────────────────
+
+describe('CalendarScreen — Undo restores the original date (spec §9 #14 / DS-2 row 5 / I-5)', () => {
+  it('invoking the success toast Undo action calls updateTask again with the OLD start datetime', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #14 / US-3/AS-4 / DS-2 row 5
+    // BDD: Given a successful task-due drop,
+    // When the user clicks Undo on the success toast,
+    // Then updateTask is called a second time with the OLD start's toISOString() value.
+
+    vi.mocked(updateTask)
+      .mockResolvedValueOnce(makeTask() as never) // first drop succeeds
+      .mockResolvedValueOnce(makeTask() as never) // undo succeeds
+
+    renderCalendarScreen()
+    await waitFor(() => expect(capturedProps.onEventDrop).not.toBeNull())
+
+    const oldStart = new Date(2026, 5, 20, 0, 0, 0) // Jun 20
+    const newStart = new Date(2026, 5, 23, 0, 0, 0) // Jun 23
+
+    const { arg } = makeDropArg(
+      { kind: 'task-due', taskId: 'task-1', icon: 'Circle', status: 'next' },
+      newStart,
+      oldStart,
+    )
+
+    await act(async () => {
+      capturedProps.onEventDrop!(arg)
+    })
+
+    // Wait for the first updateTask call + toast
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalledOnce())
+
+    // Capture the success toast's Undo action
+    const toastArg = mockAddToast.mock.calls[0][0]
+    expect(toastArg.variant).toBe('success')
+    expect(toastArg.action).toBeDefined()
+    expect(toastArg.action.label).toBe('Undo')
+
+    // Invoke the Undo action — this should call updateTask with the OLD start
+    await act(async () => {
+      toastArg.action.onClick()
+    })
+
+    // updateTask must be called a second time with the OLD start's toISOString()
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledTimes(2))
+
+    const [, undoData] = vi.mocked(updateTask).mock.calls[1]
+    // The undo must restore the original date — derive the expected ISO from the
+    // SAME local Date constructor so this is TZ-robust (no hardcoded UTC string).
+    expect(undoData.due).toBe(oldStart.toISOString())
+  })
+
+  it('Undo failure shows a "Couldn\'t undo" error toast', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #14 / FR-010 / DS-2 row 5
+    // BDD: Given the 2nd updateTask (undo) rejects,
+    // When Undo is clicked,
+    // Then an error toast with "Couldn't undo" fires.
+
+    vi.mocked(updateTask)
+      .mockResolvedValueOnce(makeTask() as never)   // first drop succeeds
+      .mockRejectedValueOnce(new Error('500 Undo failed')) // undo fails
+
+    renderCalendarScreen()
+    await waitFor(() => expect(capturedProps.onEventDrop).not.toBeNull())
+
+    const oldStart = new Date(2026, 5, 20, 0, 0, 0)
+    const newStart = new Date(2026, 5, 23, 0, 0, 0)
+
+    const { arg } = makeDropArg(
+      { kind: 'task-due', taskId: 'task-1', icon: 'Circle', status: 'next' },
+      newStart,
+      oldStart,
+    )
+
+    await act(async () => {
+      capturedProps.onEventDrop!(arg)
+    })
+
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalledOnce())
+    const toastArg = mockAddToast.mock.calls[0][0]
+    expect(toastArg.variant).toBe('success')
+    expect(toastArg.action).toBeDefined()
+
+    // Trigger the undo which will reject
+    mockAddToast.mockReset()
+    await act(async () => {
+      toastArg.action.onClick()
+    })
+
+    // An error toast must fire after the undo rejection
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalledOnce())
+    const errorToast = mockAddToast.mock.calls[0][0]
+    expect(errorToast.variant).toBe('error')
+    expect(errorToast.message).toMatch(/undo/i)
+  })
+})
+
+// ── isLoading / isEmpty props (#20 / I-1) ─────────────────────────────────────
+
+describe('CalendarScreen — isLoading and isEmpty props on FullCalendarView (spec §9 #20 / I-1)', () => {
+  it('passes isLoading=true and isEmpty=false while queries are pending', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #20 / US-1/AS-6 / I-1
+    // BDD: Given the tasks query has not yet resolved,
+    // When the calendar mounts,
+    // Then FullCalendarView receives isLoading=true and isEmpty=false
+    // (grid renders with loading affordance, empty hint must NOT flash).
+
+    // Use a promise we control to keep the query pending
+    let resolveTask: (v: never) => void
+    const pendingPromise = new Promise<never>((res) => { resolveTask = res })
+    vi.mocked(fetchTasks).mockReturnValueOnce(pendingPromise)
+    vi.mocked(fetchMilestones).mockReturnValueOnce(pendingPromise)
+
+    renderCalendarScreen()
+
+    // On the first render, both queries are loading
+    await waitFor(() => expect(capturedProps.isLoading).not.toBeUndefined())
+
+    expect(capturedProps.isLoading).toBe(true)
+    // isEmpty must not be true while loading (no empty-hint flash)
+    expect(capturedProps.isEmpty).toBe(false)
+
+    // Resolve the pending promises to avoid teardown leaks
+    resolveTask!([] as never)
+  })
+
+  it('passes isEmpty=true and isLoading=false after load with zero tasks and milestones', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #20 / US-1/AS-6 / FR-001 / I-1
+    // BDD: After both queries resolve with empty arrays,
+    // Then FullCalendarView receives isEmpty=true and isLoading=false.
+
+    vi.mocked(fetchTasks).mockResolvedValue([] as never)
+    vi.mocked(fetchMilestones).mockResolvedValue([] as never)
+
+    renderCalendarScreen()
+
+    // Wait for queries to load (render count >= 2)
+    await waitFor(() => {
+      expect(vi.mocked(fetchTasks)).toHaveBeenCalled()
+      expect(vi.mocked(fetchMilestones)).toHaveBeenCalled()
+      expect(_renderCount).toBeGreaterThanOrEqual(2)
+    }, { timeout: 5000 })
+
+    // After loading completes with zero events, isEmpty must be true
+    await waitFor(() => {
+      expect(capturedProps.isEmpty).toBe(true)
+      expect(capturedProps.isLoading).toBe(false)
+    }, { timeout: 5000 })
+  })
+})
+
+// ── Slot-select (US-4/AS-2) ───────────────────────────────────────────────────
+
+describe('CalendarScreen — timed slot-select opens CreateTaskSlideOver with initialDue (US-4/AS-2)', () => {
+  /**
+   * Build a synthetic DateSelectArg for a timed (non-allDay) selection.
+   */
+  function makeDateSelectArg(start: Date, allDay = false): DateSelectArg {
+    return {
+      start,
+      end: new Date(start.getTime() + 3600_000), // +1h
+      allDay,
+      jsEvent: { target: document.createElement('div') } as unknown as MouseEvent,
+    } as unknown as DateSelectArg
+  }
+
+  it('slot-select with allDay=false opens CreateTaskSlideOver prefilled with the slot start time', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #15 / US-4/AS-2 / FR-012
+    // BDD: Given Week/Day view,
+    // When I drag-select 2026-06-22T10:00,
+    // Then CreateTaskSlideOver opens with initialDue = "2026-06-22T10:00".
+
+    renderCalendarScreen()
+
+    await waitFor(() => expect(capturedProps.onDateSelect).not.toBeNull())
+
+    // Confirm create slide-over is closed initially
+    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'false')
+
+    // Simulate a timed slot-select starting at 10:00 local
+    const slotStart = new Date(2026, 5, 22, 10, 0, 0) // Jun 22 10:00 local
+
+    await act(async () => {
+      capturedProps.onDateSelect!(makeDateSelectArg(slotStart, false))
+    })
+
+    // Slide-over must now be open
+    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'true')
+
+    // initialDue must be the local datetime "YYYY-MM-DDTHH:mm" of the slot start
+    const initialDue = screen.getByTestId('create-task-slideover').getAttribute('data-initial-due')
+    expect(initialDue).toBe('2026-06-22T10:00')
+  })
+
+  it('differentiation: slot-select at two different times produces two different initialDue values', async () => {
+    // Anti-hardcode: different slot times → different initialDue strings.
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #15 / US-4/AS-2
+
+    renderCalendarScreen()
+
+    await waitFor(() => expect(capturedProps.onDateSelect).not.toBeNull())
+
+    // First select: 10:00
+    const slot1 = new Date(2026, 5, 22, 10, 0, 0)
+    await act(async () => {
+      capturedProps.onDateSelect!(makeDateSelectArg(slot1, false))
+    })
+    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'true')
+    const initialDue1 = screen.getByTestId('create-task-slideover').getAttribute('data-initial-due')
+
+    // Close the slide-over
+    await act(async () => {
+      screen.getByTestId('create-close-btn').click()
+    })
+    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'false')
+
+    // Second select: 14:30
+    const slot2 = new Date(2026, 5, 22, 14, 30, 0)
+    await act(async () => {
+      capturedProps.onDateSelect!(makeDateSelectArg(slot2, false))
+    })
+    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'true')
+    const initialDue2 = screen.getByTestId('create-task-slideover').getAttribute('data-initial-due')
+
+    expect(initialDue1).toBe('2026-06-22T10:00')
+    expect(initialDue2).toBe('2026-06-22T14:30')
+    expect(initialDue1).not.toBe(initialDue2)
   })
 })

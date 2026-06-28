@@ -21,6 +21,7 @@ import {
   tasksQueryKeys,
   milestonesQueryKeys,
   type Task,
+  type Milestone,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { mapToCalendarEvents, formatLocalDate } from '@/lib/calendar/eventMapping'
@@ -128,34 +129,100 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     window.requestAnimationFrame(() => el?.focus?.())
   }, [])
 
-  // ── Reschedule persistence (the whole-trigger + date-only rules — F-05/F-06) ──
+  // ── Reschedule persistence (whole-trigger + date-format rules — F-05/F-06/F-08) ─
+  // `ext` is the discriminated CalendarEventExtProps union, so the switch narrows
+  // taskId/milestoneId with no defensive checks and is exhaustive over `kind`.
   const persistReschedule = useCallback(
     async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
-      if (ext.kind === 'milestone' && ext.milestoneId) {
-        await updateMilestone(workspaceId, ext.milestoneId, { due_date: formatLocalDate(start) })
-        return
-      }
-      if (ext.kind === 'task-due' && ext.taskId) {
-        // Task `due` is RFC3339 date-time (contract: format date-time), so a
-        // date-only string is rejected 400. Write the dropped day's local-midnight
-        // instant as ISO; the read side (mapToCalendarEvents) places it by LOCAL
-        // date, so this round-trips with no off-by-one in any timezone.
-        await updateTask(ext.taskId, { due: start.toISOString() })
-        return
-      }
-      if (ext.kind === 'task-fire' && ext.taskId) {
-        const task = tasks.find((t) => t.id === ext.taskId)
-        const trigger = task?.trigger
-        // Send the WHOLE trigger, preserving type + sibling config keys (F-05).
-        await updateTask(ext.taskId, {
-          trigger: {
-            type: trigger?.type ?? 'once',
-            config: { ...(trigger?.config ?? {}), at_ms: start.getTime() },
-          },
-        })
+      switch (ext.kind) {
+        case 'milestone':
+          // Milestone due_date is a plain ISO date string → local YYYY-MM-DD.
+          await updateMilestone(workspaceId, ext.milestoneId, {
+            due_date: formatLocalDate(start),
+          })
+          return
+        case 'task-due':
+          // Task `due` is RFC3339 date-time (contract: format date-time), so a
+          // date-only string is rejected 400. Write the dropped day's local-midnight
+          // instant as ISO; the read side places it by LOCAL date → no off-by-one.
+          await updateTask(ext.taskId, { due: start.toISOString() })
+          return
+        case 'task-fire': {
+          const trigger = tasks.find((t) => t.id === ext.taskId)?.trigger
+          // Send the WHOLE trigger, preserving type + sibling config keys (F-05).
+          await updateTask(ext.taskId, {
+            trigger: {
+              type: trigger?.type ?? 'once',
+              config: { ...(trigger?.config ?? {}), at_ms: start.getTime() },
+            },
+          })
+          return
+        }
       }
     },
     [tasks, workspaceId],
+  )
+
+  // Optimistically patch the cached item's date so the `events` memo agrees with
+  // FullCalendar's DOM move — prevents a stale-data flash before the refetch lands.
+  // Returns a rollback that restores the previous cache.
+  const patchCacheDate = useCallback(
+    (ext: CalendarEventExtProps, start: Date): (() => void) => {
+      if (ext.kind === 'milestone') {
+        const key = milestonesQueryKeys.list(workspaceId)
+        const prev = queryClient.getQueryData<Milestone[]>(key)
+        if (prev) {
+          queryClient.setQueryData<Milestone[]>(
+            key,
+            prev.map((m) =>
+              m.id === ext.milestoneId ? { ...m, due_date: formatLocalDate(start) } : m,
+            ),
+          )
+        }
+        return () => {
+          if (prev) queryClient.setQueryData(key, prev)
+        }
+      }
+      const key = tasksQueryKeys.list({ workspace_id: workspaceId })
+      const prev = queryClient.getQueryData<Task[]>(key)
+      if (prev) {
+        queryClient.setQueryData<Task[]>(
+          key,
+          prev.map((t) => {
+            if (t.id !== ext.taskId) return t
+            if (ext.kind === 'task-due') return { ...t, due: start.toISOString() }
+            return t.trigger
+              ? {
+                  ...t,
+                  trigger: {
+                    ...t.trigger,
+                    config: { ...(t.trigger.config ?? {}), at_ms: start.getTime() },
+                  },
+                }
+              : t
+          }),
+        )
+      }
+      return () => {
+        if (prev) queryClient.setQueryData(key, prev)
+      }
+    },
+    [queryClient, workspaceId],
+  )
+
+  // Optimistic reschedule: patch cache → persist → invalidate; rollback on failure.
+  const runReschedule = useCallback(
+    async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
+      const rollback = patchCacheDate(ext, start)
+      try {
+        await persistReschedule(ext, start)
+        invalidate()
+      } catch (err) {
+        rollback()
+        throw err
+      }
+    },
+    [patchCacheDate, persistReschedule, invalidate],
   )
 
   const handleEventDrop = useCallback(
@@ -167,10 +234,8 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         arg.revert()
         return
       }
-      void (async () => {
-        try {
-          await persistReschedule(ext, newStart)
-          invalidate()
+      void runReschedule(ext, newStart).then(
+        () => {
           addToast({
             message: `Rescheduled to ${formatShort(newStart)}`,
             variant: 'success',
@@ -179,55 +244,61 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
               ? {
                   label: 'Undo',
                   onClick: () => {
-                    void (async () => {
-                      try {
-                        await persistReschedule(ext, oldStart)
-                        invalidate()
-                      } catch {
-                        addToast({ message: "Couldn't undo — please try again", variant: 'error' })
-                      }
-                    })()
+                    void runReschedule(ext, oldStart).catch((err) => {
+                      console.error('[calendar] undo reschedule failed', { kind: ext.kind, err })
+                      addToast({ message: "Couldn't undo — please try again", variant: 'error' })
+                    })
                   },
                 }
               : undefined,
           })
-        } catch {
-          arg.revert()
+        },
+        (err) => {
+          arg.revert() // optimistic cache already rolled back inside runReschedule
+          console.error('[calendar] reschedule failed', { kind: ext.kind, err })
           addToast({ message: "Couldn't reschedule — please try again", variant: 'error' })
-        }
-      })()
+        },
+      )
     },
-    [persistReschedule, invalidate, addToast],
+    [runReschedule, addToast],
   )
 
   const handleEventClick = useCallback(
     (arg: EventClickArg) => {
       triggerElRef.current = (arg.jsEvent?.target as HTMLElement) ?? null
       const ext = arg.event.extendedProps as CalendarEventExtProps
-      if (ext.kind === 'milestone' && ext.milestoneId) {
+      if (ext.kind === 'milestone') {
         const m = milestones.find((x) => x.id === ext.milestoneId)
         if (m) setMilestoneTarget({ id: m.id, name: m.name, due_date: m.due_date ?? null })
+        else console.warn('[calendar] milestone event has no backing milestone', ext)
         return
       }
-      if (ext.taskId) {
-        const t = tasks.find((x) => x.id === ext.taskId)
-        if (t) setSelectedTask(t)
-      }
+      // task-due | task-fire → taskId is guaranteed by the discriminated union.
+      const t = tasks.find((x) => x.id === ext.taskId)
+      if (t) setSelectedTask(t)
+      else console.warn('[calendar] task event has no backing task', ext)
     },
     [tasks, milestones],
   )
 
-  const handleDateClick = useCallback((arg: DateClickArg) => {
-    triggerElRef.current = (arg.jsEvent?.target as HTMLElement) ?? null
-    setInitialDue(arg.allDay ? `${formatLocalDate(arg.date)}T00:00` : toDatetimeLocal(arg.date))
+  // Open the create slide-over prefilled with a date (all-day → midnight; timed → slot).
+  const openCreateAt = useCallback((target: HTMLElement | null, date: Date, allDay: boolean) => {
+    triggerElRef.current = target
+    setInitialDue(allDay ? `${formatLocalDate(date)}T00:00` : toDatetimeLocal(date))
     setCreateOpen(true)
   }, [])
 
-  const handleDateSelect = useCallback((arg: DateSelectArg) => {
-    triggerElRef.current = (arg.jsEvent?.target as HTMLElement) ?? null
-    setInitialDue(arg.allDay ? `${formatLocalDate(arg.start)}T00:00` : toDatetimeLocal(arg.start))
-    setCreateOpen(true)
-  }, [])
+  const handleDateClick = useCallback(
+    (arg: DateClickArg) =>
+      openCreateAt((arg.jsEvent?.target as HTMLElement) ?? null, arg.date, arg.allDay),
+    [openCreateAt],
+  )
+
+  const handleDateSelect = useCallback(
+    (arg: DateSelectArg) =>
+      openCreateAt((arg.jsEvent?.target as HTMLElement) ?? null, arg.start, arg.allDay),
+    [openCreateAt],
+  )
 
   const handleNewTask = useCallback(() => {
     triggerElRef.current = null
@@ -236,7 +307,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   }, [])
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-x-hidden bg-[var(--color-bg)] text-[var(--color-secondary)]">
+    <div className="flex flex-col h-full min-h-0 overflow-x-hidden bg-[var(--color-surface-0)] text-[var(--color-secondary)]">
       <div className="@container flex-shrink-0 w-full min-w-0">
         <CalendarToolbar
           calendarRef={calendarRef}
