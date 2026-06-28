@@ -28,8 +28,6 @@ package onboard
 
 import (
 	"bufio"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -402,31 +400,7 @@ func Run(home string, wio wizardIO) error {
 // and must never cause onboarding to fail.
 func printAccessURLBlock(out io.Writer, home string) {
 	configPath := filepath.Join(home, "config.json")
-	raw, err := os.ReadFile(configPath)
-
-	host := ""
-	port := 5000
-	publicURL := ""
-
-	if err == nil {
-		var m map[string]any
-		if jsonErr := json.Unmarshal(raw, &m); jsonErr == nil {
-			gw, _ := m["gateway"].(map[string]any)
-			if gw != nil {
-				if h, ok := gw["host"].(string); ok {
-					host = h
-				}
-				if p, ok := gw["port"].(float64); ok && p > 0 {
-					port = int(p)
-				}
-				if pu, ok := gw["public_url"].(string); ok {
-					publicURL = pu
-				}
-			}
-		}
-	}
-
-	urls := netinfo.BuildAccessURLs(host, port, publicURL, netinfo.LocalIPv4s())
+	urls := netinfo.AccessURLsFromConfig(configPath)
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Next steps:")
 	fmt.Fprintln(out, "  1. Run: omnipus start")
@@ -597,7 +571,7 @@ func applyInput(in Input, wio wizardIO) error {
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
-	token, err := generateBearerToken()
+	token, err := clitoken.GenerateBearerToken()
 	if err != nil {
 		return fmt.Errorf("generate token: %w", err)
 	}
@@ -633,14 +607,6 @@ func applyInput(in Input, wio wizardIO) error {
 	fmt.Fprintf(wio.stdout, "Encrypted API key under credential ref %q in %s\n", credRef, credPath)
 	fmt.Fprintf(wio.stdout, "Bearer token for %q (save this — it is only shown once):\n  %s\n", in.Username, token)
 	return nil
-}
-
-func generateBearerToken() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return "omnipus_" + hex.EncodeToString(bytes), nil
 }
 
 func mutateConfigFile(path string, in Input, credRef, passwordHash, tokenHash string) error {

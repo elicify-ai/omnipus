@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,8 +49,12 @@ type approvalRecord struct {
 type scriptedServer struct {
 	srv        *httptest.Server
 	frames     []any // server frames to emit after the message frame
-	rejectAuth bool  // if true: close with ClosePolicyViolation after auth
+	rejectAuth bool  // if true: send error frame then close with ClosePolicyViolation
 	approvals  chan approvalRecord
+
+	// approvalStatusCode, when non-zero, overrides the HTTP status returned by
+	// the approval handler. Used to simulate server errors.
+	approvalStatusCode int
 }
 
 func newScriptedServer(t *testing.T, frames []any, rejectAuth bool) *scriptedServer {
@@ -91,6 +96,15 @@ func (ss *scriptedServer) wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ss.rejectAuth || authFrame.Token != testToken {
+		// Match the live gateway ordering: send an error frame FIRST, then the
+		// ClosePolicyViolation close. The client must detect ErrKeyInvalid from
+		// the error frame (FR-019 primary path) rather than waiting for the close.
+		errFrame := generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "unauthorized: invalid token",
+		}
+		errData, _ := json.Marshal(errFrame)
+		_ = conn.WriteMessage(websocket.TextMessage, errData)
 		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication failed"))
 		return
@@ -127,8 +141,17 @@ func (ss *scriptedServer) approvalHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ss.approvals <- approvalRecord{ApprovalID: id, Action: string(body.Action)}
+
+	statusCode := ss.approvalStatusCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		http.Error(w, "simulated server error", statusCode)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(statusCode)
 	_, _ = w.Write([]byte(`{"status":"ok","action":"` + string(body.Action) + `"}`))
 }
 
@@ -329,8 +352,12 @@ func TestRun_GatewayDown(t *testing.T) {
 	}
 }
 
-// TestRun_AuthRejected verifies that when the server closes the connection with
-// ClosePolicyViolation after the auth frame, Run returns ErrKeyInvalid (FR-019).
+// TestRun_AuthRejected verifies that when the server sends an error frame
+// followed by ClosePolicyViolation (matching the real gateway ordering in
+// pkg/gateway/websocket.go:665-706), Run returns ErrKeyInvalid (FR-019).
+//
+// The error frame arrives BEFORE the close — the fix ensures ErrKeyInvalid is
+// triggered by the error frame on the !authed path, not only by the close code.
 //
 // BDD: Given an invalid CLI key, When Run is called, Then ErrKeyInvalid is returned.
 func TestRun_AuthRejected(t *testing.T) {
@@ -491,5 +518,145 @@ func TestRun_ErrorFrame(t *testing.T) {
 	// Error text must not appear on stdout.
 	if strings.Contains(stdout.String(), errMsg) {
 		t.Errorf("error message leaked to stdout: %q", stdout.String())
+	}
+}
+
+// TestRun_TimeoutDuringKeepalive verifies that when the server streams keep-alive
+// frames indefinitely but never sends a done frame, Run returns ErrTimeout within
+// the Timeout budget. This exercises the ctx.Done() goroutine that unblocks the
+// blocked ReadMessage call — without it, a keep-alive stream would prevent the
+// timeout from firing.
+//
+// BDD: Given a server that streams pong frames forever and never sends done,
+// And --timeout is 300 ms, Then Run returns ErrTimeout within ~600 ms.
+func TestRun_TimeoutDuringKeepalive(t *testing.T) {
+	t.Parallel()
+
+	// keepAliveHandler upgrades to WS, accepts auth + message, then streams
+	// pong frames at 20 ms intervals forever (simulating a server that sends
+	// periodic keep-alive traffic but never completes the turn).
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/chat/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// Read auth frame.
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var authFrame generated.AuthFrame
+		if jsonErr := json.Unmarshal(raw, &authFrame); jsonErr != nil || authFrame.Token != testToken {
+			return
+		}
+		// Send session_started so the client marks authed, then keep-alive pongs.
+		sessionFrame := generated.SessionStartedFrame{Type: "session_started", SessionId: "sess-ka"}
+		if data, marshalErr := json.Marshal(sessionFrame); marshalErr == nil {
+			_ = conn.WriteMessage(websocket.TextMessage, data)
+		}
+		// Read the message frame.
+		if _, _, err = conn.ReadMessage(); err != nil {
+			return
+		}
+		// Stream pong frames indefinitely until the client closes.
+		pong := map[string]string{"type": "pong"}
+		pongData, _ := json.Marshal(pong)
+		for {
+			if writeErr := conn.WriteMessage(websocket.TextMessage, pongData); writeErr != nil {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	addr := strings.TrimPrefix(srv.URL, "http://")
+
+	start := time.Now()
+	const budget = 300 * time.Millisecond
+	err := run.Run(context.Background(), run.Options{
+		Agent:   "jim",
+		Prompt:  "hello",
+		Addr:    addr,
+		Token:   testToken,
+		Timeout: budget,
+		Stdout:  io.Discard,
+		Stderr:  io.Discard,
+	})
+
+	elapsed := time.Since(start)
+	if err != run.ErrTimeout {
+		t.Errorf("Run returned %v, want ErrTimeout", err)
+	}
+	// Allow up to 3× the budget for scheduling jitter; must not exceed 10×.
+	if elapsed > 10*budget {
+		t.Errorf("Run took %v, expected < %v (10× budget)", elapsed, 10*budget)
+	}
+}
+
+// TestRun_ApprovalPostFailure verifies that when the /tool-approvals endpoint
+// returns 500 on both the initial attempt and the retry, Run returns
+// ErrApprovalFailed rather than silently continuing to a 90 s server hang.
+//
+// BDD: Given the approval endpoint always returns 500,
+// When a tool_approval_required frame arrives,
+// Then Run returns ErrApprovalFailed (not nil).
+func TestRun_ApprovalPostFailure(t *testing.T) {
+	t.Parallel()
+
+	// The approval POST is synchronous (blocks the WS read loop while it runs),
+	// so we must ensure the WS scripted frames are ready before the approval
+	// fires. The approval frame arrives after session_started; after both POSTs
+	// fail, Run should return ErrApprovalFailed before reaching the done frame.
+	frames := []any{
+		generated.SessionStartedFrame{Type: "session_started", SessionId: "sess-af"},
+		generated.ToolApprovalRequiredFrame{
+			Type:        "tool_approval_required",
+			SessionId:   "sess-af",
+			AgentId:     "jim",
+			ApprovalId:  "appr-fail",
+			ToolName:    "workspace.shell",
+			ToolCallId:  "tc-fail",
+			TurnId:      "turn-fail",
+			Args:        map[string]any{"command": "rm -rf /"},
+			ExpiresInMs: 30000,
+		},
+		// done frame is present in the script but should never be reached because
+		// Run exits on ErrApprovalFailed before the WS read resumes.
+		generated.DoneFrame{Type: "done", SessionId: "sess-af"},
+	}
+
+	ss := newScriptedServer(t, frames, false)
+	ss.approvalStatusCode = http.StatusInternalServerError // both attempts return 500
+
+	var postCount atomic.Int32
+	var stdout, stderr bytes.Buffer
+	opts := run.Options{
+		Agent:   "jim",
+		Prompt:  "hello",
+		Addr:    ss.addr(),
+		Token:   testToken,
+		Yes:     true,
+		Timeout: 10 * time.Second,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	err := run.Run(context.Background(), opts)
+	if err != run.ErrApprovalFailed {
+		t.Errorf("Run returned %v, want ErrApprovalFailed", err)
+	}
+
+	// Drain the approvals channel to count how many POSTs the server received.
+	// Both the initial attempt and the retry must have fired (2 POSTs total).
+	close(ss.approvals)
+	for range ss.approvals {
+		postCount.Add(1)
+	}
+	if n := postCount.Load(); n != 2 {
+		t.Errorf("approval endpoint received %d POST(s), want 2 (initial + retry)", n)
 	}
 }

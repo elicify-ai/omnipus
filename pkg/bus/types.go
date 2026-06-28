@@ -58,8 +58,22 @@ type InboundMessage struct {
 	// (ADR-019 FR-4b / NFR-1). Channels that know their instance set this
 	// directly; inboundInstanceID prefers it over Metadata for the
 	// transition off the metadata-map smuggling pattern.
-	InstanceID string            `json:"instance_id,omitempty"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
+	InstanceID string `json:"instance_id,omitempty"`
+	// GatewayUserID is the WS-authenticated gateway principal that initiated
+	// this turn (FR-017 audit attribution). It is set ONLY by the gateway
+	// webchat WS path (pkg/gateway/websocket.go, where wc.userID is known,
+	// e.g. "cli" or an admin username) and is read by the agent loop into
+	// processOptions.UserID → audit.Entry.User. It is a DEDICATED carrier,
+	// deliberately separate from Sender.Username: production channels
+	// (Telegram, Discord, IRC, Matrix, Google Chat, WeiXin) populate
+	// Sender.Username with the PLATFORM handle (e.g. "@alice"), which is NOT
+	// a gateway principal and must never be stamped as audit User. Because
+	// channel/task/scheduled inbound messages never set this field, those
+	// turns leave audit.Entry.User empty structurally — not by a runtime
+	// guard. Empty under dev-mode bypass / legacy env-token auth (wc.userID
+	// is unset there); the audit stamp then stays empty rather than guessing.
+	GatewayUserID string            `json:"gateway_user_id,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
 }
 
 type OutboundMessage struct {

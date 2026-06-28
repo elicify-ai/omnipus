@@ -51,8 +51,10 @@ func TestNewOmnipusCommand_KeptCommandsPresent(t *testing.T) {
 }
 
 // TestNewOmnipusCommand_RemovedVerbsAreUnknown verifies that each removed verb
-// is not registered as a subcommand (cobra will return "unknown command" at
-// runtime). We test the absence by checking the subcommand list.
+// is not registered as a subcommand. Because the root uses cobra.ArbitraryArgs,
+// typing a removed verb falls into RunE rather than cobra's own "unknown command"
+// handler; RunE prints a dedicated redesign-removal message instead. We assert
+// here only that the verbs are absent from the registered subcommand list.
 func TestNewOmnipusCommand_RemovedVerbsAreUnknown(t *testing.T) {
 	cmd := NewOmnipusCommand()
 	require.NotNil(t, cmd)
@@ -68,6 +70,38 @@ func TestNewOmnipusCommand_RemovedVerbsAreUnknown(t *testing.T) {
 	for _, verb := range removedVerbs {
 		assert.False(t, slices.Contains(registeredNames, verb),
 			"removed verb %q must not be registered", verb)
+	}
+}
+
+// TestRemovedVerbPrintsDesignMessage verifies that when the user types a removed
+// verb (e.g. "status"), the removedVerbs guard in RunE would fire — NOT the
+// confusing "unknown agent" error that would appear if the verb reached the
+// agent-lookup path (US-11/AC-1). Because RunE calls os.Exit(1) we cannot
+// call cmd.Execute() in a unit test, so we assert the map membership that
+// controls the guard directly.
+func TestRemovedVerbPrintsDesignMessage(t *testing.T) {
+	// Confirm that each removed verb is in the map the RunE guard consults.
+	// TestRemovedVerbMessage_DirectMapCheck covers the same map for kept verbs.
+	for _, verb := range []string{"agent", "auth", "status", "cron", "migrate", "model", "skills"} {
+		t.Run(verb, func(t *testing.T) {
+			assert.True(t, removedVerbs[verb],
+				"removedVerbs map must contain %q so RunE prints the redesign message", verb)
+		})
+	}
+}
+
+// TestRemovedVerbMessage_DirectMapCheck is a direct table test of the
+// removedVerbs map used by RunE. If a verb is in the map, RunE will print
+// the removal message and exit non-zero before trying the agent-lookup.
+func TestRemovedVerbMessage_DirectMapCheck(t *testing.T) {
+	wantIn := []string{"agent", "auth", "status", "cron", "migrate", "model", "skills"}
+	wantOut := []string{"onboard", "start", "credentials", "audit", "doctor", "version", "gateway", "jim", "mia"}
+
+	for _, v := range wantIn {
+		assert.True(t, removedVerbs[v], "expected %q in removedVerbs", v)
+	}
+	for _, v := range wantOut {
+		assert.False(t, removedVerbs[v], "did not expect %q in removedVerbs", v)
 	}
 }
 

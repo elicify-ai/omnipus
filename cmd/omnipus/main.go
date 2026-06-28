@@ -71,11 +71,26 @@ func printRosterAndUsage(w *os.File, roster []rosterLine) {
 	fmt.Fprintln(w, `Run "omnipus --help" for full documentation.`)
 }
 
+// removedVerbs is the set of CLI verbs removed in the CLI redesign. When the
+// user types one of these, RunE prints a helpful message instead of the
+// confusing "unknown agent" error that would otherwise appear because the root
+// uses cobra.ArbitraryArgs (US-11/AC-1).
+var removedVerbs = map[string]bool{
+	"agent":   true,
+	"auth":    true,
+	"status":  true,
+	"cron":    true,
+	"migrate": true,
+	"model":   true,
+	"skills":  true,
+}
+
 // NewOmnipusCommand builds the root cobra command with the minimized CLI tree.
 //
 // Subcommands (resolved first by cobra): onboard, start, credentials, audit, doctor, version.
 // Root RunE handles the positional <agent> [<prompt>] execute path (FR-001/002/008).
-// Removed verbs (agent, auth, status, cron, migrate, model, skills) are no longer registered.
+// Removed verbs (agent, auth, status, cron, migrate, model, skills) are no longer registered;
+// typing one prints a helpful message (US-11/AC-1) rather than "unknown agent".
 func NewOmnipusCommand() *cobra.Command {
 	short := fmt.Sprintf("%s omnipus - Personal AI Assistant v%s\n\n", internal.Logo, config.GetVersion())
 
@@ -163,6 +178,17 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 
 			agentID := args[0]
 
+			// US-11/AC-1: if args[0] is a removed verb, print a helpful message
+			// before attempting the agent-lookup (which would print the confusing
+			// "unknown agent" error because the root uses ArbitraryArgs).
+			if removedVerbs[agentID] {
+				fmt.Fprintf(os.Stderr,
+					"%q was removed in the CLI redesign — run 'omnipus --help' for the current commands\n",
+					agentID,
+				)
+				os.Exit(1)
+			}
+
 			// Exactly 1 arg (agent, no prompt) → usage error.
 			if len(args) == 1 {
 				fmt.Fprintf(os.Stderr, "error: provide a prompt: omnipus %s \"<prompt>\"\n", agentID)
@@ -234,15 +260,18 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 			}
 
 			// Map sentinel errors to user-facing messages + non-zero exit.
+			// The four sentinel values carry complete user-facing messages;
+			// print them verbatim. Only the default (wrapped) case prepends
+			// the "error:" prefix so the label isn't duplicated.
 			switch {
 			case errors.Is(runErr, run.ErrRemoteUnsupported):
-				fmt.Fprintln(os.Stderr, "error: remote gateways are not supported yet")
+				fmt.Fprintln(os.Stderr, run.ErrRemoteUnsupported.Error())
 			case errors.Is(runErr, run.ErrGatewayDown):
 				fmt.Fprintln(os.Stderr, run.ErrGatewayDown.Error())
 			case errors.Is(runErr, run.ErrKeyInvalid):
 				fmt.Fprintln(os.Stderr, run.ErrKeyInvalid.Error())
 			case errors.Is(runErr, run.ErrTimeout):
-				fmt.Fprintln(os.Stderr, "error: timed out waiting for the agent to finish")
+				fmt.Fprintln(os.Stderr, run.ErrTimeout.Error())
 			default:
 				fmt.Fprintln(os.Stderr, "error:", runErr)
 			}

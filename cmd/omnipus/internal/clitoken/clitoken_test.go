@@ -1,9 +1,11 @@
 package clitoken
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
@@ -230,5 +232,105 @@ func TestLoadCLIToken_MissingFile_ReturnsErrNoCLIToken(t *testing.T) {
 	}
 	if err != ErrNoCLIToken {
 		t.Errorf("expected ErrNoCLIToken, got: %v", err)
+	}
+}
+
+// TestWarnPermissiveTokenFile_0644EmitsWarning verifies that
+// warnPermissiveTokenFile writes a warning when the file mode has group/world
+// read bits set (MIN-2). The warning must mention "group/world-readable" and
+// "chmod 600". The file is still readable afterwards — the helper does not
+// refuse access.
+func TestWarnPermissiveTokenFile_0644EmitsWarning(t *testing.T) {
+	home := t.TempDir()
+	seedMinimalConfig(t, home)
+	if _, err := EnsureCLIToken(home); err != nil {
+		t.Fatalf("EnsureCLIToken: %v", err)
+	}
+	tokenPath := CLITokenPath(home)
+
+	// Widen permissions so group/world can read.
+	if err := os.Chmod(tokenPath, 0o644); err != nil {
+		t.Fatalf("chmod 0644: %v", err)
+	}
+
+	var buf bytes.Buffer
+	warnPermissiveTokenFile(tokenPath, &buf)
+	warning := buf.String()
+
+	if warning == "" {
+		t.Error("expected a warning for a 0644 token file, got empty output")
+	}
+	if !strings.Contains(warning, "group/world-readable") {
+		t.Errorf("warning does not mention group/world-readable: %q", warning)
+	}
+	if !strings.Contains(warning, "chmod 600") {
+		t.Errorf("warning does not mention chmod 600: %q", warning)
+	}
+}
+
+// TestWarnPermissiveTokenFile_0600NoWarning verifies that a correctly-moded
+// 0600 file produces no output (the common case must be silent).
+func TestWarnPermissiveTokenFile_0600NoWarning(t *testing.T) {
+	home := t.TempDir()
+	seedMinimalConfig(t, home)
+	if _, err := EnsureCLIToken(home); err != nil {
+		t.Fatalf("EnsureCLIToken: %v", err)
+	}
+
+	var buf bytes.Buffer
+	warnPermissiveTokenFile(CLITokenPath(home), &buf)
+	if buf.Len() != 0 {
+		t.Errorf("unexpected warning for a 0600 file: %q", buf.String())
+	}
+}
+
+// TestWarnPermissiveTokenFile_MissingFile_NoOutput verifies that
+// warnPermissiveTokenFile silently does nothing when the file does not exist
+// (the caller handles the missing-file error path in LoadCLIToken).
+func TestWarnPermissiveTokenFile_MissingFile_NoOutput(t *testing.T) {
+	var buf bytes.Buffer
+	warnPermissiveTokenFile("/nonexistent/path/cli.token", &buf)
+	if buf.Len() != 0 {
+		t.Errorf("expected no output for a missing file, got: %q", buf.String())
+	}
+}
+
+// TestLoadCLIToken_EmptyFile_ReturnsEmptyString verifies that an empty
+// cli.token file does not panic and returns an empty string without error
+// (the caller will later fail auth on an empty token, which is the correct
+// handling path).
+func TestLoadCLIToken_EmptyFile_ReturnsEmptyString(t *testing.T) {
+	home := t.TempDir()
+	tokenPath := CLITokenPath(home)
+	// Write an empty file at the token path.
+	if err := os.WriteFile(tokenPath, []byte{}, 0o600); err != nil {
+		t.Fatalf("write empty token file: %v", err)
+	}
+	tok, err := LoadCLIToken(home)
+	if err != nil {
+		t.Fatalf("LoadCLIToken returned unexpected error for empty file: %v", err)
+	}
+	if tok != "" {
+		t.Errorf("expected empty string from empty token file, got %q", tok)
+	}
+}
+
+// TestLoadCLIToken_TruncatedFile_ReturnsPartialToken verifies that a token
+// file containing only a partial token (no newline, truncated) does not panic;
+// the partial content is returned and the caller will receive an auth rejection
+// from the gateway (the correct error path, distinct from ErrNoCLIToken).
+func TestLoadCLIToken_TruncatedFile_ReturnsPartialToken(t *testing.T) {
+	home := t.TempDir()
+	tokenPath := CLITokenPath(home)
+	partial := []byte("omnipus_abc")
+	if err := os.WriteFile(tokenPath, partial, 0o600); err != nil {
+		t.Fatalf("write truncated token file: %v", err)
+	}
+	tok, err := LoadCLIToken(home)
+	if err != nil {
+		t.Fatalf("LoadCLIToken returned unexpected error for truncated file: %v", err)
+	}
+	if tok != "omnipus_abc" {
+		t.Errorf("expected %q, got %q", "omnipus_abc", tok)
 	}
 }
