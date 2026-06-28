@@ -66,12 +66,39 @@ export function MilestoneDatePopover({
       // milestone is guaranteed non-null when Save is clicked (button disabled otherwise).
       return updateMilestone(workspaceId, milestone!.id, { due_date: dateValue || null })
     },
-    onSuccess: () => {
+    onSuccess: (_data, _vars, _ctx) => {
+      // Capture all closure values into consts NOW — the milestone prop may be null
+      // by the time the Undo action is invoked (dialog already closed). FR-010 Undo.
+      const savedMilestoneId = milestone!.id
+      const savedMilestoneName = milestone?.name ?? 'milestone'
+      const savedWorkspaceId = workspaceId
+      const priorDueDate = milestone!.due_date ?? null
+
       addToast({
-        message: `Rescheduled ${milestone?.name ?? 'milestone'}`,
+        message: `Rescheduled ${savedMilestoneName}`,
         variant: 'success',
+        duration: 5000,
         // role=status is the semantic for a non-disruptive confirmation (I-8/FR-010).
         // The toast store renders with aria-live="polite" for the status variant.
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            updateMilestone(savedWorkspaceId, savedMilestoneId, { due_date: priorDueDate })
+              .then(() => {
+                onRescheduled?.()
+              })
+              .catch((err: unknown) => {
+                console.error('[calendar] milestone reschedule undo failed', {
+                  milestoneId: savedMilestoneId,
+                  err,
+                })
+                addToast({
+                  message: "Couldn't undo",
+                  variant: 'error',
+                })
+              })
+          },
+        },
       })
       onRescheduled?.()
       onClose()
