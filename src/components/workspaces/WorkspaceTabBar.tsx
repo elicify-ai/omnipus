@@ -1,3 +1,4 @@
+import React from 'react'
 import { Link, useLocation } from '@tanstack/react-router'
 import { motion } from 'framer-motion'
 import {
@@ -50,7 +51,8 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
     <div
       role="tablist"
       aria-label="Workspace views"
-      className="flex items-stretch gap-1 overflow-x-auto flex-shrink-0"
+      className="flex items-stretch gap-1 overflow-x-auto min-w-0 flex-1"
+      style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
     >
       {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
         const isActive = segment === activeSegment
