@@ -464,3 +464,99 @@ describe('ModelSelector — O3 onPairChange ({model, provider} pair)', () => {
     expect(onChange).toHaveBeenCalledWith('claude-3-haiku')
   })
 })
+
+// =====================================================================
+// variant="ghost" — flat/compact trigger for the chat header
+// =====================================================================
+
+describe('ModelSelector — variant="ghost"', () => {
+  it('renders a trigger without a border class in ghost mode', () => {
+    render(
+      <ModelSelector
+        models={FLAT_MODELS}
+        value="claude-3-haiku"
+        onChange={vi.fn()}
+        variant="ghost"
+        triggerTestId="ghost-trigger"
+      />,
+    )
+    const trigger = screen.getByTestId('ghost-trigger')
+    // Ghost trigger must NOT carry the form-field border class.
+    expect(trigger.className).not.toContain('border')
+    // Ghost trigger must carry the compact height class.
+    expect(trigger.className).toContain('h-7')
+    // Ghost trigger must carry the compact padding class.
+    expect(trigger.className).toContain('px-2')
+  })
+
+  it('still renders the selected value and caret in ghost mode', () => {
+    render(
+      <ModelSelector
+        models={FLAT_MODELS}
+        value="claude-3-haiku"
+        onChange={vi.fn()}
+        variant="ghost"
+        triggerTestId="ghost-trigger"
+      />,
+    )
+    // The popover mock renders content inline, so the model text may appear
+    // in both the trigger span and the list. Use getAllByText and verify at
+    // least one instance is present (the trigger display value).
+    expect(screen.getAllByText('claude-3-haiku').length).toBeGreaterThanOrEqual(1)
+    // CommandInput also carries role="combobox" in cmdk; confirm the trigger
+    // button itself is present by test id.
+    expect(screen.getByTestId('ghost-trigger')).toBeInTheDocument()
+  })
+
+  it('opens the popover and lists models in ghost mode', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelSelector
+        models={FLAT_MODELS}
+        value=""
+        onChange={onChange}
+        variant="ghost"
+        triggerTestId="ghost-trigger"
+      />,
+    )
+    // Popover content is rendered by our mock; all models visible.
+    for (const model of FLAT_MODELS) {
+      expect(screen.getByText(model)).toBeInTheDocument()
+    }
+    // Picking a model calls onChange.
+    fireEvent.click(screen.getByText('gpt-4o'))
+    expect(onChange).toHaveBeenCalledWith('gpt-4o')
+  })
+
+  it('still shows the unresolved chip on the ghost trigger for unknown slugs', () => {
+    render(
+      <ModelSelector
+        models={FLAT_MODELS}
+        value="totally-unknown-model"
+        onChange={vi.fn()}
+        variant="ghost"
+        triggerTestId="ghost-trigger"
+      />,
+    )
+    expect(screen.getByText('Unresolved')).toBeInTheDocument()
+    const trigger = screen.getByTestId('ghost-trigger')
+    expect(trigger.getAttribute('data-unresolved')).toBe('true')
+  })
+
+  it('default variant (omitted) preserves the bordered form-field look', () => {
+    // Regression guard: omitting variant must not regress existing styled triggers.
+    render(
+      <ModelSelector
+        models={FLAT_MODELS}
+        value="claude-3-haiku"
+        onChange={vi.fn()}
+        triggerTestId="default-trigger"
+      />,
+    )
+    const trigger = screen.getByTestId('default-trigger')
+    // Default trigger carries the border class.
+    expect(trigger.className).toContain('border')
+    // Default trigger uses the taller h-10 class.
+    expect(trigger.className).toContain('h-10')
+  })
+})

@@ -97,6 +97,14 @@ html {
   font-size: clamp(12px, var(--user-font-size, 14px), 20px);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* iOS/Safari scroll fix: lock the document to the viewport so the
+     app-shell (h-dvh + overflow-hidden) is the sole scroll root.
+     Without this, momentum-scroll from the inner message list chains
+     up to the body and scrolls/rubber-bands the entire layout away on
+     iPad/iOS Safari and macOS Safari. */
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
@@ -105,6 +113,18 @@ body {
   color: var(--color-secondary);
   font-family: var(--font-body);
   line-height: 1.6;
+  /* Mirror the html lock so every level of the document stack is
+     height-constrained and cannot scroll or rubber-band. */
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Ensure the Vite mount node fills the viewport so the h-dvh app-shell
+   receives the full display height on all browsers (including iOS Safari
+   where 100vh != dvh without an explicit parent height). */
+#root {
+  height: 100%;
 }
 
 /* Typography utilities */

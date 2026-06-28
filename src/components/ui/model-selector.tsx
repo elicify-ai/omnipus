@@ -96,9 +96,19 @@ interface ModelSelectorProps {
    * constrained picker. Defaults to a generic "connect a provider" hint.
    */
   emptyCatalogHint?: string
+  /**
+   * Visual style of the trigger button.
+   * - `'default'` (the default) — bordered form-field look: solid border, filled
+   *   background, h-10, full-width. Preserves the existing appearance for all
+   *   current call sites (backward-compatible).
+   * - `'ghost'` — flat, compact, borderless: transparent background, h-7, smaller
+   *   padding (px-2), muted text, hover-background only. Matches the ghost sibling
+   *   controls in the chat header (New Chat / agent-picker buttons).
+   */
+  variant?: 'default' | 'ghost'
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, variant = 'default' }: ModelSelectorProps) {
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
   // Unique id for the sr-only description the popover's aria-describedby
@@ -117,16 +127,25 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // exception — there the user must type the first slug for an
   // endpoint-less provider.
   if (catalogEmpty && constrainToCatalog && !allowFreeTextWhenEmpty) {
+    const isGhost = variant === 'ghost'
     return (
       <div
         data-testid={triggerTestId}
         aria-disabled="true"
-        className="flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm cursor-not-allowed opacity-70"
-        style={{
-          borderColor: 'var(--color-border)',
-          backgroundColor: 'var(--color-surface-1)',
-          color: 'var(--color-muted)',
-        }}
+        className={
+          isGhost
+            ? 'flex items-center h-7 rounded-md px-2 text-xs cursor-not-allowed opacity-70'
+            : 'flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm cursor-not-allowed opacity-70'
+        }
+        style={
+          isGhost
+            ? { color: 'var(--color-muted)' }
+            : {
+                borderColor: 'var(--color-border)',
+                backgroundColor: 'var(--color-surface-1)',
+                color: 'var(--color-muted)',
+              }
+        }
       >
         <span className="truncate text-xs">
           {emptyCatalogHint ?? 'No models available — connect a provider first'}
@@ -234,6 +253,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     setQuery('')
   }
 
+  const isGhost = variant === 'ghost'
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -247,12 +268,20 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           disabled={disabled}
           data-testid={triggerTestId}
           data-unresolved={valueUnresolved || undefined}
-          className="flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50"
-          style={{
-            borderColor: open ? 'var(--color-accent)' : valueUnresolved ? 'var(--color-warning)' : 'var(--color-border)',
-            backgroundColor: 'var(--color-surface-1)',
-            color: value ? 'var(--color-secondary)' : 'var(--color-muted)',
-          }}
+          className={
+            isGhost
+              ? 'flex items-center gap-1 h-7 rounded-md px-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[var(--color-surface-2)]'
+              : 'flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50'
+          }
+          style={
+            isGhost
+              ? { color: 'var(--color-muted)' }
+              : {
+                  borderColor: open ? 'var(--color-accent)' : valueUnresolved ? 'var(--color-warning)' : 'var(--color-border)',
+                  backgroundColor: 'var(--color-surface-1)',
+                  color: value ? 'var(--color-secondary)' : 'var(--color-muted)',
+                }
+          }
         >
           <span className="flex items-center gap-2 min-w-0 flex-1">
             <span className="truncate font-mono text-sm">{displayValue}</span>

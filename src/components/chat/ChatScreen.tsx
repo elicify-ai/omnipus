@@ -612,7 +612,7 @@ function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; lit
   return (
     <div
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto pt-4 pb-2"
+      className="flex-1 overflow-y-auto overscroll-contain pt-4 pb-2"
     >
       <div className="max-w-4xl mx-auto w-full">
         {messages.map((msg) => {
@@ -785,7 +785,7 @@ function VirtualizedMessageListInner({
     <div
       ref={scrollContainerRef}
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto pt-4 pb-2"
+      className="flex-1 overflow-y-auto overscroll-contain pt-4 pb-2"
       style={{ position: 'relative' }}
       onScroll={onScroll}
       onWheel={markUserGesture}

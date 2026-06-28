@@ -154,8 +154,6 @@ function WorkspaceTabContainerView({
 
           <WorkspaceTabBar workspaceId={workspace.id} />
 
-          <div className="flex-1 min-w-0" />
-
           {activeSegment === 'chat' && (
             <div className="flex-shrink-0 px-3" data-testid="workspace-chat-controls">
               <ChatControls />

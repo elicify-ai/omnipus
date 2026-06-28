@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from '@tanstack/react-router'
-import { Robot, ArrowsClockwise, CaretDown, PencilSimpleLine, CaretLeft } from '@phosphor-icons/react'
+import { Robot, ArrowsClockwise, CaretDown, PencilSimpleLine, CaretLeft, DotsThreeVertical } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
   DropdownMenu,
@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -38,6 +39,7 @@ export function ChatControls({ className }: ChatControlsProps) {
   const setNextModel = useChatStore((s) => s.setNextModel)
   const addToast = useUiStore((s) => s.addToast)
   const openSessionPanel = useUiStore((s) => s.openSessionPanel)
+  const [moreOpen, setMoreOpen] = useState(false)
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -49,8 +51,10 @@ export function ChatControls({ className }: ChatControlsProps) {
   const handleNewChat = () => {
     if (isWorkspaceChat) {
       startNewSession(activeAgentId, null)
+      setMoreOpen(false)
       return
     }
+    setMoreOpen(false)
     void navigate({ to: '/' })
   }
 
@@ -161,125 +165,207 @@ export function ChatControls({ className }: ChatControlsProps) {
     )
   }
 
-  return (
-    <div className={cn('flex items-center gap-2 min-w-0', className)}>
-      {/* New Chat — icon-only on mobile, icon+text on desktop */}
-      <button
-        type="button"
-        onClick={handleNewChat}
-        title="New chat"
-        aria-label="New chat"
-        className="sm:hidden w-7 h-7 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
-      >
-        <PencilSimpleLine size={15} />
-      </button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="hidden sm:flex h-7 px-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] gap-1"
-        onClick={handleNewChat}
-        title="New chat"
-        aria-label="New chat"
-      >
-        <PencilSimpleLine size={13} />
-        <span>New Chat</span>
-      </Button>
+  // ── Shared sub-components ─────────────────────────────────────────────────
 
-      {/* Agent selector */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="flex items-center gap-2 h-7 px-2 text-xs font-medium max-w-[280px]"
-            title={activeAgent?.description || activeAgent?.name || 'Select agent'}
+  /** Agent picker dropdown — rendered inline in both breakpoint bands. */
+  const AgentPicker = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="flex items-center gap-2 h-7 px-2 text-xs font-medium max-w-[280px]"
+          title={activeAgent?.description || activeAgent?.name || 'Select agent'}
+        >
+          <div
+            className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+            style={{
+              backgroundColor: activeAgent?.color ?? 'var(--color-surface-3)',
+            }}
+          >
+            {activeAgent
+              ? activeAgent.icon
+                ? <IconRenderer icon={activeAgent.icon} size={11} />
+                : activeAgent.name.charAt(0).toUpperCase()
+              : <Robot size={11} />}
+          </div>
+          <span className="truncate">
+            {activeAgent ? activeAgent.name : 'Select agent'}
+          </span>
+          <CaretDown size={11} className="shrink-0 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-96">
+        {chatAgents.map((agent) => (
+          <DropdownMenuItem
+            key={agent.id}
+            onClick={() => handleAgentSelect(agent.id)}
+            className="flex items-center gap-2"
+            title={agent.description || agent.name}
           >
             <div
               className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
-              style={{
-                backgroundColor: activeAgent?.color ?? 'var(--color-surface-3)',
-              }}
+              style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
             >
-              {activeAgent
-                ? activeAgent.icon
-                  ? <IconRenderer icon={activeAgent.icon} size={11} />
-                  : activeAgent.name.charAt(0).toUpperCase()
-                : <Robot size={11} />}
+              {agent.icon
+                ? <IconRenderer icon={agent.icon} size={11} />
+                : agent.name.charAt(0).toUpperCase()}
             </div>
-            <span className="truncate">
-              {activeAgent ? activeAgent.name : 'Select agent'}
-            </span>
-            <CaretDown size={11} className="shrink-0 opacity-60" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-96">
-          {chatAgents.map((agent) => (
-            <DropdownMenuItem
-              key={agent.id}
-              onClick={() => handleAgentSelect(agent.id)}
-              className="flex items-center gap-2"
-              title={agent.description || agent.name}
-            >
-              <div
-                className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
-                style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
-              >
-                {agent.icon
-                  ? <IconRenderer icon={agent.icon} size={11} />
-                  : agent.name.charAt(0).toUpperCase()}
-              </div>
-              <span className="truncate">{agent.name}</span>
-              {agent.id === effectiveAgentId && (
-                <span className="ml-auto shrink-0 text-[var(--color-success)] text-[10px]">active</span>
-              )}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+            <span className="truncate">{agent.name}</span>
+            {agent.id === effectiveAgentId && (
+              <span className="ml-auto shrink-0 text-[var(--color-success)] text-[10px]">active</span>
+            )}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
 
-      {/* Model selector */}
-      <div className="hidden sm:block w-[220px]">
-        <ModelSelector
-          models={availableModels}
-          value={nextModel ?? ''}
-          onChange={onPickerChange}
-          placeholder={activeAgentModel ?? 'Select a model…'}
-          providerGroups={providerGroups}
-          triggerTestId="composer-model-selector"
-          constrainToCatalog
-          emptyCatalogHint="Connect a provider to pick a model"
-        />
-      </div>
+  /** Sessions button — rendered inline in both breakpoint bands. */
+  const SessionsButton = (
+    <button
+      type="button"
+      onClick={openSessionPanel}
+      aria-label="Open sessions panel"
+      className="flex items-center justify-center h-7 px-2 gap-1 rounded-md text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors text-xs"
+    >
+      <span className="hidden sm:inline">Sessions</span>
+      <CaretLeft size={13} className="rotate-180" />
+    </button>
+  )
 
-      {/* Token counter */}
-      <div
-        className="hidden sm:flex items-center gap-1 text-xs text-[var(--color-muted)]"
-        data-testid="session-token-counter"
-        aria-label={`${sessionTokens} tokens used`}
-      >
-        <ArrowsClockwise
-          size={11}
-          className={isStreaming ? 'animate-spin text-[var(--color-accent)]' : ''}
-          aria-hidden="true"
-        />
-        <span
-          className={`font-mono tabular-nums${isStreaming ? ' text-[var(--color-secondary)]' : ''}`}
-          data-testid="session-token-value"
+  return (
+    <div className={cn('flex items-center gap-2 min-w-0', className)}>
+
+      {/* ── Desktop (≥lg): all five controls inline ─────────────────────── */}
+      <div className="hidden lg:flex items-center gap-2">
+        {/* New Chat */}
+        <button
+          type="button"
+          onClick={handleNewChat}
+          title="New chat"
+          aria-label="New chat"
+          className="w-7 h-7 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
         >
-          {formatTokens(sessionTokens)} tokens
-        </span>
+          <PencilSimpleLine size={15} />
+        </button>
+
+        {/* Agent picker */}
+        {AgentPicker}
+
+        {/* Model selector */}
+        <div className="w-[220px]">
+          <ModelSelector
+            variant="ghost"
+            models={availableModels}
+            value={nextModel ?? ''}
+            onChange={onPickerChange}
+            placeholder={activeAgentModel ?? 'Select a model…'}
+            providerGroups={providerGroups}
+            triggerTestId="composer-model-selector"
+            constrainToCatalog
+            emptyCatalogHint="Connect a provider to pick a model"
+          />
+        </div>
+
+        {/* Token counter */}
+        <div
+          className="flex items-center gap-1 text-xs text-[var(--color-muted)]"
+          data-testid="session-token-counter"
+          aria-label={`${sessionTokens} tokens used`}
+        >
+          <ArrowsClockwise
+            size={11}
+            className={isStreaming ? 'animate-spin text-[var(--color-accent)]' : ''}
+            aria-hidden="true"
+          />
+          <span
+            className={`font-mono tabular-nums${isStreaming ? ' text-[var(--color-secondary)]' : ''}`}
+            data-testid="session-token-value"
+          >
+            {formatTokens(sessionTokens)} tokens
+          </span>
+        </div>
+
+        {/* Sessions button */}
+        {SessionsButton}
       </div>
 
-      {/* Sessions button */}
-      <button
-        type="button"
-        onClick={openSessionPanel}
-        aria-label="Open sessions panel"
-        className="flex items-center justify-center h-7 px-2 gap-1 rounded-md text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors text-xs"
-      >
-        <span className="hidden sm:inline">Sessions</span>
-        <CaretLeft size={13} className="rotate-180" />
-      </button>
+      {/* ── Mobile/Tablet (<lg): Agent · [More ⋯] · Sessions ───────────── */}
+      <div className="flex lg:hidden items-center gap-2">
+        {/* Agent picker — always inline */}
+        {AgentPicker}
+
+        {/* More popover — secondary controls */}
+        <Popover open={moreOpen} onOpenChange={setMoreOpen} modal={false}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="More chat controls"
+              data-testid="chat-controls-more-trigger"
+              className="flex items-center justify-center h-7 w-7 rounded-md text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+            >
+              <DotsThreeVertical size={16} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            sideOffset={6}
+            className="w-64 p-3 flex flex-col gap-3"
+            data-testid="chat-controls-more-popover"
+          >
+            {/* New Chat */}
+            <button
+              type="button"
+              onClick={handleNewChat}
+              aria-label="New chat"
+              data-testid="more-new-chat"
+              className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors text-left"
+            >
+              <PencilSimpleLine size={14} />
+              <span>New Chat</span>
+            </button>
+
+            {/* Model selector */}
+            <div data-testid="more-model-selector">
+              <p className="text-[10px] text-[var(--color-muted)] mb-1.5 px-1">Model</p>
+              <ModelSelector
+                variant="ghost"
+                models={availableModels}
+                value={nextModel ?? ''}
+                onChange={onPickerChange}
+                placeholder={activeAgentModel ?? 'Select a model…'}
+                providerGroups={providerGroups}
+                triggerTestId="composer-model-selector"
+                constrainToCatalog
+                emptyCatalogHint="Connect a provider to pick a model"
+              />
+            </div>
+
+            {/* Token counter */}
+            <div
+              className="flex items-center gap-1.5 px-1 py-1 text-xs text-[var(--color-muted)]"
+              data-testid="session-token-counter"
+              aria-label={`${sessionTokens} tokens used`}
+            >
+              <ArrowsClockwise
+                size={11}
+                className={isStreaming ? 'animate-spin text-[var(--color-accent)]' : ''}
+                aria-hidden="true"
+              />
+              <span
+                className={`font-mono tabular-nums${isStreaming ? ' text-[var(--color-secondary)]' : ''}`}
+                data-testid="session-token-value"
+              >
+                {formatTokens(sessionTokens)} tokens
+              </span>
+            </div>
+          </PopoverContent>
+        </Popover>
+
+        {/* Sessions button — always inline */}
+        {SessionsButton}
+      </div>
     </div>
   )
 }
