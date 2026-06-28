@@ -174,16 +174,15 @@ func Run(ctx context.Context, o Options) error {
 	// ctxFired is set to true by the ctx.Done() goroutine below, immediately
 	// before SetReadDeadline(now) is called. The read-error handler checks this
 	// flag to distinguish a context-deadline-triggered i/o timeout from a genuine
-	// unexpected disconnect — the net error type alone is ambiguous because the
-	// per-read deadline (min(120s, ctx)) can fire as a net i/o-timeout BEFORE
-	// ctx.Err() is observable on the calling goroutine (race between the runtime
-	// setting DeadlineExceeded and the net layer returning the error).
+	// unexpected disconnect — the net error type alone is ambiguous, and ctx.Err()
+	// can lag behind the net layer returning the deadline error on this goroutine.
+	// Because ctxFired is stored before the deadline kick, it is authoritative.
 	var ctxFired atomic.Bool
 
-	// Kick off a goroutine that closes the connection when the context deadline
-	// fires. Without this, a blocked ReadMessage is not interrupted by context
-	// cancellation — keep-alive frames from the server would keep refreshing the
-	// per-read deadline, so the run could outlive --timeout indefinitely.
+	// Kick off a goroutine that unblocks a blocked ReadMessage when the context
+	// deadline fires. Without this, a blocked read is not interrupted by context
+	// cancellation — keep-alive frames from the server would keep the read alive,
+	// so the run could outlive --timeout indefinitely.
 	// The goroutine uses SetReadDeadline(now) to unblock any in-flight read
 	// immediately; the next ReadMessage call returns an error that we map to
 	// ErrTimeout (see the ctxFired / ctx.Err() check after every read error below).
@@ -233,23 +232,14 @@ func Run(ctx context.Context, o Options) error {
 		return conn.WriteMessage(websocket.TextMessage, data)
 	}
 
-	// refreshRead sets a per-read deadline capped at min(120 s, time until the
-	// context deadline). This ensures:
-	//   1. A stalled server is detected within 120 s.
-	//   2. If the context deadline is closer than 120 s, the read deadline fires
-	//      first and the ctx.Done() goroutine (above) unblocks any read, allowing
-	//      the ErrTimeout path to trigger promptly.
-	ctxDeadline, hasDeadline := ctx.Deadline()
-	refreshRead := func() {
-		perReadTimeout := 120 * time.Second
-		if hasDeadline {
-			untilDeadline := time.Until(ctxDeadline)
-			if untilDeadline < perReadTimeout {
-				perReadTimeout = untilDeadline
-			}
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(perReadTimeout))
-	}
+	// We deliberately set NO per-read deadline. Run always installs a context
+	// deadline (Options.Timeout, default 300 s), and the ctx.Done() goroutine above
+	// is the SOLE timeout source: it sets ctxFired=true and then SetReadDeadline(now)
+	// to unblock any in-flight ReadMessage. A competing per-read deadline (the old
+	// min(120 s, ctx) scheme) could fire a hair BEFORE ctxFired/ctx.Err() became
+	// observable under load, mislabeling a timeout as an unexpected disconnect.
+	// With a single deadline source, ctxFired is always true when the read unblocks
+	// from the kick, so the mapping below is race-free.
 
 	// Send the message frame only after auth is accepted (the server will close
 	// the connection if auth fails — we detect that in the read loop below).
@@ -266,21 +256,16 @@ func Run(ctx context.Context, o Options) error {
 	// post-auth error frames (→ wrapped error).
 	authed := false
 
-	// Read loop: receive frames until done or error.
-	refreshRead()
+	// Read loop: receive frames until done or error. The read blocks until a
+	// frame arrives or the ctx.Done() goroutine kicks the deadline at --timeout.
 	for {
 		_, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
-			// Map to ErrTimeout if:
-			//   (a) ctxFired is set — the ctx.Done() goroutine already ran
-			//       SetReadDeadline(now), meaning this error is the result of that
-			//       intentional deadline kick; OR
-			//   (b) ctx.Err() is DeadlineExceeded — the context has fully propagated.
-			// We check ctxFired first because the net i/o-timeout error can arrive
-			// before ctx.Err() is visible on this goroutine (timing race), which
-			// previously caused the connection-closed-unexpectedly branch to fire
-			// instead of ErrTimeout.
-			if ctxFired.Load() || ctx.Err() == context.DeadlineExceeded {
+			// The ctx.Done() goroutine sets ctxFired BEFORE SetReadDeadline(now),
+			// so if the read unblocked from that kick, ctxFired is already true.
+			// ctx.Err() is a belt-and-suspenders for full propagation. Either way
+			// the run exceeded --timeout (or was canceled) → ErrTimeout.
+			if ctxFired.Load() || ctx.Err() != nil {
 				return ErrTimeout
 			}
 
@@ -296,7 +281,6 @@ func Run(ctx context.Context, o Options) error {
 			// unexpected disconnect.
 			return fmt.Errorf("run: connection closed unexpectedly: %w", readErr)
 		}
-		refreshRead()
 
 		// Decode just the type discriminator first, then re-decode into the
 		// specific struct. This avoids importing a full JSON schema dispatcher.
