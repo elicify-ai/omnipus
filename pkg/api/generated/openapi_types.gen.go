@@ -2908,6 +2908,24 @@ func (e SkillTrustUpdateResponseAppliedLevel) Valid() bool {
 	}
 }
 
+// Defines values for SlashCommandDelivery.
+const (
+	SlashCommandDeliveryAgent  SlashCommandDelivery = "agent"
+	SlashCommandDeliveryClient SlashCommandDelivery = "client"
+)
+
+// Valid indicates whether the value is a known member of the SlashCommandDelivery enum.
+func (e SlashCommandDelivery) Valid() bool {
+	switch e {
+	case SlashCommandDeliveryAgent:
+		return true
+	case SlashCommandDeliveryClient:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskAction.
 const (
 	TaskActionLlm TaskAction = "llm"
@@ -3592,6 +3610,27 @@ func (e WorkspaceUpdateRequestStatus) Valid() bool {
 	case WorkspaceUpdateRequestStatusActive:
 		return true
 	case WorkspaceUpdateRequestStatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListCommandsParamsSurface.
+const (
+	Channel ListCommandsParamsSurface = "channel"
+	Cli     ListCommandsParamsSurface = "cli"
+	Web     ListCommandsParamsSurface = "web"
+)
+
+// Valid indicates whether the value is a known member of the ListCommandsParamsSurface enum.
+func (e ListCommandsParamsSurface) Valid() bool {
+	switch e {
+	case Channel:
+		return true
+	case Cli:
+		return true
+	case Web:
 		return true
 	default:
 		return false
@@ -7459,6 +7498,33 @@ type SkillTrustUpdateResponse struct {
 // SkillTrustUpdateResponseAppliedLevel The skill trust level now active.
 type SkillTrustUpdateResponseAppliedLevel string
 
+// SlashCommand A single slash command available on a given surface, as returned by GET /api/v1/commands. The web chat palette renders these. Aliases and deprecated command names are NOT returned as separate entries.
+type SlashCommand struct {
+	// Aliases Hidden back-compat alias names (without slash). Informational only — aliases are not shown as separate palette entries.
+	Aliases *[]string `json:"aliases,omitempty"`
+
+	// AvailableWhileStreaming Whether the command can be invoked mid-turn (e.g. /cancel).
+	AvailableWhileStreaming *bool `json:"available_while_streaming,omitempty"`
+
+	// Delivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+	Delivery SlashCommandDelivery `json:"delivery"`
+
+	// Description One-line description shown in the palette and help.
+	Description string `json:"description"`
+
+	// Label Display label including the leading slash.
+	Label string `json:"label"`
+
+	// Name Canonical command name WITHOUT the leading slash.
+	Name string `json:"name"`
+
+	// Usage Optional usage hint.
+	Usage *string `json:"usage,omitempty"`
+}
+
+// SlashCommandDelivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+type SlashCommandDelivery string
+
 // SseChatRequest Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a user message to the agent and streams the response via Server-Sent Events.
 type SseChatRequest struct {
 	// Message The user message to send to the agent. Must not be empty.
@@ -8413,6 +8479,15 @@ type bearerAuthContextKey string
 
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
 type ConfigureChannelJSONBody map[string]interface{}
+
+// ListCommandsParams defines parameters for ListCommands.
+type ListCommandsParams struct {
+	// Surface Which surface to list commands for. Defaults to web. Unknown values are treated as web.
+	Surface *ListCommandsParamsSurface `form:"surface,omitempty" json:"surface,omitempty"`
+}
+
+// ListCommandsParamsSurface defines parameters for ListCommands.
+type ListCommandsParamsSurface string
 
 // RotateCredentials200JSONResponseBodyStatus defines parameters for RotateCredentials.
 type RotateCredentials200JSONResponseBodyStatus string

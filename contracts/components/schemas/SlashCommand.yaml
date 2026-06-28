@@ -1,0 +1,50 @@
+type: object
+description: >
+  A single slash command available on a given surface, as returned by
+  GET /api/v1/commands. The web chat palette renders these. Aliases and
+  deprecated command names are NOT returned as separate entries.
+required:
+  - name
+  - label
+  - description
+  - delivery
+additionalProperties: false
+properties:
+  name:
+    type: string
+    description: Canonical command name WITHOUT the leading slash.
+    example: "clear"
+  label:
+    type: string
+    description: Display label including the leading slash.
+    example: "/clear"
+  description:
+    type: string
+    description: One-line description shown in the palette and help.
+    example: "Start a new conversation"
+  usage:
+    type: string
+    description: Optional usage hint.
+    example: "/model [name]"
+  aliases:
+    type: array
+    description: >
+      Hidden back-compat alias names (without slash). Informational only —
+      aliases are not shown as separate palette entries.
+    items:
+      type: string
+  available_while_streaming:
+    type: boolean
+    description: Whether the command can be invoked mid-turn (e.g. /cancel).
+    example: false
+  delivery:
+    type: string
+    enum:
+      - client
+      - agent
+    description: >
+      How the web client dispatches the command. "client" = the SPA handles it
+      locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" =
+      the SPA inserts it as text and forwards it via the message frame (e.g.
+      /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+    example: "client"

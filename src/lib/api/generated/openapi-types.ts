@@ -1522,6 +1522,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List available slash commands for a surface
+         * @description Returns the canonical slash commands available on the given surface (default web). Aliases and deprecated names are excluded. The web chat palette renders the web set as its single source of truth.
+         */
+        get: operations["listCommands"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skills": {
         parameters: {
             query?: never;
@@ -4770,6 +4790,42 @@ export interface components {
              * @example jim
              */
             agent_assignment?: string;
+        };
+        /** @description A single slash command available on a given surface, as returned by GET /api/v1/commands. The web chat palette renders these. Aliases and deprecated command names are NOT returned as separate entries. */
+        SlashCommand: {
+            /**
+             * @description Canonical command name WITHOUT the leading slash.
+             * @example clear
+             */
+            name: string;
+            /**
+             * @description Display label including the leading slash.
+             * @example /clear
+             */
+            label: string;
+            /**
+             * @description One-line description shown in the palette and help.
+             * @example Start a new conversation
+             */
+            description: string;
+            /**
+             * @description Optional usage hint.
+             * @example /model [name]
+             */
+            usage?: string;
+            /** @description Hidden back-compat alias names (without slash). Informational only — aliases are not shown as separate palette entries. */
+            aliases?: string[];
+            /**
+             * @description Whether the command can be invoked mid-turn (e.g. /cancel).
+             * @example false
+             */
+            available_while_streaming?: boolean;
+            /**
+             * @description How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+             * @example client
+             * @enum {string}
+             */
+            delivery: "client" | "agent";
         };
         /** @description A single activity event as returned by GET /activity. Events represent notable runtime occurrences (session starts, task lifecycle changes) from the last 24 hours, returned in reverse-chronological order (max 50 entries). */
         ActivityEvent: {
@@ -10748,6 +10804,33 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    listCommands: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Which surface to list commands for. Defaults to web. Unknown values are treated as web.
+                 * @example web
+                 */
+                surface?: "web" | "cli" | "channel";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of available slash commands for the surface. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlashCommand"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
     listSkills: {
         parameters: {
             query?: never;
@@ -12487,6 +12570,7 @@ export type IntegrationProvidersResponse = components["schemas"]["IntegrationPro
 export type IntegrationProviderUpdateRequest = components["schemas"]["IntegrationProviderUpdateRequest"];
 export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
 export type Skill = components["schemas"]["Skill"];
+export type SlashCommand = components["schemas"]["SlashCommand"];
 export type ActivityEvent = components["schemas"]["ActivityEvent"];
 export type UploadedFile = components["schemas"]["UploadedFile"];
 export type SandboxConfigUpdate = components["schemas"]["SandboxConfigUpdate"];
