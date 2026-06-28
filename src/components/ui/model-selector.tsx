@@ -106,10 +106,26 @@ interface ModelSelectorProps {
    *   controls in the chat header (New Chat / agent-picker buttons).
    */
   variant?: 'default' | 'ghost'
+  /**
+   * Controlled open state. When provided alongside `onOpenChange`, the popover
+   * is driven externally (e.g. by the /model slash command setting a store flag).
+   * When omitted the popover manages its own open state via internal useState.
+   */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, variant = 'default' }: ModelSelectorProps) {
-  const [open, setOpen] = React.useState(false)
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
+  const [internalOpen, setInternalOpen] = React.useState(false)
+  const isControlled = controlledOpen !== undefined
+  const open = isControlled ? controlledOpen : internalOpen
+  const setOpen = React.useCallback((next: boolean) => {
+    if (isControlled) {
+      controlledOnOpenChange?.(next)
+    } else {
+      setInternalOpen(next)
+    }
+  }, [isControlled, controlledOnOpenChange])
   const [query, setQuery] = React.useState('')
   // Unique id for the sr-only description the popover's aria-describedby
   // points at. useId() guarantees uniqueness even if multiple

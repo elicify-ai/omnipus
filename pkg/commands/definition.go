@@ -43,6 +43,22 @@ type Definition struct {
 	// appear in /help, the channel menu, or GET /api/v1/commands, but still
 	// execute when invoked directly for one release.
 	Hidden bool
+
+	// AvailableWhileStreaming marks commands that can be invoked mid-turn
+	// (while the agent is actively streaming a response). Only /cancel sets
+	// this to true. Commands that do not set this field default to false.
+	AvailableWhileStreaming bool
+}
+
+// EffectiveDelivery returns the delivery mode, defaulting to DeliveryAgent
+// when none is set. Non-web commands omit Delivery (it is only meaningful
+// for web-surfaced commands), so callers must use this method instead of
+// reading Delivery directly to avoid emitting an empty string on the wire.
+func (d Definition) EffectiveDelivery() DeliveryMode {
+	if d.Delivery == "" {
+		return DeliveryAgent
+	}
+	return d.Delivery
 }
 
 // EffectiveUsage returns the usage string. When SubCommands are present,

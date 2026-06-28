@@ -7,11 +7,12 @@ import (
 
 func cancelCommand() Definition {
 	return Definition{
-		Name:        "cancel",
-		Description: "Cancel the current turn",
-		Usage:       "/cancel",
-		Surfaces:    []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
-		Delivery:    DeliveryClient,
+		Name:                    "cancel",
+		Description:             "Cancel the current turn",
+		Usage:                   "/cancel",
+		Surfaces:                []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
+		Delivery:                DeliveryClient,
+		AvailableWhileStreaming: true,
 		// No Aliases per FR-5 — /stop, /abort, /kill and any other alias are
 		// explicitly forbidden.
 		Handler: func(ctx context.Context, req Request, rt *Runtime) error {

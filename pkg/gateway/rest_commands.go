@@ -52,13 +52,16 @@ func parseSurface(param string) commands.Surface {
 }
 
 // defToSlashCommand converts a commands.Definition to the generated SlashCommand wire type.
-// The Delivery field maps the internal DeliveryMode string directly to SlashCommandDelivery.
+// Delivery is read via EffectiveDelivery() so non-web commands (which leave Delivery unset)
+// emit "agent" instead of an empty string that would fail schema validation.
+// AvailableWhileStreaming is read directly from the Definition field instead of a
+// name string-match so the registry is the single source of truth.
 func defToSlashCommand(def commands.Definition) gen.SlashCommand {
 	sc := gen.SlashCommand{
 		Name:        def.Name,
 		Label:       "/" + def.Name,
 		Description: def.Description,
-		Delivery:    gen.SlashCommandDelivery(def.Delivery),
+		Delivery:    gen.SlashCommandDelivery(def.EffectiveDelivery()),
 	}
 
 	// Usage: only populate when non-empty.
@@ -66,8 +69,8 @@ func defToSlashCommand(def commands.Definition) gen.SlashCommand {
 		sc.Usage = &usage
 	}
 
-	// AvailableWhileStreaming: only /cancel is available mid-turn.
-	if def.Name == "cancel" {
+	// AvailableWhileStreaming: driven by the Definition field, not a name string-match.
+	if def.AvailableWhileStreaming {
 		t := true
 		sc.AvailableWhileStreaming = &t
 	}

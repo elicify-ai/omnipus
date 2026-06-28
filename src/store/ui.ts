@@ -72,6 +72,12 @@ interface UiStore {
   // useState which the parent-swap unmount reset to false.
   expandedSpans: Record<string, boolean>
   toggleSpanExpansion: (spanId: string) => void
+
+  // Model selector open state — set true by the /model slash command so the
+  // chat-header model picker (composer-model-selector in ChatControls) opens
+  // without the user having to click it directly.
+  modelSelectorOpen: boolean
+  setModelSelectorOpen: (open: boolean) => void
 }
 
 // Tracks auto-dismiss timers outside state so they can be cleared on manual dismiss
@@ -133,4 +139,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set((state) => ({
       expandedSpans: { ...state.expandedSpans, [spanId]: !state.expandedSpans[spanId] },
     })),
+
+  modelSelectorOpen: false,
+  setModelSelectorOpen: (open) => set({ modelSelectorOpen: open }),
 }))

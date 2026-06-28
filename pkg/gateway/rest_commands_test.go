@@ -319,6 +319,120 @@ func TestParseSurface(t *testing.T) {
 	}
 }
 
+// TestHandleListCommands_DeliveryValidEnum asserts that EVERY command returned on
+// surface=cli and surface=channel has Delivery ∈ {"client","agent"} (never empty).
+// This is the regression guard for the Constraint #8 bug: non-web commands with
+// Delivery=="" would emit an empty string that fails the SlashCommand.delivery
+// enum constraint in contracts/components/schemas/SlashCommand.yaml.
+func TestHandleListCommands_DeliveryValidEnum(t *testing.T) {
+	api := newMinimalCommandsAPI(t)
+
+	for _, surface := range []string{"cli", "channel"} {
+		t.Run(surface, func(t *testing.T) {
+			w := doCommandsRequest(t, api, surface, true)
+			if w.Code != http.StatusOK {
+				t.Fatalf("surface=%s: status=%d, want 200\nbody: %s", surface, w.Code, w.Body.String())
+			}
+			cmds := parseCommandsResponse(t, w)
+			for _, c := range cmds {
+				if c.Delivery != gen.SlashCommandDeliveryClient && c.Delivery != gen.SlashCommandDeliveryAgent {
+					t.Errorf("surface=%s cmd=%q: Delivery=%q is not a valid enum value (must be 'client' or 'agent')",
+						surface, c.Name, c.Delivery)
+				}
+			}
+		})
+	}
+}
+
+// TestClearHandler_CLI exercises the /clear handler with Channel="cli" and a
+// Runtime providing ClearHistory. Verifies OutcomeHandled and the expected reply.
+// This covers the CLI/channel /clear branch (rt.ClearHistory) which was untested.
+func TestClearHandler_CLI(t *testing.T) {
+	cleared := false
+
+	rt := &commands.Runtime{
+		ClearHistory: func() error {
+			cleared = true
+			return nil
+		},
+	}
+
+	var reply string
+	req := commands.Request{
+		Channel:  "cli",
+		SenderID: "user_cli",
+		Text:     "/clear",
+		Reply: func(text string) error {
+			reply = text
+			return nil
+		},
+	}
+
+	// Invoke the handler directly (same path as the executor for CLI).
+	defs := commands.BuiltinDefinitions()
+	var clearDef *commands.Definition
+	for i := range defs {
+		if defs[i].Name == "clear" {
+			d := defs[i]
+			clearDef = &d
+			break
+		}
+	}
+	if clearDef == nil {
+		t.Fatal("clear definition not found in BuiltinDefinitions()")
+	}
+	if clearDef.Handler == nil {
+		t.Fatal("clear handler must not be nil")
+	}
+
+	if err := clearDef.Handler(t.Context(), req, rt); err != nil {
+		t.Fatalf("handler returned unexpected error: %v", err)
+	}
+
+	if !cleared {
+		t.Error("ClearHistory must have been called")
+	}
+	if reply != "Chat history cleared!" {
+		t.Errorf("reply = %q, want %q", reply, "Chat history cleared!")
+	}
+}
+
+// TestClearHandler_NilRuntime exercises the nil-Runtime path of /clear.
+// When rt==nil, the handler must reply with the unavailable message and not panic.
+func TestClearHandler_NilRuntime(t *testing.T) {
+	var reply string
+	req := commands.Request{
+		Channel:  "cli",
+		SenderID: "user_cli",
+		Text:     "/clear",
+		Reply: func(text string) error {
+			reply = text
+			return nil
+		},
+	}
+
+	defs := commands.BuiltinDefinitions()
+	var clearDef *commands.Definition
+	for i := range defs {
+		if defs[i].Name == "clear" {
+			d := defs[i]
+			clearDef = &d
+			break
+		}
+	}
+	if clearDef == nil {
+		t.Fatal("clear definition not found")
+	}
+
+	if err := clearDef.Handler(t.Context(), req, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Reply must be the standard unavailable message, not a panic.
+	if reply == "" {
+		t.Error("reply must not be empty when Runtime is nil")
+	}
+}
+
 // commandNames extracts just the name slice for error messages.
 func commandNames(cmds []gen.SlashCommand) []string {
 	names := make([]string, len(cmds))

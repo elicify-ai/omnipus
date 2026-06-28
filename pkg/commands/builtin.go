@@ -27,6 +27,7 @@ func BuiltinDefinitions() []Definition {
 		configCommand(),
 
 		// Deprecated commands — hidden but still execute (one-release back-compat).
+		// TODO(v0.2): remove these deprecated multiplexers + aliases after one release of back-compat (tracking issue to be filed).
 		startCommand(),
 		showCommand(),
 		listCommand(),

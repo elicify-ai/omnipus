@@ -3431,3 +3431,88 @@ func TestContract_ScheduleTrigger_RecurringKindRejected(t *testing.T) {
 		EveryMs: &everyMS,
 	}, "recurring is not a valid ScheduleTrigger.kind (only at|every|cron allowed)")
 }
+
+// ── SlashCommand ──────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SlashCommand.yaml
+//
+// Regression guard for Constraint #8: delivery is a required enum [client, agent].
+// Non-web commands (agents/tasks/skills/channels/status/config) previously left
+// Delivery unset (Go zero value ""), which marshals to `"delivery":""` — an
+// invalid enum value. EffectiveDelivery() and explicit field-setting on the 6
+// non-web commands together close the hole. These tests lock the valid range.
+
+func TestContract_SlashCommand_ClientDelivery(t *testing.T) {
+	// Web command with delivery=client — both required and valid.
+	// Traces to: SlashCommand.yaml — delivery: enum: [client, agent]
+	mustPassComponent(t, "SlashCommand", FixtureSlashCommand_ClientDelivery())
+}
+
+func TestContract_SlashCommand_AgentDelivery(t *testing.T) {
+	// Non-web command with delivery=agent — the regression case.
+	// Before the fix, non-web commands emitted delivery="" which fails this schema.
+	// Traces to: SlashCommand.yaml — delivery: required enum [client, agent]
+	mustPassComponent(t, "SlashCommand", FixtureSlashCommand_AgentDelivery())
+}
+
+func TestContract_SlashCommand_WithAliasesAndStreaming(t *testing.T) {
+	// /cancel with available_while_streaming=true — all optional fields exercised.
+	// Traces to: SlashCommand.yaml
+	mustPassComponent(t, "SlashCommand", FixtureSlashCommand_WithAliasesAndStreaming())
+}
+
+func TestContract_SlashCommand_ZeroValueRejected(t *testing.T) {
+	// Zero value: name="", label="", description="", delivery="" — all required;
+	// delivery="" is not in enum [client, agent].
+	// Traces to: SlashCommand.yaml — required: [name, label, description, delivery]
+	mustFailComponent(t, "SlashCommand", FixtureSlashCommand_ZeroValue(),
+		"zero value has empty required fields; delivery=\"\" is not in enum [client, agent]")
+}
+
+func TestContract_SlashCommand_EmptyDeliveryRejected(t *testing.T) {
+	// Directly exercises the exact wire state that the Constraint #8 bug produced:
+	// a non-web command with Delivery="" marshals to "delivery":"" which is invalid.
+	// Traces to: SlashCommand.yaml — delivery: enum: [client, agent]
+
+	sc := map[string]any{
+		"name":        "agents",
+		"label":       "/agents",
+		"description": "List registered agents",
+		"delivery":    "", // THE BUG: empty string is not in enum [client, agent]
+	}
+	raw, err := json.Marshal(sc)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"delivery":""`,
+		"fixture must contain delivery:\"\" to exercise the bug path")
+	assert.Error(t,
+		validateAgainstComponentSchemaRawJSON(t, "SlashCommand", raw),
+		"delivery:\"\" MUST fail SlashCommand.yaml — not in enum [client, agent]")
+}
+
+func TestContract_SlashCommand_Differentiation(t *testing.T) {
+	// client-delivery and agent-delivery fixtures must produce different JSON.
+	// Guards against hardcoded stubs.
+	f1 := FixtureSlashCommand_ClientDelivery()
+	f2 := FixtureSlashCommand_AgentDelivery()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"client-delivery and agent-delivery SlashCommand fixtures must produce different JSON")
+	mustPassComponent(t, "SlashCommand", f1)
+	mustPassComponent(t, "SlashCommand", f2)
+}
+
+// TestContract_SlashCommandDelivery_ValidMethod verifies the generated Valid() helper
+// reports true for both enum values and false for an empty string (Constraint #8 gate).
+func TestContract_SlashCommandDelivery_ValidMethod(t *testing.T) {
+	if !SlashCommandDeliveryAgent.Valid() {
+		t.Error("SlashCommandDeliveryAgent.Valid() must be true")
+	}
+	if !SlashCommandDeliveryClient.Valid() {
+		t.Error("SlashCommandDeliveryClient.Valid() must be true")
+	}
+	if SlashCommandDelivery("").Valid() {
+		t.Error("SlashCommandDelivery(\"\").Valid() must be false — empty string is not a valid enum value")
+	}
+}

@@ -9,6 +9,7 @@ func agentsCommand() Definition {
 		Description: "List registered agents",
 		Usage:       "/agents",
 		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
+		Delivery:    DeliveryAgent,
 		Handler:     agentsHandler(),
 	}
 }

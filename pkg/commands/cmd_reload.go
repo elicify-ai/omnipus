@@ -11,6 +11,7 @@ func configCommand() Definition {
 		Usage:       "/config",
 		Aliases:     []string{"reload"},
 		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
+		Delivery:    DeliveryAgent,
 		Handler: func(_ context.Context, req Request, rt *Runtime) error {
 			if rt == nil || rt.ReloadConfig == nil {
 				return req.Reply(unavailableMsg)
