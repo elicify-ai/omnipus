@@ -264,18 +264,18 @@ test(
     await expect(todayBtn).toBeVisible({ timeout: 10_000 });
 
     // Click next — the view should re-render (title changes)
-    const titleBefore = await page.locator('[aria-live="polite"]').first().textContent();
+    const titleBefore = await page.getByTestId('calendar-title').textContent();
     await nextBtn.click();
     // Give FC a moment to update the title
     await page.waitForTimeout(500);
-    const titleAfter = await page.locator('[aria-live="polite"]').first().textContent();
+    const titleAfter = await page.getByTestId('calendar-title').textContent();
     // The period title must have changed
     expect(titleAfter).not.toBe(titleBefore);
 
     // Click today — should return to the current period
     await todayBtn.click();
     await page.waitForTimeout(500);
-    const titleToday = await page.locator('[aria-live="polite"]').first().textContent();
+    const titleToday = await page.getByTestId('calendar-title').textContent();
     // After today, title should match what it was before we clicked next
     expect(titleToday).toBe(titleBefore);
   },
