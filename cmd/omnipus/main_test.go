@@ -3,6 +3,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -17,7 +19,7 @@ import (
 // TestNewOmnipusCommand_KeptCommandsPresent verifies that the minimized command
 // tree registers exactly the kept subcommands and no removed verbs.
 //
-// Kept: onboard, start (+ gateway/g aliases), credentials, audit, doctor, version.
+// Kept: onboard, start (+ gateway/g aliases), stop, credentials, audit, doctor, version.
 // Removed: agent, auth, status, cron, migrate, model, skills.
 func TestNewOmnipusCommand_KeptCommandsPresent(t *testing.T) {
 	cmd := NewOmnipusCommand()
@@ -33,6 +35,7 @@ func TestNewOmnipusCommand_KeptCommandsPresent(t *testing.T) {
 		"doctor",
 		"onboard",
 		"start",
+		"stop",
 		"version",
 	}
 
@@ -251,4 +254,72 @@ func TestHelpText_ExamplesPresent(t *testing.T) {
 		}
 	}
 	assert.GreaterOrEqual(t, execLines, 2, "at least 2 execute-form examples required in --help (FR-009)")
+}
+
+// --------------------------------------------------------------------------
+// Auto-start precondition tests (FR-016)
+// --------------------------------------------------------------------------
+
+// TestHasNonInteractiveKeyMode_EnvVars verifies that hasNonInteractiveKeyMode
+// returns true when OMNIPUS_MASTER_KEY or OMNIPUS_KEY_FILE is set, and false
+// when neither is set and no master.key file exists in home.
+func TestHasNonInteractiveKeyMode_EnvVars(t *testing.T) {
+	home := t.TempDir() // empty — no master.key
+
+	// Base case: no env vars, no file → false.
+	t.Setenv("OMNIPUS_MASTER_KEY", "")
+	t.Setenv("OMNIPUS_KEY_FILE", "")
+	assert.False(t, hasNonInteractiveKeyMode(home),
+		"no env vars and no master.key → must return false")
+
+	// OMNIPUS_MASTER_KEY set → true.
+	t.Setenv("OMNIPUS_MASTER_KEY", "aabbccdd")
+	assert.True(t, hasNonInteractiveKeyMode(home),
+		"OMNIPUS_MASTER_KEY set → must return true")
+	t.Setenv("OMNIPUS_MASTER_KEY", "")
+
+	// OMNIPUS_KEY_FILE set → true.
+	t.Setenv("OMNIPUS_KEY_FILE", "/some/path/master.key")
+	assert.True(t, hasNonInteractiveKeyMode(home),
+		"OMNIPUS_KEY_FILE set → must return true")
+	t.Setenv("OMNIPUS_KEY_FILE", "")
+}
+
+// TestHasNonInteractiveKeyMode_MasterKeyFile verifies that hasNonInteractiveKeyMode
+// returns true when <home>/master.key exists on disk, even without env vars.
+func TestHasNonInteractiveKeyMode_MasterKeyFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_MASTER_KEY", "")
+	t.Setenv("OMNIPUS_KEY_FILE", "")
+
+	// No file yet → false.
+	assert.False(t, hasNonInteractiveKeyMode(home),
+		"no master.key on disk → must return false")
+
+	// Create the master.key file.
+	keyPath := filepath.Join(home, "master.key")
+	if err := os.WriteFile(keyPath, []byte("dummykeycontents"), 0o600); err != nil {
+		t.Fatalf("write master.key: %v", err)
+	}
+
+	// File present → true.
+	assert.True(t, hasNonInteractiveKeyMode(home),
+		"master.key present → must return true")
+}
+
+// TestNewOmnipusCommand_StopSubcommandPresent verifies that the stop subcommand
+// is registered in the command tree with the correct name.
+func TestNewOmnipusCommand_StopSubcommandPresent(t *testing.T) {
+	cmd := NewOmnipusCommand()
+	require.NotNil(t, cmd)
+
+	var stopCmd *cobra.Command
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "stop" {
+			stopCmd = sub
+			break
+		}
+	}
+	require.NotNil(t, stopCmd, "stop subcommand must be registered")
+	assert.Equal(t, "stop", stopCmd.Name())
 }

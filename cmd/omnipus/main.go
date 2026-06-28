@@ -10,12 +10,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
@@ -26,8 +30,11 @@ import (
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/gateway"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/onboard"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/run"
+	stopcmd "github.com/dapicom-ai/omnipus/cmd/omnipus/internal/stop"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/version"
+	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/daemon"
 )
 
 // rosterLine describes a single chat-target agent for the no-args listing.
@@ -63,6 +70,7 @@ func printRosterAndUsage(w *os.File, roster []rosterLine) {
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  omnipus onboard      first-time setup — configure a provider and admin account")
 	fmt.Fprintln(w, "  omnipus start        start Omnipus (SPA + API on port 5000)")
+	fmt.Fprintln(w, "  omnipus stop         stop a running Omnipus gateway")
 	fmt.Fprintln(w, "  omnipus credentials  manage secrets (set/list/delete/rotate)")
 	fmt.Fprintln(w, "  omnipus audit        view the audit log")
 	fmt.Fprintln(w, "  omnipus doctor       diagnose configuration issues")
@@ -83,6 +91,98 @@ var removedVerbs = map[string]bool{
 	"migrate": true,
 	"model":   true,
 	"skills":  true,
+	// "stop" is now a registered subcommand, not a removed verb; listed here
+	// only as documentation that it is reserved.
+}
+
+// autoStartPollTimeout is the maximum time to wait for the gateway to be ready
+// after daemon.Spawn before giving up and returning an error.
+const autoStartPollTimeout = 30 * time.Second
+
+// hasNonInteractiveKeyMode reports whether a non-interactive unlock mode is
+// available (i.e. the process can unlock credentials without a TTY passphrase
+// prompt). This is the prerequisite for auto-starting the gateway from the CLI.
+//
+// The three non-interactive modes are:
+//  1. OMNIPUS_MASTER_KEY env var set (64-char hex key).
+//  2. OMNIPUS_KEY_FILE env var set (path to a 0600 file with the hex key).
+//  3. <home>/master.key exists on disk (default key file path).
+func hasNonInteractiveKeyMode(home string) bool {
+	if os.Getenv("OMNIPUS_MASTER_KEY") != "" {
+		return true
+	}
+	if os.Getenv("OMNIPUS_KEY_FILE") != "" {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(home, "master.key"))
+	return err == nil
+}
+
+// pollGatewayReady polls until the gateway at addr accepts a full WebSocket
+// auth round-trip (TCP connect + WS upgrade + auth frame + any valid response
+// frame). This is stricter than /ready which goes green early before the auth
+// layer is up. It polls with a short interval and returns nil when the gateway
+// is fully accepting authenticated connections, or an error after timeout.
+func pollGatewayReady(ctx context.Context, addr, token string) error {
+	ctx, cancel := context.WithTimeout(ctx, autoStartPollTimeout)
+	defer cancel()
+
+	const pollInterval = 500 * time.Millisecond
+
+	dialer := websocket.Dialer{HandshakeTimeout: 2 * time.Second}
+
+	for {
+		// Try a TCP connect first to avoid the WS dialer's error noise on
+		// connection refused (expected during early startup).
+		tcpConn, tcpErr := net.DialTimeout("tcp", addr, 1*time.Second)
+		if tcpErr == nil {
+			tcpConn.Close()
+
+			// TCP up — attempt WS auth round-trip.
+			wsURL := "ws://" + addr + "/api/v1/chat/ws"
+			conn, wsResp, wsErr := dialer.DialContext(ctx, wsURL, nil)
+			if wsResp != nil {
+				wsResp.Body.Close()
+			}
+			if wsErr == nil {
+				// Send auth frame and read at least one frame back. A valid frame
+				// (of any type, including an error frame) proves the WS layer is up
+				// and auth is being processed. ErrKeyInvalid is fine here — the
+				// gateway is up; the caller will retry run.Run which will fail on its
+				// own auth path if the token is wrong.
+				authFrame := generated.AuthFrame{
+					Type:  string(generated.WsFrameTypeAuth),
+					Token: token,
+				}
+				authData, _ := json.Marshal(authFrame)
+				_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+				writeErr := conn.WriteMessage(websocket.TextMessage, authData)
+				if writeErr == nil {
+					_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+					_, _, readErr := conn.ReadMessage()
+					conn.Close()
+					if readErr == nil {
+						// Got a response — gateway is ready.
+						return nil
+					}
+					// A close-error response (e.g. ClosePolicyViolation on bad token)
+					// still means the gateway is up and handling connections.
+					var closeErr *websocket.CloseError
+					if errors.As(readErr, &closeErr) {
+						return nil
+					}
+				} else {
+					conn.Close()
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("gateway did not become ready within %s: %w", autoStartPollTimeout, ctx.Err())
+		case <-time.After(pollInterval):
+		}
+	}
 }
 
 // NewOmnipusCommand builds the root cobra command with the minimized CLI tree.
@@ -115,6 +215,7 @@ With no arguments, lists available agents and usage.
 Commands:
   onboard      First-time setup — configure a provider and admin account.
   start        Start Omnipus (SPA + API on port 5000). Alias: gateway, g.
+  stop         Stop a running Omnipus gateway.
   credentials  Manage secrets: set, list, delete, rotate.
   audit        View the audit log.
   doctor       Diagnose configuration issues.
@@ -126,8 +227,9 @@ Examples:
   omnipus jim --model openrouter/glm-5.2 "explain Go generics"
   omnipus onboard
   omnipus start
+  omnipus stop
 
-Reserved names (shadowed by subcommands): onboard, start, credentials, audit, doctor, version.
+Reserved names (shadowed by subcommands): onboard, start, stop, credentials, audit, doctor, version.
 If an agent shares a name with a subcommand, use the agent's ID directly via the API or rename it.
 `, internal.Logo, config.GetVersion()),
 		Example: `  omnipus jim "summarize the last 10 commits"
@@ -242,8 +344,9 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 			// Build the local gateway address from config.
 			addr := fmt.Sprintf("localhost:%d", cfg.Gateway.Port)
 
-			// Dispatch to the run client.
-			runErr := run.Run(cmd.Context(), run.Options{
+			// runOptions holds the common options for run.Run calls (first attempt
+			// and the auto-start retry share the same options).
+			runOptions := run.Options{
 				Agent:   agentID,
 				Prompt:  prompt,
 				Model:   flagModel,
@@ -254,15 +357,45 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 				Token:   token,
 				Stdout:  os.Stdout,
 				Stderr:  os.Stderr,
-			})
+			}
+
+			// Dispatch to the run client.
+			runErr := run.Run(cmd.Context(), runOptions)
+
+			// Auto-start (P1/FR-016): when the gateway is not reachable and a
+			// non-interactive unlock mode is available, spawn the gateway and retry.
+			if errors.Is(runErr, run.ErrGatewayDown) {
+				if !hasNonInteractiveKeyMode(home) {
+					fmt.Fprintln(os.Stderr,
+						"no gateway running and no non-interactive key configured; run `omnipus start`")
+					os.Exit(1)
+				}
+
+				fmt.Fprintln(os.Stderr, "Omnipus is not running — starting gateway...")
+				_, spawnErr := daemon.Spawn(home, nil)
+				if spawnErr != nil {
+					fmt.Fprintf(os.Stderr, "error: failed to start gateway: %v\n", spawnErr)
+					os.Exit(1)
+				}
+
+				// Poll until the gateway accepts authenticated WS connections.
+				pollErr := pollGatewayReady(cmd.Context(), addr, token)
+				if pollErr != nil {
+					fmt.Fprintf(os.Stderr, "error: gateway did not become ready: %v\n", pollErr)
+					os.Exit(1)
+				}
+
+				// Retry once with the same options.
+				runErr = run.Run(cmd.Context(), runOptions)
+			}
+
 			if runErr == nil {
 				return nil
 			}
 
 			// Map sentinel errors to user-facing messages + non-zero exit.
-			// The four sentinel values carry complete user-facing messages;
-			// print them verbatim. Only the default (wrapped) case prepends
-			// the "error:" prefix so the label isn't duplicated.
+			// Sentinel values carry complete user-facing messages; print verbatim.
+			// Only the default (wrapped) case prepends "error:" to avoid duplication.
 			switch {
 			case errors.Is(runErr, run.ErrRemoteUnsupported):
 				fmt.Fprintln(os.Stderr, run.ErrRemoteUnsupported.Error())
@@ -272,6 +405,8 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 				fmt.Fprintln(os.Stderr, run.ErrKeyInvalid.Error())
 			case errors.Is(runErr, run.ErrTimeout):
 				fmt.Fprintln(os.Stderr, run.ErrTimeout.Error())
+			case errors.Is(runErr, run.ErrTurnFailed):
+				fmt.Fprintln(os.Stderr, run.ErrTurnFailed.Error())
 			default:
 				fmt.Fprintln(os.Stderr, "error:", runErr)
 			}
@@ -294,6 +429,7 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 		credcmd.NewCredentialsCommand(),
 		doctor.NewDoctorCommand(),
 		gateway.NewGatewayCommand(),
+		stopcmd.NewStopCommand(),
 		version.NewVersionCommand(),
 	)
 

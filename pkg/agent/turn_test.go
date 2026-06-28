@@ -302,3 +302,57 @@ func TestTurnState_Abandoned_SuppressesFinalizeStreamer(t *testing.T) {
 	assert.Equal(t, before+1, AbandonedWritesSuppressed(), "suppressed counter must increment")
 	assert.Equal(t, 0, ms.finalizeCalled, "Finalize must NOT be called when abandoned")
 }
+
+// --- Suite 6: turn_failed marker tests ---
+
+// failCapturingStreamer is a bus.Streamer that also implements streamerFailedSetter
+// so tests can assert that finalizeStreamer propagates the turnFailed flag.
+type failCapturingStreamer struct {
+	mockStreamer
+	receivedFailed *bool
+}
+
+func (f *failCapturingStreamer) SetTurnFailed(failed bool) {
+	f.receivedFailed = &failed
+}
+
+var _ bus.Streamer = (*failCapturingStreamer)(nil)
+
+// TestTurnState_MarkTurnFailed_PropagatesToStreamer verifies that calling
+// markTurnFailed before finalizeStreamer causes the streamer's SetTurnFailed
+// to be called with true, and that a normal (non-failed) turn leaves the flag
+// as false/absent.
+//
+// BDD: Given a turnState whose turn ended via a synthetic fallback,
+// When markTurnFailed() is called before finalizeStreamer,
+// Then the streamer's SetTurnFailed is called with true;
+// AND when markTurnFailed is NOT called, SetTurnFailed is called with false.
+//
+// Traces to: pkg/agent/turn.go — markTurnFailed / finalizeStreamer / streamerFailedSetter
+func TestTurnState_MarkTurnFailed_PropagatesToStreamer(t *testing.T) {
+	t.Run("failed turn", func(t *testing.T) {
+		ts := &turnState{}
+		fs := &failCapturingStreamer{}
+		ts.setLastStreamer(fs)
+		ts.markTurnFailed()
+
+		ts.finalizeStreamer(context.Background())
+
+		require.NotNil(t, fs.receivedFailed, "SetTurnFailed must have been called")
+		assert.True(t, *fs.receivedFailed, "SetTurnFailed must be called with true for a failed turn")
+	})
+
+	t.Run("normal turn", func(t *testing.T) {
+		ts := &turnState{}
+		fs := &failCapturingStreamer{}
+		ts.setLastStreamer(fs)
+		// markTurnFailed is NOT called — simulates a normal successful turn.
+
+		ts.finalizeStreamer(context.Background())
+
+		// SetTurnFailed is still called (with false) because finalizeStreamer always
+		// invokes it when the interface is implemented.
+		require.NotNil(t, fs.receivedFailed, "SetTurnFailed must have been called even on a normal turn")
+		assert.False(t, *fs.receivedFailed, "SetTurnFailed must be called with false for a normal turn")
+	})
+}

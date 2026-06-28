@@ -7114,6 +7114,7 @@ export const DoneStats = z
     duplicate_tool_call_id_count: z.number().min(0).optional(),
     truncated_result_count: z.number().min(0).optional(),
     replay_error: z.boolean().optional(),
+    turn_failed: z.boolean().optional(),
   })
   .passthrough();
 

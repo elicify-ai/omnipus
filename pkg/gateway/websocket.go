@@ -2595,10 +2595,11 @@ type wsStreamer struct {
 	// Populates the "done" frame so the chat UI shows real token counts and
 	// cost instead of zeros (issue #12). Mutex-protected because SetTurnStats
 	// and Finalize may be called from different goroutines.
-	statsMu       sync.Mutex
-	statsTokens   int64
-	statsCostUSD  float64
-	statsDuration time.Duration
+	statsMu         sync.Mutex
+	statsTokens     int64
+	statsCostUSD    float64
+	statsDuration   time.Duration
+	statsTurnFailed bool // set by SetTurnFailed when the engine used a synthetic fallback
 
 	// transcriptPersisted records that the agent loop already wrote this
 	// streamer's narration to the transcript via
@@ -2653,6 +2654,17 @@ func (s *wsStreamer) SetTurnStats(tokens int64, costUSD float64, duration time.D
 	s.statsTokens = tokens
 	s.statsCostUSD = costUSD
 	s.statsDuration = duration
+}
+
+// SetTurnFailed is called by the agent loop's finalizeStreamer when the turn
+// ended via the engine's error/limit fallback (empty response after retries, or
+// tool-iteration limit reached) rather than a real model response. Implements
+// the streamerFailedSetter interface from pkg/agent. The flag is emitted in the
+// done frame as DoneStats.TurnFailed so CLI/automation clients can exit non-zero.
+func (s *wsStreamer) SetTurnFailed(failed bool) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.statsTurnFailed = failed
 }
 
 func (s *wsStreamer) Update(_ context.Context, content string) error {
@@ -2750,10 +2762,14 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	durF := float64(s.statsDuration.Milliseconds())
 	transcriptAlreadyPersisted := s.transcriptPersisted
 	producedModel := s.producedModel
+	turnFailed := s.statsTurnFailed
 	s.statsMu.Unlock()
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
 	doneStats.DurationMs = &durF
+	if turnFailed {
+		doneStats.TurnFailed = &turnFailed
+	}
 
 	doneFrame := generated.DoneFrame{
 		Type:      string(generated.WsFrameTypeDone),

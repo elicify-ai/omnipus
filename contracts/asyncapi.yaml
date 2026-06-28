@@ -1127,6 +1127,8 @@ components:
           minimum: 0
         replay_error:
           type: boolean
+        turn_failed:
+          type: boolean
 
     DoneFrame:
       title: DoneFrame

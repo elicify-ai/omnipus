@@ -9,153 +9,75 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+
+	"github.com/dapicom-ai/omnipus/pkg/daemon"
 )
 
-const pidFileName = "gateway.pid"
+// omnipusHome returns the Omnipus home directory (~/.omnipus).
+func omnipusHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".omnipus"
+	}
+	return home + "/.omnipus"
+}
+
+// getGatewayStatus returns the current gateway status by delegating to
+// pkg/daemon. Errors from Status are treated as "not running" to keep the
+// UI polling resilient to transient I/O problems.
+func getGatewayStatus() gatewayStatus {
+	running, pid, err := daemon.Status(omnipusHome())
+	if err != nil {
+		return gatewayStatus{running: false}
+	}
+	return gatewayStatus{running: running, pid: pid}
+}
 
 type gatewayStatus struct {
 	running bool
 	pid     int
 }
 
-func getPidPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, ".omnipus", pidFileName)
-}
-
-func isProcessRunning(pid int) bool {
-	if runtime.GOOS == "windows" {
-		cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid))
-		output, err := cmd.Output()
-		if err != nil {
-			return false
-		}
-		return strings.Contains(string(output), strconv.Itoa(pid))
-	} else if runtime.GOOS == "darwin" {
-		cmd := exec.Command("ps", "aux")
-		output, err := cmd.Output()
-		if err != nil {
-			return false
-		}
-		return strings.Contains(string(output), fmt.Sprintf(" %d ", pid))
-	}
-	// Linux
-	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
-	return err == nil
-}
-
-func getGatewayStatus() gatewayStatus {
-	pidPath := getPidPath()
-	data, err := os.ReadFile(pidPath)
-	if err != nil {
-		return gatewayStatus{running: false}
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return gatewayStatus{running: false}
-	}
-	if !isProcessRunning(pid) {
-		os.Remove(pidPath)
-		return gatewayStatus{running: false}
-	}
-	return gatewayStatus{
-		running: true,
-		pid:     pid,
-	}
-}
-
+// startGateway spawns the Omnipus gateway via pkg/daemon. It resolves the
+// `omnipus` binary from PATH (the launcher is a separate process from the
+// main gateway binary) and delegates the detached spawn + PID file write to
+// daemon.SpawnExe. Returns an error if the gateway is already running, if
+// `omnipus` cannot be found, or if the spawn fails.
 func startGateway() error {
 	status := getGatewayStatus()
 	if status.running {
 		return fmt.Errorf("gateway is already running (PID: %d)", status.pid)
 	}
 
-	pidPath := getPidPath()
-	var cmd *exec.Cmd
-
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", "start /B omnipus start > NUL 2>&1")
-	} else {
-		cmd = exec.Command("sh", "-c", "nohup omnipus start > /dev/null 2>&1 & echo $! > "+pidPath)
-	}
-
-	err := cmd.Start()
+	// Resolve the omnipus binary from PATH; the launcher is a separate
+	// binary so os.Executable() would point at the launcher, not omnipus.
+	omnipusExe, err := exec.LookPath("omnipus")
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot find omnipus binary in PATH: %w", err)
 	}
 
-	time.Sleep(1 * time.Second)
-
-	if runtime.GOOS == "windows" {
-		cmd := exec.Command(
-			"wmic",
-			"process",
-			"where",
-			"name='omnipus.exe' and commandline like '%start%'",
-			"get",
-			"processid",
-		)
-		output, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("failed to get gateway PID: %w", err)
-		}
-		lines := strings.Split(string(output), "\n")
-		for _, line := range lines[1:] {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			pid, err := strconv.Atoi(line)
-			if err == nil {
-				os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600)
-				break
-			}
-		}
-	}
-
-	status = getGatewayStatus()
-	if !status.running {
-		return fmt.Errorf("failed to start gateway")
+	home := omnipusHome()
+	if _, err := daemon.SpawnExe(home, omnipusExe, nil); err != nil {
+		return fmt.Errorf("failed to start gateway: %w", err)
 	}
 	return nil
 }
 
+// stopGateway stops the Omnipus gateway via pkg/daemon. It sends SIGTERM then
+// SIGKILL (Unix) or taskkill (Windows) and removes the PID file. Returns an
+// error if no gateway is running or if the termination fails.
 func stopGateway() error {
-	status := getGatewayStatus()
-	if !status.running {
+	stopped, err := daemon.Stop(omnipusHome())
+	if err != nil {
+		return fmt.Errorf("failed to stop gateway: %w", err)
+	}
+	if !stopped {
 		return fmt.Errorf("gateway is not running")
 	}
-
-	var err error
-	if runtime.GOOS == "windows" {
-		err = exec.Command("taskkill", "/F", "/PID", strconv.Itoa(status.pid)).Run()
-	} else {
-		err = exec.Command("kill", "-9", strconv.Itoa(status.pid)).Run()
-	}
-	if err != nil {
-		return err
-	}
-
-	// 多次尝试确认进程已停止
-	for i := 0; i < 5; i++ {
-		if !isProcessRunning(status.pid) {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	os.Remove(getPidPath())
 	return nil
 }
 
@@ -175,7 +97,6 @@ func (a *App) newGatewayPage() tview.Primitive {
 
 	var updateStatus func()
 
-	// 使用List作为按钮，保证显示和交互正常
 	buttons := tview.NewList()
 	buttons.SetBackgroundColor(tcell.NewHexColor(0x050510))
 	buttons.SetMainTextColor(tcell.ColorWhite)
