@@ -18,7 +18,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
   const toggle = useSidebarStore((s) => s.toggle)
 
   return (
-    <header className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
+    <header role="banner" className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
       {/* Hamburger — sidebar toggle */}
       <button
         id="sidebar-hamburger"
