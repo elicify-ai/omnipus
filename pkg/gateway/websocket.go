@@ -1245,6 +1245,12 @@ func (h *WSHandler) handleChatMessage(
 		Channel: "webchat",
 		Sender: bus.SenderInfo{
 			CanonicalID: "webchat_user",
+			// FR-017: carry the WS-authenticated gateway principal (set at auth
+			// time, e.g. "cli" or an admin username) so the agent loop can stamp
+			// audit.Entry.User for turn attribution. Empty under dev-mode bypass /
+			// legacy env-token auth (wc.userID is left unset there) — the audit
+			// stamp then stays empty rather than guessing.
+			Username: wc.userID,
 		},
 		ChatID:    chatID,
 		Content:   content,

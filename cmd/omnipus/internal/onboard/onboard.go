@@ -18,7 +18,8 @@
 //     install per the same boot contract gateway uses);
 //  3. encrypts the provider API key into credentials.json;
 //  4. writes a provider entry and an admin user entry into config.json;
-//  5. marks onboarding complete in system/state.json.
+//  5. mints the cli principal and token file (clitoken.EnsureCLIToken);
+//  6. marks onboarding complete in system/state.json.
 //
 // After this runs, `omnipus start` boots without requiring dev_mode_bypass
 // or env-injected secrets — the admin can log in immediately with the
@@ -35,12 +36,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 
+	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/clitoken"
+	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/netinfo"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/datamodel"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
@@ -72,6 +76,25 @@ type Input struct {
 	Password   string
 }
 
+// providerMenuItem is one entry in the numbered provider menu.
+type providerMenuItem struct {
+	label      string // display label, e.g. "OpenRouter"
+	providerID string // protocol id passed downstream, e.g. "openrouter"
+}
+
+// providerMenu is the curated short list shown to the user during interactive
+// onboarding (FR-010/US-8). "Other" (the last entry) has an empty providerID
+// and triggers a raw protocol-id prompt.
+var providerMenu = []providerMenuItem{
+	{label: "OpenRouter", providerID: "openrouter"},
+	{label: "Anthropic", providerID: "anthropic"},
+	{label: "OpenAI", providerID: "openai"},
+	{label: "Google / Gemini", providerID: "gemini"},
+	{label: "Groq", providerID: "groq"},
+	{label: "DeepSeek", providerID: "deepseek"},
+	{label: "Other (enter protocol id)", providerID: ""},
+}
+
 // defaultModelFor mirrors the per-provider model defaults the REST handler
 // applies when the user doesn't specify a model.
 func defaultModelFor(providerID string) string {
@@ -79,9 +102,15 @@ func defaultModelFor(providerID string) string {
 	case "anthropic":
 		return "claude-sonnet-4-6"
 	case "gemini", "google":
-		return "gemini-2.0-flash"
+		return "gemini-2.5-flash"
 	case "openrouter":
-		return "openai/gpt-4o"
+		return "openrouter/auto"
+	case "groq":
+		return "llama-3.3-70b-versatile"
+	case "deepseek":
+		return "deepseek-chat"
+	case "openai":
+		return "gpt-4o"
 	default:
 		return "gpt-4o"
 	}
@@ -108,8 +137,8 @@ func NewOnboardCommand() *cobra.Command {
 Two modes:
 
   Interactive (default)
-    Prompts for an LLM provider, API key, default model, and admin
-    username/password.
+    Presents a numbered provider menu, prompts for API key, default model,
+    and admin username/password, then mints the CLI token.
 
   Headless
     Pass --non-interactive together with all of --provider, --api-key
@@ -119,7 +148,8 @@ Two modes:
 
 In both modes the API key is encrypted into credentials.json (creating
 master.key on first run); the admin user and provider entry are written
-to config.json; system/state.json is marked complete.
+to config.json; the cli principal and its token file are created; and
+system/state.json is marked complete.
 
 After running this command, ` + "`omnipus start`" + ` can boot without
 ` + "`dev_mode_bypass`" + ` and the operator can log in with the credentials
@@ -306,14 +336,14 @@ func inputFromFlags(stdin io.Reader, f inputFlags) (Input, error) {
 
 // RunHeadless writes the headless onboarding state from a pre-validated Input.
 // It is the non-interactive counterpart of Run.
-func RunHeadless(home string, io wizardIO, in Input) error {
+func RunHeadless(home string, wio wizardIO, in Input) error {
 	if err := datamodel.Init(home); err != nil {
 		return fmt.Errorf("init home: %w", err)
 	}
 	mgr := onboarding.NewManager(home)
 	if mgr.IsComplete() {
-		fmt.Fprintln(io.stdout, "Onboarding is already complete; nothing to do.")
-		fmt.Fprintln(io.stdout,
+		fmt.Fprintln(wio.stdout, "Onboarding is already complete; nothing to do.")
+		fmt.Fprintln(wio.stdout,
 			"To re-run, delete ~/.omnipus/system/state.json"+
 				" (or the equivalent under your OMNIPUS_HOME).",
 		)
@@ -321,80 +351,118 @@ func RunHeadless(home string, io wizardIO, in Input) error {
 	}
 
 	in.Home = home
-	if err := applyInput(in, io); err != nil {
+	if err := applyInput(in, wio); err != nil {
 		return err
 	}
 
-	fmt.Fprintln(io.stdout, "")
-	fmt.Fprintln(io.stdout, "Onboarding complete.")
-	fmt.Fprintf(io.stdout, "Run `omnipus start` to serve the SPA + API on the configured port.\n")
-	fmt.Fprintf(io.stdout, "Log in as %q with the password you just entered.\n", in.Username)
+	fmt.Fprintln(wio.stdout, "")
+	fmt.Fprintln(wio.stdout, "Onboarding complete.")
+	fmt.Fprintf(wio.stdout, "Log in as %q with the password you just entered.\n", in.Username)
+	printAccessURLBlock(wio.stdout, home)
 	return nil
 }
 
 // Run executes the wizard against the supplied IO and home directory. It is
 // exported only so the regression tests can drive it without going through
 // Cobra's command-execution machinery.
-func Run(home string, io wizardIO) error {
+func Run(home string, wio wizardIO) error {
 	if err := datamodel.Init(home); err != nil {
 		return fmt.Errorf("init home: %w", err)
 	}
 	mgr := onboarding.NewManager(home)
 	if mgr.IsComplete() {
-		fmt.Fprintln(io.stdout, "Onboarding is already complete; nothing to do.")
-		fmt.Fprintln(io.stdout,
+		fmt.Fprintln(wio.stdout, "Onboarding is already complete; nothing to do.")
+		fmt.Fprintln(wio.stdout,
 			"To re-run, delete ~/.omnipus/system/state.json"+
 				" (or the equivalent under your OMNIPUS_HOME).",
 		)
 		return nil
 	}
 
-	in, err := prompt(io)
+	in, err := prompt(wio)
 	if err != nil {
 		return err
 	}
 	in.Home = home
 
-	if err := applyInput(in, io); err != nil {
+	if err := applyInput(in, wio); err != nil {
 		return err
 	}
 
-	fmt.Fprintln(io.stdout, "")
-	fmt.Fprintln(io.stdout, "Onboarding complete.")
-	fmt.Fprintf(io.stdout, "Run `omnipus start` to serve the SPA + API on the configured port.\n")
-	fmt.Fprintf(io.stdout, "Log in as %q with the password you just entered.\n", in.Username)
+	fmt.Fprintln(wio.stdout, "")
+	fmt.Fprintln(wio.stdout, "Onboarding complete.")
+	fmt.Fprintf(wio.stdout, "Log in as %q with the password you just entered.\n", in.Username)
+	printAccessURLBlock(wio.stdout, home)
 	return nil
+}
+
+// printAccessURLBlock reads the freshly-written config to obtain host/port/
+// public_url and prints the bind-aware URL block plus a next-step hint.
+// Errors reading config are silently swallowed — the URL block is informational
+// and must never cause onboarding to fail.
+func printAccessURLBlock(out io.Writer, home string) {
+	configPath := filepath.Join(home, "config.json")
+	raw, err := os.ReadFile(configPath)
+
+	host := ""
+	port := 5000
+	publicURL := ""
+
+	if err == nil {
+		var m map[string]any
+		if jsonErr := json.Unmarshal(raw, &m); jsonErr == nil {
+			gw, _ := m["gateway"].(map[string]any)
+			if gw != nil {
+				if h, ok := gw["host"].(string); ok {
+					host = h
+				}
+				if p, ok := gw["port"].(float64); ok && p > 0 {
+					port = int(p)
+				}
+				if pu, ok := gw["public_url"].(string); ok {
+					publicURL = pu
+				}
+			}
+		}
+	}
+
+	urls := netinfo.BuildAccessURLs(host, port, publicURL, netinfo.LocalIPv4s())
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Next steps:")
+	fmt.Fprintln(out, "  1. Run: omnipus start")
+	fmt.Fprintln(out, "  2. Open the dashboard:")
+	fmt.Fprint(out, netinfo.Render(urls))
 }
 
 // prompt walks the user through the wizard and returns the validated answers.
 // Returns an error if input is malformed, empty where required, or the
 // password fails length validation.
-func prompt(io wizardIO) (Input, error) {
-	reader := bufio.NewReader(io.stdin)
+//
+// The provider step now presents a numbered menu (FR-010/US-8): the user types
+// a digit (1–N); an out-of-range entry re-prompts without crashing; choosing
+// "Other" prompts for a raw protocol id validated via providers.IsKnownProtocol.
+func prompt(wio wizardIO) (Input, error) {
+	reader := bufio.NewReader(wio.stdin)
 	in := Input{}
 
-	fmt.Fprintln(io.stdout, "Omnipus first-run setup")
-	fmt.Fprintln(io.stdout, "=======================")
-	fmt.Fprintln(io.stdout, "")
+	fmt.Fprintln(wio.stdout, "Omnipus first-run setup")
+	fmt.Fprintln(wio.stdout, "=======================")
+	fmt.Fprintln(wio.stdout, "")
 
-	// Provider.
-	providerHint := "openai, anthropic, openrouter, gemini, …"
-	providerID, err := readNonEmpty(io.stdout, reader, "LLM provider ["+providerHint+"]: ", "openai")
+	// Provider — numbered menu with re-prompt on invalid input.
+	providerID, err := promptProviderMenu(wio.stdout, reader)
 	if err != nil {
 		return in, err
-	}
-	if !providers.IsKnownProtocol(providerID) {
-		return in, fmt.Errorf("provider %q is not a known protocol", providerID)
 	}
 	in.ProviderID = providerID
 
 	// API key (hidden input).
-	fmt.Fprintf(io.stdout, "%s API key (input hidden): ", providerID)
-	apiKey, err := io.readPassword()
+	fmt.Fprintf(wio.stdout, "%s API key (input hidden): ", providerID)
+	apiKey, err := wio.readPassword()
 	if err != nil {
 		return in, fmt.Errorf("read api key: %w", err)
 	}
-	fmt.Fprintln(io.stdout, "")
+	fmt.Fprintln(wio.stdout, "")
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return in, errors.New("api key must not be empty")
@@ -403,25 +471,25 @@ func prompt(io wizardIO) (Input, error) {
 
 	// Model (default per provider).
 	defaultModel := defaultModelFor(providerID)
-	model, err := readWithDefault(io.stdout, reader, "Model", defaultModel)
+	model, err := readWithDefault(wio.stdout, reader, "Model", defaultModel)
 	if err != nil {
 		return in, err
 	}
 	in.Model = model
 
 	// Admin user.
-	username, err := readNonEmpty(io.stdout, reader, "Admin username: ", "")
+	username, err := readNonEmpty(wio.stdout, reader, "Admin username: ", "")
 	if err != nil {
 		return in, err
 	}
 	in.Username = username
 
-	fmt.Fprint(io.stdout, "Admin password (min 8 chars, input hidden): ")
-	password, err := io.readPassword()
+	fmt.Fprint(wio.stdout, "Admin password (min 8 chars, input hidden): ")
+	password, err := wio.readPassword()
 	if err != nil {
 		return in, fmt.Errorf("read password: %w", err)
 	}
-	fmt.Fprintln(io.stdout, "")
+	fmt.Fprintln(wio.stdout, "")
 	if len(password) < 8 {
 		return in, errors.New("password must be at least 8 characters")
 	}
@@ -430,8 +498,56 @@ func prompt(io wizardIO) (Input, error) {
 	return in, nil
 }
 
-func readNonEmpty(out io.Writer, r *bufio.Reader, prompt, defaultVal string) (string, error) {
-	fmt.Fprint(out, prompt)
+// promptProviderMenu prints the numbered menu and reads the user's selection,
+// re-prompting on out-of-range or blank input. Returns the selected protocol id.
+// Selecting "Other" prompts for a raw protocol id and validates it via
+// providers.IsKnownProtocol.
+func promptProviderMenu(out io.Writer, reader *bufio.Reader) (string, error) {
+	for {
+		fmt.Fprintln(out, "Select your LLM provider:")
+		for i, item := range providerMenu {
+			fmt.Fprintf(out, "  %d) %s\n", i+1, item.label)
+		}
+		fmt.Fprint(out, "Choice [1]: ")
+
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("read provider choice: %w", err)
+		}
+		line = strings.TrimSpace(line)
+
+		// Default to 1 on empty input.
+		if line == "" {
+			line = "1"
+		}
+
+		n, parseErr := strconv.Atoi(line)
+		if parseErr != nil || n < 1 || n > len(providerMenu) {
+			fmt.Fprintf(out, "Please enter a number between 1 and %d.\n\n", len(providerMenu))
+			continue
+		}
+
+		chosen := providerMenu[n-1]
+
+		// "Other" entry: prompt for raw protocol id.
+		if chosen.providerID == "" {
+			rawID, readErr := readNonEmpty(out, reader, "Provider protocol id (e.g. ollama, litellm): ", "")
+			if readErr != nil {
+				return "", readErr
+			}
+			rawID = strings.ToLower(strings.TrimSpace(rawID))
+			if !providers.IsKnownProtocol(rawID) {
+				return "", fmt.Errorf("provider %q is not a known protocol", rawID)
+			}
+			return rawID, nil
+		}
+
+		return chosen.providerID, nil
+	}
+}
+
+func readNonEmpty(out io.Writer, r *bufio.Reader, promptStr, defaultVal string) (string, error) {
+	fmt.Fprint(out, promptStr)
 	line, err := r.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
@@ -460,9 +576,9 @@ func readWithDefault(out io.Writer, r *bufio.Reader, label, defaultVal string) (
 }
 
 // applyInput performs the side-effecting writes: credentials.json,
-// config.json, and state.json. It is split out so the regression test can
-// invoke it with a pre-built Input without going through stdin parsing.
-func applyInput(in Input, io wizardIO) error {
+// config.json, cli.token, and state.json. It is split out so the regression
+// test can invoke it with a pre-built Input without going through stdin parsing.
+func applyInput(in Input, wio wizardIO) error {
 	// 1. Unlock credentials store (auto-generates master.key on a fresh install).
 	credPath := filepath.Join(in.Home, "credentials.json")
 	store := credentials.NewStore(credPath)
@@ -497,7 +613,13 @@ func applyInput(in Input, io wizardIO) error {
 		return fmt.Errorf("update config.json: %w", err)
 	}
 
-	// 5. Mark onboarding complete. NewManager reads state.json fresh — the
+	// 5. Mint the cli principal and token file (create-if-absent).
+	// EnsureCLIToken reads config.json which was just written above.
+	if _, err := clitoken.EnsureCLIToken(in.Home); err != nil {
+		return fmt.Errorf("mint cli token: %w", err)
+	}
+
+	// 6. Mark onboarding complete. NewManager reads state.json fresh — the
 	// previous IsComplete() check inside Run() may have used a stale view if
 	// state.json was just written by datamodel.Init, but it correctly
 	// reports OnboardingComplete=false from the seeded state.
@@ -506,10 +628,10 @@ func applyInput(in Input, io wizardIO) error {
 		return fmt.Errorf("mark onboarding complete: %w", err)
 	}
 
-	fmt.Fprintln(io.stdout, "")
-	fmt.Fprintf(io.stdout, "Wrote provider %q (model %q) to %s\n", in.ProviderID, in.Model, configPath)
-	fmt.Fprintf(io.stdout, "Encrypted API key under credential ref %q in %s\n", credRef, credPath)
-	fmt.Fprintf(io.stdout, "Bearer token for %q (save this — it is only shown once):\n  %s\n", in.Username, token)
+	fmt.Fprintln(wio.stdout, "")
+	fmt.Fprintf(wio.stdout, "Wrote provider %q (model %q) to %s\n", in.ProviderID, in.Model, configPath)
+	fmt.Fprintf(wio.stdout, "Encrypted API key under credential ref %q in %s\n", credRef, credPath)
+	fmt.Fprintf(wio.stdout, "Bearer token for %q (save this — it is only shown once):\n  %s\n", in.Username, token)
 	return nil
 }
 

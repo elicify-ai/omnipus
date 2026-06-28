@@ -80,4 +80,4 @@ USER omnipus
 # args) if they want the strict-boot behavior for production where the
 # config is fully provisioned ahead of time.
 ENTRYPOINT ["omnipus"]
-CMD ["gateway", "--allow-empty"]
+CMD ["start", "--allow-empty"]

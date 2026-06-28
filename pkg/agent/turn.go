@@ -88,7 +88,13 @@ type turnState struct {
 	channel     string
 	chatID      string
 	userMessage string
-	media       []string
+	// userID is the authenticated gateway principal that initiated this turn
+	// (FR-017), threaded from processOptions.UserID (← InboundMessage.Sender.Username
+	// ← websocket.go wc.userID). Stamped onto turn-scoped audit entries via
+	// auditUser() so CLI runs (principal "cli") and admin sessions are
+	// attributable. Empty for channel-originated and unauthenticated turns.
+	userID string
+	media  []string
 
 	phase        TurnPhase
 	iteration    int
@@ -204,6 +210,17 @@ func (ts *turnState) setLastProducedModel(model string) {
 	ts.lastProducedModel = model
 }
 
+// auditUser returns the authenticated gateway principal for this turn, used to
+// stamp audit.Entry.User (FR-017). Returns "" for a nil turnState or a turn
+// with no authenticated principal (channel-originated, env-token, dev-bypass) —
+// callers leave Entry.User empty in that case rather than guessing.
+func (ts *turnState) auditUser() string {
+	if ts == nil {
+		return ""
+	}
+	return ts.userID
+}
+
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	ts := &turnState{
 		agent:        agent,
@@ -215,6 +232,7 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		channel:      opts.Channel,
 		chatID:       opts.ChatID,
 		userMessage:  opts.UserMessage,
+		userID:       opts.UserID,
 		media:        append([]string(nil), opts.Media...),
 		phase:        TurnPhaseSetup,
 		startedAt:    time.Now(),

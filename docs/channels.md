@@ -190,11 +190,13 @@ Omnipus supports connecting to your personal WeChat account using the official T
 
 **1. Login**
 
-Run the interactive QR login flow:
-```bash
-omnipus auth weixin
-```
-Scan the printed QR code with your WeChat mobile app. On success, the token is saved to your config.
+Open **Channels → Weixin → Configure** in the web UI (`omnipus start`, then visit
+`http://localhost:5000`). A QR code appears in the panel — scan it with your WeChat
+mobile app. On success, the token is saved automatically to the encrypted credential
+store.
+
+Alternatively, paste the `token_ref` value manually (see the config block below) if
+you already have a token from another setup.
 
 **2. Configure**
 
@@ -380,11 +382,10 @@ See [WeCom Configuration Guide](channels/wecom.md) for the full configuration re
 
 **1. Authenticate**
 
-```bash
-omnipus auth wecom
-```
-
-This command shows a QR code, waits for approval in WeCom, and writes `bot_id` and `secret` into `channels.wecom`.
+Open **Channels → WeCom → Configure** in the web UI (`omnipus start`, then visit
+`http://localhost:5000`). A QR code appears in the panel — scan it in the WeCom
+mobile app. On success, `bot_id` and `secret` are written automatically to the
+encrypted credential store.
 
 **2. Configure manually if needed**
 

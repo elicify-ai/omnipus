@@ -10,6 +10,37 @@ defaults:
     shell: bash
 
 jobs:
+  cli-verb-guard:
+    name: CLI Removed-Verb Guard
+    # US-11 AC4 (FR-013): fail if any removed CLI verb reappears in infra.
+    # Scanned directories: docker/, .github/, deploy/, scripts/,
+    #   cmd/omnipus-launcher-tui/ — NOT docs/ (may discuss history).
+    # The regex matches "<binary> <removed-verb>" in any form an infra script
+    # might invoke it (plain, path-prefixed, variable-prefixed). The gateway
+    # alias is kept and excluded by scanning for the removed verbs only:
+    #   removed: agent auth status cron migrate model skills
+    #   kept:    start gateway credentials audit doctor version onboard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check for removed CLI verbs in infra
+        run: |
+          set -euo pipefail
+          PATTERN='(omnipus|[A-Za-z0-9_./-]*omnipus|\$[A-Z_]+)[[:space:]]+(agent|auth|status|cron|migrate|model|skills)\b'
+          DIRS="docker .github deploy scripts cmd/omnipus-launcher-tui"
+          FOUND=$(grep -rE "$PATTERN" --include="*.sh" --include="*.yml" --include="*.yaml" \
+            --include="Dockerfile*" --include="*.go" \
+            $DIRS 2>/dev/null | grep -v "^Binary" || true)
+          if [ -n "$FOUND" ]; then
+            echo "ERROR: removed CLI verb found in infra. Update callers to use 'omnipus start', 'omnipus credentials', etc." >&2
+            echo "" >&2
+            echo "$FOUND" >&2
+            exit 1
+          fi
+          echo "OK: no removed CLI verbs in infra."
+
   typecheck:
     name: TypeScript Type Check
     # Runs `tsc -b --noEmit` (project-references build mode) against the repo
@@ -613,7 +644,7 @@ jobs:
         # which is needed in case the credential seed step is extended in future.
         run: |
           OMNIPUS_MASTER_KEY=${{ secrets.OMNIPUS_MASTER_KEY_CI }} \
-            ./omnipus gateway --allow-empty > /tmp/omnipus.log 2>&1 &
+            ./omnipus start --allow-empty > /tmp/omnipus.log 2>&1 &
           GATEWAY_PID=$!
           echo "${GATEWAY_PID}" > /tmp/omnipus.pid
 

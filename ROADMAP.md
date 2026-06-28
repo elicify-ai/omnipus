@@ -100,7 +100,7 @@ Child issues by priority:
 | P3 | User / role / device management (admin) | [#209](https://github.com/elicify-ai/omnipus/issues/209) |
 | P3 | Routing, retention & sandbox settings | [#210](https://github.com/elicify-ai/omnipus/issues/210) |
 
-The CLI already **leads** the UI on `omnipus onboard`, `omnipus gateway`, `omnipus credentials rotate`, `omnipus audit verify`, and `omnipus migrate` — those stay CLI-first.
+The CLI leads on: `omnipus onboard` (first-run setup), `omnipus start` (server), `omnipus credentials rotate` (vault re-encryption), and `omnipus audit verify` (log integrity). These stay CLI-first.
 
 ---
 

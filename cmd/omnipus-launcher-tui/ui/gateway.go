@@ -85,9 +85,9 @@ func startGateway() error {
 	var cmd *exec.Cmd
 
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", "start /B omnipus gateway > NUL 2>&1")
+		cmd = exec.Command("cmd", "/C", "start /B omnipus start > NUL 2>&1")
 	} else {
-		cmd = exec.Command("sh", "-c", "nohup omnipus gateway > /dev/null 2>&1 & echo $! > "+pidPath)
+		cmd = exec.Command("sh", "-c", "nohup omnipus start > /dev/null 2>&1 & echo $! > "+pidPath)
 	}
 
 	err := cmd.Start()
@@ -102,7 +102,7 @@ func startGateway() error {
 			"wmic",
 			"process",
 			"where",
-			"name='omnipus.exe' and commandline like '%gateway%'",
+			"name='omnipus.exe' and commandline like '%start%'",
 			"get",
 			"processid",
 		)

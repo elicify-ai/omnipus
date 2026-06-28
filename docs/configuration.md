@@ -25,7 +25,7 @@ OMNIPUS_CONFIG=/etc/omnipus/production.json omnipus start
 # Run omnipus with all its data stored in /opt/omnipus
 # Config will be loaded from the default ~/.omnipus/config.json
 # Workspace will be created at /opt/omnipus/workspace
-OMNIPUS_HOME=/opt/omnipus omnipus agent
+OMNIPUS_HOME=/opt/omnipus omnipus start
 
 # Use both for a fully customized setup
 OMNIPUS_HOME=/srv/omnipus OMNIPUS_CONFIG=/srv/omnipus/main.json omnipus start
@@ -621,7 +621,7 @@ For complete documentation, see [`security_configuration.md`](security_configura
 }
 ```
 
-> Run `omnipus auth login --provider anthropic` to paste your API token.
+> Set your key with: `omnipus credentials set ANTHROPIC_API_KEY <your-key>`
 
 For direct Anthropic API access or custom endpoints that only support Anthropic's native message format:
 

@@ -295,11 +295,19 @@ type AgentLoop struct {
 
 // processOptions configures how a message is processed
 type processOptions struct {
-	SessionKey              string                // Session identifier for history/context
-	Channel                 string                // Target channel for tool execution
-	ChatID                  string                // Target chat ID for tool execution
-	SenderID                string                // Current sender ID for dynamic context
-	SenderDisplayName       string                // Current sender display name for dynamic context
+	SessionKey        string // Session identifier for history/context
+	Channel           string // Target channel for tool execution
+	ChatID            string // Target chat ID for tool execution
+	SenderID          string // Current sender ID for dynamic context
+	SenderDisplayName string // Current sender display name for dynamic context
+	// UserID is the authenticated gateway principal that initiated this turn,
+	// threaded from the WS connection (websocket.go wc.userID) via
+	// bus.InboundMessage.Sender.Username (FR-017). It is stamped onto turn-scoped
+	// audit.Entry.User so CLI runs (principal "cli") and admin browser sessions
+	// are attributable. Empty for channel-originated turns (the platform sender
+	// is not a gateway principal) and unauthenticated env-token / dev-bypass
+	// paths — never guessed.
+	UserID                  string                // Authenticated gateway principal (FR-017)
 	UserMessage             string                // User message content (may include prefix)
 	ForcedSkills            []string              // Skills explicitly requested for this message
 	SystemPromptOverride    string                // Override the default system prompt (Used by SubTurns)
@@ -968,6 +976,7 @@ func (al *AgentLoop) recordRateLimitDenial(
 			Event:      audit.EventRateLimit,
 			Decision:   audit.DecisionDeny,
 			AgentID:    ts.agent.ID,
+			User:       ts.auditUser(), // FR-017
 			Tool:       payload.Tool,
 			PolicyRule: payload.PolicyRule,
 			Details:    details,
@@ -2823,6 +2832,7 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 			Event:     audit.EventToolPolicyAskDenied,
 			Decision:  audit.DecisionDeny,
 			SessionID: sessionKey,
+			User:      ts.auditUser(), // FR-017
 			Details: map[string]any{
 				"reason":   "restart",
 				"turn_id":  ts.turnID,
@@ -4391,11 +4401,17 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	}
 
 	opts := processOptions{
-		SessionKey:          sessionKey,
-		Channel:             msg.Channel,
-		ChatID:              msg.ChatID,
-		SenderID:            msg.Sender.CanonicalID,
-		SenderDisplayName:   msg.Sender.DisplayName,
+		SessionKey:        sessionKey,
+		Channel:           msg.Channel,
+		ChatID:            msg.ChatID,
+		SenderID:          msg.Sender.CanonicalID,
+		SenderDisplayName: msg.Sender.DisplayName,
+		// FR-017: thread the authenticated gateway principal into the turn for
+		// audit attribution. The webchat WS path sets Sender.Username = wc.userID
+		// (the WS-authenticated identity, e.g. "cli" or an admin username);
+		// channel paths leave it as the platform username or empty. Audit
+		// stamping only treats the WS-authenticated value as a gateway principal.
+		UserID:              msg.Sender.Username,
 		UserMessage:         msg.Content,
 		Media:               msg.Media,
 		DefaultResponse:     defaultResponse,
@@ -6911,6 +6927,7 @@ turnLoop:
 						Event:    audit.EventPolicyEval,
 						Decision: audit.DecisionAllow,
 						AgentID:  ts.agent.ID,
+						User:     ts.auditUser(), // FR-017
 						Tool:     toolName,
 						Details:  details,
 					})
@@ -7229,6 +7246,7 @@ func (al *AgentLoop) recordSyntheticDeny(ts *turnState) (shouldAbort bool, abort
 		Decision:  audit.DecisionDeny,
 		AgentID:   ts.agentID,
 		SessionID: ts.sessionKey,
+		User:      ts.auditUser(), // FR-017
 		Details: map[string]any{
 			"turn_id":               ts.turnID,
 			"synthetic_error_count": ts.syntheticErrorCount,
@@ -8737,6 +8755,7 @@ func (al *AgentLoop) checkToolDedupInvariant(ts *turnState, filtered []tools.Too
 				AgentID:   ts.agentID,
 				Tool:      name,
 				SessionID: ts.sessionKey,
+				User:      ts.auditUser(), // FR-017
 				Details:   details,
 			})
 			return fmt.Errorf("tools[] dedup invariant violated: tool %q appears from sources %v", name, sources)
@@ -8869,6 +8888,7 @@ func (al *AgentLoop) emitPolicyDenyAudit(
 		AgentID:   ts.agentID,
 		Tool:      toolName,
 		SessionID: ts.sessionKey,
+		User:      ts.auditUser(), // FR-017
 		Details:   details,
 	})
 }

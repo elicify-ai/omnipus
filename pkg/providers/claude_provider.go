@@ -48,7 +48,7 @@ func createClaudeTokenSource() func() (string, error) {
 			return "", fmt.Errorf("loading auth credentials: %w", err)
 		}
 		if cred == nil {
-			return "", fmt.Errorf("no credentials for anthropic. Run: omnipus auth login --provider anthropic")
+			return "", fmt.Errorf("no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>")
 		}
 		return cred.AccessToken, nil
 	}

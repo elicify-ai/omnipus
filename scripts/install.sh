@@ -177,4 +177,4 @@ else
   info "(note: '$TARGET version' did not exit 0 — binary may still work; check 'omnipus --help')"
 fi
 
-info "next: run 'omnipus gateway' and open http://localhost:5000/"
+info "next: run 'omnipus start' and open http://localhost:5000/"

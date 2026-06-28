@@ -80,7 +80,7 @@ jobs:
           # Supply a deterministic master key so the credential store unlocks
           # without prompting (Plan 3 §1 locked-decision: env takes priority).
           export OMNIPUS_MASTER_KEY="0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
-          ./omnipus gateway --allow-empty > omnipus.log 2>&1 &
+          ./omnipus start --allow-empty > omnipus.log 2>&1 &
           PID=$!
           echo "gateway pid=$PID"
 
