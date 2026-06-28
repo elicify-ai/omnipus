@@ -160,6 +160,7 @@ export function CalendarToolbar({
 
         {/* Period title — grows to consume remaining space in row 1 */}
         <h2
+          data-testid="calendar-title"
           className={cn(
             'ml-1 flex-1 min-w-0',
             'text-sm font-headline font-semibold',
