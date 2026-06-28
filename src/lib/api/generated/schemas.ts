@@ -1710,6 +1710,15 @@ export const ProviderUpdateRequest = z
     models: z.array(z.string().min(1).max(256)).max(500),
   })
   .partial();
+export const SlashCommand = z.object({
+  name: z.string(),
+  label: z.string(),
+  description: z.string(),
+  usage: z.string().optional(),
+  aliases: z.array(z.string()).optional(),
+  available_while_streaming: z.boolean().optional(),
+  delivery: z.enum(["client", "agent"]),
+});
 export const Skill = z.object({
   id: z.string(),
   name: z.string(),
@@ -3293,6 +3302,29 @@ Includes session_start events from all agent stores and task lifecycle events.
         description: `Bad request — missing or invalid field.`,
         schema: ErrorResponse,
       },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/commands",
+    alias: "listCommands",
+    description: `Returns the canonical slash commands available on the given surface (default web). Aliases and deprecated names are excluded. The web chat palette renders the web set as its single source of truth.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "surface",
+        type: "Query",
+        schema: z.enum(["web", "cli", "channel"]).optional(),
+      },
+    ],
+    response: z.array(SlashCommand),
+    errors: [
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,

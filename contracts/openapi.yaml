@@ -39,6 +39,8 @@ tags:
   description: Audit log entries and audit logging toggle
 - name: Channels
   description: Communication channel configuration and management
+- name: Commands
+  description: Surface-aware slash-command registry (web palette source of truth)
 - name: Config
   description: Config state introspection (pending restarts)
 - name: Workspace
@@ -252,6 +254,8 @@ components:
       $ref: ./components/schemas/TranscribeResponse.yaml
     Skill:
       $ref: ./components/schemas/Skill.yaml
+    SlashCommand:
+      $ref: ./components/schemas/SlashCommand.yaml
     ActivityEvent:
       $ref: ./components/schemas/ActivityEvent.yaml
     UploadedFile:
@@ -3734,6 +3738,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OperationResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /commands:
+    get:
+      operationId: listCommands
+      summary: List available slash commands for a surface
+      description: "Returns the canonical slash commands available on the given surface (default web). Aliases and deprecated names are excluded. The web chat palette renders the web set as its single source of truth.\n"
+      tags:
+      - Commands
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: surface
+        in: query
+        description: Which surface to list commands for. Defaults to web. Unknown values are treated as web.
+        schema:
+          type: string
+          enum:
+          - web
+          - cli
+          - channel
+        example: web
+      responses:
+        '200':
+          description: Array of available slash commands for the surface.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SlashCommand'
         '401':
           $ref: '#/components/responses/401Unauthorized'
   /skills:
