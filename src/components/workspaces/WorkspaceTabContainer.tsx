@@ -135,8 +135,10 @@ function WorkspaceTabContainerView({
   return (
     <WorkspaceContext.Provider value={workspace}>
       <div className="absolute inset-0 flex flex-col overflow-hidden">
-        {/* Row 1: top bar — @container so children can use container-query variants */}
-        <div
+        {/* Row 1: top bar — semantic <header> (banner landmark) so the token/cost
+            counter is reachable via both getByRole('banner') and a `header` CSS
+            selector. @container enables container-query variants on children. */}
+        <header
           role="banner"
           className="@container flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface-1)]/95 backdrop-blur-sm flex-shrink-0"
           data-testid="workspace-top-bar"
@@ -159,7 +161,7 @@ function WorkspaceTabContainerView({
               <ChatControls />
             </div>
           )}
-        </div>
+        </header>
 
         {/* Row 2: breadcrumb */}
         <WorkspaceBreadcrumbBar workspace={workspace} />
