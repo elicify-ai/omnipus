@@ -750,7 +750,15 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	//   503 — taskExecutor is nil (gateway degraded / not fully initialised)
 	//   409 — dispatch cap exhausted (retryable congestion)
 	//   500 — any other launch error
-	if updated.Status == task.StatusInProgress &&
+	//
+	// Guard: only fire when the client explicitly set status=in_progress in this
+	// PATCH (req.Status != nil). A PATCH with no status field must never enter
+	// the launch path even if the task happens to already be in_progress —
+	// preUpdateStatus would be "" in that case, making the revert call
+	// Update(id, Patch{Status: &""}) which the store rejects (IsValidStatus("")
+	// == false), causing a silent no-op revert and a misleading log entry.
+	if req.Status != nil &&
+		updated.Status == task.StatusInProgress &&
 		preUpdateStatus != task.StatusInProgress &&
 		updated.AgentID != "" &&
 		updated.SessionID == "" {

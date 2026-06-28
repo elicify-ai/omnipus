@@ -25,6 +25,20 @@ const (
 // distinguish this retryable condition from hard failures.
 var ErrDispatchCapReached = errors.New("task_executor: global dispatch cap reached")
 
+// taskSlot holds the state for one running (or reserved) task goroutine. A
+// slot is inserted into te.running atomically under te.mu before the goroutine
+// launches; this eliminates the nil-sentinel that previously required every
+// reader to remember the nil-check.
+//
+// States:
+//
+//	reserved == true, cancel == nil  → slot claimed, goroutine not yet started
+//	reserved == false, cancel != nil → goroutine live and cancellable
+type taskSlot struct {
+	cancel   context.CancelFunc // non-nil once the goroutine starts
+	reserved bool               // true while the slot is held but goroutine not yet launched
+}
+
 // TaskExecutor runs dispatchable tasks by handing them to agent sessions. It
 // operates over the unified pkg/task store and 7-state vocabulary: a
 // dispatchable task is `next`, running is `in_progress`, terminal is
@@ -33,7 +47,7 @@ type TaskExecutor struct {
 	agentLoop     *AgentLoop
 	store         *task.Store
 	mu            sync.Mutex
-	running       map[string]context.CancelFunc
+	running       map[string]*taskSlot
 	maxConcurrent int
 	// dispatchSema gates the total number of concurrently dispatched tasks
 	// across all agents.
@@ -61,7 +75,7 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 	return &TaskExecutor{
 		agentLoop:     al,
 		store:         store,
-		running:       make(map[string]context.CancelFunc),
+		running:       make(map[string]*taskSlot),
 		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
 		dispatchSema:  newDispatchSemaphore(capacity),
 	}
@@ -138,7 +152,7 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 
 	taskCtx, cancel := context.WithCancel(ctx)
 	te.mu.Lock()
-	te.running[taskID] = cancel
+	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
 
 	go te.runTask(taskCtx, t, cancel, release)
@@ -597,8 +611,9 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		}
 		return "", fmt.Errorf("task_executor: StartTaskNow: task %q goroutine already running", taskID)
 	}
-	// Reserve the slot with a nil sentinel so competing callers bail above.
-	te.running[taskID] = nil
+	// Reserve the slot explicitly so competing callers bail at the check above.
+	// reserved=true, cancel=nil: slot is claimed but the goroutine has not started yet.
+	te.running[taskID] = &taskSlot{reserved: true}
 	te.mu.Unlock()
 
 	// releaseSlot removes the reservation if setup fails so future callers can
@@ -681,13 +696,14 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	// Detach from the caller's context (typically an HTTP request context that
 	// gets canceled as soon as the response is sent). The goroutine must outlive
 	// the HTTP request; the explicit cancel stored in te.running[taskID] is the
-	// intended cancellation path (called by Stop or a future "cancel task" API).
+	// intended cancellation path (a future "cancel task" API).
 	//
-	// Replace the nil sentinel (inserted above) with the real cancel under the
-	// same mutex so Stop() callers always observe a callable value.
+	// Replace the reserved slot (inserted above, cancel==nil, reserved==true)
+	// with a live slot (cancel set, reserved==false) under the same mutex so
+	// any concurrent reader always observes a consistent, named state.
 	taskCtx, cancel := context.WithCancel(context.Background())
 	te.mu.Lock()
-	te.running[taskID] = cancel
+	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
 	slotReleased = true // goroutine now owns the slot; don't let releaseSlot clear it
 
@@ -769,21 +785,6 @@ func (te *TaskExecutor) DispatchSemaCap() int {
 // internal sema path inside StartTaskNow / ExecuteTask.
 func (te *TaskExecutor) TryAcquireDispatchSema() (bool, func()) {
 	return te.dispatchSema.TryAcquire()
-}
-
-// Stop cancels all running task goroutines.
-// Entries whose cancel is nil are reservation sentinels (StartTaskNow has
-// reserved the slot but has not yet launched the goroutine); they are skipped
-// since no goroutine is running yet.
-func (te *TaskExecutor) Stop() {
-	te.mu.Lock()
-	defer te.mu.Unlock()
-	for _, cancel := range te.running {
-		if cancel != nil {
-			cancel()
-		}
-	}
-	te.running = make(map[string]context.CancelFunc)
 }
 
 // CheckQueuedTasks picks the highest-priority *dispatchable* `next` task per

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { isApiError } from '@/lib/api'
+import { isReAuthCancelled } from '@/components/settings/useReAuthGate'
 
 export type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
@@ -65,7 +66,20 @@ export function useAutoSave<T>(
   // "pending" — the unmount flush + page-hide beacon still fire and retry it.
   // Without this, a thrown save would still mark the edit as saved and the
   // user's delegation-edge changes would silently vanish on reload.
+  //
+  // FIX 2 — stale-resolve guard: only advance this ref when the just-resolved
+  // save is the most recently FIRED one. Without this guard, a concurrent save
+  // A that fires before B but resolves after B writes json_A (stale) into
+  // lastSavedJsonRef while latestDataRef already holds json_B. That leaves
+  // hasPendingChanges()=true and an extra (correct-valued) PUT fires on unmount.
+  // Tracking the fired-sequence counter and comparing at resolution time prevents
+  // the stale write. Latest-wins correctness is preserved: save B always resolves
+  // its own json_B, and A's late resolution is simply ignored.
   const lastSavedJsonRef = useRef<string>('')
+  // Monotonically increasing counter: incremented each time a save is FIRED.
+  // Each save closure captures its own sequence number and only advances
+  // lastSavedJsonRef when its sequence equals the latest fired sequence.
+  const firedSeqRef = useRef<number>(0)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestDataRef = useRef<T>(data)
@@ -84,11 +98,20 @@ export function useAutoSave<T>(
     // Snapshot what we're about to persist so success marks exactly that JSON
     // saved (data may change again while the request is in flight).
     const inFlightJson = JSON.stringify(latestDataRef.current)
+    // FIX 2: capture the sequence number for this particular fire so we can
+    // guard against a stale-resolving concurrent save clobbering lastSavedJsonRef.
+    firedSeqRef.current += 1
+    const thisSeq = firedSeqRef.current
     try {
       await saveFnRef.current(latestDataRef.current)
       // Only NOW is the data durable — advance the saved marker so
       // hasPendingChanges() flips false for this exact payload.
-      lastSavedJsonRef.current = inFlightJson
+      // FIX 2: only advance if no newer save has been fired since this one;
+      // a later-fired save that already resolved would have set a higher seq,
+      // and we must not regress lastSavedJsonRef to our (older) payload.
+      if (thisSeq === firedSeqRef.current) {
+        lastSavedJsonRef.current = inFlightJson
+      }
       setStatus('saved')
       setLastSavedAt(new Date())
       // Fade back to idle after 2s. Cancel any previous fade timer first to
@@ -99,6 +122,14 @@ export function useAutoSave<T>(
         fadeTimerRef.current = null
       }, 2000)
     } catch (err) {
+      // FIX 1: a user-initiated re-auth dialog dismissal is not an error —
+      // treat it as a no-op and restore idle status so the indicator does not
+      // stay red until the next edit. Genuine save failures still land in error.
+      if (isReAuthCancelled(err)) {
+        setStatus('idle')
+        setError(undefined)
+        return
+      }
       setStatus('error')
       setError(isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err))
     }

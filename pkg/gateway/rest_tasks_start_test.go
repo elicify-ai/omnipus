@@ -104,14 +104,15 @@ func TestHandleTaskPatch_InProgress_NoAgentID(t *testing.T) {
 }
 
 // TestHandleTaskPatch_InProgress_NilTaskExecutor verifies that PATCH
-// status=in_progress with an agent_id but a nil taskExecutor still returns 200
-// (graceful fallback — logs a warn, does not crash or return 500).
+// status=in_progress with an agent_id but a nil taskExecutor returns 503
+// Service Unavailable (gateway degraded — logs a warn, rejects the transition
+// so the task is not left stranded as in_progress).
 //
 // BDD:
 //
-//	Given a task with an agent_id and taskExecutor=nil on the restAPI,
+//	Given a task with an agent_id (bypassed via store) and taskExecutor=nil,
 //	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"},
-//	Then 200, status=in_progress, no crash.
+//	Then 503 Service Unavailable and the task is NOT left as in_progress.
 func TestHandleTaskPatch_InProgress_NilTaskExecutor(t *testing.T) {
 	api := newTestRestAPIWithHome(t) // does NOT wire taskExecutor
 	wsID := ensureTestWorkspace(t, api)
@@ -119,13 +120,22 @@ func TestHandleTaskPatch_InProgress_NilTaskExecutor(t *testing.T) {
 	tsk := createTaskViaAPI(t, api, "AgentTaskNoExec", wsID)
 	advanceTaskToNext(t, api, tsk.Id)
 
-	// Assign a (fake) agent_id so the executor-launch path is reached.
-	// validateTaskAgentID skips the check when the registry is empty/no agents.
-	w := patchTask(t, api, tsk.Id, `{"status":"in_progress","agent_id":"mia"}`)
-	// The store may reject "mia" if registry validation fires with an empty agent
-	// list; we only care that the response is not 500.
-	assert.NotEqual(t, http.StatusInternalServerError, w.Code,
-		"PATCH with nil taskExecutor must not return 500; body=%s", w.Body.String())
+	// Inject agent_id directly via the store, bypassing the registry FK guard
+	// (registry is empty in this test setup so the REST PATCH would reject "mia"
+	// with 400 before reaching the executor-nil branch).
+	agentID := "synthetic-agent"
+	_, err := api.taskStore.Update(tsk.Id, task.Patch{AgentID: &agentID})
+	require.NoError(t, err, "direct agent_id set must succeed")
+
+	// PATCH status=in_progress with nil executor must return 503.
+	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"nil taskExecutor must return 503; body=%s", w.Body.String())
+
+	// Task must be reverted, not left as in_progress.
+	statusAfter := getTaskStatus(t, api, tsk.Id)
+	assert.Equal(t, gen.TaskStatusNext, statusAfter,
+		"task must revert to 'next' after nil-executor 503 (not left as in_progress)")
 }
 
 // TestHandleTaskPatch_InProgress_WithKnownAgent verifies that PATCH
@@ -412,4 +422,55 @@ func TestHandleTaskPatch_RunTask_NilExecutorReturns503(t *testing.T) {
 	statusAfter := getTaskStatus(t, api, tsk.Id)
 	assert.Equal(t, gen.TaskStatusNext, statusAfter,
 		"task must revert to 'next' after 503 (not left as in_progress)")
+}
+
+// TestHandleTaskPatch_NilStatus_AlreadyInProgress_NoLaunch verifies that a PATCH
+// carrying NO status field (req.Status == nil) on a task that is ALREADY
+// in_progress never enters the StartTaskNow launch path, even when the task has
+// an agent_id and taskExecutor is nil. The patch must succeed with 200 and the
+// task must remain in_progress (no silent revert, no 503).
+//
+// This covers the revert-silent-fail bug: when req.Status is nil, preUpdateStatus
+// is "" because the pre-read is skipped. If the launch guard fired in this case
+// and StartTaskNow failed, the revert would call Update with status="" which the
+// store rejects (IsValidStatus("")==false), causing a silent no-op revert and a
+// misleading error response. The fix is to gate the entire launch block on
+// req.Status != nil.
+//
+// BDD:
+//
+//	Given a task already in_progress with an agent_id, and taskExecutor == nil,
+//	When PATCH /api/v1/tasks/{id} with a body that contains NO "status" field
+//	     (e.g. {"priority":1}),
+//	Then 200 OK, the task remains in_progress, and no revert is attempted.
+func TestHandleTaskPatch_NilStatus_AlreadyInProgress_NoLaunch(t *testing.T) {
+	api := newTestRestAPIWithHome(t) // taskExecutor is nil by construction
+	wsID := ensureTestWorkspace(t, api)
+
+	tsk := createTaskViaAPI(t, api, "NilStatusAlreadyInProgress", wsID)
+	advanceTaskToNext(t, api, tsk.Id)
+
+	// Force the task to in_progress via the store directly (bypassing the REST
+	// path that would require a real executor). Also inject an agent_id so that,
+	// if the launch guard were to fire incorrectly, it would reach the nil-executor
+	// branch and produce a 503.
+	inProgress := task.StatusInProgress
+	agentID := "synthetic-agent"
+	_, err := api.taskStore.Update(tsk.Id, task.Patch{Status: &inProgress, AgentID: &agentID})
+	require.NoError(t, err, "direct status+agent_id set must succeed")
+
+	// Confirm the task is in_progress before the PATCH.
+	require.Equal(t, gen.TaskStatusInProgress, getTaskStatus(t, api, tsk.Id))
+
+	// PATCH with NO "status" field — only a metadata field to prove the path works.
+	// Must NOT enter the launch guard (req.Status == nil).
+	w := patchTask(t, api, tsk.Id, `{"priority":1}`)
+	assert.Equal(t, http.StatusOK, w.Code,
+		"PATCH with no status field on already-in_progress task must return 200; body=%s",
+		w.Body.String())
+
+	// Task must still be in_progress — no silent revert.
+	statusAfter := getTaskStatus(t, api, tsk.Id)
+	assert.Equal(t, gen.TaskStatusInProgress, statusAfter,
+		"task must remain in_progress after a nil-status PATCH (no revert attempted)")
 }

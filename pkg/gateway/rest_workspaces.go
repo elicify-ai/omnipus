@@ -338,7 +338,23 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 	// and edges stay consistent (no edge to an off-team agent like the generic
 	// worker). The Planner→Explorer/Researcher specialist edges survive because
 	// all three are on the default team.
-	ws.Delegation = seedEdgesForTeam(defaultWorkspaceDelegationEdges(cfg), ws.CoreTeam)
+	seedEdges := seedEdgesForTeam(defaultWorkspaceDelegationEdges(cfg), ws.CoreTeam)
+	// Defense-in-depth: validate each seeded edge so no unvalidated edge is ever
+	// persisted. The source is the trusted compiled-in roster so failures are
+	// unexpected; on failure log WARN and drop the offending edge rather than
+	// hard-failing boot over a seed-config issue.
+	team := workspaceTeamSet(ws)
+	ceiling := delegationDepthCeiling(cfg)
+	validEdges := seedEdges[:0:0]
+	for _, edge := range seedEdges {
+		if verr := edge.Validate(team, ceiling); verr != nil {
+			slog.Warn("rest: ensureDefaultWorkspace: dropping invalid seed delegation edge",
+				"from", edge.FromAgent, "to", edge.ToAgent, "error", verr)
+			continue
+		}
+		validEdges = append(validEdges, edge)
+	}
+	ws.Delegation = validEdges
 	if err := writeWorkspaceFile(home, ws); err != nil {
 		return fmt.Errorf("ensureDefaultWorkspace: write: %w", err)
 	}
@@ -541,7 +557,23 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	// Seed default delegation edges from each team agent's seeded role (M5),
 	// restricted to edges whose endpoints are both on this workspace's team so a
 	// custom core_team never gains edges to agents it did not include.
-	ws.Delegation = seedEdgesForTeam(defaultWorkspaceDelegationEdges(cfg), ws.CoreTeam)
+	seedEdges := seedEdgesForTeam(defaultWorkspaceDelegationEdges(cfg), ws.CoreTeam)
+	// Defense-in-depth: validate each seeded edge so no unvalidated edge is ever
+	// persisted. The source is the trusted compiled-in roster so failures are
+	// unexpected; on failure log WARN and drop the offending edge (do not hard-fail
+	// the create request over a seed-config issue).
+	createTeam := workspaceTeamSet(ws)
+	createCeiling := delegationDepthCeiling(cfg)
+	validSeedEdges := seedEdges[:0:0]
+	for _, edge := range seedEdges {
+		if verr := edge.Validate(createTeam, createCeiling); verr != nil {
+			slog.Warn("rest: handleWorkspaceCreate: dropping invalid seed delegation edge",
+				"from", edge.FromAgent, "to", edge.ToAgent, "error", verr)
+			continue
+		}
+		validSeedEdges = append(validSeedEdges, edge)
+	}
+	ws.Delegation = validSeedEdges
 
 	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
 		slog.Error("rest: create workspace", "error", err)

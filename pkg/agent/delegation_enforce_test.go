@@ -436,7 +436,7 @@ func TestEnforceEdgeModeAndDepth_NegativeDepthFailsClosed(t *testing.T) {
 		edge := &workspace.DelegationEdge{
 			FromAgent: "mia",
 			ToAgent:   "ray",
-			Modes:     []string{"background"},
+			Modes:     []workspace.DelegationMode{"background"},
 			Depth:     intPtr(neg),
 		}
 		// globalDepthCap = 0 (no global ceiling): the ONLY thing that could deny is
@@ -455,7 +455,7 @@ func TestEnforceEdgeModeAndDepth_NegativeDepthFailsClosed(t *testing.T) {
 	// Control: a POSITIVE cap above the current depth still ALLOWS (the fix must
 	// not over-deny legitimate edges).
 	okEdge := &workspace.DelegationEdge{
-		FromAgent: "mia", ToAgent: "ray", Modes: []string{"background"}, Depth: intPtr(3),
+		FromAgent: "mia", ToAgent: "ray", Modes: []workspace.DelegationMode{"background"}, Depth: intPtr(3),
 	}
 	if denial := enforceEdgeModeAndDepth(
 		ctxAtDepth(0), okEdge, "mia", "ray", config.DelegationModeBackground, 0); denial != nil {

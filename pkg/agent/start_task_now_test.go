@@ -28,7 +28,7 @@ func newStartTaskNowExecutor(t *testing.T) (*TaskExecutor, *task.Store) {
 	te := &TaskExecutor{
 		agentLoop:     &AgentLoop{eventBus: NewEventBus()},
 		store:         store,
-		running:       make(map[string]context.CancelFunc),
+		running:       make(map[string]*taskSlot),
 		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
 		dispatchSema:  newDispatchSemaphore(4),
 	}
@@ -150,12 +150,12 @@ func TestStartTaskNow_Idempotent_AlreadyRunning(t *testing.T) {
 
 	tk := createInProgressTask(t, store, "some-agent", "ws-1")
 
-	// Manually register a cancel to simulate a running goroutine.
+	// Manually register a live slot to simulate a running goroutine.
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	_ = cancelCtx
 	te.mu.Lock()
-	te.running[tk.ID] = cancel
+	te.running[tk.ID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
 	t.Cleanup(func() {
 		te.mu.Lock()

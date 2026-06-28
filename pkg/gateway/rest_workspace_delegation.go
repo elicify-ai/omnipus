@@ -16,6 +16,7 @@ import (
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
 // delegationEdgeToWire converts a storedDelegationEdge to the generated wire type.
@@ -25,9 +26,11 @@ func delegationEdgeToWire(e storedDelegationEdge) gen.WorkspaceDelegationEdge {
 		ToAgent:   e.ToAgent,
 	}
 	if len(e.Modes) > 0 {
+		// []DelegationMode → the generated wire enum. DelegationMode is a string
+		// type, so this is a plain string cast — the wire shape stays a string array.
 		modes := make([]gen.WorkspaceDelegationEdgeModes, 0, len(e.Modes))
 		for _, m := range e.Modes {
-			modes = append(modes, gen.WorkspaceDelegationEdgeModes(m))
+			modes = append(modes, gen.WorkspaceDelegationEdgeModes(string(m)))
 		}
 		out.Modes = &modes
 	}
@@ -173,9 +176,11 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 		if dp == nil || len(dp.To) == 0 {
 			continue
 		}
-		modes := make([]string, 0, len(dp.Modes))
+		// config.DelegationMode → workspace.DelegationMode (both string types):
+		// seed the edge graph with the typed modes the stored edge now carries.
+		modes := make([]workspace.DelegationMode, 0, len(dp.Modes))
 		for _, m := range dp.Modes {
-			modes = append(modes, string(m))
+			modes = append(modes, workspace.DelegationMode(m))
 		}
 		var depth *int
 		if dp.Depth != nil {
@@ -189,7 +194,7 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 			edges = append(edges, storedDelegationEdge{
 				FromAgent: ac.ID,
 				ToAgent:   ref.ID,
-				Modes:     append([]string(nil), modes...),
+				Modes:     append([]workspace.DelegationMode(nil), modes...),
 				Depth:     depth,
 			})
 		}
@@ -253,22 +258,12 @@ func seedEdgesForTeam(edges []storedDelegationEdge, team []string) []storedDeleg
 // members but may NOT silently introduce a brand-new agent that is neither in
 // core_team nor already an endpoint — that would expand the team as a side
 // effect of an edge write, which the schema forbids.
+//
+// It is a thin adapter over the canonical workspace.TeamSet, which is the SINGLE
+// derivation shared with the update_workspace tool — the two write paths can no
+// longer diverge (they previously differed on whitespace trimming).
 func workspaceTeamSet(ws storedWorkspace) map[string]bool {
-	team := make(map[string]bool, len(ws.CoreTeam)+2*len(ws.Delegation))
-	for _, id := range ws.CoreTeam {
-		if id = strings.TrimSpace(id); id != "" {
-			team[id] = true
-		}
-	}
-	for _, e := range ws.Delegation {
-		if f := strings.TrimSpace(e.FromAgent); f != "" {
-			team[f] = true
-		}
-		if t := strings.TrimSpace(e.ToAgent); t != "" {
-			team[t] = true
-		}
-	}
-	return team
+	return workspace.TeamSet(ws.CoreTeam, ws.Delegation)
 }
 
 // buildWorkspaceDelegationEdges validates and normalises the incoming edge list
@@ -302,17 +297,19 @@ func buildWorkspaceDelegationEdges(
 
 		// Normalise the modes (trim already done by the wire layer; dedup here)
 		// BEFORE validation so the stored edge carries the canonical, deduped set.
-		var modes []string
+		// Incoming wire enum ([]string under the hood) → typed []DelegationMode;
+		// the typed set is what the stored edge and Validate() consume.
+		var modes []workspace.DelegationMode
 		if e.Modes != nil {
-			modes = make([]string, 0, len(*e.Modes))
-			seenMode := make(map[string]bool, len(*e.Modes))
+			modes = make([]workspace.DelegationMode, 0, len(*e.Modes))
+			seenMode := make(map[workspace.DelegationMode]bool, len(*e.Modes))
 			for _, m := range *e.Modes {
-				ms := string(m)
-				if seenMode[ms] {
+				dm := workspace.DelegationMode(string(m))
+				if seenMode[dm] {
 					continue
 				}
-				seenMode[ms] = true
-				modes = append(modes, ms)
+				seenMode[dm] = true
+				modes = append(modes, dm)
 			}
 		}
 

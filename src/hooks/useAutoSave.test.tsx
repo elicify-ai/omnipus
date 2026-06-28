@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
+
+// useAutoSave imports isReAuthCancelled from useReAuthGate. Mock the module so
+// the hook picks up the mock in tests; use the real predicate logic (pure fn).
+vi.mock('@/components/settings/useReAuthGate', () => ({
+  isReAuthCancelled: (err: unknown) =>
+    err instanceof Error && err.message === 'Re-authentication cancelled',
+}))
+
 import { useAutoSave } from '@/hooks/useAutoSave'
 
 describe('useAutoSave', () => {
@@ -209,5 +217,159 @@ describe('useAutoSave', () => {
 
     expect(result.current.status).toBe('error')
     expect(result.current.error).toBe('Save failed')
+  })
+
+  // ── FIX 1: re-auth cancellation resolves to idle, not error ────────────────
+
+  it('FIX-1: user-cancelled gated save ends in idle, not error', async () => {
+    // saveFn throws the exact cancellation sentinel that runGated emits when the
+    // user dismisses the re-auth dialog.
+    const cancelErr = new Error('Re-authentication cancelled')
+    const saveFn = vi.fn().mockRejectedValue(cancelErr)
+    let data = { v: 1 }
+
+    const { result, rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100 }),
+      { initialProps: { d: data } },
+    )
+
+    data = { v: 2 }
+    rerender({ d: data })
+
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+
+    // A user-initiated cancel must NOT leave the indicator red.
+    expect(result.current.status).toBe('idle')
+    expect(result.current.error).toBeUndefined()
+  })
+
+  it('FIX-1: after cancelled gated save a subsequent real edit still saves', async () => {
+    const cancelErr = new Error('Re-authentication cancelled')
+    // First call rejects with cancel; second call succeeds.
+    const saveFn = vi.fn()
+      .mockRejectedValueOnce(cancelErr)
+      .mockResolvedValue(undefined)
+    let data = { v: 1 }
+
+    const { result, rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100 }),
+      { initialProps: { d: data } },
+    )
+
+    // First edit — triggers cancelled save.
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+    expect(result.current.status).toBe('idle')
+
+    // Second edit — must trigger a real successful save.
+    data = { v: 3 }
+    rerender({ d: data })
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(result.current.status).toBe('saved')
+    expect(saveFn).toHaveBeenCalledTimes(2)
+    expect(saveFn).toHaveBeenLastCalledWith({ v: 3 })
+  })
+
+  it('FIX-1: a genuine save failure (non-cancel error) still ends in error', async () => {
+    const saveFn = vi.fn().mockRejectedValue(new Error('Network error'))
+    let data = { v: 1 }
+
+    const { result, rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100 }),
+      { initialProps: { d: data } },
+    )
+
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+
+    // Non-cancel errors must still surface as error status.
+    expect(result.current.status).toBe('error')
+    expect(result.current.error).toBe('Network error')
+  })
+
+  // ── FIX 2: stale-resolving concurrent save does not clobber lastSavedJsonRef ─
+
+  it('FIX-2: stale-resolves-after-latest ordering leaves hasPendingChanges false after latest resolves', async () => {
+    // Simulate: save A fires (json_A), then save B fires (json_B).
+    // Save A resolves AFTER save B. lastSavedJsonRef must end up as json_B,
+    // not json_A, so hasPendingChanges() returns false and no unmount flush fires.
+
+    let resolveA!: () => void
+    let resolveB!: () => void
+    const promiseA = new Promise<void>((r) => { resolveA = r })
+    const promiseB = new Promise<void>((r) => { resolveB = r })
+
+    const saveFn = vi.fn()
+      .mockReturnValueOnce(promiseA)  // first fire (A)
+      .mockReturnValueOnce(promiseB)  // second fire (B)
+
+    let data = { v: 1 }
+
+    const { rerender, unmount } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100 }),
+      { initialProps: { d: data } },
+    )
+
+    // Fire save A.
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(150) })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+
+    // Fire save B before A resolves.
+    data = { v: 3 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(150) })
+    expect(saveFn).toHaveBeenCalledTimes(2)
+
+    // Resolve B first (latest), then A (stale).
+    await act(async () => { resolveB(); await Promise.resolve() })
+    await act(async () => { resolveA(); await Promise.resolve() })
+
+    // After both resolve, unmount should NOT trigger another save because
+    // lastSavedJsonRef correctly reflects json_B (the latest fired payload).
+    unmount()
+    await act(async () => { await Promise.resolve() })
+
+    // saveFn called exactly twice — no extra unmount flush.
+    expect(saveFn).toHaveBeenCalledTimes(2)
+  })
+
+  it('FIX-2: when saves resolve in natural order (A then B), no redundant unmount flush', async () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    let data = { v: 1 }
+
+    const { rerender, unmount } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100 }),
+      { initialProps: { d: data } },
+    )
+
+    // Two sequential edits — debounce collapses them into one fired save each.
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(150) })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+
+    data = { v: 3 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(150) })
+    expect(saveFn).toHaveBeenCalledTimes(2)
+
+    // Unmount — both saves resolved successfully so nothing is pending.
+    unmount()
+    await act(async () => { await Promise.resolve() })
+
+    expect(saveFn).toHaveBeenCalledTimes(2)
   })
 })
