@@ -9,7 +9,7 @@
 // (CalendarToolbar.tsx), the milestone popover (MilestoneDatePopover.tsx) and the
 // host screen (CalendarScreen.tsx) all depend on the interfaces declared here.
 
-import type { MutableRefObject, ReactNode } from 'react'
+import type { MutableRefObject } from 'react'
 import type FullCalendar from '@fullcalendar/react'
 import type {
   EventInput,
@@ -18,6 +18,10 @@ import type {
   DateSelectArg,
 } from '@fullcalendar/core'
 import type { DateClickArg } from '@fullcalendar/interaction'
+import type { Task } from '@/lib/api'
+
+/** The 7-member task status union (reused from the wire contract). */
+export type TaskStatus = Task['status']
 
 /** The four views offered by the toolbar (FR-006). */
 export type CalendarViewName =
@@ -57,18 +61,18 @@ export type StatusIconKey =
   | 'Clock' //       once-trigger "fires" chip (overrides status icon)
   | 'Flag' //        milestone
 
-/** extendedProps carried on every FullCalendar EventInput we produce. */
-export interface CalendarEventExtProps {
-  kind: CalendarEventKind
-  /** Task status (absent for milestones). */
-  status?: string
-  /** Phosphor icon key for the chip's leading glyph. */
-  icon: StatusIconKey
-  /** Present when kind is task-* */
-  taskId?: string
-  /** Present when kind is milestone */
-  milestoneId?: string
-}
+/**
+ * extendedProps carried on every FullCalendar EventInput we produce.
+ *
+ * Discriminated on `kind` so illegal states (e.g. a milestone carrying a
+ * `taskId`, or a task without one) are unrepresentable — the consumer's
+ * switch on `kind` then narrows `taskId`/`milestoneId`/`status` with no
+ * defensive runtime checks, and `persistReschedule`'s switch can be exhaustive.
+ */
+export type CalendarEventExtProps =
+  | { kind: 'task-due'; taskId: string; status: TaskStatus; icon: StatusIconKey }
+  | { kind: 'task-fire'; taskId: string; status: TaskStatus; icon: 'Clock' }
+  | { kind: 'milestone'; milestoneId: string; icon: 'Flag' }
 
 /** Near-black chip text — clears WCAG AAA (>=7:1) on every chip background (SC-006b). */
 export const CHIP_TEXT_COLOR = '#0A0A0B'
@@ -83,7 +87,7 @@ export interface ChipStyle {
   icon: StatusIconKey
 }
 
-export const STATUS_STYLE: Record<string, ChipStyle> = {
+export const STATUS_STYLE: Record<TaskStatus, ChipStyle> = {
   done: { bg: '#34D399', icon: 'CheckCircle' },
   in_progress: { bg: '#60A5FA', icon: 'CircleNotch' },
   blocked: { bg: '#FBBF24', icon: 'Prohibit' },
@@ -146,6 +150,3 @@ export interface MilestoneDatePopoverProps {
   /** Called after a successful reschedule so the host can invalidate queries. */
   onRescheduled?: () => void
 }
-
-/** Convenience: a render-prop slot some components accept for empty/overlay UI. */
-export type CalendarSlot = ReactNode

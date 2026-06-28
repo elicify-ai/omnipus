@@ -14,6 +14,7 @@ import {
   STATUS_STYLE,
   STATUS_STYLE_FALLBACK,
   MILESTONE_STYLE,
+  type CalendarEventExtProps,
 } from '@/components/calendar/types'
 
 // ─── TZ-safe date helpers (FR-015, F-06) ────────────────────────────────────
@@ -46,8 +47,9 @@ export function parseLocalDate(s: string | null | undefined): Date | null {
 
 /**
  * Format a Date to `YYYY-MM-DD` using LOCAL date components.
- * Used when writing `due` / `due_date` on drag (FR-015, F-06).
- * Never uses UTC methods — no off-by-one across timezones.
+ * Used to write milestone `due_date` on drag and to seed the create-form date
+ * prefill (FR-015, F-06). Task `due` is RFC3339 date-time and is written via
+ * `toISOString()`, NOT this helper. Never uses UTC methods — no off-by-one.
  */
 export function formatLocalDate(d: Date): string {
   const y = d.getFullYear()
@@ -64,6 +66,36 @@ export function parseMs(ms: number | null | undefined): Date | null {
   if (ms == null || ms === 0) return null
   const d = new Date(ms)
   return isNaN(d.getTime()) ? null : d
+}
+
+// ─── Event builder ────────────────────────────────────────────────────────────
+
+/**
+ * Build the common FullCalendar EventInput shape — centralises the per-chip
+ * invariant (near-black text, border = background, draggable) so it is stated
+ * once (FR-005). `extendedProps` is typed against the discriminated
+ * CalendarEventExtProps union: the single authoritative construction site, so a
+ * mismatched/illegal extendedProps shape is now a compile error.
+ */
+function makeEvent(
+  id: string,
+  start: Date,
+  title: string,
+  bg: string,
+  allDay: boolean,
+  extendedProps: CalendarEventExtProps,
+): EventInput {
+  return {
+    id,
+    allDay,
+    start,
+    title,
+    backgroundColor: bg,
+    borderColor: bg,
+    textColor: CHIP_TEXT_COLOR,
+    editable: true,
+    extendedProps,
+  }
 }
 
 // ─── Main mapping function ────────────────────────────────────────────────────
@@ -88,58 +120,40 @@ export function mapToCalendarEvents(
   const events: EventInput[] = []
 
   for (const task of tasks) {
-    // Exclude non-user surfaces (FR-003, F-01): the real exclusion value is 'heartbeat'.
+    // In practice the only non-user surface is 'heartbeat'; allow-list on 'user'
+    // to stay future-proof (FR-003, F-01).
     if (task.surface && task.surface !== 'user') continue
 
     const style = STATUS_STYLE[task.status] ?? STATUS_STYLE_FALLBACK
 
-    // ── All-day :due event (FR-002) ──────────────────────────────────────────
+    // All-day :due event (FR-002).
     if (task.due) {
       const dueDate = parseLocalDate(task.due)
       if (dueDate !== null) {
-        events.push({
-          id: `task:${task.id}:due`,
-          allDay: true,
-          start: dueDate,
-          title: task.title,
-          backgroundColor: style.bg,
-          borderColor: style.bg,
-          textColor: CHIP_TEXT_COLOR,
-          editable: true,
-          extendedProps: {
+        events.push(
+          makeEvent(`task:${task.id}:due`, dueDate, task.title, style.bg, true, {
             kind: 'task-due',
             status: task.status,
             icon: style.icon,
             taskId: task.id,
-          },
-        })
+          }),
+        )
       }
     }
 
     // ── Timed :fire event for once triggers (FR-002, US-3) ───────────────────
     // `every` and `recurring` → skipped in v1 (F-10).
-    if (
-      task.trigger?.type === 'once' &&
-      task.trigger.config?.at_ms != null
-    ) {
+    if (task.trigger?.type === 'once' && task.trigger.config?.at_ms != null) {
       const fireDate = parseMs(task.trigger.config.at_ms)
       if (fireDate !== null) {
-        events.push({
-          id: `task:${task.id}:fire`,
-          allDay: false,
-          start: fireDate,
-          title: task.title,
-          backgroundColor: style.bg,
-          borderColor: style.bg,
-          textColor: CHIP_TEXT_COLOR,
-          editable: true,
-          extendedProps: {
+        events.push(
+          makeEvent(`task:${task.id}:fire`, fireDate, task.title, style.bg, false, {
             kind: 'task-fire',
             status: task.status,
-            icon: 'Clock', // always overrides status icon on fire chips (§6)
+            icon: 'Clock', // always overrides the status icon on fire chips (§6)
             taskId: task.id,
-          },
-        })
+          }),
+        )
       }
     }
   }
@@ -150,21 +164,13 @@ export function mapToCalendarEvents(
     const dueDate = parseLocalDate(m.due_date)
     if (dueDate === null) continue
 
-    events.push({
-      id: `milestone:${m.id}`,
-      allDay: true,
-      start: dueDate,
-      title: m.name,
-      backgroundColor: MILESTONE_STYLE.bg,
-      borderColor: MILESTONE_STYLE.bg,
-      textColor: CHIP_TEXT_COLOR,
-      editable: true,
-      extendedProps: {
+    events.push(
+      makeEvent(`milestone:${m.id}`, dueDate, m.name, MILESTONE_STYLE.bg, true, {
         kind: 'milestone',
         icon: 'Flag',
         milestoneId: m.id,
-      },
-    })
+      }),
+    )
   }
 
   return events

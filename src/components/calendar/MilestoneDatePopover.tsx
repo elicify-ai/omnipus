@@ -24,8 +24,9 @@ import type { MilestoneDatePopoverProps } from './types'
  *   onClose        — called on cancel, dialog-close (X), and after successful save
  *   onRescheduled  — called after successful save so the host can invalidate queries
  *
- * updateMilestone call: updateMilestone(workspaceId, milestone.id, { due_date: 'YYYY-MM-DD' })
- * — 3 args, matching lib/api.ts:2807.
+ * updateMilestone call: updateMilestone(workspaceId, milestone.id, { due_date: 'YYYY-MM-DD' | null })
+ * — 3 args, matching the `updateMilestone(workspaceId, id, body)` signature in `lib/api.ts`.
+ * An EMPTY date input sends `null` to CLEAR the due date (body: { due_date: null }).
  */
 export function MilestoneDatePopover({
   workspaceId,
@@ -47,8 +48,9 @@ export function MilestoneDatePopover({
     }
   }, [milestone])
 
-  // Focus the date input on open (C-4: dialog gives focus trap for free via Radix;
-  // we additionally move focus to the input so the user can start editing immediately).
+  // Focus the date input on open. This setTimeout is LOAD-BEARING: without it Radix's
+  // focus trap would land on the first tabbable element (the Cancel button). Moving focus
+  // explicitly to the input lets the user start editing immediately (C-4).
   useEffect(() => {
     if (milestone != null) {
       // Small defer so the dialog animation does not fight focus management.
@@ -74,7 +76,8 @@ export function MilestoneDatePopover({
       onRescheduled?.()
       onClose()
     },
-    onError: () => {
+    onError: (err) => {
+      console.error('[calendar] milestone reschedule failed', { milestoneId: milestone?.id, err })
       addToast({
         message: "Couldn't reschedule milestone",
         variant: 'error',

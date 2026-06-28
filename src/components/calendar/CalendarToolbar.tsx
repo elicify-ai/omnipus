@@ -26,7 +26,6 @@
  * No lucide, no emoji in UI chrome.
  */
 
-import type { ReactNode } from 'react'
 import { CaretLeft, CaretRight, CalendarBlank, Plus } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -36,15 +35,6 @@ import {
   type CalendarToolbarProps,
   type CalendarViewName,
 } from './types'
-
-// Decorative icon rendered on narrow views (density aid, aria-hidden).
-// All four views share CalendarBlank; label text is always present for WCAG.
-const VIEW_ICONS: Record<CalendarViewName, ReactNode> = {
-  dayGridMonth: <CalendarBlank size={15} weight="regular" aria-hidden="true" />,
-  timeGridWeek: <CalendarBlank size={15} weight="regular" aria-hidden="true" />,
-  timeGridDay: <CalendarBlank size={15} weight="regular" aria-hidden="true" />,
-  listWeek: <CalendarBlank size={15} weight="regular" aria-hidden="true" />,
-}
 
 /**
  * CalendarToolbar drives the FullCalendar instance through the `calendarRef`
@@ -175,8 +165,6 @@ export function CalendarToolbar({
             'text-sm font-headline font-semibold',
             'text-[var(--color-secondary)] truncate',
           )}
-          aria-live="polite"
-          aria-atomic="true"
         >
           {title}
         </h2>
@@ -232,7 +220,7 @@ export function CalendarToolbar({
               >
                 {/* On narrow screens show the icon alongside the label for density */}
                 <span className="@2xl:hidden" aria-hidden="true">
-                  {VIEW_ICONS[view]}
+                  <CalendarBlank size={15} weight="regular" aria-hidden="true" />
                 </span>
                 <span>{CALENDAR_VIEW_LABELS[view]}</span>
               </button>

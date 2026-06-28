@@ -56,7 +56,7 @@ const ICON_MAP: Record<StatusIconKey, IconComponent> = {
 
 function EventChip({ arg }: { arg: EventContentArg }) {
   const icon = arg.event.extendedProps.icon as StatusIconKey | undefined
-  const Icon = icon ? (ICON_MAP[icon] ?? Circle) : Circle
+  const Icon = (icon && ICON_MAP[icon]) || Circle
   const bg = arg.event.backgroundColor || 'transparent'
   const isAllDay = arg.event.allDay
 
@@ -74,8 +74,6 @@ function EventChip({ arg }: { arg: EventContentArg }) {
         borderRadius: '4px',
         overflow: 'hidden',
         cursor: 'pointer',
-        // Ensures accessible text colour regardless of chip bg
-        // The fill weight provides a visually distinct icon
       }}
     >
       <Icon size={12} weight="fill" color={CHIP_TEXT_COLOR} aria-hidden="true" />
