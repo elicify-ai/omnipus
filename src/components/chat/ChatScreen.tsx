@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { generateId } from '@/lib/constants'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
   ThreadPrimitive,
   MessagePrimitive,
@@ -994,12 +994,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const reconnect = useConnectionStore((s) => s.reconnect)
   const outboundQueue = useChatStore((s) => s.outboundQueue)
   const cancelStream = useChatStore((s) => s.cancelStream)
-  const setMessages = useChatStore((s) => s.setMessages)
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
+  const startNewSession = useSessionStore((s) => s.startNewSession)
   const addToast = useUiStore((s) => s.addToast)
   const composerRuntime = useComposerRuntime()
-  const queryClient = useQueryClient()
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name ?? 'Omnipus'
@@ -1100,10 +1099,70 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     setSlashHighlight(0)
   }
 
+  // runClientCommand — shared handler for client-delivery slash commands.
+  // Called both from palette selection (executeSlashCommand) and from the
+  // send-path interception so that typing "/clear"+Enter converges with
+  // selecting /clear from the palette — both run client-side, never reaching
+  // the backend.
+  //
+  // Returns true when the command was handled (caller must NOT send the text),
+  // false when the name is not a known client command (caller should fall
+  // through to inserting as text — Issue 3 fallback).
+  function runClientCommand(name: string): boolean {
+    if (name === 'clear') {
+      // US-4/AC-2: start a new conversation per spec — aligned to the "new
+      // conversation" semantic (startNewSession) rather than just wiping the
+      // local message list.
+      startNewSession()
+      return true
+    }
+
+    if (name === 'help') {
+      // US-4/AC-2: build the help text from the fetched command list.
+      const helpLines = commands
+        .map((c) => `- \`${c.label}\` — ${c.description}`)
+        .join('\n')
+      const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
+      appendMessage({
+        id: generateId(),
+        role: 'system',
+        content: helpText,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      })
+      return true
+    }
+
+    if (name === 'model') {
+      // US-4/AC-2: open the model selector in the chat header (ChatControls).
+      // Setting modelSelectorOpen=true drives the controlled Popover in ModelSelector
+      // without the user having to click it directly.
+      // Per A4: web-only client action; opens the chat model selector, not the
+      // server agent default.
+      useUiStore.getState().setModelSelectorOpen(true)
+      return true
+    }
+
+    if (name === 'cancel') {
+      // FR-3a: /cancel uses the same cancelStream() as the Stop button.
+      // Only morph the button to "Stopping..." if the turn is actively streaming.
+      if (isStreaming) {
+        stoppingStartedAt.current = Date.now()
+        setStopLabel('stopping')
+      }
+      cancelStream()
+      return true
+    }
+
+    // Issue 3 fallback: unknown client command — do NOT silently drop.
+    // Return false so the caller inserts it as text rather than clearing the composer.
+    return false
+  }
+
   // executeSlashCommand — called when the user selects a palette entry.
   // `label` is the full label string from the SlashCommand (e.g. "/clear").
   // FR-009: dispatch by `delivery`:
-  //   - 'client' → run the local handler keyed by `name`; do NOT send to backend.
+  //   - 'client' → run the local handler via runClientCommand; do NOT send.
   //   - 'agent'  → insert the label as text into the composer so the user can
   //                complete it and forward it via the message frame on send.
   function executeSlashCommand(label: string) {
@@ -1124,55 +1183,34 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       return
     }
 
-    // delivery === 'client': handle locally by name.
+    // delivery === 'client': clear the composer then run the handler.
     composerRuntime.setText('')
     setInputValue('')
 
-    if (def.name === 'clear') {
-      // US-4/AC-2: start a new local chat — clears messages + query cache.
-      setMessages([])
-      const { activeSessionId: sid } = useSessionStore.getState()
-      if (sid) queryClient.removeQueries({ queryKey: ['messages', sid] })
-      return
+    const handled = runClientCommand(def.name)
+    if (!handled) {
+      // Issue 3: unknown client command — insert text so it isn't silently lost.
+      composerRuntime.setText(`${def.label} `)
+      setInputValue(`${def.label} `)
     }
+  }
 
-    if (def.name === 'help') {
-      // US-4/AC-2: build the help text from the fetched command list.
-      const helpLines = commands
-        .map((c) => `- \`${c.label}\` — ${c.description}`)
-        .join('\n')
-      const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
-      appendMessage({
-        id: generateId(),
-        role: 'system',
-        content: helpText,
-        timestamp: new Date().toISOString(),
-        status: 'done',
-      })
-      return
-    }
-
-    if (def.name === 'model') {
-      // US-4/AC-2: open the model selector — mirrors the header dropdown.
-      // /model with no argument shows the current model via setNextModel(null)
-      // to prompt the selector to open.  The ModelSelector is rendered in
-      // ChatControls; we set the nextModel store value to drive its open state.
-      // Per A4: web-only client action; sets the chat model selector, not the
-      // server agent default.
-      useChatStore.getState().setNextModel(null)
-      return
-    }
-
-    if (def.name === 'cancel') {
-      // FR-3a: /cancel uses the same cancelStream() as the Stop button.
-      // Only morph the button to "Stopping..." if the turn is actively streaming.
-      if (isStreaming) {
-        stoppingStartedAt.current = Date.now()
-        setStopLabel('stopping')
-      }
-      cancelStream()
-      return
-    }
+  // Send-path interception: before AssistantUI's onNew fires, check if the
+  // trimmed input is exactly a client-delivery slash command (e.g. "/clear").
+  // If it is, run it locally and prevent the message from reaching the backend.
+  // This makes typing "/clear"+Enter behave identically to palette selection.
+  //
+  // Returns true if the text was intercepted (caller must stop the send),
+  // false if the message should proceed normally.
+  function interceptClientCommand(text: string): boolean {
+    const trimmed = text.trim()
+    if (!trimmed.startsWith('/')) return false
+    const def = commands.find((c) => c.delivery === 'client' && c.label === trimmed)
+    if (!def) return false
+    composerRuntime.setText('')
+    setInputValue('')
+    runClientCommand(def.name)
+    return true
   }
 
   // commitFiles hands each file to the native composer attachment system; the
@@ -1426,6 +1464,15 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         onSubmit={(e) => {
           // Block Enter-submit while streaming; slash-menu Enter is handled in handleKeyDown.
           if (isStreaming) {
+            e.preventDefault()
+            return
+          }
+          // Send-path interception: if the typed text is exactly a client-delivery
+          // slash command (e.g. "/clear", "/help", "/model", "/cancel"), handle it
+          // locally and prevent it from reaching the backend. This converges the
+          // typed+Enter path with the palette selection path.
+          const currentText = composerRuntime.getState().text ?? inputValue
+          if (interceptClientCommand(currentText)) {
             e.preventDefault()
           }
         }}

@@ -15,6 +15,7 @@ func statusCommand() Definition {
 		Description: "Show current model, channel, and agent summary",
 		Usage:       "/status",
 		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
+		Delivery:    DeliveryAgent,
 		Handler:     statusHandler(),
 	}
 }

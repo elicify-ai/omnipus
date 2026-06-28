@@ -23,6 +23,7 @@ func tasksCommand() Definition {
 		Usage:       "/tasks",
 		Aliases:     []string{"subagents"},
 		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
+		Delivery:    DeliveryAgent,
 		Handler: func(ctx context.Context, req Request, rt *Runtime) error {
 			getTurnFn := rt.GetActiveTurn
 			if getTurnFn == nil {

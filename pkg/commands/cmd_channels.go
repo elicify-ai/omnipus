@@ -16,6 +16,7 @@ func channelsCommand() Definition {
 		Description: "List enabled channels or check a channel's availability",
 		Usage:       "/channels [name]",
 		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
+		Delivery:    DeliveryAgent,
 		Handler:     channelsHandler(),
 	}
 }

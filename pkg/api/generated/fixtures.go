@@ -2567,3 +2567,56 @@ func FixtureCliDetect_Populated() CliDetect {
 		HasOpencode: true,
 	}
 }
+
+// ── SlashCommand ──────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SlashCommand.yaml
+// Regression guard: delivery is a required enum [client, agent]. Non-web
+// commands (agents/tasks/skills/channels/status/config) must emit "agent",
+// not an empty string, which would fail schema validation.
+
+// FixtureSlashCommand_ClientDelivery returns a web command (clear) with delivery=client.
+func FixtureSlashCommand_ClientDelivery() SlashCommand {
+	usage := "/clear"
+	return SlashCommand{
+		Name:        "clear",
+		Label:       "/clear",
+		Description: "Start a new chat",
+		Usage:       &usage,
+		Delivery:    SlashCommandDeliveryClient,
+	}
+}
+
+// FixtureSlashCommand_AgentDelivery returns a non-web command (agents) with delivery=agent.
+// This is the regression fixture for the Constraint #8 bug: non-web commands
+// previously emitted delivery="" which fails the enum constraint in SlashCommand.yaml.
+func FixtureSlashCommand_AgentDelivery() SlashCommand {
+	usage := "/agents"
+	return SlashCommand{
+		Name:        "agents",
+		Label:       "/agents",
+		Description: "List registered agents",
+		Usage:       &usage,
+		Delivery:    SlashCommandDeliveryAgent,
+	}
+}
+
+// FixtureSlashCommand_WithAliasesAndStreaming returns /cancel with all optional fields set.
+func FixtureSlashCommand_WithAliasesAndStreaming() SlashCommand {
+	usage := "/cancel"
+	availWhileStreaming := true
+	return SlashCommand{
+		Name:                    "cancel",
+		Label:                   "/cancel",
+		Description:             "Cancel the current turn",
+		Usage:                   &usage,
+		Delivery:                SlashCommandDeliveryClient,
+		AvailableWhileStreaming: &availWhileStreaming,
+	}
+}
+
+// FixtureSlashCommand_ZeroValue returns a zero-value SlashCommand.
+// Expected to FAIL schema validation: name/label/description/delivery are required;
+// delivery="" is not in enum [client, agent].
+func FixtureSlashCommand_ZeroValue() SlashCommand {
+	return SlashCommand{}
+}

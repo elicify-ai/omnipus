@@ -15,6 +15,7 @@ func skillsCommand() Definition {
 		Description: "List installed skills",
 		Usage:       "/skills",
 		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
+		Delivery:    DeliveryAgent,
 		Handler:     listSkillsHandler(),
 	}
 }

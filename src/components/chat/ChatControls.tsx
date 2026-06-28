@@ -57,6 +57,8 @@ export function ChatControls({ className }: ChatControlsProps) {
   const setNextModel = useChatStore((s) => s.setNextModel)
   const addToast = useUiStore((s) => s.addToast)
   const openSessionPanel = useUiStore((s) => s.openSessionPanel)
+  const modelSelectorOpen = useUiStore((s) => s.modelSelectorOpen)
+  const setModelSelectorOpen = useUiStore((s) => s.setModelSelectorOpen)
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -278,6 +280,8 @@ export function ChatControls({ className }: ChatControlsProps) {
           triggerTestId="composer-model-selector"
           constrainToCatalog
           emptyCatalogHint="Connect a provider to pick a model"
+          open={modelSelectorOpen}
+          onOpenChange={setModelSelectorOpen}
         />
       </div>
 
