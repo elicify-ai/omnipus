@@ -5634,14 +5634,14 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	// Re-auth gate (Spec-3 FR-3.3 / Spec-6 FR-12.2): changing which tools an
-	// agent may call is a sensitive capability grant and requires the single-use
-	// re-auth consent token — the same gate the Integrations PUT enforces.
-	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && user != nil {
-		if !a.requireReAuth(w, r, user.Username) {
-			return
-		}
-	} else {
+	// The step-up re-auth gate (requireReAuth) was INTENTIONALLY REMOVED here for
+	// the per-agent tool-grant PUT per UAT feedback (operator found re-typing the
+	// password to change a tool permission to be unnecessary friction). This is a
+	// deliberate, scoped loosening — do NOT restore it. Authorization is still
+	// enforced: this handler runs behind withAuth, so the caller must hold a valid
+	// session; only the password re-prompt is removed. The same gate remains in
+	// force on Integrations/Providers/Sandbox/Credentials/Performance PUTs.
+	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); !ok || user == nil {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -136,26 +137,38 @@ func TestSandboxConfigPUT_WithReAuth_Succeeds(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "valid re-auth must allow the change; body=%s", w.Body.String())
 }
 
-// --- Global tool policies (Spec-3 FR-3.3 / Spec-6 FR-12.2) ---
+// --- Global tool policies (UAT: step-up re-auth REMOVED) ---
+//
+// The step-up re-auth gate was intentionally removed from the global tool-policy
+// PUT per UAT feedback (operator found re-typing the password to change a tool
+// permission to be unnecessary friction). Authorization is unchanged: the PUT
+// still runs behind RequireAdmin + withAuth. These tests now PROVE the gate is
+// gone — a valid admin session with NO X-Reauth-Token succeeds — while the
+// re-auth gate on OTHER sensitive routes (sandbox/providers/credentials/...)
+// keeps its dedicated tests above and below.
 
-// TestToolPoliciesPUT_RequiresReAuth proves the global tool-policy PUT rejects a
-// request that carries the admin role/user but no re-auth consent token (403).
-func TestToolPoliciesPUT_RequiresReAuth(t *testing.T) {
+// TestToolPoliciesPUT_NoReAuthToken_Succeeds proves the global tool-policy PUT now
+// succeeds with a valid admin session and NO re-auth consent token — the step-up
+// gate was removed per UAT. This would fail (403) if the gate were restored.
+func TestToolPoliciesPUT_NoReAuthToken_Succeeds(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies",
 		strings.NewReader(`{"default_policy":"ask","policies":{"exec":"deny"}}`))
 	r.Header.Set("Content-Type", "application/json")
-	r = withReAuthAdminNoToken(r)
+	r = withReAuthAdminNoToken(r) // admin user/role, but deliberately NO token
 	w := httptest.NewRecorder()
 	api.HandleToolPolicies(w, r)
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"tool-policies PUT without a re-auth token must be 403; body=%s", w.Body.String())
-	assert.Contains(t, strings.ToLower(w.Body.String()), "re-typing your password")
+	require.Equal(t, http.StatusOK, w.Code,
+		"tool-policies PUT must succeed without a re-auth token (gate removed per UAT); body=%s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ask", resp["default_policy"])
 }
 
-// TestToolPoliciesPUT_WithReAuth_Succeeds proves the same PUT succeeds once a
-// valid consent token is supplied.
-func TestToolPoliciesPUT_WithReAuth_Succeeds(t *testing.T) {
+// TestToolPoliciesPUT_WithReAuthToken_StillSucceeds proves a stale/legacy client
+// that still sends an X-Reauth-Token is not penalised — the PUT succeeds whether
+// or not the token is present (the gate no longer consumes it).
+func TestToolPoliciesPUT_WithReAuthToken_StillSucceeds(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies",
 		strings.NewReader(`{"default_policy":"ask","policies":{"exec":"deny"}}`))
@@ -163,7 +176,7 @@ func TestToolPoliciesPUT_WithReAuth_Succeeds(t *testing.T) {
 	r = withReAuthAdmin(t, api, r)
 	w := httptest.NewRecorder()
 	api.HandleToolPolicies(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "valid re-auth must allow the change; body=%s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "tool-policies PUT must succeed; body=%s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "ask", resp["default_policy"])
@@ -196,31 +209,43 @@ func TestProvidersPUT_RequiresReAuth(t *testing.T) {
 	assert.Contains(t, strings.ToLower(w.Body.String()), "re-typing your password")
 }
 
-// --- Agent tool-grant PUT (Spec-3 FR-3.3 / Spec-6 FR-12.2) ---
+// --- Agent tool-grant PUT (UAT: step-up re-auth REMOVED) ---
 //
 // updateAgentTools changes which tools an agent may call — a capability grant.
-// The re-auth gate sits AFTER the agent-exists and not-locked checks but BEFORE
-// the request body is decoded, so the negative test needs a real, non-locked
-// agent in config; an empty/minimal body is fine because the 403 short-circuits
-// before decode. The happy path is covered elsewhere; this is the missing
-// NEGATIVE proof that the gate rejects an ungated capability grant (403).
+// The step-up re-auth gate was intentionally removed from this PUT per UAT
+// feedback (operator found re-typing the password to change a tool permission to
+// be unnecessary friction). Authorization is unchanged: the handler still runs
+// behind withAuth (a valid session is required) and rejects locked/core agents.
+// This test now PROVES the gate is gone — a valid admin session with NO
+// X-Reauth-Token succeeds.
 
-// TestAgentToolsPUT_RequiresReAuth proves an agent tool-grant PUT that carries the
-// admin user but no re-auth consent token is rejected (403). It reuses
-// newTestRestAPIWithAgent (rest_board_test.go), which seeds a single non-locked
-// custom agent, so updateAgentTools reaches its re-auth gate (found + unlocked).
-func TestAgentToolsPUT_RequiresReAuth(t *testing.T) {
+// TestAgentToolsPUT_NoReAuthToken_Succeeds proves an agent tool-grant PUT now
+// succeeds with a valid admin session and NO re-auth consent token — the step-up
+// gate was removed per UAT. It reuses newTestRestAPIWithAgent (which seeds a
+// single non-locked custom agent) and additionally writes that agent into the
+// on-disk config.json so updateAgentTools reaches AND completes its persist path
+// (the original fixture's minimal config.json has an empty agents.list, which
+// only mattered before because the re-auth 403 short-circuited ahead of persist).
+// This would fail (403) if the gate were restored.
+func TestAgentToolsPUT_NoReAuthToken_Succeeds(t *testing.T) {
 	const agentID = "01JXTESTAGENTSTARTTEST001"
 	api := newTestRestAPIWithAgent(t)
+
+	// safeUpdateConfigJSON persists into the on-disk config.json, which the
+	// fixture seeds with an empty agents.list. Write the seeded agent there so the
+	// per-agent persist (which looks the agent up by id in the file) succeeds and
+	// the full happy path returns 200 — proving the gate is gone, not just bypassed.
+	onDisk := `{"version":1,"agents":{"defaults":{},"list":[{"id":"` + agentID + `","name":"Test Agent","type":"custom"}]},"providers":[]}`
+	require.NoError(t, os.WriteFile(filepath.Join(api.homePath, "config.json"), []byte(onDisk), 0o600))
+
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools",
 		strings.NewReader(`{"builtin":{"default_policy":"allow"}}`))
 	r.Header.Set("Content-Type", "application/json")
-	r = withReAuthAdminNoToken(r)
+	r = withReAuthAdminNoToken(r) // admin user/role, but deliberately NO token
 	w := httptest.NewRecorder()
 	api.updateAgentTools(w, r, agentID)
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"agent tool-grant PUT without a re-auth token must be 403; body=%s", w.Body.String())
-	assert.Contains(t, strings.ToLower(w.Body.String()), "re-typing your password")
+	require.Equal(t, http.StatusOK, w.Code,
+		"agent tool-grant PUT must succeed without a re-auth token (gate removed per UAT); body=%s", w.Body.String())
 }
 
 // --- Re-auth token TTL / expiry (Spec-6 FR-12.2) ---
