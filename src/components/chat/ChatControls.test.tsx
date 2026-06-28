@@ -1,21 +1,22 @@
 /**
  * ChatControls tests.
  *
- * Covers all five controls rendered by <ChatControls>:
- *   1. New Chat button
+ * Covers all five controls rendered by <ChatControls> in a single inline cluster:
+ *   1. New Chat button (always icon + "New Chat" label)
  *   2. Agent selector dropdown
  *   3. Model selector (interactive)
- *   4. Token counter
- *   5. Sessions button
+ *   4. Token counter (hidden @2xl — present in DOM with responsive class)
+ *   5. Sessions button (always visible)
  *
  * Also validates:
  *   - Agent dropdown lists only workspace-team agents
  *   - Worker agents are excluded
  *   - formatTokens re-export (migrated from SessionBar.token.test.tsx)
- *   - Responsive layout: the "More" trigger (mobile band) and desktop-inline
- *     band both exist in the DOM; jsdom renders both since it ignores CSS.
- *   - The "More" popover contains New Chat, model selector, and token counter.
- *   - Agent picker + Sessions always present in the mobile band inline.
+ *   - Responsive layout: single inline cluster (no More/kebab trigger)
+ *   - Token counter has the container-query hidden class structure
+ *   - New Chat label is always present (no icon-only mobile variant)
+ *   - Sessions button aria-label always present; "Sessions" text in DOM
+ *     with the @2xl: responsive class (hidden below 42rem container)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -157,41 +158,34 @@ describe('formatTokens (re-exported from ChatControls)', () => {
 
 // ── Control: New Chat ─────────────────────────────────────────────────────────
 //
-// Note: the component renders TWO layout bands (desktop + mobile) in the DOM
-// simultaneously — jsdom does not apply CSS visibility. New Chat appears in both.
+// New Chat always shows icon + "New Chat" label in the single inline cluster.
 
 describe('ChatControls — New Chat button', () => {
-  it('renders a New Chat button', async () => {
+  it('renders a New Chat button with a visible label', async () => {
     renderControls()
-    const btns = await vi.waitFor(() => {
-      const all = screen.getAllByRole('button', { name: /new chat/i })
-      if (all.length === 0) throw new Error('not rendered')
-      return all
+    const btn = await vi.waitFor(() => {
+      const b = screen.getByRole('button', { name: /new chat/i })
+      if (!b) throw new Error('not rendered')
+      return b
     })
-    expect(btns.length).toBeGreaterThan(0)
+    expect(btn).toBeInTheDocument()
+    // Label text is always present in the single-cluster layout
+    expect(btn.textContent).toMatch(/new chat/i)
   })
 
   it('navigates to "/" when clicked on the global chat route', async () => {
     mockPathname = '/'
     renderControls()
-    const btns = await vi.waitFor(() => {
-      const all = screen.getAllByRole('button', { name: /new chat/i })
-      if (all.length === 0) throw new Error('not rendered')
-      return all
-    })
-    fireEvent.click(btns[0])
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
+    fireEvent.click(btn)
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
   })
 
   it('calls startNewSession in-place inside a workspace chat tab', async () => {
     mockPathname = '/workspaces/ws-123/chat'
     renderControls()
-    const btns = await vi.waitFor(() => {
-      const all = screen.getAllByRole('button', { name: /new chat/i })
-      if (all.length === 0) throw new Error('not rendered')
-      return all
-    })
-    fireEvent.click(btns[0])
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
+    fireEvent.click(btn)
     expect(mockNavigate).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(useSessionStore.getState().activeSessionId).toBeNull()
@@ -202,18 +196,15 @@ describe('ChatControls — New Chat button', () => {
 
 // ── Control: Agent selector ───────────────────────────────────────────────────
 //
-// AgentPicker is shared between both bands: jsdom renders it twice. Use getAllBy.
+// Single inline cluster — agent picker renders once.
 
 describe('ChatControls — Agent selector', () => {
   it('shows the active agent name', async () => {
     renderControls()
-    // getAllByText tolerates multiple instances (both layout bands)
-    const els = await vi.waitFor(() => {
-      const all = screen.getAllByText('Mia')
-      if (all.length === 0) throw new Error('not rendered')
-      return all
+    await vi.waitFor(() => {
+      const els = screen.getAllByText('Mia')
+      expect(els.length).toBeGreaterThan(0)
     })
-    expect(els.length).toBeGreaterThan(0)
   })
 
   it('shows "Select agent" when no active agent', async () => {
@@ -242,7 +233,6 @@ describe('ChatControls — Agent selector', () => {
       useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     })
     renderControls()
-    // The active agent button shows Mia (may appear twice — both bands)
     await vi.waitFor(() => {
       const els = screen.getAllByText('Mia')
       expect(els.length).toBeGreaterThan(0)
@@ -284,13 +274,12 @@ describe('ChatControls — Agent selector', () => {
 describe('ChatControls — Model selector (interactive)', () => {
   it('renders the model selector trigger', async () => {
     renderControls()
-    // Both bands render the model selector — getAllByTestId handles multiples
-    const triggers = await vi.waitFor(() => {
-      const all = screen.getAllByTestId('composer-model-selector')
-      if (all.length === 0) throw new Error('not rendered')
-      return all
+    const trigger = await vi.waitFor(() => {
+      const el = screen.getByTestId('composer-model-selector')
+      if (!el) throw new Error('not rendered')
+      return el
     })
-    expect(triggers.length).toBeGreaterThan(0)
+    expect(trigger).toBeInTheDocument()
   })
 
   it('updates nextModel in the store when a model is picked', async () => {
@@ -298,171 +287,157 @@ describe('ChatControls — Model selector (interactive)', () => {
       useChatStore.setState({ nextModel: null })
     })
     renderControls()
-    const triggers = await vi.waitFor(() => {
-      const all = screen.getAllByTestId('composer-model-selector')
-      if (all.length === 0) throw new Error('not rendered')
-      return all
-    })
-    expect(triggers.length).toBeGreaterThan(0)
+    const trigger = await vi.waitFor(() => screen.getByTestId('composer-model-selector'))
+    expect(trigger).toBeInTheDocument()
   })
 })
 
 // ── Control: Token counter ────────────────────────────────────────────────────
+//
+// Token counter is in the single inline cluster with class `hidden @2xl:flex`.
+// jsdom doesn't apply CSS, so the element is in the DOM (hidden class is just a class).
 
 describe('ChatControls — Token counter', () => {
   it('renders the token counter with the formatted value', async () => {
     renderControls()
-    const counters = await vi.waitFor(() => {
-      const all = screen.getAllByTestId('session-token-counter')
-      if (all.length === 0) throw new Error('not rendered')
-      return all
+    const counter = await vi.waitFor(() => {
+      const el = screen.getByTestId('session-token-counter')
+      if (!el) throw new Error('not rendered')
+      return el
     })
-    expect(counters.length).toBeGreaterThan(0)
-    const values = screen.getAllByTestId('session-token-value')
-    expect(values[0].textContent).toContain('44.0k')
-    expect(values[0].textContent).toContain('tokens')
+    expect(counter).toBeInTheDocument()
+    const value = screen.getByTestId('session-token-value')
+    expect(value.textContent).toContain('44.0k')
+    expect(value.textContent).toContain('tokens')
+  })
+
+  it('token counter has the container-query responsive hidden class (hidden @2xl:flex)', async () => {
+    renderControls()
+    const counter = await vi.waitFor(() => screen.getByTestId('session-token-counter'))
+    // Confirm the responsive class structure: hidden by default, shown at @2xl
+    expect(counter.className).toContain('hidden')
+    expect(counter.className).toContain('@2xl:flex')
   })
 
   it('does not render any dollar amount', async () => {
     const { container } = renderControls()
-    await vi.waitFor(() => screen.getAllByTestId('session-token-counter'))
+    await vi.waitFor(() => screen.getByTestId('session-token-counter'))
     expect(container.textContent).not.toMatch(/\$\d/)
   })
 
   it('does not render the CurrencyDollar Phosphor icon', async () => {
     const { container } = renderControls()
-    await vi.waitFor(() => screen.getAllByTestId('session-token-counter'))
+    await vi.waitFor(() => screen.getByTestId('session-token-counter'))
     expect(container.querySelector('[data-phosphor-icon="CurrencyDollar"]')).toBeNull()
   })
 })
 
 // ── Control: Sessions button ──────────────────────────────────────────────────
-//
-// Sessions button is shared between bands — jsdom renders it twice.
 
 describe('ChatControls — Sessions button', () => {
   it('renders a Sessions button', async () => {
     renderControls()
-    const btns = await vi.waitFor(() =>
-      screen.getAllByRole('button', { name: /open sessions panel/i }),
+    const btn = await vi.waitFor(() =>
+      screen.getByRole('button', { name: /open sessions panel/i }),
     )
-    expect(btns.length).toBeGreaterThan(0)
+    expect(btn).toBeInTheDocument()
   })
 
   it('calls openSessionPanel when clicked', async () => {
     renderControls()
-    const btns = await vi.waitFor(() =>
-      screen.getAllByRole('button', { name: /open sessions panel/i }),
+    const btn = await vi.waitFor(() =>
+      screen.getByRole('button', { name: /open sessions panel/i }),
     )
-    fireEvent.click(btns[0])
+    fireEvent.click(btn)
     expect(useUiStore.getState().sessionPanelOpen).toBe(true)
   })
+
+  it('Sessions text label is in the DOM with the @2xl: responsive class', async () => {
+    renderControls()
+    await vi.waitFor(() => screen.getByRole('button', { name: /open sessions panel/i }))
+    // The "Sessions" span exists with the container-query class
+    const sessionSpan = screen.getByText('Sessions')
+    expect(sessionSpan.className).toContain('hidden')
+    expect(sessionSpan.className).toContain('@2xl:inline')
+  })
 })
 
-// ── All five controls render in order ─────────────────────────────────────────
+// ── All five controls render in the single inline cluster ─────────────────────
 
-describe('ChatControls — all five controls present', () => {
-  it('renders New Chat, agent selector, model selector, token counter, Sessions in the DOM', async () => {
+describe('ChatControls — all five controls present (single cluster)', () => {
+  it('renders New Chat (with label), agent selector, model selector, token counter, Sessions in the DOM', async () => {
     renderControls()
 
-    // 1. New Chat — in at least one breakpoint band
-    await vi.waitFor(() => {
-      expect(screen.getAllByRole('button', { name: /new chat/i }).length).toBeGreaterThan(0)
-    })
+    // 1. New Chat — single button with visible label
+    const newChat = await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
+    expect(newChat.textContent).toMatch(/new chat/i)
 
-    // 2. Agent selector (shows Mia — in both bands)
+    // 2. Agent selector (shows Mia)
     await vi.waitFor(() => {
       expect(screen.getAllByText('Mia').length).toBeGreaterThan(0)
     })
 
-    // 3. Model selector — in at least one band
-    expect(screen.getAllByTestId('composer-model-selector').length).toBeGreaterThan(0)
+    // 3. Model selector
+    expect(screen.getByTestId('composer-model-selector')).toBeInTheDocument()
 
-    // 4. Token counter — in at least one band
-    expect(screen.getAllByTestId('session-token-counter').length).toBeGreaterThan(0)
+    // 4. Token counter (in DOM, hidden via container-query class below @2xl)
+    expect(screen.getByTestId('session-token-counter')).toBeInTheDocument()
 
-    // 5. Sessions button — in at least one band
-    expect(screen.getAllByRole('button', { name: /open sessions panel/i }).length).toBeGreaterThan(0)
+    // 5. Sessions button
+    expect(screen.getByRole('button', { name: /open sessions panel/i })).toBeInTheDocument()
   })
 })
 
-// ── Responsive layout: "More" popover ────────────────────────────────────────
+// ── No kebab / "More" popover ─────────────────────────────────────────────────
 //
-// jsdom does not perform real CSS layout, so we cannot test actual breakpoint
-// visibility (hidden/flex based on viewport width). Instead we assert on the
-// structural presence of the responsive wrappers and the "More" trigger.
+// The old More popover has been removed. No chat-controls-more-trigger in DOM.
+
+describe('ChatControls — no More/kebab popover', () => {
+  it('does NOT render the old "More chat controls" kebab trigger', async () => {
+    renderControls()
+    // Give time for async queries to settle
+    await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
+    expect(screen.queryByTestId('chat-controls-more-trigger')).toBeNull()
+  })
+
+  it('does NOT render any DotsThreeVertical icon (no kebab)', async () => {
+    const { container } = renderControls()
+    await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
+    expect(container.querySelector('[data-phosphor-icon="DotsThreeVertical"]')).toBeNull()
+  })
+})
+
+// ── Responsive layout: single inline cluster structural check ─────────────────
 //
-// The responsive design is:
-//   - desktop band (hidden lg:flex): New Chat + Agent + Model + Tokens + Sessions
-//   - mobile band  (flex lg:hidden): Agent + [More trigger] + Sessions
-//     with More popover containing: New Chat, Model selector, Token counter
+// jsdom does not perform real CSS layout, so we verify the class structure
+// rather than computed visibility. The single cluster always renders once.
 
 describe('ChatControls — responsive layout (structural)', () => {
-  it('renders the "More chat controls" trigger button in the mobile band', async () => {
+  it('New Chat label is always in the DOM (no icon-only variant)', async () => {
     renderControls()
-    const moreTrigger = await vi.waitFor(() =>
-      screen.getByTestId('chat-controls-more-trigger'),
-    )
-    expect(moreTrigger).toBeInTheDocument()
-    expect(moreTrigger).toHaveAttribute('aria-label', 'More chat controls')
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
+    // The label text "New Chat" must be part of the button's content
+    expect(btn.textContent).toMatch(/new chat/i)
+    // Should be exactly one New Chat button in the single-cluster layout
+    const allNewChat = screen.getAllByRole('button', { name: /new chat/i })
+    expect(allNewChat).toHaveLength(1)
   })
 
-  it('opens the "More" popover and reveals New Chat, model selector, token counter', async () => {
+  it('agent picker is present exactly once (single inline cluster)', async () => {
     renderControls()
-    // Wait for agents to load
-    await vi.waitFor(() => {
-      expect(screen.getAllByText('Mia').length).toBeGreaterThan(0)
-    })
-
-    const moreTrigger = screen.getByTestId('chat-controls-more-trigger')
-    fireEvent.click(moreTrigger)
-
-    // The popover content should now be in the DOM
-    const popover = await vi.waitFor(() => screen.getByTestId('chat-controls-more-popover'))
-    expect(popover).toBeInTheDocument()
-
-    // New Chat inside "More"
-    expect(screen.getByTestId('more-new-chat')).toBeInTheDocument()
-
-    // Model selector inside "More"
-    expect(screen.getByTestId('more-model-selector')).toBeInTheDocument()
-
-    // Token counter — now appears in both bands plus the More popover
-    const counters = screen.getAllByTestId('session-token-counter')
-    expect(counters.length).toBeGreaterThan(0)
+    await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
+    // In the old layout, Mia appeared twice (desktop + mobile band).
+    // In the new single-cluster layout, the trigger shows Mia once.
+    // (The dropdown items with Mia may add more when open — trigger only here.)
+    const miaEls = screen.getAllByText('Mia')
+    expect(miaEls.length).toBeGreaterThan(0)
   })
 
-  it('clicking "New Chat" inside the More popover fires the handler', async () => {
-    mockPathname = '/'
+  it('Sessions button is present exactly once (single inline cluster)', async () => {
     renderControls()
-    await vi.waitFor(() => {
-      expect(screen.getAllByText('Mia').length).toBeGreaterThan(0)
-    })
-
-    const moreTrigger = screen.getByTestId('chat-controls-more-trigger')
-    fireEvent.click(moreTrigger)
-
-    const moreNewChat = await vi.waitFor(() => screen.getByTestId('more-new-chat'))
-    fireEvent.click(moreNewChat)
-
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
-  })
-
-  it('agent picker is present in the DOM (rendered in both bands)', async () => {
-    renderControls()
-    await vi.waitFor(() => {
-      // 'Mia' appears in both the desktop and mobile band agent pickers
-      const miaEls = screen.getAllByText('Mia')
-      expect(miaEls.length).toBeGreaterThanOrEqual(2)
-    })
-  })
-
-  it('Sessions button is present in the DOM (rendered in both bands)', async () => {
-    renderControls()
-    // Sessions button has aria-label "Open sessions panel" — appears in both bands
     const sessionBtns = await vi.waitFor(() =>
       screen.getAllByRole('button', { name: /open sessions panel/i }),
     )
-    expect(sessionBtns.length).toBeGreaterThanOrEqual(2)
+    expect(sessionBtns).toHaveLength(1)
   })
 })

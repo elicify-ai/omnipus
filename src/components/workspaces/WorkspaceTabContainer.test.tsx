@@ -145,9 +145,12 @@ describe('WorkspaceTabContainer — layout', () => {
     const topBar = screen.getByTestId('workspace-top-bar')
     const segments = ['chat', 'board', 'list', 'graph', 'calendar', 'team', 'settings']
     for (const seg of segments) {
-      const tab = screen.getByTestId(`workspace-tab-${seg}`)
-      expect(tab).toBeTruthy()
-      expect(topBar.contains(tab)).toBe(true)
+      // WorkspaceTabBar renders each segment twice (full strip + sr-only strip).
+      const tabs = screen.getAllByTestId(`workspace-tab-${seg}`)
+      expect(tabs.length).toBeGreaterThan(0)
+      // At least one instance must be inside the top-bar row.
+      const inTopBar = tabs.some((tab) => topBar.contains(tab))
+      expect(inTopBar).toBe(true)
     }
   })
 

@@ -135,10 +135,10 @@ function WorkspaceTabContainerView({
   return (
     <WorkspaceContext.Provider value={workspace}>
       <div className="absolute inset-0 flex flex-col overflow-hidden">
-        {/* Row 1: top bar */}
+        {/* Row 1: top bar — @container so children can use container-query variants */}
         <div
           role="banner"
-          className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface-1)]/95 backdrop-blur-sm flex-shrink-0"
+          className="@container flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface-1)]/95 backdrop-blur-sm flex-shrink-0"
           data-testid="workspace-top-bar"
         >
           <button
@@ -155,7 +155,7 @@ function WorkspaceTabContainerView({
           <WorkspaceTabBar workspaceId={workspace.id} />
 
           {activeSegment === 'chat' && (
-            <div className="flex-shrink-0 px-3" data-testid="workspace-chat-controls">
+            <div className="flex-1 min-w-0 flex @6xl:justify-end px-3" data-testid="workspace-chat-controls">
               <ChatControls />
             </div>
           )}
