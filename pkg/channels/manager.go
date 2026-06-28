@@ -942,17 +942,29 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 	// C1 fix: invoke RegisterCommands on every started channel that implements
 	// CommandRegistrarCapable (FR-28 fallback: failures are WARN-logged, channel
-	// startup continues). This registers /cancel and other builtins with the
-	// upstream platform (Telegram BotCommand, Slack slash commands, etc.) so they
-	// appear in the platform's command menu.
-	defs := commands.BuiltinDefinitions()
+	// startup continues). This registers canonical channel-surfaced commands with
+	// the upstream platform (Telegram BotCommand, Slack slash commands, etc.) so
+	// they appear in the platform's command menu.
+	// Only non-hidden, Channel-surfaced commands are registered — hidden/deprecated
+	// commands and web-only commands are excluded from the platform menu.
+	allDefs := commands.BuiltinDefinitions()
+	channelDefs := make([]commands.Definition, 0, len(allDefs))
+	for _, def := range allDefs {
+		if def.Hidden {
+			continue
+		}
+		if !def.AllowsSurface(commands.SurfaceChannel) {
+			continue
+		}
+		channelDefs = append(channelDefs, def)
+	}
 	for name, ch := range m.channels {
 		if reg, ok := ch.(CommandRegistrarCapable); ok {
 			name, reg := name, reg // capture for goroutine
 			go func() {
 				regCtx, regCancel := context.WithTimeout(dispatchCtx, 30*time.Second)
 				defer regCancel()
-				if err := reg.RegisterCommands(regCtx, defs); err != nil {
+				if err := reg.RegisterCommands(regCtx, channelDefs); err != nil {
 					logger.WarnCF("channels", "RegisterCommands failed — platform command menu not updated",
 						map[string]any{
 							"channel": name,
@@ -960,7 +972,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 						})
 				} else {
 					logger.InfoCF("channels", "RegisterCommands succeeded",
-						map[string]any{"channel": name, "command_count": len(defs)})
+						map[string]any{"channel": name, "command_count": len(channelDefs)})
 				}
 			}()
 		}

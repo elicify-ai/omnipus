@@ -15,11 +15,14 @@ type SubCommand struct {
 
 // Definition is the single-source metadata and behavior contract for a slash command.
 //
-// Design notes (phase 1):
+// Design notes:
 //   - Every channel reads command shape from this type instead of keeping local copies.
-//   - Visibility is global: all definitions are considered available to all channels.
+//   - Surface-aware visibility: Surfaces controls which surfaces the command is active on.
+//     An empty Surfaces slice means the command is available on all surfaces (back-compat).
 //   - Platform menu registration (for example Telegram BotCommand) also derives from this
 //     same definition so UI labels and runtime behavior stay aligned.
+//   - Hidden commands (aliases/deprecated) are excluded from /help, GET /commands, and
+//     channel menus, but still execute when invoked directly (back-compat for one release).
 type Definition struct {
 	Name        string
 	Description string
@@ -27,6 +30,19 @@ type Definition struct {
 	Aliases     []string
 	SubCommands []SubCommand // optional; when set, Executor routes to sub-command handlers
 	Handler     Handler      // for simple commands without sub-commands
+
+	// Surfaces lists the surfaces on which this command is active.
+	// Empty = all surfaces (back-compat default).
+	Surfaces []Surface
+
+	// Delivery controls how the web SPA dispatches this command.
+	// Only meaningful for web-surfaced commands; defaults to DeliveryAgent.
+	Delivery DeliveryMode
+
+	// Hidden marks deprecated commands and back-compat aliases that should not
+	// appear in /help, the channel menu, or GET /api/v1/commands, but still
+	// execute when invoked directly for one release.
+	Hidden bool
 }
 
 // EffectiveUsage returns the usage string. When SubCommands are present,

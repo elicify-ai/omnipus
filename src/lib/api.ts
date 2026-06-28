@@ -131,6 +131,8 @@ import {
   GatewayRestartResponse as GatewayRestartResponseSchema,
   // O14 god-mode switch (contract-first #8):
   GodModeStatus as GodModeStatusSchema,
+  // Slash-command harmonization (contract-first #8):
+  SlashCommand as SlashCommandSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -354,6 +356,8 @@ import type {
   // O14 god-mode switch (contract-first #8):
   GodModeStatus,
   GodModeUpdateRequest,
+  // Slash-command harmonization (contract-first #8):
+  SlashCommand,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -471,6 +475,8 @@ export type {
   // O14 god-mode switch:
   GodModeStatus,
   GodModeUpdateRequest,
+  // Slash-command harmonization (contract-first #8):
+  SlashCommand,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -1791,6 +1797,32 @@ export async function fetchSkills(): Promise<Skill[]> {
 export function deleteSkill(name: string): Promise<void> {
   // no-schema: void response; DELETE has no body.
   return request<void>(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
+}
+
+// ── Slash commands ─────────────────────────────────────────────────────────────
+
+// SlashCommand is re-exported from the `export type {}` block above (contract-first #8).
+// See contracts/components/schemas/SlashCommand.yaml.
+
+// fetchCommands — mirrors fetchSkills; fetches the surface-applicable slash commands
+// from GET /api/v1/commands?surface=<surface>.  Per US-4 / FR-008 / SC-005, the
+// web palette must render from this endpoint and never from a hardcoded list.
+// Tolerant per-item validation: a single malformed item must NOT hide the entire list.
+export async function fetchCommands(surface: 'web' | 'cli' | 'channel' = 'web'): Promise<SlashCommand[]> {
+  const raw = await request<unknown[]>(`/commands?surface=${encodeURIComponent(surface)}`)
+  if (!Array.isArray(raw)) return []
+  const out: SlashCommand[] = []
+  let dropped = 0
+  for (const item of raw) {
+    const parsed = SlashCommandSchema.safeParse(item)
+    if (parsed.success) out.push(parsed.data)
+    else dropped++
+  }
+  if (dropped > 0 && import.meta.env?.DEV) {
+    // eslint-disable-next-line no-console
+    console.warn(`fetchCommands: dropped ${dropped} command(s) that failed schema validation`)
+  }
+  return out
 }
 
 // fetchMcpServers is a backward-compat alias for fetchMcpServersForAgent.

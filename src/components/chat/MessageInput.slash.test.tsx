@@ -1,15 +1,19 @@
 /**
  * MessageInput.slash.test.tsx — O11 slash-command autocomplete.
  *
+ * US-4 / FR-008: built-in suggestions now come from fetchCommands (API-driven),
+ * not a hardcoded list.  Dynamic /skill <id> entries still come from fetchSkills.
+ *
  * Covers:
- *  - Typing /cl shows "Clear session" suggestion (only active skills + /clear survive).
- *  - Typing /re does NOT show Recall or Remember (removed — no real dispatch).
+ *  - Typing /cl shows the API-driven "Start a new conversation" (clear) suggestion.
+ *  - Typing /re does NOT show Recall or Remember (excluded from the web surface).
  *  - Trailing space after command text closes the menu.
  *  - ArrowDown clamps at length-1 (no overflow past last item).
- *  - Enter applies the highlighted suggestion and for /clear calls startNewSession().
- *  - Skills filtered to status === 'active' only.
+ *  - Enter applies the /clear suggestion and for trigger=clear calls startNewSession().
+ *  - Skills filtered to status === 'active' only (still from fetchSkills).
  *  - Escape closes the suggestion list.
  *  - Stale-index shrink case (MAJOR 3): ArrowDown then backspace does not crash.
+ *  - Agent-delivery command (/skill) is inserted as text, not executed locally.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -29,6 +33,16 @@ vi.mock('@/store/session', () => ({
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
+  // The 5 web-surface commands from the API (US-3/AC-1).
+  // Inlined inside the factory: vi.mock is hoisted, so top-level constants are
+  // not yet initialized when the factory executes.
+  const mockCommands = [
+    { name: 'clear',  label: '/clear',  description: 'Start a new conversation', delivery: 'client', available_while_streaming: false },
+    { name: 'help',   label: '/help',   description: 'Show available commands',   delivery: 'client', available_while_streaming: false },
+    { name: 'model',  label: '/model',  description: 'Change the chat model',     delivery: 'client', available_while_streaming: false },
+    { name: 'skill',  label: '/skill',  description: 'Run an installed skill',    delivery: 'agent',  available_while_streaming: false },
+    { name: 'cancel', label: '/cancel', description: 'Cancel the current turn',   delivery: 'client', available_while_streaming: true  },
+  ]
   return {
     ...actual,
     transcribeAudio: vi.fn(),
@@ -37,6 +51,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       { id: 'web-research', name: 'Web Research', description: 'Research the web', status: 'active' },
       { id: 'code-review', name: 'Code Review', description: 'Review code', status: 'inactive' },
     ]),
+    fetchCommands: vi.fn().mockResolvedValue(mockCommands),
   }
 })
 
@@ -67,23 +82,24 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('MessageInput slash-command autocomplete', () => {
-  it('typing /cl shows "Clear session" suggestion', async () => {
+describe('MessageInput slash-command autocomplete — API-driven (US-4 / FR-008)', () => {
+  it('typing /cl shows the "Start a new conversation" (clear) suggestion from the API', async () => {
     renderInput()
     fireEvent.change(getTextarea(), { target: { value: '/cl' } })
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
-      expect(screen.getByText('Clear session')).toBeInTheDocument()
+      // description becomes the human-readable label in the suggestion entry
+      expect(screen.getByText('Start a new conversation')).toBeInTheDocument()
     })
   })
 
-  it('typing /re does NOT show Recall or Remember suggestions', async () => {
+  it('typing /re does NOT show Recall or Remember suggestions (excluded from web surface)', async () => {
     renderInput()
     fireEvent.change(getTextarea(), { target: { value: '/re' } })
     // Wait for a tick so the debounce/memo settles.
     await act(async () => { await Promise.resolve() })
     // The listbox might still appear (if skills match /re), but Recall and
-    // Remember must never be present since they are removed from built-ins.
+    // Remember must never be present since they are excluded from the web surface.
     expect(screen.queryByText('Recall')).not.toBeInTheDocument()
     expect(screen.queryByText('Remember')).not.toBeInTheDocument()
   })
@@ -115,17 +131,11 @@ describe('MessageInput slash-command autocomplete', () => {
     expect(options.indexOf(selected!)).toBe(options.length - 1)
   })
 
-  it('Enter applies the /clear suggestion and calls startNewSession', async () => {
+  it('Enter on /clear suggestion calls startNewSession (client delivery)', async () => {
     renderInput()
     fireEvent.change(getTextarea(), { target: { value: '/cl' } })
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    // ArrowDown to highlight "Clear session" (it's the first built-in and
-    // first item in the filtered list for "/cl").
-    fireEvent.keyDown(getTextarea(), { key: 'ArrowDown' })
-    // The first item is already selected (index 0) — pressing Enter applies it.
-    // Actually it starts at 0, so pressing Enter immediately works.
-    fireEvent.change(getTextarea(), { target: { value: '/clear' } })
-    await waitFor(() => expect(screen.getByText('Clear session')).toBeInTheDocument())
+    // The first item should be /clear from the API. Press Enter immediately.
     fireEvent.keyDown(getTextarea(), { key: 'Enter' })
     await waitFor(() => {
       expect(mockStartNewSession).toHaveBeenCalledTimes(1)
@@ -155,20 +165,44 @@ describe('MessageInput slash-command autocomplete', () => {
 
   it('stale-index shrink case: typing then backspacing does not crash', async () => {
     renderInput()
-    // Type "/clear" — shows 1 built-in item.
-    fireEvent.change(getTextarea(), { target: { value: '/clear' } })
+    // Type "/cancel" — shows 1 item matching "cancel".
+    fireEvent.change(getTextarea(), { target: { value: '/cancel' } })
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     // Press ArrowDown to move index to 0 (only 1 item).
     fireEvent.keyDown(getTextarea(), { key: 'ArrowDown' })
-    // Backspace to "/clea" — list might now be shorter or the same.
-    fireEvent.change(getTextarea(), { target: { value: '/clea' } })
-    // Backspace again to "/cl" — list may differ; MAJOR 3 fix clamps the index.
-    fireEvent.change(getTextarea(), { target: { value: '/cl' } })
+    // Backspace to "/cance" — list might be same.
+    fireEvent.change(getTextarea(), { target: { value: '/cance' } })
+    // Backspace again to "/c" — list now includes more items; MAJOR 3 fix clamps index.
+    fireEvent.change(getTextarea(), { target: { value: '/c' } })
     await waitFor(() => {
       // No crash — the listbox is still rendered and an option is accessible.
       const options = screen.getAllByRole('option')
       expect(options.length).toBeGreaterThan(0)
     })
     // No thrown error by this point means the clamp worked.
+  })
+
+  it('US-4/AC-3: selecting the API /skill (agent-delivery) suggestion inserts text, not executed locally', async () => {
+    // Type "/skill" exactly — this matches the API built-in /skill suggestion (trigger='skill')
+    // and the active skill /skill web-research (trigger='skill web-research').
+    // Select the first option (the built-in /skill from the API, trigger='skill').
+    renderInput()
+    fireEvent.change(getTextarea(), { target: { value: '/skill' } })
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+    // Get all options and find the one whose trigger span text is exactly "/skill"
+    const options = screen.getAllByRole('option')
+    // The first option whose trigger span ends in just "skill" (not "skill web-research")
+    const skillOpt = options.find((o) => {
+      const triggerSpan = o.querySelector('[aria-hidden="true"]')
+      return triggerSpan?.textContent === '/skill'
+    })
+    expect(skillOpt).toBeDefined()
+    fireEvent.click(skillOpt!)
+    // The input should now contain "/skill " (inserted as text, not executed locally)
+    expect(getTextarea()).toHaveValue('/skill ')
+    // startNewSession should NOT have been called (not a client-delivery /clear)
+    expect(mockStartNewSession).not.toHaveBeenCalled()
   })
 })

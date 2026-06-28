@@ -14,10 +14,15 @@ type TurnInfo struct {
 	IsFinished   bool
 }
 
-func subagentsCommand() Definition {
+// tasksCommand is the canonical /tasks command (renamed from /subagents).
+// Surfaces: CLI, Channel (not web — the Tasks screen covers this in the SPA).
+func tasksCommand() Definition {
 	return Definition{
-		Name:        "subagents",
+		Name:        "tasks",
 		Description: "Show running subagents and task tree",
+		Usage:       "/tasks",
+		Aliases:     []string{"subagents"},
+		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
 		Handler: func(ctx context.Context, req Request, rt *Runtime) error {
 			getTurnFn := rt.GetActiveTurn
 			if getTurnFn == nil {

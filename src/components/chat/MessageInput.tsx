@@ -5,7 +5,8 @@ import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
-import { transcribeAudio, isApiError, fetchSkills } from '@/lib/api'
+import { transcribeAudio, isApiError, fetchSkills, fetchCommands } from '@/lib/api'
+import type { SlashCommand } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 // B3: label union for the stop button state machine.
@@ -35,7 +36,7 @@ export function MessageInput() {
   const { isConnected } = useConnectionStore()
   const { addToast } = useUiStore()
 
-  // O11 slash-command autocomplete: fetch skills for the suggestion list.
+  // O11 slash-command autocomplete: fetch skills for the skill suggestions.
   // staleTime 60s — skills don't change often mid-session.
   const { data: skills = [] } = useQuery({
     queryKey: ['skills'],
@@ -44,22 +45,35 @@ export function MessageInput() {
     enabled: isConnected,
   })
 
-  // Build the full suggestion list: active skills + built-in commands that
-  // perform real client-side actions.
+  // US-4 / FR-008: built-in commands come from the API (GET /commands?surface=web),
+  // not a hardcoded list.  Per SC-005, no hardcoded built-in array here.
+  const { data: builtInCommands = [] } = useQuery<SlashCommand[]>({
+    queryKey: ['commands', 'web'],
+    queryFn: () => fetchCommands('web'),
+    staleTime: 60_000,
+    enabled: isConnected,
+  })
+
+  // Build the full suggestion list: API-driven built-in commands + active skills.
   //
-  // /recall and /remember are intentionally excluded: they are server-side
-  // memory tool triggers that the agent handles as plain text in the message
-  // body (the LLM routes them to the remember/recall tools). Advertising them
-  // here as slash-commands would mislead users into thinking the SPA executes
-  // them — in practice they are just natural-language cues. Skills that wrap
-  // memory operations (e.g. "skill remember") will appear if installed.
+  // Built-ins: each SlashCommand from the API becomes a suggestion whose trigger
+  // is the command name (without leading slash) and whose label is the command
+  // label (with leading slash).
   //
-  // /clear is the only built-in that dispatches a real client-side action:
-  // startNewSession() clears the active session ID and shows an empty composer.
+  // Skills: active skills only; trigger is "skill <id>" so selecting inserts
+  // "/skill <id> " into the composer for the agent to forward.
+  //
+  // /recall and /remember are intentionally absent from the API-driven built-ins:
+  // they are server-side memory tool triggers that the agent handles as plain text.
   const allSuggestions = useMemo<SlashSuggestion[]>(() => {
-    const builtIn: SlashSuggestion[] = [
-      { trigger: 'clear', label: 'Clear session', description: 'Start a new session in this chat' },
-    ]
+    const builtIn: SlashSuggestion[] = builtInCommands.map((cmd) => ({
+      trigger: cmd.name,
+      // Use the command description as the human-readable label displayed in the
+      // suggestion entry (SlashSuggestion.label is the bold display name; cmd.label
+      // carries the "/name" form which is already rendered by the /{trigger} prefix).
+      label: cmd.description,
+      description: cmd.usage,
+    }))
     const skillSuggestions: SlashSuggestion[] = skills
       .filter((s) => s.status === 'active')
       .map((s) => ({
@@ -68,7 +82,7 @@ export function MessageInput() {
         description: s.description,
       }))
     return [...builtIn, ...skillSuggestions]
-  }, [skills])
+  }, [builtInCommands, skills])
 
   const startNewSession = useSessionStore((s) => s.startNewSession)
 

@@ -5,10 +5,14 @@ import (
 	"fmt"
 )
 
+// switchCommand is the deprecated /switch multiplexer.
+// Hidden=true: excluded from /help, channel menus, and GET /commands.
+// Kept for one-release back-compat. The /switch model logic is now reused by /model.
 func switchCommand() Definition {
 	return Definition{
 		Name:        "switch",
-		Description: "Switch model",
+		Description: "Switch model (deprecated — use /model <name>)",
+		Hidden:      true,
 		SubCommands: []SubCommand{
 			{
 				Name:        "model",

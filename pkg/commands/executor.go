@@ -47,6 +47,14 @@ func (e *Executor) Execute(ctx context.Context, req Request) ExecuteResult {
 		return ExecuteResult{Outcome: OutcomePassthrough, Command: cmdName}
 	}
 
+	// Surface gating: if the resolved definition (via name or alias) does not
+	// allow the caller's surface, pass the text through to the model unchanged.
+	// This implements option B from the spec: non-web commands typed in web chat
+	// fall through to the agent rather than returning an error.
+	if !def.AllowsSurface(SurfaceForChannel(req.Channel)) {
+		return ExecuteResult{Outcome: OutcomePassthrough, Command: def.Name}
+	}
+
 	return e.executeDefinition(ctx, req, def)
 }
 

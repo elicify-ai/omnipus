@@ -5,10 +5,15 @@ import (
 	"fmt"
 )
 
+// showCommand is the deprecated /show multiplexer.
+// Hidden=true: excluded from /help, channel menus, and GET /commands.
+// Kept for one-release back-compat. All sub-handler logic is now reused by the
+// canonical noun commands (/model, /agents, /channels, /status).
 func showCommand() Definition {
 	return Definition{
 		Name:        "show",
-		Description: "Show current configuration",
+		Description: "Show current configuration (deprecated — use /status, /model, /agents, or /channels)",
+		Hidden:      true,
 		SubCommands: []SubCommand{
 			{
 				Name:        "model",

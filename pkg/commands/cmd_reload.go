@@ -2,11 +2,15 @@ package commands
 
 import "context"
 
-func reloadCommand() Definition {
+// configCommand is the canonical /config command (renamed from /reload).
+// Surfaces: CLI, Channel (not web — the Settings screen covers config in the SPA).
+func configCommand() Definition {
 	return Definition{
-		Name:        "reload",
+		Name:        "config",
 		Description: "Reload the configuration file",
-		Usage:       "/reload",
+		Usage:       "/config",
+		Aliases:     []string{"reload"},
+		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
 		Handler: func(_ context.Context, req Request, rt *Runtime) error {
 			if rt == nil || rt.ReloadConfig == nil {
 				return req.Reply(unavailableMsg)
