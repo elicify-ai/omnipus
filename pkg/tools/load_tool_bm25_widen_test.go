@@ -184,7 +184,7 @@ func TestExactMissFallbackSuggestsBrowserTool(t *testing.T) {
 	}
 }
 
-// TestExactMissFallbackSuggestsViaFuzzy proves that a typo like "browser_navigate"
+// TestExactMissFallbackSuggestsViaFuzzy proves that a typo like "browser_naviagte"
 // (one transposition) suggests the correct "browser_navigate".
 func TestExactMissFallbackSuggestsViaFuzzy(t *testing.T) {
 	reg := NewToolRegistry()
@@ -198,7 +198,7 @@ func TestExactMissFallbackSuggestsViaFuzzy(t *testing.T) {
 	tt.SetResolver(registryAwareCanLoad(reg, available), markLoaded)
 
 	r := tt.Execute(context.Background(), map[string]any{
-		"names": []any{"browser_navigate"}, // typo: transposed 'ia' → 'ai'
+		"names": []any{"browser_naviagte"}, // typo: transposed 'ia' → 'ai'
 	})
 
 	if !r.IsError {
