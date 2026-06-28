@@ -589,14 +589,14 @@ describe('AgentProfile — Sandbox callout when executor is external-cli (G10)',
 // worker-irrelevant accordions and relabelling the soul field as an
 // optional "Task prompt". Base agents get the full set.
 describe('AgentProfile — tier-branched form (worker vs base)', () => {
-  it('worker form: shows Executor, hides Heartbeat, hides Schedules, shows optional Task prompt', async () => {
+  it('worker form: shows Executor, hides Heartbeat, shows optional Task prompt', async () => {
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, soul: '' })
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
     // Worker-only: Executor section is inside the Advanced tab.
     switchTab('tab-advanced')
     expect(await screen.findByText(/^Executor$/)).toBeInTheDocument()
-    // Base-only: no Schedules section in Advanced (workers never own a schedule)
+    // Schedules section is removed from the Advanced tab entirely.
     expect(screen.queryByText(/^Schedules$/)).toBeNull()
     // Open the Personality tab and assert the worker relabel + no heartbeat
     switchTab('tab-personality')
@@ -629,16 +629,14 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     expect(await screen.findByTestId('runner-test-button')).toBeInTheDocument()
   })
 
-  it('base (core) form: hides Executor, shows Schedules, shows Heartbeat when expanded', async () => {
+  it('base (core) form: hides Executor, hides Schedules, shows Heartbeat when expanded', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    // Base: Schedules is in the Advanced tab. Switch to it first.
+    // Base: Advanced tab — no Executor (workers only), no Schedules (removed).
     switchTab('tab-advanced')
-    // Base: no Executor section (only workers have one)
     expect(screen.queryByText(/^Executor$/)).toBeNull()
-    // Base: Schedules section IS present
-    expect(await screen.findByText(/^Schedules$/)).toBeInTheDocument()
+    expect(screen.queryByText(/^Schedules$/)).toBeNull()
     // Heartbeat is in the Personality tab.
     switchTab('tab-personality')
     expect(await screen.findByText(/Enable heartbeat/i)).toBeInTheDocument()
@@ -658,7 +656,7 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     expect(screen.queryByText(/Task prompt/i)).toBeNull()
   })
 
-  it('custom (base) form: also hides the Executor and shows Schedules', async () => {
+  it('custom (base) form: also hides the Executor and hides Schedules', async () => {
     // Custom agents are base-tier too — they run native only, never
     // external CLI. The split is worker vs non-worker, not core vs custom.
     // Wire contract: user-created chat agents use type='Main' (the
@@ -666,10 +664,10 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    // Both Executor and Schedules live in the Advanced tab now.
+    // Schedules section is removed; Executor is worker-only.
     switchTab('tab-advanced')
     expect(screen.queryByText(/^Executor$/)).toBeNull()
-    expect(await screen.findByText(/^Schedules$/)).toBeInTheDocument()
+    expect(screen.queryByText(/^Schedules$/)).toBeNull()
   })
 })
 
