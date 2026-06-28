@@ -19,19 +19,28 @@
 //
 // [Spawn] launches the current executable (via [os.Executable]) with the
 // sub-command "start" prepended and any caller-supplied extra args appended.
-// The child is detached from the parent session/process group so it outlives
-// the spawning process. On Unix this is done via SysProcAttr.Setpgid=true
-// (avoids the Setsid ioctl, which is blocked by seccomp when the caller is
-// already a session leader). On Windows a separate file in daemon_windows.go
-// sets CREATE_NEW_PROCESS_GROUP.
+// The child is detached from the parent process group so it outlives the
+// spawning process. On Unix this is done via SysProcAttr.Setpgid=true
+// (puts the child in a new process group; this is NOT a new session — the
+// child remains in the same session as the parent but is immune to SIGHUP
+// because it is no longer a process group leader of the foreground group).
+// On Windows a separate file in daemon_windows.go sets
+// CREATE_NEW_PROCESS_GROUP.
 //
 // # Stop
 //
 // [Stop] reads the PID file, verifies the PID belongs to a live omnipus
 // process (best-effort name check), sends SIGTERM (Unix) / taskkill (Windows),
-// waits up to stopGracePeriod for clean exit, then sends SIGKILL / force-kills
-// if needed. A stale PID file is silently cleared; [Stop] never kills an
-// unrelated process.
+// waits up to the grace period for clean exit, then sends SIGKILL / force-kills
+// if needed. A stale PID file is silently cleared.
+//
+// The never-kill guarantee strength varies by platform:
+//   - Linux: /proc/<pid>/exe identifies the binary precisely — very strong.
+//   - macOS/non-Linux POSIX: no /proc; the name check falls back to /proc/<pid>/comm
+//     (truncated, 15 chars) or is unavailable — conservatively assumes ours when the
+//     name cannot be read, so Stop will proceed rather than orphan a running gateway.
+//   - Windows: depends on wmic availability. When wmic is missing (Win11 24H2+) or
+//     fails unexpectedly, Stop refuses to act (fail-safe) and returns an error.
 package daemon
 
 import (
@@ -47,11 +56,6 @@ import (
 
 const (
 	pidFile = "gateway.pid"
-
-	// stopGracePeriod is how long [Stop] waits between SIGTERM and SIGKILL.
-	// Exported via the stopGracePeriodDuration constant in each OS file so the
-	// test can override it; here we keep the documented value for reference.
-	// Actual value: 5 s on Unix, 3 s on Windows (the OS files set it).
 )
 
 // PIDPath returns the absolute path to the gateway PID file for the given
@@ -61,25 +65,47 @@ func PIDPath(home string) string {
 }
 
 // readPID reads the PID file and returns the stored PID.
-// It returns (0, nil) if the file does not exist, and a non-nil error
-// for any other read/parse failure.
+//
+// Returns (0, nil) when:
+//   - the file does not exist (no gateway running)
+//   - the file exists but contains unparseable / empty content (stale/corrupt);
+//     in this case the file is removed and a slog.Warn is emitted.
+//
+// Returns (0, err) only for genuine I/O errors (e.g. unreadable directory).
 func readPID(home string) (int, error) {
-	data, err := os.ReadFile(PIDPath(home))
+	path := PIDPath(home)
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, fmt.Errorf("daemon: read PID file: %w", err)
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return 0, fmt.Errorf("daemon: parse PID file: %w", err)
+	pidStr := strings.TrimSpace(string(data))
+	pid, parseErr := strconv.Atoi(pidStr)
+	if parseErr != nil {
+		// Corrupt or empty PID file — treat as stale rather than a hard error.
+		// Remove it so subsequent calls see a clean state, and report
+		// not-running (0, nil) so neither Status nor Stop permanently wedge.
+		slog.Warn("daemon: PID file has unparseable content — treating as stale",
+			"path", path, "content", pidStr)
+		removePIDPath(path)
+		pid = 0 // be explicit: return zero so callers use the "no PID" path
 	}
 	return pid, nil
 }
 
 // writePID writes pid atomically to the PID file (mode 0600).
 func writePID(home string, pid int) error {
+	return WritePID(home, pid)
+}
+
+// WritePID writes pid atomically to the PID file (mode 0600).
+// It is exported so the gateway can self-register its own PID after the
+// HTTP listener binds (MAJOR-2: hand-started gateways are tracked the same
+// way as spawner-started ones, making [Status] and [Stop] authoritative
+// regardless of launch path).
+func WritePID(home string, pid int) error {
 	data := []byte(strconv.Itoa(pid))
 	if err := fileutil.WriteFileAtomic(PIDPath(home), data, 0o600); err != nil {
 		return fmt.Errorf("daemon: write PID file: %w", err)
@@ -91,9 +117,22 @@ func writePID(home string, pid int) error {
 // (the file may have already been removed by a concurrent process) and not
 // propagated: removal is best-effort cleanup.
 func removePID(home string) {
-	if err := os.Remove(PIDPath(home)); err != nil && !os.IsNotExist(err) {
-		slog.Debug("daemon: remove PID file", "path", PIDPath(home), "error", err)
+	removePIDPath(PIDPath(home))
+}
+
+// removePIDPath deletes the file at path. Errors are logged at Debug level
+// and not propagated (removal is best-effort cleanup).
+func removePIDPath(path string) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		slog.Debug("daemon: remove PID file", "path", path, "error", err)
 	}
+}
+
+// RemovePID deletes the gateway PID file. It is exported so the gateway can
+// clean up its own PID file on graceful shutdown (MAJOR-2: symmetric with
+// [WritePID]). Removal is best-effort; errors are logged at Debug level.
+func RemovePID(home string) {
+	removePID(home)
 }
 
 // Status reports whether the gateway is running and returns its PID.
@@ -115,7 +154,13 @@ func Status(home string) (running bool, pid int, err error) {
 		return false, 0, nil
 	}
 
-	alive, isOmnipus := checkProcess(pid)
+	alive, isOmnipus, identityErr := checkProcess(pid)
+	if identityErr != nil {
+		// Identity cannot be determined (e.g. wmic missing on Windows). Fail safe:
+		// do not remove the PID file and report the error to the caller so they
+		// know Status is inconclusive rather than silently wrong.
+		return false, 0, fmt.Errorf("daemon: status inconclusive — process identity check failed: %w", identityErr)
+	}
 	if !alive || !isOmnipus {
 		if !alive {
 			slog.Debug("daemon: stale PID file — process is not alive", "pid", pid)
@@ -161,6 +206,12 @@ func Spawn(home string, args []string) (pid int, err error) {
 //	<exe> start [args...]
 //
 // detached in a new process group, and writes the child PID to the PID file.
+//
+// When the child started successfully but writing the PID file failed, SpawnExe
+// returns (pid, err) — the non-zero pid allows the caller to recover (e.g. kill
+// the orphaned child). The child is NOT automatically killed on PID-write failure
+// so that operators who catch the error can inspect or adopt the process; the
+// error log line names the pid and instructs the operator on recovery.
 func SpawnExe(home string, exe string, args []string) (pid int, err error) {
 	// Build argv: <exe> start [caller args...]
 	spawnArgs := make([]string, 0, 1+len(args))
@@ -206,7 +257,13 @@ func Stop(home string) (stopped bool, err error) {
 		return false, nil
 	}
 
-	alive, isOmnipus := checkProcess(pid)
+	alive, isOmnipus, identityErr := checkProcess(pid)
+	if identityErr != nil {
+		// Identity cannot be determined (e.g. wmic missing on Windows). Fail safe:
+		// do not kill, do not remove the PID file, return an error so the caller
+		// knows Stop was unable to act (rather than silently orphaning the process).
+		return false, fmt.Errorf("daemon: stop refused — process identity check failed (pid %d): %w", pid, identityErr)
+	}
 	if !alive {
 		slog.Debug("daemon: stop called but process is not alive — clearing stale PID file", "pid", pid)
 		removePID(home)

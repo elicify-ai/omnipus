@@ -291,6 +291,12 @@ type AgentLoop struct {
 	// CloseSession (transcript sessions). Only populated when Compressed is true.
 	loadedTools   map[string]map[string]bool
 	loadedToolsMu sync.Mutex
+
+	// lastTurnResultMu guards lastTurnResult.  Written by runAgentLoop after
+	// every turn; read by tests to assert turnFailed without threading the flag
+	// through the full public call stack.  Never read in production paths.
+	lastTurnResultMu sync.Mutex
+	lastTurnResult   turnResult
 }
 
 // processOptions configures how a message is processed
@@ -4805,6 +4811,11 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 	result, err := al.runTurn(ctx, ts)
+	// Snapshot the result for test observability (lastTurnResult field).
+	// This is the only writer; production callers never read lastTurnResult.
+	al.lastTurnResultMu.Lock()
+	al.lastTurnResult = result
+	al.lastTurnResultMu.Unlock()
 	if err != nil {
 		return "", err
 	}
@@ -7155,11 +7166,22 @@ turnLoop:
 
 	if finalContent == "" {
 		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
+			// Genuine failure: tool-iteration ceiling hit without a final response.
+			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
 			finalContent = toolLimitResponse
+			ts.markTurnFailed()
 		} else {
+			// The engine fell through without an LLM response and uses the
+			// caller-supplied DefaultResponse as the content.  Only mark as
+			// failed when the caller passed the engine's own error sentinel
+			// (defaultResponse) — a caller-supplied success string such as
+			// "Background task completed." (heartbeat/system path) must NOT be
+			// flagged as a failed turn.
 			finalContent = ts.opts.DefaultResponse
+			if ts.opts.DefaultResponse == defaultResponse {
+				ts.markTurnFailed()
+			}
 		}
-		ts.markTurnFailed()
 	}
 
 	ts.setPhase(TurnPhaseFinalizing)
@@ -7214,6 +7236,7 @@ turnLoop:
 		finalContent: finalContent,
 		status:       turnStatus,
 		followUps:    append([]bus.InboundMessage(nil), ts.followUps...),
+		turnFailed:   ts.turnFailed,
 	}, nil
 }
 

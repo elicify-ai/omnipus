@@ -48,6 +48,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/cron"
+	"github.com/dapicom-ai/omnipus/pkg/daemon"
 	"github.com/dapicom-ai/omnipus/pkg/datamodel"
 	"github.com/dapicom-ai/omnipus/pkg/devices"
 	"github.com/dapicom-ai/omnipus/pkg/email"
@@ -190,6 +191,10 @@ type services struct {
 	// restAPI is constructed; passed to setupConfigWatcherPolling so the poller
 	// can suppress reload on app-initiated writes.
 	selfWriteReg *configSelfWriteRegistry
+
+	// homePath is the Omnipus home directory. Stored here so omnipusGracefulShutdown
+	// can remove the self-registered PID file without an additional parameter.
+	homePath string
 }
 
 type startupBlockedProvider struct {
@@ -1195,7 +1200,7 @@ func setupAndStartServices(
 	mcpReg *tools.MCPRegistry, // M16: central MCP registry (FR-001)
 	allowGodMode bool,
 ) (*services, error) {
-	runningServices := &services{credStore: credStore, bundle: bundle, sandboxResult: sandboxResult}
+	runningServices := &services{credStore: credStore, bundle: bundle, sandboxResult: sandboxResult, homePath: homePath}
 
 	// Per-user notification store (#264). Backs schedule-failure notifications and
 	// the header notification center.
@@ -1763,6 +1768,20 @@ func setupAndStartServices(
 	portData := strconv.Itoa(cfg.Gateway.Port)
 	if writeErr := os.WriteFile(portFile, []byte(portData+"\n"), 0o600); writeErr != nil {
 		return nil, fmt.Errorf("write gateway.port: %w", writeErr)
+	}
+
+	// Self-register this process's PID so that `omnipus stop` and Status work
+	// regardless of how the gateway was launched (spawner-started OR hand-started
+	// via `omnipus start`). WritePID uses an atomic rename so a concurrent Status
+	// call never reads a partial write. MAJOR-2: without this, a hand-started
+	// gateway leaves no PID file and `omnipus stop` reports "not running".
+	if pidErr := daemon.WritePID(homePath, os.Getpid()); pidErr != nil {
+		// Non-fatal: the gateway is already serving traffic. Log prominently so
+		// the operator knows that `omnipus stop` will not find this process.
+		slog.Warn("gateway: failed to write self PID file — `omnipus stop` will not track this process",
+			"pid", os.Getpid(), "home", homePath, "error", pidErr)
+	} else {
+		slog.Info("gateway: registered self PID", "pid", os.Getpid(), "home", homePath)
 	}
 
 	fmt.Printf(

@@ -2657,10 +2657,14 @@ func (s *wsStreamer) SetTurnStats(tokens int64, costUSD float64, duration time.D
 }
 
 // SetTurnFailed is called by the agent loop's finalizeStreamer when the turn
-// ended via the engine's error/limit fallback (empty response after retries, or
-// tool-iteration limit reached) rather than a real model response. Implements
-// the streamerFailedSetter interface from pkg/agent. The flag is emitted in the
-// done frame as DoneStats.TurnFailed so CLI/automation clients can exit non-zero.
+// ended via the engine's error/limit fallback rather than a real model response.
+// Conditions that set the flag: (1) LLM returned empty after retries and the
+// engine substituted its defaultResponse sentinel; (2) tool-iteration limit
+// reached; (3) generic empty-content exhaustion resolved to the defaultResponse
+// sentinel (excludes caller-supplied success strings like the heartbeat path).
+// Implements the streamerFailedSetter interface from pkg/agent. The flag is
+// emitted in the done frame as DoneStats.TurnFailed so CLI/automation clients
+// can exit non-zero.
 func (s *wsStreamer) SetTurnFailed(failed bool) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()

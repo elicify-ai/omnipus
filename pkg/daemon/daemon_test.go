@@ -130,9 +130,13 @@ func TestStatus_NoPIDFile_ReturnsNotRunning(t *testing.T) {
 	}
 }
 
-// ---- Status — corrupted PID file --------------------------------------------
+// ---- Status — corrupted PID file (self-heal) --------------------------------
 
-func TestStatus_CorruptPIDFile_ReturnsError(t *testing.T) {
+// TestStatus_CorruptPIDFile_SelfHeals verifies that a non-numeric / empty PID
+// file is treated as stale: Status removes the file and returns
+// (running=false, pid=0, err=nil) rather than propagating a parse error that
+// would permanently wedge `omnipus stop`.
+func TestStatus_CorruptPIDFile_SelfHeals(t *testing.T) {
 	home := newHome(t)
 	path := PIDPath(home)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -142,9 +146,44 @@ func TestStatus_CorruptPIDFile_ReturnsError(t *testing.T) {
 		t.Fatalf("write PID file: %v", err)
 	}
 
-	_, _, err := Status(home)
-	if err == nil {
-		t.Error("Status: expected error for corrupt PID file, got nil")
+	running, pid, err := Status(home)
+	if err != nil {
+		t.Fatalf("Status: expected nil error for corrupt PID file (self-heal), got: %v", err)
+	}
+	if running {
+		t.Errorf("Status: expected running=false for corrupt PID file, got running=true (pid=%d)", pid)
+	}
+	if pid != 0 {
+		t.Errorf("Status: expected pid=0 for corrupt PID file, got %d", pid)
+	}
+	// The stale file must have been removed so subsequent calls return cleanly.
+	if got := readPIDFile(t, home); got != "" {
+		t.Errorf("Status: corrupt PID file not removed; content=%q", got)
+	}
+}
+
+// TestStop_CorruptPIDFile_SelfHeals verifies that Stop with a corrupt PID file
+// is also a safe no-op (file removed, returns not-stopped, nil error) rather
+// than permanently wedging the stop command.
+func TestStop_CorruptPIDFile_SelfHeals(t *testing.T) {
+	home := newHome(t)
+	path := PIDPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("garbage\x00\xff"), 0o600); err != nil {
+		t.Fatalf("write PID file: %v", err)
+	}
+
+	stopped, err := Stop(home)
+	if err != nil {
+		t.Fatalf("Stop: expected nil error for corrupt PID file (self-heal), got: %v", err)
+	}
+	if stopped {
+		t.Error("Stop: expected stopped=false for corrupt PID file, got true")
+	}
+	if got := readPIDFile(t, home); got != "" {
+		t.Errorf("Stop: corrupt PID file not removed; content=%q", got)
 	}
 }
 
@@ -282,7 +321,7 @@ func TestSpawnStop_RoundTrip(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// The process should be alive.
-	alive, _ := checkProcess(pid)
+	alive, _, _ := checkProcess(pid)
 	if !alive {
 		t.Fatalf("child process %d is not alive immediately after spawn", pid)
 	}
@@ -296,7 +335,7 @@ func TestSpawnStop_RoundTrip(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Process should be gone.
-	alive, _ = checkProcess(pid)
+	alive, _, _ = checkProcess(pid)
 	if alive {
 		t.Errorf("process %d still alive after killProcess", pid)
 	}
@@ -323,7 +362,7 @@ func sleepCommand() (exe string, args []string) {
 // process as alive (pid = os.Getpid()).
 func TestCheckProcess_OwnPID(t *testing.T) {
 	pid := os.Getpid()
-	alive, _ := checkProcess(pid)
+	alive, _, _ := checkProcess(pid)
 	if !alive {
 		t.Errorf("checkProcess(%d): expected alive=true for own PID, got false", pid)
 	}
@@ -333,7 +372,7 @@ func TestCheckProcess_OwnPID(t *testing.T) {
 func TestCheckProcess_DeadPID(t *testing.T) {
 	// PID 2147483647 is effectively guaranteed not to be alive.
 	const deadPID = 2147483647
-	alive, _ := checkProcess(deadPID)
+	alive, _, _ := checkProcess(deadPID)
 	if alive {
 		t.Skip(fmt.Sprintf("PID %d appears alive; skipping", deadPID))
 	}
@@ -372,5 +411,62 @@ func TestStatus_CurrentProcess_NotOmnipusBinary(t *testing.T) {
 		if got := readPIDFile(t, home); got != "" {
 			t.Errorf("Status: stale PID file not removed for non-omnipus PID; content=%q", got)
 		}
+	}
+}
+
+// ---- WritePID / RemovePID exported API (self-registration seam) -------------
+
+// TestWritePID_SeenByReadPID verifies that the exported WritePID writes a PID
+// file that readPID can read back. This exercises the self-registration seam
+// used by the gateway to register its own PID after the HTTP listener binds
+// (MAJOR-2: hand-started gateways are tracked by Status/Stop).
+func TestWritePID_SeenByReadPID(t *testing.T) {
+	home := newHome(t)
+	const wantPID = 99999
+
+	if err := WritePID(home, wantPID); err != nil {
+		t.Fatalf("WritePID: %v", err)
+	}
+
+	got, err := readPID(home)
+	if err != nil {
+		t.Fatalf("readPID after WritePID: %v", err)
+	}
+	if got != wantPID {
+		t.Errorf("readPID = %d, want %d", got, wantPID)
+	}
+
+	// File mode must be 0600.
+	if runtime.GOOS != "windows" {
+		fi, statErr := os.Stat(PIDPath(home))
+		if statErr != nil {
+			t.Fatalf("stat PID file: %v", statErr)
+		}
+		if perm := fi.Mode().Perm(); perm != 0o600 {
+			t.Errorf("PID file perm = %04o, want 0600", perm)
+		}
+	}
+}
+
+// TestRemovePID_ClearsFile verifies that RemovePID removes a file written by
+// WritePID and that a subsequent readPID returns (0, nil).
+func TestRemovePID_ClearsFile(t *testing.T) {
+	home := newHome(t)
+
+	if err := WritePID(home, 12345); err != nil {
+		t.Fatalf("WritePID: %v", err)
+	}
+
+	RemovePID(home)
+
+	pid, err := readPID(home)
+	if err != nil {
+		t.Fatalf("readPID after RemovePID: %v", err)
+	}
+	if pid != 0 {
+		t.Errorf("readPID after RemovePID = %d, want 0", pid)
+	}
+	if got := readPIDFile(t, home); got != "" {
+		t.Errorf("PID file still present after RemovePID; content=%q", got)
 	}
 }

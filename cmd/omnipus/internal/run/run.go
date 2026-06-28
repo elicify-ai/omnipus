@@ -125,12 +125,11 @@ type Options struct {
 // the correct exit code and user-facing message without string inspection.
 //
 // Provider errors and empty responses are delivered by the gateway as a normal
-// assistant token+done sequence (loop.go:7120-7124 fills in a default response).
-// There is no wire-level failure marker in the done frame for live-turn provider
-// errors — DoneStats.ReplayError is replay-only (set by streamReplay, never by
-// the live agent loop). Therefore exit 0 means "the turn reached done"; provider
-// or turn errors delivered as assistant content are not distinguishable on the
-// wire today. This is a documented known limitation — do not string-sniff.
+// assistant token+done sequence (loop.go:~7156-7175 fills in a default response
+// and sets DoneStats.TurnFailed=true when the response is a genuine failure).
+// DoneStats.ReplayError is replay-only (set by streamReplay, never by the live
+// agent loop). Check DoneStats.TurnFailed in the done frame to detect a failed
+// turn without string-sniffing the assistant content.
 func Run(ctx context.Context, o Options) error {
 	// Default nil writers to io.Discard so callers that omit them don't panic.
 	if o.Stdout == nil {

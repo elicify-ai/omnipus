@@ -13,6 +13,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/daemon"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
@@ -165,6 +166,15 @@ func omnipusGracefulShutdown(
 	// the hook's closure (which captures agentLoop) from one boot into the next.
 	// SetRestrictAuditHook is thread-safe and idempotent.
 	sandbox.SetRestrictAuditHook(nil)
+
+	// Remove the self-registered PID file so `omnipus status` correctly reports
+	// not-running after a clean shutdown. Best-effort: a missing homePath (e.g.
+	// in-process gateway test harnesses) is a safe no-op (RemovePID tolerates
+	// ENOENT). Symmetric with the WritePID call in setupAndStartServices.
+	if runningServices.homePath != "" {
+		daemon.RemovePID(runningServices.homePath)
+		slog.Debug("shutdown: removed PID file", "home", runningServices.homePath)
+	}
 
 	slog.Info("shutdown: complete")
 }
