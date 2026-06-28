@@ -1,5 +1,5 @@
 import React from 'react'
-import { Link, useLocation } from '@tanstack/react-router'
+import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { motion } from 'framer-motion'
 import {
   ChatCircle,
@@ -9,8 +9,15 @@ import {
   CalendarBlank,
   UsersThree,
   Gear,
+  CaretDown,
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 
 // The 7-tab workspace container surface. Each tab is a deep-linkable sub-route
@@ -39,52 +46,114 @@ interface WorkspaceTabBarProps {
  * Workspace tab bar — Sovereign Deep, Outfit labels, gold active underline
  * that slides between tabs with a spring transition.
  *
- * Sits inline inside the WorkspaceTabContainer top-bar row (Row 1) rather
- * than as a full-width sticky bar. The parent row owns border-bottom and
- * background; this component only renders the tab list.
+ * Responsive strategy (container-query, relative to the @container top-bar):
+ *   ≥ 72rem (1152px): full 7-tab strip (hidden @6xl:flex)
+ *   < 72rem (1152px): single "Active ▾" view-switcher dropdown (flex @6xl:hidden)
+ *
+ * The full strip retains all workspace-tab-<segment> test ids so Playwright
+ * tests at 1280px viewport (container ≥1152px) still find them.
+ *
+ * Sits inline inside the WorkspaceTabContainer top-bar row (Row 1). The parent
+ * row owns border-bottom and background; this component only renders the tab list.
  */
 export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
   const location = useLocation()
+  const navigate = useNavigate()
   const activeSegment = resolveActiveSegment(location.pathname, workspaceId)
+  const activeTab = WORKSPACE_TABS.find((t) => t.segment === activeSegment)
 
   return (
-    <div
-      role="tablist"
-      aria-label="Workspace views"
-      className="flex items-stretch gap-1 overflow-x-auto min-w-0 flex-1"
-      style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
-    >
-      {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
-        const isActive = segment === activeSegment
-        return (
-          <Link
-            key={segment}
-            to={`/workspaces/$workspaceId/${segment}`}
-            params={{ workspaceId }}
-            role="tab"
-            aria-selected={isActive}
-            aria-label={label}
-            data-testid={`workspace-tab-${segment}`}
-            className={cn(
-              'group relative flex items-center gap-1.5 px-3 py-3 text-sm font-headline whitespace-nowrap outline-none transition-colors',
-              'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 rounded-t-sm',
-              isActive
-                ? 'text-[var(--color-accent)]'
-                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-            )}
-          >
-            <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
-            <span>{label}</span>
-            {isActive && (
-              <motion.div
-                layoutId="workspace-tab-underline"
-                className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]"
-                transition={{ type: 'spring', stiffness: 500, damping: 32 }}
-              />
-            )}
-          </Link>
-        )
-      })}
+    <div className="flex-shrink-0 flex items-stretch">
+      {/* ── Full 7-tab strip: shown when container ≥ 1152px (72rem) ─────── */}
+      <div
+        role="tablist"
+        aria-label="Workspace views"
+        className="hidden @6xl:flex items-stretch gap-1 overflow-x-auto min-w-0 flex-1"
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
+      >
+        {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
+          const isActive = segment === activeSegment
+          return (
+            <Link
+              key={segment}
+              to={`/workspaces/$workspaceId/${segment}`}
+              params={{ workspaceId }}
+              role="tab"
+              aria-selected={isActive}
+              aria-label={label}
+              data-testid={`workspace-tab-${segment}`}
+              className={cn(
+                'group relative flex items-center gap-1.5 px-3 py-3 text-sm font-headline whitespace-nowrap outline-none transition-colors',
+                'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 rounded-t-sm',
+                isActive
+                  ? 'text-[var(--color-accent)]'
+                  : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+              )}
+            >
+              <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
+              <span>{label}</span>
+              {isActive && (
+                <motion.div
+                  layoutId="workspace-tab-underline"
+                  className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]"
+                  transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+                />
+              )}
+            </Link>
+          )
+        })}
+      </div>
+
+      {/* ── View-switcher dropdown: shown when container < 1152px (72rem) ── */}
+      <div className="flex @6xl:hidden items-center px-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              data-testid="workspace-view-switcher"
+              aria-label={`Switch view, currently ${activeTab?.label ?? 'Chat'}`}
+              className={cn(
+                'flex items-center gap-1.5 px-3 h-11 text-sm font-headline whitespace-nowrap rounded-md',
+                'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors',
+                'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 outline-none',
+                'pointer-coarse:min-h-[44px]',
+              )}
+            >
+              {activeTab && <activeTab.Icon size={16} weight="fill" className="text-[var(--color-accent)]" />}
+              <span className="text-[var(--color-accent)]">{activeTab?.label ?? 'Chat'}</span>
+              <CaretDown size={13} className="opacity-60" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-44">
+            {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
+              const isActive = segment === activeSegment
+              return (
+                <DropdownMenuItem
+                  key={segment}
+                  onClick={() => {
+                    void navigate({
+                      to: `/workspaces/$workspaceId/${segment}`,
+                      params: { workspaceId },
+                    })
+                  }}
+                  className={cn(
+                    'flex items-center gap-2',
+                    isActive && 'text-[var(--color-accent)]',
+                  )}
+                >
+                  <Icon size={15} weight={isActive ? 'fill' : 'regular'} />
+                  <span>{label}</span>
+                  {isActive && (
+                    <span className="ml-auto text-[10px] text-[var(--color-accent)]" aria-hidden="true">
+                      ●
+                    </span>
+                  )}
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   )
 }
