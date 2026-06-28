@@ -137,6 +137,7 @@ function WorkspaceTabContainerView({
       <div className="absolute inset-0 flex flex-col overflow-hidden">
         {/* Row 1: top bar */}
         <div
+          role="banner"
           className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface-1)]/95 backdrop-blur-sm flex-shrink-0"
           data-testid="workspace-top-bar"
         >
