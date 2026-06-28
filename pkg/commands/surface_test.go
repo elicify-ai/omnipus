@@ -94,13 +94,23 @@ func TestExecutor_SurfaceGating(t *testing.T) {
 			Reply:   func(string) error { return nil },
 		})
 		if res.Outcome != tc.want {
-			t.Errorf("cmd=%q channel=%q: outcome=%v, want %v", tc.cmd, tc.channel, res.Outcome, tc.want)
+			t.Errorf(
+				"cmd=%q channel=%q: outcome=%v, want %v",
+				tc.cmd,
+				tc.channel,
+				res.Outcome,
+				tc.want,
+			)
 		}
 		if tc.want == OutcomeHandled && !called {
 			t.Errorf("cmd=%q channel=%q: handler not called", tc.cmd, tc.channel)
 		}
 		if tc.want == OutcomePassthrough && called {
-			t.Errorf("cmd=%q channel=%q: handler must not be called on passthrough", tc.cmd, tc.channel)
+			t.Errorf(
+				"cmd=%q channel=%q: handler must not be called on passthrough",
+				tc.cmd,
+				tc.channel,
+			)
 		}
 	}
 }
@@ -207,7 +217,19 @@ func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 
 	// CLI surface: should show all 11 canonical commands.
 	cliHelp := formatHelpMessage(defs, SurfaceCLI)
-	allCanonical := []string{"clear", "help", "model", "skill", "cancel", "agents", "tasks", "skills", "channels", "status", "config"}
+	allCanonical := []string{
+		"clear",
+		"help",
+		"model",
+		"skill",
+		"cancel",
+		"agents",
+		"tasks",
+		"skills",
+		"channels",
+		"status",
+		"config",
+	}
 	for _, name := range allCanonical {
 		if !containsWord(cliHelp, "/"+name) {
 			t.Errorf("cli help must contain /%s, got:\n%s", name, cliHelp)
@@ -233,7 +255,19 @@ func TestChannelRegistrationFilter(t *testing.T) {
 	// The channel set must include all 11 canonical non-web-only commands.
 	// Note: web-only commands are excluded; all-surface commands (clear/help/model/skill/cancel)
 	// are included because they also include SurfaceChannel.
-	wantInChannel := []string{"clear", "help", "model", "skill", "cancel", "agents", "tasks", "skills", "channels", "status", "config"}
+	wantInChannel := []string{
+		"clear",
+		"help",
+		"model",
+		"skill",
+		"cancel",
+		"agents",
+		"tasks",
+		"skills",
+		"channels",
+		"status",
+		"config",
+	}
 	names := make(map[string]bool, len(channelDefs))
 	for _, d := range channelDefs {
 		names[d.Name] = true
@@ -288,7 +322,10 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		t.Errorf("expected 11 canonical commands, got %d", canonical)
 	}
 	if hidden != 5 {
-		t.Errorf("expected 5 hidden/deprecated commands, got %d (start+show+list+switch+check)", hidden)
+		t.Errorf(
+			"expected 5 hidden/deprecated commands, got %d (start+show+list+switch+check)",
+			hidden,
+		)
 	}
 
 	// Web surface: 5 commands

@@ -47,7 +47,10 @@ import (
 // Sender.Username again) is therefore caught here. It returns the loop, the
 // turn, and the temp dir so the caller can read back audit.jsonl. closeFn
 // flushes + closes the logger.
-func newAuditUserFixture(t *testing.T, msg bus.InboundMessage) (al *AgentLoop, ts *turnState, dir string, closeFn func()) {
+func newAuditUserFixture(
+	t *testing.T,
+	msg bus.InboundMessage,
+) (al *AgentLoop, ts *turnState, dir string, closeFn func()) {
 	t.Helper()
 	dir = t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
@@ -124,7 +127,12 @@ func TestAuditEntry_AttributedToCliPrincipal(t *testing.T) {
 	al, ts, dir, closeFn := newAuditUserFixture(t, msg)
 
 	// The carrier must reach turnState via the production constructor.
-	require.Equal(t, "cli", ts.userID, "GatewayUserID must thread through gatewayPrincipal → processOptions.UserID → turnState.userID")
+	require.Equal(
+		t,
+		"cli",
+		ts.userID,
+		"GatewayUserID must thread through gatewayPrincipal → processOptions.UserID → turnState.userID",
+	)
 	require.Equal(t, "cli", ts.auditUser(), "ts.auditUser() must return the threaded principal")
 
 	// Drive a real ts-scoped audit emission site (FR-017 stamps User here).
@@ -197,19 +205,31 @@ func TestAuditEntry_NoUser_WhenChannelOriginated(t *testing.T) {
 	}
 
 	// Belt-and-suspenders: prove the seam itself ignores the platform handle.
-	require.Empty(t, gatewayPrincipal(msg), "gatewayPrincipal must ignore Sender.Username (platform handle)")
+	require.Empty(
+		t,
+		gatewayPrincipal(msg),
+		"gatewayPrincipal must ignore Sender.Username (platform handle)",
+	)
 
 	al, ts, dir, closeFn := newAuditUserFixture(t, msg)
 
 	require.Empty(t, ts.userID, "a channel-originated turn must carry no gateway principal")
-	require.Empty(t, ts.auditUser(), "the platform sender must not surface as the audited principal")
+	require.Empty(
+		t,
+		ts.auditUser(),
+		"the platform sender must not surface as the audited principal",
+	)
 
 	al.emitPolicyDenyAudit(ts, "workspace.shell", "deny", "exec_policy_denied")
 	closeFn()
 
 	entry := readLastAuditEntry(t, dir)
 	_, present := entry["user"]
-	assert.False(t, present, "user key must be omitted for channel-originated turns; the platform handle must never be stamped")
+	assert.False(
+		t,
+		present,
+		"user key must be omitted for channel-originated turns; the platform handle must never be stamped",
+	)
 	// The emission itself still happens with real values.
 	assert.Equal(t, string(audit.EventToolPolicyDenyAttempted), entry["event"])
 	assert.Equal(t, string(audit.DecisionDeny), entry["decision"])

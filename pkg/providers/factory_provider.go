@@ -24,7 +24,9 @@ func createClaudeAuthProvider() (LLMProvider, error) {
 		return nil, fmt.Errorf("loading auth credentials: %w", err)
 	}
 	if cred == nil {
-		return nil, fmt.Errorf("no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>")
+		return nil, fmt.Errorf(
+			"no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>",
+		)
 	}
 	return NewClaudeProviderWithTokenSource(cred.AccessToken, createClaudeTokenSource()), nil
 }
@@ -36,9 +38,15 @@ func createCodexAuthProvider() (LLMProvider, error) {
 		return nil, fmt.Errorf("loading auth credentials: %w", err)
 	}
 	if cred == nil {
-		return nil, fmt.Errorf("no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>")
+		return nil, fmt.Errorf(
+			"no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>",
+		)
 	}
-	return NewCodexProviderWithTokenSource(cred.AccessToken, cred.AccountID, createCodexTokenSource()), nil
+	return NewCodexProviderWithTokenSource(
+		cred.AccessToken,
+		cred.AccountID,
+		createCodexTokenSource(),
+	), nil
 }
 
 // ExtractProtocol extracts the protocol prefix and model identifier from a model string.
@@ -91,7 +99,10 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		}
 		// OpenAI with API key
 		if cfg.APIKey() == "" && cfg.APIBase == "" {
-			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
+			return nil, "", fmt.Errorf(
+				"api_key or api_base is required for HTTP-based protocol %q",
+				protocol,
+			)
 		}
 		apiBase := cfg.APIBase
 		if apiBase == "" {
@@ -172,7 +183,10 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		// OpenRouter: inject temperature=0 and seed=42 for deterministic responses
 		// unless the caller has explicitly overridden them in ExtraBody.
 		if cfg.APIKey() == "" && cfg.APIBase == "" {
-			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
+			return nil, "", fmt.Errorf(
+				"api_key or api_base is required for HTTP-based protocol %q",
+				protocol,
+			)
 		}
 		apiBase := cfg.APIBase
 		if apiBase == "" {
@@ -236,7 +250,10 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		"mimo":
 		// All other OpenAI-compatible HTTP providers
 		if cfg.APIKey() == "" && cfg.APIBase == "" {
-			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
+			return nil, "", fmt.Errorf(
+				"api_key or api_base is required for HTTP-based protocol %q",
+				protocol,
+			)
 		}
 		apiBase := cfg.APIBase
 		if apiBase == "" {
@@ -258,7 +275,10 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 	case "minimax", "minimax-cn":
 		// Minimax requires reasoning_split: true in the request body
 		if cfg.APIKey() == "" && cfg.APIBase == "" {
-			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
+			return nil, "", fmt.Errorf(
+				"api_key or api_base is required for HTTP-based protocol %q",
+				protocol,
+			)
 		}
 		apiBase := cfg.APIBase
 		if apiBase == "" {
@@ -299,7 +319,10 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			apiBase = "https://api.anthropic.com/v1"
 		}
 		if cfg.APIKey() == "" {
-			return nil, "", fmt.Errorf("api_key is required for anthropic protocol (model: %s)", cfg.Model)
+			return nil, "", fmt.Errorf(
+				"api_key is required for anthropic protocol (model: %s)",
+				cfg.Model,
+			)
 		}
 		p, err := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 			cfg.APIKey(),
@@ -321,7 +344,10 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			apiBase = "https://api.anthropic.com/v1"
 		}
 		if cfg.APIKey() == "" {
-			return nil, "", fmt.Errorf("api_key is required for anthropic-messages protocol (model: %s)", cfg.Model)
+			return nil, "", fmt.Errorf(
+				"api_key is required for anthropic-messages protocol (model: %s)",
+				cfg.Model,
+			)
 		}
 		return anthropicmessages.NewProviderWithTimeout(
 			cfg.APIKey(),
@@ -342,7 +368,11 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			apiBase = GetDefaultAPIBase(protocol)
 		}
 		if cfg.APIKey() == "" {
-			return nil, "", fmt.Errorf("api_key is required for %q protocol (model: %s)", protocol, cfg.Model)
+			return nil, "", fmt.Errorf(
+				"api_key is required for %q protocol (model: %s)",
+				protocol,
+				cfg.Model,
+			)
 		}
 		return anthropicmessages.NewProviderWithTimeout(
 			cfg.APIKey(),

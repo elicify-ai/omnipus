@@ -166,7 +166,7 @@ func TestToolPoliciesPUT_NoReAuthToken_Succeeds(t *testing.T) {
 }
 
 // TestToolPoliciesPUT_WithReAuthToken_StillSucceeds proves a stale/legacy client
-// that still sends an X-Reauth-Token is not penalised — the PUT succeeds whether
+// that still sends an X-Reauth-Token is not penalized — the PUT succeeds whether
 // or not the token is present (the gate no longer consumes it).
 func TestToolPoliciesPUT_WithReAuthToken_StillSucceeds(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
