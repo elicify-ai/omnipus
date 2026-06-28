@@ -215,10 +215,12 @@ On boot, `start` prints where to open the dashboard: always `localhost`; the LAN
 `agent`, `auth`, `status`, `cron`, `migrate`, and standalone `model`/`skills` are deleted. **Kept commands:** `onboard`, `start` (+ `gateway`/`g` alias), `credentials`, `audit`, `doctor`, `version`. All internal callers are updated and a CI guard prevents regressions. Reserved-name set (agent IDs may not shadow these): the full kept-command set above.
 
 **Why this priority**: These read dead stores / retired features; leaving them is the drift this redesign exists to end. Constraint #7 forbids breaking our own pipeline.
-**Independent Test**: `omnipus status` → cobra "unknown command"; `grep -rE '(omnipus|\./omnipus|[A-Za-z0-9_/]*/omnipus|\$[A-Z_]+) (agent|auth|status|cron|migrate|model|skills)\b'` over Docker/CI/worker/launcher/install.sh is empty; `omnipus gateway` still maps to `start`.
+**Independent Test**: `omnipus status` → prints `"status" was removed in the CLI redesign — run 'omnipus --help' for the current commands` (stderr) and exits non-zero; `grep -rE '(omnipus|\./omnipus|[A-Za-z0-9_/]*/omnipus|\$[A-Z_]+) (agent|auth|status|cron|migrate|model|skills)\b'` over Docker/CI/worker/launcher/install.sh is empty; `omnipus gateway` still maps to `start`.
+
+**Note (implementation detail):** Because the root command uses `cobra.ArbitraryArgs`, removed verbs reach `RunE` rather than cobra's built-in "unknown command" handler. `RunE` checks `args[0]` against the `removedVerbs` map and prints a dedicated redesign-removal message before the agent-lookup so the user receives actionable guidance rather than the confusing "unknown agent" error.
 
 **Acceptance Scenarios**:
-1. **Given** the new tree, **When** a removed verb is invoked, **Then** cobra prints "unknown command" and exits non-zero.
+1. **Given** the new tree, **When** a removed verb is invoked (e.g. `omnipus status`), **Then** stderr prints `"<verb>" was removed in the CLI redesign — run 'omnipus --help' for the current commands` and the process exits non-zero.
 2. **Given** the same PR, **Then** no removed verb is referenced in: runtime callers (`docker/Dockerfile{,.full,.heavy,.goreleaser}`, `docker/entrypoint.sh`, `.github/workflows/cross-platform.yml`, `pr.yml`, `deploy/ci-worker/runci.sh`, `cmd/omnipus-launcher-tui/ui/gateway.go`, `scripts/install.sh` — all currently SAFE via the kept `gateway`/`credentials`, migrate `gateway`→`start` for consistency); docs (`docs/using-omnipus-cli.md`, `docs/ANTIGRAVITY_USAGE.md`, `docs/providers.md`, `docs/configuration.md`, `docs/channels.md`, `docs/channels/weixin.md`, `docs/channels/wecom.md`, `docs/skills.md`, `ROADMAP.md`, `docs/internal/architecture/ADR-004-credential-boot-contract.md`); and user-facing error strings (`pkg/providers/{claude,factory,codex,antigravity}_provider.go` "run omnipus auth login" → point at `omnipus credentials set` / onboarding).
 3. **Given** `omnipus gateway`, **Then** it still runs `start` (alias kept).
 4. **Given** CI, **Then** the grep-guard step (regex incl. `model|skills` and path-prefixed forms) fails if any removed verb reappears in infra, and is implemented as a shell/CI step (primary) — a Go mirror, if any, resolves repo root via go.mod and is `//go:build linux`.
@@ -266,7 +268,7 @@ Error:
 - When the gateway is unreachable (P0), the system prints `run omnipus start` to stderr and exits non-zero.
 - When a `tool_approval_required` frame arrives without `--yes`, the system denies-and-continues and notes it on stderr.
 - When `<agent>` is a worker/unknown, the system errors clearly and exits non-zero.
-- When a removed verb is invoked, the system prints cobra "unknown command".
+- When a removed verb is invoked, the system prints `"<verb>" was removed in the CLI redesign — run 'omnipus --help' for the current commands` (stderr) and exits non-zero.
 
 Boundary:
 - When bound to loopback, the system prints only localhost + a hint.
@@ -471,13 +473,15 @@ Boundary:
 
 ### Feature: Removals
 
-#### Scenario: removed verb is unknown; gateway alias survives
+#### Scenario: removed verb prints redesign message; gateway alias survives
 **Traces to**: User Story 11, Acceptance Scenario 1/3
 **Category**: Error Path
 - **Given** the new command tree
 - **When** the user runs `omnipus status`
-- **Then** cobra prints "unknown command" and exits non-zero
+- **Then** stderr prints `"status" was removed in the CLI redesign — run 'omnipus --help' for the current commands` and exits non-zero
 - **But** `omnipus gateway` still runs `start`
+
+**Implementation note:** `RunE` uses `cobra.ArbitraryArgs` and intercepts removed verbs via the `removedVerbs` map before the agent-lookup, so the message is the redesign-specific one rather than cobra's generic "unknown command".
 
 #### Scenario: CI grep-guard blocks removed-verb regressions
 **Traces to**: User Story 11, Acceptance Scenario 2/4
@@ -637,7 +641,7 @@ Boundary:
 - **SC-004**: After onboard, `cli.token` is mode 0600, a `cli` user exists, and (with FR-017 plumbing) an audited run produces ≥1 `audit.Entry` with `User=="cli"`; the token never appears in stdout/stderr. (FR-006/FR-017)
 - **SC-008**: `omnipus start` with a valid `cli.token` leaves it byte-identical; `omnipus start --new-cli-token` changes it and the prior token is rejected by the gateway. (FR-018)
 - **SC-009**: A run against a reachable gateway with a wrong/stale token prints the `omnipus start` *key-invalid* guidance (not the gateway-down message) and exits non-zero. (FR-019)
-- **SC-005**: `grep -rE '(omnipus|\./omnipus|[A-Za-z0-9_/]*/omnipus|\$[A-Z_]+) (agent|auth|status|cron|migrate|model|skills)\b'` over Docker/CI/worker/launcher/install.sh returns empty in CI; `omnipus gateway` still starts the server. (FR-013)
+- **SC-005**: `omnipus status` prints the redesign-removal message and exits non-zero; `grep -rE '(omnipus|\./omnipus|[A-Za-z0-9_/]*/omnipus|\$[A-Z_]+) (agent|auth|status|cron|migrate|model|skills)\b'` over Docker/CI/worker/launcher/install.sh returns empty in CI; `omnipus gateway` still starts the server. (FR-013)
 - **SC-006**: Bare `omnipus` with no gateway lists ≥1 chat-target agent and 0 workers, exit 0. (FR-008)
 - **SC-007 (P1)**: With `OMNIPUS_MASTER_KEY` set and no gateway, `omnipus jim "hi"` spawns exactly one gateway (verified under 2 concurrent invocations) and returns a reply. (FR-015/016)
 
@@ -689,7 +693,7 @@ Boundary:
 2. **H2 (happy):** `omnipus mia "what agents do I have?"` returns a sensible answer; `omnipus` (no args) lists the same agents.
 3. **H3 (happy):** `omnipus jim "summarize" < bigfile.txt` (piped) — result on stdout only; `… > out.txt` yields a clean file.
 4. **H4 (error):** Stop the gateway; `omnipus jim "hi"` prints the `omnipus start` guidance and exits non-zero.
-5. **H5 (error):** `omnipus status` → "unknown command"; `omnipus gateway` still serves.
+5. **H5 (error):** `omnipus status` → stderr: `"status" was removed in the CLI redesign — run 'omnipus --help' for the current commands`, exit non-zero; `omnipus gateway` still serves.
 6. **H6 (edge):** A task that makes Jim attempt a shell command without `--yes` → completes quickly, stderr notes the denied tool; with `--yes` the command runs.
 7. **H7 (edge):** Inspect `$OMNIPUS_HOME/cli.token` (0600) and the audit log shows `user=cli`; grep the terminal scrollback — the token never appears.
 

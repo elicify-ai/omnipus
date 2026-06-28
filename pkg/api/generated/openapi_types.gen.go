@@ -4921,7 +4921,7 @@ type AuditEntry struct {
 	// Tool Tool name when the event is a tool call. May be absent.
 	Tool *string `json:"tool,omitempty"`
 
-	// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated as the `cli` principal this is "cli"; for an admin browser session it is the admin username. This is the WS-authenticated identity, not the channel-platform sender — channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
+	// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated as the `cli` principal this is "cli"; for an admin browser session it is the admin username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
 	User *string `json:"user,omitempty"`
 }
 
@@ -4968,7 +4968,7 @@ type AuditLogResponse struct {
 		// Tool Tool name when the event is a tool call. May be absent.
 		Tool *string `json:"tool,omitempty"`
 
-		// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated as the `cli` principal this is "cli"; for an admin browser session it is the admin username. This is the WS-authenticated identity, not the channel-platform sender — channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
+		// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated as the `cli` principal this is "cli"; for an admin browser session it is the admin username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
 		User *string `json:"user,omitempty"`
 	} `json:"entries"`
 }

@@ -301,12 +301,12 @@ type processOptions struct {
 	SenderID          string // Current sender ID for dynamic context
 	SenderDisplayName string // Current sender display name for dynamic context
 	// UserID is the authenticated gateway principal that initiated this turn,
-	// threaded from the WS connection (websocket.go wc.userID) via
-	// bus.InboundMessage.Sender.Username (FR-017). It is stamped onto turn-scoped
-	// audit.Entry.User so CLI runs (principal "cli") and admin browser sessions
-	// are attributable. Empty for channel-originated turns (the platform sender
-	// is not a gateway principal) and unauthenticated env-token / dev-bypass
-	// paths — never guessed.
+	// threaded from the WS connection (websocket.go wc.userID) via the dedicated
+	// bus.InboundMessage.GatewayUserID carrier (FR-017). It is stamped onto
+	// turn-scoped audit.Entry.User so CLI runs (principal "cli") and admin browser
+	// sessions are attributable. Empty for channel-originated turns (the platform
+	// sender in Sender.Username is not a gateway principal and is never read here)
+	// and unauthenticated env-token / dev-bypass paths — never guessed.
 	UserID                  string                // Authenticated gateway principal (FR-017)
 	UserMessage             string                // User message content (may include prefix)
 	ForcedSkills            []string              // Skills explicitly requested for this message
@@ -348,6 +348,21 @@ type processOptions struct {
 	// onward await/background delegation even though a task run otherwise starts
 	// a fresh turn at depth 0. Interactive/chat turns leave this 0.
 	InitialDelegationDepth int
+}
+
+// gatewayPrincipal returns the WS-authenticated gateway principal that an
+// inbound message carries for audit attribution (FR-017), or "" when none.
+//
+// It reads ONLY bus.InboundMessage.GatewayUserID — the dedicated carrier set
+// solely by the gateway webchat WS path (pkg/gateway/websocket.go, from
+// wc.userID). It deliberately ignores Sender.Username: production channels
+// (Telegram, Discord, IRC, Matrix, Google Chat, WeiXin) populate Sender.Username
+// with the platform handle (e.g. "@alice"), which is NOT a gateway principal and
+// must never be stamped as audit User. Channel/task/scheduled inbound messages
+// never set GatewayUserID, so this returns "" for them — leaving audit.Entry.User
+// empty structurally rather than by a runtime channel-name guard.
+func gatewayPrincipal(msg bus.InboundMessage) string {
+	return msg.GatewayUserID
 }
 
 // ScheduledJobInfo carries the schedule/job identity that ProcessScheduled
@@ -4407,11 +4422,14 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		SenderID:          msg.Sender.CanonicalID,
 		SenderDisplayName: msg.Sender.DisplayName,
 		// FR-017: thread the authenticated gateway principal into the turn for
-		// audit attribution. The webchat WS path sets Sender.Username = wc.userID
-		// (the WS-authenticated identity, e.g. "cli" or an admin username);
-		// channel paths leave it as the platform username or empty. Audit
-		// stamping only treats the WS-authenticated value as a gateway principal.
-		UserID:              msg.Sender.Username,
+		// audit attribution. Only the gateway webchat WS path sets
+		// msg.GatewayUserID (= wc.userID, the WS-authenticated identity, e.g.
+		// "cli" or an admin username). Channel/task/scheduled inbound messages
+		// never set it, so their turns leave audit.Entry.User empty structurally.
+		// We deliberately do NOT read msg.Sender.Username here: channels populate
+		// it with the platform handle (e.g. "@alice"), which is not a gateway
+		// principal and must never be stamped as audit User.
+		UserID:              gatewayPrincipal(msg),
 		UserMessage:         msg.Content,
 		Media:               msg.Media,
 		DefaultResponse:     defaultResponse,

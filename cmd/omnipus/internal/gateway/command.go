@@ -3,7 +3,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -173,31 +172,7 @@ func NewGatewayCommand() *cobra.Command {
 // open hint. Errors are non-fatal — the URL block is purely informational.
 func printStartURLBlock(home string) {
 	configPath := home + "/config.json"
-	raw, err := os.ReadFile(configPath)
-
-	host := ""
-	port := 5000
-	publicURL := ""
-
-	if err == nil {
-		var m map[string]any
-		if jsonErr := json.Unmarshal(raw, &m); jsonErr == nil {
-			gw, _ := m["gateway"].(map[string]any)
-			if gw != nil {
-				if h, ok := gw["host"].(string); ok {
-					host = h
-				}
-				if p, ok := gw["port"].(float64); ok && p > 0 {
-					port = int(p)
-				}
-				if pu, ok := gw["public_url"].(string); ok {
-					publicURL = pu
-				}
-			}
-		}
-	}
-
-	urls := netinfo.BuildAccessURLs(host, port, publicURL, netinfo.LocalIPv4s())
+	urls := netinfo.AccessURLsFromConfig(configPath)
 	fmt.Fprintln(os.Stderr, "Open the dashboard / log in as admin:")
 	fmt.Fprint(os.Stderr, netinfo.Render(urls))
 }

@@ -89,10 +89,11 @@ type turnState struct {
 	chatID      string
 	userMessage string
 	// userID is the authenticated gateway principal that initiated this turn
-	// (FR-017), threaded from processOptions.UserID (← InboundMessage.Sender.Username
+	// (FR-017), threaded from processOptions.UserID (← InboundMessage.GatewayUserID
 	// ← websocket.go wc.userID). Stamped onto turn-scoped audit entries via
 	// auditUser() so CLI runs (principal "cli") and admin sessions are
-	// attributable. Empty for channel-originated and unauthenticated turns.
+	// attributable. Empty for channel-originated and unauthenticated turns
+	// (Sender.Username, the platform handle, is never read for this).
 	userID string
 	media  []string
 

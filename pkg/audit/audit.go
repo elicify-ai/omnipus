@@ -177,9 +177,12 @@ type Entry struct {
 	// entry belongs to (FR-017). For a CLI run authenticated as the `cli`
 	// principal this is "cli"; for an admin browser session it is the admin's
 	// username. It is the WS-authenticated identity (websocket.go wc.userID),
-	// NOT the channel-platform sender — so channel-originated turns (Telegram,
-	// Discord, …) and unauthenticated env-token / dev-bypass paths leave it
-	// empty. Empty is the documented default and is never guessed.
+	// carried on a dedicated field (bus.InboundMessage.GatewayUserID) set only
+	// by the gateway WS path — NOT the channel-platform sender. Because channel
+	// inbound messages never set that carrier, channel-originated turns
+	// (Telegram, Discord, …) and unauthenticated env-token / dev-bypass paths
+	// leave User empty structurally. Empty is the documented default and is
+	// never guessed.
 	User       string         `json:"user,omitempty"`
 	Tool       string         `json:"tool,omitempty"`
 	Command    string         `json:"command,omitempty"`

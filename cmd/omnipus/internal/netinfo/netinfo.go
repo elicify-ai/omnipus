@@ -15,8 +15,10 @@
 package netinfo
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -116,6 +118,40 @@ func LocalIPv4s() []string {
 		}
 	}
 	return result
+}
+
+// AccessURLsFromConfig reads host, port (default 5000), and public_url from
+// the config.json at configPath and calls BuildAccessURLs with LocalIPv4s().
+// It is the single implementation of the config-read + URL-build sequence
+// previously duplicated between onboard.printAccessURLBlock and
+// gateway/command.go's printStartURLBlock. Errors reading or parsing the
+// config are silently swallowed and defaults are used — the URL block is
+// informational and must never cause callers to fail.
+func AccessURLsFromConfig(configPath string) AccessURLs {
+	host := ""
+	port := 5000
+	publicURL := ""
+
+	raw, err := os.ReadFile(configPath)
+	if err == nil {
+		var m map[string]any
+		if jsonErr := json.Unmarshal(raw, &m); jsonErr == nil {
+			gw, _ := m["gateway"].(map[string]any)
+			if gw != nil {
+				if h, ok := gw["host"].(string); ok {
+					host = h
+				}
+				if p, ok := gw["port"].(float64); ok && p > 0 {
+					port = int(p)
+				}
+				if pu, ok := gw["public_url"].(string); ok {
+					publicURL = pu
+				}
+			}
+		}
+	}
+
+	return BuildAccessURLs(host, port, publicURL, LocalIPv4s())
 }
 
 // Render returns a human-readable multi-line block for printing at gateway

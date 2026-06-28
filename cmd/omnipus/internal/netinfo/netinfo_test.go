@@ -1,6 +1,9 @@
 package netinfo
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -178,4 +181,64 @@ func TestRender_IncludesAllFields(t *testing.T) {
 			t.Errorf("Render missing canonical URL")
 		}
 	})
+}
+
+// TestAccessURLsFromConfig verifies the de-duplicated helper that reads
+// host/port/public_url from config.json and calls BuildAccessURLs.
+func TestAccessURLsFromConfig(t *testing.T) {
+	t.Run("reads host port and public_url", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := map[string]any{
+			"gateway": map[string]any{
+				"host":       "127.0.0.1",
+				"port":       float64(9090),
+				"public_url": "",
+			},
+		}
+		writeCfg(t, dir, cfg)
+		urls := AccessURLsFromConfig(filepath.Join(dir, "config.json"))
+		// host=127.0.0.1 → loopback rule → localhost only + hint.
+		if urls.Primary != "http://localhost:9090" {
+			t.Errorf("Primary = %q, want http://localhost:9090", urls.Primary)
+		}
+		if !strings.Contains(urls.Hint, "bound to localhost") {
+			t.Errorf("expected loopback hint, got %q", urls.Hint)
+		}
+	})
+
+	t.Run("uses public_url when set", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := map[string]any{
+			"gateway": map[string]any{
+				"port":       float64(5000),
+				"public_url": "https://omni.example.com",
+			},
+		}
+		writeCfg(t, dir, cfg)
+		urls := AccessURLsFromConfig(filepath.Join(dir, "config.json"))
+		if urls.Primary != "https://omni.example.com" {
+			t.Errorf("Primary = %q, want https://omni.example.com", urls.Primary)
+		}
+	})
+
+	t.Run("missing config falls back to defaults", func(t *testing.T) {
+		urls := AccessURLsFromConfig("/nonexistent/path/config.json")
+		// Default: host="" port=5000 → 0.0.0.0 rule → localhost.
+		if !strings.HasPrefix(urls.Primary, "http://localhost:5000") {
+			t.Errorf("Primary = %q, want http://localhost:5000", urls.Primary)
+		}
+	})
+}
+
+// writeCfg is a test helper that writes a config map as JSON to
+// <dir>/config.json.
+func writeCfg(t *testing.T, dir string, cfg map[string]any) {
+	t.Helper()
+	raw, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), raw, 0o600); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
 }

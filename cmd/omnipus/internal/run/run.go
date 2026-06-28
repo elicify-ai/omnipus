@@ -48,12 +48,20 @@ var (
 	ErrGatewayDown = errors.New("Omnipus isn't running — start it with: omnipus start")
 
 	// ErrKeyInvalid is returned when the WebSocket connection is established but
-	// the server closes it with ClosePolicyViolation after the auth frame. The
-	// caller prints the "run: omnipus start" rotation hint (FR-019).
+	// the server sends an auth-phase error frame (unauthorized: invalid token)
+	// followed by ClosePolicyViolation. Detected either via the error frame before
+	// auth is established (FR-019 — the live gateway always sends the error frame
+	// first) or via the close code as a fallback.
+	// The caller prints the "run: omnipus start" rotation hint.
 	ErrKeyInvalid = errors.New("Your CLI key is invalid or out of date. Run: omnipus start")
 
 	// ErrTimeout is returned when no done frame is received within Options.Timeout.
 	ErrTimeout = errors.New("timed out waiting for the agent to finish")
+
+	// ErrApprovalFailed is returned when the REST POST to resolve a tool approval
+	// fails after one retry. Continuing to a 90 s server timeout would be a silent
+	// hang, so we exit non-zero immediately.
+	ErrApprovalFailed = errors.New("failed to resolve tool approval via REST")
 )
 
 const defaultTimeout = 300 * time.Second
@@ -74,6 +82,8 @@ type Options struct {
 
 	// URL, when non-empty, causes Run to return ErrRemoteUnsupported immediately
 	// (FR-007 P0 guard — remote gateways not supported yet).
+	// Note: the live caller (main.go) pre-guards --url before calling Run; this
+	// in-Run check is forward-compat for callers that skip the pre-guard (P1).
 	URL string
 
 	// Yes, when true, causes tool_approval_required frames to be resolved with
@@ -93,9 +103,11 @@ type Options struct {
 	Token string
 
 	// Stdout receives the streamed LLM response (token frames + final newline).
+	// Nil is treated as io.Discard.
 	Stdout io.Writer
 
 	// Stderr receives progress, tool activity, and error diagnostics.
+	// Nil is treated as io.Discard.
 	Stderr io.Writer
 }
 
@@ -104,7 +116,23 @@ type Options struct {
 // It returns nil after a clean done frame (process should exit 0).
 // It returns a typed sentinel error on any failure so the cmd layer can map to
 // the correct exit code and user-facing message without string inspection.
+//
+// Provider errors and empty responses are delivered by the gateway as a normal
+// assistant token+done sequence (loop.go:7120-7124 fills in a default response).
+// There is no wire-level failure marker in the done frame for live-turn provider
+// errors — DoneStats.ReplayError is replay-only (set by streamReplay, never by
+// the live agent loop). Therefore exit 0 means "the turn reached done"; provider
+// or turn errors delivered as assistant content are not distinguishable on the
+// wire today. This is a documented known limitation — do not string-sniff.
 func Run(ctx context.Context, o Options) error {
+	// Default nil writers to io.Discard so callers that omit them don't panic.
+	if o.Stdout == nil {
+		o.Stdout = io.Discard
+	}
+	if o.Stderr == nil {
+		o.Stderr = io.Discard
+	}
+
 	// FR-007 P0 guard: remote gateway support is deferred.
 	if o.URL != "" {
 		return ErrRemoteUnsupported
@@ -136,6 +164,18 @@ func Run(ctx context.Context, o Options) error {
 		return ErrGatewayDown
 	}
 	defer conn.Close()
+
+	// Kick off a goroutine that closes the connection when the context deadline
+	// fires. Without this, a blocked ReadMessage is not interrupted by context
+	// cancellation — keep-alive frames from the server would keep refreshing the
+	// per-read deadline, so the run could outlive --timeout indefinitely.
+	// The goroutine uses SetReadDeadline(now) to unblock any in-flight read
+	// immediately; the next ReadMessage call returns an error that we map to
+	// ErrTimeout (see the ctx.Err() check after every read error below).
+	go func() {
+		<-ctx.Done()
+		_ = conn.SetReadDeadline(time.Now())
+	}()
 
 	// The first frame MUST be the auth frame (FR-019 / authenticateWS contract).
 	authFrame := generated.AuthFrame{
@@ -177,36 +217,55 @@ func Run(ctx context.Context, o Options) error {
 		return conn.WriteMessage(websocket.TextMessage, data)
 	}
 
-	// Set a per-read deadline that gets refreshed on each frame so a stalled
-	// server is detected. The outer context timeout enforces the overall wall-clock
-	// limit.
+	// refreshRead sets a per-read deadline capped at min(120 s, time until the
+	// context deadline). This ensures:
+	//   1. A stalled server is detected within 120 s.
+	//   2. If the context deadline is closer than 120 s, the read deadline fires
+	//      first and the ctx.Done() goroutine (above) unblocks any read, allowing
+	//      the ErrTimeout path to trigger promptly.
+	ctxDeadline, hasDeadline := ctx.Deadline()
 	refreshRead := func() {
-		_ = conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		perReadTimeout := 120 * time.Second
+		if hasDeadline {
+			untilDeadline := time.Until(ctxDeadline)
+			if untilDeadline < perReadTimeout {
+				perReadTimeout = untilDeadline
+			}
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(perReadTimeout))
 	}
 
 	// Send the message frame only after auth is accepted (the server will close
 	// the connection if auth fails — we detect that in the read loop below).
-	// We optimistically send the message here; if auth fails we'll get a close
-	// frame before the session_started arrives and the read loop will return
-	// ErrKeyInvalid.
+	// We optimistically send the message here; if auth fails we'll get an error
+	// frame (FR-019: the live gateway sends error THEN ClosePolicyViolation) and
+	// the read loop will return ErrKeyInvalid.
 	if writeErr := send(msgData); writeErr != nil {
 		return fmt.Errorf("run: write message frame: %w", writeErr)
 	}
 
+	// authed tracks whether we've received a session_started or token frame,
+	// meaning authentication succeeded and a session is established.
+	// Used to distinguish auth-phase error frames (→ ErrKeyInvalid) from
+	// post-auth error frames (→ wrapped error).
+	authed := false
+
 	// Read loop: receive frames until done or error.
 	refreshRead()
 	for {
-		// Check context before each read.
-		select {
-		case <-ctx.Done():
-			return ErrTimeout
-		default:
-		}
-
 		_, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
+			// If the context fired, the ctx.Done() goroutine set a past deadline,
+			// causing this read to fail. Map to ErrTimeout regardless of the
+			// underlying net error type.
+			if ctx.Err() == context.DeadlineExceeded {
+				return ErrTimeout
+			}
+
 			// Distinguish auth-rejection close (ClosePolicyViolation = 1008) from
 			// other errors. gorilla/websocket wraps close frames as *CloseError.
+			// This path is a fallback for gateways that send the close without a
+			// preceding error frame, or for future protocol changes.
 			var closeErr *websocket.CloseError
 			if errors.As(readErr, &closeErr) && closeErr.Code == websocket.ClosePolicyViolation {
 				return ErrKeyInvalid
@@ -229,7 +288,10 @@ func Run(ctx context.Context, o Options) error {
 
 		switch generated.WsFrameType(envelope.Type) {
 		case generated.WsFrameTypeSessionStarted:
-			// The server has minted a session — the turn has started.
+			// The server has minted a session — authentication succeeded and the
+			// turn has started. Mark as authed so subsequent error frames are
+			// treated as post-auth turn errors, not auth rejections.
+			authed = true
 			var f generated.SessionStartedFrame
 			if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
 				fmt.Fprintf(o.Stderr, "[session %s]\n", f.SessionId)
@@ -237,6 +299,8 @@ func Run(ctx context.Context, o Options) error {
 
 		case generated.WsFrameTypeToken:
 			// LLM token: stream to stdout (US-3 AC-1 — stdout = result text only).
+			// Receiving a token also proves authentication succeeded.
+			authed = true
 			var f generated.TokenFrame
 			if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
 				fmt.Fprint(o.Stdout, f.Content)
@@ -272,12 +336,15 @@ func Run(ctx context.Context, o Options) error {
 			if o.Yes {
 				action = generated.ToolApprovalActionRequestActionApprove
 			}
-			resolveErr := resolveApproval(ctx, httpBase, o.Token, f.ApprovalId, action)
+			resolveErr := resolveApprovalWithRetry(ctx, httpBase, o.Token, f.ApprovalId, action)
 			if resolveErr != nil {
-				// Log but do not abort — the engine will time out the approval on its
-				// own and the run will still proceed to done.
+				// The POST failed after one retry. Continuing to a 90 s server
+				// timeout is the exact hang this REST path exists to avoid — exit
+				// non-zero immediately instead.
 				fmt.Fprintf(o.Stderr, "[approval: failed to resolve %s: %v]\n", f.ApprovalId, resolveErr)
-			} else if action == generated.ToolApprovalActionRequestActionDeny {
+				return ErrApprovalFailed
+			}
+			if action == generated.ToolApprovalActionRequestActionDeny {
 				fmt.Fprintf(o.Stderr, "denied tool: %s\n", f.ToolName)
 			}
 
@@ -288,14 +355,27 @@ func Run(ctx context.Context, o Options) error {
 			return nil
 
 		case generated.WsFrameTypeError:
-			// Server-side error: report to stderr and return a non-zero error
-			// (US-3 AC-2).
+			// Server-side error frame. Two sub-cases:
+			//   1. Not yet authed: this is an auth-phase rejection (the live gateway
+			//      sends an error frame BEFORE the ClosePolicyViolation close — see
+			//      pkg/gateway/websocket.go:665-706). Return ErrKeyInvalid so the
+			//      caller prints the FR-019 rotation hint.
+			//   2. Already authed: this is a post-auth turn/provider error. Report
+			//      to stderr and return a wrapped error (non-zero exit, US-3 AC-2).
 			var f generated.ErrorFrame
-			if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
-				fmt.Fprintf(o.Stderr, "error: %s\n", f.Message)
-				return fmt.Errorf("run: agent error: %s", f.Message)
+			if jsonErr := json.Unmarshal(raw, &f); jsonErr != nil {
+				if !authed {
+					return ErrKeyInvalid
+				}
+				return fmt.Errorf("run: agent error (malformed error frame)")
 			}
-			return fmt.Errorf("run: agent error (malformed error frame)")
+			if !authed {
+				// Auth-phase error (FR-019 primary path).
+				return ErrKeyInvalid
+			}
+			// Post-auth error.
+			fmt.Fprintf(o.Stderr, "error: %s\n", f.Message)
+			return fmt.Errorf("run: agent error: %s", f.Message)
 
 		case generated.WsFrameTypeSubagentStart,
 			generated.WsFrameTypeSubagentEnd,
@@ -315,6 +395,22 @@ func Run(ctx context.Context, o Options) error {
 			slog.Debug("run: ignoring unrecognized frame", "type", envelope.Type)
 		}
 	}
+}
+
+// resolveApprovalWithRetry calls resolveApproval and, on failure, retries once.
+// If the retry also fails, it returns the retry error so the caller can return
+// ErrApprovalFailed and exit non-zero (preventing a 90 s server-side hang).
+func resolveApprovalWithRetry(
+	ctx context.Context,
+	httpBase, token, approvalID string,
+	action generated.ToolApprovalActionRequestAction,
+) error {
+	err := resolveApproval(ctx, httpBase, token, approvalID, action)
+	if err == nil {
+		return nil
+	}
+	slog.Warn("run: approval POST failed, retrying once", "approval_id", approvalID, "error", err)
+	return resolveApproval(ctx, httpBase, token, approvalID, action)
 }
 
 // resolveApproval posts a tool-approval action to the gateway's REST endpoint.

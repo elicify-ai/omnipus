@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,10 +75,35 @@ func ResetCLIToken(home string) error {
 	return mintAndPersist(configPath, tokenPath)
 }
 
+// warnPermissiveTokenFile checks the file permissions of the token at path and
+// writes a warning to w when the file is group- or world-readable (i.e. the
+// permission bits beyond owner are non-zero). The warning is advisory — it
+// does not prevent the token from being returned. Callers may pass os.Stderr
+// for w. In tests, pass a *bytes.Buffer to capture the output.
+func warnPermissiveTokenFile(path string, w io.Writer) {
+	info, err := os.Stat(path)
+	if err != nil {
+		// Cannot stat — skip the warning; the caller handles the missing-file error.
+		return
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		fmt.Fprintf(w,
+			"warning: cli.token is group/world-readable (mode %o); run: chmod 600 %s\n",
+			info.Mode().Perm(), path,
+		)
+	}
+}
+
 // LoadCLIToken reads the plaintext bearer token from $home/cli.token.
 // Returns ErrNoCLIToken when the file is absent.
+//
+// If the token file has group- or world-readable permissions (mode bits beyond
+// owner are non-zero), a warning is printed to os.Stderr before the token is
+// returned (MIN-2). The warning is advisory — the token is still returned.
 func LoadCLIToken(home string) (string, error) {
-	data, err := os.ReadFile(CLITokenPath(home))
+	tokenPath := CLITokenPath(home)
+	warnPermissiveTokenFile(tokenPath, os.Stderr)
+	data, err := os.ReadFile(tokenPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", ErrNoCLIToken
@@ -195,13 +221,17 @@ func upsertCLIUser(configPath, tokenHash string) error {
 	return fileutil.WriteFileAtomic(configPath, out, 0o600)
 }
 
-// generateBearerToken returns a new random bearer token of the form
-// "omnipus_<64 hex chars>" (256 bits of entropy), matching the pattern used
-// by onboard.generateBearerToken.
-func generateBearerToken() (string, error) {
+// GenerateBearerToken returns a new random bearer token of the form
+// "omnipus_<64 hex chars>" (256 bits of entropy). It is exported so that
+// onboard.go and any other CLI packages can share a single implementation
+// rather than duplicating the logic.
+func GenerateBearerToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	return "omnipus_" + hex.EncodeToString(b), nil
 }
+
+// generateBearerToken is the package-private alias used internally.
+func generateBearerToken() (string, error) { return GenerateBearerToken() }
