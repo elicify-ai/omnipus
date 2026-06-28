@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { Outlet } from '@tanstack/react-router'
 import { Sidebar } from './Sidebar'
-import { TopBar } from './TopBar'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
@@ -14,7 +13,7 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useQuery } from '@tanstack/react-query'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
 
-// US-4: Application shell — sidebar + top bar + main content area
+// US-4: Application shell — sidebar + main content area
 export function AppShell() {
   const connectionError = useConnectionStore((s) => s.connectionError)
   const reconnect = useConnectionStore((s) => s.reconnect)
@@ -52,13 +51,10 @@ export function AppShell() {
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
 
-      {/* Main content area — shrinks when sidebar is pinned */}
+      {/* Main content area — shrinks when sidebar is pinned; each screen owns its own top bar */}
       <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
         {/* OmnipusRuntimeProvider: AssistantUI context + WebSocket connection for entire app */}
         <OmnipusRuntimeProvider>
-          {/* Top bar: hamburger + session bar + notifications + profile dropdown */}
-          <TopBar />
-
           {/* Global connection error banner — visible on every screen */}
           {connectionError && (
             <div className="flex items-center justify-between gap-2 px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-xs text-[var(--color-error)] shrink-0">

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import {
   Circle,
   ListChecks,
@@ -366,60 +367,63 @@ interface WorkspaceSessionGroup {
 }
 
 /**
- * Build workspace-keyed groups from a flat session list.
+ * Build workspace-scoped groups from a flat session list.
  *
- * workspaces: list of all Workspace objects (for name lookup)
- * activeWorkspaceId: shown first in the list
+ * When `activeWorkspaceId` is set, produces at most two groups:
+ *   1. The active workspace's own sessions (sessions where workspace_id matches).
+ *   2. A "No workspace" group at the bottom for sessions that have no workspace_id
+ *      OR whose workspace_id does not resolve to any known active workspace
+ *      (deleted-workspace / orphaned / scheduled sessions).
+ *
+ * Sessions belonging to OTHER existing workspaces are intentionally excluded
+ * so each workspace view is scoped to its own sessions only.
+ *
+ * When `activeWorkspaceId` is null (no active workspace), falls back to a
+ * single "No workspace" group containing all sessions.
  */
 function buildWorkspaceGroups(
   sessions: Session[],
   workspaces: Workspace[],
   activeWorkspaceId: string | null,
 ): WorkspaceSessionGroup[] {
-  const groups = new Map<string, Session[]>()
+  const workspaceById = new Map(workspaces.map((w) => [w.id, w]))
+  const existingWorkspaceIds = new Set(workspaces.map((w) => w.id))
 
-  for (const s of sessions) {
-    const wsId = s.workspace_id ?? NO_WORKSPACE_KEY
-    const existing = groups.get(wsId) ?? []
-    groups.set(wsId, [...existing, s])
+  // No active workspace: put all sessions in the "No workspace" fallback group.
+  if (!activeWorkspaceId) {
+    if (sessions.length === 0) return []
+    return [{ key: NO_WORKSPACE_KEY, label: 'No workspace', sessions }]
   }
 
-  const workspaceById = new Map(workspaces.map((w) => [w.id, w]))
+  const activeSessions: Session[] = []
+  const orphanSessions: Session[] = []
+
+  for (const s of sessions) {
+    if (s.workspace_id === activeWorkspaceId) {
+      // Belongs to the active workspace.
+      activeSessions.push(s)
+    } else if (!s.workspace_id || !existingWorkspaceIds.has(s.workspace_id)) {
+      // No workspace_id, or workspace_id points to a deleted/unknown workspace.
+      orphanSessions.push(s)
+    }
+    // Sessions belonging to OTHER existing workspaces are intentionally excluded.
+  }
 
   const result: WorkspaceSessionGroup[] = []
 
-  // Active workspace first
-  if (activeWorkspaceId && groups.has(activeWorkspaceId)) {
+  if (activeSessions.length > 0) {
     result.push({
       key: activeWorkspaceId,
       label: workspaceById.get(activeWorkspaceId)?.name ?? activeWorkspaceId,
-      sessions: groups.get(activeWorkspaceId)!,
+      sessions: activeSessions,
     })
   }
 
-  // Other named workspaces sorted by name, excluding active and the no-workspace sentinel
-  const otherKeys = [...groups.keys()]
-    .filter((k) => k !== activeWorkspaceId && k !== NO_WORKSPACE_KEY)
-    .sort((a, b) => {
-      const nameA = workspaceById.get(a)?.name ?? a
-      const nameB = workspaceById.get(b)?.name ?? b
-      return nameA.localeCompare(nameB)
-    })
-
-  for (const key of otherKeys) {
-    result.push({
-      key,
-      label: workspaceById.get(key)?.name ?? key,
-      sessions: groups.get(key)!,
-    })
-  }
-
-  // Sessions with no workspace at the end
-  if (groups.has(NO_WORKSPACE_KEY)) {
+  if (orphanSessions.length > 0) {
     result.push({
       key: NO_WORKSPACE_KEY,
       label: 'No workspace',
-      sessions: groups.get(NO_WORKSPACE_KEY)!,
+      sessions: orphanSessions,
     })
   }
 
@@ -434,6 +438,7 @@ export function SessionPanel() {
   const sessionsById = useChatStore((s) => s.sessionsById)
   const seedSessionTokens = useChatStore((s) => s.seedSessionTokens)
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const [searchValue, setSearchValue] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -467,23 +472,15 @@ export function SessionPanel() {
   })
 
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
+  const setActiveWorkspaceId = useWorkspacesStore((s) => s.setActiveWorkspaceId)
 
-  // Fetch all workspaces (active) to build the name map and check default status.
+  // Fetch all workspaces (active) to build the name map and resolve orphaned sessions.
   const { data: workspaces = [] } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     enabled: sessionPanelOpen,
     staleTime: 30_000,
   })
-
-  const activeIsDefaultWorkspace = useMemo(() => {
-    if (!activeWorkspaceId || !workspaces.length) return false
-    const active = workspaces.find((w) => w.id === activeWorkspaceId)
-    return active?.is_default === true
-  }, [activeWorkspaceId, workspaces])
-
-  // Only scope when a non-default workspace is active.
-  const scopeToWorkspace = !!activeWorkspaceId && !activeIsDefaultWorkspace
 
   const handleSelectSession = (session: Session) => {
     // Always trigger the WS attach_session flow so the replay pipeline
@@ -496,6 +493,34 @@ export function SessionPanel() {
     // time, wiping the state attachToSession just initialized (including
     // isReplaying=true and attachedSessionType).
     const agentId = session.active_agent_id ?? session.agent_id
+
+    // If the session belongs to a different existing workspace, switch to it
+    // before attaching. The workspace container's enterWorkspaceChat preserves
+    // an already-active session, so it will NOT reset the one we just attached.
+    const existingWorkspaceIds = new Set(workspaces.map((w) => w.id))
+    const sessionWsId = session.workspace_id
+    if (
+      sessionWsId &&
+      existingWorkspaceIds.has(sessionWsId) &&
+      sessionWsId !== activeWorkspaceId
+    ) {
+      setActiveWorkspaceId(sessionWsId)
+      attachToSession(session.id, session.type, session.title, agentId)
+      if (session.total_tokens && session.total_tokens > 0) {
+        seedSessionTokens(session.total_tokens)
+      }
+      if (session.type !== 'task') {
+        const agent = agents.find((a) => a.id === agentId)
+        if (agent?.type) {
+          setActiveAgentType(agent.type)
+        }
+      }
+      closeSessionPanel()
+      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: sessionWsId } })
+      return
+    }
+
+    // Same workspace, no workspace, or deleted-workspace session — attach in place.
     attachToSession(session.id, session.type, session.title, agentId)
     // Seed the token counter from the persisted total so historic sessions
     // show their total immediately rather than starting at 0.
@@ -521,19 +546,16 @@ export function SessionPanel() {
     }
   }
 
-  // Scope to the active workspace's sessions (by workspace_id) when a non-default
-  // workspace is active. Sort by updated_at descending.
-  const scopedSessions = scopeToWorkspace
-    ? sessions.filter((s) => s.workspace_id === activeWorkspaceId)
-    : sessions
-  const sortedSessions = [...scopedSessions].sort(
+  // Sort all sessions descending. Scoping to the active workspace + "No workspace"
+  // orphans is handled inside buildWorkspaceGroups — no pre-filtering here.
+  const sortedSessions = [...sessions].sort(
     (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
   )
 
-  // Apply search filter: match title, or any participating agent's name
+  // Apply search filter: match title, or any participating agent's name.
   const searchLower = debouncedSearch.toLowerCase().trim()
 
-  const filteredSessions = searchLower
+  const searchFilteredSessions = searchLower
     ? sortedSessions.filter((session) => {
         const titleMatch = (session.title ?? '').toLowerCase().includes(searchLower)
         if (titleMatch) return true
@@ -548,15 +570,21 @@ export function SessionPanel() {
       })
     : sortedSessions
 
-  // Group sessions by workspace.
+  // Build workspace-scoped groups. Only the active workspace's sessions and a
+  // "No workspace" group for orphaned sessions are shown. Other workspaces'
+  // sessions are excluded (buildWorkspaceGroups enforces this).
   const workspaceGroups = useMemo(
-    () => buildWorkspaceGroups(filteredSessions, workspaces, activeWorkspaceId),
-    [filteredSessions, workspaces, activeWorkspaceId],
+    () => buildWorkspaceGroups(searchFilteredSessions, workspaces, activeWorkspaceId),
+    [searchFilteredSessions, workspaces, activeWorkspaceId],
   )
 
-  // Always show workspace group headers as long as there is at least one group
-  // (i.e. there are sessions to display). A single workspace still gets its
-  // collapsible header so "My Workspace" is always visible.
+  // Flat list of visible sessions across all groups (for empty-state check).
+  const filteredSessions = useMemo(
+    () => workspaceGroups.flatMap((g) => g.sessions),
+    [workspaceGroups],
+  )
+
+  // Always show workspace group headers as long as there is at least one group.
   const showGroups = workspaceGroups.length > 0
 
   const toggleWorkspace = (key: string) => {
@@ -624,7 +652,7 @@ export function SessionPanel() {
             <div className="px-4 py-6 text-xs text-[var(--color-muted)] text-center">
               {searchLower
                 ? 'No results.'
-                : scopeToWorkspace
+                : activeWorkspaceId
                   ? 'No conversations in this workspace yet. Start a chat to begin.'
                   : 'No sessions yet. Start a conversation to begin.'}
             </div>

@@ -15,7 +15,6 @@ import { cn } from '@/lib/utils'
 // The 7-tab workspace container surface. Each tab is a deep-linkable sub-route
 // under /workspaces/$workspaceId. Chat is the default landing tab.
 export interface WorkspaceTab {
-  /** The path segment appended to /workspaces/$workspaceId (e.g. 'chat'). */
   segment: 'chat' | 'board' | 'list' | 'graph' | 'calendar' | 'team' | 'settings'
   label: string
   Icon: Icon
@@ -36,21 +35,22 @@ interface WorkspaceTabBarProps {
 }
 
 /**
- * Sticky workspace tab bar — Sovereign Deep, Outfit labels, gold active
- * underline that slides between tabs with a spring transition (shared
- * layoutId so the underline animates rather than snapping).
+ * Workspace tab bar — Sovereign Deep, Outfit labels, gold active underline
+ * that slides between tabs with a spring transition.
+ *
+ * Sits inline inside the WorkspaceTabContainer top-bar row (Row 1) rather
+ * than as a full-width sticky bar. The parent row owns border-bottom and
+ * background; this component only renders the tab list.
  */
 export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
   const location = useLocation()
-  // Resolve the active segment from the URL. The container's index route
-  // redirects to /chat, so the bare /workspaces/$id path is transient.
   const activeSegment = resolveActiveSegment(location.pathname, workspaceId)
 
   return (
     <div
       role="tablist"
       aria-label="Workspace views"
-      className="sticky top-0 z-10 flex items-stretch gap-1 px-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]/95 backdrop-blur-sm overflow-x-auto flex-shrink-0"
+      className="flex items-stretch gap-1 overflow-x-auto flex-shrink-0"
     >
       {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
         const isActive = segment === activeSegment
@@ -89,8 +89,7 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
 
 /**
  * Derive the active tab segment from a pathname. Returns 'chat' for the bare
- * container path (the index redirect target) so the Chat tab reads active
- * during the transient pre-redirect render.
+ * container path (the index redirect target).
  */
 export function resolveActiveSegment(
   pathname: string,

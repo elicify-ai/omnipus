@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { AgentKind, Session } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 // syncChatForeground is imported lazily to avoid the chat ↔ session circular init.
 // It is resolved at call-time via a dynamic require-style closure.
 let _syncChatForeground: (() => void) | null = null
@@ -11,23 +12,24 @@ function syncForeground(): void {
   _syncChatForeground?.()
 }
 
+/** Descriptor stored per workspace so we can restore the last-viewed session. */
+interface WorkspaceSessionDescriptor {
+  id: string
+  type: Session['type']
+  title: string | null
+  agentId: string | null
+}
+
 interface SessionStore {
   activeSessionId: string | null
   activeAgentId: string | null
-  /** The type of the currently active agent (AgentKind | null).
-   *  Set by setActiveSession so all callers stay in sync without manual tracking. */
   activeAgentType: AgentKind | null
   setActiveSession: (
     sessionId: string | null,
     agentId?: string | null,
     agentType?: AgentKind | null
   ) => void
-  /** Proper store action for updating activeAgentType.
-   *  Replaces direct useSessionStore.setState({ activeAgentType }) call-sites
-   *  so future side-effects can be added here without touching callers. */
   setActiveAgentType: (type: AgentKind | null) => void
-
-  // Attached session context — tracks when viewing a task/channel session
   attachedSessionType: 'chat' | 'task' | 'channel' | 'scheduled' | null
   attachedTaskTitle: string | null
   attachToSession: (
@@ -36,18 +38,10 @@ interface SessionStore {
     title?: string,
     agentId?: string
   ) => void
-  /** Sets attachedSessionType and attachedTaskTitle WITHOUT sending a WS attach_session
-   *  frame or resetting chat buckets. Used by the session route loader when navigating
-   *  directly to a task session via the session route (the WS attach is handled by
-   *  OmnipusRuntimeProvider / WsLifecycle on route mount). */
   setAttachedContext: (type: Session['type'], title: string | null) => void
-
-  /** Starts a fresh chat in the SPA: clears activeSessionId so the next
-   *  message frame omits session_id, prompting the server to mint a new
-   *  session and ack it back via {type:"session_started", session_id}.
-   *  Does NOT touch existing per-session buckets — background sessions
-   *  keep streaming and remain visible in the SessionPanel. */
   startNewSession: (agentId?: string | null, agentType?: AgentKind | null) => void
+  sessionByWorkspace: Record<string, WorkspaceSessionDescriptor | null>
+  enterWorkspaceChat: (workspaceId: string) => void
 }
 
 // Breaks the chat.ts ↔ session.ts circular import: chat.ts imports this module,
@@ -87,7 +81,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   activeAgentType: null,
 
   setActiveSession: (sessionId, agentId, agentType) => {
-    // F-S3: single set() call so any frame arriving mid-update sees a consistent state.
     set((state) => ({
       ...state,
       activeSessionId: sessionId,
@@ -96,13 +89,26 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       attachedSessionType: null,
       attachedTaskTitle: null,
     }))
-    // Sync chat foreground selectors to the new active session's bucket.
-    // Does NOT reset the bucket — background sessions keep their state.
-    // F-S2: drop the __default orphan bucket in production (defensive cleanup after session switch).
     syncForeground()
+    // Record real session ids under the current workspace for restore on re-entry.
+    if (sessionId !== null) {
+      const wsId = useWorkspacesStore.getState().activeWorkspaceId
+      if (wsId) {
+        set((state) => ({
+          sessionByWorkspace: {
+            ...state.sessionByWorkspace,
+            [wsId]: {
+              id: sessionId,
+              type: state.attachedSessionType ?? 'chat',
+              title: state.attachedTaskTitle,
+              agentId: (agentId ?? get().activeAgentId) ?? null,
+            },
+          },
+        }))
+      }
+    }
   },
 
-  // Dedicated action so future side effects can be added without touching callers.
   setActiveAgentType: (type) => {
     set({ activeAgentType: type })
   },
@@ -113,14 +119,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   attachToSession: (sessionId, type, title, agentId) => {
     const { connection } = useConnectionStore.getState()
 
-    // W1-11: send the WS frame BEFORE committing state. If send fails, leave
-    // the previous session state intact so the UI doesn't show a phantom
-    // attached session with no gateway replay in flight.
     if (connection) {
-      // Reset BEFORE sending attach so the upcoming replay rebuilds the
-      // bucket from scratch. Without this, reopening a session that
-      // already lived in the SPA store appends every replayed message
-      // again, doubling (or quadrupling) bubbles per click.
       resetChatBucketForReplay(sessionId)
       const sent = connection.send({ type: 'attach_session', session_id: sessionId })
       if (!sent) {
@@ -129,49 +128,118 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         )
         return
       }
-      set({
+      set((state) => ({
         activeSessionId: sessionId,
         attachedSessionType: type,
         attachedTaskTitle: title ?? null,
-        activeAgentId: agentId ?? get().activeAgentId,
-      })
+        activeAgentId: agentId ?? state.activeAgentId,
+      }))
+      // Record under current workspace.
+      const wsId = useWorkspacesStore.getState().activeWorkspaceId
+      if (wsId) {
+        set((state) => ({
+          sessionByWorkspace: {
+            ...state.sessionByWorkspace,
+            [wsId]: {
+              id: sessionId,
+              type,
+              title: title ?? null,
+              agentId: (agentId ?? get().activeAgentId) ?? null,
+            },
+          },
+        }))
+      }
       syncForeground()
-      // FR-I-014: replay is now in flight — disable send until done arrives.
       setChatReplaying(true)
     } else {
-      // No connection at all — commit state anyway (offline/optimistic path) but
-      // do not set replaying since no replay will arrive.
       console.warn('[session] attachToSession: no connection — attach_session not sent')
-      set({
+      set((state) => ({
         activeSessionId: sessionId,
         attachedSessionType: type,
         attachedTaskTitle: title ?? null,
-        activeAgentId: agentId ?? get().activeAgentId,
-      })
+        activeAgentId: agentId ?? state.activeAgentId,
+      }))
+      // Record under current workspace (offline path).
+      const wsId = useWorkspacesStore.getState().activeWorkspaceId
+      if (wsId) {
+        set((state) => ({
+          sessionByWorkspace: {
+            ...state.sessionByWorkspace,
+            [wsId]: {
+              id: sessionId,
+              type,
+              title: title ?? null,
+              agentId: (agentId ?? get().activeAgentId) ?? null,
+            },
+          },
+        }))
+      }
       syncForeground()
     }
   },
 
   startNewSession: (agentId, agentType) => {
-    // Setting activeSessionId=null shows an empty foreground; existing session
-    // buckets are untouched so background sessions keep streaming.
-    set({
+    set((state) => ({
       activeSessionId: null,
-      activeAgentId: agentId ?? get().activeAgentId,
-      activeAgentType: agentType ?? get().activeAgentType,
+      activeAgentId: agentId ?? state.activeAgentId,
+      activeAgentType: agentType ?? state.activeAgentType,
       attachedSessionType: null,
       attachedTaskTitle: null,
-    })
+    }))
+    // Mark this workspace as intentionally fresh (null).
+    const wsId = useWorkspacesStore.getState().activeWorkspaceId
+    if (wsId) {
+      set((state) => ({
+        sessionByWorkspace: {
+          ...state.sessionByWorkspace,
+          [wsId]: null,
+        },
+      }))
+    }
     syncForeground()
   },
 
   setAttachedContext: (type, title) => {
-    // No WS frame — the session route path (OmnipusRuntimeProvider / WsLifecycle)
-    // handles the attach_session frame. This action only sets the UI context so
-    // ChatScreen can render the Task title banner (attachedSessionType === 'task').
     set({
       attachedSessionType: type,
       attachedTaskTitle: title,
     })
+  },
+
+  sessionByWorkspace: {},
+
+  enterWorkspaceChat: (workspaceId: string) => {
+    const state = get()
+    const descriptor = state.sessionByWorkspace[workspaceId]
+
+    if (descriptor === undefined) {
+      // First visit: no stored session for this workspace.
+      // Only reset if something is active (avoid redundant startNewSession when already null).
+      if (state.activeSessionId !== null) {
+        state.startNewSession()
+      }
+      return
+    }
+
+    if (descriptor === null) {
+      // User previously started fresh in this workspace — honour that choice.
+      if (state.activeSessionId !== null) {
+        state.startNewSession()
+      }
+      return
+    }
+
+    // Stored descriptor — no-op if it's already the active session (Bug 1 fix).
+    if (descriptor.id === state.activeSessionId) {
+      return
+    }
+
+    // Restore the previous conversation for this workspace.
+    state.attachToSession(
+      descriptor.id,
+      descriptor.type,
+      descriptor.title ?? undefined,
+      descriptor.agentId ?? undefined,
+    )
   },
 }))

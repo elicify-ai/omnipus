@@ -7,6 +7,7 @@ import { useUiStore } from '@/store/ui'
 import { ChannelConfigPanel } from '@/components/skills/ChannelConfigPanel'
 import { EmailMailboxPanel } from '@/components/connectors/EmailMailboxPanel'
 import { SkeletonList, ErrorState } from '@/components/shared/ListStates'
+import { ScreenHeader } from '@/components/layout/ScreenHeader'
 
 export function ConnectorsScreen() {
   const { addToast } = useUiStore()
@@ -38,7 +39,9 @@ export function ConnectorsScreen() {
   })
 
   return (
-    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+    <div className="absolute inset-0 flex flex-col">
+      <ScreenHeader title="Connectors" />
+      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
       <div className="max-w-4xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="mb-6">
@@ -204,6 +207,7 @@ export function ConnectorsScreen() {
           open={mailboxPanelOpen}
           onOpenChange={setMailboxPanelOpen}
         />
+      </div>
       </div>
     </div>
   )

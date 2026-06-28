@@ -18,10 +18,22 @@ import {
   MagnifyingGlass,
   WarningCircle,
   ArrowClockwise,
+  UserCircle,
+  Sun,
 } from '@phosphor-icons/react'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
+import { useUiStore } from '@/store/ui'
+import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
@@ -46,6 +58,10 @@ export function Sidebar() {
   const location = useLocation()
   const navigate = useNavigate()
   const { activeWorkspaceId, setActiveWorkspaceId } = useWorkspacesStore()
+
+  const { toggleNotificationPanel } = useUiStore()
+  const unreadCount = useNotificationsStore((s) => s.unreadCount)
+  const username = useAuthStore((s) => s.username)
 
   const queryClient = useQueryClient()
   const [newProjectOpen, setNewProjectOpen] = useState(false)
@@ -412,8 +428,29 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Bottom: Settings + Pin toggle (Profile moved to TopBar dropdown) */}
+      {/* Bottom: Notifications + Settings + Profile + Pin toggle */}
       <div className="border-t border-[var(--color-border)] py-3">
+        {/* Notifications row — Tray icon + unread badge */}
+        <button
+          type="button"
+          onClick={toggleNotificationPanel}
+          aria-label="Notifications"
+          data-testid="sidebar-notifications"
+          className="relative flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors w-[calc(100%-16px)]"
+        >
+          <Tray size={18} />
+          <span className="flex-1 text-left">Notifications</span>
+          {unreadCount > 0 && (
+            <span
+              data-testid="sidebar-notification-badge"
+              className="flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium leading-none bg-[var(--color-error)] text-white"
+            >
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
+        </button>
+
+        {/* Settings */}
         <Link
           to="/settings"
           aria-label="Settings"
@@ -433,15 +470,62 @@ export function Sidebar() {
           Settings
         </Link>
 
-        {/* Sign out */}
-        <button
-          onClick={handleLogout}
-          aria-label="Sign out"
-          className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
-        >
-          <SignOut size={18} />
-          Sign out
-        </button>
+        {/* Profile dropdown — opens upward */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Open profile menu"
+              data-testid="sidebar-profile-trigger"
+              className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors w-[calc(100%-16px)]"
+            >
+              <UserCircle size={18} weight="regular" />
+              <span className="flex-1 text-left truncate">
+                {username ?? 'Profile'}
+              </span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="top"
+            align="start"
+            className="min-w-[180px] bg-[var(--color-surface-1)] border border-[var(--color-border)]"
+          >
+            <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
+              {username ?? 'Account'}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator className="bg-[var(--color-border)]" />
+            <DropdownMenuItem asChild>
+              <Link
+                to="/profile"
+                className={cn(
+                  'flex items-center gap-2 cursor-pointer',
+                  location.pathname === '/profile' && 'text-[var(--color-accent)]',
+                )}
+              >
+                <UserCircle size={14} />
+                Profile
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link
+                to="/profile"
+                className="flex items-center gap-2 cursor-pointer"
+              >
+                <Sun size={14} />
+                Appearance
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-[var(--color-border)]" />
+            <DropdownMenuItem
+              onSelect={handleLogout}
+              aria-label="Sign out"
+              className="flex items-center gap-2 cursor-pointer text-[var(--color-muted)]"
+            >
+              <SignOut size={14} />
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Pin toggle — only shown when the viewport is wide enough to support it (≥1024px) */}
         {canPin && (

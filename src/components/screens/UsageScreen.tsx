@@ -6,6 +6,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
+import { ScreenHeader } from '@/components/layout/ScreenHeader'
 
 export { formatTokens }
 
@@ -270,7 +271,9 @@ export function UsageScreen() {
   const isEmpty = !isLoading && totalTokens === 0
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="absolute inset-0 flex flex-col">
+      <ScreenHeader title="Usage" />
+      <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
         {/* Header + Period selector */}
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -413,6 +416,7 @@ export function UsageScreen() {
             </Tabs>
           </>
         )}
+      </div>
       </div>
     </div>
   )

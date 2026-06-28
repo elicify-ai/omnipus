@@ -1,29 +1,26 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChatScreen } from '@/components/chat/ChatScreen'
-import { fetchSessionDetail, isApiError } from '@/lib/api'
+import { fetchSessionDetail, fetchWorkspaces, workspacesQueryKeys, isApiError } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 
 function SessionRoute() {
   const { sessionId } = Route.useParams()
+  const navigate = useNavigate()
   const attachToSession = useSessionStore((s) => s.attachToSession)
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
   const setAttachedContext = useSessionStore((s) => s.setAttachedContext)
-  // Track which session we last attached to so a re-render doesn't re-send
-  // the attach_session frame (causing a double replay).
+  const setActiveWorkspaceId = useWorkspacesStore((s) => s.setActiveWorkspaceId)
   const attachedRef = useRef<string | null>(null)
+  const redirectedRef = useRef(false)
 
-  // Loader pre-fetches session detail and activates the session synchronously
-  // in the Zustand store before this component renders. The useQuery below is
-  // kept for live data updates (e.g. agent_removed flag changing).
   const loaderData = Route.useLoaderData()
 
   const { data: detail } = useQuery({
     queryKey: ['session-detail', sessionId],
-    // Loader already fetched session detail — use it as initialData so
-    // the query doesn't fire a redundant network request on mount.
     initialData: loaderData ?? undefined,
     queryFn: () => fetchSessionDetail(sessionId),
     enabled: !!sessionId,
@@ -31,35 +28,66 @@ function SessionRoute() {
     staleTime: 10_000,
   })
 
-  // #250: When the WS is already open and we navigate to a session URL (e.g.
-  // "Open in Chat" from TaskDetailPanel, or a direct deep-link), trigger the
-  // full attach pipeline so the gateway replays the transcript and live tokens
-  // stream into this bucket. setActiveSession alone does NOT send attach_session;
-  // only attachToSession does (session.ts:108).
+  // Fetch active workspaces to verify the session's workspace_id.
+  const { data: workspaces = [] } = useQuery({
+    queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    staleTime: 30_000,
+    enabled: !!detail?.session?.workspace_id,
+  })
+
+  // Bug 2 fix: redirect /sessions/{id} into the session's workspace.
   //
-  // attachToSession is used when the WS is connected. When the WS is not yet
-  // open (cold load), setActiveSession is sufficient because WsLifecycle will
-  // call attachToSession once the connection opens.
+  // When a session has a workspace_id that resolves to an active workspace,
+  // bind the workspace, attach the session, and navigate to /workspaces/{wsId}/chat
+  // so WorkspaceTabContainer owns session lifecycle going forward.
   //
-  // When the session type is 'task', also restore the attached context so the
-  // Task title banner in ChatScreen stays visible after a navigation/refresh.
-  // setAttachedContext does not send a WS frame.
+  // The redirect writes sessionByWorkspace[wsId] = descriptor before navigating,
+  // so when WorkspaceTabContainer's enterWorkspaceChat fires on mount it sees
+  // descriptor.id === activeSessionId and is a no-op (handoff contract).
+  //
+  // Fallback: if workspace_id is absent, or the workspace doesn't exist in the
+  // active list, render ChatScreen inline (legacy behaviour).
   useEffect(() => {
     if (!detail?.session) return
+    if (redirectedRef.current) return
+
     const { session } = detail
     const { connection } = useConnectionStore.getState()
-
-    // After an agent handover the header/composer must reflect the LAST-ACTIVE
-    // agent (active_agent_id), not the session's creating agent (agent_id).
-    // Fall back to the creator when active_agent_id is absent (no handover).
     const headerAgentId = session.active_agent_id ?? session.agent_id
 
+    const wsId = session.workspace_id
+    const targetWorkspace = wsId ? workspaces.find((w) => w.id === wsId) : null
+
+    if (wsId && targetWorkspace) {
+      redirectedRef.current = true
+      // Bind workspace first so sessionByWorkspace writes land under the right key.
+      setActiveWorkspaceId(wsId)
+
+      if (connection && attachedRef.current !== session.id) {
+        attachedRef.current = session.id
+        attachToSession(session.id, session.type, session.title ?? undefined, headerAgentId)
+      } else if (!connection) {
+        setActiveSession(session.id, headerAgentId, null)
+      }
+
+      if (session.type === 'task') {
+        setAttachedContext('task', session.title)
+      }
+
+      void navigate({
+        to: '/workspaces/$workspaceId/chat',
+        params: { workspaceId: wsId },
+        replace: true,
+      })
+      return
+    }
+
+    // Fallback inline path — no workspace, or workspace not yet loaded.
     if (connection && attachedRef.current !== session.id) {
       attachedRef.current = session.id
       attachToSession(session.id, 'chat', undefined, headerAgentId)
     } else if (!connection) {
-      // WS not open — fall back to setActiveSession so the store is consistent.
-      // WsLifecycle sends attach_session once the WS connects (onConnected path).
       setActiveSession(session.id, headerAgentId, null)
     }
 
@@ -72,10 +100,20 @@ function SessionRoute() {
     detail?.session?.active_agent_id,
     detail?.session?.type,
     detail?.session?.title,
+    detail?.session?.workspace_id,
+    workspaces,
     attachToSession,
     setActiveSession,
     setAttachedContext,
+    setActiveWorkspaceId,
+    navigate,
   ])
+
+  // Suppress inline render while workspace redirect is in flight.
+  const wsId = detail?.session?.workspace_id
+  if (wsId && workspaces.find((w) => w.id === wsId)) {
+    return null
+  }
 
   return <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
 }
@@ -84,27 +122,11 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
   component: SessionRoute,
   loader: async ({ params }) => {
     // Pre-fetch session detail and activate the session in the Zustand store
-    // BEFORE the component renders. This guarantees that activeSessionId is
-    // set when the ChatScreen mounts — eliminating the race where a quickly
-    // typed message is routed by the gateway to a new orphan session instead
-    // of the URL session (because activeSessionId was still null from useEffect
-    // firing after the first render).
-    //
-    // When the session type is 'task', also set the attached context so
-    // ChatScreen renders the Task title banner on first mount. setAttachedContext
-    // does not send a WS frame.
-    //
-    // Note: the loader runs on every navigation to this route. Using
-    // setActiveSession here (not attachToSession) is intentional — the loader
-    // runs before the component mounts, so the WS connection state is not yet
-    // observable. The component's useEffect above handles the attach_session
-    // WS frame once the component is mounted and the connection is available.
+    // BEFORE the component renders.
     try {
       const detail = await fetchSessionDetail(params.sessionId)
       if (detail?.session) {
         const store = useSessionStore.getState()
-        // Prefer the last-active agent (post-handover) over the creating agent
-        // so the header/composer seed under the correct agent on cold load.
         const headerAgentId = detail.session.active_agent_id ?? detail.session.agent_id
         store.setActiveSession(detail.session.id, headerAgentId, null)
         if (detail.session.type === 'task') {
@@ -113,11 +135,6 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
       }
       return detail ?? null
     } catch (err) {
-      // Only swallow 404 — session genuinely does not exist, let ChatScreen
-      // render with an empty/default state.
-      // Re-throw everything else (ApiSchemaError, 5xx ApiError, network errors)
-      // so the route error boundary surfaces the real problem instead of
-      // silently hiding contract violations.
       if (isApiError(err) && err.status === 404) {
         return null
       }

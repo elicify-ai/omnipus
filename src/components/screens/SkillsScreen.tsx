@@ -46,6 +46,7 @@ import {
 import { useUiStore } from '@/store/ui'
 import { SkillBrowser } from '@/components/skills/SkillBrowser'
 import { McpServerModal } from '@/components/skills/McpServerModal'
+import { ScreenHeader } from '@/components/layout/ScreenHeader'
 
 export function SkillsScreen() {
   const { addToast } = useUiStore()
@@ -137,10 +138,11 @@ export function SkillsScreen() {
   }
 
   return (
-    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+    <div className="absolute inset-0 flex flex-col">
+      <ScreenHeader title="Skills & Tools" />
+    <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
     <div className="max-w-4xl mx-auto px-4 py-6">
       <div className="mb-6">
-        <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Skills & Tools</h1>
         <p className="text-sm text-[var(--color-muted)] mt-0.5">
           Manage agent capabilities — skills, MCP servers, and built-in tools.
         </p>
@@ -439,6 +441,7 @@ export function SkillsScreen() {
         </AlertDialogContent>
       </AlertDialog>
 
+    </div>
     </div>
     </div>
   )
