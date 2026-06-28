@@ -1,0 +1,857 @@
+/**
+ * CalendarScreen.test.tsx
+ *
+ * Integration tests for CalendarScreen — the integration hub for the workspace
+ * calendar (FullCalendar v6).
+ *
+ * Strategy (spec §9 — F-03): jsdom cannot render FullCalendar layout / compute
+ * pointer geometry, so FullCalendarView is mocked at the module boundary. The
+ * mock captures the props passed to it (including all event handlers) into a
+ * module-level variable. Each test invokes the captured handler with a synthetic
+ * `info` object and then asserts on API call arguments and toast calls.
+ *
+ * Covers spec §9 tests #13–#21:
+ *   #13 drop failure → revert() + error toast (variant 'error')           FR-010
+ *   #14 drop success → success toast (variant 'success') + Undo action    FR-010
+ *   #15 dateClick → opens CreateTaskSlideOver with initialDue             FR-012
+ *   #17 eventClick(task) → TaskDetailSlideOver opens                      FR-009
+ *   #18 eventClick(milestone) → MilestoneDatePopover opens                FR-009
+ *   #20 milestones query rejects → error toast "Couldn't load milestones" FR-016
+ *   #21 plus: eventDrop task-fire preserves sibling trigger.config keys   FR-008
+ *   plus: eventDrop milestone → updateMilestone(workspaceId, id, …)       FR-008
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { EventDropArg, EventClickArg } from '@fullcalendar/core'
+import type { DateClickArg } from '@fullcalendar/interaction'
+import { CalendarScreen } from './CalendarScreen'
+import type { CalendarEventExtProps } from '@/components/calendar/types'
+
+// ── 1. Mock FullCalendarView — capture props so tests can invoke handlers ──────
+
+/**
+ * Module-level capture. Tests read `capturedProps` to fire synthetic events.
+ * Reset in beforeEach.
+ */
+type CapturedProps = {
+  onEventDrop: ((arg: EventDropArg) => void) | null
+  onEventClick: ((arg: EventClickArg) => void) | null
+  onDateClick: ((arg: DateClickArg) => void) | null
+  onDatesSet: ((title: string, view: string) => void) | null
+}
+
+const capturedProps: CapturedProps = {
+  onEventDrop: null,
+  onEventClick: null,
+  onDateClick: null,
+  onDatesSet: null,
+}
+
+vi.mock('@/components/calendar/FullCalendarView', () => ({
+  FullCalendarView: (props: {
+    onEventDrop: (arg: EventDropArg) => void
+    onEventClick: (arg: EventClickArg) => void
+    onDateClick: (arg: DateClickArg) => void
+    onDatesSet?: (title: string, view: string) => void
+  }) => {
+    // Capture handlers on every render (they may change via useCallback deps).
+    capturedProps.onEventDrop = props.onEventDrop
+    capturedProps.onEventClick = props.onEventClick
+    capturedProps.onDateClick = props.onDateClick
+    capturedProps.onDatesSet = props.onDatesSet ?? null
+    // Increment render counter (used by waitForQueriesLoaded)
+    _renderCount++
+    return <div data-testid="fullcalendar-stub">FullCalendar stub</div>
+  },
+}))
+
+// ── 2. Mock CalendarToolbar — thin stub ───────────────────────────────────────
+
+vi.mock('@/components/calendar/CalendarToolbar', () => ({
+  CalendarToolbar: ({ onNewTask }: { onNewTask: () => void }) => (
+    <div data-testid="calendar-toolbar-stub">
+      <button data-testid="new-task-btn" onClick={onNewTask}>
+        New task
+      </button>
+    </div>
+  ),
+}))
+
+// ── 3. Mock slide-overs / popover with testid stubs that expose their state ───
+
+/**
+ * CreateTaskSlideOver stub: renders data-testid="create-task-slideover" with
+ * open state and the initialDue prop so tests can assert on them.
+ */
+vi.mock('@/components/workspaces/CreateTaskSlideOver', () => ({
+  CreateTaskSlideOver: ({
+    open,
+    initialDue,
+    workspaceId,
+    onOpenChange,
+  }: {
+    open: boolean
+    initialDue?: string
+    workspaceId: string
+    onOpenChange: (open: boolean) => void
+  }) => (
+    <div
+      data-testid="create-task-slideover"
+      data-open={String(open)}
+      data-initial-due={initialDue ?? ''}
+      data-workspace-id={workspaceId}
+    >
+      {open && (
+        <button onClick={() => onOpenChange(false)} data-testid="create-close-btn">
+          close
+        </button>
+      )}
+    </div>
+  ),
+}))
+
+/**
+ * TaskDetailSlideOver stub: renders data-testid="task-detail-slideover" with
+ * the task id when task is non-null.
+ */
+vi.mock('@/components/workspaces/TaskDetailSlideOver', () => ({
+  TaskDetailSlideOver: ({
+    task,
+    onClose,
+  }: {
+    task: { id: string; title: string } | null
+    onClose: () => void
+  }) => (
+    <div
+      data-testid="task-detail-slideover"
+      data-task-id={task?.id ?? ''}
+    >
+      {task && (
+        <>
+          <span data-testid="task-detail-title">{task.title}</span>
+          <button onClick={onClose} data-testid="task-detail-close">
+            close
+          </button>
+        </>
+      )}
+    </div>
+  ),
+}))
+
+/**
+ * MilestoneDatePopover stub: renders data-testid="milestone-date-popover" with
+ * the milestone id when milestone is non-null.
+ */
+vi.mock('@/components/calendar/MilestoneDatePopover', () => ({
+  MilestoneDatePopover: ({
+    milestone,
+    onClose,
+  }: {
+    milestone: { id: string; name: string; due_date: string | null } | null
+    onClose: () => void
+  }) => (
+    <div
+      data-testid="milestone-date-popover"
+      data-milestone-id={milestone?.id ?? ''}
+    >
+      {milestone && (
+        <>
+          <span data-testid="milestone-name">{milestone.name}</span>
+          <button onClick={onClose} data-testid="milestone-close">
+            close
+          </button>
+        </>
+      )}
+    </div>
+  ),
+}))
+
+// ── 4. Mock @/lib/api ─────────────────────────────────────────────────────────
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchTasks: vi.fn(),
+    fetchMilestones: vi.fn(),
+    updateTask: vi.fn(),
+    updateMilestone: vi.fn(),
+    tasksQueryKeys: {
+      list: (params?: Record<string, unknown>) => ['tasks', params ?? {}],
+    },
+    milestonesQueryKeys: {
+      list: (workspaceId: string) => ['milestones', workspaceId],
+    },
+  }
+})
+
+import {
+  fetchTasks,
+  fetchMilestones,
+  updateTask,
+  updateMilestone,
+} from '@/lib/api'
+
+// ── 5. Mock @/store/ui ────────────────────────────────────────────────────────
+
+const mockAddToast = vi.fn()
+
+vi.mock('@/store/ui', () => ({
+  useUiStore: (selector?: (s: { addToast: ReturnType<typeof vi.fn> }) => unknown) => {
+    const store = { addToast: mockAddToast }
+    return selector ? selector(store) : store
+  },
+}))
+
+// ── 6. Test setup file import ────────────────────────────────────────────────
+
+// @testing-library/jest-dom matchers (toBeInTheDocument, toHaveAttribute, etc.)
+// are wired via the project's setupFiles (src/test/setup.ts).
+
+// ── 7. Fixtures ───────────────────────────────────────────────────────────────
+
+const WORKSPACE_ID = 'ws-test-123'
+
+function makeTask(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'task-1',
+    title: 'Test Task',
+    action: 'llm' as const,
+    status: 'next' as const,
+    priority: 3,
+    workspace_id: WORKSPACE_ID,
+    owner: 'alice',
+    created_by: 'alice',
+    created_at: '2026-06-20T10:00:00Z',
+    updated_at: '2026-06-20T10:00:00Z',
+    surface: 'user' as const,
+    due: '2026-06-20T00:00:00Z',
+    ...overrides,
+  }
+}
+
+function makeMilestone(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'ms-1',
+    name: 'Beta Release',
+    workspace_id: WORKSPACE_ID,
+    due_date: '2026-06-25',
+    created_at: '2026-06-01T00:00:00Z',
+    updated_at: '2026-06-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+/**
+ * Build a synthetic EventDropArg for testing.
+ * The `revert` spy is returned alongside the arg so tests can assert it was called.
+ */
+function makeDropArg(
+  ext: CalendarEventExtProps,
+  newStart: Date,
+  oldStart: Date,
+): { arg: EventDropArg; revert: ReturnType<typeof vi.fn> } {
+  const revert = vi.fn()
+  const arg = {
+    event: {
+      start: newStart,
+      extendedProps: ext,
+    },
+    oldEvent: {
+      start: oldStart,
+    },
+    revert,
+  } as unknown as EventDropArg
+  return { arg, revert }
+}
+
+/**
+ * Build a synthetic EventClickArg.
+ */
+function makeClickArg(ext: CalendarEventExtProps): EventClickArg {
+  return {
+    event: {
+      extendedProps: ext,
+    },
+    jsEvent: { target: document.createElement('div') },
+  } as unknown as EventClickArg
+}
+
+/**
+ * Build a synthetic DateClickArg for an all-day click.
+ */
+function makeDateClickArg(date: Date, allDay = true): DateClickArg {
+  return {
+    date,
+    allDay,
+    jsEvent: { target: document.createElement('div') },
+  } as unknown as DateClickArg
+}
+
+// ── 7. Render helpers ─────────────────────────────────────────────────────────
+
+function makeClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  })
+}
+
+function renderCalendarScreen(client?: QueryClient) {
+  const qc = client ?? makeClient()
+  return render(
+    <QueryClientProvider client={qc}>
+      <CalendarScreen workspaceId={WORKSPACE_ID} />
+    </QueryClientProvider>,
+  )
+}
+
+// ── 8. Tests ──────────────────────────────────────────────────────────────────
+
+/**
+ * Wait for the CalendarScreen's queries to settle. We track render count via
+ * a ref that the mock increments so we can confirm the post-data re-render.
+ */
+let _renderCount = 0
+
+async function waitForQueriesLoaded() {
+  // Wait until both queries have been invoked AND at least 2 renders happened
+  // (initial + post-data). The captured handlers are updated on every render.
+  await waitFor(
+    () => {
+      expect(vi.mocked(fetchTasks)).toHaveBeenCalled()
+      expect(vi.mocked(fetchMilestones)).toHaveBeenCalled()
+      expect(_renderCount).toBeGreaterThanOrEqual(2)
+      expect(capturedProps.onEventClick).not.toBeNull()
+    },
+    { timeout: 5000 },
+  )
+}
+
+beforeEach(() => {
+  // Reset captured props
+  capturedProps.onEventDrop = null
+  capturedProps.onEventClick = null
+  capturedProps.onDateClick = null
+  capturedProps.onDatesSet = null
+
+  // Reset render counter
+  _renderCount = 0
+
+  // Reset mocks
+  vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
+  vi.mocked(fetchMilestones).mockResolvedValue([makeMilestone()])
+  vi.mocked(updateTask).mockResolvedValue(makeTask() as never)
+  vi.mocked(updateMilestone).mockResolvedValue(makeMilestone() as never)
+  mockAddToast.mockReset()
+})
+
+afterEach(() => {
+  vi.clearAllMocks()
+})
+
+// ── eventDrop: task-due → updateTask({ due: <local-midnight RFC3339 datetime> }) ─
+
+describe('CalendarScreen — eventDrop on a task-due event (spec §9 #13, #14)', () => {
+  it('calls updateTask with due as a local-midnight RFC3339 datetime', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #14 / FR-008 / US-3/AS-1
+    // BDD: Given a task-due event is dragged to a new day,
+    // When CalendarScreen.handleEventDrop fires,
+    // Then updateTask(taskId, { due }) is called with the dropped day's local-midnight
+    // instant as an RFC3339 datetime (TaskUpdateRequest.due is `format: date-time`;
+    // a date-only string is rejected 400). The read side maps it back to the local date.
+
+    vi.mocked(updateTask).mockResolvedValueOnce(makeTask() as never)
+    renderCalendarScreen()
+
+    // Wait for FullCalendarView stub to mount and capture props
+    await waitFor(() => expect(capturedProps.onEventDrop).not.toBeNull())
+
+    const newStart = new Date(2026, 5, 23, 0, 0, 0) // local Jun 23 2026
+    const oldStart = new Date(2026, 5, 20, 0, 0, 0)
+
+    const { arg } = makeDropArg(
+      {
+        kind: 'task-due',
+        taskId: 'task-1',
+        icon: 'Circle',
+        status: 'next',
+      },
+      newStart,
+      oldStart,
+    )
+
+    await act(async () => {
+      capturedProps.onEventDrop!(arg)
+    })
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledOnce())
+
+    const [calledId, calledData] = vi.mocked(updateTask).mock.calls[0]
+    expect(calledId).toBe('task-1')
+    // RFC3339 datetime derived from the SAME local Date → timezone-independent (FR-008/FR-015).
+    expect(calledData.due).toBe(new Date(2026, 5, 23, 0, 0, 0).toISOString())
+  })
+
+  it('shows a success toast with variant "success" and an Undo action', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #14 / FR-010 / US-3/AS-4
+    // BDD: Given updateTask resolves successfully,
+    // Then addToast is called with variant "success" and an action.label "Undo".
+
+    vi.mocked(updateTask).mockResolvedValueOnce(makeTask() as never)
+    renderCalendarScreen()
+
+    await waitFor(() => expect(capturedProps.onEventDrop).not.toBeNull())
+
+    const newStart = new Date(2026, 5, 23, 0, 0, 0)
+    const oldStart = new Date(2026, 5, 20, 0, 0, 0)
+
+    const { arg } = makeDropArg(
+      { kind: 'task-due', taskId: 'task-1', icon: 'Circle', status: 'next' },
+      newStart,
+      oldStart,
+    )
+
+    await act(async () => {
+      capturedProps.onEventDrop!(arg)
+    })
+
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalledOnce())
+
+    const toastArg = mockAddToast.mock.calls[0][0]
+    expect(toastArg.variant).toBe('success')
+    // Must include an Undo action (I-5/I-6)
+    expect(toastArg.action).toBeDefined()
+    expect(toastArg.action.label).toBe('Undo')
+    // Toast message must mention the date
+    expect(toastArg.message).toMatch(/rescheduled/i)
+  })
+
+  it('calls revert() and shows an error toast when updateTask rejects', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #13 / FR-010 / US-3/AS-5
+    // BDD: Given updateTask rejects (e.g. 500),
+    // When the drop is processed,
+    // Then arg.revert() is called AND addToast with variant "error" fires.
+
+    vi.mocked(updateTask).mockRejectedValueOnce(new Error('500 Internal Server Error'))
+    renderCalendarScreen()
+
+    await waitFor(() => expect(capturedProps.onEventDrop).not.toBeNull())
+
+    const newStart = new Date(2026, 5, 24, 0, 0, 0)
+    const oldStart = new Date(2026, 5, 20, 0, 0, 0)
+
+    const { arg, revert } = makeDropArg(
+      { kind: 'task-due', taskId: 'task-1', icon: 'Circle', status: 'next' },
+      newStart,
+      oldStart,
+    )
+
+    await act(async () => {
+      capturedProps.onEventDrop!(arg)
+    })
+
+    // Failure path: revert must be called (FR-010)
+    await waitFor(() => expect(revert).toHaveBeenCalledOnce())
+
+    // Error toast with variant 'error' (role=alert) (FR-010)
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalledOnce())
+    const toastArg = mockAddToast.mock.calls[0][0]
+    expect(toastArg.variant).toBe('error')
+  })
+})
+
+// ── eventDrop: task-fire → preserve sibling trigger.config keys ───────────────
+
+describe('CalendarScreen — eventDrop on a task-fire event (spec §9 #11)', () => {
+  it('preserves sibling config keys when updating a once-trigger (F-05)', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #11 / FR-008 / US-3/AS-2
+    // BDD: Given a once-trigger task with config { at_ms: <original>, foo: "bar" },
+    // When its fire chip is dropped to a new slot,
+    // Then updateTask sends { trigger: { type:"once", config:{ at_ms:<newMs>, foo:"bar" } } }
+    // (sibling keys like "foo" must be preserved — F-05).
+
+    const originalAtMs = new Date(2026, 5, 20, 9, 0, 0).getTime()
+    const taskWithTrigger = makeTask({
+      id: 'task-fire-1',
+      trigger: {
+        type: 'once',
+        config: { at_ms: originalAtMs, foo: 'bar' }, // sibling key to preserve
+      },
+      due: undefined,
+    })
+
+    vi.mocked(fetchTasks).mockResolvedValue([taskWithTrigger] as never)
+    vi.mocked(updateTask).mockResolvedValueOnce(taskWithTrigger as never)
+
+    renderCalendarScreen()
+
+    // Wait for query data to load so `tasks` inside the handler includes the trigger task
+    await waitForQueriesLoaded()
+
+    const newStart = new Date(2026, 5, 20, 14, 0, 0) // drag to 14:00 same day
+    const oldStart = new Date(2026, 5, 20, 9, 0, 0)
+
+    const { arg } = makeDropArg(
+      {
+        kind: 'task-fire',
+        taskId: 'task-fire-1',
+        icon: 'Clock',
+        status: 'next',
+      },
+      newStart,
+      oldStart,
+    )
+
+    await act(async () => {
+      capturedProps.onEventDrop!(arg)
+    })
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledOnce())
+
+    const [calledId, calledData] = vi.mocked(updateTask).mock.calls[0]
+    expect(calledId).toBe('task-fire-1')
+    // Must send the whole trigger (F-05)
+    expect(calledData.trigger).toBeDefined()
+    expect(calledData.trigger!.type).toBe('once')
+    // at_ms must equal the new start time
+    expect(calledData.trigger!.config.at_ms).toBe(newStart.getTime())
+    // Sibling key "foo" must be preserved (not dropped)
+    expect((calledData.trigger!.config as Record<string, unknown>).foo).toBe('bar')
+  })
+
+  it('differentiation: two different drops produce two different at_ms values', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #11
+    // Anti-hardcode: different drop targets produce different at_ms values.
+
+    const originalAtMs = new Date(2026, 5, 20, 9, 0, 0).getTime()
+    const taskWithTrigger = makeTask({
+      id: 'task-fire-diff',
+      trigger: { type: 'once', config: { at_ms: originalAtMs } },
+      due: undefined,
+    })
+
+    vi.mocked(fetchTasks).mockResolvedValue([taskWithTrigger] as never)
+    vi.mocked(updateTask)
+      .mockResolvedValueOnce(taskWithTrigger as never)
+      .mockResolvedValueOnce(taskWithTrigger as never)
+
+    const { unmount } = renderCalendarScreen()
+
+    await waitForQueriesLoaded()
+
+    // First drop: 14:00
+    const start1 = new Date(2026, 5, 20, 14, 0, 0)
+    const { arg: arg1 } = makeDropArg(
+      { kind: 'task-fire', taskId: 'task-fire-diff', icon: 'Clock' },
+      start1,
+      new Date(2026, 5, 20, 9, 0, 0),
+    )
+    await act(async () => { capturedProps.onEventDrop!(arg1) })
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledTimes(1))
+
+    const atMs1 = vi.mocked(updateTask).mock.calls[0][1].trigger!.config.at_ms as number
+
+    // Second drop: 16:00
+    const start2 = new Date(2026, 5, 20, 16, 0, 0)
+    const { arg: arg2 } = makeDropArg(
+      { kind: 'task-fire', taskId: 'task-fire-diff', icon: 'Clock' },
+      start2,
+      new Date(2026, 5, 20, 9, 0, 0),
+    )
+    await act(async () => { capturedProps.onEventDrop!(arg2) })
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledTimes(2))
+
+    const atMs2 = vi.mocked(updateTask).mock.calls[1][1].trigger!.config.at_ms as number
+
+    // Different drop targets must produce different at_ms values
+    expect(atMs1).not.toBe(atMs2)
+    expect(atMs1).toBe(start1.getTime())
+    expect(atMs2).toBe(start2.getTime())
+
+    unmount()
+  })
+})
+
+// ── eventDrop: milestone → updateMilestone(workspaceId, id, { due_date }) ─────
+
+describe('CalendarScreen — eventDrop on a milestone event (spec §9 #12)', () => {
+  it('calls updateMilestone(workspaceId, milestoneId, { due_date }) with 3 args (F-09)', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #12 / FR-008 / US-3/AS-3
+    // BDD: Given a milestone chip is dragged to 2026-06-28,
+    // When CalendarScreen.handleEventDrop fires,
+    // Then updateMilestone("ws-test-123", "ms-1", { due_date:"2026-06-28" }) is called.
+
+    vi.mocked(updateMilestone).mockResolvedValueOnce(makeMilestone() as never)
+    renderCalendarScreen()
+
+    await waitFor(() => expect(capturedProps.onEventDrop).not.toBeNull())
+
+    const newStart = new Date(2026, 5, 28, 0, 0, 0) // local Jun 28 2026
+    const oldStart = new Date(2026, 5, 25, 0, 0, 0)
+
+    const { arg } = makeDropArg(
+      {
+        kind: 'milestone',
+        milestoneId: 'ms-1',
+        icon: 'Flag',
+      },
+      newStart,
+      oldStart,
+    )
+
+    await act(async () => {
+      capturedProps.onEventDrop!(arg)
+    })
+
+    await waitFor(() => expect(vi.mocked(updateMilestone)).toHaveBeenCalledOnce())
+
+    const [wsId, msId, body] = vi.mocked(updateMilestone).mock.calls[0]
+    // Must use all 3 args (F-09)
+    expect(wsId).toBe(WORKSPACE_ID)
+    expect(msId).toBe('ms-1')
+    expect(body.due_date).toBe('2026-06-28')
+  })
+
+  it('differentiation: dragging to two different days sends two different due_date values', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #12
+    // Anti-hardcode check: milestone drops to different dates send different due_dates.
+
+    vi.mocked(updateMilestone)
+      .mockResolvedValueOnce(makeMilestone() as never)
+      .mockResolvedValueOnce(makeMilestone() as never)
+
+    const { unmount } = renderCalendarScreen()
+
+    await waitFor(() => expect(capturedProps.onEventDrop).not.toBeNull())
+
+    // Drop 1: Jun 28
+    const { arg: arg1 } = makeDropArg(
+      { kind: 'milestone', milestoneId: 'ms-1', icon: 'Flag' },
+      new Date(2026, 5, 28, 0, 0, 0),
+      new Date(2026, 5, 25, 0, 0, 0),
+    )
+    await act(async () => { capturedProps.onEventDrop!(arg1) })
+    await waitFor(() => expect(vi.mocked(updateMilestone)).toHaveBeenCalledTimes(1))
+
+    // Drop 2: Jul 1
+    const { arg: arg2 } = makeDropArg(
+      { kind: 'milestone', milestoneId: 'ms-1', icon: 'Flag' },
+      new Date(2026, 6, 1, 0, 0, 0),
+      new Date(2026, 5, 28, 0, 0, 0),
+    )
+    await act(async () => { capturedProps.onEventDrop!(arg2) })
+    await waitFor(() => expect(vi.mocked(updateMilestone)).toHaveBeenCalledTimes(2))
+
+    const due1 = vi.mocked(updateMilestone).mock.calls[0][2].due_date
+    const due2 = vi.mocked(updateMilestone).mock.calls[1][2].due_date
+    expect(due1).toBe('2026-06-28')
+    expect(due2).toBe('2026-07-01')
+    expect(due1).not.toBe(due2)
+
+    unmount()
+  })
+})
+
+// ── dateClick → opens CreateTaskSlideOver ────────────────────────────────────
+
+describe('CalendarScreen — dateClick opens CreateTaskSlideOver (spec §9 #15)', () => {
+  it('allDay dateClick opens CreateTaskSlideOver with initialDue="YYYY-MM-DDTHH:mm" (F-02)', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #15 / FR-012 / US-4/AS-1
+    // BDD: Given Month view and user clicks day 2026-06-22,
+    // When dateClick fires,
+    // Then CreateTaskSlideOver opens with initialDue = "2026-06-22T00:00".
+
+    renderCalendarScreen()
+
+    await waitFor(() => expect(capturedProps.onDateClick).not.toBeNull())
+
+    // Confirm create slide-over is closed initially
+    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'false')
+
+    const clickedDate = new Date(2026, 5, 22, 0, 0, 0) // Jun 22, local midnight
+
+    await act(async () => {
+      capturedProps.onDateClick!(makeDateClickArg(clickedDate, true))
+    })
+
+    // Slide-over must now be open
+    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'true')
+
+    // initialDue must be "2026-06-22T00:00" (local midnight datetime — F-02)
+    const initialDue = screen.getByTestId('create-task-slideover').getAttribute('data-initial-due')
+    expect(initialDue).toBe('2026-06-22T00:00')
+  })
+
+  it('workspaceId is passed to CreateTaskSlideOver', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #15 / FR-012
+    // BDD: The workspace ID must be passed to CreateTaskSlideOver.
+
+    renderCalendarScreen()
+
+    await waitFor(() => expect(capturedProps.onDateClick).not.toBeNull())
+
+    const clickedDate = new Date(2026, 5, 22, 0, 0, 0)
+
+    await act(async () => {
+      capturedProps.onDateClick!(makeDateClickArg(clickedDate, true))
+    })
+
+    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute(
+      'data-workspace-id',
+      WORKSPACE_ID,
+    )
+  })
+})
+
+// ── eventClick(task) → TaskDetailSlideOver ────────────────────────────────────
+
+describe('CalendarScreen — eventClick(task) opens TaskDetailSlideOver (spec §9 #17)', () => {
+  it('opens TaskDetailSlideOver with the matching task', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #17 / FR-009 / US-5/AS-1
+    // BDD: Given a task chip is clicked,
+    // When eventClick fires,
+    // Then TaskDetailSlideOver renders with that task's id/title.
+
+    const task = makeTask({ id: 'task-click-1', title: 'Clicked Task' })
+    vi.mocked(fetchTasks).mockResolvedValue([task] as never)
+
+    renderCalendarScreen()
+
+    // Wait for query data to load so `tasks` inside the click handler includes the task
+    await waitForQueriesLoaded()
+
+    // Confirm task-detail slide-over is closed initially (no task-id)
+    expect(screen.getByTestId('task-detail-slideover')).toHaveAttribute('data-task-id', '')
+
+    await act(async () => {
+      capturedProps.onEventClick!(makeClickArg({
+        kind: 'task-due',
+        taskId: 'task-click-1',
+        icon: 'Circle',
+        status: 'next',
+      }))
+    })
+
+    // Task detail must now show the task's id
+    await waitFor(() => {
+      expect(screen.getByTestId('task-detail-slideover')).toHaveAttribute(
+        'data-task-id',
+        'task-click-1',
+      )
+    })
+    expect(screen.getByTestId('task-detail-title')).toHaveTextContent('Clicked Task')
+  })
+
+  it('differentiation: clicking two different tasks opens the correct one each time', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #17
+    // Anti-hardcode: different task chips open different slides.
+
+    const task1 = makeTask({ id: 'task-a', title: 'Task A' })
+    const task2 = makeTask({ id: 'task-b', title: 'Task B' })
+    vi.mocked(fetchTasks).mockResolvedValue([task1, task2] as never)
+
+    renderCalendarScreen()
+
+    await waitForQueriesLoaded()
+
+    // Click task-a
+    await act(async () => {
+      capturedProps.onEventClick!(makeClickArg({
+        kind: 'task-due', taskId: 'task-a', icon: 'Circle', status: 'next',
+      }))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('task-detail-slideover')).toHaveAttribute('data-task-id', 'task-a')
+    })
+
+    // Close and click task-b
+    await act(async () => {
+      screen.getByTestId('task-detail-close').click()
+    })
+
+    await act(async () => {
+      capturedProps.onEventClick!(makeClickArg({
+        kind: 'task-due', taskId: 'task-b', icon: 'Circle', status: 'next',
+      }))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('task-detail-slideover')).toHaveAttribute('data-task-id', 'task-b')
+    })
+  })
+})
+
+// ── eventClick(milestone) → MilestoneDatePopover ─────────────────────────────
+
+describe('CalendarScreen — eventClick(milestone) opens MilestoneDatePopover (spec §9 #18)', () => {
+  it('opens MilestoneDatePopover with the matching milestone', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #18 / FR-009 / US-5/AS-2 / C-5
+    // BDD: Given a milestone chip is clicked,
+    // When eventClick fires,
+    // Then MilestoneDatePopover renders with that milestone's id/name.
+
+    const milestone = makeMilestone({ id: 'ms-click-1', name: 'Beta Launch' })
+    vi.mocked(fetchMilestones).mockResolvedValue([milestone] as never)
+
+    renderCalendarScreen()
+
+    // Wait for query data to load so `milestones` inside the click handler includes the milestone
+    await waitForQueriesLoaded()
+
+    // Confirm popover is closed initially
+    expect(screen.getByTestId('milestone-date-popover')).toHaveAttribute('data-milestone-id', '')
+
+    await act(async () => {
+      capturedProps.onEventClick!(makeClickArg({
+        kind: 'milestone',
+        milestoneId: 'ms-click-1',
+        icon: 'Flag',
+      }))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('milestone-date-popover')).toHaveAttribute(
+        'data-milestone-id',
+        'ms-click-1',
+      )
+    })
+    expect(screen.getByTestId('milestone-name')).toHaveTextContent('Beta Launch')
+  })
+})
+
+// ── Milestones query rejection → error toast ──────────────────────────────────
+
+describe('CalendarScreen — milestones query failure (spec §9 #21)', () => {
+  it('shows "Couldn\'t load milestones" error toast when fetchMilestones rejects', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #21 / FR-016 / I-2
+    // BDD: Given the milestones request returns 500,
+    // When the calendar loads,
+    // Then addToast is called with message "Couldn't load milestones" and variant "error".
+
+    vi.mocked(fetchMilestones).mockRejectedValueOnce(new Error('500 Server Error'))
+    // Tasks still load fine — the grid must show tasks + toast for milestones
+    vi.mocked(fetchTasks).mockResolvedValue([makeTask()] as never)
+
+    renderCalendarScreen()
+
+    await waitFor(() => {
+      const calls = mockAddToast.mock.calls
+      const milestonesFailCall = calls.find(
+        (call) => call[0].message === "Couldn't load milestones",
+      )
+      expect(milestonesFailCall).toBeDefined()
+    })
+
+    const toastCall = mockAddToast.mock.calls.find(
+      (call) => call[0].message === "Couldn't load milestones",
+    )
+    expect(toastCall![0].variant).toBe('error')
+
+    // The calendar grid stub must still render (degradation — not a full failure screen)
+    expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
+  })
+})

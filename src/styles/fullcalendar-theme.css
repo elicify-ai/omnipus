@@ -1,0 +1,502 @@
+/**
+ * fullcalendar-theme.css — Sovereign Deep theme for FullCalendar v6
+ *
+ * Spec: docs/internal/specs/workspace-calendar-fullcalendar-spec.md (v2), §3/§6/FR-017
+ *
+ * Design tokens referenced: var(--color-*) from src/styles/globals.css
+ *   --color-primary    : #0A0A0B  (Deep Space Black)
+ *   --color-secondary  : #E2E8F0  (Liquid Silver)
+ *   --color-accent     : #D4AF37  (Forge Gold)
+ *   --color-surface-0  : #0A0A0B
+ *   --color-surface-1  : #111113
+ *   --color-surface-2  : #1A1A1E
+ *   --color-surface-3  : #222228
+ *   --color-muted      : #9CA3AF
+ *   --color-border     : #2D3748
+ *   --font-body        : Inter
+ *   --font-headline    : Outfit
+ *
+ * v6 auto-injects FullCalendar's base CSS via JS — do NOT import main.css here.
+ */
+
+/* ------------------------------------------------------------------ */
+/* --fc-* variable overrides (maps FullCalendar vars → Sovereign Deep) */
+/* ------------------------------------------------------------------ */
+
+:root {
+  /* Grid structure */
+  --fc-border-color: var(--color-border);
+  --fc-page-bg-color: transparent;
+  --fc-neutral-bg-color: var(--color-surface-2);
+  --fc-neutral-text-color: var(--color-muted);
+
+  /* Today cell — subtle Forge-Gold tint (not blinding) */
+  --fc-today-bg-color: rgba(212, 175, 55, 0.07);
+
+  /* Now indicator: Forge Gold, NOT FullCalendar's default red (spec M-2 / FR-017) */
+  --fc-now-indicator-color: var(--color-accent);
+
+  /* Selection / drag highlight */
+  --fc-highlight-color: rgba(212, 175, 55, 0.12);
+
+  /* Event border removed — chip BG is the colour signal */
+  --fc-event-border-color: transparent;
+  --fc-event-bg-color: transparent;
+  --fc-event-text-color: #0a0a0b;
+
+  /* List view */
+  --fc-list-event-hover-bg-color: var(--color-surface-3);
+  --fc-list-event-dot-width: 8px;
+  --fc-list-event-dot-height: 8px;
+
+  /* Small-text */
+  --fc-small-font-size: 0.8em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Global calendar base                                                */
+/* ------------------------------------------------------------------ */
+
+.fc {
+  font-family: var(--font-body);
+  color: var(--color-secondary);
+}
+
+/* Remove heavy outer scrollgrid border */
+.fc-scrollgrid,
+.fc-scrollgrid-sync-table {
+  border-color: var(--color-border) !important;
+}
+
+.fc .fc-scrollgrid {
+  border-left-width: 0;
+  border-top-width: 0;
+}
+
+.fc-theme-standard td,
+.fc-theme-standard th {
+  border-color: var(--color-border);
+}
+
+/* ------------------------------------------------------------------ */
+/* Header row (weekday labels)                                         */
+/* ------------------------------------------------------------------ */
+
+.fc .fc-col-header-cell-cushion {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 4px;
+  text-decoration: none;
+}
+
+.fc .fc-col-header-cell-cushion:hover {
+  color: var(--color-secondary);
+  text-decoration: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Day cells — month grid                                              */
+/* ------------------------------------------------------------------ */
+
+.fc .fc-daygrid-day {
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+/* Today cell: gold tint applied via --fc-today-bg-color above */
+.fc .fc-day-today {
+  background-color: var(--fc-today-bg-color) !important;
+}
+
+/* Out-of-range days (previous/next month overflow) */
+.fc .fc-day-other {
+  background: rgba(255, 255, 255, 0.015) !important;
+}
+
+.fc .fc-day-other .fc-daygrid-day-number {
+  color: var(--color-muted);
+  opacity: 0.5;
+}
+
+/* Day cell top row: day number + "+" hover affordance (I-3) */
+.fc .fc-daygrid-day-top {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  padding: 2px 4px;
+  min-height: 28px;
+}
+
+.fc .fc-daygrid-day-number,
+.fc .fc-daygrid-day-top a {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
+.fc .fc-daygrid-day-number:hover {
+  color: var(--color-secondary);
+}
+
+/* Sovereign-Deep custom day-cell wrapper (rendered by DayCellRenderer) */
+.fc-sovereign-day-cell {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+/* Forge-Gold pill for today (I-3, §3 template pattern) */
+.fc-sovereign-today-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background-color: var(--color-accent);
+  color: #0a0a0b;
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-family: var(--font-body);
+}
+
+.fc-sovereign-day-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  font-family: var(--font-body);
+}
+
+/* ---------------------------------------------------------------------------
+ * Day-cell hover/focus: cursor + faint "+" affordance (I-3, US-4/AS-5)
+ *
+ * The `::after` pseudo-element on `.fc-daygrid-day.fc-day:not(.fc-day-other)`
+ * draws the "+" when the cell is hovered or focused. The overlay uses
+ * pointer-events: none so it never blocks underlying event clicks.
+ * --------------------------------------------------------------------------- */
+.fc .fc-daygrid-day:not(.fc-day-other) {
+  cursor: pointer;
+}
+
+.fc .fc-daygrid-day:not(.fc-day-other):hover,
+.fc .fc-daygrid-day:not(.fc-day-other):focus-within {
+  background-color: rgba(212, 175, 55, 0.05);
+}
+
+/* Faint "+" in the bottom-right corner of a hovered day cell */
+.fc .fc-daygrid-day:not(.fc-day-other):hover .fc-daygrid-day-bg::after,
+.fc .fc-daygrid-day:not(.fc-day-other):focus-within .fc-daygrid-day-bg::after {
+  content: '+';
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  opacity: 0.45;
+  pointer-events: none;
+  line-height: 1;
+}
+
+.fc .fc-daygrid-day-bg {
+  position: relative;
+}
+
+/* ------------------------------------------------------------------ */
+/* Event chips                                                         */
+/* ------------------------------------------------------------------ */
+
+/* Reset FullCalendar's default event wrapper styles */
+.fc .fc-event {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.fc .fc-daygrid-event {
+  margin: 1px 2px;
+  border-radius: 4px;
+}
+
+.fc .fc-event-main {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+
+/* Custom chip rendered by EventChip (FullCalendarView.tsx) */
+.fc-sovereign-chip {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Hover scale for drag affordance */
+.fc .fc-daygrid-event-harness:hover {
+  transform: scale(1.015);
+  transition: transform 0.12s ease;
+}
+
+.fc .fc-timegrid-event-harness:hover {
+  transform: scale(1.01);
+  transition: transform 0.1s ease;
+}
+
+/* ------------------------------------------------------------------ */
+/* Time-grid (week / day views)                                        */
+/* ------------------------------------------------------------------ */
+
+.fc .fc-timegrid-slot {
+  height: 2rem;
+  border-color: var(--color-border);
+}
+
+.fc .fc-timegrid-slot-minor {
+  border-top-style: dotted;
+  border-color: rgba(255, 255, 255, 0.04);
+}
+
+.fc .fc-timegrid-slot-label-cushion {
+  font-size: 0.7rem;
+  color: var(--color-muted);
+  font-weight: 400;
+}
+
+/* Now indicator line */
+.fc .fc-timegrid-now-indicator-line {
+  border-color: var(--color-accent);
+  border-width: 2px;
+}
+
+.fc .fc-timegrid-now-indicator-arrow {
+  border-color: var(--color-accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Touch targets: time-grid chips ≥ 44px on coarse-pointer devices    */
+/* (FR-007, I-4, WCAG 2.5.8)                                          */
+/* ------------------------------------------------------------------ */
+
+@media (pointer: coarse) {
+  .fc .fc-timegrid-event {
+    min-height: 44px !important;
+  }
+
+  .fc .fc-timegrid-slot {
+    height: 3rem;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* List view (Agenda)                                                  */
+/* ------------------------------------------------------------------ */
+
+.fc .fc-list-table {
+  border-color: var(--color-border);
+}
+
+.fc .fc-list-day-cushion,
+.fc .fc-list-day th {
+  background: var(--color-surface-2);
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-color: var(--color-border);
+}
+
+.fc .fc-list-event-title a {
+  color: var(--color-secondary);
+  text-decoration: none;
+}
+
+.fc .fc-list-event-title a:hover {
+  color: var(--color-accent);
+}
+
+.fc .fc-list-event-time {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+}
+
+.fc .fc-list-event:hover td {
+  background: var(--fc-list-event-hover-bg-color);
+  cursor: pointer;
+}
+
+/* Themed "no events" text in list view */
+.fc .fc-list-empty {
+  background: transparent;
+}
+
+.fc .fc-list-empty-cushion {
+  color: var(--color-muted);
+  font-size: 0.875rem;
+  font-family: var(--font-body);
+}
+
+/* ------------------------------------------------------------------ */
+/* "+N more" popover AND list-day-popover — themed dark (I-7)         */
+/*                                                                     */
+/* FullCalendar renders `.fc-popover` as a white box by default.      */
+/* Override with Sovereign-Deep surface/border/text so it does not    */
+/* float white on the dark UI. Escape / focus containment is handled  */
+/* by FullCalendar's built-in keyboard management (I-7).              */
+/* ------------------------------------------------------------------ */
+
+.fc .fc-popover {
+  background: var(--color-surface-2) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 6px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+  z-index: 200;
+}
+
+.fc .fc-popover-header {
+  background: var(--color-surface-3) !important;
+  color: var(--color-secondary) !important;
+  border-radius: 6px 6px 0 0 !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  padding: 4px 8px !important;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.fc .fc-popover-title {
+  color: var(--color-secondary) !important;
+}
+
+.fc .fc-popover-close {
+  color: var(--color-muted) !important;
+  opacity: 0.8;
+}
+
+.fc .fc-popover-close:hover {
+  color: var(--color-secondary) !important;
+  opacity: 1;
+}
+
+.fc .fc-popover-body {
+  padding: 6px 8px !important;
+  background: var(--color-surface-2) !important;
+  border-radius: 0 0 6px 6px !important;
+}
+
+/* Events inside the popover use the same chip renderer */
+.fc .fc-popover-body .fc-daygrid-event {
+  margin: 2px 0;
+}
+
+/* "more" link that opens the popover */
+.fc .fc-daygrid-more-link {
+  color: var(--color-accent) !important;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.fc .fc-daygrid-more-link:hover {
+  color: var(--color-accent-hover, #c49e2f) !important;
+}
+
+/* ------------------------------------------------------------------ */
+/* Selection highlight (dateClick / slot-select)                       */
+/* ------------------------------------------------------------------ */
+
+.fc .fc-highlight {
+  background: var(--fc-highlight-color) !important;
+  border-radius: 4px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Mirror event (selectMirror preview during slot-select drag)         */
+/* ------------------------------------------------------------------ */
+
+.fc .fc-event.fc-event-mirror {
+  opacity: 0.6;
+  background: rgba(212, 175, 55, 0.25) !important;
+  border: 1px dashed var(--color-accent) !important;
+}
+
+/* ------------------------------------------------------------------ */
+/* Shimmer keyframe for the loading overlay (I-1)                     */
+/* ------------------------------------------------------------------ */
+
+@keyframes fc-sovereign-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Dragging state                                                      */
+/* ------------------------------------------------------------------ */
+
+.fc .fc-event-dragging {
+  opacity: 0.75;
+  cursor: grabbing !important;
+}
+
+/* ------------------------------------------------------------------ */
+/* prefers-reduced-motion — disable all transitions/animations (M-5)   */
+/* ------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .fc-sovereign-wrapper,
+  .fc-sovereign-wrapper * {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .fc-event,
+  .fc * {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  /* Also suppress the shimmer overlay animation */
+  @keyframes fc-sovereign-shimmer {
+    0%, 100% {
+      background-position: 0 0;
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive: mobile two-row toolbar hook (I-9)                      */
+/* CalendarToolbar.tsx renders two rows; these rules tighten           */
+/* the calendar's own chrome to not clash at narrow widths.            */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 640px) {
+  .fc .fc-col-header-cell-cushion {
+    font-size: 0.65rem;
+    letter-spacing: 0;
+    padding: 4px 2px;
+  }
+
+  .fc .fc-daygrid-day-number,
+  .fc .fc-sovereign-day-number,
+  .fc .fc-sovereign-today-pill {
+    font-size: 0.65rem;
+    min-width: 20px;
+    min-height: 20px;
+  }
+
+  .fc-sovereign-chip span {
+    font-size: 0.6rem;
+  }
+}
