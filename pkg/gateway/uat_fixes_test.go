@@ -38,7 +38,7 @@ func TestFetchUpstreamModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		models, err := fetchUpstreamModels(srv.URL, "key")
+		models, err := fetchUpstreamModels(srv.URL, "key", nil)
 		require.NoError(t, err)
 		// Sorted, empty id dropped.
 		assert.Equal(t, []string{"a-model", "z-model"}, models)
@@ -50,7 +50,7 @@ func TestFetchUpstreamModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		_, err := fetchUpstreamModels(srv.URL, "key")
+		_, err := fetchUpstreamModels(srv.URL, "key", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "401")
 	})
@@ -62,7 +62,7 @@ func TestFetchUpstreamModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		_, err := fetchUpstreamModels(srv.URL, "key")
+		_, err := fetchUpstreamModels(srv.URL, "key", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Content-Type")
 	})
@@ -74,7 +74,7 @@ func TestFetchUpstreamModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		_, err := fetchUpstreamModels(srv.URL, "key")
+		_, err := fetchUpstreamModels(srv.URL, "key", nil)
 		require.Error(t, err)
 	})
 }
