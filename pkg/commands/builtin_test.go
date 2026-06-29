@@ -19,8 +19,7 @@ func findDefinitionByName(t *testing.T, defs []Definition, name string) Definiti
 
 // TestBuiltinHelpHandler_ReturnsFormattedMessage verifies /help lists the
 // canonical noun commands (not the hidden deprecated ones) for the caller's surface.
-// Updated from the pre-harmonization test: /show, /list, /use no longer appear;
-// /status, /agents, /config etc. appear on non-web surfaces.
+// Updated for D1: /skill and /use are hard-removed; the canonical count is now 10.
 func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 	defs := BuiltinDefinitions()
 	helpDef := findDefinitionByName(t, defs, "help")
@@ -28,7 +27,7 @@ func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 		t.Fatalf("/help handler should not be nil")
 	}
 
-	// Call from CLI surface — should see all 11 canonical commands.
+	// Call from CLI surface — should see the 10 canonical commands (skill removed).
 	var reply string
 	err := helpDef.Handler(context.Background(), Request{
 		Channel: "cli",
@@ -42,19 +41,19 @@ func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 		t.Fatalf("/help handler error: %v", err)
 	}
 
-	// Canonical commands must appear.
-	for _, name := range []string{"clear", "help", "model", "skill", "cancel", "agents", "tasks", "skills", "channels", "status", "config"} {
+	// Canonical commands must appear (10; /skill hard-removed per D1).
+	for _, name := range []string{"clear", "help", "model", "cancel", "agents", "tasks", "skills", "channels", "status", "config"} {
 		if !strings.Contains(reply, "/"+name) {
 			t.Errorf("/help cli: missing /%s in output:\n%s", name, reply)
 		}
 	}
 
-	// Hidden/deprecated commands must NOT appear.
-	for _, name := range []string{"show", "list", "switch", "check", "start", "use", "subagents", "reload"} {
+	// Removed and hidden/deprecated commands must NOT appear.
+	for _, name := range []string{"show", "list", "switch", "check", "start", "use", "skill", "subagents", "reload"} {
 		// Check that the name doesn't appear as a /name entry (it could appear in descriptions)
 		// We check for the usage-format "/<name> " or "/<name>\n" or "/<name> -"
 		if strings.Contains(reply, "/"+name+" -") || strings.HasPrefix(reply, "/"+name) {
-			t.Errorf("/help cli: deprecated /%s must not appear as a command in output:\n%s", name, reply)
+			t.Errorf("/help cli: /%s must not appear as a command in output:\n%s", name, reply)
 		}
 	}
 }
@@ -195,54 +194,30 @@ func TestBuiltinListSkills_UsesRuntimeSkillNames(t *testing.T) {
 	}
 }
 
-// TestBuiltinSkillCommand_PassthroughsToAgentLogic verifies /skill (renamed from /use)
-// passes through to agent logic since it has no backend handler.
-// The canonical command name is now "skill"; the old alias "use" resolves to the same def.
-func TestBuiltinSkillCommand_PassthroughsToAgentLogic(t *testing.T) {
+// TestBuiltinNoSkillOrUseCommand verifies that /skill and /use are NOT registered
+// in the built-in command set (D1 hard removal). The executor must return Passthrough
+// (no-op) for both — they are treated as unknown text by the executor, which means
+// they flow to the agent loop as normal messages (D4).
+func TestBuiltinNoSkillOrUseCommand(t *testing.T) {
 	defs := BuiltinDefinitions()
 	ex := NewExecutor(NewRegistry(defs), nil)
 
-	// Test via canonical name /skill
-	res := ex.Execute(context.Background(), Request{
-		Channel: "telegram",
-		Text:    "/skill shell run ls",
-	})
-	if res.Outcome != OutcomePassthrough {
-		t.Fatalf("/skill outcome=%v, want=%v", res.Outcome, OutcomePassthrough)
-	}
-	if res.Command != "skill" {
-		t.Fatalf("/skill command=%q, want=%q", res.Command, "skill")
-	}
-
-	// Test via back-compat alias /use — resolves to "skill" canonical.
-	resUse := ex.Execute(context.Background(), Request{
-		Channel: "telegram",
-		Text:    "/use shell run ls",
-	})
-	if resUse.Outcome != OutcomePassthrough {
-		t.Fatalf("/use outcome=%v, want=%v", resUse.Outcome, OutcomePassthrough)
-	}
-	if resUse.Command != "skill" {
-		t.Fatalf("/use command=%q, want=%q (canonical)", resUse.Command, "skill")
-	}
-}
-
-// TestBuiltinUseCommand_PassthroughsToAgentLogic is kept for legacy CI compatibility.
-// The old test expected Command=="use" but the canonical is now "skill".
-// This asserts the current correct behavior.
-func TestBuiltinUseCommand_PassthroughsToAgentLogic(t *testing.T) {
-	defs := BuiltinDefinitions()
-	ex := NewExecutor(NewRegistry(defs), nil)
-
-	res := ex.Execute(context.Background(), Request{
-		Channel: "telegram",
-		Text:    "/use shell run ls",
-	})
-	if res.Outcome != OutcomePassthrough {
-		t.Fatalf("/use outcome=%v, want=%v", res.Outcome, OutcomePassthrough)
-	}
-	// The resolved command name is the canonical "skill", not the alias "use".
-	if res.Command != "skill" {
-		t.Fatalf("/use command=%q, want=%q (canonical name after rename)", res.Command, "skill")
+	for _, text := range []string{"/skill shell run ls", "/use shell run ls"} {
+		res := ex.Execute(context.Background(), Request{
+			Channel: "telegram",
+			Text:    text,
+		})
+		if res.Outcome != OutcomePassthrough {
+			t.Errorf("%q: executor outcome=%v, want Passthrough (not a registered command, D1)", text, res.Outcome)
+		}
+		// Command field should be empty or the name parsed from the text; either
+		// way, neither "skill" nor "use" should be registered.
+		reg := NewRegistry(defs)
+		if _, found := reg.Lookup("skill"); found {
+			t.Error("Registry must not contain 'skill' command (D1 hard removal)")
+		}
+		if _, found := reg.Lookup("use"); found {
+			t.Error("Registry must not contain 'use' command (D1 hard removal)")
+		}
 	}
 }

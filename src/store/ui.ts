@@ -78,6 +78,11 @@ interface UiStore {
   // without the user having to click it directly.
   modelSelectorOpen: boolean
   setModelSelectorOpen: (open: boolean) => void
+
+  // Agent selector open state — set true by the /agents slash command so the
+  // chat-header agent picker opens without the user having to click it directly.
+  agentSelectorOpen: boolean
+  setAgentSelectorOpen: (open: boolean) => void
 }
 
 // Tracks auto-dismiss timers outside state so they can be cleared on manual dismiss
@@ -142,4 +147,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
 
   modelSelectorOpen: false,
   setModelSelectorOpen: (open) => set({ modelSelectorOpen: open }),
+
+  agentSelectorOpen: false,
+  setAgentSelectorOpen: (open) => set({ agentSelectorOpen: open }),
 }))

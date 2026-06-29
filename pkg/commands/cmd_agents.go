@@ -1,15 +1,17 @@
 package commands
 
-// agentsCommand is the new canonical /agents command.
-// Reuses the shared agentsHandler() (same as /show agents + /list agents).
-// Surfaces: CLI, Channel (not web — the Agents screen covers this in the SPA).
+// agentsCommand is the canonical /agents command.
+// Surfaces: Web, CLI, Channel.
+// On web: DeliveryClient — the SPA opens the in-header agent selector
+// (mirroring how /model opens the model selector). The backend Handler is
+// still called for CLI/Channel surfaces where it lists agents as a text reply.
 func agentsCommand() Definition {
 	return Definition{
 		Name:        "agents",
-		Description: "List registered agents",
+		Description: "Switch the active agent",
 		Usage:       "/agents",
-		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
-		Delivery:    DeliveryAgent,
+		Surfaces:    []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
+		Delivery:    DeliveryClient,
 		Handler:     agentsHandler(),
 	}
 }

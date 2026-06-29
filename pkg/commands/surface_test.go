@@ -40,17 +40,17 @@ func TestAllowsSurface_EmptySurfaces(t *testing.T) {
 // TestAllowsSurface_Membership verifies membership check.
 func TestAllowsSurface_Membership(t *testing.T) {
 	def := Definition{
-		Name:     "agents",
+		Name:     "testcmd",
 		Surfaces: []Surface{SurfaceCLI, SurfaceChannel},
 	}
 	if def.AllowsSurface(SurfaceWeb) {
-		t.Error("agents must NOT allow SurfaceWeb")
+		t.Error("testcmd must NOT allow SurfaceWeb")
 	}
 	if !def.AllowsSurface(SurfaceCLI) {
-		t.Error("agents must allow SurfaceCLI")
+		t.Error("testcmd must allow SurfaceCLI")
 	}
 	if !def.AllowsSurface(SurfaceChannel) {
-		t.Error("agents must allow SurfaceChannel")
+		t.Error("testcmd must allow SurfaceChannel")
 	}
 }
 
@@ -65,14 +65,14 @@ func TestExecutor_SurfaceGating(t *testing.T) {
 		want     Outcome
 	}
 	rows := []row{
-		// agents is CLI+Channel only
-		{"agents", []Surface{SurfaceCLI, SurfaceChannel}, "webchat", OutcomePassthrough},
-		{"agents", []Surface{SurfaceCLI, SurfaceChannel}, "cli", OutcomeHandled},
-		{"agents", []Surface{SurfaceCLI, SurfaceChannel}, "telegram", OutcomeHandled},
-		// clear is all surfaces
-		{"clear", []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel}, "webchat", OutcomeHandled},
 		// config is CLI+Channel only
 		{"config", []Surface{SurfaceCLI, SurfaceChannel}, "webchat", OutcomePassthrough},
+		{"config", []Surface{SurfaceCLI, SurfaceChannel}, "cli", OutcomeHandled},
+		{"config", []Surface{SurfaceCLI, SurfaceChannel}, "telegram", OutcomeHandled},
+		// clear is all surfaces
+		{"clear", []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel}, "webchat", OutcomeHandled},
+		// tasks is CLI+Channel only
+		{"tasks", []Surface{SurfaceCLI, SurfaceChannel}, "webchat", OutcomePassthrough},
 		// empty surfaces = all
 		{"legacy", nil, "webchat", OutcomeHandled},
 	}
@@ -141,13 +141,13 @@ func TestExecutor_WebAliasOfNonWebCommandPassesThrough(t *testing.T) {
 	}
 }
 
-// TestRegistry_AliasResolution verifies all rename pairs (TDD #5, DS-2, US-1/AS-2).
+// TestRegistry_AliasResolution verifies alias pairs (TDD #5, DS-2).
+// Note: the "skill"/"use" pair is removed (D1 hard removal).
 func TestRegistry_AliasResolution(t *testing.T) {
 	reg := NewRegistry(BuiltinDefinitions())
 
 	pairs := []struct{ canonical, alias string }{
 		{"tasks", "subagents"},
-		{"skill", "use"},
 		{"config", "reload"},
 	}
 	for _, p := range pairs {
@@ -171,6 +171,13 @@ func TestRegistry_AliasResolution(t *testing.T) {
 			t.Errorf("expected canonical name %q, got %q", p.canonical, canonDef.Name)
 		}
 	}
+
+	// Confirm "skill" and "use" are NOT in the registry (D1 hard removal).
+	for _, name := range []string{"skill", "use"} {
+		if _, found := reg.Lookup(name); found {
+			t.Errorf("Registry.Lookup(%q) must return not-found (D1 hard removal)", name)
+		}
+	}
 }
 
 // TestCancelHasNoAliases is maintained alongside cmd_cancel_test.go (TDD #6, US-1/AS-4).
@@ -192,36 +199,38 @@ func TestCancelHasNoAliasesInBuiltins(t *testing.T) {
 // that feeds it. The full mapper is tested in pkg/gateway/rest_commands_test.go.
 
 // TestHelpFormatter_SurfaceFilter tests the surface filtering and hidden exclusion (TDD #8, US-5/AS-2).
+// Updated for D1 (skill removed) and D7/D9 (agents+skills now on web).
 func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 	defs := BuiltinDefinitions()
 
-	// Web surface: should show only the 5 web-capable commands.
+	// Web surface: clear, help, model, cancel, agents, skills = 6 commands.
 	webHelp := formatHelpMessage(defs, SurfaceWeb)
-	for _, name := range []string{"clear", "help", "model", "skill", "cancel"} {
+	for _, name := range []string{"clear", "help", "model", "cancel", "agents", "skills"} {
 		if !containsWord(webHelp, "/"+name) {
 			t.Errorf("web help must contain /%s, got:\n%s", name, webHelp)
 		}
 	}
-	// Non-web commands must not appear in web help.
-	for _, name := range []string{"agents", "tasks", "skills", "channels", "status", "config"} {
+	// Non-web-only commands must not appear in web help (tasks, channels, status, config).
+	for _, name := range []string{"tasks", "channels", "status", "config"} {
 		if containsWord(webHelp, "/"+name) {
-			t.Errorf("web help must NOT contain /%s, got:\n%s", name, webHelp)
+			t.Errorf("web help must NOT contain /%s (CLI/Channel only), got:\n%s", name, webHelp)
 		}
 	}
-	// Hidden/deprecated commands must not appear at all.
-	for _, name := range []string{"show", "list", "switch", "check", "start", "subagents", "reload", "use"} {
-		if containsWord(webHelp, "/"+name) {
-			t.Errorf("web help must NOT contain hidden /%s, got:\n%s", name, webHelp)
+	// Removed and hidden/deprecated commands must not appear as their own command entry.
+	// We check "/<name> -" (the help-line format used by formatHelpMessage) to avoid
+	// false substring matches (e.g. "/skill" inside "/skills - List installed skills").
+	for _, name := range []string{"show", "list", "switch", "check", "start", "subagents", "reload", "use", "skill"} {
+		if containsWord(webHelp, "/"+name+" -") {
+			t.Errorf("web help must NOT contain /%s as a command entry (removed/hidden), got:\n%s", name, webHelp)
 		}
 	}
 
-	// CLI surface: should show all 11 canonical commands.
+	// CLI surface: should show all 10 canonical commands.
 	cliHelp := formatHelpMessage(defs, SurfaceCLI)
 	allCanonical := []string{
 		"clear",
 		"help",
 		"model",
-		"skill",
 		"cancel",
 		"agents",
 		"tasks",
@@ -239,6 +248,7 @@ func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 
 // TestChannelRegistrationFilter verifies that only Channel-surfaced, non-Hidden defs
 // would pass the filter used in manager.StartAll (TDD #9, US-5/AS-1).
+// Updated for D1 (skill removed) and D7/D9 (agents+skills gain SurfaceChannel).
 func TestChannelRegistrationFilter(t *testing.T) {
 	allDefs := BuiltinDefinitions()
 	channelDefs := make([]Definition, 0, len(allDefs))
@@ -252,14 +262,11 @@ func TestChannelRegistrationFilter(t *testing.T) {
 		channelDefs = append(channelDefs, def)
 	}
 
-	// The channel set must include all 11 canonical non-web-only commands.
-	// Note: web-only commands are excluded; all-surface commands (clear/help/model/skill/cancel)
-	// are included because they also include SurfaceChannel.
+	// The channel set must include all 10 canonical commands.
 	wantInChannel := []string{
 		"clear",
 		"help",
 		"model",
-		"skill",
 		"cancel",
 		"agents",
 		"tasks",
@@ -275,6 +282,13 @@ func TestChannelRegistrationFilter(t *testing.T) {
 	for _, want := range wantInChannel {
 		if !names[want] {
 			t.Errorf("channel menu should include %q, but it doesn't. menu: %v", want, names)
+		}
+	}
+
+	// Removed commands must be excluded.
+	for _, banned := range []string{"skill", "use"} {
+		if names[banned] {
+			t.Errorf("removed command %q must not appear in channel registration (D1)", banned)
 		}
 	}
 
@@ -304,6 +318,7 @@ func containsSubstring(s, sub string) bool {
 }
 
 // TestBuiltinDefinitions_CountsAndSurfaces verifies the complete set.
+// Updated for D1 (skill removed: 11→10 canonical) and D7/D9 (agents+skills gain SurfaceWeb: 5→6 web).
 func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 	defs := BuiltinDefinitions()
 
@@ -317,9 +332,9 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		}
 	}
 
-	// 11 canonical + 5 hidden/deprecated = 16 total
-	if canonical != 11 {
-		t.Errorf("expected 11 canonical commands, got %d", canonical)
+	// 10 canonical (skill removed D1) + 5 hidden/deprecated = 15 total
+	if canonical != 10 {
+		t.Errorf("expected 10 canonical commands (skill removed D1), got %d", canonical)
 	}
 	if hidden != 5 {
 		t.Errorf(
@@ -328,56 +343,52 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		)
 	}
 
-	// Web surface: 5 commands
+	// Web surface: clear, help, model, cancel, agents, skills = 6 (D7/D9 added agents+skills)
 	webCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceWeb) {
 			webCount++
 		}
 	}
-	if webCount != 5 {
-		t.Errorf("expected 5 web-surface canonical commands, got %d", webCount)
+	if webCount != 6 {
+		t.Errorf("expected 6 web-surface canonical commands (D7/D9: agents+skills added), got %d", webCount)
 	}
 
-	// CLI/Channel surface: all 11 canonical
+	// CLI/Channel surface: all 10 canonical
 	cliCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceCLI) {
 			cliCount++
 		}
 	}
-	if cliCount != 11 {
-		t.Errorf("expected 11 CLI-surface canonical commands, got %d", cliCount)
+	if cliCount != 10 {
+		t.Errorf("expected 10 CLI-surface canonical commands (skill removed D1), got %d", cliCount)
 	}
 }
 
-// TestDeliveryFields verifies FR-007: client delivery for clear/help/model/cancel;
-// agent delivery for skill.
+// TestDeliveryFields verifies delivery modes for the canonical commands.
+// Updated for D1 (skill removed), D7 (agents=client), D9 (skills=client).
 func TestDeliveryFields(t *testing.T) {
 	defs := BuiltinDefinitions()
 	reg := NewRegistry(defs)
 
-	clientCmds := []string{"clear", "help", "model", "cancel"}
+	// Client-delivered commands (web SPA handles them locally).
+	clientCmds := []string{"clear", "help", "model", "cancel", "agents", "skills"}
 	for _, name := range clientCmds {
 		def, ok := reg.Lookup(name)
 		if !ok {
 			t.Errorf("%q not found", name)
 			continue
 		}
-		if def.Delivery != DeliveryClient {
-			t.Errorf("%q: Delivery=%q, want %q", name, def.Delivery, DeliveryClient)
+		if def.EffectiveDelivery() != DeliveryClient {
+			t.Errorf("%q: Delivery=%q, want %q", name, def.EffectiveDelivery(), DeliveryClient)
 		}
 	}
 
-	agentCmds := []string{"skill"}
-	for _, name := range agentCmds {
-		def, ok := reg.Lookup(name)
-		if !ok {
-			t.Errorf("%q not found", name)
-			continue
-		}
-		if def.Delivery != DeliveryAgent {
-			t.Errorf("%q: Delivery=%q, want %q", name, def.Delivery, DeliveryAgent)
+	// Confirm /skill and /use are absent (D1).
+	for _, name := range []string{"skill", "use"} {
+		if _, found := reg.Lookup(name); found {
+			t.Errorf("Registry must not contain %q (D1 hard removal)", name)
 		}
 	}
 }
