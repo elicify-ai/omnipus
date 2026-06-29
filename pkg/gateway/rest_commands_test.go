@@ -79,7 +79,8 @@ func parseCommandsResponse(t *testing.T, w *httptest.ResponseRecorder) []gen.Sla
 	return cmds
 }
 
-// TestHandleListCommands_Web verifies surface=web returns exactly 5 commands (SC-001, TDD #10).
+// TestHandleListCommands_Web verifies surface=web returns exactly 6 commands.
+// Post ADR-026: /skill+/use removed; /skills and /agents gained the web surface.
 func TestHandleListCommands_Web(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "web", true)
@@ -89,16 +90,17 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 5 {
-		t.Errorf("web: expected 5 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 6 {
+		t.Errorf("web: expected 6 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	wantNames := map[string]bool{
 		"clear":  true,
 		"help":   true,
 		"model":  true,
-		"skill":  true,
 		"cancel": true,
+		"agents": true,
+		"skills": true,
 	}
 	for _, c := range cmds {
 		if !wantNames[c.Name] {
@@ -111,7 +113,8 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_CLI verifies surface=cli returns all 11 commands (SC-002, TDD #10).
+// TestHandleListCommands_CLI verifies surface=cli returns all 10 canonical commands.
+// Post ADR-026: /skill (singular) removed, so the canonical set is 10 (was 11).
 func TestHandleListCommands_CLI(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "cli", true)
@@ -121,15 +124,14 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 11 {
-		t.Errorf("cli: expected 11 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 10 {
+		t.Errorf("cli: expected 10 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	allCanonical := []string{
 		"clear",
 		"help",
 		"model",
-		"skill",
 		"cancel",
 		"agents",
 		"tasks",
@@ -149,7 +151,7 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_Channel verifies surface=channel returns all 11 commands (SC-002, TDD #10).
+// TestHandleListCommands_Channel verifies surface=channel returns all 10 commands.
 func TestHandleListCommands_Channel(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "channel", true)
@@ -159,8 +161,8 @@ func TestHandleListCommands_Channel(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 11 {
-		t.Errorf("channel: expected 11 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 10 {
+		t.Errorf("channel: expected 10 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 }
 
@@ -175,9 +177,9 @@ func TestHandleListCommands_DefaultSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 5 {
+	if len(cmds) != 6 {
 		t.Errorf(
-			"default surface (web): expected 5 commands, got %d: %v",
+			"default surface (web): expected 6 commands, got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -194,9 +196,9 @@ func TestHandleListCommands_UnknownSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 5 {
+	if len(cmds) != 6 {
 		t.Errorf(
-			"unknown surface should default to web (5 cmds), got %d: %v",
+			"unknown surface should default to web (6 cmds), got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -235,8 +237,16 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 	w := doCommandsRequest(t, api, "web", true)
 	cmds := parseCommandsResponse(t, w)
 
-	clientCmds := map[string]bool{"clear": true, "help": true, "model": true, "cancel": true}
-	agentCmds := map[string]bool{"skill": true}
+	// Post ADR-026: all web commands are client-delivered (D7/D9 made /agents and
+	// /skills client commands that open the in-header selector / filter the menu).
+	clientCmds := map[string]bool{
+		"clear":  true,
+		"help":   true,
+		"model":  true,
+		"cancel": true,
+		"agents": true,
+		"skills": true,
+	}
 
 	for _, c := range cmds {
 		if clientCmds[c.Name] {
@@ -247,10 +257,6 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 					c.Delivery,
 					gen.SlashCommandDeliveryClient,
 				)
-			}
-		} else if agentCmds[c.Name] {
-			if c.Delivery != gen.SlashCommandDeliveryAgent {
-				t.Errorf("%q: Delivery=%q, want %q", c.Name, c.Delivery, gen.SlashCommandDeliveryAgent)
 			}
 		}
 	}
