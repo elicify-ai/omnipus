@@ -129,6 +129,26 @@ describe('MermaidDiagram', () => {
     errSpy.mockRestore()
   })
 
+  it('paints synchronously from cache on remount (no loading flash, no re-render)', async () => {
+    // A finalized message can remount when the virtualized list re-renders. The
+    // SVG cache must make the second mount render the stored diagram synchronously
+    // instead of flashing "Rendering diagram..." and calling mermaid.render again.
+    renderFn.mockResolvedValue({ svg: '<svg id="cached-diagram"/>' })
+    const MermaidDiagram = await importDiagram()
+
+    const first = render(<MermaidDiagram code={DIAGRAM} />)
+    await waitFor(() => expect(document.querySelector('#cached-diagram')).toBeInTheDocument())
+    expect(renderFn).toHaveBeenCalledTimes(1)
+    first.unmount()
+
+    // Remount with the SAME code → cache hit: SVG is present on first paint and
+    // mermaid.render is NOT called again.
+    render(<MermaidDiagram code={DIAGRAM} />)
+    expect(screen.queryByText(/Rendering diagram/i)).toBeNull()
+    expect(document.querySelector('#cached-diagram')).toBeInTheDocument()
+    expect(renderFn).toHaveBeenCalledTimes(1)
+  })
+
   it('re-renders when the code prop changes', async () => {
     renderFn.mockResolvedValue({ svg: '<svg id="first"/>' })
     const MermaidDiagram = await importDiagram()
