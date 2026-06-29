@@ -15,3 +15,5 @@ properties:
     type: string
     description: Human-readable error message. Present only when success=false.
     example: no API key configured for this provider
+  validation:
+    $ref: './ProviderValidation.yaml'

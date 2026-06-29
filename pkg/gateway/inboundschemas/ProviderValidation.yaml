@@ -1,0 +1,33 @@
+title: ProviderValidation
+description: >
+  Classified outcome of a provider API-key validation probe.
+  Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse
+  (onboarding probe), and OperationResult (Settings Test) whenever a key probe
+  was performed. Absent on non-probing responses (e.g. model-only edits).
+type: object
+additionalProperties: false
+required:
+  - outcome
+properties:
+  outcome:
+    type: string
+    enum:
+      - valid
+      - invalid_key
+      - no_credit
+      - unreachable
+      - restricted
+    description: >
+      Classified result of the key probe.
+      "valid" — the key was accepted by the upstream provider.
+      "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save.
+      "no_credit" — the key is valid but the account has insufficient credit or quota.
+      "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient.
+      "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
+    example: valid
+  message:
+    type: string
+    description: >
+      Plain-English, user-facing message for the outcome (curated; never the raw provider body).
+      Present for non-valid outcomes. Parameterized by provider name.
+    example: "Your OpenRouter key works, but the account has no credit. Add funds in your OpenRouter dashboard to use it."

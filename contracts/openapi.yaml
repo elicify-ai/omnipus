@@ -418,6 +418,8 @@ components:
       $ref: ./components/schemas/TaskTrigger.yaml
     ProviderUpdateRequest:
       $ref: ./components/schemas/ProviderUpdateRequest.yaml
+    ProviderValidation:
+      $ref: ./components/schemas/ProviderValidation.yaml
     AppStatePatchRequest:
       $ref: ./components/schemas/AppStatePatchRequest.yaml
     SkillInstallRequest:

@@ -79,3 +79,5 @@ properties:
     description: >
       Fatal error message when status is "error". Absent for connected/disconnected providers.
     example: "upstream returned 403 Forbidden"
+  validation:
+    $ref: './ProviderValidation.yaml'
