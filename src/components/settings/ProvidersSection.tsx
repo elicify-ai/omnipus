@@ -17,6 +17,8 @@ import { useUiStore } from '@/store/ui'
 import { PROVIDER_HINTS } from '@/lib/constants'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
 import { ReAuthDialog } from './ReAuthDialog'
+import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
+import type { ProviderValidation } from '@/lib/api/generated/openapi-types'
 
 // A pending provider edit captured before the re-auth prompt; replayed once the
 // consent token is minted. `key` carries an API-key change (empty string = no
@@ -36,6 +38,10 @@ export function ProvidersSection() {
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({})
+  // Per-provider validation warning from the last save or test result.
+  // Cleared when the expanded form is closed or a new save begins.
+  const [saveValidation, setSaveValidation] = useState<Record<string, ProviderValidation | undefined>>({})
+  const [testValidation, setTestValidation] = useState<Record<string, ProviderValidation | undefined>>({})
   // Draft model-slug catalogue for a 'manual' provider while its config form is
   // open, plus the slug currently being typed into the add field. Seeded from
   // provider.models when the editor mounts.
@@ -59,14 +65,25 @@ export function ProvidersSection() {
       // An empty key means "don't change the key" (manual-models-only save), so
       // pass undefined for api_key in that case to leave the stored key intact.
       configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models),
-    onSuccess: (_, { id }) => {
+    onSuccess: (provider, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
-      addToast({ message: 'Provider saved', variant: 'success' })
-      setExpandedProvider(null)
+      const validation = provider.validation
+      if (validation && validation.outcome !== 'valid') {
+        // Non-blocking warning: save succeeded but the key has a warning outcome.
+        // Keep the form open so the user can see the banner; do NOT close it.
+        setSaveValidation((prev) => ({ ...prev, [id]: validation }))
+        addToast({ message: 'Provider saved', variant: 'success' })
+      } else {
+        setSaveValidation((prev) => ({ ...prev, [id]: undefined }))
+        addToast({ message: 'Provider saved', variant: 'success' })
+        setExpandedProvider(null)
+      }
       setPending(null)
       setApiKeys((prev) => ({ ...prev, [id]: '' }))
     },
     onError: (err: Error) => {
+      // 422 (InvalidKey) throws here — surface as a blocking error. The form
+      // stays open so the user can correct the key and retry (after re-auth).
       addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
       setPending(null)
     },
@@ -77,6 +94,8 @@ export function ProvidersSection() {
   // IntegrationsSection's gated-save flow. `models` is sent only for manual
   // providers (undefined leaves the catalogue unchanged).
   const requestChange = (id: string, key: string, models?: string[]) => {
+    // Clear any prior save validation warning before a new save attempt.
+    setSaveValidation((prev) => ({ ...prev, [id]: undefined }))
     setPending({ id, key, models })
     setReauthOpen(true)
   }
@@ -107,9 +126,15 @@ export function ProvidersSection() {
 
   const handleTest = async (id: string) => {
     setTesting((prev) => ({ ...prev, [id]: true }))
+    setTestValidation((prev) => ({ ...prev, [id]: undefined }))
     try {
       const result = await testProvider(id)
       if (result.success) {
+        // Capture any warning validation from the test result (e.g. no_credit,
+        // unreachable, restricted). success=true means the key is not invalid.
+        if (result.validation && result.validation.outcome !== 'valid') {
+          setTestValidation((prev) => ({ ...prev, [id]: result.validation }))
+        }
         addToast({ message: 'Connection successful', variant: 'success' })
         queryClient.invalidateQueries({ queryKey: ['providers'] })
       } else {
@@ -233,6 +258,18 @@ export function ProvidersSection() {
                   </div>
                 </div>
 
+                {/* Test-validation warning banner — shown after the Test button
+                    returns a non-blocking outcome (no_credit, unreachable,
+                    restricted). Cleared on the next test. */}
+                {testValidation[provider.id] && (
+                  <div className="px-4 pb-3">
+                    <ProviderValidationBanner
+                      validation={testValidation[provider.id]}
+                      data-testid={`test-validation-banner-${provider.id}`}
+                    />
+                  </div>
+                )}
+
                 {/* Expanded config form */}
                 {isExpanded && (
                   <div className="border-t border-[var(--color-border)] px-4 py-4 space-y-3 bg-[var(--color-surface-2)]">
@@ -346,12 +383,23 @@ export function ProvidersSection() {
                         </div>
                     )})()}
 
+                    {/* Save-validation warning banner — shown after a successful
+                        save whose key had a non-blocking outcome (no_credit,
+                        unreachable, restricted). Cleared on cancel. */}
+                    {saveValidation[provider.id] && (
+                      <ProviderValidationBanner
+                        validation={saveValidation[provider.id]}
+                        data-testid={`save-validation-banner-${provider.id}`}
+                      />
+                    )}
+
                     <div className="flex justify-end gap-2">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => {
                           setExpandedProvider(null)
+                          setSaveValidation((prev) => ({ ...prev, [provider.id]: undefined }))
                           setDraftModels((prev) => {
                             const { [provider.id]: _drop, ...rest } = prev
                             return rest

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -966,105 +965,18 @@ func TestHandleOnboardingProbeProvider_WrongMethod(t *testing.T) {
 	_ = context.Background
 }
 
-// --- testProviderAuth unit tests ---
-
-// TestTestProviderAuth exercises the discrimination logic:
-//   - 401/403 always reject.
-//   - 400 rejects ONLY when the body carries a credential marker (e.g. Gemini's
-//     API_KEY_INVALID); a generic 400 (bad model slug) stays a PASS.
-//   - any other status (200, 404, 422, 429, 5xx) is inconclusive → nil.
-//
-// BDD: Given an httptest server returning a specific status code + body,
-// When testProviderAuth is called,
-// Then it returns a non-nil error only for explicit credential rejections.
-func TestTestProviderAuth(t *testing.T) {
-	cases := []struct {
-		name       string
-		statusCode int
-		body       string
-		wantErr    bool
-	}{
-		{"auth rejected 401", http.StatusUnauthorized, `{"error":"test"}`, true},
-		{"auth rejected 403", http.StatusForbidden, `{"error":"test"}`, true},
-		{"success 200", http.StatusOK, `{"choices":[]}`, false},
-		// Generic 400 (bad model / malformed request) without a credential marker
-		// must NOT be misread as a bad key — it stays a PASS.
-		{"generic 400 (bad model)", http.StatusBadRequest, `{"error":{"message":"model not found"}}`, false},
-		// 400 with a Gemini-style credential marker IS an auth rejection.
-		{
-			"400 with key marker (Gemini)",
-			http.StatusBadRequest,
-			`{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"API key not valid. Please pass a valid API key."}}`,
-			true,
-		},
-		{"400 with api_key_invalid marker", http.StatusBadRequest, `{"error":{"reason":"API_KEY_INVALID"}}`, true},
-		{"not found 404", http.StatusNotFound, `{"error":"test"}`, false},
-		{"unprocessable 422", http.StatusUnprocessableEntity, `{"error":"test"}`, false},
-		{"rate limited 429", http.StatusTooManyRequests, `{"error":"test"}`, false},
-		{"server error 500", http.StatusInternalServerError, `{"error":"test"}`, false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tc.statusCode)
-				_, _ = w.Write([]byte(tc.body))
-			}))
-			defer srv.Close()
-
-			err := testProviderAuth(context.Background(), srv.URL, "test-api-key", "test-model", nil)
-			if tc.wantErr {
-				require.Error(t, err, "status %d / body %q must produce an auth error", tc.statusCode, tc.body)
-				assert.Contains(t, err.Error(), strconv.Itoa(tc.statusCode),
-					"error should mention the status code")
-				// SEC-16: the client-facing message must NEVER echo the raw upstream
-				// body (which could reflect the key) or the API key itself.
-				assert.NotContains(t, err.Error(), "test-api-key",
-					"client-facing error must not embed the API key")
-				assert.NotContains(t, err.Error(), "INVALID_ARGUMENT",
-					"client-facing error must not embed the raw upstream body")
-			} else {
-				require.NoError(t, err, "status %d / body %q must NOT produce an auth error", tc.statusCode, tc.body)
-			}
-		})
-	}
-}
-
-// TestTestProviderAuth_NetworkError verifies that a transport-level failure
-// (e.g. connection refused, timeout) is not misread as an auth failure.
-//
-// BDD: Given a URL that cannot be reached (port 1 is effectively unreachable),
-// When testProviderAuth is called,
-// Then it returns nil (not an auth error).
-func TestTestProviderAuth_NetworkError(t *testing.T) {
-	// Use a server that immediately closes to simulate a network error.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Hijack and close to force a transport error.
-		hj, ok := w.(http.Hijacker)
-		if !ok {
-			// Fall back: write nothing and let the client get a connection reset.
-			return
-		}
-		conn, _, _ := hj.Hijack()
-		conn.Close()
-	}))
-	defer srv.Close()
-
-	err := testProviderAuth(context.Background(), srv.URL, "test-api-key", "test-model", nil)
-	require.NoError(t, err, "network/transport error must not be reported as auth failure")
-}
-
 // --- HandleOnboardingProbeProvider auth-gap tests ---
 
 // TestHandleOnboardingProbeProvider_PublicModelsBadKey is the primary regression
-// test for the OpenRouter auth gap: GET /models returns 200 with a model list
-// (the provider's /models endpoint is public) but POST /chat/completions returns
-// 401 (the key is invalid). The probe must respond success=false with a clear
-// message that the key was rejected.
+// test for the OpenRouter auth gap (SC-003): GET /models returns 200 with a model
+// list (the provider's /models endpoint is public) but POST /chat/completions returns
+// 401 (the key is invalid). The probe must respond success=false with a curated
+// user-facing message and a validation.outcome of "invalid_key".
 //
 // BDD: Given a mock upstream where GET /models → 200 but POST /chat/completions → 401,
 // When POST /api/v1/onboarding/probe-provider {"id":"openai","api_key":"bad-key"} is called,
-// Then the response is HTTP 200 with {"success":false,"error":"<auth-rejection message>"}.
+// Then the response is HTTP 200 with success=false, validation.outcome="invalid_key",
+// and the error does NOT contain the raw upstream body or the API key (SEC-16).
 func TestHandleOnboardingProbeProvider_PublicModelsBadKey(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -1096,13 +1008,22 @@ func TestHandleOnboardingProbeProvider_PublicModelsBadKey(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// SC-003: probe must fail when /chat/completions returns 401.
 	assert.Equal(t, false, resp["success"],
 		"probe must fail when /chat/completions returns 401")
+	// The error field carries the curated FR-7 message (SEC-16: no raw body, no key).
 	errStr, _ := resp["error"].(string)
 	assert.Contains(t, errStr, "rejected",
-		"error must state the key was rejected")
-	assert.Contains(t, errStr, "401",
-		"error must include the upstream status code")
+		"error must state the key was rejected (curated message)")
+	assert.NotContains(t, errStr, "bad-key",
+		"SEC-16: error must not contain the API key")
+	assert.NotContains(t, errStr, "Invalid API key",
+		"SEC-16: error must not echo the raw upstream body")
+	// validation field must carry outcome=invalid_key (R-B / FR-013).
+	validationMap, _ := resp["validation"].(map[string]any)
+	require.NotNil(t, validationMap, "validation object must be present")
+	assert.Equal(t, "invalid_key", validationMap["outcome"],
+		"validation.outcome must be invalid_key for a 401")
 }
 
 // TestHandleOnboardingProbeProvider_PublicModelsGoodKey verifies the happy path:
@@ -1321,8 +1242,12 @@ func TestProviderTest_ConfiguredAPIBaseRejectsBadKey(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, false, resp["success"], "401 from the configured base must reject")
 	errStr, _ := resp["error"].(string)
-	assert.Contains(t, errStr, "rejected")
-	assert.Contains(t, errStr, "401")
+	// The centralized validator returns a curated message (SEC-16: raw status codes
+	// must not appear in client-facing responses; only the classified outcome does).
+	assert.Contains(t, errStr, "rejected",
+		"error must state the key was rejected (curated FR-7 message)")
+	assert.NotContains(t, errStr, "401",
+		"SEC-16: raw HTTP status code must not appear in client-facing error")
 	assert.NotContains(t, errStr, "sk-bad", "client error must never echo the API key")
 }
 
