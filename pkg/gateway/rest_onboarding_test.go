@@ -3,11 +3,14 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +23,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
+	"github.com/dapicom-ai/omnipus/pkg/security"
 	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
@@ -960,4 +964,477 @@ func TestHandleOnboardingProbeProvider_WrongMethod(t *testing.T) {
 	}
 	// silence unused context import if minimized tests drop it
 	_ = context.Background
+}
+
+// --- testProviderAuth unit tests ---
+
+// TestTestProviderAuth exercises the discrimination logic:
+//   - 401/403 always reject.
+//   - 400 rejects ONLY when the body carries a credential marker (e.g. Gemini's
+//     API_KEY_INVALID); a generic 400 (bad model slug) stays a PASS.
+//   - any other status (200, 404, 422, 429, 5xx) is inconclusive → nil.
+//
+// BDD: Given an httptest server returning a specific status code + body,
+// When testProviderAuth is called,
+// Then it returns a non-nil error only for explicit credential rejections.
+func TestTestProviderAuth(t *testing.T) {
+	cases := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantErr    bool
+	}{
+		{"auth rejected 401", http.StatusUnauthorized, `{"error":"test"}`, true},
+		{"auth rejected 403", http.StatusForbidden, `{"error":"test"}`, true},
+		{"success 200", http.StatusOK, `{"choices":[]}`, false},
+		// Generic 400 (bad model / malformed request) without a credential marker
+		// must NOT be misread as a bad key — it stays a PASS.
+		{"generic 400 (bad model)", http.StatusBadRequest, `{"error":{"message":"model not found"}}`, false},
+		// 400 with a Gemini-style credential marker IS an auth rejection.
+		{
+			"400 with key marker (Gemini)",
+			http.StatusBadRequest,
+			`{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"API key not valid. Please pass a valid API key."}}`,
+			true,
+		},
+		{"400 with api_key_invalid marker", http.StatusBadRequest, `{"error":{"reason":"API_KEY_INVALID"}}`, true},
+		{"not found 404", http.StatusNotFound, `{"error":"test"}`, false},
+		{"unprocessable 422", http.StatusUnprocessableEntity, `{"error":"test"}`, false},
+		{"rate limited 429", http.StatusTooManyRequests, `{"error":"test"}`, false},
+		{"server error 500", http.StatusInternalServerError, `{"error":"test"}`, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			err := testProviderAuth(context.Background(), srv.URL, "test-api-key", "test-model", nil)
+			if tc.wantErr {
+				require.Error(t, err, "status %d / body %q must produce an auth error", tc.statusCode, tc.body)
+				assert.Contains(t, err.Error(), strconv.Itoa(tc.statusCode),
+					"error should mention the status code")
+				// SEC-16: the client-facing message must NEVER echo the raw upstream
+				// body (which could reflect the key) or the API key itself.
+				assert.NotContains(t, err.Error(), "test-api-key",
+					"client-facing error must not embed the API key")
+				assert.NotContains(t, err.Error(), "INVALID_ARGUMENT",
+					"client-facing error must not embed the raw upstream body")
+			} else {
+				require.NoError(t, err, "status %d / body %q must NOT produce an auth error", tc.statusCode, tc.body)
+			}
+		})
+	}
+}
+
+// TestTestProviderAuth_NetworkError verifies that a transport-level failure
+// (e.g. connection refused, timeout) is not misread as an auth failure.
+//
+// BDD: Given a URL that cannot be reached (port 1 is effectively unreachable),
+// When testProviderAuth is called,
+// Then it returns nil (not an auth error).
+func TestTestProviderAuth_NetworkError(t *testing.T) {
+	// Use a server that immediately closes to simulate a network error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Hijack and close to force a transport error.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			// Fall back: write nothing and let the client get a connection reset.
+			return
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	err := testProviderAuth(context.Background(), srv.URL, "test-api-key", "test-model", nil)
+	require.NoError(t, err, "network/transport error must not be reported as auth failure")
+}
+
+// --- HandleOnboardingProbeProvider auth-gap tests ---
+
+// TestHandleOnboardingProbeProvider_PublicModelsBadKey is the primary regression
+// test for the OpenRouter auth gap: GET /models returns 200 with a model list
+// (the provider's /models endpoint is public) but POST /chat/completions returns
+// 401 (the key is invalid). The probe must respond success=false with a clear
+// message that the key was rejected.
+//
+// BDD: Given a mock upstream where GET /models → 200 but POST /chat/completions → 401,
+// When POST /api/v1/onboarding/probe-provider {"id":"openai","api_key":"bad-key"} is called,
+// Then the response is HTTP 200 with {"success":false,"error":"<auth-rejection message>"}.
+func TestHandleOnboardingProbeProvider_PublicModelsBadKey(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			// Public /models — returns 200 regardless of auth (the OpenRouter pattern).
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"openrouter/auto"},{"id":"openai/gpt-4"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			// Auth gate — rejects the bad key.
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"Invalid API key"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	tmpDir := t.TempDir()
+	api := newOnboardingTestAPI(t, tmpDir, nil)
+	require.False(t, api.onboardingMgr.IsComplete())
+
+	body := `{"id":"openai","api_key":"bad-key","endpoint":"` + upstream.URL + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleOnboardingProbeProvider(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["success"],
+		"probe must fail when /chat/completions returns 401")
+	errStr, _ := resp["error"].(string)
+	assert.Contains(t, errStr, "rejected",
+		"error must state the key was rejected")
+	assert.Contains(t, errStr, "401",
+		"error must include the upstream status code")
+}
+
+// TestHandleOnboardingProbeProvider_PublicModelsGoodKey verifies the happy path:
+// GET /models → 200 and POST /chat/completions → 200 → success=true with models.
+//
+// BDD: Given a mock upstream where both GET /models and POST /chat/completions → 200,
+// When POST /api/v1/onboarding/probe-provider {"id":"openai","api_key":"good-key"} is called,
+// Then the response is HTTP 200 with {"success":true,"models":[...]}.
+func TestHandleOnboardingProbeProvider_PublicModelsGoodKey(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"openrouter/auto"},{"id":"openai/gpt-4"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hello"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	tmpDir := t.TempDir()
+	api := newOnboardingTestAPI(t, tmpDir, nil)
+	require.False(t, api.onboardingMgr.IsComplete())
+
+	body := `{"id":"openai","api_key":"good-key","endpoint":"` + upstream.URL + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleOnboardingProbeProvider(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, true, resp["success"])
+	models, _ := resp["models"].([]any)
+	assert.NotEmpty(t, models, "models list must be returned on success")
+}
+
+// --- SEC-24 SSRF tests (fix #1) ---
+
+// captureSlog redirects the default slog logger to an in-memory buffer for the
+// duration of the test and returns the buffer plus a restore func. Used to assert
+// that an observable WARN was emitted on a skip/inconclusive branch.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+// TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint proves the SSRF
+// gate: a probe whose caller-supplied `endpoint` points at an internal/loopback
+// address is rejected with success=false "endpoint not allowed" BEFORE any
+// outbound call — closing the pre-onboarding, unauthenticated SSRF hole.
+//
+// BDD: Given an SSRF checker with no internal allowlist,
+// When POST /onboarding/probe-provider has endpoint=http://127.0.0.1:<port>/,
+// Then HTTP 200 with {"success":false,"error":"endpoint not allowed"} and the
+//
+//	upstream is never contacted.
+func TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint(t *testing.T) {
+	var hits int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++ // must remain 0 — the SSRF gate blocks before any request
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4"}]}`))
+	}))
+	defer upstream.Close()
+
+	tmpDir := t.TempDir()
+	api := newOnboardingTestAPI(t, tmpDir, nil)
+	// Real SSRF checker, no internal allowlist → loopback (httptest binds 127.0.0.1) is blocked.
+	api.ssrfChecker = security.NewSSRFChecker(nil)
+	require.False(t, api.onboardingMgr.IsComplete())
+
+	body := `{"id":"openai","api_key":"test-key","endpoint":"` + upstream.URL + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleOnboardingProbeProvider(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["success"], "internal endpoint must be rejected")
+	assert.Equal(t, "endpoint not allowed", resp["error"])
+	assert.Zero(t, hits, "upstream must never be contacted when SSRF blocks the endpoint")
+}
+
+// TestHandleOnboardingProbeProvider_SSRFAllowsAllowlistedLoopback verifies the
+// gate does not over-block: when 127.0.0.1 is explicitly allowlisted the probe
+// proceeds and reaches the (loopback) upstream, returning the model list.
+func TestHandleOnboardingProbeProvider_SSRFAllowsAllowlistedLoopback(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hi"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	tmpDir := t.TempDir()
+	api := newOnboardingTestAPI(t, tmpDir, nil)
+	// Allowlist loopback so the legitimate httptest target is permitted.
+	api.ssrfChecker = security.NewSSRFChecker([]string{"127.0.0.1", "::1"})
+
+	body := `{"id":"openai","api_key":"test-key","endpoint":"` + upstream.URL + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleOnboardingProbeProvider(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, true, resp["success"], "allowlisted loopback must be permitted")
+}
+
+// --- /providers/{id}/test tests (fixes #3, #4, #5) ---
+
+// newProviderTestAPI builds a restAPI wired with an unlocked credential store and a
+// config.json on disk, suitable for exercising POST /providers/{id}/test. The
+// onboarding manager is left incomplete so the endpoint serves without auth.
+func newProviderTestAPI(t *testing.T, tmpDir, configJSON string) *restAPI {
+	t.Helper()
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", []byte(configJSON), 0o600))
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	return newOnboardingTestAPI(t, tmpDir, al)
+}
+
+// TestProviderTest_HonorsConfiguredAPIBase proves fix #3: POST /providers/{id}/test
+// probes the provider entry's configured `api_base`, NOT the vendor default. The
+// test points api_base at a local httptest server and asserts the auth probe hit
+// THAT server (the openai vendor default api.openai.com is never contacted).
+//
+// BDD: Given a provider entry with api_base=http://127.0.0.1:<port> and a plaintext key,
+// When POST /api/v1/providers/openai/test is called,
+// Then the /chat/completions probe hits the configured base and success=true.
+func TestProviderTest_HonorsConfiguredAPIBase(t *testing.T) {
+	var probedPath string
+	var probedHost bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probedHost = true
+		probedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hi"}}]}`))
+	}))
+	defer upstream.Close()
+
+	tmpDir := t.TempDir()
+	// Provider entry: openai protocol, plaintext api_keys, and a CONFIGURED api_base
+	// pointing at the local server (a regional / self-hosted gateway override).
+	cfgJSON := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[` +
+		`{"provider":"openai","model":"gpt-4","model_name":"gpt-4",` +
+		`"api_keys":["sk-test"],"api_base":"` + upstream.URL + `"}]}`
+	api := newProviderTestAPI(t, tmpDir, cfgJSON)
+	// Allowlist loopback so the SSRF gate permits the legitimate test server.
+	api.ssrfChecker = security.NewSSRFChecker([]string{"127.0.0.1", "::1"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
+	w := httptest.NewRecorder()
+	api.HandleProviders(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, true, resp["success"], "probe against configured api_base must succeed (body=%s)", w.Body.String())
+	assert.True(t, probedHost, "the auth probe must hit the CONFIGURED api_base, not the vendor default")
+	assert.True(t, strings.HasSuffix(probedPath, "/chat/completions"),
+		"the probe must POST to /chat/completions on the configured base, got %q", probedPath)
+}
+
+// TestProviderTest_ConfiguredAPIBaseRejectsBadKey proves the configured-base probe
+// actually validates the key: an api_base server that returns 401 yields success=false.
+func TestProviderTest_ConfiguredAPIBaseRejectsBadKey(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"bad key"}`))
+	}))
+	defer upstream.Close()
+
+	tmpDir := t.TempDir()
+	cfgJSON := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[` +
+		`{"provider":"openai","model":"gpt-4","model_name":"gpt-4",` +
+		`"api_keys":["sk-bad"],"api_base":"` + upstream.URL + `"}]}`
+	api := newProviderTestAPI(t, tmpDir, cfgJSON)
+	api.ssrfChecker = security.NewSSRFChecker([]string{"127.0.0.1", "::1"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
+	w := httptest.NewRecorder()
+	api.HandleProviders(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["success"], "401 from the configured base must reject")
+	errStr, _ := resp["error"].(string)
+	assert.Contains(t, errStr, "rejected")
+	assert.Contains(t, errStr, "401")
+	assert.NotContains(t, errStr, "sk-bad", "client error must never echo the API key")
+}
+
+// TestProviderTest_SSRFBlocksInternalAPIBase proves fix #1 on the /test path: a
+// configured api_base pointing at an internal address is blocked before any
+// outbound call when SSRF is active and the address is not allowlisted.
+func TestProviderTest_SSRFBlocksInternalAPIBase(t *testing.T) {
+	var hits int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	tmpDir := t.TempDir()
+	cfgJSON := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[` +
+		`{"provider":"openai","model":"gpt-4","model_name":"gpt-4",` +
+		`"api_keys":["sk-test"],"api_base":"` + upstream.URL + `"}]}`
+	api := newProviderTestAPI(t, tmpDir, cfgJSON)
+	// No allowlist → loopback api_base is blocked.
+	api.ssrfChecker = security.NewSSRFChecker(nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
+	w := httptest.NewRecorder()
+	api.HandleProviders(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["success"])
+	assert.Equal(t, "endpoint not allowed", resp["error"])
+	assert.Zero(t, hits, "SSRF must block before any outbound call to the internal api_base")
+}
+
+// TestProviderTest_CredentialVaultUnreadable proves fix #5: when the provider
+// entry references an api_key_ref that the credential vault cannot resolve, the
+// response is a DISTINCT "vault could not be read" message — not the misleading
+// "no API key configured".
+//
+// BDD: Given a provider entry with api_key_ref but a LOCKED credential store,
+// When POST /api/v1/providers/openai/test is called,
+// Then success=false with an error mentioning the credential vault could not be read.
+func TestProviderTest_CredentialVaultUnreadable(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgJSON := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[` +
+		`{"provider":"openai","model":"gpt-4","model_name":"gpt-4",` +
+		`"api_key_ref":"openai_API_KEY"}]}`
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", []byte(cfgJSON), 0o600))
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	// Build the API WITHOUT an unlocked credential store: a LOCKED store makes
+	// resolveCredentialRef fail, exercising the present-but-unresolvable branch.
+	lockedStore := credentials.NewStore(tmpDir + "/credentials.json")
+	api := &restAPI{
+		agentLoop:     al,
+		homePath:      tmpDir,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		taskStore:     task.New(tmpDir + "/tasks"),
+		credStore:     lockedStore,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
+	w := httptest.NewRecorder()
+	api.HandleProviders(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["success"])
+	errStr, _ := resp["error"].(string)
+	assert.Contains(t, errStr, "credential vault could not be read",
+		"unresolvable ref must surface the vault-read error, not 'no API key configured'")
+	assert.NotContains(t, errStr, "no API key configured")
+}
+
+// TestHandleOnboardingProbeProvider_EmptyModelsWarns proves fix #4: when the
+// upstream /models list is empty the probe still returns success=true (the catalog
+// is simply empty) but the skip is observable via a WARN — instead of a silent pass
+// that would defeat the auth-verification intent for empty-catalog providers.
+func TestHandleOnboardingProbeProvider_EmptyModelsWarns(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`)) // empty model list
+	}))
+	defer upstream.Close()
+
+	logBuf := captureSlog(t)
+
+	tmpDir := t.TempDir()
+	api := newOnboardingTestAPI(t, tmpDir, nil)
+	api.ssrfChecker = security.NewSSRFChecker([]string{"127.0.0.1", "::1"})
+
+	body := `{"id":"openai","api_key":"test-key","endpoint":"` + upstream.URL + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleOnboardingProbeProvider(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// Empty catalog is not a hard failure — success stays true (don't block onboarding).
+	assert.Equal(t, true, resp["success"], "empty model list must not hard-fail the probe")
+	// But the skip must be observable.
+	assert.Contains(t, logBuf.String(), "provider returned no models",
+		"an empty model list must emit an observable WARN that the key was not verified")
 }

@@ -1149,8 +1149,17 @@ func inferProviderName(provider, model string) string {
 // provider's /models endpoint. Returns model IDs sorted alphabetically, or nil on error.
 // Used to populate the model dropdown with all models the provider supports, not just
 // the ones explicitly configured in config.json.
-func fetchUpstreamModels(baseURL, apiKey string) ([]string, error) {
+//
+// SEC-24: when checker is non-nil the request is made through the SSRF-safe HTTP client
+// so that a redirect to an internal/loopback/metadata address is blocked at dial time
+// (the caller is expected to have already CheckURL'd the initial baseURL). A nil checker
+// uses a plain client and is intended only for tests that point at a local httptest server.
+func fetchUpstreamModels(baseURL, apiKey string, checker *security.SSRFChecker) ([]string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
+	if checker != nil {
+		client = checker.SafeClient()
+		client.Timeout = 10 * time.Second
+	}
 	req, err := http.NewRequest("GET", strings.TrimSuffix(baseURL, "/")+"/models", nil)
 	if err != nil {
 		return nil, err
@@ -1203,6 +1212,143 @@ func fetchUpstreamModels(baseURL, apiKey string) ([]string, error) {
 	}
 	sort.Strings(models)
 	return models, nil
+}
+
+// authRejectionMarkers are case-insensitive substrings that, when present in a
+// 400 response body, identify the 400 as a credential/key rejection rather than a
+// generic bad-request (e.g. a bad model slug or malformed payload). Google Gemini's
+// OpenAI-compat endpoint returns 400 with `API_KEY_INVALID` / `API key not valid`
+// for an invalid key, so a status-only check would let a bad Gemini key pass.
+//
+// Keep this list conservative: only markers that unambiguously mean "the
+// credential was wrong" belong here, so a generic 400 (bad model, malformed
+// request) keeps passing and never falsely blocks onboarding.
+var authRejectionMarkers = []string{
+	"api_key_invalid",
+	"api key not valid",
+	"invalid api key",
+	"invalid_api_key",
+	"unauthenticated",
+	`"code":401`,
+	"no auth credentials",
+	"permission_denied",
+}
+
+// bodyIndicatesKeyRejection reports whether an upstream response body contains a
+// marker that identifies the response as a credential/key rejection.
+func bodyIndicatesKeyRejection(body string) bool {
+	lower := strings.ToLower(body)
+	for _, marker := range authRejectionMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// testProviderAuth exercises real authentication against an OpenAI-compatible
+// provider by POSTing a minimal chat-completion request. It is the canonical
+// auth probe for providers whose /models endpoint is public (e.g. OpenRouter),
+// where a 200 from GET /models does NOT mean the key is valid.
+//
+// Discrimination logic (by design):
+//   - HTTP 401 or 403 → the provider explicitly rejected the credentials. Return
+//     a descriptive error so the caller can surface it to the user.
+//   - HTTP 400 → treated as an auth rejection ONLY when the response body carries
+//     a credential/key marker (see authRejectionMarkers). This catches providers
+//     like Google Gemini's OpenAI-compat endpoint, which returns 400
+//     INVALID_ARGUMENT / API_KEY_INVALID for a bad key. A generic 400 (bad model
+//     slug, malformed request) WITHOUT those markers stays a PASS.
+//   - Any other outcome (200, 404, 422, 429, 5xx, transport error, timeout) →
+//     return nil (not an auth failure). Rationale: a bad model slug, a missing
+//     feature endpoint (e.g. Anthropic's /chat/completions returning 404), a rate
+//     limit, or a network blip must NEVER be misread as an invalid key and must
+//     not block onboarding. Each such branch is logged (key NOT verified) so the
+//     skip is observable to a debugger.
+//
+// SEC-24: when checker is non-nil the probe is made through the SSRF-safe HTTP
+// client so a redirect to an internal/loopback/metadata address is blocked at dial
+// time. A nil checker uses a plain client and is intended only for tests that point
+// at a local httptest server.
+//
+// SEC-16 hygiene: the client-facing error is a FIXED message and never embeds the
+// raw upstream body (which could reflect the key or split a UTF-8 rune). The raw
+// upstream detail is recorded only in a server-side slog.Debug, and the API key is
+// never logged.
+//
+// The caller must supply ctx so the probe respects request cancellation.
+// Timeout is capped at 15 s regardless of the parent context.
+func testProviderAuth(ctx context.Context, baseURL, apiKey, model string, checker *security.SSRFChecker) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	payload := fmt.Sprintf(
+		`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_tokens":1}`,
+		model,
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimSuffix(baseURL, "/")+"/chat/completions",
+		strings.NewReader(payload),
+	)
+	if err != nil {
+		// Construction failure (bad URL etc.) is not an auth failure.
+		slog.Warn("rest: auth probe inconclusive (key NOT verified): request construction failed",
+			"error", err)
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Api-Key", apiKey)
+	if strings.Contains(baseURL, "anthropic") {
+		req.Header.Set("Anthropic-Version", "2023-06-01")
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	if checker != nil {
+		client = checker.SafeClient()
+		client.Timeout = 15 * time.Second
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		// Transport / timeout / SSRF-block — not an auth failure (network could be
+		// unreachable, or the SSRF checker rejected a redirect target).
+		slog.Warn("rest: auth probe inconclusive (key NOT verified): transport error",
+			"error", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		// Read a short snippet of the body for server-side diagnostics only.
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		slog.Debug("rest: auth probe rejected key",
+			"status", resp.StatusCode, "upstream_body", strings.TrimSpace(string(snippet)))
+		// SEC-16: fixed client-facing message — never echo the raw upstream body.
+		return fmt.Errorf("the provider rejected the API key (HTTP %d)", resp.StatusCode)
+
+	case resp.StatusCode == http.StatusBadRequest:
+		// A 400 is an auth rejection ONLY when the body indicates a key problem.
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if bodyIndicatesKeyRejection(string(snippet)) {
+			slog.Debug("rest: auth probe rejected key (HTTP 400 with credential marker)",
+				"upstream_body", strings.TrimSpace(string(snippet)))
+			return fmt.Errorf("the provider rejected the API key (HTTP 400)")
+		}
+		// Generic 400 (bad model slug, malformed request) — NOT an auth failure.
+		slog.Warn("rest: auth probe inconclusive (key NOT verified): HTTP 400 without credential marker",
+			"upstream_body_snippet", strings.TrimSpace(string(snippet)))
+		return nil
+
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+		slog.Warn("rest: auth probe inconclusive (key NOT verified): rate-limited or upstream error",
+			"status", resp.StatusCode)
+		return nil
+
+	default:
+		// Any other status (200, 404, 422 …) is not an auth failure.
+		return nil
+	}
 }
 
 // Agent response type is defined in contracts/components/schemas/Agent.yaml
@@ -4568,7 +4714,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if hasEndpoint {
 				if apiKey, ok := providerAPIKeys[name]; ok {
 					baseURL := providers_pkg.GetDefaultAPIBase(name)
-					if upstream, err := fetchUpstreamModels(baseURL, apiKey); err != nil {
+					if upstream, err := fetchUpstreamModels(baseURL, apiKey, a.ssrfChecker); err != nil {
 						slog.Warn("rest: failed to fetch upstream models", "provider", name, "error", err)
 						modelFetchWarning = fmt.Sprintf("could not fetch upstream model list: %v", err)
 					} else if len(upstream) > 0 {
@@ -4811,7 +4957,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		a.refreshProviderModels(w, r, strings.TrimSuffix(sub, "/refresh-models"))
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
-		// POST /api/v1/providers/{id}/test — verify the provider has an API key configured.
+		// POST /api/v1/providers/{id}/test — verify the provider has a valid API key.
 		// Allow unauthenticated access during onboarding (same reason as PUT above).
 		onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
 		if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
@@ -4834,6 +4980,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		providerList, _ := cfgRaw["providers"].([]any)
 		found := false
+		var resolvedAPIKey string
+		var firstModel string
+		var configuredAPIBase string
+		// keyConfiguredButUnreadable is true when the provider entry references an
+		// API key (api_key_ref) that the credential vault could NOT resolve (store
+		// locked / decrypt error). This is distinct from "no key configured" and
+		// must surface a different, actionable message (fix #5).
+		keyConfiguredButUnreadable := false
 		for _, entry := range providerList {
 			modelMap, ok := entry.(map[string]any)
 			if !ok {
@@ -4842,29 +4996,103 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			pName := inferProviderName(strVal(modelMap, "provider"), strVal(modelMap, "model"))
 			if pName == providerID {
 				found = true
+				// Capture the provider entry's configured api_base (config.go
+				// `json:"api_base"`). Preferred over the vendor default so a
+				// regional host / self-hosted gateway is probed at the SAME base
+				// the runtime factory will actually use (fix #3).
+				configuredAPIBase = strings.TrimSpace(strVal(modelMap, "api_base"))
 				// Check if API key is set: either via api_keys array or api_key_ref
 				// pointing to the encrypted credentials store.
 				apiKeys, _ := modelMap["api_keys"].([]any)
 				apiKeyRef, _ := modelMap["api_key_ref"].(string)
-				hasPlaintextKey := len(apiKeys) > 0 && apiKeys[0] != ""
-				hasCredRef := false
-				if apiKeyRef != "" {
-					if v, err := a.resolveCredentialRef(apiKeyRef); err != nil {
-						slog.Warn("rest: provider test: credential store error", "ref", apiKeyRef, "error", err)
-					} else {
-						hasCredRef = v != ""
+				if len(apiKeys) > 0 {
+					if k, _ := apiKeys[0].(string); k != "" {
+						resolvedAPIKey = k
 					}
 				}
-				if !hasPlaintextKey && !hasCredRef {
+				if resolvedAPIKey == "" && apiKeyRef != "" {
+					if v, err := a.resolveCredentialRef(apiKeyRef); err != nil {
+						// A ref is present but the vault could not be read — do NOT
+						// fall through to "no API key configured" (misleading).
+						slog.Warn("rest: provider test: credential store error", "ref", apiKeyRef, "error", err)
+						keyConfiguredButUnreadable = true
+					} else {
+						resolvedAPIKey = v
+					}
+				}
+				if resolvedAPIKey == "" {
+					if keyConfiguredButUnreadable {
+						errMsg := "API key is configured but the credential vault could not be read " +
+							"(store locked or undecryptable) — unlock and retry."
+						jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
+						return
+					}
 					errMsg := "no API key configured for this provider"
 					jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 					return
+				}
+				// Capture a model to use for the auth probe. Prefer the first
+				// entry in the models list; fall back to the model field itself.
+				if configuredModels, _ := modelMap["models"].([]any); len(configuredModels) > 0 {
+					firstModel, _ = configuredModels[0].(string)
+				}
+				if firstModel == "" {
+					firstModel = strVal(modelMap, "model")
 				}
 				break
 			}
 		}
 		if !found {
 			errMsg := fmt.Sprintf("provider %q not configured", providerID)
+			jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
+			return
+		}
+		// Resolve the base URL to probe: prefer the entry's configured api_base
+		// (regional host / self-hosted gateway), fall back to the vendor default
+		// (fix #3).
+		baseURL := configuredAPIBase
+		if baseURL == "" {
+			baseURL = providers_pkg.GetDefaultAPIBase(providerID)
+		}
+		if baseURL == "" {
+			// Neither a configured api_base nor a known vendor default — the probe
+			// genuinely cannot run. Report success WITH a note rather than a silent
+			// pass, so the caller knows the key was not actually verified (fix #3).
+			slog.Warn("rest: provider test: no api_base or vendor default; key NOT verified",
+				"provider", providerID)
+			note := "API key not verified: no endpoint is configured for this provider " +
+				"(set api_base) and it has no known default."
+			jsonOK(w, gen.OperationResult{Success: true, Error: &note})
+			return
+		}
+		// SEC-24: block a probe against an internal/loopback/metadata address before
+		// any outbound call (fix #1). The configured api_base is caller-influenced
+		// (set via PUT /providers), so it must be SSRF-checked just like the
+		// onboarding endpoint override.
+		if a.ssrfChecker != nil {
+			if err := a.ssrfChecker.CheckURL(r.Context(), baseURL); err != nil {
+				slog.Warn("rest: provider test: SSRF blocked api_base", "provider", providerID, "error", err)
+				errMsg := "endpoint not allowed"
+				jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
+				return
+			}
+		}
+		if firstModel == "" {
+			// No model to probe with — the auth call cannot run. Make the skip
+			// observable instead of silently returning success (fix #4).
+			slog.Warn("rest: provider test: provider has no model to probe; API key not verified",
+				"provider", providerID)
+			jsonOK(w, gen.OperationResult{Success: true})
+			return
+		}
+		// Auth-validation step: exercise real authentication with a minimal
+		// chat-completion call. This catches providers (e.g. OpenRouter) whose
+		// GET /models is public and returns 200 even with a bad key. 401/403 always
+		// rejects; a 400 rejects only when the body carries a credential marker;
+		// any other outcome (transport error, 404, 422, 429, 5xx) is inconclusive.
+		authErr := testProviderAuth(r.Context(), baseURL, resolvedAPIKey, firstModel, a.ssrfChecker)
+		if authErr != nil {
+			errMsg := "API key was rejected by the provider (" + authErr.Error() + "). Check the key is correct, active, and has credit."
 			jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 			return
 		}
@@ -4964,7 +5192,7 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		baseURL := providers_pkg.GetDefaultAPIBase(providerID)
-		upstream, err := fetchUpstreamModels(baseURL, apiKey)
+		upstream, err := fetchUpstreamModels(baseURL, apiKey, a.ssrfChecker)
 		if err != nil {
 			slog.Warn("rest: refresh-models: upstream fetch failed", "provider", providerID, "error", err)
 			warning = fmt.Sprintf("could not fetch upstream model list: %v", err)

@@ -436,7 +436,22 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	models, fetchErr := fetchUpstreamModels(baseURL, body.ApiKey)
+	// SEC-24: this endpoint is CSRF-exempt and reachable pre-onboarding WITHOUT
+	// authentication, and baseURL can come from a caller-supplied `endpoint`
+	// override. Without this gate an attacker could make the server POST/GET to
+	// http://169.254.169.254/... (cloud metadata), http://10.x, or localhost:<port>.
+	// Resolve + check the host (with DNS-rebinding protection) before ANY outbound
+	// call. Redirect-to-internal is additionally caught by the SSRF-safe client
+	// passed into fetchUpstreamModels / testProviderAuth below.
+	if a.ssrfChecker != nil {
+		if err := a.ssrfChecker.CheckURL(r.Context(), baseURL); err != nil {
+			slog.Warn("rest: probe-provider: SSRF blocked endpoint", "error", err)
+			jsonOK(w, gen.ProbeProviderResponse{Success: false, Error: ptr("endpoint not allowed")})
+			return
+		}
+	}
+
+	models, fetchErr := fetchUpstreamModels(baseURL, body.ApiKey, a.ssrfChecker)
 	if fetchErr != nil {
 		// Upstream probe failure is a 200 with success=false — symmetrical
 		// with POST /providers/{id}/test, so the SPA's error-handling branch
@@ -444,6 +459,29 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		errMsg := fetchErr.Error()
 		jsonOK(w, gen.ProbeProviderResponse{Success: false, Error: &errMsg})
 		return
+	}
+
+	// Auth-validation step: some providers (notably OpenRouter) serve GET /models
+	// without authentication, so a 200 from /models does NOT prove the key is
+	// valid. We exercise real auth by posting a minimal chat-completion request
+	// against the first model in the list. The probe fails on HTTP 401/403, or on
+	// a 400 whose body carries a credential marker (e.g. Gemini's API_KEY_INVALID);
+	// any other outcome (generic 400, 404, 422, 429, 5xx, transport error) is
+	// non-blocking so that a strange model or an endpoint quirk never blocks
+	// onboarding.
+	if len(models) > 0 {
+		if authErr := testProviderAuth(r.Context(), baseURL, body.ApiKey, models[0], a.ssrfChecker); authErr != nil {
+			errMsg := "API key was rejected by the provider (" + authErr.Error() + "). Check the key is correct, active, and has credit."
+			jsonOK(w, gen.ProbeProviderResponse{Success: false, Error: &errMsg})
+			return
+		}
+	} else {
+		// Empty /models list: the auth probe cannot run (no model to exercise).
+		// Make the skip observable instead of silently returning success — this
+		// is exactly the case the auth-probe fix was meant to cover for providers
+		// that return an empty catalog (fix #4).
+		slog.Warn("rest: probe-provider: provider returned no models; API key not verified",
+			"provider", body.Id)
 	}
 
 	jsonOK(w, gen.ProbeProviderResponse{Success: true, Models: &models})
