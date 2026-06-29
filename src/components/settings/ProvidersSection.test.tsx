@@ -258,3 +258,215 @@ describe('ProvidersSection', () => {
     })
   })
 })
+
+// ── MAJOR-3 — validation integration (US8.1 / 422 + banner) ──────────────────
+//
+// Spec: provider-validation-centralization-spec.md, US8 / MAJOR-3.
+//
+// These tests assert the integration between configureProvider and the
+// ProvidersSection UI for the validation flows:
+//
+//   1. 422 (InvalidKey) → blocking error toast, form stays open (US8.1).
+//   2. 200 + validation.outcome=no_credit → banner appears (wallet icon, amber).
+//   3. Test button → 200 + validation → banner appears below the provider row.
+
+describe('ProvidersSection — validation integration (MAJOR-3 / US8)', () => {
+  // Shared provider fixture for all validation tests (live provider, already connected).
+  const CONNECTED_PROVIDER = [
+    {
+      id: 'openrouter',
+      name: 'openrouter',
+      display_name: 'OpenRouter',
+      status: 'connected',
+      has_models_endpoint: true,
+      models: ['openrouter/auto'],
+    },
+  ]
+
+  beforeEach(() => {
+    vi.mocked(api.fetchProviders).mockResolvedValue(CONNECTED_PROVIDER as never)
+  })
+
+  // Helper: expand the config form, type a key, click Save & Connect, confirm re-auth.
+  async function expandAndInitiateSave(key = 'bad-key-123') {
+    renderSection()
+    await waitFor(() => screen.getByText('OpenRouter'))
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }))
+    fireEvent.change(screen.getByPlaceholderText(/sk-or/i), { target: { value: key } })
+    fireEvent.click(screen.getByTestId('save-provider-openrouter'))
+    // Re-auth dialog opens — fill password and confirm.
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+  }
+
+  it('US8.1 — 422 (InvalidKey) shows a blocking error toast and form stays open', async () => {
+    // Mock configureProvider to throw an ApiError with status 422.
+    const errMsg = 'The API key was rejected by OpenRouter. Check you copied the whole key.'
+    vi.mocked(api.configureProvider).mockRejectedValue(
+      new api.ApiError(422, errMsg),
+    )
+
+    await expandAndInitiateSave('definitely-wrong-key')
+
+    await waitFor(() => {
+      // A blocking error toast must appear with the server message.
+      expect(addToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'error', message: errMsg }),
+      )
+    })
+
+    // The form MUST stay open (US8.1 — user can correct key and retry).
+    // The expanded form contains the API Key input; if it's in the DOM the form is open.
+    expect(screen.getByPlaceholderText(/sk-or/i)).toBeInTheDocument()
+
+    // No save-validation banner should be shown (it's a blocking error, not a warning).
+    expect(screen.queryByTestId('save-validation-banner-openrouter')).not.toBeInTheDocument()
+  })
+
+  it('US8.2 — 200 + no_credit outcome → amber banner with wallet icon, form stays open', async () => {
+    // Save succeeds but the key has no credit.
+    vi.mocked(api.configureProvider).mockResolvedValue({
+      ...CONNECTED_PROVIDER[0],
+      validation: {
+        outcome: 'no_credit',
+        message: 'Your OpenRouter key works, but the account has no credit.',
+      },
+    } as never)
+
+    await expandAndInitiateSave('no-credit-key')
+
+    await waitFor(() => {
+      // Success toast fires (save did succeed).
+      expect(addToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'success', message: 'Provider saved' }),
+      )
+    })
+
+    // The save-validation banner MUST appear with the no_credit outcome.
+    await waitFor(() => {
+      expect(screen.getByTestId('save-validation-banner-openrouter')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('save-validation-banner-openrouter')).toHaveAttribute('data-outcome', 'no_credit')
+
+    // The server message is displayed in the banner.
+    expect(
+      screen.getByText('Your OpenRouter key works, but the account has no credit.'),
+    ).toBeInTheDocument()
+
+    // Form stays open so the user sees the banner (US8.2 — non-blocking).
+    expect(screen.getByPlaceholderText(/sk-or/i)).toBeInTheDocument()
+  })
+
+  it('US8.3 — 200 + unreachable outcome → amber banner with wifi-slash icon', async () => {
+    vi.mocked(api.configureProvider).mockResolvedValue({
+      ...CONNECTED_PROVIDER[0],
+      validation: {
+        outcome: 'unreachable',
+        message: "Couldn't reach OpenRouter to check the key.",
+      },
+    } as never)
+
+    await expandAndInitiateSave('key-no-reach')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('save-validation-banner-openrouter')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('save-validation-banner-openrouter')).toHaveAttribute(
+      'data-outcome',
+      'unreachable',
+    )
+  })
+
+  it('US8.3 — 200 + restricted outcome → amber banner with lock icon', async () => {
+    vi.mocked(api.configureProvider).mockResolvedValue({
+      ...CONNECTED_PROVIDER[0],
+      validation: {
+        outcome: 'restricted',
+        message: 'The request was blocked in your region.',
+      },
+    } as never)
+
+    await expandAndInitiateSave('restricted-key')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('save-validation-banner-openrouter')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('save-validation-banner-openrouter')).toHaveAttribute(
+      'data-outcome',
+      'restricted',
+    )
+  })
+
+  it('US8.4 — 200 with no validation → no banner, form closes on success', async () => {
+    vi.mocked(api.configureProvider).mockResolvedValue({
+      ...CONNECTED_PROVIDER[0],
+      // No validation field = clean success
+    } as never)
+
+    await expandAndInitiateSave('valid-key')
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'success', message: 'Provider saved' }),
+      )
+    })
+
+    // No banner should appear.
+    expect(screen.queryByTestId('save-validation-banner-openrouter')).not.toBeInTheDocument()
+
+    // Form closes after a clean success.
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText(/sk-or/i)).not.toBeInTheDocument()
+    })
+  })
+
+  it('Test button → mocked 200 + no_credit validation → banner appears below the row', async () => {
+    vi.mocked(api.testProvider).mockResolvedValue({
+      success: true,
+      validation: {
+        outcome: 'no_credit',
+        message: 'Your OpenRouter key works, but the account has no credit.',
+      },
+    } as never)
+
+    renderSection()
+    await waitFor(() => screen.getByText('OpenRouter'))
+
+    // Click the Test button (only visible when connected).
+    fireEvent.click(screen.getByRole('button', { name: /^test$/i }))
+
+    await waitFor(() => {
+      // Test-validation banner appears below the row.
+      expect(screen.getByTestId('test-validation-banner-openrouter')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('test-validation-banner-openrouter')).toHaveAttribute(
+      'data-outcome',
+      'no_credit',
+    )
+    // Success toast also fires.
+    expect(addToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'success', message: 'Connection successful' }),
+    )
+  })
+
+  it('Test button → success=true + no validation → no banner, toast only', async () => {
+    vi.mocked(api.testProvider).mockResolvedValue({
+      success: true,
+      // No validation field
+    } as never)
+
+    renderSection()
+    await waitFor(() => screen.getByText('OpenRouter'))
+
+    fireEvent.click(screen.getByRole('button', { name: /^test$/i }))
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'success', message: 'Connection successful' }),
+      )
+    })
+    expect(screen.queryByTestId('test-validation-banner-openrouter')).not.toBeInTheDocument()
+  })
+})

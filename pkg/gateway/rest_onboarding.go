@@ -385,10 +385,18 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 //
 // Response shape:
 //
-//	{"success":true,"models":["gpt-4","gpt-4-turbo",...]}     on OK
-//	{"success":false,"error":"401 unauthorized"}               on upstream reject
+//	{
+//	  "success": true,
+//	  "models":  ["gpt-4","gpt-4-turbo",...],
+//	  "validation": {"outcome":"no_credit","message":"..."}   // present for non-valid outcomes only
+//	}
+//	{"success":false,"error":"401 unauthorized"}               on upstream reject (outcome==invalid_key)
 //	(HTTP 409)                                                 after onboarding complete
 //	(HTTP 400)                                                 on malformed body / unknown id
+//
+// success is the complement of ValidationResult.Blocks() — only invalid_key yields success=false.
+// The validation field is present for non-valid probed outcomes (no_credit, unreachable, restricted)
+// and absent for valid outcomes and for error responses that short-circuit before the probe.
 func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -469,7 +477,7 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// SEC-16: result.RawDetail is server-debug-only; never sent to the client.
 	result := providers.ValidateKey(r.Context(), providers.ValidateInput{
 		ProviderID:   string(body.Id),
-		ProviderName: string(body.Id),
+		ProviderName: providers.DisplayName(string(body.Id)),
 		BaseURL:      baseURL,
 		APIKey:       body.ApiKey,
 		Catalog:      models,
@@ -477,24 +485,32 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	slog.Debug("rest: probe-provider: key validation result",
 		"provider", body.Id, "outcome", result.Outcome, "detail", result.RawDetail)
 
-	// Build the probe response with the classified validation field (R-B / FR-013).
+	// Build the probe response (R-B / FR-013).
+	// validation is present for non-valid probed outcomes only (no_credit, unreachable,
+	// restricted) — absent for valid (symmetric with Provider/OperationResult).
 	probeResp := gen.ProbeProviderResponse{
-		Success: !result.Blocks,
+		Success: !result.Blocks(),
 		Models:  &models,
 	}
-	// Populate validation for all probed outcomes (valid included for transparency).
-	outcomeStr := gen.ProbeProviderResponseValidationOutcome(result.Outcome)
-	msg := result.Message
-	validationObj := &struct {
-		Message *string                                    `json:"message,omitempty"`
-		Outcome gen.ProbeProviderResponseValidationOutcome `json:"outcome"`
-	}{Outcome: outcomeStr}
-	if msg != "" {
-		validationObj.Message = &msg
+	if result.Outcome != providers.OutcomeValid {
+		outcomeStr := gen.ProbeProviderResponseValidationOutcome(result.Outcome)
+		// Guard: only assign the validation object when the cast is a known wire value.
+		if !outcomeStr.Valid() {
+			slog.Warn("rest: probe-provider: unrecognized validation outcome; omitting validation field",
+				"provider", body.Id, "outcome", result.Outcome)
+		} else {
+			validationObj := &struct {
+				Message *string                                    `json:"message,omitempty"`
+				Outcome gen.ProbeProviderResponseValidationOutcome `json:"outcome"`
+			}{Outcome: outcomeStr}
+			if result.Message != "" {
+				validationObj.Message = &result.Message
+			}
+			probeResp.Validation = validationObj
+		}
 	}
-	probeResp.Validation = validationObj
 
-	if result.Blocks {
+	if result.Blocks() {
 		// InvalidKey — report failure. The curated message is safe to surface (SEC-16).
 		probeResp.Models = nil
 		probeResp.Error = &result.Message

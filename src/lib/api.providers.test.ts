@@ -1,17 +1,22 @@
 /**
- * api.providers.test.ts — Test #22 + #32 (spec TDD plan)
+ * api.providers.test.ts — Test #22 + #32 + MAJOR-4 (spec TDD plan)
  *
- * Spec: provider-validation-centralization-spec.md, US8 / FR-016 / R-C.
+ * Spec: provider-validation-centralization-spec.md, US8 / FR-016 / R-C / MAJOR-4.
  *
  * Test #22: configureProvider throws on 422 (InvalidKey), returns Provider
  *   with validation on 200 with non-valid outcome.
  *
  * Test #32 / m4 / R-C: configureProvider omits api_key in the request body
  *   when only model/models changed (SC-005 premise — no key → no server probe).
+ *
+ * MAJOR-4: probeProvider validation passthrough — the onboarding probe returns
+ *   200 + validation.outcome for no_credit/unreachable/restricted (non-blocking),
+ *   returns success:false for InvalidKey (blocking), and returns no validation
+ *   on a clean success.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { configureProvider, ApiError } from './api'
+import { configureProvider, probeProvider, ApiError } from './api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -239,5 +244,134 @@ describe('configureProvider — Test #32 / m4 / R-C — key omission', () => {
     const keyFromInputWhenUnchanged = ''
     const apiKeyArg = keyFromInputWhenUnchanged === '' ? undefined : keyFromInputWhenUnchanged
     expect(apiKeyArg).toBeUndefined()
+  })
+})
+
+// ── MAJOR-4 — probeProvider validation passthrough ────────────────────────────
+//
+// Spec: provider-validation-centralization-spec.md, US8 / R-B / Flow-A.
+//
+// probeProvider POST /onboarding/probe-provider returns ProbeProviderResponse:
+//   { success: true, validation?: {outcome, message} }  — non-blocking warning
+//   { success: false, error: string }                   — blocking (InvalidKey)
+//   { success: true }                                   — clean valid
+//
+// These tests verify the function passes the validation object through
+// transparently, so the onboarding step can render the ProviderValidationBanner.
+
+describe('probeProvider — MAJOR-4 / validation passthrough', () => {
+  it('returns validation.outcome=no_credit on 200 with no_credit outcome', async () => {
+    fetchSpy.mockResolvedValue(
+      makeJsonResponse({
+        success: true,
+        models: ['openrouter/auto'],
+        validation: {
+          outcome: 'no_credit',
+          message: 'Your OpenRouter key works, but the account has no credit.',
+        },
+      }),
+    )
+
+    const result = await probeProvider('openrouter', 'key-with-no-credit')
+
+    expect(result.success).toBe(true)
+    expect(result.validation).toBeDefined()
+    expect(result.validation?.outcome).toBe('no_credit')
+    expect(result.validation?.message).toMatch(/no credit/i)
+
+    // Verify the right endpoint was called
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/onboarding/probe-provider')
+  })
+
+  it('returns validation.outcome=unreachable on 200 with unreachable outcome', async () => {
+    fetchSpy.mockResolvedValue(
+      makeJsonResponse({
+        success: true,
+        models: [],
+        validation: {
+          outcome: 'unreachable',
+          message: "Couldn't reach OpenRouter to check the key.",
+        },
+      }),
+    )
+
+    const result = await probeProvider('openrouter', 'key-no-reach')
+
+    expect(result.success).toBe(true)
+    expect(result.validation?.outcome).toBe('unreachable')
+  })
+
+  it('returns validation.outcome=restricted on 200 with restricted outcome', async () => {
+    fetchSpy.mockResolvedValue(
+      makeJsonResponse({
+        success: true,
+        models: [],
+        validation: {
+          outcome: 'restricted',
+          message: 'The request was blocked in your region.',
+        },
+      }),
+    )
+
+    const result = await probeProvider('openrouter', 'key-restricted')
+
+    expect(result.success).toBe(true)
+    expect(result.validation?.outcome).toBe('restricted')
+  })
+
+  it('returns success=false (InvalidKey) with the blocking error message', async () => {
+    fetchSpy.mockResolvedValue(
+      makeJsonResponse({
+        success: false,
+        error: 'The API key was rejected by OpenRouter. Check you copied the whole key.',
+      }),
+    )
+
+    const result = await probeProvider('openrouter', 'wrong-key')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/rejected by OpenRouter/i)
+    // No validation field on a blocking failure
+    expect(result.validation).toBeUndefined()
+  })
+
+  it('returns no validation on a clean 200 valid response', async () => {
+    fetchSpy.mockResolvedValue(
+      makeJsonResponse({
+        success: true,
+        models: ['openrouter/auto', 'anthropic/claude-3-5-haiku'],
+      }),
+    )
+
+    const result = await probeProvider('openrouter', 'valid-key')
+
+    expect(result.success).toBe(true)
+    expect(result.models).toHaveLength(2)
+    // validation absent → no banner should be shown
+    expect(result.validation == null || result.validation.outcome === 'valid').toBe(true)
+  })
+
+  it('sends the correct request body (id + api_key, no endpoint when omitted)', async () => {
+    fetchSpy.mockResolvedValue(makeJsonResponse({ success: true, models: [] }))
+
+    await probeProvider('anthropic', 'sk-ant-test')
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as Record<string, unknown>
+    expect(body.id).toBe('anthropic')
+    expect(body.api_key).toBe('sk-ant-test')
+    // endpoint omitted when not passed → empty string per the implementation
+    expect(body.endpoint).toBe('')
+  })
+
+  it('forwards endpoint when provided', async () => {
+    fetchSpy.mockResolvedValue(makeJsonResponse({ success: true, models: [] }))
+
+    await probeProvider('azure', 'azure-key', 'https://my.azure.com/openai')
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as Record<string, unknown>
+    expect(body.endpoint).toBe('https://my.azure.com/openai')
   })
 })
