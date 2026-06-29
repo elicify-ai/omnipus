@@ -72,6 +72,72 @@ interface SlashItem {
   onSelect: () => void
 }
 
+// ── Skill-aware message content renderer (R2/F1/F7/F9) ───────────────────────
+
+// renderSkillAwareContent — shared helper used by both the live AssistantUI
+// UserMessage (which has MessagePrimitive.Parts) and VirtualUserMessageRow
+// (historical/reloaded messages). Keeps the chip logic in one place so that
+// reloaded messages display identically to live ones (F1).
+// Exported for focused unit tests (F1 test requirement).
+//
+// F7: a leading /token that matches a known built-in command label (e.g.
+// /clear, /help, /model, /agents) must NOT produce a chip — built-ins win (D3).
+// We receive the `commands` list and use it to exclude those tokens.
+//
+// F9: the regex uses [\s\S]* so multi-line bodies (foo\nbar) are captured.
+//
+// Returns the JSX for the inner message bubble content; the caller wraps it in
+// the appropriate outer container (MessagePrimitive.Root or a plain div).
+export function renderSkillAwareContent(
+  content: string | null,
+  skills: Skill[],
+  // Command label strings, e.g. ['/clear', '/help', '/model'] — used to apply
+  // the F7 built-in precedence gate. Pass the fetched commands list when
+  // available; callers that can't access the store pass [].
+  commandLabels: string[],
+  // Fallback plain-text renderer — used by live UserMessage (which has access
+  // to MessagePrimitive.Parts) vs historical messages (which use a simple <p>).
+  fallbackRenderer: () => React.ReactNode,
+): React.ReactNode {
+  // F9: [\s\S]* captures newlines; without the s/dotAll flag this was broken
+  // for multi-line messages.
+  const skillMatch = content?.match(/^\/(\S+)(?:\s+([\s\S]*))?$/)
+
+  // F7: skip chip when the leading /token is a known built-in command.
+  const isBuiltin = skillMatch
+    ? commandLabels.some((lbl) => lbl.toLowerCase() === `/${skillMatch[1].toLowerCase()}`)
+    : false
+
+  const matchedSkill =
+    skillMatch && !isBuiltin
+      ? skills.find((s) => s.id.toLowerCase() === skillMatch[1].toLowerCase())
+      : null
+
+  if (matchedSkill && skillMatch) {
+    // R2: compact skill indicator — show message text + chip, or chip alone
+    return (
+      <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm flex flex-col gap-1">
+        {skillMatch[2] ? (
+          <>
+            <p className="whitespace-pre-wrap break-words">{skillMatch[2]}</p>
+            <span className="flex items-center gap-1 text-[10px] text-[var(--color-muted)]">
+              <Lightning size={10} weight="fill" className="text-[var(--color-accent)]" />
+              skill: {matchedSkill.name}
+            </span>
+          </>
+        ) : (
+          <span className="flex items-center gap-1 text-xs">
+            <Lightning size={12} weight="fill" className="text-[var(--color-accent)]" />
+            {matchedSkill.name}
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  return fallbackRenderer()
+}
+
 // ── Message components ────────────────────────────────────────────────────────
 
 function UserMessage() {
@@ -79,6 +145,11 @@ function UserMessage() {
   const { data: skills = [] } = useQuery<Skill[]>({
     queryKey: ['skills'],
     queryFn: () => fetchSkills(),
+    staleTime: 60_000,
+  })
+  const { data: commands = [] } = useQuery<SlashCommand[]>({
+    queryKey: ['commands', 'web'],
+    queryFn: () => fetchCommands('web'),
     staleTime: 60_000,
   })
 
@@ -90,11 +161,7 @@ function UserMessage() {
     return (textPart as { text: string }).text
   })()
 
-  // R2: detect skill prefix `/skill-id rest...`
-  const skillMatch = content?.match(/^\/(\S+)(?:\s+(.*))?$/)
-  const matchedSkill = skillMatch
-    ? skills.find((s) => s.id.toLowerCase() === skillMatch[1].toLowerCase())
-    : null
+  const commandLabels = commands.map((c) => c.label)
 
   return (
     <MessagePrimitive.Root data-testid="user-message" data-message-id={message.id} className="group flex gap-3 px-4 py-3 flex-row-reverse">
@@ -102,25 +169,7 @@ function UserMessage() {
         <User size={14} weight="bold" />
       </div>
       <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
-        {matchedSkill && skillMatch ? (
-          // R2: compact skill indicator
-          <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm flex flex-col gap-1">
-            {skillMatch[2] ? (
-              <>
-                <p className="whitespace-pre-wrap break-words">{skillMatch[2]}</p>
-                <span className="flex items-center gap-1 text-[10px] text-[var(--color-muted)]">
-                  <Lightning size={10} weight="fill" className="text-[var(--color-accent)]" />
-                  skill: {matchedSkill.name}
-                </span>
-              </>
-            ) : (
-              <span className="flex items-center gap-1 text-xs">
-                <Lightning size={12} weight="fill" className="text-[var(--color-accent)]" />
-                {matchedSkill.name}
-              </span>
-            )}
-          </div>
-        ) : (
+        {renderSkillAwareContent(content, skills, commandLabels, () => (
           <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
             <MessagePrimitive.Parts>
               {({ part }) => {
@@ -129,7 +178,7 @@ function UserMessage() {
               }}
             </MessagePrimitive.Parts>
           </div>
-        )}
+        ))}
       </div>
     </MessagePrimitive.Root>
   )
@@ -428,6 +477,21 @@ function UserMessageRetryButton({ message }: { message: ChatMessage }) {
 /** Standalone user message row for the virtualizer. */
 function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
   const isError = message.status === 'error'
+  // F1: use the shared skill-aware renderer so reloaded messages show the chip
+  // identically to live messages (R2/FR-013). We fetch skills + commands from
+  // the same TanStack Query cache — no extra network request on cache hit.
+  const { data: skills = [] } = useQuery<Skill[]>({
+    queryKey: ['skills'],
+    queryFn: () => fetchSkills(),
+    staleTime: 60_000,
+  })
+  const { data: commands = [] } = useQuery<SlashCommand[]>({
+    queryKey: ['commands', 'web'],
+    queryFn: () => fetchCommands('web'),
+    staleTime: 60_000,
+  })
+  const commandLabels = commands.map((c) => c.label)
+
   return (
     <div
       data-testid="user-message"
@@ -457,14 +521,21 @@ function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
           </div>
         )}
         {message.content.trim().length > 0 && (
-          <div className={cn(
-            "rounded-xl px-4 py-3 text-sm leading-relaxed rounded-tr-sm",
-            isError
-              ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
-              : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
-          )}>
-            <p className="whitespace-pre-wrap break-words">{message.content}</p>
-          </div>
+          renderSkillAwareContent(
+            message.content,
+            skills,
+            commandLabels,
+            () => (
+              <div className={cn(
+                "rounded-xl px-4 py-3 text-sm leading-relaxed rounded-tr-sm",
+                isError
+                  ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
+                  : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
+              )}>
+                <p className="whitespace-pre-wrap break-words">{message.content}</p>
+              </div>
+            ),
+          )
         )}
         {/* #253(b): show error + Retry when message failed to send */}
         <UserMessageRetryButton message={message} />
@@ -1060,7 +1131,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const [slashHighlight, setSlashHighlight] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   // Ghost text after skill selection — shown when value is exactly `/<skill-id> `
+  // F3-frontend: also store the skill's argument_hint so the ghost can show it
+  // instead of the generic `<message>` when the skill declares one.
   const [ghostSkillId, setGhostSkillId] = useState<string | null>(null)
+  const [ghostArgumentHint, setGhostArgumentHint] = useState<string | null>(null)
   // Harmful-file upload confirmation (replaces the two native window.confirm calls).
   // `harmfulConfirm` holds the files awaiting confirmation plus the flagged names;
   // it is the open/closed signal — the dialog is closed when `harmfulConfirm` is
@@ -1156,13 +1230,19 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       s.id.toLowerCase().startsWith(lower) ||
       s.name.toLowerCase().startsWith(lower),
     )
-    return filtered.slice(0, 8).map((s) => ({
-      key: s.id,
-      label: `/${s.id}`,
-      description: s.name + (s.description ? ` — ${s.description}` : ''),
-      section: 'skills' as const,
-      onSelect: () => completeSkillName(s.id),
-    }))
+    return filtered.slice(0, 8).map((s) => {
+      // F3-frontend/FR-014/R3: the skill's argument_hint drives the menu help text
+      // and the inline ghost (Skill.argument_hint is on the generated wire type).
+      const argHint: string | undefined = s.argument_hint
+      return {
+        key: s.id,
+        label: `/${s.id}`,
+        description: s.name + (s.description ? ` — ${s.description}` : ''),
+        section: 'skills' as const,
+        argumentHint: argHint,
+        onSelect: () => completeSkillName(s.id, argHint),
+      }
+    })
   })()
 
   // Unified list for keyboard nav — commands first, then skills
@@ -1321,11 +1401,14 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
   // completeSkillName — called when the user selects a skill from the
   // partitioned skill menu.  Sets the input to `/<id> ` and shows ghost text.
-  function completeSkillName(id: string) {
+  // Accepts the skill's argument_hint so the ghost shows it instead of the
+  // generic `<message>` when the skill declares one (FR-006/R3).
+  function completeSkillName(id: string, argumentHint?: string) {
     const text = `/${id} `
     composerRuntime.setText(text)
     setInputValue(text)
     setGhostSkillId(id)
+    setGhostArgumentHint(argumentHint ?? null)
     closeSlash()
   }
 
@@ -1546,26 +1629,35 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       )}
 
       {/* Slash command + skills partitioned dropdown (FR-005).
-          Commands section (top) and Skills section (bottom), with section headers.
-          Both modes use the same styling. Hidden when typing "/skills" in commands section. */}
+          F6: unified slashItems.map() — emits a section header on each section
+          transition, making the `section` field load-bearing and removing the
+          duplicate render blocks + the off-by-one `globalIndex` variable.
+          FR-014/R3: skill items show their argument_hint as muted help text. */}
       {shouldShowSlash && slashOpen && (
         <div
           data-testid="slash-menu"
           className="mb-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden shadow-lg"
         >
-          {/* Commands section */}
-          {visibleCommandItems.length > 0 && (
-            <div>
-              <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] border-b border-[var(--color-border)]">
-                Commands
-              </div>
-              {visibleCommandItems.map((item, i) => (
+          {slashItems.map((item, globalIndex) => {
+            const prevSection = globalIndex > 0 ? slashItems[globalIndex - 1].section : null
+            const isFirstInSection = item.section !== prevSection
+            return (
+              <React.Fragment key={item.key}>
+                {isFirstInSection && (
+                  <div className={cn(
+                    'px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
+                    globalIndex === 0
+                      ? 'border-b border-[var(--color-border)]'
+                      : 'border-t border-[var(--color-border)]',
+                  )}>
+                    {item.section === 'commands' ? 'Commands' : 'Skills'}
+                  </div>
+                )}
                 <button
-                  key={item.key}
                   type="button"
                   className={cn(
                     'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
-                    i === slashHighlight
+                    globalIndex === slashHighlight
                       ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
                       : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)]',
                   )}
@@ -1573,48 +1665,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                     e.preventDefault()
                     item.onSelect()
                   }}
-                  onMouseEnter={() => setSlashHighlight(i)}
+                  onMouseEnter={() => setSlashHighlight(globalIndex)}
                 >
                   <span className="font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
                   <span className="text-[11px]">{item.description}</span>
+                  {/* FR-014/R3: show argument_hint as muted help text for skills */}
+                  {item.section === 'skills' && item.argumentHint && (
+                    <span className="ml-auto text-[10px] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
+                      {item.argumentHint}
+                    </span>
+                  )}
                 </button>
-              ))}
-            </div>
-          )}
-          {/* Skills section */}
-          {visibleSkillMenuItems.length > 0 && (
-            <div>
-              <div className={cn(
-                'px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
-                visibleCommandItems.length > 0 && 'border-t border-[var(--color-border)]',
-              )}>
-                Skills
-              </div>
-              {visibleSkillMenuItems.map((item, i) => {
-                const globalIndex = visibleCommandItems.length + i
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={cn(
-                      'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
-                      globalIndex === slashHighlight
-                        ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
-                        : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)]',
-                    )}
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      item.onSelect()
-                    }}
-                    onMouseEnter={() => setSlashHighlight(globalIndex)}
-                  >
-                    <span className="font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
-                    <span className="text-[11px]">{item.description}</span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
+              </React.Fragment>
+            )
+          })}
         </div>
       )}
 
@@ -1685,6 +1749,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // Clear ghost if value no longer exactly matches `/<ghostSkillId> `
             if (ghostSkillId && val !== `/${ghostSkillId} `) {
               setGhostSkillId(null)
+              setGhostArgumentHint(null)
             }
             if (val.startsWith('/')) {
               setSlashOpen(true)
@@ -1707,6 +1772,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           onBlur={() => {
             // Delay so mouseDown on slash item fires first
             setGhostSkillId(null)
+            setGhostArgumentHint(null)
             setTimeout(closeSlash, 150)
           }}
           onPaste={(e) => {
@@ -1724,7 +1790,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           }}
         />
         {/* Ghost text overlay — shown when value is exactly `/<skillId> ` after skill selection.
-            Falls back to generic `<message>` since the Skill wire type has no argument_hint field. */}
+            F3-frontend/FR-006/R3: shows the skill's argument_hint when declared, else `<message>`.
+            The hint comes from `ghostArgumentHint` set when the skill was selected from the menu. */}
         {ghostSkillId && inputValue === `/${ghostSkillId} ` && (
           <div
             aria-hidden="true"
@@ -1732,7 +1799,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             data-testid="ghost-text"
           >
             <span className="invisible whitespace-pre">{`/${ghostSkillId} `}</span>
-            <span className="text-[var(--color-muted)] opacity-60">{'<message>'}</span>
+            <span className="text-[var(--color-muted)] opacity-60">
+              {ghostArgumentHint ?? '<message>'}
+            </span>
           </div>
         )}
         </div>

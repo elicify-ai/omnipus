@@ -4797,6 +4797,11 @@ export interface components {
              * @example jim
              */
             agent_assignment?: string;
+            /**
+             * @description Optional placeholder shown in the slash-command menu and as ghost text after the user selects this skill from the composer palette (e.g. "[topic]", "<url>"). Sourced from the SKILL.md frontmatter `argument-hint:` field (ClawHub convention). Absent when the skill does not declare a hint.
+             * @example [topic]
+             */
+            argument_hint?: string;
         };
         /** @description A single slash command available on a given surface, as returned by GET /api/v1/commands. The web chat palette renders these. Aliases and deprecated command names are NOT returned as separate entries. */
         SlashCommand: {

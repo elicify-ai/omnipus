@@ -49,12 +49,13 @@ type SkillInfo struct {
 	// Name is the human-readable display name, sourced from SKILL.md frontmatter
 	// `name:` (e.g. "Daily Briefing"). It falls back to the slug when no
 	// frontmatter name is present. Unlike ID it is free-form and NOT slug-validated.
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Source      string `json:"source"`
-	Description string `json:"description"`
-	Author      string `json:"author"`  // optional, from SKILL.md frontmatter
-	Version     string `json:"version"` // optional, from SKILL.md frontmatter
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	Source       string `json:"source"`
+	Description  string `json:"description"`
+	Author       string `json:"author"`        // optional, from SKILL.md frontmatter
+	Version      string `json:"version"`       // optional, from SKILL.md frontmatter
+	ArgumentHint string `json:"argument_hint"` // optional, from SKILL.md frontmatter argument-hint
 }
 
 // validate enforces the loader's contract: the ID (slug) must be a valid skill
@@ -178,6 +179,7 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				}
 				info.Author = metadata.Author
 				info.Version = metadata.Version
+				info.ArgumentHint = metadata.ArgumentHint
 			}
 			if err := info.validate(); err != nil {
 				slog.Warn("invalid skill from "+source, "name", info.Name, "error", err)

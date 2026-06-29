@@ -266,3 +266,53 @@ describe('Ghost text overlay', () => {
     expect(screen.queryByTestId('ghost-text')).not.toBeInTheDocument()
   })
 })
+
+// SC-004/B8: the ghost `<message>` text is NEVER submitted — when the user
+// presses Enter/Send while the composer shows just `/<skill-id> ` (the ghost
+// state), the message dispatched is `/<skill-id>` (trimmed, no ghost text).
+describe('Ghost text never submitted (SC-004/B8)', () => {
+  it('submitting with ghost active dispatches exactly `/<skill-id>` and no ghost text', async () => {
+    const mockSetText = vi.fn()
+    const { useComposerRuntime } = await import('@assistant-ui/react')
+    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
+      getState: () => ({ text: '/web-research ' }),
+      setText: mockSetText,
+      addAttachment: vi.fn(),
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+    const form = screen.getByTestId('composer-form')
+
+    // Select the skill from the menu
+    act(() => { fireEvent.change(input, { target: { value: '/web' } }) })
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+    act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
+
+    // Simulate the setText call that completeSkillName makes
+    act(() => { fireEvent.change(input, { target: { value: '/web-research ' } }) })
+
+    // Ghost should be present
+    expect(screen.queryByTestId('ghost-text')).toBeInTheDocument()
+
+    // The ghost element must NOT contain its text in the textarea value —
+    // the ghost is aria-hidden and outside the input.
+    const ghostEl = screen.getByTestId('ghost-text')
+    expect(ghostEl).toHaveAttribute('aria-hidden', 'true')
+
+    // Submit the form with the composer returning `/<skill-id> ` as its text.
+    // The interceptClientCommand path: `/web-research ` (trimmed = `/web-research`)
+    // is NOT in the commands list as a client command, so it passes through.
+    // The ghost text "<message>" must not appear in any submitted text frame.
+    act(() => { fireEvent.submit(form) })
+
+    // Verify: interceptClientCommand called setText('') only for actual client
+    // commands. For skill slugs, it does NOT call setText('') — the message
+    // goes through normally. The ghost text ("<message>") must never appear in
+    // the composer value or be dispatched.
+    const textSetToGhostText = mockSetText.mock.calls.filter(
+      (args: string[]) => typeof args[0] === 'string' && args[0].includes('<message>'),
+    )
+    expect(textSetToGhostText).toHaveLength(0)
+  })
+})

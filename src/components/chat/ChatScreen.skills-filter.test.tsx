@@ -96,6 +96,21 @@ vi.mock('@assistant-ui/react', () => {
   }
 })
 
+// 10 skills — used by the "capped at 8" test to actually exercise the slice(0, 8) cap.
+// The other tests use only a prefix of this list; the full list is needed for the cap test.
+const ALL_MOCK_SKILLS = [
+  { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+  { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+  { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+  { id: 'skill-4',       name: 'Skill 4',        version: '1.0', description: 'Description 4',             verified: true,  status: 'active' },
+  { id: 'skill-5',       name: 'Skill 5',        version: '1.0', description: 'Description 5',             verified: true,  status: 'active' },
+  { id: 'skill-6',       name: 'Skill 6',        version: '1.0', description: 'Description 6',             verified: true,  status: 'active' },
+  { id: 'skill-7',       name: 'Skill 7',        version: '1.0', description: 'Description 7',             verified: true,  status: 'active' },
+  { id: 'skill-8',       name: 'Skill 8',        version: '1.0', description: 'Description 8',             verified: true,  status: 'active' },
+  { id: 'skill-9',       name: 'Skill 9',        version: '1.0', description: 'Description 9',             verified: true,  status: 'active' },
+  { id: 'skill-10',      name: 'Skill 10',       version: '1.0', description: 'Description 10',            verified: true,  status: 'active' },
+]
+
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   const mockCommands = [
@@ -105,11 +120,6 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
     { name: 'agents',  label: '/agents',  description: 'Open agent selector',         delivery: 'client', available_while_streaming: false },
     { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
   ]
-  const mockSkills = [
-    { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-    { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-    { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
-  ]
   return {
     ...actual,
     useQuery: (opts: { queryKey: unknown[] }) => {
@@ -118,7 +128,8 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
         return { data: mockCommands, isError: false, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'skills') {
-        return { data: mockSkills, isError: false, refetch: vi.fn() }
+        // Return ALL 10 skills so the "capped at 8" test can actually exercise the cap.
+        return { data: ALL_MOCK_SKILLS, isError: false, refetch: vi.fn() }
       }
       return { data: [], isError: false, refetch: vi.fn() }
     },
@@ -220,17 +231,27 @@ describe('Skills filter mode (D9)', () => {
     expect(screen.queryByText('/clear')).not.toBeInTheDocument()
   })
 
-  it('skills are capped at 8 results maximum', async () => {
-    // With only 3 mock skills this always passes, but verifies the cap logic exists
+  it('skills are capped at 8 results maximum — 10 skills seeded, only 8 shown', async () => {
+    // The module-level mock now returns ALL_MOCK_SKILLS (10 entries).
+    // This test verifies that the slice(0, 8) cap in visibleSkillMenuItems works.
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    // 3 skills in mock data — all 3 should appear (under the cap of 8)
-    const skillItems = screen.getAllByText(/^\/(web-research|code-review|data-analysis)$/)
-    expect(skillItems.length).toBeLessThanOrEqual(8)
+    // With 10 skills in the mock, the menu must show at most 8.
+    // Count all buttons in the slash menu that have a skill-like label
+    // (starts with "/" — both commands and skills).
+    const menuButtons = screen
+      .getAllByRole('button')
+      .filter((btn) => {
+        const text = btn.textContent ?? ''
+        // Skill items: /web-research, /code-review, /data-analysis, /skill-4..10
+        return text.match(/^\/(web-research|code-review|data-analysis|skill-\d+)/)
+      })
+    // Exactly 8 skill items (cap = 8, mock has 10)
+    expect(menuButtons.length).toBe(8)
   })
 
   it('menu does not show when input does not start with "/"', async () => {
