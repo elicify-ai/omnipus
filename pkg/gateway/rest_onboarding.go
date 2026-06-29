@@ -470,6 +470,15 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// An empty catalog is not a hard failure (the key is still validated below via a
+	// default chat model), but it IS observable: the operator gets no model list to
+	// pick from. Surface it as a WARN so an empty-catalog provider doesn't look like a
+	// silent success.
+	if len(models) == 0 {
+		slog.Warn("rest: probe-provider: provider returned no models",
+			"provider", body.Id)
+	}
+
 	// Auth-validation step: use the centralized providers.ValidateKey to probe the key.
 	// Some providers (notably OpenRouter) serve GET /models without authentication, so
 	// a 200 from /models does NOT prove the key is valid. The classified outcome is

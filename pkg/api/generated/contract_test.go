@@ -3532,7 +3532,7 @@ func TestContract_SlashCommandDelivery_ValidMethod(t *testing.T) {
 // These tests catch regressions where:
 //   - the Outcome enum value is invalid (off-contract)
 //   - the validation object is absent when expected
-//   - the outcome type is serialised incorrectly
+//   - the outcome type is serialized incorrectly
 
 func TestContract_Provider_WithValidation_Valid(t *testing.T) {
 	// Provider with validation.outcome=no_credit must pass Provider.yaml.
@@ -3570,7 +3570,6 @@ func TestContract_Provider_WithValidation_AllOutcomes(t *testing.T) {
 		ProviderValidationOutcomeRestricted,
 	}
 	for _, outcome := range outcomes {
-		outcome := outcome
 		t.Run(string(outcome), func(t *testing.T) {
 			o := outcome
 			p := Provider{
@@ -3672,7 +3671,6 @@ func TestContract_OperationResult_WithValidation_AllOutcomes(t *testing.T) {
 		OperationResultValidationOutcomeRestricted,
 	}
 	for _, outcome := range outcomes {
-		outcome := outcome
 		t.Run(string(outcome), func(t *testing.T) {
 			o := outcome
 			r := OperationResult{
