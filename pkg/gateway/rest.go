@@ -4519,10 +4519,17 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if hasEndpoint {
 				if apiKey, ok := providerAPIKeys[name]; ok {
 					baseURL := providers_pkg.GetDefaultAPIBase(name)
-					if upstream, err := providers_pkg.FetchModels(r.Context(), baseURL, apiKey, a.ssrfChk()); err != nil {
+					if upstream, err := providers_pkg.FetchModels(
+						r.Context(),
+						baseURL,
+						apiKey,
+						a.ssrfChk(),
+					); err != nil {
 						slog.Warn("rest: failed to fetch upstream models", "provider", name, "error", err)
 						modelFetchWarning = fmt.Sprintf("could not fetch upstream model list: %v", err)
-					} else if len(upstream) > 0 {
+					} else if len(
+						upstream,
+					) > 0 {
 						models = upstream
 					}
 				}
@@ -4811,7 +4818,8 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		// R-D step 7 / FR-011: attach validation for warning outcomes (NoCredit/Unreachable/Restricted).
 		// Valid outcome and key-absent PUTs carry no validation field.
-		if keyChanged && putValidationResult.Outcome != "" && putValidationResult.Outcome != providers_pkg.OutcomeValid {
+		if keyChanged && putValidationResult.Outcome != "" &&
+			putValidationResult.Outcome != providers_pkg.OutcomeValid {
 			outcomeStr := gen.ProviderValidationOutcome(putValidationResult.Outcome)
 			msg := putValidationResult.Message
 			providerResp.Validation = &struct {

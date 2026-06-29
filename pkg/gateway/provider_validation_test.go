@@ -336,12 +336,16 @@ func TestPutProvider_SSRFPersistedApiBase(t *testing.T) {
 	// Seed an in-memory provider with a loopback api_base.
 	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKeyValidation)
 	tmpDir := t.TempDir()
-	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[{"model_name":"testprovider","provider":"testprovider","model":"test-model"}]}`)
+	minimalCfg := []byte(
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[{"model_name":"testprovider","provider":"testprovider","model":"test-model"}]}`,
+	)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents:  config.AgentsConfig{Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096}},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
 		// Provider with a loopback api_base that the SSRF checker must block.
 		Providers: []*config.ModelConfig{
 			{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: "http://127.0.0.1:9"},
@@ -399,11 +403,20 @@ func TestProviderTest_ClassifiedOutcome(t *testing.T) {
 
 	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKeyValidation)
 	tmpDir := t.TempDir()
-	require.NoError(t, os.WriteFile(tmpDir+"/config.json", []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(
+			tmpDir+"/config.json",
+			[]byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`),
+			0o600,
+		),
+	)
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents:  config.AgentsConfig{Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096}},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
 		Providers: []*config.ModelConfig{
 			{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
 		},
@@ -529,7 +542,16 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 		t.Setenv("OMNIPUS_MASTER_KEY", "")
 		t.Setenv("OMNIPUS_KEY_FILE", "")
 		tmpDir := t.TempDir()
-		require.NoError(t, os.WriteFile(tmpDir+"/config.json", []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[{"model_name":"testprovider","provider":"testprovider","model":"test-model"}]}`), 0o600))
+		require.NoError(
+			t,
+			os.WriteFile(
+				tmpDir+"/config.json",
+				[]byte(
+					`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[{"model_name":"testprovider","provider":"testprovider","model":"test-model"}]}`,
+				),
+				0o600,
+			),
+		)
 
 		// Pre-create a credentials.json stub so Mode-4 auto-generate does NOT fire.
 		// With no master key, no key file, and a pre-existing credentials.json, the
@@ -540,7 +562,9 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 
 		cfg := &config.Config{
 			Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-			Agents:  config.AgentsConfig{Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096}},
+			Agents: config.AgentsConfig{
+				Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			},
 			Providers: []*config.ModelConfig{
 				{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
 			},
@@ -586,7 +610,7 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 		})
 
 		w := doPutProvider(t, api, "testprovider", `{"api_key":"valid-key"}`)
-		// Reload failure returns 500 (existing behaviour — key has been persisted).
+		// Reload failure returns 500 (existing behavior — key has been persisted).
 		assert.Equal(t, http.StatusInternalServerError, w.Code,
 			"reload failure must return 500; body=%s", w.Body.String())
 
