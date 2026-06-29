@@ -1046,7 +1046,7 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 		if strings.EqualFold(skill.ID, name) || strings.EqualFold(skill.Name, name) {
 			// FR-9.4: tool-resolution default-DENY enforcement. A skill that
 			// exists on disk but is not in this agent's allowlist cannot be
-			// resolved — so it can be neither armed via /use nor loaded into
+			// resolved — so it cannot be activated via /<skill> nor loaded into
 			// context. This is the invocation gate, distinct from the prompt-time
 			// context filter (activeSkillNames).
 			if !cb.skillAllowed(skill.ID) {

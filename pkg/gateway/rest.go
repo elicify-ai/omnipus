@@ -3390,6 +3390,14 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 			skill.Source = &src
 		}
 
+		// ArgumentHint (optional): surface the SKILL.md frontmatter argument-hint
+		// in the wire response so the composer palette and ghost-text can use it
+		// (FR-006/FR-014/R3). Omit when the skill declares no hint.
+		if s.ArgumentHint != "" {
+			hint := s.ArgumentHint
+			skill.ArgumentHint = &hint
+		}
+
 		result = append(result, skill)
 	}
 	jsonOK(w, result)

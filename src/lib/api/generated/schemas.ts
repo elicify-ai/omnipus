@@ -1771,6 +1771,7 @@ export const Skill = z.object({
   verified: z.boolean(),
   status: z.enum(["active", "disabled", "inactive", "error"]),
   agent_assignment: z.string().optional(),
+  argument_hint: z.string().optional(),
 });
 export const SkillSearchResult = z.object({
   slug: z.string(),

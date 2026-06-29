@@ -240,3 +240,59 @@ describe('Unknown slash command handling', () => {
     expect(screen.queryByText('/clear')).not.toBeInTheDocument()
   })
 })
+
+// B10/B11/D4: unknown-slash send-path — messages starting with an unknown /token
+// or with the removed /skill prefix must be dispatched as normal messages, not
+// intercepted or silently dropped (FR-004, US1.4, US2.2).
+describe('Unknown slash send-path — dispatched as normal message (B10/B11/D4)', () => {
+  it('"/skill web-research go" is not intercepted by the client command handler (B11/US2.2)', async () => {
+    // "/skill" has been removed (D1). It must pass through as a normal message —
+    // interceptClientCommand must NOT fire for it.
+    const mockSetText = vi.fn()
+    const { useComposerRuntime } = await import('@assistant-ui/react')
+    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
+      getState: () => ({ text: '/skill web-research go' }),
+      setText: mockSetText,
+      addAttachment: vi.fn(),
+    })
+
+    render(<OmnipusComposer />)
+    const form = screen.getByTestId('composer-form')
+    const input = screen.getByTestId('composer-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '/skill web-research go' } }) })
+
+    // Submit the form — interceptClientCommand checks the text; /skill is not
+    // in the commands list (it's been removed), so it returns false.
+    // The form submit should NOT clear the input via mockSetText('').
+    act(() => { fireEvent.submit(form) })
+
+    // The text must NOT have been cleared by interceptClientCommand.
+    // If it was intercepted, mockSetText would have been called with ''.
+    // (completeSkillName also calls setText but with `/<id> ` not '')
+    const clearCalls = mockSetText.mock.calls.filter((args: string[]) => args[0] === '')
+    expect(clearCalls).toHaveLength(0)
+  })
+
+  it('"/zzz hi" is not intercepted by the client command handler (B10/D4)', async () => {
+    // "/zzz" is neither a builtin nor an installed skill — must dispatch normally.
+    const mockSetText = vi.fn()
+    const { useComposerRuntime } = await import('@assistant-ui/react')
+    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
+      getState: () => ({ text: '/zzz hi' }),
+      setText: mockSetText,
+      addAttachment: vi.fn(),
+    })
+
+    render(<OmnipusComposer />)
+    const form = screen.getByTestId('composer-form')
+    const input = screen.getByTestId('composer-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '/zzz hi' } }) })
+    act(() => { fireEvent.submit(form) })
+
+    // No intercept: mockSetText must not have been called with '' (the intercept cleanup)
+    const clearCalls = mockSetText.mock.calls.filter((args: string[]) => args[0] === '')
+    expect(clearCalls).toHaveLength(0)
+  })
+})

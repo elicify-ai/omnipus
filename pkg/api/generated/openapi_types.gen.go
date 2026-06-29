@@ -7515,6 +7515,9 @@ type Skill struct {
 	// AgentAssignment ID of the agent this skill is assigned to, when the skill is bound to a specific agent rather than globally available. Absent for globally assigned skills.
 	AgentAssignment *string `json:"agent_assignment,omitempty"`
 
+	// ArgumentHint Optional placeholder shown in the slash-command menu and as ghost text after the user selects this skill from the composer palette (e.g. "[topic]", "<url>"). Sourced from the SKILL.md frontmatter `argument-hint:` field (ClawHub convention). Absent when the skill does not declare a hint.
+	ArgumentHint *string `json:"argument_hint,omitempty"`
+
 	// Author Skill author or publisher name.
 	Author *string `json:"author,omitempty"`
 

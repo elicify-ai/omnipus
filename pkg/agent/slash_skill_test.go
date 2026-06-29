@@ -375,6 +375,38 @@ func TestCmdAgents_WebSurface_ClientDelivery(t *testing.T) {
 	}
 }
 
+// TestResolveSlash_HiddenBuiltinWins verifies that a skill whose slug matches a
+// HIDDEN (deprecated) built-in command name cannot shadow it (D3/F4). Hidden
+// back-compat commands like "list" are registered in the registry and must
+// therefore win over a same-named skill even though they are excluded from /help
+// and GET /commands output.
+//
+// Traces to: FR-003, D3, F4 (7-reviewer finding).
+func TestResolveSlash_HiddenBuiltinWins(t *testing.T) {
+	al, cfg, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	// Install a skill whose slug is "list" — same as the hidden back-compat built-in.
+	writeSkillFile(t, cfg.Agents.Defaults.Workspace, "list")
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	opts := &processOptions{SessionKey: "test-session"}
+	matched, _, _ := al.applyExplicitSkillCommand("/list skills", agent, opts)
+
+	// The skill parser must NOT match — registration-based gate includes hidden
+	// commands (D3 "built-ins win", F4 fix).
+	if matched {
+		t.Fatal("a skill named 'list' must not shadow the hidden /list built-in (D3/F4)")
+	}
+	if len(opts.ForcedSkills) > 0 {
+		t.Fatalf("ForcedSkills must be empty when hidden builtin wins, got %v", opts.ForcedSkills)
+	}
+}
+
 // TestHelp_CommandsOnly verifies that /help lists commands and does not list skills,
 // and that /skill and /use are absent (D10/FR-009/US7).
 //

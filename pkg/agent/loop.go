@@ -8368,13 +8368,16 @@ func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 // introduced by the unified slash-command + skill menu (D2/D3/D4/R1).
 //
 // Resolution order (R1):
-//  1. If <name> is a non-hidden built-in command → return matched=false so the
-//     normal command dispatcher handles it (built-ins win, D3).
+//  1. If <name> is any registered built-in command (visible or hidden) →
+//     return matched=false so the normal command dispatcher handles it.
+//     Registration is the sole authority — hidden/deprecated back-compat
+//     aliases also win (D3: "built-ins win").
 //  2. If <name> resolves to an installed skill (exact, case-insensitive) →
 //     force the skill for THIS turn (one-shot, no arming/pending state).
 //     If a message follows ("/<skill> the message"), set opts.UserMessage to
-//     that message. If no message follows, leave opts.UserMessage unchanged
-//     (the skill's injected instructions drive the LLM turn, per R1).
+//     that message. If no message follows, opts.UserMessage retains the
+//     literal "/<skill-id>" token as the user turn (the skill's injected
+//     instructions from its SKILL.md body drive the LLM response, per R1).
 //  3. Otherwise → return matched=false so the text is delivered as a normal
 //     chat message (D4 — unknown /<x> is not an error).
 //
@@ -8390,9 +8393,12 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 		return false, false, ""
 	}
 
-	// D3: if <name> is a registered non-hidden built-in, let normal dispatch run.
+	// D3: if <name> is any registered built-in (visible or hidden/deprecated),
+	// let normal dispatch run. Hidden commands are back-compat aliases that must
+	// not be shadowed by a skill of the same name — registration is the sole
+	// authority (D3: "built-ins win").
 	if al.cmdRegistry != nil {
-		if def, found := al.cmdRegistry.Lookup(cmdName); found && !def.Hidden {
+		if _, found := al.cmdRegistry.Lookup(cmdName); found {
 			return false, false, ""
 		}
 	}
@@ -8413,9 +8419,12 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 	if opts != nil {
 		opts.ForcedSkills = append(opts.ForcedSkills, skillName)
 
-		// If a message follows the skill token, use it as the user message.
-		// If no message is provided, leave opts.UserMessage unchanged so the
-		// skill's SKILL.md body (injected as system context) drives the turn.
+		// If a message follows the skill token, replace opts.UserMessage with
+		// that message. If no message is provided, leave opts.UserMessage as
+		// the literal "/<skill-id>" token — it becomes the user turn text and
+		// the skill's injected instructions (from SKILL.md body) drive the LLM
+		// response. The literal token is intentional; the SPA renders it as a
+		// compact "skill: <name>" indicator (R2) so users never see the raw token.
 		parts := strings.Fields(strings.TrimSpace(raw))
 		if len(parts) >= 2 {
 			message := strings.TrimSpace(strings.Join(parts[1:], " "))

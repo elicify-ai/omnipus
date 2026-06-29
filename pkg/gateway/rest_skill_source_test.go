@@ -252,3 +252,52 @@ func TestDeleteNonBuiltinSkillNotRejectedByGuard(t *testing.T) {
 		w.Body.String(),
 	)
 }
+
+// TestHandleSkills_IncludesArgumentHint verifies that GET /api/v1/skills
+// surfaces the SKILL.md frontmatter argument-hint as argument_hint on the
+// wire Skill type (F3/FR-006/FR-014/R3).
+//
+// Traces to: FR-006, FR-014, R3, SC-008.
+func TestHandleSkills_IncludesArgumentHint(t *testing.T) {
+	builtinDir := t.TempDir()
+
+	// Skill WITH an argument-hint declaration.
+	// Note: "[topic]" must be quoted in YAML because bare [topic] parses as a
+	// YAML sequence, not a string. The SKILL.md convention is to quote the hint.
+	seedSkill(t, builtinDir, "web-research",
+		`name: web-research`+"\n"+`description: Search the web.`+"\n"+`argument-hint: "[topic]"`,
+		"# web-research\n\nSearch the web for a given topic.")
+
+	// Skill WITHOUT an argument-hint declaration.
+	seedSkill(t, builtinDir, "summarize",
+		"name: summarize\ndescription: Summarize text.",
+		"# summarize\n\nSummarize arbitrary text.")
+
+	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var listed []gen.Skill
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listed))
+	require.Len(t, listed, 2)
+
+	// Index by id for order-independent assertions.
+	byID := make(map[string]gen.Skill, len(listed))
+	for _, s := range listed {
+		byID[s.Id] = s
+	}
+
+	// web-research: argument_hint must be "[topic]".
+	wr, ok := byID["web-research"]
+	require.True(t, ok, "web-research must be in the listing")
+	require.NotNil(t, wr.ArgumentHint, "web-research must carry argument_hint")
+	assert.Equal(t, "[topic]", *wr.ArgumentHint) // YAML-quoted in frontmatter → string "[topic]"
+
+	// summarize: argument_hint must be absent (nil pointer).
+	sum, ok := byID["summarize"]
+	require.True(t, ok, "summarize must be in the listing")
+	assert.Nil(t, sum.ArgumentHint, "summarize must not carry argument_hint when not declared")
+}
