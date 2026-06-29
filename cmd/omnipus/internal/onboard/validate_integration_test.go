@@ -436,12 +436,10 @@ func TestCliOnboard_NonInteractive_WrongKey_NotPersisted(t *testing.T) {
 		NonInteractive: true,
 	}
 
-	// Patch the BaseURL by wrapping applyInput's validate call. Since applyInput
-	// calls validateAndResolveKey (production), and that resolves the URL from
-	// providers.GetDefaultAPIBase, we cannot inject the test URL there without
-	// changing the production function. Instead, we test the path directly:
-	// call validateAndResolveKey (which mirrors the production logic) and
-	// assert that on error, the credential store has no entry.
+	// applyInput resolves baseURL via providers.GetDefaultAPIBase and passes it to
+	// validateAndResolveKey. We call the production validateAndResolveKey directly with
+	// the httptest URL (the baseURL seam) and assert that a non-interactive InvalidKey
+	// returns an error — the caller then persists nothing.
 	_, err := validateAndResolveKey(context.Background(), in, wio, srv.URL)
 	if err == nil {
 		t.Fatal("expected error for invalid key in non-interactive mode, got nil")

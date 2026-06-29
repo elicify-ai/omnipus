@@ -104,8 +104,10 @@ var providerMenu = []providerMenuItem{
 	{label: "Other (enter protocol id)", providerID: ""},
 }
 
-// defaultModelFor mirrors the per-provider model defaults the REST handler
-// applies when the user doesn't specify a model.
+// defaultModelFor provides the CLI's per-provider default model when the user
+// doesn't specify one. It is analogous to, but independently maintained from, the
+// REST onboarding defaults (the slug lists are not kept in lockstep — do not assume
+// a single source of truth).
 func defaultModelFor(providerID string) string {
 	switch providerID {
 	case "anthropic":
@@ -461,8 +463,10 @@ func providerDisplayName(providerID string) string {
 	return strings.ToUpper(providerID[:1]) + providerID[1:]
 }
 
-// validateAndResolveKey validates the provider API key in in.APIKey before it is
-// persisted. It implements the FR-014/FR-015 policy:
+// validateAndResolveKey validates in.APIKey against the provider at baseURL before
+// it is persisted, implementing the FR-014/FR-015 policy. The caller resolves baseURL
+// via providers.GetDefaultAPIBase and passes it in, which keeps this function a pure,
+// httptest-injectable seam (the tests exercise it directly — there is no mirror).
 //
 //   - in.SkipVerify == true: no probe; emit R-F slog audit line; return in.APIKey.
 //   - Outcome == Valid: proceed silently; return in.APIKey.
@@ -471,12 +475,8 @@ func providerDisplayName(providerID string) string {
 //   - Outcome == NoCredit/Unreachable/Restricted: print warning to wio.stdout; emit R-F
 //     audit slog line; return in.APIKey.
 //
-// The caller must NOT persist anything if this function returns a non-nil error.
-// validateAndResolveKey validates in.APIKey against the provider at baseURL
-// (the caller resolves baseURL via providers.GetDefaultAPIBase; passing it in
-// keeps the function a pure, httptest-injectable seam). It returns the resolved
-// key (which may differ from in.APIKey after an interactive re-prompt) or an
-// error when a non-interactive run hits an InvalidKey outcome.
+// It returns the resolved key (which may differ from in.APIKey after an interactive
+// re-prompt). The caller must NOT persist anything if this returns a non-nil error.
 func validateAndResolveKey(ctx context.Context, in Input, wio wizardIO, baseURL string) (string, error) {
 	if in.SkipVerify {
 		// R-F best-effort audit: emit structured slog line; never fail onboard.
@@ -498,7 +498,7 @@ func validateAndResolveKey(ctx context.Context, in Input, wio wizardIO, baseURL 
 			BaseURL:      baseURL,
 			APIKey:       apiKey,
 			Catalog:      nil,
-		}, nil) // CLI passes nil URLChecker (operator-run, no SSRF guard — R-A/spec)
+		}, providers.NoopChecker{}) // CLI: explicit no-SSRF-guard (operator-run — R-A/spec)
 
 		// SEC-16: RawDetail for debug log only, never to the user.
 		slog.Debug("providers: CLI key probe result",
@@ -507,7 +507,7 @@ func validateAndResolveKey(ctx context.Context, in Input, wio wizardIO, baseURL 
 			"raw_detail", result.RawDetail,
 		)
 
-		if result.Blocks {
+		if result.Blocks() {
 			// Outcome is InvalidKey.
 			if in.NonInteractive {
 				fmt.Fprintln(wio.stderr, result.Message)
