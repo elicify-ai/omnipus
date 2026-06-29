@@ -19,15 +19,19 @@ import (
 //
 // Call-order contract (loop.go injection site):
 //
-//	callMessages = injectWorkspaceInstructions(callMessages, note)  // inserts at [1]
-//	callMessages = injectManifestNote(callMessages, manifestNote)   // also inserts at [1], shifts workspace to [2]
+//	callMessages = injectWorkspaceInstructions(callMessages, note)     // inserts at [1]
+//	callMessages = injectWebRenderingNote(callMessages, webNote)       // also inserts at [1], shifts workspace to [2]
+//	callMessages = injectManifestNote(callMessages, manifestNote)      // also inserts at [1], shifts web-note to [2], workspace to [3]
 //
-// Final order: [0] system prompt · [1] manifest note · [2] workspace instructions · [3+] history.
-// When the manifest note is absent (empty), injectManifestNote is a no-op and the
-// workspace instructions remain at [1]. A scratchpad note (present when the acting
-// agent has active tasks) is inserted at [1] BEFORE this call, so it ends up after
-// the workspace instructions; this helper governs only the manifest↔workspace
-// relative order, not absolute positions.
+// Final order on a web-chat turn (all three notes present):
+//
+//	[0] system prompt · [1] manifest note · [2] web-rendering note · [3] workspace instructions · [4] scratchpad · [5+] history
+//
+// On a non-web turn, injectWebRenderingNote is a no-op (buildWebRenderingNote returns ""),
+// so workspace instructions land at [2] when the manifest note is present, or at [1] when absent.
+// A scratchpad note (present when the acting agent has active tasks) is inserted at [1]
+// BEFORE this call, so it ends up further back; this helper governs only the
+// manifest↔web-note↔workspace relative order, not absolute positions.
 //
 // Returns msgs unchanged when note == "" or len(msgs) == 0.
 func injectWorkspaceInstructions(msgs []providers.Message, note string) []providers.Message {

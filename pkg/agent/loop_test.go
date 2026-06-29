@@ -203,6 +203,111 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	}
 }
 
+// TestProcessMessage_WebRenderingNoteWiring guards the loop.go integration seam:
+// injectWebRenderingNote(callMessages, buildWebRenderingNote(ts.channel)) must
+// actually reach the provider's Chat call for a webchat turn, and must NOT appear
+// on a non-web turn. This is the false-green class the unit tests in
+// web_rendering_note_test.go cannot catch — they test the helpers in isolation but
+// cannot detect a wrong argument (e.g. ts.opts.WorkspaceID instead of ts.channel)
+// or a dropped call after a rebase.
+//
+// The test drives processMessage end-to-end (the same code path as production)
+// with a recordingProvider that captures the exact messages handed to Chat().
+//
+// Traces to: pkg/agent/loop.go injection site (~line 5465):
+//
+//	callMessages = injectWebRenderingNote(callMessages, buildWebRenderingNote(ts.channel))
+func TestProcessMessage_WebRenderingNoteWiring(t *testing.T) {
+	const webNoteMarker = "Rendering (web chat)"
+
+	setup := func(t *testing.T) (*AgentLoop, *recordingProvider) {
+		t.Helper()
+		tmpDir := t.TempDir()
+		cfg := &config.Config{
+			Agents: config.AgentsConfig{
+				Defaults: config.AgentDefaults{
+					Workspace:         tmpDir,
+					ModelName:         "test-model",
+					MaxTokens:         4096,
+					MaxToolIterations: 10,
+				},
+			},
+		}
+		provider := &recordingProvider{}
+		al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+		return al, provider
+	}
+
+	t.Run("webchat turn injects web-rendering note into provider messages", func(t *testing.T) {
+		al, provider := setup(t)
+
+		_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+			Channel: "webchat",
+			Sender:  bus.SenderInfo{CanonicalID: "user-web-1"},
+			ChatID:  "chat-web-1",
+			Content: "hello",
+		})
+		if err != nil {
+			t.Fatalf("processMessage: %v", err)
+		}
+		if len(provider.lastMessages) == 0 {
+			t.Fatal("provider received no messages — loop did not call Chat()")
+		}
+
+		var found bool
+		for _, msg := range provider.lastMessages {
+			if msg.Role == "system" && strings.Contains(msg.Content, webNoteMarker) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			contents := make([]string, len(provider.lastMessages))
+			for i, m := range provider.lastMessages {
+				contents[i] = fmt.Sprintf("[%d] role=%s content=%q", i, m.Role, m.Content)
+			}
+			t.Fatalf(
+				"web-rendering note (%q) missing from messages passed to Chat() on a webchat turn.\n"+
+					"This means injectWebRenderingNote is not wired for channel='webchat' in loop.go.\n"+
+					"Messages received:\n%s",
+				webNoteMarker, strings.Join(contents, "\n"),
+			)
+		}
+	})
+
+	t.Run("non-web turn does not inject web-rendering note", func(t *testing.T) {
+		for _, channel := range []string{"telegram", "cli", "discord"} {
+			channel := channel
+			t.Run(channel, func(t *testing.T) {
+				al, provider := setup(t)
+
+				_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+					Channel: channel,
+					Sender:  bus.SenderInfo{CanonicalID: "user-1"},
+					ChatID:  "chat-1",
+					Content: "hello",
+				})
+				if err != nil {
+					t.Fatalf("processMessage: %v", err)
+				}
+				if len(provider.lastMessages) == 0 {
+					t.Fatal("provider received no messages")
+				}
+
+				for _, msg := range provider.lastMessages {
+					if msg.Role == "system" && strings.Contains(msg.Content, webNoteMarker) {
+						t.Errorf(
+							"channel=%q: web-rendering note must NOT appear on non-web turns, "+
+								"but found it in message: role=%s content=%q",
+							channel, msg.Role, msg.Content,
+						)
+					}
+				}
+			})
+		}
+	})
+}
+
 // TestProcessMessage_SkillCommandLoadsRequestedSkill verifies that "/<skill-id> <message>"
 // activates the skill (one-shot, R1) and forwards the message to the LLM with the
 // skill injected into context. Replaces the old /use-token test (D1/R1).
