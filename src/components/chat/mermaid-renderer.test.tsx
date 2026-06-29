@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react'
 
 // Mock the `mermaid` module. The default export carries initialize + render, which
 // getMermaid()/render() call. These vi.fn()s are reconfigured per test.
@@ -24,12 +24,21 @@ const initialize = vi.fn()
 const renderFn = vi.fn()
 vi.mock('mermaid', () => ({ default: { initialize, render: renderFn } }))
 
+// The error card feeds the failure back to the LLM via the chat store; mock it so we
+// can assert that behaviour without standing up the real store/WebSocket.
+const sendMessageMock = vi.fn()
+vi.mock('@/store/chat', () => ({
+  useChatStore: (selector: (s: { sendMessage: typeof sendMessageMock; isStreaming: boolean }) => unknown) =>
+    selector({ sendMessage: sendMessageMock, isStreaming: false }),
+}))
+
 // DOMPurify is intentionally NOT mocked — the sanitization test exercises the real one.
 
 beforeEach(() => {
   vi.resetModules() // fresh mermaid-renderer module -> initialized=false each test
   initialize.mockReset().mockReturnValue(undefined)
   renderFn.mockReset()
+  sendMessageMock.mockReset()
 })
 afterEach(() => cleanup())
 
@@ -67,17 +76,81 @@ describe('MermaidDiagram', () => {
     await waitFor(() => expect(document.querySelector('svg')).toBeInTheDocument())
   })
 
-  it('falls back to the source + error note when render() throws', async () => {
+  it('shows the error card (short message + syntax error + collapsible source) when render() throws', async () => {
     renderFn.mockRejectedValue(new Error('Parse error on line 1'))
     const MermaidDiagram = await importDiagram()
 
     render(<MermaidDiagram code={'this is not valid mermaid'} />)
 
     await waitFor(() => expect(screen.getByText('Parse error on line 1')).toBeInTheDocument())
-    // The raw source is shown so the user still sees what failed.
+    // Short headline, not a raw dump of the source.
+    expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument()
+    // Source still available (in the collapsible <details>).
     expect(screen.getByText(/this is not valid mermaid/)).toBeInTheDocument()
-    // No diagram is injected on the error path.
-    expect(document.querySelector('svg')).toBeNull()
+    // A "fix" affordance is offered.
+    expect(screen.getByRole('button', { name: /Ask assistant to fix/i })).toBeInTheDocument()
+  })
+
+  it('error card "Ask assistant to fix" sends the syntax error + code back to the LLM', async () => {
+    renderFn.mockRejectedValue(new Error("Parse error on line 3: Expecting 'PE', got '1'"))
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={'graph TD; A--B'} />)
+
+    const btn = await screen.findByRole('button', { name: /Ask assistant to fix/i })
+    fireEvent.click(btn)
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1)
+    const sent = sendMessageMock.mock.calls[0][0] as string
+    expect(sent).toContain("Parse error on line 3: Expecting 'PE', got '1'") // the syntax detail
+    expect(sent).toContain('graph TD; A--B') // the original code
+    expect(sent).toMatch(/corrected Mermaid/i) // a clear fix request
+    // Button reflects the sent state (and would be disabled to prevent double-send).
+    expect(screen.getByRole('button', { name: /Sent to assistant/i })).toBeInTheDocument()
+  })
+
+  it('streaming: renders NOTHING while the partial code fails to parse (no naked source, no error)', async () => {
+    renderFn.mockRejectedValue(new Error('Parse error on line 1'))
+    const MermaidDiagram = await importDiagram()
+
+    const { container } = render(<MermaidDiagram code={'graph T'} streaming />)
+
+    await waitFor(() => expect(renderFn).toHaveBeenCalled())
+    expect(screen.queryByText(/Couldn't render/i)).toBeNull()
+    expect(screen.queryByText(/Rendering diagram/i)).toBeNull()
+    expect(screen.queryByText(/graph T/)).toBeNull()
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('streaming: shows no placeholder while loading, then pops in the SVG when ready', async () => {
+    let resolve!: (v: { svg: string }) => void
+    renderFn.mockReturnValue(new Promise((r) => (resolve = r)))
+    const MermaidDiagram = await importDiagram()
+
+    const { container } = render(<MermaidDiagram code={DIAGRAM} streaming />)
+
+    // While streaming + loading: nothing at all (no "Rendering diagram..." placeholder).
+    expect(screen.queryByText(/Rendering diagram/i)).toBeNull()
+    expect(container).toBeEmptyDOMElement()
+
+    resolve({ svg: '<svg id="streamed"/>' })
+    await waitFor(() => expect(document.querySelector('#streamed')).toBeInTheDocument())
+  })
+
+  it('streaming: does NOT log render failures (avoids mid-stream console spam)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    renderFn.mockRejectedValue(new Error('Parse error on line 1'))
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={'graph T'} streaming />)
+    await waitFor(() => expect(renderFn).toHaveBeenCalled())
+    await Promise.resolve()
+
+    const loggedRenderFailure = errSpy.mock.calls.some((c) =>
+      String(c[0]).includes('[mermaid] render failed'),
+    )
+    expect(loggedRenderFailure).toBe(false)
+    errSpy.mockRestore()
   })
 
   it('shows the init-failure fallback when mermaid.initialize() throws', async () => {
@@ -161,6 +234,24 @@ describe('MermaidDiagram', () => {
     render(<MermaidDiagram code={DIAGRAM} />)
     expect(screen.queryByText(/Rendering diagram/i)).toBeNull()
     expect(document.querySelector('#cached-diagram')).toBeInTheDocument()
+    expect(renderFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('caches a render FAILURE so a remount shows the error card without re-attempting (no loop)', async () => {
+    // A malformed diagram in the virtualized list remounts repeatedly. Without a failure
+    // cache, each remount re-runs the async render → setError → height change → re-measure
+    // → remount: a console-spamming loop. The cache makes the error card synchronous.
+    renderFn.mockRejectedValue(new Error('Parse error on line 1'))
+    const MermaidDiagram = await importDiagram()
+
+    const first = render(<MermaidDiagram code={'graph T--'} />)
+    await waitFor(() => expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument())
+    expect(renderFn).toHaveBeenCalledTimes(1)
+    first.unmount()
+
+    // Remount with the SAME malformed code → error card from cache; render NOT re-called.
+    render(<MermaidDiagram code={'graph T--'} />)
+    expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument()
     expect(renderFn).toHaveBeenCalledTimes(1)
   })
 
