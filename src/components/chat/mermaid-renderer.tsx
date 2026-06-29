@@ -89,10 +89,12 @@ function MermaidDiagramImpl({ code }: MermaidDiagramProps) {
         renderedSvgCache.set(code, rendered)
         if (!cancelled) setSvg(rendered)
       } catch (e) {
-        if (!cancelled) {
-          const msg = e instanceof Error ? e.message : String(e)
-          setError(msg)
-        }
+        const msg = e instanceof Error ? e.message : String(e)
+        // Parity with the init-failure path (which logs): surface render failures to
+        // the console so a diagram that fails for only some users leaves a breadcrumb,
+        // not just a user-visible error block.
+        console.error('[mermaid] render failed:', msg)
+        if (!cancelled) setError(msg)
       }
     }
 

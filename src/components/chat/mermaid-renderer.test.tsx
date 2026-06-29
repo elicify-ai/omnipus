@@ -129,6 +129,21 @@ describe('MermaidDiagram', () => {
     errSpy.mockRestore()
   })
 
+  it('SECURITY: initializes mermaid with securityLevel "strict"', async () => {
+    // The renderer pins securityLevel:'strict' (mermaid's most restrictive: HTML
+    // labels off, click/script directives disabled) because this sink renders on the
+    // persisted/reload path. A regression to 'loose' would re-enable script execution
+    // in agent-authored diagrams — guard the pin explicitly (DOMPurify is a separate,
+    // output-side defense; this asserts mermaid's own input-side posture).
+    renderFn.mockResolvedValue({ svg: '<svg/>' })
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={DIAGRAM} />)
+
+    await waitFor(() => expect(initialize).toHaveBeenCalled())
+    expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ securityLevel: 'strict' }))
+  })
+
   it('paints synchronously from cache on remount (no loading flash, no re-render)', async () => {
     // A finalized message can remount when the virtualized list re-renders. The
     // SVG cache must make the second mount render the stored diagram synchronously
