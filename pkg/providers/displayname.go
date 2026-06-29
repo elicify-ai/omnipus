@@ -24,8 +24,12 @@ var knownDisplayNames = map[string]string{
 }
 
 // DisplayName returns the branded display name for the given provider ID (e.g.
-// "openrouter" → "OpenRouter"). The single source of truth for FR-7 user-facing
-// messages in the gateway (used at all three ValidateKey call sites).
+// "openrouter" → "OpenRouter"). It is the single source of truth for FR-7
+// user-facing messages in the gateway (used at all three ValidateKey call sites).
+//
+// Note: the interactive CLI onboarding wizard deliberately uses its own
+// providerMenu labels for display (cmd/omnipus/internal/onboard) rather than this
+// map, so a provider may surface a slightly different label in the CLI menu UX.
 //
 // Falls back to title-casing the first letter of the providerID for unknown
 // providers so messages are still readable without a curated entry.

@@ -4820,8 +4820,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		// R-D step 7 / FR-011: attach validation for warning outcomes (NoCredit/Unreachable/Restricted).
 		// Valid outcome and key-absent PUTs carry no validation field.
-		if keyChanged && putValidationResult.Outcome != "" &&
-			putValidationResult.Outcome != providers_pkg.OutcomeValid {
+		if keyChanged && putValidationResult.Outcome != providers_pkg.OutcomeValid {
 			outcomeStr := gen.ProviderValidationOutcome(putValidationResult.Outcome)
 			// Guard: only assign the validation object when the cast is a known wire value.
 			// An off-contract Outcome (e.g. future 6th value, wrong case) must not silently
