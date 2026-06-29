@@ -2984,6 +2984,25 @@ func (a *restAPI) storeCredential(refName, apiKey string) (string, error) {
 	return refName, nil
 }
 
+// credentialStoreReady reports whether the encrypted credential store can accept a
+// write (unlocked / master key available), WITHOUT writing anything. It mirrors the
+// readiness path of storeCredential so the PUT handler can return 503 BEFORE running a
+// live key-validation probe — there is no point making a billable upstream call to
+// validate a key we cannot persist (SEC-23: no plaintext fallback).
+func (a *restAPI) credentialStoreReady() error {
+	if a.credStore != nil {
+		return nil // an already-unlocked store was injected
+	}
+	store := credentials.NewStore(a.credentialsStorePath())
+	if err := credentials.Unlock(store); err != nil {
+		return fmt.Errorf(
+			"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets: %w",
+			err,
+		)
+	}
+	return nil
+}
+
 // channelCredKey is the credential-store key for a channel's secret field. The
 // format is opaque to readers (channel constructors resolve secrets via the
 // config <field>_ref, never by reconstructing this key); it exists so the
@@ -4665,6 +4684,18 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		var putValidationResult providers_pkg.ValidationResult
 		keyChanged := req.ApiKey != nil && *req.ApiKey != ""
 		if keyChanged {
+			// Store-readiness FIRST (SEC-23): if the credential store is locked we cannot
+			// persist the key, so return 503 BEFORE the SSRF check + the billable
+			// validation probe. (Otherwise a locked store would be reported as an invalid
+			// key — the validation probe would run and 422 before we discovered we can't
+			// store anything.)
+			if err := a.credentialStoreReady(); err != nil {
+				slog.Error("rest: credential store unavailable for provider update",
+					"provider", providerID, "error", err)
+				jsonErr(w, http.StatusServiceUnavailable,
+					"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets")
+				return
+			}
 			// Resolve the persisted api_base from the in-memory config.
 			var persistedAPIBase string
 			for _, m := range cfg.Providers {

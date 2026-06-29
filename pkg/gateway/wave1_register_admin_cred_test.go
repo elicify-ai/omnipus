@@ -110,6 +110,49 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 	return api, tmpDir, hexKey
 }
 
+// newTestAPIWithMasterKeyAndProviders is identical to newTestAPIWithMasterKey but
+// pre-seeds the in-memory AgentLoop config with the given providers slice. Use this
+// when the PUT /providers/{id} handler needs to resolve a specific api_base from the
+// in-memory config (e.g. to point at an httptest stub rather than the live provider
+// endpoint that GetDefaultAPIBase would return). The callers of newTestAPIWithMasterKey
+// that do NOT need custom providers are left unchanged.
+func newTestAPIWithMasterKeyAndProviders(t *testing.T, provs []*config.ModelConfig) (*restAPI, string, string) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	t.Setenv("OMNIPUS_KEY_FILE", "")
+
+	rawKey := make([]byte, 32)
+	_, err := rand.Read(rawKey)
+	require.NoError(t, err)
+	hexKey := hex.EncodeToString(rawKey)
+	t.Setenv("OMNIPUS_MASTER_KEY", hexKey)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+		Providers: provs,
+	}
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		homePath:      tmpDir,
+		taskStore:     task.New(tmpDir + "/tasks"),
+	}
+	return api, tmpDir, hexKey
+}
+
 // setupMasterKeyTempDir creates a temp directory with a minimal config.json,
 // sets OMNIPUS_MASTER_KEY to a fresh random hex key, and returns (tmpDir, hexKey).
 // Unlike newTestAPIWithMasterKey it does NOT create an AgentLoop — use this
@@ -575,7 +618,42 @@ func TestOnboarding_RefusesWhenNoMasterKey(t *testing.T) {
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders PUT (credential store integration)
 func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
-	api, tmpDir, _ := newTestAPIWithMasterKey(t)
+	// Start a local stub server that ValidateKey will hit instead of the live
+	// api.anthropic.com endpoint (which would reject our fake key with 401 →
+	// InvalidKey → 422, blocking the credential-ref storage mechanics under test).
+	//
+	// The stub returns HTTP 200 for both:
+	//   GET  /models           — FetchModels selects a probe model from the list
+	//   POST /chat/completions — probeCompletion classifies 200+no-error as Valid
+	//
+	// NoopChecker (ssrfChecker == nil) uses a plain http.Client, so 127.0.0.1 is
+	// reachable with no SSRF block.
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/models":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"claude-3-haiku-20240307"}]}`))
+		default:
+			// /chat/completions and anything else → 200 Valid
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		}
+	}))
+	t.Cleanup(stub.Close)
+
+	// Seed the in-memory config with an anthropic provider whose api_base points
+	// at the stub. The PUT handler resolves persistedAPIBase from cfg.Providers
+	// first; this overrides the GetDefaultAPIBase("anthropic") = real endpoint
+	// fallback so ValidateKey probes the stub and returns OutcomeValid.
+	api, tmpDir, _ := newTestAPIWithMasterKeyAndProviders(t, []*config.ModelConfig{
+		{
+			ModelName: "anthropic",
+			Provider:  "anthropic",
+			Model:     "claude-3-haiku-20240307",
+			APIBase:   stub.URL,
+		},
+	})
 
 	// Inject an authenticated user into the context (PUT requires auth).
 	body := `{"api_key":"sk-put-test","model":"claude-opus-4-5"}`
