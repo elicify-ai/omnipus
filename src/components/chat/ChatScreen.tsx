@@ -54,11 +54,20 @@ import type { ChatMessage } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, fetchSessionMessages, fetchCommands } from '@/lib/api'
-import type { SlashCommand } from '@/lib/api'
+import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
+import type { SlashCommand, Skill } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
+
+// ── Slash/skill palette item shape ───────────────────────────────────────────
+
+interface SlashItem {
+  key: string
+  label: string
+  description: string
+  onSelect: () => void
+}
 
 // ── Message components ────────────────────────────────────────────────────────
 
@@ -1054,6 +1063,30 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     enabled: inputEnabled,
   })
 
+  // Skill-arg mode: detect when the user is typing the skill NAME argument after
+  // "/skill " or "/use " — i.e. the pattern is /^\/(?:skill|use)\s+(\S*)$/
+  // (command + at least one space + a partial token with NO further space).
+  // We capture the partial token so we can filter skills letter-by-letter.
+  const skillArgMatch = !isReplaying && inputEnabled
+    ? /^\/(?:skill|use)\s+(\S*)$/.exec(inputValue)
+    : null
+  const inSkillArgMode = skillArgMatch !== null
+  // The partial token the user is typing — "" means show all installed skills.
+  const skillPartial = skillArgMatch ? skillArgMatch[1] : ''
+
+  // Lazy skills query: only fetched once the user reaches the skill-name argument.
+  // staleTime of 60s matches the commands query — skills change rarely.
+  const { data: skills = [] } = useQuery<Skill[]>({
+    queryKey: ['skills'],
+    // Wrapped (not a bare `fetchSkills` reference) to match the commands query's
+    // `() => fetchCommands('web')` pattern: the binding is read only when the
+    // queryFn is invoked, so sibling tests whose useQuery mock ignores queryFn
+    // don't need to add fetchSkills to their @/lib/api mock.
+    queryFn: () => fetchSkills(),
+    staleTime: 60_000,
+    enabled: inputEnabled && inSkillArgMode,
+  })
+
   // FR-3a: during streaming, show the slash menu ONLY if at least one command
   // with available_while_streaming:true matches the current input prefix.
   // Outside streaming, show all commands.  Commands come from the API (US-4);
@@ -1064,7 +1097,42 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     if (isStreaming) return all.filter((cmd) => cmd.available_while_streaming === true)
     return all
   })()
-  const shouldShowSlash = visibleSlashCommands.length > 0 && inputValue.startsWith('/') && !isReplaying && inputEnabled
+
+  // Skill suggestions for the skill-arg autocomplete.
+  // Filter by case-insensitive prefix on id OR name; cap at 8.
+  const visibleSkillItems = (() => {
+    if (!inSkillArgMode) return []
+    const lower = skillPartial.toLowerCase()
+    const filtered = skills.filter(
+      (s) => s.id.toLowerCase().startsWith(lower) || s.name.toLowerCase().startsWith(lower),
+    )
+    return filtered.slice(0, 8)
+  })()
+
+  // Unified item list consumed by the dropdown and keyboard navigation.
+  // Shape: { key, label (mono primary), description (muted secondary), onSelect() }
+  // When in skill-arg mode AND there are skill matches → show skill items.
+  // Otherwise → show command items (preserving existing behaviour exactly).
+  const slashItems: SlashItem[] = inSkillArgMode && visibleSkillItems.length > 0
+    ? visibleSkillItems.map((s) => ({
+        key: s.id,
+        label: s.id,
+        description: s.name + (s.description ? ` — ${s.description}` : ''),
+        onSelect: () => completeSkillName(s.id),
+      }))
+    : visibleSlashCommands.map((cmd) => ({
+        key: cmd.label,
+        label: cmd.label,
+        description: cmd.description,
+        onSelect: () => executeSlashCommand(cmd.label),
+      }))
+
+  const shouldShowSlash = slashItems.length > 0 && !isReplaying && inputEnabled
+
+  // Reset highlight to 0 when the visible list changes (length or content) so
+  // the cursor never points out-of-bounds as the filter narrows.
+  const slashItemKeys = slashItems.map((i) => i.key).join(',')
+  useEffect(() => { setSlashHighlight(0) }, [slashItemKeys])
 
   // T23: record when a new stream starts so the global Escape handler can detect
   // the race window where the done frame arrived before Escape was pressed.
@@ -1195,6 +1263,16 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     }
   }
 
+  // completeSkillName — called when the user selects a skill from the
+  // skill-arg autocomplete dropdown.  Always normalises to the canonical
+  // "/skill " prefix even when the user typed the "/use" alias.
+  function completeSkillName(id: string) {
+    const text = `/skill ${id} `
+    composerRuntime.setText(text)
+    setInputValue(text)
+    closeSlash()
+  }
+
   // Send-path interception: before AssistantUI's onNew fires, check if the
   // trimmed input is exactly a client-delivery slash command (e.g. "/clear").
   // If it is, run it locally and prevent the message from reaching the backend.
@@ -1269,17 +1347,15 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setSlashHighlight((h) => (h + 1) % visibleSlashCommands.length)
+      setSlashHighlight((h) => (h + 1) % slashItems.length)
       setSlashOpen(true)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setSlashHighlight((h) => (h - 1 + visibleSlashCommands.length) % visibleSlashCommands.length)
+      setSlashHighlight((h) => (h - 1 + slashItems.length) % slashItems.length)
       setSlashOpen(true)
     } else if (e.key === 'Enter' && slashOpen) {
       e.preventDefault()
-      if (visibleSlashCommands[slashHighlight]) {
-        executeSlashCommand(visibleSlashCommands[slashHighlight].label)
-      }
+      slashItems[slashHighlight]?.onSelect()
     } else if (e.key === 'Escape') {
       closeSlash()
     }
@@ -1413,12 +1489,14 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {/* Slash command dropdown */}
+      {/* Slash command / skill-arg dropdown — shared palette for both modes.
+          In skill-arg mode (user typed "/skill <partial>") shows filtered skills;
+          otherwise shows slash commands.  Both modes use the same styling. */}
       {shouldShowSlash && slashOpen && (
         <div className="mb-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden shadow-lg">
-          {visibleSlashCommands.map((cmd, i) => (
+          {slashItems.map((item, i) => (
             <button
-              key={cmd.label}
+              key={item.key}
               type="button"
               className={cn(
                 'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
@@ -1428,12 +1506,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               )}
               onMouseDown={(e) => {
                 e.preventDefault() // prevent blur before click registers
-                executeSlashCommand(cmd.label)
+                item.onSelect()
               }}
               onMouseEnter={() => setSlashHighlight(i)}
             >
-              <span className="font-mono text-xs text-[var(--color-accent)]">{cmd.label}</span>
-              <span className="text-[11px]">{cmd.description}</span>
+              <span className="font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
+              <span className="text-[11px]">{item.description}</span>
             </button>
           ))}
         </div>
