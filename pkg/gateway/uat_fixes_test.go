@@ -25,10 +25,12 @@ import (
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	providers_pkg "github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
 // TestFetchUpstreamModels covers the OpenAI-compatible /models fetcher against a
 // stub server: success (sorted IDs), non-200, wrong content-type, and bad JSON.
+// Re-pointed to providers_pkg.FetchModels after the gateway copy was deleted (FR-002 / SC-002).
 func TestFetchUpstreamModels(t *testing.T) {
 	t.Run("success returns sorted ids", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,7 +40,7 @@ func TestFetchUpstreamModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		models, err := fetchUpstreamModels(srv.URL, "key", nil)
+		models, err := providers_pkg.FetchModels(context.Background(), srv.URL, "key", nil)
 		require.NoError(t, err)
 		// Sorted, empty id dropped.
 		assert.Equal(t, []string{"a-model", "z-model"}, models)
@@ -50,7 +52,7 @@ func TestFetchUpstreamModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		_, err := fetchUpstreamModels(srv.URL, "key", nil)
+		_, err := providers_pkg.FetchModels(context.Background(), srv.URL, "key", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "401")
 	})
@@ -62,7 +64,7 @@ func TestFetchUpstreamModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		_, err := fetchUpstreamModels(srv.URL, "key", nil)
+		_, err := providers_pkg.FetchModels(context.Background(), srv.URL, "key", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Content-Type")
 	})
@@ -74,7 +76,7 @@ func TestFetchUpstreamModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		_, err := fetchUpstreamModels(srv.URL, "key", nil)
+		_, err := providers_pkg.FetchModels(context.Background(), srv.URL, "key", nil)
 		require.Error(t, err)
 	})
 }

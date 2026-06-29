@@ -28,10 +28,12 @@ package onboard
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -61,6 +63,9 @@ type wizardIO struct {
 	// this is term.ReadPassword over os.Stdin; in tests it is a stub that
 	// returns the next scripted line.
 	readPassword func() (string, error)
+	// skipVerify controls whether the live provider-key probe is skipped.
+	// Set by --skip-verify; passed through to applyInput in the interactive path.
+	skipVerify bool
 }
 
 // Input is the validated set of answers the wizard collected. Exposed for
@@ -72,6 +77,12 @@ type Input struct {
 	Model      string
 	Username   string
 	Password   string
+	// SkipVerify mirrors the --skip-verify flag: when true, no live key probe
+	// is performed and the key is persisted unconditionally (FR-015).
+	SkipVerify bool
+	// NonInteractive mirrors the --non-interactive flag: when true, an InvalidKey
+	// outcome exits non-zero rather than re-prompting.
+	NonInteractive bool
 }
 
 // providerMenuItem is one entry in the numbered provider menu.
@@ -126,6 +137,7 @@ func NewOnboardCommand() *cobra.Command {
 		adminPasswordFlag  string
 		adminPasswordStdin bool
 		nonInteractive     bool
+		skipVerify         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "onboard",
@@ -198,9 +210,13 @@ Examples:
 				if err != nil {
 					return err
 				}
+				in.SkipVerify = skipVerify
+				in.NonInteractive = true
 				return RunHeadless(home, defaultIO(cmd), in)
 			}
-			return Run(home, defaultIO(cmd))
+			wio := defaultIO(cmd)
+			wio.skipVerify = skipVerify
+			return Run(home, wio)
 		},
 	}
 	cmd.Flags().StringVar(&homeFlag, "home", "", "Omnipus home directory (default: $OMNIPUS_HOME or ~/.omnipus)")
@@ -231,6 +247,12 @@ Examples:
 		"admin-password-stdin",
 		false,
 		"Read the admin password from stdin (next line after the api key if --api-key-stdin is also set)",
+	)
+	cmd.Flags().BoolVar(
+		&skipVerify,
+		"skip-verify",
+		false,
+		"Skip the live provider-key check (offline/air-gapped setup or known-good key).",
 	)
 	return cmd
 }
@@ -377,7 +399,9 @@ func Run(home string, wio wizardIO) error {
 		return nil
 	}
 
-	in, err := prompt(wio)
+	// Interactive path: prompt collects the raw answers; then the validation loop
+	// may re-prompt for the API key when the live probe returns InvalidKey.
+	in, err := promptWithValidation(wio)
 	if err != nil {
 		return err
 	}
@@ -406,6 +430,113 @@ func printAccessURLBlock(out io.Writer, home string) {
 	fmt.Fprintln(out, "  1. Run: omnipus start")
 	fmt.Fprintln(out, "  2. Open the dashboard:")
 	fmt.Fprint(out, netinfo.Render(urls))
+}
+
+// promptWithValidation calls prompt then carries wio.skipVerify into the result.
+// The interactive key-validation re-prompt loop is handled in applyInput, which
+// has access to wio for re-reading the key. promptWithValidation is therefore a
+// thin wrapper that transfers the flag from wizardIO into the returned Input.
+func promptWithValidation(wio wizardIO) (Input, error) {
+	in, err := prompt(wio)
+	if err != nil {
+		return in, err
+	}
+	in.SkipVerify = wio.skipVerify
+	return in, nil
+}
+
+// providerDisplayName returns a human-readable display name for a given
+// providerID, used to construct FR-7 validation messages. It falls back to
+// the title-cased providerID when the provider is not in the curated menu.
+func providerDisplayName(providerID string) string {
+	for _, item := range providerMenu {
+		if item.providerID == providerID {
+			return item.label
+		}
+	}
+	// Fallback: capitalise the first letter.
+	if len(providerID) == 0 {
+		return providerID
+	}
+	return strings.ToUpper(providerID[:1]) + providerID[1:]
+}
+
+// validateAndResolveKey validates the provider API key in in.APIKey before it is
+// persisted. It implements the FR-014/FR-015 policy:
+//
+//   - in.SkipVerify == true: no probe; emit R-F slog audit line; return in.APIKey.
+//   - Outcome == Valid: proceed silently; return in.APIKey.
+//   - Outcome == InvalidKey + in.NonInteractive: print message to wio.stderr; return error.
+//   - Outcome == InvalidKey + interactive: print message; re-prompt for key; loop.
+//   - Outcome == NoCredit/Unreachable/Restricted: print warning to wio.stdout; emit R-F
+//     audit slog line; return in.APIKey.
+//
+// The caller must NOT persist anything if this function returns a non-nil error.
+func validateAndResolveKey(ctx context.Context, in Input, wio wizardIO) (string, error) {
+	if in.SkipVerify {
+		// R-F best-effort audit: emit structured slog line; never fail onboard.
+		slog.Info("provider_key_validation_skipped",
+			"provider", in.ProviderID,
+			"source", "cli",
+			"flag", "--skip-verify",
+		)
+		return in.APIKey, nil
+	}
+
+	displayName := providerDisplayName(in.ProviderID)
+	baseURL := providers.GetDefaultAPIBase(in.ProviderID)
+
+	apiKey := in.APIKey
+	for {
+		result := providers.ValidateKey(ctx, providers.ValidateInput{
+			ProviderID:   in.ProviderID,
+			ProviderName: displayName,
+			BaseURL:      baseURL,
+			APIKey:       apiKey,
+			Catalog:      nil,
+		}, nil) // CLI passes nil URLChecker (operator-run, no SSRF guard — R-A/spec)
+
+		// SEC-16: RawDetail for debug log only, never to the user.
+		slog.Debug("providers: CLI key probe result",
+			"provider", in.ProviderID,
+			"outcome", result.Outcome,
+			"raw_detail", result.RawDetail,
+		)
+
+		if result.Blocks {
+			// Outcome is InvalidKey.
+			if in.NonInteractive {
+				fmt.Fprintln(wio.stderr, result.Message)
+				return "", fmt.Errorf("provider key rejected: %s", result.Message)
+			}
+			// Interactive: print the error and re-prompt for the key.
+			fmt.Fprintf(wio.stdout, "\n%s\n", result.Message)
+			fmt.Fprintf(wio.stdout, "%s API key (input hidden): ", in.ProviderID)
+			newKey, err := wio.readPassword()
+			if err != nil {
+				return "", fmt.Errorf("read api key: %w", err)
+			}
+			fmt.Fprintln(wio.stdout, "")
+			newKey = strings.TrimSpace(newKey)
+			if newKey == "" {
+				return "", errors.New("api key must not be empty")
+			}
+			apiKey = newKey
+			continue
+		}
+
+		// Non-blocking outcomes: warn if not Valid, then proceed.
+		if result.Outcome != providers.OutcomeValid {
+			fmt.Fprintf(wio.stdout, "Warning: %s\n", result.Message)
+			// R-F best-effort audit slog line for warning-proceed.
+			slog.Info("provider_key_validated",
+				"provider", in.ProviderID,
+				"outcome", string(result.Outcome),
+				"action", "proceeded",
+			)
+		}
+		return apiKey, nil
+	}
 }
 
 // prompt walks the user through the wizard and returns the validated answers.
@@ -552,6 +683,16 @@ func readWithDefault(out io.Writer, r *bufio.Reader, label, defaultVal string) (
 // applyInput performs the side-effecting writes: credentials.json,
 // config.json, cli.token, and state.json. It is split out so the regression
 // test can invoke it with a pre-built Input without going through stdin parsing.
+//
+// When in.SkipVerify is false the function validates the API key against the
+// live provider before persisting it (FR-014/FR-015):
+//   - InvalidKey + non-interactive → print to stderr, return error, persist nothing.
+//   - InvalidKey + interactive → print message, re-prompt for the key, repeat.
+//   - NoCredit/Unreachable/Restricted → print warning to stdout, proceed.
+//   - Valid → proceed silently.
+//
+// When in.SkipVerify is true the probe is skipped, the key is persisted, and a
+// structured slog audit line is emitted (R-F best-effort).
 func applyInput(in Input, wio wizardIO) error {
 	// 1. Unlock credentials store (auto-generates master.key on a fresh install).
 	credPath := filepath.Join(in.Home, "credentials.json")
@@ -560,13 +701,21 @@ func applyInput(in Input, wio wizardIO) error {
 		return fmt.Errorf("unlock credentials store: %w", err)
 	}
 
-	// 2. Store API key under a deterministic name (e.g. openai_api_key).
+	// 2. Validate the API key before persisting (FR-014/FR-015).
+	//    resolvedKey may differ from in.APIKey when the interactive loop re-prompts.
+	resolvedKey, err := validateAndResolveKey(context.Background(), in, wio)
+	if err != nil {
+		return err
+	}
+	in.APIKey = resolvedKey
+
+	// 3. Store API key under a deterministic name (e.g. openai_api_key).
 	credRef := strings.ToLower(in.ProviderID) + "_api_key"
 	if err := store.Set(credRef, in.APIKey); err != nil {
 		return fmt.Errorf("save api key: %w", err)
 	}
 
-	// 3. Pre-compute bcrypt hashes + bearer token outside any locks.
+	// 4. Pre-compute bcrypt hashes + bearer token outside any locks.
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
@@ -580,20 +729,20 @@ func applyInput(in Input, wio wizardIO) error {
 		return fmt.Errorf("hash token: %w", err)
 	}
 
-	// 4. Mutate config.json. datamodel.Init has already written a minimal
+	// 5. Mutate config.json. datamodel.Init has already written a minimal
 	// default config if none existed, so the file exists at this point.
 	configPath := filepath.Join(in.Home, "config.json")
 	if err := mutateConfigFile(configPath, in, credRef, string(passwordHash), string(tokenHash)); err != nil {
 		return fmt.Errorf("update config.json: %w", err)
 	}
 
-	// 5. Mint the cli principal and token file (create-if-absent).
+	// 6. Mint the cli principal and token file (create-if-absent).
 	// EnsureCLIToken reads config.json which was just written above.
 	if _, err := clitoken.EnsureCLIToken(in.Home); err != nil {
 		return fmt.Errorf("mint cli token: %w", err)
 	}
 
-	// 6. Mark onboarding complete. NewManager reads state.json fresh — the
+	// 7. Mark onboarding complete. NewManager reads state.json fresh — the
 	// previous IsComplete() check inside Run() may have used a stale view if
 	// state.json was just written by datamodel.Init, but it correctly
 	// reports OnboardingComplete=false from the seeded state.

@@ -26,6 +26,8 @@ import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { PROVIDER_HINTS } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
+import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
+import type { ProviderValidation } from '@/lib/api/generated/openapi-types'
 
 // First-launch onboarding flow — full-screen, outside AppShell.
 //
@@ -561,6 +563,9 @@ function OnboardingWizard() {
   // fails, so the user stays on the step and can retry rather than failing
   // silently.
   const [finishError, setFinishError] = useState('')
+  // Non-blocking validation warning from the last probe (no_credit / unreachable
+  // / restricted). Cleared when the user changes provider or re-probes.
+  const [probeValidation, setProbeValidation] = useState<ProviderValidation | undefined>(undefined)
   // Step 1 — name/username
   const [adminUsername, setAdminUsername] = useState('')
   // Step 2 — password + confirm
@@ -584,6 +589,7 @@ function OnboardingWizard() {
     setTestError('')
     setSelectedModel('')
     setAvailableModels([])
+    setProbeValidation(undefined)
   }
 
   // L1: User clicks a company tile. For single-option companies, this immediately
@@ -681,6 +687,7 @@ function OnboardingWizard() {
     if (PROVIDERS_REQUIRING_ENDPOINT.has(selectedProvider) && !endpoint.trim()) return
     setTestStatus('testing')
     setTestError('')
+    setProbeValidation(undefined)
     try {
       // Non-persistent test + fetch: the server probes the provider with the
       // supplied key and returns the model list in one response. Nothing is
@@ -690,6 +697,11 @@ function OnboardingWizard() {
       const result = await probeProvider(selectedProvider, apiKey.trim(), endpointArg)
       if (result.success) {
         setTestStatus('success')
+        // Capture any non-blocking validation warning from the probe result
+        // (no_credit / unreachable / restricted). success=true means proceed.
+        if (result.validation && result.validation.outcome !== 'valid') {
+          setProbeValidation(result.validation)
+        }
         if (result.models && result.models.length > 0) {
           setAvailableModels(result.models)
           // UAT fix: pre-select a capable default instead of leaving the
@@ -948,6 +960,7 @@ function OnboardingWizard() {
                 onSelectModel={setSelectedModel}
                 isSaving={isSaving}
                 finishError={finishError}
+                probeValidation={probeValidation}
               />
             </motion.div>
           )}
@@ -1260,6 +1273,7 @@ function ModelKeyStep({
   onSelectModel,
   isSaving,
   finishError,
+  probeValidation,
 }: {
   providers: ProviderVariant[]
   selectedProvider: string
@@ -1288,6 +1302,7 @@ function ModelKeyStep({
   onSelectModel: (model: string) => void
   isSaving: boolean
   finishError: string
+  probeValidation?: ProviderValidation
 }) {
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -1717,6 +1732,16 @@ function ModelKeyStep({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Probe-validation warning banner — shown when the connection probe
+          succeeded with a non-blocking warning (no_credit / unreachable /
+          restricted). The key is accepted; the user can proceed. */}
+      {testStatus === 'success' && probeValidation && (
+        <ProviderValidationBanner
+          validation={probeValidation}
+          data-testid="onboarding-probe-validation-banner"
+        />
+      )}
 
       {/* Inline finish failure — keeps the user on this step so they can retry. */}
       {finishError && (

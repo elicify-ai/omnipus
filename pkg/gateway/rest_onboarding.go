@@ -442,7 +442,7 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// http://169.254.169.254/... (cloud metadata), http://10.x, or localhost:<port>.
 	// Resolve + check the host (with DNS-rebinding protection) before ANY outbound
 	// call. Redirect-to-internal is additionally caught by the SSRF-safe client
-	// passed into fetchUpstreamModels / testProviderAuth below.
+	// passed into FetchModels / ValidateKey below.
 	if a.ssrfChecker != nil {
 		if err := a.ssrfChecker.CheckURL(r.Context(), baseURL); err != nil {
 			slog.Warn("rest: probe-provider: SSRF blocked endpoint", "error", err)
@@ -451,9 +451,10 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	models, fetchErr := fetchUpstreamModels(baseURL, body.ApiKey, a.ssrfChecker)
+	// Fetch the model catalog (behavior-preserving: same as the former fetchUpstreamModels call).
+	models, fetchErr := providers.FetchModels(r.Context(), baseURL, body.ApiKey, a.ssrfChk())
 	if fetchErr != nil {
-		// Upstream probe failure is a 200 with success=false — symmetrical
+		// Upstream catalog fetch failure is a 200 with success=false — symmetrical
 		// with POST /providers/{id}/test, so the SPA's error-handling branch
 		// is identical for both flows.
 		errMsg := fetchErr.Error()
@@ -461,28 +462,42 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Auth-validation step: some providers (notably OpenRouter) serve GET /models
-	// without authentication, so a 200 from /models does NOT prove the key is
-	// valid. We exercise real auth by posting a minimal chat-completion request
-	// against the first model in the list. The probe fails on HTTP 401/403, or on
-	// a 400 whose body carries a credential marker (e.g. Gemini's API_KEY_INVALID);
-	// any other outcome (generic 400, 404, 422, 429, 5xx, transport error) is
-	// non-blocking so that a strange model or an endpoint quirk never blocks
-	// onboarding.
-	if len(models) > 0 {
-		if authErr := testProviderAuth(r.Context(), baseURL, body.ApiKey, models[0], a.ssrfChecker); authErr != nil {
-			errMsg := "API key was rejected by the provider (" + authErr.Error() + "). Check the key is correct, active, and has credit."
-			jsonOK(w, gen.ProbeProviderResponse{Success: false, Error: &errMsg})
-			return
-		}
-	} else {
-		// Empty /models list: the auth probe cannot run (no model to exercise).
-		// Make the skip observable instead of silently returning success — this
-		// is exactly the case the auth-probe fix was meant to cover for providers
-		// that return an empty catalog (fix #4).
-		slog.Warn("rest: probe-provider: provider returned no models; API key not verified",
-			"provider", body.Id)
-	}
+	// Auth-validation step: use the centralized providers.ValidateKey to probe the key.
+	// Some providers (notably OpenRouter) serve GET /models without authentication, so
+	// a 200 from /models does NOT prove the key is valid. The classified outcome is
+	// returned in the validation field (R-B). Only InvalidKey blocks (Blocks=true).
+	// SEC-16: result.RawDetail is server-debug-only; never sent to the client.
+	result := providers.ValidateKey(r.Context(), providers.ValidateInput{
+		ProviderID:   string(body.Id),
+		ProviderName: string(body.Id),
+		BaseURL:      baseURL,
+		APIKey:       body.ApiKey,
+		Catalog:      models,
+	}, a.ssrfChk())
+	slog.Debug("rest: probe-provider: key validation result",
+		"provider", body.Id, "outcome", result.Outcome, "detail", result.RawDetail)
 
-	jsonOK(w, gen.ProbeProviderResponse{Success: true, Models: &models})
+	// Build the probe response with the classified validation field (R-B / FR-013).
+	probeResp := gen.ProbeProviderResponse{
+		Success: !result.Blocks,
+		Models:  &models,
+	}
+	// Populate validation for all probed outcomes (valid included for transparency).
+	outcomeStr := gen.ProbeProviderResponseValidationOutcome(result.Outcome)
+	msg := result.Message
+	validationObj := &struct {
+		Message *string                                    `json:"message,omitempty"`
+		Outcome gen.ProbeProviderResponseValidationOutcome `json:"outcome"`
+	}{Outcome: outcomeStr}
+	if msg != "" {
+		validationObj.Message = &msg
+	}
+	probeResp.Validation = validationObj
+
+	if result.Blocks {
+		// InvalidKey — report failure. The curated message is safe to surface (SEC-16).
+		probeResp.Models = nil
+		probeResp.Error = &result.Message
+	}
+	jsonOK(w, probeResp)
 }

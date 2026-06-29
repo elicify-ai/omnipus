@@ -73,6 +73,9 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 			idx++
 			return out, nil
 		},
+		// Skip the live provider-key probe: this test exercises the full
+		// write path (credentials, config, token, state), not key validation.
+		skipVerify: true,
 	}
 
 	if err := Run(home, wio); err != nil {
@@ -432,6 +435,9 @@ func TestOnboard_MintsCLIToken(t *testing.T) {
 			idx++
 			return out, nil
 		},
+		// Skip the live provider-key probe: this test exercises token minting,
+		// not key validation.
+		skipVerify: true,
 	}
 
 	if err := Run(home, wio); err != nil {
@@ -653,6 +659,10 @@ func TestRunHeadless_EndToEnd(t *testing.T) {
 		Model:      "z-ai/glm-5v-turbo",
 		Username:   "alice",
 		Password:   "correcthorsebatterystaple",
+		// Skip the live provider-key probe: this test exercises the full
+		// write path (credentials, config, token, state), not key validation.
+		SkipVerify:     true,
+		NonInteractive: true,
 	}
 	if err := RunHeadless(home, wio, in); err != nil {
 		t.Fatalf("RunHeadless: %v", err)
