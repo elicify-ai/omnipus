@@ -203,7 +203,10 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	}
 }
 
-func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
+// TestProcessMessage_SkillCommandLoadsRequestedSkill verifies that "/<skill-id> <message>"
+// activates the skill (one-shot, R1) and forwards the message to the LLM with the
+// skill injected into context. Replaces the old /use-token test (D1/R1).
+func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 	tmpDir := t.TempDir()
 	skillDir := filepath.Join(tmpDir, "skills", "shell")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -231,13 +234,14 @@ func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
 	provider := &recordingProvider{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
+	// /shell is the skill slug; the message follows directly. One-shot: no arm.
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
 		},
 		ChatID:  "chat-1",
-		Content: "/use shell explain how to list files",
+		Content: "/shell explain how to list files",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -263,7 +267,9 @@ func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
 	}
 }
 
-func TestHandleCommand_UseCommandRejectsUnknownSkill(t *testing.T) {
+// TestHandleCommand_UseTokenIsNormalMessage verifies that "/use <x>" is no longer a
+// skill-activation command (D1): it is delivered as a normal chat message, not handled.
+func TestHandleCommand_UseTokenIsNormalMessage(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -280,8 +286,9 @@ func TestHandleCommand_UseCommandRejectsUnknownSkill(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	agent := al.GetRegistry().GetDefaultAgent()
 
+	// "/use" is no longer a registered command, so it falls through as a normal message.
 	opts := processOptions{}
-	reply, handled := al.handleCommand(context.Background(), bus.InboundMessage{
+	_, handled := al.handleCommand(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
@@ -289,15 +296,15 @@ func TestHandleCommand_UseCommandRejectsUnknownSkill(t *testing.T) {
 		ChatID:  "chat-1",
 		Content: "/use missing explain how to list files",
 	}, agent, &opts)
-	if !handled {
-		t.Fatal("expected /use with unknown skill to be handled")
-	}
-	if !strings.Contains(reply, "Unknown skill: missing") {
-		t.Fatalf("reply = %q, want unknown skill error", reply)
+	if handled {
+		t.Fatal("/use must no longer be handled — it should pass through as a normal message (D1/D4)")
 	}
 }
 
-func TestProcessMessage_UseCommandArmsSkillForNextMessage(t *testing.T) {
+// TestProcessMessage_SkillTokenAloneRunsSkill verifies that "/<skill-id>" alone (no message)
+// activates the skill one-shot with an empty user message, and the LLM is called with the
+// skill injected into context (R1 — skill body drives the turn).
+func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 	tmpDir := t.TempDir()
 	skillDir := filepath.Join(tmpDir, "skills", "shell")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -325,54 +332,43 @@ func TestProcessMessage_UseCommandArmsSkillForNextMessage(t *testing.T) {
 	provider := &recordingProvider{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
+	// "/shell" alone — one-shot skill run; turn proceeds with empty user message.
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
 		},
 		ChatID:  "chat-1",
-		Content: "/use shell",
+		Content: "/shell",
 	})
 	if err != nil {
-		t.Fatalf("processMessage() arm error = %v", err)
+		t.Fatalf("processMessage() error = %v", err)
 	}
-	if !strings.Contains(response, `Skill "shell" is armed for your next message.`) {
-		t.Fatalf("arm response = %q, want armed confirmation", response)
-	}
-
-	response, _, err = al.processMessage(context.Background(), bus.InboundMessage{
-		Channel: "telegram",
-		Sender: bus.SenderInfo{
-			CanonicalID: "telegram:123",
-		},
-		ChatID:  "chat-1",
-		Content: "explain how to list files",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() follow-up error = %v", err)
-	}
+	// The LLM is called (no arm, no "armed" reply) and returns the mock response.
 	if response != "Mock response" {
-		t.Fatalf("follow-up response = %q, want %q", response, "Mock response")
+		t.Fatalf("response = %q, want %q (skill alone must run turn, not arm)", response, "Mock response")
 	}
 	if len(provider.lastMessages) == 0 {
 		t.Fatal("provider did not receive any messages")
 	}
-
 	systemPrompt := provider.lastMessages[0].Content
 	if !strings.Contains(systemPrompt, "### Skill: shell") {
-		t.Fatalf("system prompt missing pending skill content:\n%s", systemPrompt)
-	}
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
-	if lastMessage.Role != "user" || lastMessage.Content != "explain how to list files" {
-		t.Fatalf("last provider message = %+v, want unchanged follow-up user message", lastMessage)
+		t.Fatalf("system prompt missing skill content:\n%s", systemPrompt)
 	}
 }
 
-func TestApplyExplicitSkillCommand_ArmsSkillForNextMessage(t *testing.T) {
+// TestApplyExplicitSkillCommand_OneShot verifies the one-shot activation semantics (R1/D2):
+// - "/<skill> message" → skill forced, UserMessage = trailing message
+// - "/<skill>" alone   → skill forced, UserMessage unchanged (skill body drives LLM)
+// Replaces the old /use-token tests (TestApplyExplicitSkillCommand_Arms* + _Inline*).
+func TestApplyExplicitSkillCommand_OneShot(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 
-	if err := os.MkdirAll(filepath.Join(cfg.Agents.Defaults.Workspace, "skills", "finance-news"), 0o755); err != nil {
+	if err := os.MkdirAll(
+		filepath.Join(cfg.Agents.Defaults.Workspace, "skills", "finance-news"),
+		0o755,
+	); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
 	}
 	if err := os.WriteFile(
@@ -388,64 +384,52 @@ func TestApplyExplicitSkillCommand_ArmsSkillForNextMessage(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	opts := &processOptions{SessionKey: "agent:main:test"}
-	matched, handled, reply := al.applyExplicitSkillCommand("/use finance-news", agent, opts)
-	if !matched {
-		t.Fatal("expected /use command to match")
-	}
-	if !handled {
-		t.Fatal("expected /use without inline message to be handled immediately")
-	}
-	if !strings.Contains(reply, `Skill "finance-news" is armed for your next message`) {
-		t.Fatalf("unexpected reply: %q", reply)
-	}
+	t.Run("with_message", func(t *testing.T) {
+		opts := &processOptions{
+			SessionKey:  "agent:main:test",
+			UserMessage: "/finance-news dammi le ultime news",
+		}
+		matched, handled, reply := al.applyExplicitSkillCommand(opts.UserMessage, agent, opts)
+		if !matched {
+			t.Fatal("expected /<skill> command to match")
+		}
+		if handled {
+			t.Fatal("/<skill> with message must fall through to LLM (not produce a text reply)")
+		}
+		if reply != "" {
+			t.Fatalf("unexpected reply: %q", reply)
+		}
+		if opts.UserMessage != "dammi le ultime news" {
+			t.Fatalf("opts.UserMessage = %q, want %q", opts.UserMessage, "dammi le ultime news")
+		}
+		if len(opts.ForcedSkills) != 1 || opts.ForcedSkills[0] != "finance-news" {
+			t.Fatalf("opts.ForcedSkills = %#v, want [finance-news]", opts.ForcedSkills)
+		}
+	})
 
-	pending := al.takePendingSkills(opts.SessionKey)
-	if len(pending) != 1 || pending[0] != "finance-news" {
-		t.Fatalf("pending skills = %#v, want [finance-news]", pending)
-	}
-}
-
-func TestApplyExplicitSkillCommand_InlineMessageMutatesOptions(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-
-	if err := os.MkdirAll(filepath.Join(cfg.Agents.Defaults.Workspace, "skills", "finance-news"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(skill) error = %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(cfg.Agents.Defaults.Workspace, "skills", "finance-news", "SKILL.md"),
-		[]byte("# Finance News\n\nUse web tools for current finance updates.\n"),
-		0o644,
-	); err != nil {
-		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
-	}
-
-	agent := al.GetRegistry().GetDefaultAgent()
-	if agent == nil {
-		t.Fatal("expected default agent")
-	}
-
-	opts := &processOptions{
-		SessionKey:  "agent:main:test",
-		UserMessage: "/use finance-news dammi le ultime news",
-	}
-	matched, handled, reply := al.applyExplicitSkillCommand(opts.UserMessage, agent, opts)
-	if !matched {
-		t.Fatal("expected /use command to match")
-	}
-	if handled {
-		t.Fatal("expected /use with inline message to fall through into normal agent execution")
-	}
-	if reply != "" {
-		t.Fatalf("unexpected reply: %q", reply)
-	}
-	if opts.UserMessage != "dammi le ultime news" {
-		t.Fatalf("opts.UserMessage = %q, want %q", opts.UserMessage, "dammi le ultime news")
-	}
-	if len(opts.ForcedSkills) != 1 || opts.ForcedSkills[0] != "finance-news" {
-		t.Fatalf("opts.ForcedSkills = %#v, want [finance-news]", opts.ForcedSkills)
-	}
+	t.Run("alone_no_message", func(t *testing.T) {
+		opts := &processOptions{
+			SessionKey:  "agent:main:test",
+			UserMessage: "/finance-news",
+		}
+		matched, handled, reply := al.applyExplicitSkillCommand(opts.UserMessage, agent, opts)
+		if !matched {
+			t.Fatal("expected /<skill> alone to match")
+		}
+		if handled {
+			t.Fatal("/<skill> alone must fall through so the LLM turn runs (not produce a text reply)")
+		}
+		if reply != "" {
+			t.Fatalf("unexpected reply: %q", reply)
+		}
+		// UserMessage unchanged — the skill body drives the LLM turn (R1).
+		if opts.UserMessage != "/finance-news" {
+			t.Fatalf("opts.UserMessage = %q, want unchanged %q", opts.UserMessage, "/finance-news")
+		}
+		if len(opts.ForcedSkills) != 1 || opts.ForcedSkills[0] != "finance-news" {
+			t.Fatalf("opts.ForcedSkills = %#v, want [finance-news]", opts.ForcedSkills)
+		}
+	})
 }
 
 func TestRecordLastChannel(t *testing.T) {

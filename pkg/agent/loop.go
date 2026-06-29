@@ -89,7 +89,6 @@ type AgentLoop struct {
 	mcp              mcpRuntime
 	hookRuntime      hookRuntime
 	steering         *steeringQueue
-	pendingSkills    sync.Map
 	mu               sync.RWMutex
 
 	// Concurrent turn management
@@ -4510,15 +4509,6 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, agent, nil
 	}
 
-	if pending := al.takePendingSkills(opts.SessionKey); len(pending) > 0 {
-		opts.ForcedSkills = append(opts.ForcedSkills, pending...)
-		logger.InfoCF("agent", "Applying pending skill override",
-			map[string]any{
-				"session_key": opts.SessionKey,
-				"skills":      strings.Join(pending, ","),
-			})
-	}
-
 	resp, err := al.runAgentLoop(ctx, agent, opts)
 	return resp, agent, err
 }
@@ -8374,59 +8364,68 @@ func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	return resolved
 }
 
+// applyExplicitSkillCommand handles the "/<name>" one-shot skill activation
+// introduced by the unified slash-command + skill menu (D2/D3/D4/R1).
+//
+// Resolution order (R1):
+//  1. If <name> is a non-hidden built-in command → return matched=false so the
+//     normal command dispatcher handles it (built-ins win, D3).
+//  2. If <name> resolves to an installed skill (exact, case-insensitive) →
+//     force the skill for THIS turn (one-shot, no arming/pending state).
+//     If a message follows ("/<skill> the message"), set opts.UserMessage to
+//     that message. If no message follows, leave opts.UserMessage unchanged
+//     (the skill's injected instructions drive the LLM turn, per R1).
+//  3. Otherwise → return matched=false so the text is delivered as a normal
+//     chat message (D4 — unknown /<x> is not an error).
+//
+// The old arm/pending path (setPendingSkills) and /use-token guard are removed.
 func (al *AgentLoop) applyExplicitSkillCommand(
 	raw string,
 	agent *AgentInstance,
 	opts *processOptions,
 ) (matched bool, handled bool, reply string) {
 	cmdName, ok := commands.CommandName(raw)
-	if !ok || cmdName != "use" {
+	if !ok {
+		// No leading "/" token at all — not our concern.
 		return false, false, ""
 	}
 
+	// D3: if <name> is a registered non-hidden built-in, let normal dispatch run.
+	if al.cmdRegistry != nil {
+		if def, found := al.cmdRegistry.Lookup(cmdName); found && !def.Hidden {
+			return false, false, ""
+		}
+	}
+
+	// No skill context — cannot resolve skills; fall through to normal message.
 	if agent == nil || agent.ContextBuilder == nil {
-		return true, true, commandsUnavailableSkillMessage()
+		return false, false, ""
 	}
 
-	parts := strings.Fields(strings.TrimSpace(raw))
-	if len(parts) < 2 {
-		return true, true, buildUseCommandHelp(agent)
-	}
-
-	arg := strings.TrimSpace(parts[1])
-	if strings.EqualFold(arg, "clear") || strings.EqualFold(arg, "off") {
-		if opts != nil {
-			al.clearPendingSkills(opts.SessionKey)
-		}
-		return true, true, "Cleared pending skill override."
-	}
-
-	skillName, ok := agent.ContextBuilder.ResolveSkillName(arg)
+	// Attempt exact, case-insensitive slug resolution.
+	skillName, ok := agent.ContextBuilder.ResolveSkillName(cmdName)
 	if !ok {
-		return true, true, fmt.Sprintf("Unknown skill: %s\nUse /list skills to see installed skills.", arg)
+		// Unknown /<x> → normal chat message (D4).
+		return false, false, ""
 	}
 
-	if len(parts) < 3 {
-		if opts == nil || strings.TrimSpace(opts.SessionKey) == "" {
-			return true, true, commandsUnavailableSkillMessage()
-		}
-		al.setPendingSkills(opts.SessionKey, []string{skillName})
-		return true, true, fmt.Sprintf(
-			"Skill %q is armed for your next message. Send your next prompt normally, or use /use clear to cancel.",
-			skillName,
-		)
-	}
-
-	message := strings.TrimSpace(strings.Join(parts[2:], " "))
-	if message == "" {
-		return true, true, buildUseCommandHelp(agent)
-	}
-
+	// Skill matched — one-shot activation (R1).
 	if opts != nil {
 		opts.ForcedSkills = append(opts.ForcedSkills, skillName)
-		opts.UserMessage = message
+
+		// If a message follows the skill token, use it as the user message.
+		// If no message is provided, leave opts.UserMessage unchanged so the
+		// skill's SKILL.md body (injected as system context) drives the turn.
+		parts := strings.Fields(strings.TrimSpace(raw))
+		if len(parts) >= 2 {
+			message := strings.TrimSpace(strings.Join(parts[1:], " "))
+			if message != "" {
+				opts.UserMessage = message
+			}
+		}
 	}
 
+	// Return matched=true, handled=false so the turn continues to the LLM.
 	return true, false, ""
 }
 
@@ -8510,73 +8509,6 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 	rt = rt.WithAgentLoop(al)
 
 	return rt
-}
-
-func commandsUnavailableSkillMessage() string {
-	return "Skill selection is unavailable in the current context."
-}
-
-func buildUseCommandHelp(agent *AgentInstance) string {
-	if agent == nil || agent.ContextBuilder == nil {
-		return "Usage: /use <skill> [message]"
-	}
-
-	names := agent.ContextBuilder.ListSkillNames()
-	if len(names) == 0 {
-		return "Usage: /use <skill> [message]\nNo installed skills found."
-	}
-
-	return fmt.Sprintf(
-		"Usage: /use <skill> [message]\n\nInstalled Skills:\n- %s\n\nUse /use <skill> to apply a skill to your next message, or /use <skill> <message> to force it immediately.",
-		strings.Join(names, "\n- "),
-	)
-}
-
-func (al *AgentLoop) setPendingSkills(sessionKey string, skillNames []string) {
-	sessionKey = strings.TrimSpace(sessionKey)
-	if sessionKey == "" || len(skillNames) == 0 {
-		return
-	}
-
-	filtered := make([]string, 0, len(skillNames))
-	for _, name := range skillNames {
-		name = strings.TrimSpace(name)
-		if name != "" {
-			filtered = append(filtered, name)
-		}
-	}
-	if len(filtered) == 0 {
-		return
-	}
-
-	al.pendingSkills.Store(sessionKey, filtered)
-}
-
-func (al *AgentLoop) takePendingSkills(sessionKey string) []string {
-	sessionKey = strings.TrimSpace(sessionKey)
-	if sessionKey == "" {
-		return nil
-	}
-
-	value, ok := al.pendingSkills.LoadAndDelete(sessionKey)
-	if !ok {
-		return nil
-	}
-
-	skills, ok := value.([]string)
-	if !ok {
-		return nil
-	}
-
-	return append([]string(nil), skills...)
-}
-
-func (al *AgentLoop) clearPendingSkills(sessionKey string) {
-	sessionKey = strings.TrimSpace(sessionKey)
-	if sessionKey == "" {
-		return
-	}
-	al.pendingSkills.Delete(sessionKey)
 }
 
 func mapCommandError(result commands.ExecuteResult) string {

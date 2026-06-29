@@ -6,16 +6,18 @@ import (
 	"strings"
 )
 
-// skillsCommand is the new canonical /skills command.
-// Reuses the /list skills sub-handler logic.
-// Surfaces: CLI, Channel (not web — the Skills screen covers this in the SPA).
+// skillsCommand is the canonical /skills command.
+// Surfaces: Web, CLI, Channel.
+// On web: DeliveryClient — the SPA opens the partitioned skill-filter menu
+// (showing only the Skills section). The backend Handler is still called for
+// CLI/Channel surfaces where it lists skills as a text reply.
 func skillsCommand() Definition {
 	return Definition{
 		Name:        "skills",
 		Description: "List installed skills",
 		Usage:       "/skills",
-		Surfaces:    []Surface{SurfaceCLI, SurfaceChannel},
-		Delivery:    DeliveryAgent,
+		Surfaces:    []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
+		Delivery:    DeliveryClient,
 		Handler:     listSkillsHandler(),
 	}
 }
@@ -32,7 +34,7 @@ func listSkillsHandler() Handler {
 			return req.Reply("No installed skills")
 		}
 		return req.Reply(fmt.Sprintf(
-			"Installed Skills:\n- %s\n\nUse /skill <skill> <message> to force one for a single request, or /skill <skill> to apply it to your next message.",
+			"Installed Skills:\n- %s\n\nUse /<skillname> <message> to activate a skill for a single request.",
 			strings.Join(names, "\n- "),
 		))
 	}

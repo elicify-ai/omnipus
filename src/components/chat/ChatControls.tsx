@@ -59,6 +59,8 @@ export function ChatControls({ className }: ChatControlsProps) {
   const openSessionPanel = useUiStore((s) => s.openSessionPanel)
   const modelSelectorOpen = useUiStore((s) => s.modelSelectorOpen)
   const setModelSelectorOpen = useUiStore((s) => s.setModelSelectorOpen)
+  const agentSelectorOpen = useUiStore((s) => s.agentSelectorOpen)
+  const setAgentSelectorOpen = useUiStore((s) => s.setAgentSelectorOpen)
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -209,7 +211,7 @@ export function ChatControls({ className }: ChatControlsProps) {
       </button>
 
       {/* 2. Agent picker — always visible, name truncates */}
-      <DropdownMenu>
+      <DropdownMenu open={agentSelectorOpen} onOpenChange={setAgentSelectorOpen}>
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
