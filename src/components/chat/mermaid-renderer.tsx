@@ -12,6 +12,13 @@ interface MermaidDiagramProps {
 let initialized = false
 let initFailed = false
 
+// Cache of rendered SVG keyed by diagram source. A finalized chat message can
+// remount (the virtualized message list re-renders, dropping and recreating this
+// component); without this, every remount would re-run the async mermaid render
+// and flash "Rendering diagram..." each time. Process-lifetime; in practice
+// bounded by the number of distinct diagrams in a session.
+const renderedSvgCache = new Map<string, string>()
+
 async function getMermaid() {
   const m = (await import('mermaid')).default
   // If a previous init failed, reset both flags to allow a retry on the next render
@@ -54,11 +61,21 @@ async function getMermaid() {
 }
 
 function MermaidDiagramImpl({ code }: MermaidDiagramProps) {
-  const [svg, setSvg] = useState<string | null>(null)
+  // Seed from the cache so a remount paints the already-rendered SVG synchronously
+  // (no loading flash, no redundant render) — see renderedSvgCache above.
+  const [svg, setSvg] = useState<string | null>(() => renderedSvgCache.get(code) ?? null)
   const [error, setError] = useState<string | null>(null)
   const idRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`)
 
   useEffect(() => {
+    // Cache hit: show the stored SVG and skip the async render entirely.
+    const cached = renderedSvgCache.get(code)
+    if (cached) {
+      setSvg(cached)
+      setError(null)
+      return
+    }
+
     let cancelled = false
 
     async function render() {
@@ -69,6 +86,7 @@ function MermaidDiagramImpl({ code }: MermaidDiagramProps) {
           return
         }
         const { svg: rendered } = await m.render(idRef.current, code.trim())
+        renderedSvgCache.set(code, rendered)
         if (!cancelled) setSvg(rendered)
       } catch (e) {
         if (!cancelled) {
