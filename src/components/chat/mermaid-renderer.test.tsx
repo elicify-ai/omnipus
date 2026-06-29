@@ -9,10 +9,17 @@
  *   - loading state before the async render resolves
  *   - unmount: the `cancelled` guard prevents a setState-after-unmount (no act warning)
  *   - re-render when the `code` prop changes
+ *   - fix-button: async handleFix, streaming guard, duplicate-send guard, remount guard
+ *   - streaming handoff: dropping `streaming` prop triggers error card (not silent)
+ *   - two distinct malformed codes produce distinct, non-contaminated error cards
  *
  * `mermaid` is the dynamic-import target inside getMermaid(); we mock it. The
  * component keeps module-level `initialized`/`initFailed` flags, so each test does
  * vi.resetModules() + a fresh dynamic import to get clean module state.
+ *
+ * FIX 2: the store mock now uses getState() (matching the new lazy-import pattern in
+ * handleFix). The eager top-level store import was removed from mermaid-renderer.tsx,
+ * so the module no longer drags the full chat store into every markdown consumer.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -24,13 +31,12 @@ const initialize = vi.fn()
 const renderFn = vi.fn()
 vi.mock('mermaid', () => ({ default: { initialize, render: renderFn } }))
 
-// The error card feeds the failure back to the LLM via the chat store; mock it so we
-// can assert that behaviour without standing up the real store/WebSocket.
+// FIX 2: The error card's handleFix now does a LAZY `await import('@/store/chat')`
+// and then calls `useChatStore.getState()` — match that shape here.
+// isStreaming is mutable so tests can set it to true/false between assertions.
 const sendMessageMock = vi.fn()
-vi.mock('@/store/chat', () => ({
-  useChatStore: (selector: (s: { sendMessage: typeof sendMessageMock; isStreaming: boolean }) => unknown) =>
-    selector({ sendMessage: sendMessageMock, isStreaming: false }),
-}))
+const storeState = { sendMessage: sendMessageMock, isStreaming: false }
+vi.mock('@/store/chat', () => ({ useChatStore: { getState: () => storeState } }))
 
 // DOMPurify is intentionally NOT mocked — the sanitization test exercises the real one.
 
@@ -39,6 +45,7 @@ beforeEach(() => {
   initialize.mockReset().mockReturnValue(undefined)
   renderFn.mockReset()
   sendMessageMock.mockReset()
+  storeState.isStreaming = false
 })
 afterEach(() => cleanup())
 
@@ -100,13 +107,102 @@ describe('MermaidDiagram', () => {
     const btn = await screen.findByRole('button', { name: /Ask assistant to fix/i })
     fireEvent.click(btn)
 
-    expect(sendMessageMock).toHaveBeenCalledTimes(1)
+    // handleFix is async (lazy store import) — wait for sendMessage to be called.
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
     const sent = sendMessageMock.mock.calls[0][0] as string
     expect(sent).toContain("Parse error on line 3: Expecting 'PE', got '1'") // the syntax detail
     expect(sent).toContain('graph TD; A--B') // the original code
     expect(sent).toMatch(/corrected Mermaid/i) // a clear fix request
-    // Button reflects the sent state (and would be disabled to prevent double-send).
+    // The prompt uses a backtick fence — guard that it includes the mermaid fence marker.
+    expect(sent).toContain('```mermaid')
+    // Button reflects the sent state (disabled to prevent double-send).
     expect(screen.getByRole('button', { name: /Sent to assistant/i })).toBeInTheDocument()
+  })
+
+  it('fix button: a second click does NOT call sendMessage again (disabled after sent)', async () => {
+    renderFn.mockRejectedValue(new Error('Parse error on line 1'))
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={'graph TD; A--C'} />)
+
+    const btn = await screen.findByRole('button', { name: /Ask assistant to fix/i })
+    fireEvent.click(btn)
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
+
+    // Button is now disabled — a second click must be ignored.
+    fireEvent.click(btn)
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
+  })
+
+  it('fix button: clicking while a turn is streaming does NOT call sendMessage', async () => {
+    // Set isStreaming=true before the click — handleFix guards against this.
+    storeState.isStreaming = true
+    renderFn.mockRejectedValue(new Error('Parse error on line 1'))
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={'graph TD; A--D'} />)
+
+    const btn = await screen.findByRole('button', { name: /Ask assistant to fix/i })
+    fireEvent.click(btn)
+
+    // Give async handleFix time to run (it awaits the store import then returns early).
+    await new Promise((r) => setTimeout(r, 20))
+    expect(sendMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('fix button: remount with the same code shows "Sent to assistant" (module-level cache)', async () => {
+    // Covers FIX 2: fixRequestedCache is module-level, so a virtualized-list remount
+    // must not reset the button state to "Ask assistant to fix".
+    renderFn.mockRejectedValue(new Error('Parse error on line 1'))
+    const MermaidDiagram = await importDiagram()
+
+    const { unmount } = render(<MermaidDiagram code={'graph TD; A--E'} />)
+
+    const btn = await screen.findByRole('button', { name: /Ask assistant to fix/i })
+    fireEvent.click(btn)
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
+
+    unmount()
+
+    // The error cache from the first render means the error card shows synchronously
+    // on the new mount (no async wait needed); the sent state seeds from fixRequestedCache.
+    render(<MermaidDiagram code={'graph TD; A--E'} />)
+    expect(screen.getByRole('button', { name: /Sent to assistant/i })).toBeInTheDocument()
+  })
+
+  it('streaming handoff: error card appears after streaming=false, not before', async () => {
+    // Pins that the effect depends on `streaming` — dropping it from the deps would
+    // silently break the handoff so the error card never appears.
+    renderFn.mockRejectedValue(new Error('Parse error on line 1'))
+    const MermaidDiagram = await importDiagram()
+
+    const { rerender } = render(<MermaidDiagram code={DIAGRAM} streaming />)
+
+    // While streaming: nothing rendered, including no error card.
+    await waitFor(() => expect(renderFn).toHaveBeenCalled())
+    expect(screen.queryByText(/Couldn't render/i)).toBeNull()
+
+    // Handoff: streaming ends → the effect reruns → error card appears.
+    rerender(<MermaidDiagram code={DIAGRAM} />)
+    await waitFor(() => expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument())
+  })
+
+  it('two distinct malformed codes produce distinct, non-contaminated error messages', async () => {
+    // Guards that renderErrorCache is keyed by code and does not cross-contaminate:
+    // a new code must call mermaid.render() again and show its own error.
+    const MermaidDiagram = await importDiagram()
+
+    renderFn.mockRejectedValue(new Error('err-A'))
+    render(<MermaidDiagram code={'AAA'} />)
+    await waitFor(() => expect(screen.getByText('err-A')).toBeInTheDocument())
+
+    cleanup()
+
+    renderFn.mockRejectedValue(new Error('err-B'))
+    render(<MermaidDiagram code={'BBB'} />)
+    await waitFor(() => expect(renderFn).toHaveBeenCalledWith(expect.any(String), 'BBB'))
+    await waitFor(() => expect(screen.getByText('err-B')).toBeInTheDocument())
+    expect(screen.queryByText('err-A')).toBeNull()
   })
 
   it('streaming: renders NOTHING while the partial code fails to parse (no naked source, no error)', async () => {
@@ -143,7 +239,10 @@ describe('MermaidDiagram', () => {
     const MermaidDiagram = await importDiagram()
 
     render(<MermaidDiagram code={'graph T'} streaming />)
+    // Wait until renderFn has been invoked and the rejection settled.
     await waitFor(() => expect(renderFn).toHaveBeenCalled())
+    // Allow the microtask queue to fully drain.
+    await Promise.resolve()
     await Promise.resolve()
 
     const loggedRenderFailure = errSpy.mock.calls.some((c) =>
@@ -202,19 +301,23 @@ describe('MermaidDiagram', () => {
     errSpy.mockRestore()
   })
 
-  it('SECURITY: initializes mermaid with securityLevel "strict"', async () => {
+  it('SECURITY: initializes mermaid with securityLevel "strict" and suppressErrorRendering true', async () => {
     // The renderer pins securityLevel:'strict' (mermaid's most restrictive: HTML
     // labels off, click/script directives disabled) because this sink renders on the
     // persisted/reload path. A regression to 'loose' would re-enable script execution
     // in agent-authored diagrams — guard the pin explicitly (DOMPurify is a separate,
     // output-side defense; this asserts mermaid's own input-side posture).
+    // suppressErrorRendering:true prevents mermaid's "Syntax error" bomb SVGs from
+    // accumulating as orphaned DOM nodes — our MermaidErrorCard owns the failure UI.
     renderFn.mockResolvedValue({ svg: '<svg/>' })
     const MermaidDiagram = await importDiagram()
 
     render(<MermaidDiagram code={DIAGRAM} />)
 
     await waitFor(() => expect(initialize).toHaveBeenCalled())
-    expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ securityLevel: 'strict' }))
+    expect(initialize).toHaveBeenCalledWith(
+      expect.objectContaining({ securityLevel: 'strict', suppressErrorRendering: true }),
+    )
   })
 
   it('paints synchronously from cache on remount (no loading flash, no re-render)', async () => {
