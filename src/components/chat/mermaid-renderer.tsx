@@ -3,9 +3,74 @@
 
 import { useEffect, useRef, useState, memo } from 'react'
 import DOMPurify from 'dompurify'
+import { Warning, ArrowClockwise } from '@phosphor-icons/react'
+import { useChatStore } from '@/store/chat'
 
 interface MermaidDiagramProps {
   code: string
+  // True only on the LIVE streaming path. The block arrives token-by-token, so the
+  // partial/incomplete code fails to parse on every keystroke. While streaming we must
+  // render NOTHING — no naked source, no error, no placeholder — until the block is
+  // complete and the SVG is ready, at which point the diagram pops in (the SVG cache
+  // keeps the later finalized re-render instant). The error card and the "Rendering…"
+  // indicator only appear once the message is no longer streaming.
+  streaming?: boolean
+}
+
+// buildFixPrompt frames the render failure as a correction request for the LLM,
+// including the syntax error detail (mermaid reports the offending line + token) and
+// the original code so the model can produce a fixed diagram.
+function buildFixPrompt(error: string, code: string): string {
+  return (
+    `The Mermaid diagram you generated could not be rendered — it has a syntax error:\n\n` +
+    `${error}\n\n` +
+    `The diagram code was:\n\`\`\`mermaid\n${code}\n\`\`\`\n\n` +
+    `Please reply with a corrected Mermaid diagram.`
+  )
+}
+
+// MermaidErrorCard — compact failure state for a COMPLETE but malformed diagram.
+// Shows a short message + the syntax error (not the raw source by default), an
+// "Ask assistant to fix" action that sends the error + code back to the LLM, and a
+// collapsible source view.
+function MermaidErrorCard({ error, code }: { error: string; code: string }) {
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const isStreaming = useChatStore((s) => s.isStreaming)
+  const [sent, setSent] = useState(false)
+
+  const handleFix = () => {
+    sendMessage(buildFixPrompt(error, code))
+    setSent(true)
+  }
+
+  return (
+    <div className="my-2 rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-surface-2)] p-3 text-xs">
+      <div className="flex items-center gap-1.5 font-medium text-[var(--color-error)]">
+        <Warning size={14} weight="fill" />
+        <span>Couldn&apos;t render the diagram</span>
+      </div>
+      <div className="mt-1.5 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10px] text-[var(--color-muted)]">
+        {error}
+      </div>
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleFix}
+          disabled={isStreaming || sent}
+          className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-1)] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <ArrowClockwise size={11} />
+          {sent ? 'Sent to assistant' : 'Ask assistant to fix'}
+        </button>
+        <details className="text-[var(--color-muted)]">
+          <summary className="cursor-pointer text-[11px] hover:text-[var(--color-secondary)]">Show source</summary>
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[10px] text-[var(--color-secondary)]">
+            {code}
+          </pre>
+        </details>
+      </div>
+    </div>
+  )
 }
 
 // Module-level flag to avoid re-initialising mermaid on every render.
@@ -18,6 +83,14 @@ let initFailed = false
 // and flash "Rendering diagram..." each time. Process-lifetime; in practice
 // bounded by the number of distinct diagrams in a session.
 const renderedSvgCache = new Map<string, string>()
+
+// Cache of render FAILURES keyed by diagram source. Without this, a malformed diagram
+// re-runs the async render on every remount: setError changes the row height, the
+// virtualized list re-measures and remounts, which re-renders → a tight loop that
+// spams the console. Caching the failure makes the error card render synchronously on
+// mount (stable height from the first frame), breaking the loop. Only populated for
+// COMPLETE renders (never while streaming — partial code fails on every token).
+const renderErrorCache = new Map<string, string>()
 
 async function getMermaid() {
   const m = (await import('mermaid')).default
@@ -34,6 +107,10 @@ async function getMermaid() {
         // (historical messages), so the safe posture must be asserted in-repo
         // rather than inherited from mermaid's ever-changing defaults.
         securityLevel: 'strict',
+        // On a parse error, throw instead of injecting mermaid's "Syntax error" bomb
+        // SVG into the DOM — our MermaidErrorCard owns the failure UI, and the bomb
+        // SVGs otherwise accumulate as orphaned nodes (one per failed render attempt).
+        suppressErrorRendering: true,
         theme: 'dark',
         themeVariables: {
           background: 'transparent',
@@ -60,19 +137,27 @@ async function getMermaid() {
   return m
 }
 
-function MermaidDiagramImpl({ code }: MermaidDiagramProps) {
-  // Seed from the cache so a remount paints the already-rendered SVG synchronously
-  // (no loading flash, no redundant render) — see renderedSvgCache above.
+function MermaidDiagramImpl({ code, streaming = false }: MermaidDiagramProps) {
+  // Seed from the caches so a remount paints the already-resolved result (SVG or error
+  // card) synchronously — no loading flash, no redundant async render, and crucially no
+  // height-change-driven remount loop on malformed diagrams. See the cache comments above.
   const [svg, setSvg] = useState<string | null>(() => renderedSvgCache.get(code) ?? null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(() => renderErrorCache.get(code) ?? null)
   const idRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`)
 
   useEffect(() => {
-    // Cache hit: show the stored SVG and skip the async render entirely.
-    const cached = renderedSvgCache.get(code)
-    if (cached) {
-      setSvg(cached)
+    // Cache hit (success OR a prior complete-render failure of this exact code): show
+    // the stored result and skip the async render entirely.
+    const cachedSvg = renderedSvgCache.get(code)
+    if (cachedSvg) {
+      setSvg(cachedSvg)
       setError(null)
+      return
+    }
+    const cachedErr = renderErrorCache.get(code)
+    if (cachedErr) {
+      setError(cachedErr)
+      setSvg(null)
       return
     }
 
@@ -82,6 +167,8 @@ function MermaidDiagramImpl({ code }: MermaidDiagramProps) {
       try {
         const m = await getMermaid()
         if (initFailed) {
+          // Init failures are transient/global (e.g. a flaky chunk load) — surface the
+          // error but do NOT cache it, so a later mount can retry.
           if (!cancelled) setError('Mermaid initialization failed')
           return
         }
@@ -90,10 +177,13 @@ function MermaidDiagramImpl({ code }: MermaidDiagramProps) {
         if (!cancelled) setSvg(rendered)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
-        // Parity with the init-failure path (which logs): surface render failures to
-        // the console so a diagram that fails for only some users leaves a breadcrumb,
-        // not just a user-visible error block.
-        console.error('[mermaid] render failed:', msg)
+        // Only cache + log a COMPLETE diagram's failure. While streaming, the partial
+        // code fails to parse on every token — caching those would pollute the cache and
+        // logging would spam the console with expected mid-stream parse errors.
+        if (!streaming) {
+          renderErrorCache.set(code, msg)
+          console.error('[mermaid] render failed:', msg)
+        }
         if (!cancelled) setError(msg)
       }
     }
@@ -104,16 +194,19 @@ function MermaidDiagramImpl({ code }: MermaidDiagramProps) {
     return () => {
       cancelled = true
     }
-  }, [code])
+  }, [code, streaming])
+
+  // Streaming: render NOTHING until the final SVG is ready — no naked source, no error
+  // flicker on partial/incomplete code, no placeholder. The diagram appears the instant
+  // the block is complete and renders.
+  if (streaming && !svg) {
+    return null
+  }
 
   if (error) {
-    // Show the mermaid source as a code block with the error as a small note
-    return (
-      <pre className="my-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] p-4 text-xs font-mono text-[var(--color-secondary)] overflow-x-auto whitespace-pre-wrap">
-        <div className="text-[10px] text-[var(--color-error)] mb-2 font-sans">{error}</div>
-        {code}
-      </pre>
-    )
+    // Complete but malformed: a compact error card (short message + the syntax error +
+    // an "ask the assistant to fix" action), not a dump of the raw source.
+    return <MermaidErrorCard error={error} code={code} />
   }
 
   if (!svg) {

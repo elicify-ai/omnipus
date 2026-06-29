@@ -6,15 +6,29 @@
 import { useState, useRef, useEffect } from 'react'
 import { ShikiHighlighter } from 'react-shiki'
 import { Copy, Check } from '@phosphor-icons/react'
+import { useMessage } from '@assistant-ui/react'
 import type { SyntaxHighlighterProps, CodeHeaderProps } from '@assistant-ui/react-markdown'
 import { MermaidDiagram } from './mermaid-renderer'
 import { useUiStore } from '@/store/ui'
+
+// ── Live mermaid block ────────────────────────────────────────────────────────
+// On the live streaming path the diagram code arrives token-by-token, so the partial
+// fence fails to parse on every keystroke. Pass the message's streaming status to
+// MermaidDiagram so it renders NOTHING until the block is complete and the SVG is
+// ready (no naked source, no error flicker). useMessage is safe here: SyntaxHighlighter
+// is only ever rendered by markdown-text.tsx, inside an AssistantUI message context.
+
+function LiveMermaidBlock({ code }: { code: string }) {
+  const message = useMessage()
+  const streaming = message.status?.type === 'running'
+  return <MermaidDiagram code={code} streaming={streaming} />
+}
 
 // ── Syntax highlighter ────────────────────────────────────────────────────────
 
 export function SyntaxHighlighter({ language, code }: Omit<SyntaxHighlighterProps, 'node'>) {
   if (language === 'mermaid') {
-    return <MermaidDiagram code={code} />
+    return <LiveMermaidBlock code={code} />
   }
 
   return (
