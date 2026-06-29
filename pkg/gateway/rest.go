@@ -202,12 +202,14 @@ type restAPI struct {
 }
 
 // ssrfChk returns the SSRF checker as a providers_pkg.URLChecker interface.
-// When a.ssrfChecker is nil (SSRF disabled), it returns a nil interface — not a
-// non-nil interface wrapping a nil concrete pointer, which would panic inside
-// providers_pkg.ValidateKey / FetchModels on the nil-receiver method call.
+// When a.ssrfChecker is nil (SSRF globally disabled), it returns an explicit
+// providers_pkg.NoopChecker — NOT a nil interface and NOT a non-nil interface
+// wrapping a nil concrete pointer (the typed-nil trap, which would panic inside
+// providers_pkg.ValidateKey / FetchModels on the nil-receiver method call). The
+// NoopChecker makes "no SSRF guard" an explicit, type-safe value.
 func (a *restAPI) ssrfChk() providers_pkg.URLChecker {
 	if a.ssrfChecker == nil {
-		return nil
+		return providers_pkg.NoopChecker{}
 	}
 	return a.ssrfChecker
 }
@@ -4696,7 +4698,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("rest: PUT provider: key validation result",
 				"provider", providerID, "outcome", putValidationResult.Outcome,
 				"detail", putValidationResult.RawDetail)
-			if putValidationResult.Blocks {
+			if putValidationResult.Blocks() {
 				// InvalidKey — reject the save. The key is NOT stored. SEC-16: message is curated.
 				jsonErr(w, http.StatusUnprocessableEntity, putValidationResult.Message)
 				return
@@ -4990,7 +4992,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}, a.ssrfChk())
 		slog.Debug("rest: provider test: classification complete",
 			"provider", providerID, "outcome", result.Outcome, "detail", result.RawDetail)
-		success := !result.Blocks
+		success := !result.Blocks()
 		resp := gen.OperationResult{Success: success}
 		if result.Outcome != providers_pkg.OutcomeValid {
 			outcomeStr := gen.OperationResultValidationOutcome(result.Outcome)
@@ -5003,7 +5005,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				Message: &msg,
 			}
 		}
-		if result.Blocks {
+		if result.Blocks() {
 			resp.Error = &result.Message
 		}
 		jsonOK(w, resp)

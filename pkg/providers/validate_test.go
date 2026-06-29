@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ── TestClassify_Matrix ───────────────────────────────────────────────────────
@@ -38,13 +39,37 @@ func TestClassify_Matrix(t *testing.T) {
 		// A5 — openai 401 invalid_api_key code
 		{"A5", 401, `{"error":{"code":"invalid_api_key","message":"Invalid API key."}}`, OutcomeInvalidKey, true},
 		// A6 — openai 429 insufficient_quota (credit marker)
-		{"A6", 429, `{"error":{"type":"insufficient_quota","message":"You exceeded your current quota"}}`, OutcomeNoCredit, false},
+		{
+			"A6",
+			429,
+			`{"error":{"type":"insufficient_quota","message":"You exceeded your current quota"}}`,
+			OutcomeNoCredit,
+			false,
+		},
 		// A7 — openai 429 rate_limit_exceeded (no credit marker → Unreachable)
-		{"A7", 429, `{"error":{"type":"rate_limit_exceeded","message":"Rate limit exceeded"}}`, OutcomeUnreachable, false},
+		{
+			"A7",
+			429,
+			`{"error":{"type":"rate_limit_exceeded","message":"Rate limit exceeded"}}`,
+			OutcomeUnreachable,
+			false,
+		},
 		// A8 — gemini 400 INVALID_ARGUMENT + "API key not valid" (credential marker on message)
-		{"A8", 400, `{"error":{"status":"INVALID_ARGUMENT","message":"API key not valid. Please pass a valid API key."}}`, OutcomeInvalidKey, true},
+		{
+			"A8",
+			400,
+			`{"error":{"status":"INVALID_ARGUMENT","message":"API key not valid. Please pass a valid API key."}}`,
+			OutcomeInvalidKey,
+			true,
+		},
 		// A9 — gemini 403 PERMISSION_DENIED (no credential marker → Restricted)
-		{"A9", 403, `{"error":{"status":"PERMISSION_DENIED","message":"Permission denied."}}`, OutcomeRestricted, false},
+		{
+			"A9",
+			403,
+			`{"error":{"status":"PERMISSION_DENIED","message":"Permission denied."}}`,
+			OutcomeRestricted,
+			false,
+		},
 		// A10 — deepseek 401 Authentication Fails
 		{"A10", 401, `{"error":{"message":"Authentication Fails"}}`, OutcomeInvalidKey, true},
 		// A11 — deepseek 402 Insufficient Balance (credit marker)
@@ -52,9 +77,21 @@ func TestClassify_Matrix(t *testing.T) {
 		// A12 — groq 401 invalid_api_key
 		{"A12", 401, `{"error":{"code":"invalid_api_key","message":"Invalid API key."}}`, OutcomeInvalidKey, true},
 		// A13 — anthropic 401 authentication_error
-		{"A13", 401, `{"error":{"type":"authentication_error","message":"invalid x-api-key"}}`, OutcomeInvalidKey, true},
+		{
+			"A13",
+			401,
+			`{"error":{"type":"authentication_error","message":"invalid x-api-key"}}`,
+			OutcomeInvalidKey,
+			true,
+		},
 		// A14 — anthropic 400 credit balance is too low (credit marker beats 400→Valid)
-		{"A14", 400, `{"error":{"message":"credit balance is too low for the requested model"}}`, OutcomeNoCredit, false},
+		{
+			"A14",
+			400,
+			`{"error":{"message":"credit balance is too low for the requested model"}}`,
+			OutcomeNoCredit,
+			false,
+		},
 		// A15 — other 200 clean choices
 		{"A15", 200, `{"choices":[]}`, OutcomeValid, false},
 		// A16 — other 200 with embedded invalid_api_key error (R-A step 3: 200+marker → InvalidKey)
@@ -73,12 +110,11 @@ func TestClassify_Matrix(t *testing.T) {
 		{"A22", 429, ``, OutcomeUnreachable, false},
 		// A23 — gemini 403 PERMISSION_DENIED (no credential marker → Restricted) [C1]
 		{"A23", 403, `{"error":{"status":"PERMISSION_DENIED"}}`, OutcomeRestricted, false},
-		// A24 — other 200 with embedded "overloaded" error (no recognised marker → 0 → Unreachable) [R-A step3]
+		// A24 — other 200 with embedded "overloaded" error (no recognized marker → 0 → Unreachable) [R-A step3]
 		{"A24", 200, `{"error":{"message":"overloaded"}}`, OutcomeUnreachable, false},
 	}
 
 	for _, row := range rows {
-		row := row
 		t.Run(row.id, func(t *testing.T) {
 			t.Parallel()
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +162,7 @@ func TestValidateKey_EmptyKeyNoNetwork(t *testing.T) {
 		if res.Outcome != OutcomeInvalidKey {
 			t.Errorf("key=%q: got %q, want invalid_key", key, res.Outcome)
 		}
-		if !res.Blocks {
+		if !res.Blocks() {
 			t.Errorf("key=%q: Blocks must be true for InvalidKey", key)
 		}
 		if called {
@@ -157,8 +193,76 @@ func TestValidateKey_TransportError(t *testing.T) {
 	if res.Outcome != OutcomeUnreachable {
 		t.Errorf("transport error: got %q, want unreachable", res.Outcome)
 	}
-	if res.Blocks {
+	if res.Blocks() {
 		t.Errorf("transport error: Blocks must be false for Unreachable")
+	}
+}
+
+// ── Dataset B4/B5/B6: timeout, large key, unicode body (boundary/robustness) ──
+
+// B4 — a context deadline that fires mid-probe is an Unreachable, never a block.
+func TestValidateKey_ContextTimeout(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/chat/completions" {
+			time.Sleep(2 * time.Second) // outlast the ctx deadline below
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"}]}`))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	res := ValidateKey(ctx, ValidateInput{
+		ProviderID: "openai", ProviderName: "OpenAI", BaseURL: srv.URL,
+		APIKey: "sk-test", Catalog: []string{"gpt-4o-mini"},
+	}, NoopChecker{})
+	if res.Outcome != OutcomeUnreachable {
+		t.Errorf("ctx timeout: got %q, want unreachable", res.Outcome)
+	}
+	if res.Blocks() {
+		t.Error("ctx timeout: must not block")
+	}
+}
+
+// B5 — a very large (8 KB) key must not panic; it classifies by the response only.
+func TestValidateKey_LargeKeyNoPanic(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hi"}}]}`))
+	}))
+	defer srv.Close()
+
+	res := ValidateKey(context.Background(), ValidateInput{
+		ProviderID: "openai", ProviderName: "OpenAI", BaseURL: srv.URL,
+		APIKey: "sk-" + strings.Repeat("k", 8<<10), Catalog: []string{"gpt-4o-mini"},
+	}, NoopChecker{})
+	if res.Outcome != OutcomeValid {
+		t.Errorf("large key: got %q, want valid", res.Outcome)
+	}
+}
+
+// B6 — a unicode/non-ASCII error body must classify without panicking.
+func TestValidateKey_UnicodeBodyNoPanic(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(403) // region block, no credential marker → Restricted
+		//nolint:gosmopolitan // intentional non-ASCII body: this test asserts unicode bodies classify without panic
+		_, _ = w.Write([]byte(`{"error":{"message":"このキーはこの地域でブロックされています 🚫"}}`))
+	}))
+	defer srv.Close()
+
+	res := ValidateKey(context.Background(), ValidateInput{
+		ProviderID: "openai", ProviderName: "OpenAI", BaseURL: srv.URL,
+		APIKey: "sk-test", Catalog: []string{"gpt-4o-mini"},
+	}, NoopChecker{})
+	if res.Outcome != OutcomeRestricted {
+		t.Errorf("unicode 403 body: got %q, want restricted", res.Outcome)
+	}
+	if res.Blocks() {
+		t.Error("unicode 403 body: must not block (Restricted proceeds)")
 	}
 }
 
@@ -287,7 +391,7 @@ func TestFetchModels_BehaviourPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchModels: %v", err)
 	}
-	// Must be sorted alphabetically (golden behaviour of the former gateway copy).
+	// Must be sorted alphabetically (golden behavior of the former gateway copy).
 	want := []string{"gpt-3.5-turbo", "gpt-4o", "text-embedding-3-small"}
 	if len(models) != len(want) {
 		t.Fatalf("FetchModels: got %v, want %v", models, want)
@@ -347,7 +451,11 @@ func TestClassify_Gemini400_MessageNotStatus(t *testing.T) {
 		t.Errorf("400 INVALID_ARGUMENT model-not-found: got %q, want valid", out)
 	}
 	// A8: 400 INVALID_ARGUMENT "API key not valid" → InvalidKey (credential marker in message).
-	out = classify(nil, 400, []byte(`{"error":{"status":"INVALID_ARGUMENT","message":"API key not valid. Please pass a valid API key."}}`))
+	out = classify(
+		nil,
+		400,
+		[]byte(`{"error":{"status":"INVALID_ARGUMENT","message":"API key not valid. Please pass a valid API key."}}`),
+	)
 	if out != OutcomeInvalidKey {
 		t.Errorf("400 INVALID_ARGUMENT api-key-not-valid: got %q, want invalid_key", out)
 	}
@@ -361,7 +469,7 @@ func TestClassify_429And200Defaults(t *testing.T) {
 	if out != OutcomeUnreachable {
 		t.Errorf("429 empty: got %q, want unreachable", out)
 	}
-	// A24: 200 + unrecognised error → Unreachable.
+	// A24: 200 + unrecognized error → Unreachable.
 	out = classify(nil, 200, []byte(`{"error":{"message":"overloaded"}}`))
 	if out != OutcomeUnreachable {
 		t.Errorf("200+overloaded: got %q, want unreachable", out)
@@ -397,7 +505,7 @@ func TestValidateKey_EndToEnd(t *testing.T) {
 	if res.Outcome != OutcomeInvalidKey {
 		t.Errorf("public-models + 401 completions: got %q, want invalid_key", res.Outcome)
 	}
-	if !res.Blocks {
+	if !res.Blocks() {
 		t.Errorf("InvalidKey must set Blocks=true")
 	}
 	// SEC-16: Message must not contain the raw body.
@@ -438,7 +546,7 @@ func TestValidateKey_NoCreditProceeds(t *testing.T) {
 	if res.Outcome != OutcomeNoCredit {
 		t.Errorf("402: got %q, want no_credit", res.Outcome)
 	}
-	if res.Blocks {
+	if res.Blocks() {
 		t.Errorf("NoCredit must not block")
 	}
 	if !strings.Contains(res.Message, "no credit") {

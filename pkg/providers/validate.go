@@ -10,21 +10,38 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
-
-	"log/slog"
 )
 
 // URLChecker is the SSRF guard interface. The gateway passes its *security.SSRFChecker;
-// the CLI passes nil (operator-run path — lower SSRF exposure, accepted).
-// *security.SSRFChecker already satisfies this interface.
+// the CLI (and the gateway when SSRF is globally disabled) passes a NoopChecker — an
+// explicit, greppable "no SSRF guard" decision rather than a nil that could equally
+// mean "I forgot". *security.SSRFChecker already satisfies this interface.
+//
+// Callers MUST pass a non-nil URLChecker. The package still tolerates nil defensively,
+// but NoopChecker is the supported way to express "no guard".
 type URLChecker interface {
 	CheckURL(ctx context.Context, rawURL string) error
+	// SafeClient returns an *http.Client the caller may mutate (e.g. set Timeout);
+	// implementations MUST return a fresh client per call so that mutation is race-free.
 	SafeClient() *http.Client
 }
+
+// NoopChecker is a URLChecker that performs no SSRF check and returns a plain client.
+// Use it on the CLI/operator-run path (no localhost-pivot threat) instead of a nil
+// interface — this makes "SSRF disabled" an explicit, type-safe choice and removes the
+// typed-nil footgun (a non-nil interface wrapping a nil *security.SSRFChecker pointer).
+type NoopChecker struct{}
+
+// CheckURL always permits the URL (no SSRF guard).
+func (NoopChecker) CheckURL(context.Context, string) error { return nil }
+
+// SafeClient returns a fresh default client the caller may mutate.
+func (NoopChecker) SafeClient() *http.Client { return &http.Client{} }
 
 // Outcome is the classified result of a key-validation probe.
 // String values are the wire enum — must match contracts/components/schemas/ProviderValidation.yaml.
@@ -47,11 +64,14 @@ const (
 )
 
 // ValidationResult is the classified result of ValidateKey.
+//
+// SEC-16: this struct deliberately carries NO `json:` tags and MUST NEVER be marshaled
+// directly onto the wire — RawDetail holds the raw upstream body for debug logging only.
+// Callers copy Outcome/Message into the generated wire types; RawDetail goes solely to
+// slog.Debug. Do not add json tags here and do not serialize ValidationResult.
 type ValidationResult struct {
 	// Outcome is one of the five wire enum values.
 	Outcome Outcome
-	// Blocks is true only for InvalidKey.
-	Blocks bool
 	// Message is the curated FR-7 plain-English message for the user (SEC-16: never
 	// contains the raw body or the API key).
 	Message string
@@ -61,6 +81,11 @@ type ValidationResult struct {
 	// ProbeModel is the model slug used for the completion probe.
 	ProbeModel string
 }
+
+// Blocks reports whether this outcome must block the flow. Derived solely from Outcome
+// (only InvalidKey blocks) so the block/proceed decision has a single source of truth
+// and cannot drift from Outcome.
+func (r ValidationResult) Blocks() bool { return r.Outcome == OutcomeInvalidKey }
 
 // ValidateInput carries the inputs for ValidateKey.
 type ValidateInput struct {
@@ -125,10 +150,10 @@ func isCredentialMarker(msg string) bool {
 // Providers vary; we parse defensively and never panic on malformed JSON.
 type providerErrorBody struct { // not-wire-format: decodes upstream provider error body, never emitted to SPA
 	Error struct {
-		Code    interface{} `json:"code"` // may be string or int
-		Type    string      `json:"type"`
-		Status  interface{} `json:"status"` // may be string ("PERMISSION_DENIED") or int
-		Message string      `json:"message"`
+		Code    any    `json:"code"` // may be string or int
+		Type    string `json:"type"`
+		Status  any    `json:"status"` // may be string ("PERMISSION_DENIED") or int
+		Message string `json:"message"`
 	} `json:"error"`
 }
 
@@ -265,7 +290,7 @@ func classify(transportErr error, status int, body []byte) Outcome {
 	case status >= 201 && status < 300:
 		return OutcomeValid // non-200 2xx
 	default:
-		return OutcomeUnreachable // 0 (200+unrecognised-error) or anything unmapped
+		return OutcomeUnreachable // 0 (200+unrecognized-error) or anything unmapped
 	}
 }
 
@@ -347,7 +372,7 @@ func pickProbeModel(catalog []string, providerID string) string {
 
 // FetchModels fetches the list of available models from an OpenAI-compatible
 // provider's /models endpoint. Returns model IDs sorted alphabetically, or nil on error.
-// Behaviour is identical to the former gateway.fetchUpstreamModels.
+// Behavior is identical to the former gateway.fetchUpstreamModels.
 //
 // SEC-24: when checker is non-nil the request is made through the SSRF-safe HTTP
 // client. A nil checker uses a plain client (CLI path — operator-run, accepted).
@@ -417,7 +442,8 @@ func BuildMessage(outcome Outcome, providerName string) string {
 	case OutcomeInvalidKey:
 		return fmt.Sprintf(
 			"The API key was rejected by %s. Check you copied the whole key and that it's still active in your %s account.",
-			providerName, providerName,
+			providerName,
+			providerName,
 		)
 	case OutcomeNoCredit:
 		return fmt.Sprintf(
@@ -432,7 +458,8 @@ func BuildMessage(outcome Outcome, providerName string) string {
 	case OutcomeRestricted:
 		return fmt.Sprintf(
 			"Your %s key works, but %s blocked this request (it may be restricted in your region, or the selected model isn't available to your account).",
-			providerName, providerName,
+			providerName,
+			providerName,
 		)
 	default:
 		return ""
@@ -443,12 +470,12 @@ func BuildMessage(outcome Outcome, providerName string) string {
 
 // ValidateKey validates a provider API key by probing a real completion endpoint.
 //
-// Behaviour:
+// Behavior:
 //   - Empty/whitespace key → InvalidKey immediately, no network call (FR-007).
 //   - Non-empty key → pick a probe model (FetchModels if Catalog empty), POST a
 //     minimal completion to {BaseURL}/chat/completions, classify the response via
 //     the R-A algorithm (FR-003).
-//   - Only InvalidKey sets Blocks=true.
+//   - Only InvalidKey blocks (see ValidationResult.Blocks, derived from Outcome).
 //   - Message is the curated FR-7 text (SEC-16: never the key or raw body).
 //   - RawDetail holds the raw upstream snippet for server debug logging only.
 func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) ValidationResult {
@@ -456,7 +483,6 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 	if strings.TrimSpace(in.APIKey) == "" {
 		return ValidationResult{
 			Outcome:    OutcomeInvalidKey,
-			Blocks:     true,
 			Message:    BuildMessage(OutcomeInvalidKey, in.ProviderName),
 			RawDetail:  "empty api key",
 			ProbeModel: "",
@@ -486,7 +512,6 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 			"provider", in.ProviderID)
 		return ValidationResult{
 			Outcome:    OutcomeUnreachable,
-			Blocks:     false,
 			Message:    BuildMessage(OutcomeUnreachable, in.ProviderName),
 			RawDetail:  "no chat model found in catalog",
 			ProbeModel: "",
@@ -498,7 +523,6 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 
 	return ValidationResult{
 		Outcome:    outcome,
-		Blocks:     outcome == OutcomeInvalidKey,
 		Message:    BuildMessage(outcome, in.ProviderName),
 		RawDetail:  rawDetail,
 		ProbeModel: probeModel,
@@ -529,7 +553,7 @@ func probeCompletion(ctx context.Context, baseURL, apiKey, model string, checker
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("X-Api-Key", apiKey)
-	// Anthropic-compat endpoints require the version header (SEC-24 / behaviour-preserving).
+	// Anthropic-compat endpoints require the version header (SEC-24 / behavior-preserving).
 	if strings.Contains(baseURL, "anthropic") {
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 	}
@@ -548,7 +572,12 @@ func probeCompletion(ctx context.Context, baseURL, apiKey, model string, checker
 	defer resp.Body.Close()
 
 	// Read a limited body for classification; cap at 4 KB.
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if readErr != nil {
+		// A mid-stream read failure can leave body empty; surface it for debugging an
+		// odd misclassification. classify still defaults safely (empty body → status-only).
+		slog.Debug("providers: probe body read error", "status", resp.StatusCode, "error", readErr)
+	}
 
 	outcome := classify(nil, resp.StatusCode, body)
 	// rawDetail for server debug log only — the caller must NOT send this to the user.
