@@ -23,6 +23,10 @@ async function getMermaid() {
     try {
       m.initialize({
         startOnLoad: false,
+        // Pinned explicitly: this sink renders on the persisted/reload path
+        // (historical messages), so the safe posture must be asserted in-repo
+        // rather than inherited from mermaid's ever-changing defaults.
+        securityLevel: 'strict',
         theme: 'dark',
         themeVariables: {
           background: 'transparent',

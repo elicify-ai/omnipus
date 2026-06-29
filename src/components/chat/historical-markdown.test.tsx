@@ -78,4 +78,59 @@ describe('HistoricalMessageMarkdown — Mermaid in finalized messages', () => {
     expect(code).toBeInTheDocument()
     expect(code).toHaveTextContent('graph TD')
   })
+
+  // Regression guard: bare fences (no language tag) and 4-space indented code must
+  // render as <pre><code> with whitespace preserved. Before the fix, `isBlock` was
+  // false for these (no `language-` class), so they fell to the inline branch and
+  // the pass-through `pre` dropped the wrapper entirely, collapsing newlines.
+  it('renders a bare (no-language) multi-line fence inside a <pre> (regression guard)', () => {
+    render(<HistoricalMessageMarkdown content={'```\nline one\nline two\n```'} />)
+
+    const pre = document.querySelector('pre')
+    expect(pre).toBeInTheDocument()
+    expect(pre).toHaveTextContent('line one')
+    expect(pre).toHaveTextContent('line two')
+    // Exactly one <pre>, no diagram
+    expect(document.querySelectorAll('pre')).toHaveLength(1)
+    expect(screen.queryByTestId('mermaid-diagram')).toBeNull()
+  })
+
+  // Multi-line mermaid fence: internal newlines must survive into the diagram code;
+  // only the trailing newline that react-markdown appends is stripped.
+  it('passes multi-line mermaid fence content (newlines preserved) to MermaidDiagram', () => {
+    render(<HistoricalMessageMarkdown content={'```mermaid\ngraph TD\n  A-->B\n  B-->C\n```'} />)
+
+    const diagram = screen.getByTestId('mermaid-diagram')
+    expect(diagram).toBeInTheDocument()
+    // Internal newlines preserved; trailing newline trimmed.
+    expect(diagram).toHaveTextContent('graph TD')
+    expect(diagram).toHaveTextContent('A-->B')
+    expect(diagram).toHaveTextContent('B-->C')
+    // No <pre> alongside the diagram
+    expect(document.querySelector('pre')).toBeNull()
+  })
+
+  it('renders an empty ```mermaid``` block as MermaidDiagram with empty code', () => {
+    render(<HistoricalMessageMarkdown content={'```mermaid\n```'} />)
+
+    const diagram = screen.getByTestId('mermaid-diagram')
+    expect(diagram).toBeInTheDocument()
+    // Empty content: trailing newline stripped → empty string
+    expect(diagram).toHaveTextContent('')
+    expect(document.querySelector('pre')).toBeNull()
+  })
+
+  it('renders prose before and after a mermaid fence alongside the diagram', () => {
+    render(
+      <HistoricalMessageMarkdown
+        content={'Here is a diagram:\n\n```mermaid\ngraph TD; A-->B\n```\n\nAnd some text after.'}
+      />,
+    )
+
+    const diagram = screen.getByTestId('mermaid-diagram')
+    expect(diagram).toBeInTheDocument()
+    // Surrounding prose paragraphs must still render
+    expect(screen.getByText(/Here is a diagram/)).toBeInTheDocument()
+    expect(screen.getByText(/And some text after/)).toBeInTheDocument()
+  })
 })

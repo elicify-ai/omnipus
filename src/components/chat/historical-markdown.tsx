@@ -132,15 +132,31 @@ export function HistoricalMessageMarkdown({ content }: { content: string }) {
         // without this, a finalized ```mermaid fence silently reverts to a plain
         // code block once the turn leaves the streaming view. Other languages stay a
         // plain <pre><code> (Shiki highlighting is live-only, to keep this bundle light).
+        //
+        // Block-detection must NOT rely solely on a `language-` class: bare fences
+        // (no language tag) and 4-space indented blocks produce a `code` node with no
+        // className, so they would fall to the inline branch without the newline check
+        // below, causing react-markdown's default <pre> to be swallowed by the
+        // pass-through above and collapsing all newlines. See regression test.
         code: ({ children, className }) => {
-          const isBlock = typeof className === 'string' && className.includes('language-')
+          // Robustly extract the text of children — today react-markdown delivers a
+          // string for fenced content, but a future plugin may produce an array or
+          // element. String(node) would yield "[object Object]" in that case; this
+          // recursive helper joins arrays and silently ignores non-string leaves.
+          function codeText(node: React.ReactNode): string {
+            if (typeof node === 'string') return node
+            if (Array.isArray(node)) return node.map(codeText).join('')
+            return ''
+          }
+
+          const hasLanguageClass = typeof className === 'string' && className.includes('language-')
+          const isBlock = hasLanguageClass || codeText(children).includes('\n')
           if (isBlock) {
-            const language = /language-([\w-]+)/.exec(className ?? '')?.[1]
+            const language = hasLanguageClass ? /language-([\w-]+)/.exec(className as string)?.[1] : undefined
             if (language === 'mermaid') {
               // react-markdown delivers fenced content as `children` with a trailing
               // newline; trim it so mermaid parses cleanly.
-              const code = String(children ?? '').replace(/\n$/, '')
-              return <MermaidDiagram code={code} />
+              return <MermaidDiagram code={codeText(children).replace(/\n$/, '')} />
             }
             return (
               <pre className="text-xs bg-[var(--color-surface-1)] rounded p-2 overflow-auto my-2 font-mono text-[var(--color-secondary)]">
