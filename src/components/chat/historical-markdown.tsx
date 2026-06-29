@@ -16,6 +16,7 @@ import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
 import { isSafeHref } from '@/lib/url-safe'
 import { fetchAboutInfo } from '@/lib/api'
 import { ImageLightbox } from './image-lightbox'
+import { MermaidDiagram } from './mermaid-renderer'
 import { PHOSPHOR_EMOJI_ICONS } from '@/lib/phosphor-emoji-icons'
 import type { ComponentPropsWithoutRef } from 'react'
 
@@ -120,10 +121,27 @@ export function HistoricalMessageMarkdown({ content }: { content: string }) {
         // Horizontal rule
         hr: () => <hr className="my-4 border-[var(--color-border)]" />,
 
-        // Code (inline + block — basic <pre><code>; Shiki only on live messages)
+        // `pre` is a pass-through: block code is delivered as <pre><code …>, but the
+        // `code` renderer below emits its OWN block wrapper (or a MermaidDiagram), so
+        // the default <pre> would double-wrap it (the nested <pre><pre> seen in the
+        // DOM). Pass children through and let `code` own the block layout.
+        pre: ({ children }) => <>{children}</>,
+
+        // Code (inline + block). Block code with `language-mermaid` renders a real
+        // diagram — parity with the live AssistantUI renderer (markdown-text.tsx);
+        // without this, a finalized ```mermaid fence silently reverts to a plain
+        // code block once the turn leaves the streaming view. Other languages stay a
+        // plain <pre><code> (Shiki highlighting is live-only, to keep this bundle light).
         code: ({ children, className }) => {
           const isBlock = typeof className === 'string' && className.includes('language-')
           if (isBlock) {
+            const language = /language-([\w-]+)/.exec(className ?? '')?.[1]
+            if (language === 'mermaid') {
+              // react-markdown delivers fenced content as `children` with a trailing
+              // newline; trim it so mermaid parses cleanly.
+              const code = String(children ?? '').replace(/\n$/, '')
+              return <MermaidDiagram code={code} />
+            }
             return (
               <pre className="text-xs bg-[var(--color-surface-1)] rounded p-2 overflow-auto my-2 font-mono text-[var(--color-secondary)]">
                 <code className={className}>{children}</code>
