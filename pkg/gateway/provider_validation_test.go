@@ -378,6 +378,12 @@ func TestPutProvider_SSRFPersistedApiBase(t *testing.T) {
 	// SSRF rejection returns 422 (the persisted api_base is loopback — blocked pre-probe).
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
 		"loopback persisted api_base must be SSRF-blocked; body=%s", w.Body.String())
+	// Assert the response body names the SSRF cause, not a generic validation error.
+	var errResp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	errMsg, _ := errResp["error"].(string)
+	assert.Contains(t, strings.ToLower(errMsg), "ssrf",
+		"SSRF-rejected 422 body must contain 'ssrf' to distinguish it from a key-invalid 422; got: %q", errMsg)
 }
 
 // --- Test #16: Settings Test returns classified outcome ---
@@ -469,6 +475,185 @@ func TestProviderTest_ClassifiedOutcome(t *testing.T) {
 	require.NotNil(t, result.Validation.Message, "validation.message must be present")
 	assert.Contains(t, *result.Validation.Message, "credit",
 		"validation.message must describe the no-credit condition")
+}
+
+// --- Test: Settings-Test never persists credentials ---
+
+// TestProviderTest_DoesNotPersistCredential asserts that POST /providers/{id}/test
+// (the Settings Test) is informational only and does NOT modify the credential store.
+// (O2 / spec: only persisting PUT flows write to the store)
+func TestProviderTest_DoesNotPersistCredential(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			w.WriteHeader(http.StatusPaymentRequired)
+			_, _ = w.Write([]byte(`{"error":{"message":"Insufficient credits"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKeyValidation)
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+		Providers: []*config.ModelConfig{
+			{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
+		},
+	}
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json",
+		[]byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`), 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	credStore := credentials.NewStore(tmpDir + "/credentials.json")
+	require.NoError(t, credentials.Unlock(credStore))
+	// Pre-store a credential so the Test handler can resolve the API key.
+	require.NoError(t, credStore.Set("testprovider_API_KEY", "existing-key"))
+	// Write api_key_ref into config.json for the Test handler.
+	cfgJSON := map[string]any{
+		"version": 1,
+		"agents":  map[string]any{"defaults": map[string]any{}, "list": []any{}},
+		"providers": []any{map[string]any{
+			"model_name":  "testprovider",
+			"provider":    "testprovider",
+			"model":       "test-model",
+			"api_key_ref": "testprovider_API_KEY",
+			"api_base":    upstream.URL,
+		}},
+	}
+	b, _ := json.Marshal(cfgJSON)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", b, 0o600))
+
+	api := &restAPI{
+		agentLoop:     al,
+		homePath:      tmpDir,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		taskStore:     task.New(tmpDir + "/tasks"),
+		credStore:     credStore,
+	}
+
+	// Record credential store state before the test.
+	credPathBefore := api.credentialsStorePath()
+	beforeStat, err := os.Stat(credPathBefore)
+	require.NoError(t, err, "credential store must exist before the test")
+	beforeMtime := beforeStat.ModTime()
+
+	w := doProviderTest(t, api, "testprovider")
+	require.Equal(t, http.StatusOK, w.Code, "provider test must return 200; body=%s", w.Body.String())
+
+	// Credential store must NOT have been modified.
+	afterStat, err := os.Stat(credPathBefore)
+	require.NoError(t, err, "credential store must still exist after the test")
+	assert.Equal(t, beforeMtime, afterStat.ModTime(),
+		"credential store must be unchanged after a Settings Test (informational only)")
+}
+
+// --- Test: Probe and Test are not audited (O2) ---
+
+// TestAudit_ProbeAndTestNotAudited asserts that neither the onboarding probe
+// (HandleOnboardingProbeProvider) nor the Settings Test (POST /providers/{id}/test)
+// emit a provider_key_validated audit entry — only the persisting PUT flow audits.
+// (O2 / spec Test #10-bis)
+func TestAudit_ProbeAndTestNotAudited(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			w.WriteHeader(http.StatusPaymentRequired)
+			_, _ = w.Write([]byte(`{"error":{"message":"Insufficient credits"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	auditDir := t.TempDir()
+	auditLogger, err := audit.NewLogger(audit.LoggerConfig{
+		Dir:           auditDir,
+		MaxSizeBytes:  1 << 20,
+		RetentionDays: 1,
+	})
+	require.NoError(t, err, "audit logger must initialize")
+	t.Cleanup(func() { _ = auditLogger.Close() })
+
+	// --- Sub-test A: onboarding probe does not audit ---
+	t.Run("onboarding_probe", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		api := newOnboardingTestAPI(t, tmpDir, nil)
+		api.auditor = auditLogger
+
+		body := `{"id":"openai","api_key":"valid-key","endpoint":"` + upstream.URL + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		api.HandleOnboardingProbeProvider(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+	})
+
+	// --- Sub-test B: Settings Test does not audit ---
+	t.Run("settings_test", func(t *testing.T) {
+		t.Setenv("OMNIPUS_MASTER_KEY", testMasterKeyValidation)
+		tmpDir := t.TempDir()
+		cfg := &config.Config{
+			Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+			Agents: config.AgentsConfig{
+				Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			},
+			Providers: []*config.ModelConfig{
+				{ModelName: "testprovider2", Provider: "testprovider2", Model: "test-model", APIBase: upstream.URL},
+			},
+		}
+		msgBus := bus.NewMessageBus()
+		al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+		credStore := credentials.NewStore(tmpDir + "/credentials.json")
+		require.NoError(t, credentials.Unlock(credStore))
+		require.NoError(t, credStore.Set("testprovider2_API_KEY", "valid-key"))
+		cfgJSON := map[string]any{
+			"version": 1,
+			"agents":  map[string]any{"defaults": map[string]any{}, "list": []any{}},
+			"providers": []any{map[string]any{
+				"model_name":  "testprovider2",
+				"provider":    "testprovider2",
+				"model":       "test-model",
+				"api_key_ref": "testprovider2_API_KEY",
+				"api_base":    upstream.URL,
+			}},
+		}
+		b, _ := json.Marshal(cfgJSON)
+		require.NoError(t, os.WriteFile(tmpDir+"/config.json", b, 0o600))
+
+		api := &restAPI{
+			agentLoop:     al,
+			homePath:      tmpDir,
+			allowedOrigin: "http://localhost:3000",
+			onboardingMgr: onboarding.NewManager(tmpDir),
+			taskStore:     task.New(tmpDir + "/tasks"),
+			credStore:     credStore,
+			auditor:       auditLogger,
+		}
+
+		w := doProviderTest(t, api, "testprovider2")
+		require.Equal(t, http.StatusOK, w.Code, "settings test must return 200; body=%s", w.Body.String())
+	})
+
+	// Flush and read audit log — neither probe nor test must have emitted provider_key_validated.
+	_ = auditLogger.Close()
+	entries := readAuditLog(t, auditDir)
+	for _, line := range entries {
+		assert.NotEqual(t, "provider_key_validated", line["event"],
+			"O2: provider_key_validated must NOT be audited for probe or Settings Test; got entry: %v", line)
+	}
 }
 
 // --- Test #28: PUT re-sending the same key value re-probes; omitting key → 0 probes ---
@@ -626,6 +811,12 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 // TestPutProvider_ReauthTokenBurnedOn422 verifies that a 422 rejection consumes the
 // single-use re-auth consent token, so a retry without a fresh token is rejected
 // at the re-auth gate (R-D/M4 / spec Test #30).
+//
+// Approach: the re-auth gate fires only when a user IS in the request context
+// (UserContextKey{}). We use withReAuthAdmin to mint a real token AND seed the
+// user, then submit a PUT with a bad key. After the 422, the token must be
+// consumed. A subsequent PUT with the SAME (now-stale) token is rejected at
+// the re-auth gate (403), NOT at the validation layer.
 func TestPutProvider_ReauthTokenBurnedOn422(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/models") {
@@ -641,22 +832,46 @@ func TestPutProvider_ReauthTokenBurnedOn422(t *testing.T) {
 
 	api := newProviderValidationTestAPI(t, "testprovider", upstream.URL)
 
-	// Mint a real re-auth token for the "testuser" account.
-	// The re-auth gate only fires when there IS a user in context (UserContextKey{}).
-	// In our test, the onboarding is not complete and there is no user in context,
-	// so the re-auth gate is bypassed — this test instead verifies the gateway
-	// processes the 422 normally (token consumption is invisible in the current
-	// test harness without a user session). We verify: 422 returned, no 200.
-	//
-	// For a full end-to-end token-burn test the SPA test suite is the appropriate
-	// layer (the gateway re-auth middleware is an isolated unit already covered
-	// by rest_auth_test.go).
+	// Step 1: mint a single-use re-auth token directly from the store and inject
+	// it alongside an admin user in the request context (mirrors withReAuthAdmin
+	// from reauth_gate_test.go). This activates the re-auth gate in the PUT handler.
+	token, err := api.reauthStoreOrInit().mint(reauthGateAdminUser)
+	require.NoError(t, err, "minting a re-auth consent token must not fail")
 
 	body := `{"api_key":"bad-key"}`
-	w := doPutProvider(t, api, "testprovider", body)
-	// Must be 422 (InvalidKey).
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
-		"InvalidKey must be 422 even when no re-auth user is in context; body=%s", w.Body.String())
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/providers/testprovider", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(reAuthHeader, token)
+	req = withReAuthAdminNoToken(req) // sets the user context (token is in the header above)
+	// Replace the header-set token with our minted one (withReAuthAdminNoToken doesn't mint).
+	req.Header.Set(reAuthHeader, token)
+	req.URL.Path = "/api/v1/providers/testprovider"
+
+	w1 := httptest.NewRecorder()
+	api.HandleProviders(w1, req)
+
+	// Step 2: first request must return 422 (InvalidKey blocks save).
+	assert.Equal(t, http.StatusUnprocessableEntity, w1.Code,
+		"InvalidKey must be 422; body=%s", w1.Body.String())
+
+	// Step 3: assert the token was consumed — a direct store.consume call with the
+	// same token must now return false (single-use: consumed on the first attempt).
+	alreadyConsumed := api.reauthStoreOrInit().consume(token, reauthGateAdminUser)
+	assert.False(t, alreadyConsumed,
+		"re-auth token must have been consumed by the 422 handler; a second consume must fail (single-use)")
+
+	// Step 4: retry the PUT with the stale (now-deleted) token — must be rejected
+	// at the re-auth gate (403 Forbidden), not at the validation layer (422).
+	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/providers/testprovider", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set(reAuthHeader, token) // same stale token
+	req2 = withReAuthAdminNoToken(req2)
+	req2.Header.Set(reAuthHeader, token)
+	req2.URL.Path = "/api/v1/providers/testprovider"
+	w2 := httptest.NewRecorder()
+	api.HandleProviders(w2, req2)
+	assert.Equal(t, http.StatusForbidden, w2.Code,
+		"retry with stale token must be rejected at the re-auth gate (403); body=%s", w2.Body.String())
 }
 
 // --- Test #10: Onboarding probe — bad key blocks (SC-003 regression) ---

@@ -4691,7 +4691,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			// Run the centralized key validator. SEC-16: RawDetail is server-debug only.
 			putValidationResult = providers_pkg.ValidateKey(r.Context(), providers_pkg.ValidateInput{
 				ProviderID:   providerID,
-				ProviderName: providerID,
+				ProviderName: providers_pkg.DisplayName(providerID),
 				BaseURL:      persistedAPIBase,
 				APIKey:       *req.ApiKey,
 			}, a.ssrfChk())
@@ -4823,18 +4823,26 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		if keyChanged && putValidationResult.Outcome != "" &&
 			putValidationResult.Outcome != providers_pkg.OutcomeValid {
 			outcomeStr := gen.ProviderValidationOutcome(putValidationResult.Outcome)
-			msg := putValidationResult.Message
-			providerResp.Validation = &struct {
-				Message *string                       `json:"message,omitempty"`
-				Outcome gen.ProviderValidationOutcome `json:"outcome"`
-			}{
-				Outcome: outcomeStr,
-				Message: &msg,
+			// Guard: only assign the validation object when the cast is a known wire value.
+			// An off-contract Outcome (e.g. future 6th value, wrong case) must not silently
+			// produce an invalid enum value on the wire.
+			if !outcomeStr.Valid() {
+				slog.Warn("rest: PUT provider: unrecognized validation outcome; omitting validation field",
+					"provider", providerID, "outcome", putValidationResult.Outcome)
+			} else {
+				msg := putValidationResult.Message
+				providerResp.Validation = &struct {
+					Message *string                       `json:"message,omitempty"`
+					Outcome gen.ProviderValidationOutcome `json:"outcome"`
+				}{
+					Outcome: outcomeStr,
+					Message: &msg,
+				}
 			}
-			// R-F / FR-017: audit the warning-proceed. Best-effort — ignore logger errors.
+			// R-F / FR-017: audit the warning-proceed. Best-effort — log write failures.
 			// Only persisting flows are audited (not the informational probe/Test), per O2.
 			if a.auditor != nil {
-				_ = a.auditor.Log(&audit.Entry{
+				if err := a.auditor.Log(&audit.Entry{
 					Event:    "provider_key_validated",
 					Decision: audit.DecisionAllow,
 					Details: map[string]any{
@@ -4842,7 +4850,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 						"outcome":  string(putValidationResult.Outcome),
 						"action":   "proceeded",
 					},
-				})
+				}); err != nil {
+					slog.Warn("audit write failed", "event", "provider_key_validated", "error", err)
+				}
 			}
 		}
 		jsonOK(w, providerResp)
@@ -4925,8 +4935,10 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 					return
 				}
-				// Capture a model to use for the auth probe. Prefer the first
-				// entry in the models list; fall back to the model field itself.
+				// Presence gate only — firstModel is passed to pickProbeModel inside
+				// ValidateKey, which selects the actual probe model from the catalog.
+				// A non-empty firstModel here satisfies the "has a model configured"
+				// check below; the probe model may differ.
 				if configuredModels, _ := modelMap["models"].([]any); len(configuredModels) > 0 {
 					firstModel, _ = configuredModels[0].(string)
 				}
@@ -4986,7 +4998,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// SEC-16: result.RawDetail is server-debug-only; never sent to the client.
 		result := providers_pkg.ValidateKey(r.Context(), providers_pkg.ValidateInput{
 			ProviderID:   providerID,
-			ProviderName: providerID,
+			ProviderName: providers_pkg.DisplayName(providerID),
 			BaseURL:      baseURL,
 			APIKey:       resolvedAPIKey,
 		}, a.ssrfChk())
@@ -4996,13 +5008,19 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		resp := gen.OperationResult{Success: success}
 		if result.Outcome != providers_pkg.OutcomeValid {
 			outcomeStr := gen.OperationResultValidationOutcome(result.Outcome)
-			msg := result.Message
-			resp.Validation = &struct {
-				Message *string                              `json:"message,omitempty"`
-				Outcome gen.OperationResultValidationOutcome `json:"outcome"`
-			}{
-				Outcome: outcomeStr,
-				Message: &msg,
+			// Guard: only assign the validation object when the cast is a known wire value.
+			if !outcomeStr.Valid() {
+				slog.Warn("rest: provider test: unrecognized validation outcome; omitting validation field",
+					"provider", providerID, "outcome", result.Outcome)
+			} else {
+				msg := result.Message
+				resp.Validation = &struct {
+					Message *string                              `json:"message,omitempty"`
+					Outcome gen.OperationResultValidationOutcome `json:"outcome"`
+				}{
+					Outcome: outcomeStr,
+					Message: &msg,
+				}
 			}
 		}
 		if result.Blocks() {

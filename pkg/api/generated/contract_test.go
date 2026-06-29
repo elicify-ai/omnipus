@@ -3516,3 +3516,187 @@ func TestContract_SlashCommandDelivery_ValidMethod(t *testing.T) {
 		t.Error("SlashCommandDelivery(\"\").Valid() must be false — empty string is not a valid enum value")
 	}
 }
+
+// ── Provider / ProbeProviderResponse / OperationResult with Validation ────────
+//
+// Tests #21 / #33 from the provider-validation TDD plan: verify that Provider,
+// ProbeProviderResponse, and OperationResult with a populated validation field
+// (outcome + message) marshal to schema-valid JSON.
+//
+// Traces to:
+//   - contracts/components/schemas/Provider.yaml (validation: $ref ProviderValidation)
+//   - contracts/components/schemas/ProbeProviderResponse.yaml
+//   - contracts/components/schemas/OperationResult.yaml
+//   - contracts/components/schemas/ProviderValidation.yaml
+//
+// These tests catch regressions where:
+//   - the Outcome enum value is invalid (off-contract)
+//   - the validation object is absent when expected
+//   - the outcome type is serialised incorrectly
+
+func TestContract_Provider_WithValidation_Valid(t *testing.T) {
+	// Provider with validation.outcome=no_credit must pass Provider.yaml.
+	// Traces to: Provider.yaml, ProviderValidation.yaml
+	msg := "Your OpenRouter key works, but the account has no credit."
+	p := Provider{
+		Id:     "openrouter",
+		Name:   "openrouter",
+		Status: ProviderStatusConnected,
+		Models: []string{"meta-llama/llama-3.1-8b-instruct:free"},
+		Validation: &struct {
+			Message *string                   `json:"message,omitempty"`
+			Outcome ProviderValidationOutcome `json:"outcome"`
+		}{
+			Outcome: ProviderValidationOutcomeNoCredit,
+			Message: &msg,
+		},
+	}
+	mustPassComponent(t, "Provider", p)
+
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"outcome":"no_credit"`,
+		"serialized Provider must contain outcome:no_credit")
+	assert.Contains(t, string(raw), `"message":`,
+		"serialized Provider must contain the message field")
+}
+
+func TestContract_Provider_WithValidation_AllOutcomes(t *testing.T) {
+	// Each non-valid ProviderValidation outcome must produce schema-valid JSON.
+	// Traces to: ProviderValidation.yaml (enum constraint).
+	outcomes := []ProviderValidationOutcome{
+		ProviderValidationOutcomeNoCredit,
+		ProviderValidationOutcomeUnreachable,
+		ProviderValidationOutcomeRestricted,
+	}
+	for _, outcome := range outcomes {
+		outcome := outcome
+		t.Run(string(outcome), func(t *testing.T) {
+			o := outcome
+			p := Provider{
+				Id:     "testprovider",
+				Name:   "testprovider",
+				Status: ProviderStatusConnected,
+				Models: []string{},
+				Validation: &struct {
+					Message *string                   `json:"message,omitempty"`
+					Outcome ProviderValidationOutcome `json:"outcome"`
+				}{
+					Outcome: o,
+				},
+			}
+			mustPassComponent(t, "Provider", p)
+		})
+	}
+}
+
+func TestContract_Provider_InvalidOutcome_FailsSchema(t *testing.T) {
+	// An off-contract outcome value must fail ProviderValidation schema validation.
+	// Traces to: ProviderValidation.yaml — outcome is an enum with 5 values.
+	raw := []byte(`{"outcome":"totally_wrong","message":"bad"}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "ProviderValidation", raw)
+	assert.Error(t, err,
+		"an off-contract outcome value must fail ProviderValidation.yaml schema validation")
+}
+
+func TestContract_ProbeProviderResponse_WithValidation_Valid(t *testing.T) {
+	// ProbeProviderResponse with validation.outcome=no_credit must pass schema.
+	// Traces to: ProbeProviderResponse.yaml, ProviderValidation.yaml.
+	msg := "Your key works but no credit remaining."
+	models := []string{"gpt-4o", "gpt-4o-mini"}
+	r := ProbeProviderResponse{
+		Success: true,
+		Models:  &models,
+		Validation: &struct {
+			Message *string                                `json:"message,omitempty"`
+			Outcome ProbeProviderResponseValidationOutcome `json:"outcome"`
+		}{
+			Outcome: ProbeProviderResponseValidationOutcomeNoCredit,
+			Message: &msg,
+		},
+	}
+	mustPassComponent(t, "ProbeProviderResponse", r)
+
+	raw, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"outcome":"no_credit"`,
+		"serialized ProbeProviderResponse must carry outcome:no_credit")
+}
+
+func TestContract_ProbeProviderResponse_NoValidation_Valid(t *testing.T) {
+	// ProbeProviderResponse with no validation field (valid probe) must also pass.
+	// Traces to: ProbeProviderResponse.yaml — validation is optional.
+	models := []string{"gpt-4o"}
+	r := ProbeProviderResponse{
+		Success: true,
+		Models:  &models,
+	}
+	mustPassComponent(t, "ProbeProviderResponse", r)
+
+	raw, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"validation"`,
+		"a valid probe response must omit the validation field")
+}
+
+func TestContract_OperationResult_WithValidation_Valid(t *testing.T) {
+	// OperationResult with validation.outcome=no_credit must pass schema.
+	// Traces to: OperationResult.yaml, ProviderValidation.yaml.
+	msg := "Your key works, but the account has insufficient credit."
+	r := OperationResult{
+		Success: true,
+		Validation: &struct {
+			Message *string                          `json:"message,omitempty"`
+			Outcome OperationResultValidationOutcome `json:"outcome"`
+		}{
+			Outcome: OperationResultValidationOutcomeNoCredit,
+			Message: &msg,
+		},
+	}
+	mustPassComponent(t, "OperationResult", r)
+
+	raw, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"outcome":"no_credit"`,
+		"serialized OperationResult must carry outcome:no_credit")
+	assert.Contains(t, string(raw), `"message":`,
+		"serialized OperationResult must carry the message field")
+}
+
+func TestContract_OperationResult_WithValidation_AllOutcomes(t *testing.T) {
+	// Each non-valid outcome must yield schema-valid JSON for OperationResult.
+	// Traces to: OperationResult.yaml — validation.$ref ProviderValidation.yaml.
+	outcomes := []OperationResultValidationOutcome{
+		OperationResultValidationOutcomeNoCredit,
+		OperationResultValidationOutcomeUnreachable,
+		OperationResultValidationOutcomeRestricted,
+	}
+	for _, outcome := range outcomes {
+		outcome := outcome
+		t.Run(string(outcome), func(t *testing.T) {
+			o := outcome
+			r := OperationResult{
+				Success: true,
+				Validation: &struct {
+					Message *string                          `json:"message,omitempty"`
+					Outcome OperationResultValidationOutcome `json:"outcome"`
+				}{
+					Outcome: o,
+				},
+			}
+			mustPassComponent(t, "OperationResult", r)
+		})
+	}
+}
+
+func TestContract_OperationResult_NoValidation_Valid(t *testing.T) {
+	// OperationResult with no validation field must also pass — it is optional.
+	// Traces to: OperationResult.yaml — validation is not in required list.
+	r := OperationResult{Success: true}
+	mustPassComponent(t, "OperationResult", r)
+
+	raw, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"validation"`,
+		"an OperationResult with no validation must omit the field")
+}

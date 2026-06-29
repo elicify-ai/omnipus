@@ -129,6 +129,13 @@ func IsValidEventName(e EventName) bool {
 		"egress_upstream_error",
 		"path.network_denied",
 		"sandbox.thread_restrict_failed",
+		// pkg/gateway: provider API-key validation audit events. "provider_key_validated"
+		// is emitted by the PUT /providers/{id} handler when a key probe produces a
+		// warning outcome (no_credit, unreachable, restricted) and is persisted.
+		// "provider_key_validation_skipped" is reserved for future use (e.g. --skip-verify
+		// gateway path) and included here to prevent a warn-once on first emission.
+		"provider_key_validated",
+		"provider_key_validation_skipped",
 		// pkg/tools/memory.go: long-term memory write events.
 		// "memory.remember" and "memory.retrospective" are the success-path
 		// events; "memory.rate_limited" is emitted by the v0.2 #155 item 6

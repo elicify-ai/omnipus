@@ -323,6 +323,148 @@ describe('OnboardingWizard — test connection', () => {
 })
 
 // =====================================================================
+// Scenario: Onboarding probe → ProviderValidationBanner (Flow-A / MAJOR-4)
+// Spec: provider-validation-centralization-spec.md, US8 / R-B / R-H/m2.
+// =====================================================================
+//
+// When the probe returns success=true with a non-blocking validation outcome
+// (no_credit / unreachable / restricted), the ProviderValidationBanner MUST
+// render with the correct data-outcome and message, and the user MUST be able
+// to proceed (Complete Setup not blocked).
+
+describe('OnboardingWizard — probe banner (Flow-A / MAJOR-4)', () => {
+  async function goToProviderAndSelect() {
+    await renderWizard()
+    await advanceNameToPassword()
+    await advancePasswordToModelKey()
+    fireEvent.click(screen.getByRole('button', { name: 'Anthropic' }))
+    await waitFor(() => screen.getByLabelText('API Key'))
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'sk-ant-api03-test' },
+    })
+  }
+
+  it('no_credit outcome → amber banner with wallet icon appears; user can still proceed', async () => {
+    // Use empty models list so the free-text slug input is shown (allowFreeTextWhenEmpty
+    // path in ModelSelector) — this lets us verify the user can proceed by entering a slug.
+    vi.mocked(probeProvider).mockResolvedValue({
+      success: true,
+      models: [],
+      validation: {
+        outcome: 'no_credit',
+        message: 'Your Anthropic key works, but the account has no credit.',
+      },
+    })
+
+    await goToProviderAndSelect()
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+
+    // Connected status appears (non-blocking — the probe succeeded).
+    await waitFor(() => screen.getByText(/connected successfully/i))
+
+    // The probe-validation banner must render.
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-probe-validation-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('onboarding-probe-validation-banner')).toHaveAttribute(
+      'data-outcome',
+      'no_credit',
+    )
+    // Server-provided copy must be shown.
+    expect(
+      screen.getByText('Your Anthropic key works, but the account has no credit.'),
+    ).toBeInTheDocument()
+
+    // User can still proceed — Complete Setup is not blocked (after entering a model slug).
+    // With empty models the ModelSelector renders a free-text input.
+    const modelInput = await waitFor(() => screen.getByPlaceholderText(/enter model slug/i))
+    fireEvent.change(modelInput, { target: { value: 'claude-3-haiku' } })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /complete setup/i })).not.toBeDisabled()
+    })
+  })
+
+  it('unreachable outcome → banner with unreachable outcome; user can proceed', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({
+      success: true,
+      models: [],
+      validation: {
+        outcome: 'unreachable',
+        message: "Couldn't reach Anthropic to check the key.",
+      },
+    })
+
+    await goToProviderAndSelect()
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+
+    await waitFor(() => screen.getByText(/connected successfully/i))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-probe-validation-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('onboarding-probe-validation-banner')).toHaveAttribute(
+      'data-outcome',
+      'unreachable',
+    )
+  })
+
+  it('restricted outcome → banner with restricted outcome; user can proceed', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({
+      success: true,
+      models: [],
+      validation: {
+        outcome: 'restricted',
+        message: 'The request was blocked in your region.',
+      },
+    })
+
+    await goToProviderAndSelect()
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+
+    await waitFor(() => screen.getByText(/connected successfully/i))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-probe-validation-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('onboarding-probe-validation-banner')).toHaveAttribute(
+      'data-outcome',
+      'restricted',
+    )
+  })
+
+  it('clean success (no validation) → no banner appears', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({
+      success: true,
+      models: ['claude-3-haiku'],
+    })
+
+    await goToProviderAndSelect()
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+
+    await waitFor(() => screen.getByText(/connected successfully/i))
+
+    // No banner when the probe returned no validation (or outcome=valid).
+    expect(screen.queryByTestId('onboarding-probe-validation-banner')).not.toBeInTheDocument()
+  })
+
+  it('banner is hidden when testStatus is not success (error path)', async () => {
+    // Probe returns success=false (InvalidKey): error is shown, NOT the banner.
+    vi.mocked(probeProvider).mockResolvedValue({
+      success: false,
+      error: 'The API key was rejected.',
+    })
+
+    await goToProviderAndSelect()
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+
+    await waitFor(() => screen.getByTestId('onboarding-error'))
+
+    // No probe-validation banner on error paths (testStatus=error, not success).
+    expect(screen.queryByTestId('onboarding-probe-validation-banner')).not.toBeInTheDocument()
+  })
+})
+
+// =====================================================================
 // friendlyProbeError — pure unit tests
 // =====================================================================
 
