@@ -475,11 +475,9 @@ function UserMessageRetryButton({ message }: { message: ChatMessage }) {
 }
 
 /** Standalone user message row for the virtualizer. */
-function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
-  const isError = message.status === 'error'
-  // F1: use the shared skill-aware renderer so reloaded messages show the chip
-  // identically to live messages (R2/FR-013). We fetch skills + commands from
-  // the same TanStack Query cache — no extra network request on cache hit.
+// useSkillChipData fetches the skills + web commands ONCE per message list (not
+// per row) for the R2 skill-chip detection. Cache hits are free (staleTime 60s).
+function useSkillChipData(): { skills: Skill[]; commandLabels: string[] } {
   const { data: skills = [] } = useQuery<Skill[]>({
     queryKey: ['skills'],
     queryFn: () => fetchSkills(),
@@ -490,7 +488,23 @@ function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
     queryFn: () => fetchCommands('web'),
     staleTime: 60_000,
   })
-  const commandLabels = commands.map((c) => c.label)
+  return { skills, commandLabels: commands.map((c) => c.label) }
+}
+
+// F1/R2: skills + commandLabels are passed in by the parent list (fetched ONCE
+// per list, not per row) so a 1000-row virtualized transcript doesn't spawn a
+// query subscription per row. The shared renderSkillAwareContent makes reloaded
+// messages show the skill chip identically to live messages (FR-013).
+function VirtualUserMessageRow({
+  message,
+  skills,
+  commandLabels,
+}: {
+  message: ChatMessage
+  skills: Skill[]
+  commandLabels: string[]
+}) {
+  const isError = message.status === 'error'
 
   return (
     <div
@@ -733,6 +747,7 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
 function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; liteMode: boolean }) {
+  const { skills, commandLabels } = useSkillChipData()
   return (
     <div
       data-testid="virtualized-message-list"
@@ -740,7 +755,15 @@ function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; lit
     >
       <div className="max-w-4xl mx-auto w-full">
         {messages.map((msg) => {
-          if (msg.role === 'user') return <VirtualUserMessageRow key={msg.id} message={msg} />
+          if (msg.role === 'user')
+            return (
+              <VirtualUserMessageRow
+                key={msg.id}
+                message={msg}
+                skills={skills}
+                commandLabels={commandLabels}
+              />
+            )
           if (msg.role === 'system') return <VirtualSystemMessageRow key={msg.id} message={msg} />
           return <VirtualAssistantMessageRow key={msg.id} message={msg} liteMode={liteMode} />
         })}
@@ -786,6 +809,7 @@ function VirtualizedMessageListInner({
   const isStreaming = useChatStore((s) => s.isStreaming)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  const { skills, commandLabels } = useSkillChipData()
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
@@ -900,7 +924,8 @@ function VirtualizedMessageListInner({
   const virtualItems = virtualizer.getVirtualItems()
 
   const rowForMessage = (msg: ChatMessage) => {
-    if (msg.role === 'user') return <VirtualUserMessageRow message={msg} />
+    if (msg.role === 'user')
+      return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
     return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
   }
