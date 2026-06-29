@@ -354,15 +354,10 @@ func TestPickProbeModel_EmptyCatalogFallback(t *testing.T) {
 		}
 	}
 
-	// Unknown provider: returns empty — caller must not emit false InvalidKey.
-	got = pickProbeModel(nil, "some-unknown-provider-xyz")
-	if got != "" {
-		// Having a fallback for unknown is acceptable (first catalog entry would be used),
-		// but an empty catalog with unknown provider must return "" (no model to probe).
-		// The spec says: never false InvalidKey — if got is non-empty here from an
-		// empty catalog it would be a default slug, which is fine too. This test
-		// just confirms no panic.
-		_ = got
+	// Unknown provider + empty catalog: must return "" (no model to probe). ValidateKey
+	// turns that into Unreachable (US5 AS2), never a false InvalidKey.
+	if got := pickProbeModel(nil, "some-unknown-provider-xyz"); got != "" {
+		t.Errorf("pickProbeModel(nil, unknown): want \"\" (no probe model), got %q", got)
 	}
 }
 

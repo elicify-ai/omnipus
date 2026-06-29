@@ -78,8 +78,6 @@ type ValidationResult struct {
 	// RawDetail is the raw upstream detail for the server debug log ONLY. Never send
 	// this to the user or on the wire.
 	RawDetail string
-	// ProbeModel is the model slug used for the completion probe.
-	ProbeModel string
 }
 
 // Blocks reports whether this outcome must block the flow. Derived solely from Outcome
@@ -482,10 +480,9 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 	// FR-007: empty/whitespace key short-circuit — no network call.
 	if strings.TrimSpace(in.APIKey) == "" {
 		return ValidationResult{
-			Outcome:    OutcomeInvalidKey,
-			Message:    BuildMessage(OutcomeInvalidKey, in.ProviderName),
-			RawDetail:  "empty api key",
-			ProbeModel: "",
+			Outcome:   OutcomeInvalidKey,
+			Message:   BuildMessage(OutcomeInvalidKey, in.ProviderName),
+			RawDetail: "empty api key",
 		}
 	}
 
@@ -511,10 +508,9 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 		slog.Warn("providers: no probe model available; returning Unreachable",
 			"provider", in.ProviderID)
 		return ValidationResult{
-			Outcome:    OutcomeUnreachable,
-			Message:    BuildMessage(OutcomeUnreachable, in.ProviderName),
-			RawDetail:  "no chat model found in catalog",
-			ProbeModel: "",
+			Outcome:   OutcomeUnreachable,
+			Message:   BuildMessage(OutcomeUnreachable, in.ProviderName),
+			RawDetail: "no chat model found in catalog",
 		}
 	}
 
@@ -522,10 +518,9 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 	outcome, rawDetail := probeCompletion(ctx, in.BaseURL, in.APIKey, probeModel, checker)
 
 	return ValidationResult{
-		Outcome:    outcome,
-		Message:    BuildMessage(outcome, in.ProviderName),
-		RawDetail:  rawDetail,
-		ProbeModel: probeModel,
+		Outcome:   outcome,
+		Message:   BuildMessage(outcome, in.ProviderName),
+		RawDetail: rawDetail,
 	}
 }
 

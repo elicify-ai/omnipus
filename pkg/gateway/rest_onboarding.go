@@ -499,14 +499,16 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 			slog.Warn("rest: probe-provider: unrecognized validation outcome; omitting validation field",
 				"provider", body.Id, "outcome", result.Outcome)
 		} else {
-			validationObj := &struct {
+			// Assign the generated anonymous field struct directly (matching the two
+			// rest.go sites) — binding it to a local first trips the hand-written
+			// wire-type linter (Constraint #8).
+			probeResp.Validation = &struct {
 				Message *string                                    `json:"message,omitempty"`
 				Outcome gen.ProbeProviderResponseValidationOutcome `json:"outcome"`
 			}{Outcome: outcomeStr}
 			if result.Message != "" {
-				validationObj.Message = &result.Message
+				probeResp.Validation.Message = &result.Message
 			}
-			probeResp.Validation = validationObj
 		}
 	}
 
