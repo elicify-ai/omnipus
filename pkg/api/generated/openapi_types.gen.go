@@ -972,19 +972,19 @@ func (e AuditEntryDecision) Valid() bool {
 
 // Defines values for AuditLogResponseChainStatus.
 const (
-	Broken  AuditLogResponseChainStatus = "broken"
-	Unknown AuditLogResponseChainStatus = "unknown"
-	Valid   AuditLogResponseChainStatus = "valid"
+	AuditLogResponseChainStatusBroken  AuditLogResponseChainStatus = "broken"
+	AuditLogResponseChainStatusUnknown AuditLogResponseChainStatus = "unknown"
+	AuditLogResponseChainStatusValid   AuditLogResponseChainStatus = "valid"
 )
 
 // Valid indicates whether the value is a known member of the AuditLogResponseChainStatus enum.
 func (e AuditLogResponseChainStatus) Valid() bool {
 	switch e {
-	case Broken:
+	case AuditLogResponseChainStatusBroken:
 		return true
-	case Unknown:
+	case AuditLogResponseChainStatusUnknown:
 		return true
-	case Valid:
+	case AuditLogResponseChainStatusValid:
 		return true
 	default:
 		return false
@@ -1831,6 +1831,33 @@ func (e OnboardingCompleteResponseRole) Valid() bool {
 	}
 }
 
+// Defines values for OperationResultValidationOutcome.
+const (
+	OperationResultValidationOutcomeInvalidKey  OperationResultValidationOutcome = "invalid_key"
+	OperationResultValidationOutcomeNoCredit    OperationResultValidationOutcome = "no_credit"
+	OperationResultValidationOutcomeRestricted  OperationResultValidationOutcome = "restricted"
+	OperationResultValidationOutcomeUnreachable OperationResultValidationOutcome = "unreachable"
+	OperationResultValidationOutcomeValid       OperationResultValidationOutcome = "valid"
+)
+
+// Valid indicates whether the value is a known member of the OperationResultValidationOutcome enum.
+func (e OperationResultValidationOutcome) Valid() bool {
+	switch e {
+	case OperationResultValidationOutcomeInvalidKey:
+		return true
+	case OperationResultValidationOutcomeNoCredit:
+		return true
+	case OperationResultValidationOutcomeRestricted:
+		return true
+	case OperationResultValidationOutcomeUnreachable:
+		return true
+	case OperationResultValidationOutcomeValid:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProbeProviderRequestId.
 const (
 	AlibabaCoding          ProbeProviderRequestId = "alibaba-coding"
@@ -2023,6 +2050,33 @@ func (e ProbeProviderRequestId) Valid() bool {
 	}
 }
 
+// Defines values for ProbeProviderResponseValidationOutcome.
+const (
+	ProbeProviderResponseValidationOutcomeInvalidKey  ProbeProviderResponseValidationOutcome = "invalid_key"
+	ProbeProviderResponseValidationOutcomeNoCredit    ProbeProviderResponseValidationOutcome = "no_credit"
+	ProbeProviderResponseValidationOutcomeRestricted  ProbeProviderResponseValidationOutcome = "restricted"
+	ProbeProviderResponseValidationOutcomeUnreachable ProbeProviderResponseValidationOutcome = "unreachable"
+	ProbeProviderResponseValidationOutcomeValid       ProbeProviderResponseValidationOutcome = "valid"
+)
+
+// Valid indicates whether the value is a known member of the ProbeProviderResponseValidationOutcome enum.
+func (e ProbeProviderResponseValidationOutcome) Valid() bool {
+	switch e {
+	case ProbeProviderResponseValidationOutcomeInvalidKey:
+		return true
+	case ProbeProviderResponseValidationOutcomeNoCredit:
+		return true
+	case ProbeProviderResponseValidationOutcomeRestricted:
+		return true
+	case ProbeProviderResponseValidationOutcomeUnreachable:
+		return true
+	case ProbeProviderResponseValidationOutcomeValid:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PromptGuardResponseLevel.
 const (
 	PromptGuardResponseLevelHigh   PromptGuardResponseLevel = "high"
@@ -2101,6 +2155,33 @@ func (e ProviderStatus) Valid() bool {
 	case ProviderStatusDisconnected:
 		return true
 	case ProviderStatusError:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderValidationOutcome.
+const (
+	ProviderValidationOutcomeInvalidKey  ProviderValidationOutcome = "invalid_key"
+	ProviderValidationOutcomeNoCredit    ProviderValidationOutcome = "no_credit"
+	ProviderValidationOutcomeRestricted  ProviderValidationOutcome = "restricted"
+	ProviderValidationOutcomeUnreachable ProviderValidationOutcome = "unreachable"
+	ProviderValidationOutcomeValid       ProviderValidationOutcome = "valid"
+)
+
+// Valid indicates whether the value is a known member of the ProviderValidationOutcome enum.
+func (e ProviderValidationOutcome) Valid() bool {
+	switch e {
+	case ProviderValidationOutcomeInvalidKey:
+		return true
+	case ProviderValidationOutcomeNoCredit:
+		return true
+	case ProviderValidationOutcomeRestricted:
+		return true
+	case ProviderValidationOutcomeUnreachable:
+		return true
+	case ProviderValidationOutcomeValid:
 		return true
 	default:
 		return false
@@ -6155,7 +6236,19 @@ type OperationResult struct {
 
 	// Success True when the operation succeeded.
 	Success bool `json:"success"`
+
+	// Validation Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
+	Validation *struct {
+		// Message Plain-English, user-facing message for the outcome (curated; never the raw provider body). Present for non-valid outcomes. Parameterized by provider name.
+		Message *string `json:"message,omitempty"`
+
+		// Outcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
+		Outcome OperationResultValidationOutcome `json:"outcome"`
+	} `json:"validation,omitempty"`
 }
+
+// OperationResultValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
+type OperationResultValidationOutcome string
 
 // PendingRestartEntry A single config key that has been written to disk but not yet applied — the running value diverges from the persisted value. Returned in the array from GET /api/v1/config/pending-restart.
 type PendingRestartEntry struct {
@@ -6215,7 +6308,19 @@ type ProbeProviderResponse struct {
 
 	// Success Whether the provider accepted the API key.
 	Success bool `json:"success"`
+
+	// Validation Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
+	Validation *struct {
+		// Message Plain-English, user-facing message for the outcome (curated; never the raw provider body). Present for non-valid outcomes. Parameterized by provider name.
+		Message *string `json:"message,omitempty"`
+
+		// Outcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
+		Outcome ProbeProviderResponseValidationOutcome `json:"outcome"`
+	} `json:"validation,omitempty"`
 }
+
+// ProbeProviderResponseValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
+type ProbeProviderResponseValidationOutcome string
 
 // PromptGuardResponse Prompt injection guard level returned by GET /api/v1/security/prompt-guard.
 type PromptGuardResponse struct {
@@ -6282,12 +6387,24 @@ type Provider struct {
 	// Status "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
 	Status ProviderStatus `json:"status"`
 
+	// Validation Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
+	Validation *struct {
+		// Message Plain-English, user-facing message for the outcome (curated; never the raw provider body). Present for non-valid outcomes. Parameterized by provider name.
+		Message *string `json:"message,omitempty"`
+
+		// Outcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
+		Outcome ProviderValidationOutcome `json:"outcome"`
+	} `json:"validation,omitempty"`
+
 	// Warning Non-fatal advisory message (e.g. "could not fetch upstream model list: ..."). Absent when there are no warnings.
 	Warning *string `json:"warning,omitempty"`
 }
 
 // ProviderStatus "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
 type ProviderStatus string
+
+// ProviderValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
+type ProviderValidationOutcome string
 
 // ProviderUpdateRequest Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
 type ProviderUpdateRequest struct {
@@ -6299,6 +6416,15 @@ type ProviderUpdateRequest struct {
 
 	// Models User-supplied catalogue of model slugs for a provider that does NOT expose a live /models endpoint (custom / unknown OpenAI-compatible gateways). When present, these slugs replace the provider's stored catalogue and constrain the model picker. Ignored for providers WITH a live endpoint (has_models_endpoint=true), whose catalogue is fetched from upstream. Omit to leave the existing list unchanged; send an empty array to clear it.
 	Models *[]string `json:"models,omitempty"`
+}
+
+// ProviderValidation Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
+type ProviderValidation struct {
+	// Message Plain-English, user-facing message for the outcome (curated; never the raw provider body). Present for non-valid outcomes. Parameterized by provider name.
+	Message *string `json:"message,omitempty"`
+
+	// Outcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
+	Outcome ProviderValidationOutcome `json:"outcome"`
 }
 
 // RateLimitConfig Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits.

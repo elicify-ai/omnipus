@@ -22,3 +22,5 @@ properties:
     type: string
     description: Human-readable error from the upstream provider. Present only when success=false.
     example: "401 unauthorized"
+  validation:
+    $ref: './ProviderValidation.yaml'

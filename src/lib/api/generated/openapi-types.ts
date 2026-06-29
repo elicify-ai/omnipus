@@ -2548,6 +2548,7 @@ export interface components {
              * @example 401 unauthorized
              */
             error?: string;
+            validation?: components["schemas"]["ProviderValidation"];
         };
         /** @description Represents a gateway user account as returned by GET /users and POST /users. Password hashes and token hashes are NEVER included in responses — only the boolean presence flags are exposed. */
         User: {
@@ -4631,6 +4632,7 @@ export interface components {
              * @example upstream returned 403 Forbidden
              */
             error?: string;
+            validation?: components["schemas"]["ProviderValidation"];
         };
         /** @description Body for POST /auth/reauth. Re-verifies the single user's one password before a sensitive settings change is permitted (FR-12.2). This is a consent primitive, NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). A successful re-auth mints a short-lived re-auth token the SPA attaches to the subsequent sensitive request. */
         ReAuthRequest: {
@@ -6087,6 +6089,7 @@ export interface components {
              * @example no API key configured for this provider
              */
             error?: string;
+            validation?: components["schemas"]["ProviderValidation"];
         };
         /**
          * ToolApprovalResponse
@@ -6488,6 +6491,23 @@ export interface components {
              *     ]
              */
             models?: string[];
+        };
+        /**
+         * ProviderValidation
+         * @description Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
+         */
+        ProviderValidation: {
+            /**
+             * @description Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
+             * @example valid
+             * @enum {string}
+             */
+            outcome: "valid" | "invalid_key" | "no_credit" | "unreachable" | "restricted";
+            /**
+             * @description Plain-English, user-facing message for the outcome (curated; never the raw provider body). Present for non-valid outcomes. Parameterized by provider name.
+             * @example Your OpenRouter key works, but the account has no credit. Add funds in your OpenRouter dashboard to use it.
+             */
+            message?: string;
         };
         /**
          * AppStatePatchRequest
@@ -12631,6 +12651,7 @@ export type TaskUpdateRequest = components["schemas"]["TaskUpdateRequest"];
 export type Todo = components["schemas"]["Todo"];
 export type TaskTrigger = components["schemas"]["TaskTrigger"];
 export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest"];
+export type ProviderValidation = components["schemas"]["ProviderValidation"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
 export type SkillSearchResult = components["schemas"]["SkillSearchResult"];

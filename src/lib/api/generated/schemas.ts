@@ -9,6 +9,16 @@ type LoginResponse = {
 };
 type BearerToken = string;
 type OnboardingCompleteResponse = LoginResponse;
+type ProbeProviderResponse = {
+  success: boolean;
+  models?: Array<string> | undefined;
+  error?: string | undefined;
+  validation?: ProviderValidation | undefined;
+};
+type ProviderValidation = {
+  outcome: "valid" | "invalid_key" | "no_credit" | "unreachable" | "restricted";
+  message?: string | undefined;
+};
 type Session = {
   id: string;
   type?: ("chat" | "task" | "channel" | "scheduled") | undefined;
@@ -337,6 +347,18 @@ type AuditEntry = {
   policy_rule?: string | undefined;
   details?: {} | undefined;
 };
+type Provider = {
+  id: string;
+  name: string;
+  display_name?: string | undefined;
+  status: "connected" | "disconnected" | "error";
+  models: Array<string>;
+  has_models_endpoint?: boolean | undefined;
+  has_api_key?: boolean | undefined;
+  warning?: string | undefined;
+  error?: string | undefined;
+  validation?: ProviderValidation | undefined;
+};
 type IntegrationProvidersResponse = {
   search: Array<IntegrationProvider>;
   voice: Array<IntegrationProvider>;
@@ -468,6 +490,11 @@ type AgentToolEntry = {
 type ChannelEnabledResponse = {
   id: ChannelId;
   enabled: boolean;
+};
+type OperationResult = {
+  success: boolean;
+  error?: string | undefined;
+  validation?: ProviderValidation | undefined;
 };
 type UploadFilesResponse = {
   files: Array<UploadedFile>;
@@ -726,9 +753,20 @@ export const ChangePasswordRequest = z.object({
   current_password: z.string().min(1).max(72),
   new_password: z.string().min(8).max(72),
 });
-export const OperationResult = z.object({
+export const ProviderValidation: z.ZodType<ProviderValidation> = z.object({
+  outcome: z.enum([
+    "valid",
+    "invalid_key",
+    "no_credit",
+    "unreachable",
+    "restricted",
+  ]),
+  message: z.string().optional(),
+});
+export const OperationResult: z.ZodType<OperationResult> = z.object({
   success: z.boolean(),
   error: z.string().optional(),
+  validation: ProviderValidation.optional(),
 });
 export const ReAuthRequest = z.object({ password: z.string().min(1).max(72) });
 export const ReAuthResponse = z.object({
@@ -854,11 +892,12 @@ export const ProbeProviderRequest = z.object({
   api_key: z.string().min(1),
   endpoint: z.string().optional(),
 });
-export const ProbeProviderResponse = z
+export const ProbeProviderResponse: z.ZodType<ProbeProviderResponse> = z
   .object({
     success: z.boolean(),
     models: z.array(z.string()).optional(),
     error: z.string().optional(),
+    validation: ProviderValidation.optional(),
   })
   .passthrough();
 export const ModelTokens: z.ZodType<ModelTokens> = z
@@ -1694,7 +1733,7 @@ export const GatewayStatus = z.object({
   daily_cost: z.number().gte(0),
   version: z.string().optional(),
 });
-export const Provider = z.object({
+export const Provider: z.ZodType<Provider> = z.object({
   id: z.string(),
   name: z.string(),
   display_name: z.string().optional(),
@@ -1704,6 +1743,7 @@ export const Provider = z.object({
   has_api_key: z.boolean().optional(),
   warning: z.string().optional(),
   error: z.string().optional(),
+  validation: ProviderValidation.optional(),
 });
 export const ProviderUpdateRequest = z
   .object({
