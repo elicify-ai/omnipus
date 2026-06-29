@@ -5458,6 +5458,11 @@ turnLoop:
 			// workspace instructions land at [2] in the final message array.
 			// Empty/absent instructions are a no-op — zero behavioral change.
 			callMessages = injectWorkspaceInstructions(callMessages, buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
+			// Web-only: encourage Mermaid diagrams when the turn comes from the web
+			// chat (the sole surface that renders them). Per-turn + surface-gated on
+			// ts.channel — deliberately NOT in the cached system prompt, since one
+			// agent serves multiple channels (see web_rendering_note.go).
+			callMessages = injectWebRenderingNote(callMessages, buildWebRenderingNote(ts.channel))
 			// Re-inject the compressed manifest of unloaded lazy tools as an ephemeral
 			// system message. Like the scratchpad, it is rebuilt every turn (never
 			// persisted) so it is never stale and not double-counted in the cached
