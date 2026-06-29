@@ -472,7 +472,12 @@ func providerDisplayName(providerID string) string {
 //     audit slog line; return in.APIKey.
 //
 // The caller must NOT persist anything if this function returns a non-nil error.
-func validateAndResolveKey(ctx context.Context, in Input, wio wizardIO) (string, error) {
+// validateAndResolveKey validates in.APIKey against the provider at baseURL
+// (the caller resolves baseURL via providers.GetDefaultAPIBase; passing it in
+// keeps the function a pure, httptest-injectable seam). It returns the resolved
+// key (which may differ from in.APIKey after an interactive re-prompt) or an
+// error when a non-interactive run hits an InvalidKey outcome.
+func validateAndResolveKey(ctx context.Context, in Input, wio wizardIO, baseURL string) (string, error) {
 	if in.SkipVerify {
 		// R-F best-effort audit: emit structured slog line; never fail onboard.
 		slog.Info("provider_key_validation_skipped",
@@ -484,7 +489,6 @@ func validateAndResolveKey(ctx context.Context, in Input, wio wizardIO) (string,
 	}
 
 	displayName := providerDisplayName(in.ProviderID)
-	baseURL := providers.GetDefaultAPIBase(in.ProviderID)
 
 	apiKey := in.APIKey
 	for {
@@ -703,9 +707,12 @@ func applyInput(in Input, wio wizardIO) error {
 
 	// 2. Validate the API key before persisting (FR-014/FR-015).
 	//    resolvedKey may differ from in.APIKey when the interactive loop re-prompts.
-	resolvedKey, err := validateAndResolveKey(context.Background(), in, wio)
-	if err != nil {
-		return err
+	//    vErr is named distinctly so the idiomatic `if err :=` blocks below do not
+	//    shadow a lingering function-scoped err (govet shadow).
+	resolvedKey, vErr := validateAndResolveKey(
+		context.Background(), in, wio, providers.GetDefaultAPIBase(in.ProviderID))
+	if vErr != nil {
+		return vErr
 	}
 	in.APIKey = resolvedKey
 

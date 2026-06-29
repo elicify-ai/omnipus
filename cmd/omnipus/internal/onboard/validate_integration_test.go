@@ -32,8 +32,6 @@ package onboard
 import (
 	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -44,22 +42,9 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/datamodel"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-// providerInput builds a providers.ValidateInput pointing at srvURL (the test
-// httptest server) instead of the real provider base URL.
-func providerInput(providerID, apiKey, srvURL string) providers.ValidateInput {
-	return providers.ValidateInput{
-		ProviderID:   providerID,
-		ProviderName: providerDisplayName(providerID),
-		BaseURL:      srvURL,
-		APIKey:       apiKey,
-		Catalog:      []string{"gpt-4o-mini"}, // skip FetchModels round-trip
-	}
-}
 
 // stubUpstream returns an httptest.Server and a request counter.
 // completionStatus is the HTTP status for /chat/completions.
@@ -84,78 +69,8 @@ func stubUpstream(completionStatus int, completionBody string) (*httptest.Server
 	return srv, &probeCount
 }
 
-// runValidate calls validateAndResolveKey with a fake Input whose BaseURL is
-// overridden to srvURL. It returns the resolved key and error.
-// nonInteractive and skipVerify are passed via Input fields.
-func runValidate(
-	ctx context.Context,
-	providerID, apiKey, srvURL string,
-	nonInteractive, skipVerify bool,
-	wio wizardIO,
-) (string, error) {
-	in := Input{
-		ProviderID:     providerID,
-		APIKey:         apiKey,
-		SkipVerify:     skipVerify,
-		NonInteractive: nonInteractive,
-	}
-	// Override BaseURL by temporarily patching the input before reaching ValidateKey.
-	// validateAndResolveKey calls providers.ValidateKey with
-	//   BaseURL: providers.GetDefaultAPIBase(in.ProviderID)
-	// Since we can't inject the URL there without changing the signature, we use a
-	// test helper that wraps validateAndResolveKey to substitute the URL.
-	return validateAndResolveKeyWithBase(ctx, in, wio, srvURL)
-}
-
-// validateAndResolveKeyWithBase is a test-only variant that uses baseURL instead
-// of providers.GetDefaultAPIBase, enabling httptest-server injection without
-// changing the production signature.
-func validateAndResolveKeyWithBase(ctx context.Context, in Input, wio wizardIO, baseURL string) (string, error) {
-	if in.SkipVerify {
-		// Mirror validateAndResolveKey's skip path exactly (slog + return).
-		// We don't call slog here to avoid import cycles — the caller asserts
-		// behavior indirectly (0 probes, key persisted).
-		return in.APIKey, nil
-	}
-
-	displayName := providerDisplayName(in.ProviderID)
-	apiKey := in.APIKey
-	for {
-		result := providers.ValidateKey(ctx, providers.ValidateInput{
-			ProviderID:   in.ProviderID,
-			ProviderName: displayName,
-			BaseURL:      baseURL,
-			APIKey:       apiKey,
-			Catalog:      []string{"gpt-4o-mini"},
-		}, nil)
-
-		if result.Blocks {
-			if in.NonInteractive {
-				_, _ = io.WriteString(wio.stderr, result.Message+"\n")
-				return "", fmt.Errorf("provider key rejected: %s", result.Message)
-			}
-			// Interactive: print and re-prompt.
-			_, _ = io.WriteString(wio.stdout, "\n"+result.Message+"\n")
-			_, _ = io.WriteString(wio.stdout, in.ProviderID+" API key (input hidden): ")
-			newKey, err := wio.readPassword()
-			if err != nil {
-				return "", fmt.Errorf("read api key: %w", err)
-			}
-			_, _ = io.WriteString(wio.stdout, "\n")
-			newKey = strings.TrimSpace(newKey)
-			if newKey == "" {
-				return "", errors.New("api key must not be empty")
-			}
-			apiKey = newKey
-			continue
-		}
-
-		if result.Outcome != providers.OutcomeValid {
-			_, _ = io.WriteString(wio.stdout, "Warning: "+result.Message+"\n")
-		}
-		return apiKey, nil
-	}
-}
+// validateAndResolveKey (production, in onboard.go) takes a baseURL seam so these
+// tests exercise the real function with an httptest upstream — no mirror.
 
 // ── Test #17: CLI onboard validation matrix ───────────────────────────────────
 
@@ -273,7 +188,6 @@ func TestCliOnboard_ValidationMatrix(t *testing.T) {
 	}
 
 	for _, tc := range rows {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -295,7 +209,10 @@ func TestCliOnboard_ValidationMatrix(t *testing.T) {
 						if n == 1 {
 							// First probe: wrong key → 401
 							w.WriteHeader(401)
-							_, _ = io.WriteString(w, `{"error":{"message":"No auth credentials found","code":"invalid_api_key"}}`)
+							_, _ = io.WriteString(
+								w,
+								`{"error":{"message":"No auth credentials found","code":"invalid_api_key"}}`,
+							)
 						} else {
 							// Second probe (after reprompt): correct key → 200
 							w.WriteHeader(200)
@@ -338,7 +255,7 @@ func TestCliOnboard_ValidationMatrix(t *testing.T) {
 				},
 			}
 
-			gotKey, err := validateAndResolveKeyWithBase(
+			gotKey, err := validateAndResolveKey(
 				context.Background(),
 				Input{
 					ProviderID:     "openrouter",
@@ -407,7 +324,7 @@ func TestCliOnboard_SkipVerifyNoProbe(t *testing.T) {
 		readPassword: func() (string, error) { return "", nil },
 	}
 
-	resolvedKey, err := validateAndResolveKeyWithBase(
+	resolvedKey, err := validateAndResolveKey(
 		context.Background(),
 		Input{
 			ProviderID:     "openrouter",
@@ -434,10 +351,10 @@ func TestCliOnboard_SkipVerifyNoProbe(t *testing.T) {
 // TestCliOnboard_SkipVerifyAuditUnavailable verifies R-F/SC-013: the skip-verify
 // path succeeds even when slog's output is redirected to /dev/null or unavailable.
 // Since we test in-process and slog writes are best-effort, we simply verify that
-// validateAndResolveKeyWithBase returns no error under the skip-verify path
+// validateAndResolveKey returns no error under the skip-verify path
 // regardless of slog availability. The slog package itself is always available
 // in-process; the "unavailable" case means "the underlying writer fails silently"
-// which is precisely slog's behaviour (errors from the handler are discarded).
+// which is precisely slog's behavior (errors from the handler are discarded).
 func TestCliOnboard_SkipVerifyAuditUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -457,7 +374,7 @@ func TestCliOnboard_SkipVerifyAuditUnavailable(t *testing.T) {
 
 	// Drive the skip path twice: once for non-interactive, once for interactive.
 	for _, nonInteractive := range []bool{true, false} {
-		resolvedKey, err := validateAndResolveKeyWithBase(
+		resolvedKey, err := validateAndResolveKey(
 			context.Background(),
 			Input{
 				ProviderID:     "openai",
@@ -469,7 +386,11 @@ func TestCliOnboard_SkipVerifyAuditUnavailable(t *testing.T) {
 			srv.URL,
 		)
 		if err != nil {
-			t.Errorf("nonInteractive=%v: skip-verify must not error even with log sink unavailable: %v", nonInteractive, err)
+			t.Errorf(
+				"nonInteractive=%v: skip-verify must not error even with log sink unavailable: %v",
+				nonInteractive,
+				err,
+			)
 		}
 		if resolvedKey != "sk-secret" {
 			t.Errorf("nonInteractive=%v: resolved key = %q, want sk-secret", nonInteractive, resolvedKey)
@@ -519,9 +440,9 @@ func TestCliOnboard_NonInteractive_WrongKey_NotPersisted(t *testing.T) {
 	// calls validateAndResolveKey (production), and that resolves the URL from
 	// providers.GetDefaultAPIBase, we cannot inject the test URL there without
 	// changing the production function. Instead, we test the path directly:
-	// call validateAndResolveKeyWithBase (which mirrors the production logic) and
+	// call validateAndResolveKey (which mirrors the production logic) and
 	// assert that on error, the credential store has no entry.
-	_, err := validateAndResolveKeyWithBase(context.Background(), in, wio, srv.URL)
+	_, err := validateAndResolveKey(context.Background(), in, wio, srv.URL)
 	if err == nil {
 		t.Fatal("expected error for invalid key in non-interactive mode, got nil")
 	}
@@ -585,7 +506,7 @@ func TestCliOnboard_Interactive_WrongThenCorrect_Persisted(t *testing.T) {
 		},
 	}
 
-	resolvedKey, err := validateAndResolveKeyWithBase(
+	resolvedKey, err := validateAndResolveKey(
 		context.Background(),
 		Input{
 			ProviderID:     "openrouter",
@@ -632,7 +553,7 @@ func TestCliOnboard_ValidKey_NoWarning(t *testing.T) {
 		readPassword: func() (string, error) { return "", nil },
 	}
 
-	resolvedKey, err := validateAndResolveKeyWithBase(
+	resolvedKey, err := validateAndResolveKey(
 		context.Background(),
 		Input{
 			ProviderID:     "openai",
@@ -663,7 +584,7 @@ func TestCliOnboard_ValidKey_NoWarning(t *testing.T) {
 
 // TestCliOnboard_FullApplyInput_SkipVerify drives applyInput end-to-end with
 // SkipVerify=true and asserts that the credential is persisted and state is committed.
-// This exercises the production path (not the test-only validateAndResolveKeyWithBase).
+// This exercises the production path (not the test-only validateAndResolveKey).
 // With SkipVerify=true, validateAndResolveKey calls providers.GetDefaultAPIBase — but
 // since skip short-circuits before any network call, the URL is never actually used.
 func TestCliOnboard_FullApplyInput_SkipVerify(t *testing.T) {
