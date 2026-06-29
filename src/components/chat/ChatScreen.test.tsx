@@ -128,13 +128,23 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
     { name: 'skill',  label: '/skill',  description: 'Run an installed skill',      delivery: 'agent',  available_while_streaming: false },
     { name: 'cancel', label: '/cancel', description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
   ]
+  // Installed skills returned by GET /api/v1/skills — used by the skill-arg autocomplete.
+  const mockSkills = [
+    { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+    { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+    { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+  ]
   return {
     ...actual,
     useQuery: (opts: { queryKey: unknown[] }) => {
-      // Return mocked commands for the ['commands','web'] query key.
       const key = opts?.queryKey
+      // Return mocked commands for the ['commands','web'] query key.
       if (Array.isArray(key) && key[0] === 'commands' && key[1] === 'web') {
         return { data: mockCommands, isError: false, refetch: vi.fn() }
+      }
+      // Return mocked skills for the ['skills'] query key.
+      if (Array.isArray(key) && key[0] === 'skills') {
+        return { data: mockSkills, isError: false, refetch: vi.fn() }
       }
       return { data: [], isError: false, refetch: vi.fn() }
     },
@@ -158,6 +168,11 @@ vi.mock('@/lib/api', () => ({
     { name: 'model',  label: '/model',  description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
     { name: 'skill',  label: '/skill',  description: 'Run an installed skill',      delivery: 'agent',  available_while_streaming: false },
     { name: 'cancel', label: '/cancel', description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
+  ]),
+  fetchSkills: vi.fn().mockResolvedValue([
+    { id: 'web-research',    name: 'Web Research',    version: '1.0', description: 'Web search and extraction', verified: true, status: 'active' },
+    { id: 'code-review',     name: 'Code Review',     version: '1.0', description: 'Reviews code quality',      verified: true, status: 'active' },
+    { id: 'data-analysis',   name: 'Data Analysis',   version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
   ]),
   uploadFiles: vi.fn(),
   fetchProviders: vi.fn().mockResolvedValue([]),
@@ -455,4 +470,238 @@ describe('OmnipusComposer — model selector store contracts (FR-010)', () => {
     expect(last?.metadata).toBeUndefined()
   })
 
+})
+
+// ── Skill-arg autocomplete ────────────────────────────────────────────────────
+//
+// After the user types "/skill " (or "/use ") the palette switches from
+// slash-command mode to skill-arg mode: it shows installed skills filtered
+// letter-by-letter by the partial token the user is typing.  Selecting a
+// skill completes the input to "/skill <id> " (canonical prefix, trailing
+// space).
+//
+// Mock skills (from the useQuery['skills'] mock above):
+//   web-research / Web Research
+//   code-review  / Code Review
+//   data-analysis / Data Analysis
+
+describe('Skill-arg autocomplete', () => {
+  it('typing "/skill " (space after) shows all installed skills', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => {
+      fireEvent.change(input, { target: { value: '/skill ' } })
+    })
+    // Open the dropdown via ArrowDown
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+
+    // All three mock skill ids must appear as palette items
+    expect(screen.getByText('web-research')).toBeInTheDocument()
+    expect(screen.getByText('code-review')).toBeInTheDocument()
+    expect(screen.getByText('data-analysis')).toBeInTheDocument()
+  })
+
+  it('typing "/skill web" filters to skills whose id or name starts with "web"', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => {
+      fireEvent.change(input, { target: { value: '/skill web' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+
+    // Only "web-research" starts with "web"
+    expect(screen.getByText('web-research')).toBeInTheDocument()
+    expect(screen.queryByText('code-review')).not.toBeInTheDocument()
+    expect(screen.queryByText('data-analysis')).not.toBeInTheDocument()
+  })
+
+  it('typing "/skill xyz" (no match) shows an empty dropdown (no items)', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => {
+      fireEvent.change(input, { target: { value: '/skill xyz' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+
+    // None of the mock skills start with "xyz"
+    expect(screen.queryByText('web-research')).not.toBeInTheDocument()
+    expect(screen.queryByText('code-review')).not.toBeInTheDocument()
+    expect(screen.queryByText('data-analysis')).not.toBeInTheDocument()
+  })
+
+  it('selecting a skill via Enter sets the composer text to "/skill <id> "', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    const mockSetText = vi.fn()
+    const { useComposerRuntime } = await import('@assistant-ui/react')
+    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
+      getState: () => ({ text: '' }),
+      setText: mockSetText,
+      addAttachment: vi.fn(),
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => {
+      fireEvent.change(input, { target: { value: '/skill web' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+    // "web-research" is the first (and only) item; press Enter to select it
+    act(() => {
+      fireEvent.keyDown(input, { key: 'Enter' })
+    })
+
+    expect(mockSetText).toHaveBeenCalledWith('/skill web-research ')
+  })
+
+  it('selecting a skill via mouse click sets the composer text to "/skill <id> "', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    const mockSetText = vi.fn()
+    const { useComposerRuntime } = await import('@assistant-ui/react')
+    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
+      getState: () => ({ text: '' }),
+      setText: mockSetText,
+      addAttachment: vi.fn(),
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => {
+      fireEvent.change(input, { target: { value: '/skill ' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+
+    const codeReviewBtn = screen.getByText('code-review').closest('button')
+    expect(codeReviewBtn).not.toBeNull()
+
+    act(() => {
+      fireEvent.mouseDown(codeReviewBtn!)
+    })
+
+    expect(mockSetText).toHaveBeenCalledWith('/skill code-review ')
+  })
+
+  it('typing "/use " also activates skill-arg mode (alias)', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => {
+      fireEvent.change(input, { target: { value: '/use ' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+
+    // All skills should appear
+    expect(screen.getByText('web-research')).toBeInTheDocument()
+  })
+
+  it('selecting via /use alias still sets text to canonical "/skill <id> " prefix', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    const mockSetText = vi.fn()
+    const { useComposerRuntime } = await import('@assistant-ui/react')
+    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
+      getState: () => ({ text: '' }),
+      setText: mockSetText,
+      addAttachment: vi.fn(),
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => {
+      fireEvent.change(input, { target: { value: '/use web' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'Enter' })
+    })
+
+    // Must normalise to /skill, not /use
+    expect(mockSetText).toHaveBeenCalledWith('/skill web-research ')
+  })
+
+  it('typing "/cl" still shows /clear command (regression: command palette not broken)', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => {
+      fireEvent.change(input, { target: { value: '/cl' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+
+    // /clear must still appear — command palette mode is active, not skill-arg
+    expect(screen.getByText('/clear')).toBeInTheDocument()
+    // Skills must NOT appear in command-palette mode
+    expect(screen.queryByText('web-research')).not.toBeInTheDocument()
+  })
+
+  it('"/skill " with a second space (message started) does NOT show skill autocomplete', async () => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    // User has already filled in the skill name and started typing the message —
+    // there is a second word after the skill arg, so the regex no longer matches.
+    act(() => {
+      fireEvent.change(input, { target: { value: '/skill web-research do' } })
+    })
+    act(() => {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    })
+
+    // No skill items should appear; the user is past the skill-arg argument.
+    expect(screen.queryByText('web-research')).not.toBeInTheDocument()
+    expect(screen.queryByText('code-review')).not.toBeInTheDocument()
+  })
 })
