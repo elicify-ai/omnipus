@@ -7,11 +7,29 @@
 //   F7  — builtin command tokens do NOT produce a chip (D3 precedence)
 //   F9  — multi-line skill messages still match + show the chip
 //   R2  — "skill: <name>" indicator for messages with body; "⚡ <name>" alone
+//   R2-reload — VirtualUserMessageRow (the historical/reload path) renders the
+//               skill chip identically to the live path when given a reloaded
+//               ChatMessage with a skill-prefixed content string.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { renderSkillAwareContent } from './ChatScreen'
+import { renderSkillAwareContent, VirtualUserMessageRow } from './ChatScreen'
 import type { Skill } from '@/lib/api'
+import type { ChatMessage } from '@/store/chat'
+
+// ResizeObserver stub — required because VirtualUserMessageRow renders via the
+// AttachmentCard import chain which may trigger observer callbacks.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+}
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function () {}
+}
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -170,5 +188,70 @@ describe('renderSkillAwareContent — unknown /token falls back (D4)', () => {
   it('renders plain text for regular message with no slash prefix', () => {
     renderContent('Hello world this is a normal message')
     expect(screen.getByTestId('plain-text')).toBeInTheDocument()
+  })
+})
+
+// ── R2 — VirtualUserMessageRow reload path (F1/R2-reload) ─────────────────────
+//
+// VirtualUserMessageRow is the historical/reload path: it renders persisted
+// ChatMessage objects from the session store instead of live AssistantUI
+// messages. These tests drive it directly with a reloaded ChatMessage whose
+// content is a skill-prefixed string and assert that the R2 chip renders
+// identically to the live path. This closes the gap identified in the review:
+// "live + reload render identically" was previously only asserted by convention
+// (helper tests), not by rendering the actual VirtualUserMessageRow component.
+//
+// The component is exported as a test seam only (no production consumer imports it).
+
+// Helper: build a minimal historical user ChatMessage
+function makeUserMessage(content: string): ChatMessage {
+  return {
+    id: `msg-${Math.random().toString(36).slice(2)}`,
+    role: 'user',
+    content,
+    timestamp: new Date().toISOString(),
+    status: 'done',
+  } as ChatMessage
+}
+
+describe('VirtualUserMessageRow — reload path renders R2 chip (F1/R2-reload)', () => {
+  it('renders "skill: Web Research" chip for a reloaded message with body', () => {
+    // This is the F1 invariant: reloaded messages must display the skill chip
+    // identically to live messages. VirtualUserMessageRow is the reload path.
+    const msg = makeUserMessage('/web-research summarize this')
+
+    render(
+      <VirtualUserMessageRow
+        message={msg}
+        skills={SKILLS}
+        commandLabels={COMMAND_LABELS}
+      />,
+    )
+
+    // Body text renders
+    expect(screen.getByText('summarize this')).toBeInTheDocument()
+    // "skill: Web Research" chip renders (same as the live UserMessage path)
+    expect(screen.getByText(/skill:\s*Web Research/i)).toBeInTheDocument()
+    // The raw /web-research token MUST NOT be visible
+    expect(screen.queryByText('/web-research')).not.toBeInTheDocument()
+  })
+
+  it('renders "⚡ Web Research" slug-alone chip for a reloaded slug-only message', () => {
+    // When the reloaded message content is just "/web-research" (no body),
+    // the R2 slug-alone form renders.
+    const msg = makeUserMessage('/web-research')
+
+    render(
+      <VirtualUserMessageRow
+        message={msg}
+        skills={SKILLS}
+        commandLabels={COMMAND_LABELS}
+      />,
+    )
+
+    // The skill name appears (slug-alone form — "⚡ Web Research")
+    expect(screen.getByText('Web Research')).toBeInTheDocument()
+    // The raw slug MUST NOT appear as visible text
+    expect(screen.queryByText('/web-research')).not.toBeInTheDocument()
   })
 })
