@@ -495,7 +495,8 @@ function useSkillChipData(): { skills: Skill[]; commandLabels: string[] } {
 // per list, not per row) so a 1000-row virtualized transcript doesn't spawn a
 // query subscription per row. The shared renderSkillAwareContent makes reloaded
 // messages show the skill chip identically to live messages (FR-013).
-function VirtualUserMessageRow({
+// Exported for focused unit tests (F1 test requirement — reload path).
+export function VirtualUserMessageRow({
   message,
   skills,
   commandLabels,

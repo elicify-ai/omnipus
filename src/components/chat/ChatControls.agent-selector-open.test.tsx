@@ -172,44 +172,63 @@ describe('ChatControls — agentSelectorOpen controlled DropdownMenu', () => {
 
 // SC-005/US5.2: agent switch KEEPS the current session (setActiveSession called
 // with the same activeSessionId + new agentId — no new session is created).
+//
+// This test drives the REAL handleAgentSelect function by opening the Radix
+// DropdownMenu and clicking the Jim item. Radix portals to document.body in
+// jsdom (portal content IS rendered into the live DOM), so the Jim item is
+// reachable via userEvent.click on the trigger followed by a click on the item.
+//
+// The test MUST fail if handleAgentSelect is changed to pass null as the
+// session id (the new-session regression it guards against).
 describe('ChatControls — handleAgentSelect keeps current session (SC-005/US5.2)', () => {
   it('setActiveSession is called with the current activeSessionId when switching agents', async () => {
     const setActiveSessionSpy = vi.fn()
-    // Inject a spy into the session store while preserving the real state
-    act(() => {
-      useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_keep_me' })
-    })
     const origSetActiveSession = useSessionStore.getState().setActiveSession
+
+    // Seed the session store with a known session and agent BEFORE injecting spy
     act(() => {
-      useSessionStore.setState({ setActiveSession: setActiveSessionSpy })
+      useSessionStore.setState({
+        activeAgentId: 'mia',
+        activeSessionId: 'sess_keep_me',
+        setActiveSession: setActiveSessionSpy,
+      })
     })
 
     renderControls()
+
+    // Wait for both Mia items (trigger label + Jim in content after open)
     await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
 
-    // Open the selector then pick "Jim"
-    act(() => { useUiStore.getState().setAgentSelectorOpen(true) })
-
-    // Find the Jim button inside the dropdown and click it.
-    // Radix DropdownMenuContent may not portal in jsdom, so we use the store
-    // directly to simulate the handleAgentSelect logic path: verify the
-    // internal wiring by checking that setActiveSession is called with the same
-    // session id and a new agent id.
-    //
-    // The DropdownMenu is controlled by agentSelectorOpen. In jsdom, Radix does
-    // not always render the portal content outside the tree. We directly invoke
-    // the session store's setActiveSession to verify the SC-005 invariant:
-    // the session id is unchanged when the agent changes.
-    act(() => {
-      // Call setActiveSession as handleAgentSelect would — same session, new agent
-      setActiveSessionSpy('sess_keep_me', 'jim', 'core')
+    // Open the Radix DropdownMenu by setting the store flag — the component's
+    // <DropdownMenu open={agentSelectorOpen}> is controlled by this flag, so
+    // setting it true causes Radix to render the portal content into document.body.
+    await act(async () => {
+      useUiStore.getState().setAgentSelectorOpen(true)
     })
 
+    // Wait for Jim to appear in the portal content rendered into document.body.
+    // Radix renders DropdownMenuContent into document.body even in jsdom.
+    const jimItem = await vi.waitFor(() => {
+      // There should be exactly one "Jim" element — inside the dropdown content.
+      const items = screen.getAllByText('Jim')
+      if (items.length === 0) throw new Error('Jim not in DOM yet')
+      return items[0]
+    })
+
+    // Click the Jim DropdownMenuItem — this fires handleAgentSelect('jim')
+    // which calls setActiveSession(activeSessionId, 'jim', selected.type)
+    await act(async () => {
+      jimItem.click()
+    })
+
+    // The spy MUST have been called with the PRE-EXISTING activeSessionId
+    // ('sess_keep_me') not null — that is the SC-005 invariant.
+    expect(setActiveSessionSpy).toHaveBeenCalledTimes(1)
     expect(setActiveSessionSpy).toHaveBeenCalledWith('sess_keep_me', 'jim', 'core')
-    // activeSessionId MUST NOT change — verify arg 0 equals original session
+    // activeSessionId MUST NOT be null — verify arg 0 equals original session
     expect(setActiveSessionSpy.mock.calls[0][0]).toBe('sess_keep_me')
 
-    // Restore original
+    // Restore original store function
     act(() => {
       useSessionStore.setState({ setActiveSession: origSetActiveSession })
     })
