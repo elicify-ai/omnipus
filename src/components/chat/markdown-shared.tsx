@@ -21,7 +21,8 @@
 // renderer — so no prop forwarding is required here.
 
 import { useState } from 'react'
-import type { ComponentPropsWithoutRef, ReactNode } from 'react'
+import type { ComponentPropsWithoutRef, CSSProperties, ReactNode } from 'react'
+import type { Components } from 'react-markdown'
 import { ImageLightbox } from './image-lightbox'
 import { MermaidDiagram } from './mermaid-renderer'
 import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
@@ -163,6 +164,10 @@ export { MermaidDiagram }
 // color; strong/em are styled; everything else matches. Spread into BOTH renderers'
 // component maps so they cannot drift again.
 export const commonMarkdownComponents = {
+  // `whitespace-pre-wrap` is deliberate: it preserves single newlines inside a
+  // paragraph as line breaks (overriding CommonMark's soft-break→space collapse).
+  // LLM output is frequently hard-wrapped mid-paragraph; preserving that intent reads
+  // better than reflowing into one run-on line. Applied to BOTH paths for parity.
   p: ({ children }: { children?: ReactNode }) => (
     <p className="text-sm leading-relaxed text-[var(--color-secondary)] my-1.5 whitespace-pre-wrap">{children}</p>
   ),
@@ -184,8 +189,11 @@ export const commonMarkdownComponents = {
       {children}
     </ul>
   ),
-  ol: ({ children }: { children?: ReactNode }) => (
-    <ol style={{ listStyleType: 'decimal' }} className="pl-6 my-2 space-y-1 text-[var(--color-secondary)]">
+  // `start` is forwarded so an ordered list that does not begin at 1 (e.g. "7.")
+  // renders correctly — react-markdown delivers it as a prop, and dropping it would
+  // reset every such list to 1.
+  ol: ({ children, start }: { children?: ReactNode; start?: number }) => (
+    <ol start={start} style={{ listStyleType: 'decimal' }} className="pl-6 my-2 space-y-1 text-[var(--color-secondary)]">
       {children}
     </ol>
   ),
@@ -211,14 +219,19 @@ export const commonMarkdownComponents = {
       <table className="min-w-full text-xs border-collapse">{children}</table>
     </div>
   ),
-  th: ({ children }: { children?: ReactNode }) => (
-    <th className="border border-[var(--color-border)] px-3 py-1.5 text-left font-semibold bg-[var(--color-surface-2)] text-[var(--color-secondary)]">
+  // `style` is forwarded on table cells: remark-gfm encodes column alignment
+  // (:---:) as a `style={{ textAlign }}` prop; dropping it left-aligns every column.
+  th: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
+    <th style={style} className="border border-[var(--color-border)] px-3 py-1.5 text-left font-semibold bg-[var(--color-surface-2)] text-[var(--color-secondary)]">
       {children}
     </th>
   ),
-  td: ({ children }: { children?: ReactNode }) => (
-    <td className="border border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)]">{children}</td>
+  td: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
+    <td style={style} className="border border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)]">{children}</td>
   ),
 
   hr: () => <hr className="my-4 border-[var(--color-border)]" />,
-}
+  // `satisfies Partial<Components>` pins each renderer to react-markdown's component
+  // contract at the DEFINITION site (not just where it's spread), so a renderer with a
+  // wrong signature fails here — catching the asymmetric-drift this module exists to stop.
+} satisfies Partial<Components>
