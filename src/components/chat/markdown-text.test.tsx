@@ -53,11 +53,6 @@ vi.mock('./image-lightbox', () => ({
 vi.mock('@/lib/rehype-phosphor-emoji', () => ({
   rehypePhosphorEmoji: () => {},
 }))
-// markdown-shared transitively imports mermaid-renderer, which imports the chat store
-// (for the diagram-error "ask assistant to fix" action). The store eagerly imports
-// QueryClient from @tanstack/react-query, which is mocked here without it — stub the
-// store so it never loads. This test never renders mermaid (shiki-highlighter is mocked).
-vi.mock('@/store/chat', () => ({ useChatStore: vi.fn() }))
 
 // ── Module export guard ───────────────────────────────────────────────────────
 
