@@ -18,7 +18,16 @@ The plan-spec was grilled (`../specs/workspace-heartbeat-memory-config-spec-revi
 - **F-03 — Memory settings transport.** The Settings → Memory tab uses a **dedicated `GET/PUT /api/v1/settings/memory`** that reads/writes only the recap/retention fields — **not** the generic `PUT /config` (whose GET redacts secrets, so a read-modify-write would clobber provider keys).
 - **F-10 — Agent contract.** The heartbeat fields are **removed immediately** from `Agent.yaml` + `AgentCreateRequest.yaml` (contract-first regen) — not deprecated.
 - **F-07 (consequence of no-migration, D5).** Existing `agents/<id>/HEARTBEAT.md` **bodies are not carried forward**; operators re-enter the heartbeat body per workspace. Explicitly accepted.
-- **F-08 / F-05 / F-09 (spec detail).** Add an `IsMain()` predicate; wire member-removal GC into the workspace-edit handler; the Heartbeat tab's save targets the **workspace** mutation while the slide-over's other tabs target the **agent** (one form, two scopes).
+- **F-08 / F-05 / F-09 (spec detail).** ~~Add an `IsMain()` predicate~~ → **A2:** use `!IsWorker()` (Mia is `type=core`); wire member-removal GC into the workspace-edit handler; the Heartbeat tab's save is a separate **workspace** mutation, the slide-over's other tabs save the **agent**.
+
+### Amendment A2 — post re-grill #2 (2026-06-30)
+The re-grill confirmed A1 closed 3/4 round-1 criticals; the remaining two were **mechanism** gaps (not decisions), resolved in the spec (§1.2):
+- **Job↔session link:** add `cron.JobSpec.SessionID` so reconcile injects the eager session id and the run *continues* it (today `JobSpec` has no such field).
+- **Delete-guard lookup:** the eager session carries `workspace_id`, so the guard loads that one workspace → the member whose `heartbeat.session_id == id` → 409 if enabled (bounded, no scan).
+- **`protected` is computed live** from `member_configs.enabled` (single source of truth — not a stored flag) and exposed on `GET /sessions` for the SPA's pin + delete-disable.
+- **`/settings/memory`** is writable by **any authenticated user** (operator decision).
+- Saving member_configs **triggers reconcile**; **workspace delete** also releases members' cron jobs + standing sessions; the `Session.type+="heartbeat"` regen ships **atomically** with the stamping code.
+No further ADR-level decisions; the rest is implementation in plan-spec.
 
 ## 1. Context
 
