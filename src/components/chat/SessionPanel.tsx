@@ -306,7 +306,7 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
               e.stopPropagation()
               setConfirmDelete(true)
             }}
-            className="p-1 rounded opacity-0 group-hover/item:opacity-100 text-[var(--color-muted)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-all"
+            className="p-1 rounded opacity-0 group-hover/item:opacity-100 [@media(hover:none)]:opacity-100 text-[var(--color-muted)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-all"
             aria-label={`Delete session: ${session.title || UNTITLED_SESSION}`}
             title="Delete session"
           >
