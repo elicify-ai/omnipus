@@ -20,6 +20,7 @@ const addAttachment = vi.fn(() => Promise.resolve())
 vi.mock('@assistant-ui/react', () => {
   const React = require('react')
   return {
+    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
     ThreadPrimitive: {
       Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
         React.createElement('div', { className }, children),

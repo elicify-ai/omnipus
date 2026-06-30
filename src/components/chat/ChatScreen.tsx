@@ -12,6 +12,7 @@ import {
   AuiIf,
   useComposerRuntime,
   useMessage,
+  useThreadViewportStore,
 } from '@assistant-ui/react'
 import {
   ArrowCounterClockwise,
@@ -798,6 +799,54 @@ function VirtualizedMessageList({
   return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} />
 }
 
+/**
+ * Re-pins the scroll container to the bottom when the VIRTUALIZER grows the
+ * transcript via the spacer's inline `style` height — row measurement, the
+ * live→virtualized finalize hand-off, and late-rendering mermaid/images. The
+ * assistant-ui Viewport autoscroll observes content via a subtree MutationObserver
+ * that deliberately ignores style-only mutations (so the virtualizer's translateY
+ * can't cause a feedback loop), which means it never sees that height growth and
+ * the tail of a message can sit below the fold — most visibly on slower devices
+ * (iPad) and with diagrams that render after the stream completes. A ResizeObserver
+ * on the content fires on the height growth (and NOT on transforms, which don't
+ * change size), so we re-pin — but only when the engine still reports we're at the
+ * bottom (reused via the Viewport store), so a user who scrolled up to read is
+ * never yanked down. MUST render inside ThreadPrimitive.Viewport to read its store.
+ */
+function VirtualizerAutoFollow({
+  scrollRef,
+  contentRef,
+}: {
+  scrollRef: React.RefObject<HTMLDivElement | null>
+  contentRef: React.RefObject<HTMLDivElement | null>
+}) {
+  const viewportStore = useThreadViewportStore()
+  useEffect(() => {
+    const el = scrollRef.current
+    const content = contentRef.current
+    if (!el || !content) return undefined
+    let raf = 0
+    const ro = new ResizeObserver(() => {
+      // Only follow if the engine still considers us at the bottom — this reuses
+      // its scrollTop-direction "did the user scroll up" detection, so we never
+      // fight a user reading history. isAtBottom is unchanged by a content-growth
+      // resize (the engine updates it on scroll events, not on resize), so it
+      // still reflects the pre-growth position here.
+      if (!viewportStore.getState().isAtBottom) return
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight
+      })
+    })
+    ro.observe(content)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [viewportStore, scrollRef, contentRef])
+  return null
+}
+
 function VirtualizedMessageListInner({
   messages,
   liteMode,
@@ -807,6 +856,7 @@ function VirtualizedMessageListInner({
 }) {
   const isStreaming = useChatStore((s) => s.isStreaming)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const { skills, commandLabels } = useSkillChipData()
 
   // Separate the live streaming message from completed history.
@@ -839,13 +889,20 @@ function VirtualizedMessageListInner({
   // the bottom only while the user is already at the bottom. isAtBottom is keyed
   // off real scrollTop movement (not a touch-gesture heuristic), so a user
   // scroll-up correctly suspends auto-follow on touch/momentum — the failure mode
-  // of the previous hand-rolled engine. style-only mutations (the virtualizer's
-  // translateY) are ignored by the observer, so there is no feedback loop. We keep
-  // our custom virtualizer for row rendering and only let Viewport own the scroll
-  // element + autoscroll. The Viewport self-provides its viewport context; it runs
-  // within the chat's AssistantRuntimeProvider + ThreadPrimitive.Root (the live
-  // ThreadPrimitive.Messages below needs the runtime). The parent feature-detects
-  // ResizeObserver and falls back to PlainMessageList where it is unavailable.
+  // of the previous hand-rolled engine. We keep our custom virtualizer for row
+  // rendering and only let Viewport own the scroll element + autoscroll. The
+  // Viewport self-provides its viewport context; it runs within the chat's
+  // AssistantRuntimeProvider + ThreadPrimitive.Root (the live ThreadPrimitive
+  // .Messages below needs the runtime). The parent feature-detects ResizeObserver
+  // and falls back to PlainMessageList where it is unavailable.
+  //
+  // VirtualizerAutoFollow (rendered inside the Viewport) covers the one growth the
+  // engine can't see: the virtualizer grows the transcript by setting the spacer's
+  // inline `style` height (row measurement, the live→virtualized finalize, and
+  // late mermaid/image render), and the engine's MutationObserver deliberately
+  // ignores style-only mutations (to avoid a translateY feedback loop). Without
+  // this, the tail of a finalized/diagram message sits below the fold on slower
+  // devices (iPad). It re-pins only when the engine still reports isAtBottom.
   return (
     <ThreadPrimitive.Viewport
       ref={scrollContainerRef}
@@ -854,7 +911,8 @@ function VirtualizedMessageListInner({
       className="flex-1 overflow-y-auto overscroll-contain pt-4 pb-2"
       style={{ position: 'relative' }}
     >
-      <div className="max-w-4xl mx-auto w-full">
+      <VirtualizerAutoFollow scrollRef={scrollContainerRef} contentRef={contentRef} />
+      <div ref={contentRef} className="max-w-4xl mx-auto w-full">
         <div
           style={{
             height: `${virtualizer.getTotalSize()}px`,
