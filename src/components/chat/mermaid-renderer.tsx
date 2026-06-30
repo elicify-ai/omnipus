@@ -138,6 +138,19 @@ async function getMermaid() {
         // neutral surfaces (NOT the previous blue-purple #1a1a2e family).
         theme: 'base',
         flowchart: { curve: 'basis', htmlLabels: true },
+        // Quadrant layout: default padding lets the title clip against the viewBox top
+        // and seats the 4 quadrant labels on the divider lines. Reserve top space and
+        // push the labels/point-labels off the lines.
+        quadrantChart: {
+          titlePadding: 16,
+          quadrantPadding: 8,
+          quadrantTextTopPadding: 12,
+          pointTextPadding: 10,
+          pointLabelFontSize: 12,
+          pointRadius: 5,
+          xAxisLabelPadding: 10,
+          yAxisLabelPadding: 10,
+        },
         themeVariables: {
           darkMode: true,
           background: 'transparent',
@@ -202,6 +215,25 @@ async function getMermaid() {
           pieTitleTextColor: '#e2e8f0',
           pieSectionTextColor: '#0a0a0b',
           pieOpacity: '1',
+
+          // Quadrant chart: subtle uniform fills (just above the card), NEUTRAL border +
+          // divider (not gold — keeps gold for the data points and avoids the labels
+          // fighting bright lines), Liquid Silver labels, Forge Gold points.
+          quadrant1Fill: '#1d1d23',
+          quadrant2Fill: '#1d1d23',
+          quadrant3Fill: '#1d1d23',
+          quadrant4Fill: '#1d1d23',
+          quadrant1TextFill: '#e2e8f0',
+          quadrant2TextFill: '#e2e8f0',
+          quadrant3TextFill: '#e2e8f0',
+          quadrant4TextFill: '#e2e8f0',
+          quadrantTitleFill: '#e2e8f0',
+          quadrantPointFill: '#d4af37',
+          quadrantPointTextFill: '#cbd5e1',
+          quadrantXAxisTextFill: '#cbd5e1',
+          quadrantYAxisTextFill: '#cbd5e1',
+          quadrantInternalBorderStrokeFill: '#2d3748',
+          quadrantExternalBorderStrokeFill: '#3a3a44',
         },
         // Crisper than the 1px hairline; rounded corners; brand font on every label.
         themeCSS: [
@@ -210,6 +242,10 @@ async function getMermaid() {
           '.edgePath .path, .flowchart-link { stroke-width: 1.5px; }',
           '.cluster rect { rx: 8px; ry: 8px; }',
           '.node .label, .nodeLabel, .edgeLabel, .cluster .label, text { font-family: "Inter", system-ui, sans-serif; }',
+          // Safety net: when the model classDef-colors a node with a LIGHT fill but
+          // leaves the text light, a dark halo keeps the label legible. Invisible on the
+          // dark default nodes (dark-on-dark), rescues white-on-light-fill nodes.
+          '.nodeLabel, .node .label { text-shadow: 0 0 3px rgba(0,0,0,0.7); }',
         ].join('\n'),
       })
       initialized = true
