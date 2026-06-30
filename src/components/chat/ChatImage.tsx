@@ -93,11 +93,13 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
         className="max-w-full rounded-md cursor-zoom-in border border-[var(--color-border)] hover:border-[var(--color-accent)]/50 transition-colors block"
       />
 
-      {/* Hover-revealed overlay toolbar */}
+      {/* Hover-revealed overlay toolbar. On touch devices (no hover, e.g. iPad)
+          the [@media(hover:none)] variant forces it visible so the controls are
+          reachable — otherwise group-hover never fires and they'd be invisible. */}
       <MediaActionToolbar
         variant="overlay"
         actions={overlayActions}
-        className="absolute top-2 right-2 opacity-0 group-hover/chatimg:opacity-100 focus-within:opacity-100 transition-opacity"
+        className="absolute top-2 right-2 opacity-0 group-hover/chatimg:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity"
       />
     </div>
   )

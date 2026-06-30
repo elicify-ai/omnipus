@@ -1120,7 +1120,7 @@ function ComposerAttachmentChip() {
       className={cn('group', imageUrl && 'w-16 h-16')}
       removeButton={
         <AttachmentPrimitive.Remove
-          className="absolute -top-1.5 -right-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          className="absolute -top-1.5 -right-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity"
           aria-label={`Remove ${attachment.name}`}
         >
           <AttachmentRemoveX />
