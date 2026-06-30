@@ -411,14 +411,62 @@ func TestCleanExpiredForgetOnlyKeepsFile(t *testing.T) {
 	store.nowFunc = func() time.Time { return now }
 	removed := store.CleanExpired()
 
+	// This entry uses a NON-session scope ("scope1"), so it is NOT session-pinned:
+	// CleanExpired ages it out of the in-memory index (ref dropped, counted as
+	// removed) but — being forget_only — KEEPS the file on disk. This is the prior
+	// behavior, intentionally preserved so non-session forget_only scopes (user
+	// uploads, send_file) don't leak refs. Session-PINNED inline media is covered
+	// by TestCleanExpiredKeepsSessionPinnedMedia.
 	if removed != 1 {
 		t.Errorf("expected 1 removed, got %d", removed)
 	}
 	if _, err := store.Resolve(ref); err == nil {
-		t.Error("expired forget-only ref should be unresolvable")
+		t.Error("expired non-session forget-only ref should be unresolvable")
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("forget-only file should remain on disk: %v", err)
+	}
+}
+
+// TestCleanExpiredKeepsSessionPinnedMedia guards the screenshot-persistence fix:
+// inline media under SessionInlineScopePrefix is session-PINNED, so the TTL
+// cleaner must never expire it (ref stays resolvable + file stays). It is freed
+// only by ReleaseAll when the owning session is deleted.
+func TestCleanExpiredKeepsSessionPinnedMedia(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	store := newTestStoreWithCleanup(10 * time.Minute)
+	// Store the entry "20 minutes ago" so it is well past MaxAge.
+	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
+
+	path := createTempFile(t, dir, "screenshot.jpg")
+	const sessionID = "sess-123"
+	ref, err := store.Store(path, MediaMeta{
+		Source:        "tool:inline:browser_screenshot",
+		CleanupPolicy: CleanupPolicyForgetOnly,
+	}, SessionInlineScopePrefix+sessionID)
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	store.nowFunc = func() time.Time { return now }
+	if removed := store.CleanExpired(); removed != 0 {
+		t.Errorf("expected 0 removed (session-pinned skipped by TTL), got %d", removed)
+	}
+	if _, err := store.Resolve(ref); err != nil {
+		t.Errorf("session-pinned ref must remain resolvable after CleanExpired: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("session-pinned file should remain on disk: %v", err)
+	}
+
+	// Session deletion (ReleaseAll on the session scope) is the only thing that
+	// frees a session-pinned entry.
+	if err := store.ReleaseAll(SessionInlineScopePrefix + sessionID); err != nil {
+		t.Fatalf("ReleaseAll failed: %v", err)
+	}
+	if _, err := store.Resolve(ref); err == nil {
+		t.Error("session-pinned ref should be unresolvable after ReleaseAll")
 	}
 }
 
