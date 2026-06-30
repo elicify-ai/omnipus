@@ -13,6 +13,17 @@ Move **heartbeat** configuration from per-agent to **per-(workspace, agent)**, s
 
 Out of scope: the heartbeat *execution model* (Mission Loop / Resident) and the sliding-window/recall *memory rework* — both separate decisions.
 
+## 1.1 Amendment A1 — post spec-grill (BINDING; overrides any conflict below)
+
+This spec was grilled (`workspace-heartbeat-memory-config-spec-review.md`, verdict BLOCK). Operator resolutions (also in ADR-027 Amendment A1):
+
+- **F-01 — no auth gate.** Member_config writes go through the existing workspace-edit path with **no owner/admin gate** (#406). **Drop the 403** (US-2.AC4, FR-006, DS-1.8). Validation (FR-003/004/005/005b) stays.
+- **F-02 + F-04 — session lifecycle.** The standing session is created **eagerly when the heartbeat is enabled** (during the workspace save), stamped `workspace_id` + agent + `type="heartbeat"`, with its id stored at `member_configs[agentId].heartbeat.session_id`. **Delete-protection follows the persisted `enabled` flag:** enabled ⇒ 409 + trash hidden; disabled ⇒ deletable + trash returns; re-enable ⇒ protected (recreate the session if it was deleted). **No fail-open/closed** (FR-014). The cron job *continues* the pre-created session.
+- **F-03 — memory transport.** The Memory tab uses a dedicated **`GET/PUT /api/v1/settings/memory`** (recap/retention only, never secrets) — not `PUT /config` (FR-019).
+- **F-10 — agent contract.** Remove heartbeat fields from `Agent.yaml` + `AgentCreateRequest.yaml` **now** (FR-027).
+- **F-07 — no body migration.** Existing `HEARTBEAT.md` bodies are NOT carried forward; operators re-enter per workspace.
+- **F-05 / F-08 / F-09 — detail.** Member-removal GC is wired into the workspace-edit handler (FR-022); add an `IsMain()` predicate (FR-025); the Heartbeat tab saves to the **workspace** mutation, the slide-over's other tabs to the **agent**.
+
 ## 2. Available Reference Patterns
 
 `docs/reference/` was checked — no directory present. **N/A** (no reference library to map from). Internal patterns reused instead: the existing config-resolution helpers (`AgentConfig.HeartbeatIsEnabled()`-style effective getters), the contract-first add-a-wire-type process (CLAUDE.md §Contract regeneration), and the `withAuth`/owner-admin gate pattern in `pkg/gateway/rest_auth.go`.
@@ -25,6 +36,8 @@ Out of scope: the heartbeat *execution model* (Mission Loop / Resident) and the 
 | `pkg/workspace.Workspace` (`workspace.go`) | **extend** | add `member_configs map[string]WorkspaceMemberConfig`; new `WorkspaceMemberConfig` type |
 | `contracts/components/schemas/Workspace.yaml` | **extend** | add `member_configs`; new `WorkspaceMemberConfig.yaml` |
 | `contracts/components/schemas/Session.yaml` | **extend** | add `"heartbeat"` to the `type` enum |
+| `Agent.yaml` + `AgentCreateRequest.yaml` | **remove** | delete heartbeat fields now (A1/F-10) |
+| `MemorySettings.yaml` (new) + `GET/PUT /api/v1/settings/memory` | **add** | dedicated memory endpoint (A1/F-03) |
 | `pkg/config.AgentConfig.{HeartbeatEnabled,HeartbeatInterval}` | **remove from read path** | decommission; forms + readers redirected |
 | `pkg/coreagent.SeedConfig` (`core.go:776,835`) | **modify** | stop seeding agent-level heartbeat |
 | `pkg/gateway/heartbeat_schedule.go` (`computeDesiredHeartbeats`, `ReconcileHeartbeatSchedules`) | **modify** | iterate (workspace × member) from `member_configs`; key `heartbeat:<ws>:<agent>`; read body from config |
@@ -73,12 +86,12 @@ As a workspace owner, I want each member agent's heartbeat (enabled, interval, b
 ### US-2 — Bounds & authorization on member_configs writes — **P0**
 As the platform, I must reject unbounded/unauthorized member_config writes, to prevent storage abuse and orphan configs.
 - **Why P0:** security/cost guard (grill C-3).
-- **Independent test:** writes with a non-CoreTeam key, `interval_minutes<5`, oversized body, or non-owner auth are rejected.
+- **Independent test:** writes with a non-CoreTeam key, `interval_minutes<5`, or oversized body are rejected (validation only; no auth gate — A1/F-01).
 - **Acceptance:**
   1. **Given** agent `x` NOT in `CoreTeam`, **When** I PUT `member_configs.x`, **Then** 422 (unknown member).
   2. **Given** `interval_minutes:4`, **When** I PUT, **Then** 422 (min 5).
   3. **Given** a `body` over the cap, **When** I PUT, **Then** 422 (body too large).
-  4. **Given** a non-owner/non-admin caller, **When** I PUT member_configs, **Then** 403.
+  4. *(A1/F-01: dropped — NO auth gate; member_config writes use the existing workspace-edit path. Validation-only.)*
 
 ### US-3 — Workspace-aware heartbeat reconcile — **P0**
 As an operator, I want enabled per-(ws,agent) heartbeats to actually run from the workspace config.
@@ -112,20 +125,22 @@ As a workspace owner, when I open an agent's edit form **from the Team tab**, I 
 ### US-6 — Global Settings → Memory tab — **P1**
 As an admin, I want a Memory tab in global Settings to see and change the recap/retention settings that today have no UI.
 - **Why P1:** usability; no scope change (settings stay global).
-- **Independent test:** the tab reads the current global values and PUT-saves changes via the existing config surface.
+- **Independent test:** the tab reads/saves the global values via the dedicated `GET/PUT /api/v1/settings/memory` (A1/F-03), not `PUT /config`.
 - **Acceptance:**
   1. **Given** Settings, **Then** a **Memory** tab lists: `auto_recap_enabled`, `idle_timeout_minutes`, `bootstrap_recap_enabled`, `bootstrap_recap_max_per_minute`, `bootstrap_recap_daily_budget_usd`, `recap_model_allow_list`, retention `session_days`, `memory_retros_days`.
   2. **Given** I toggle `auto_recap_enabled` and save, **When** I reload, **Then** the new value persists.
   3. **Given** these are global, **Then** the workspace Heartbeat tab does **not** show any memory/recap setting.
 
-### US-7 — Undeletable standing heartbeat session — **P0**
-As an operator, I must not be able to delete the heartbeat's session while its heartbeat is active.
+### US-7 — Heartbeat session: eager-created, undeletable while enabled — **P0** *(amended A1/F-02+F-04)*
+As an operator, the heartbeat's session should appear when I turn the heartbeat on and be undeletable while it stays on — driven by the toggle, not a background read.
 - **Why P0:** integrity of the continued session (the ADR's core promise).
-- **Independent test:** DELETE on the standing session returns 409 while the heartbeat is enabled; succeeds once disabled.
+- **Independent test:** enabling the heartbeat creates `S` (stamped `type=heartbeat`+`workspace_id`, id stored on `member_configs`); DELETE `S` → 409 while `enabled`; → 200 once disabled.
 - **Acceptance:**
-  1. **Given** an active heartbeat with standing session `S`, **When** I DELETE `S`, **Then** 409 and `S` survives; an audit entry is written.
-  2. **Given** I disable the heartbeat (reconcile removes the job), **When** I DELETE `S`, **Then** 200.
-  3. **Given** a normal (non-heartbeat) session, **When** I DELETE it, **Then** 200 (unchanged behavior).
+  1. **Given** I enable a heartbeat and save, **Then** a standing session `S` exists, stamped `type="heartbeat"` + `workspace_id`, with its id at `member_configs[a].heartbeat.session_id`.
+  2. **Given** `enabled=true`, **When** I DELETE `S`, **Then** 409, `S` survives, and an audit entry is written.
+  3. **Given** I set `enabled=false` and save, **When** I DELETE `S`, **Then** 200 (trash control returns).
+  4. **Given** `S` was deleted while disabled, **When** I re-enable the heartbeat, **Then** the standing session is recreated and protected again.
+  5. **Given** a normal (non-heartbeat) session, **When** I DELETE it, **Then** 200 (unchanged).
 
 ### US-8 — Heartbeat session pinned in the Session panel — **P1**
 As a user, I want the heartbeat session pinned at the top of the Session panel, badged, with delete disabled while active.
@@ -162,7 +177,7 @@ As someone creating an agent, I want to upload a `SOUL.md` file into the soul fi
 - E5: concurrent PUT member_configs + reconcile → last-write-wins on config; reconcile reads the committed state.
 - E6: gateway restart mid-heartbeat → standing session reused via SessionModeContinue (already), still protected.
 - E7: legacy session with `type=scheduled` (not `type=heartbeat`) → treated as a normal session (not pinned).
-- E8: delete-guard TOCTOU (heartbeat disabled between check and delete) → re-check under cron read; benign.
+- E8: *(A1/F-04)* no TOCTOU — the delete-guard reads the persisted `enabled` flag, not a live cron state; the check is deterministic.
 - E9: non-Main agent (worker) in CoreTeam → no Heartbeat tab, no heartbeat config accepted.
 
 ## 5. Behavioral Contract & Boundaries
@@ -173,7 +188,7 @@ As someone creating an agent, I want to upload a `SOUL.md` file into the soul fi
 - When the same agent is configured in two workspaces, the system runs two independent heartbeats.
 - When a heartbeat is active, the system rejects deletion of its standing session (409) and pins it atop the Session panel.
 - When an agent is removed from a workspace's team, the system GCs its heartbeat config, job, and session protection.
-- When a member_config write is unauthorized or out of bounds, the system rejects it (403/422) and persists nothing.
+- When a member_config write is out of bounds, the system rejects it (422) and persists nothing. (No auth gate — A1/F-01.)
 - When the global Memory settings are changed via the Settings tab, the system persists them globally (no per-workspace effect).
 
 ### Explicit Non-Behaviors
@@ -225,10 +240,7 @@ Then the response is 422 with `<reason>`.
 | interval_minutes | 0 | below min 5 |
 | body | >cap bytes | body too large |
 
-**Scenario (EP): non-owner write rejected** — Traces to US-2.AC4
-Given a caller without workspace owner/admin rights
-When I PUT member_configs
-Then the response is 403.
+**Scenario (REMOVED A1/F-01): non-owner write rejected** — dropped; no auth gate (§1.1). member_config writes are validation-only on the existing workspace-edit path.
 
 **Scenario (HP): reconcile creates a workspace-keyed job** — Traces to US-3.AC1
 Given `member_configs.a.heartbeat={enabled:true,interval_minutes:30}`
@@ -336,7 +348,7 @@ Then its heartbeat jobs and standing sessions are released.
 | 7 | `TestDeleteGuard_Predicate` | Unit | delete blocked while active | predicate: enabled heartbeat job references SessionID |
 | 8 | `TestSessionStamp_TypeHeartbeat` | Unit | pinned (type set) | standing session stamped `type=heartbeat`+`workspace_id` |
 | 9 | `Contract: WorkspaceMemberConfig + Session.type+="heartbeat"` | Unit | (schema) | `make verify-contracts` green; generated types compile |
-| 10 | `TestWorkspacePUT_MemberConfig_AuthBounds` | Integration | unknown/bounds/non-owner | 422/403 paths; happy 200 |
+| 10 | `TestWorkspacePUT_MemberConfig_Bounds` | Integration | unknown/bounds | 422 paths; happy 200 (no auth gate — A1/F-01) |
 | 11 | `TestReconcile_Integration_BodyFromConfig` | Integration | heartbeat uses config body | fired job's prompt = config body; not HEARTBEAT.md |
 | 12 | `TestDeleteSession_409_WhileActive` | Integration | delete blocked / allowed | 409 active, 200 disabled, 200 normal, audit on 409 |
 | 13 | `TestSessionsList_OriginField` | Integration | heartbeat session pinned (data) | GET `/sessions` returns `type=heartbeat` |
@@ -364,16 +376,16 @@ Then its heartbeat jobs and standing sessions are released.
 | 5 | 30 | **no** | "ok" | owner | 422 unknown-member | US-2.AC1 |
 | 6 | 30 | yes | (>cap) | owner | 422 body-too-large | US-2.AC3 |
 | 7 | 30 | yes | "" + enabled | owner | 422 body-required *[E3]* | E3 |
-| 8 | 30 | yes | "ok" | **non-owner** | 403 | US-2.AC4 |
+| 8 | 100000 | yes | "ok" | owner | 200 (large interval accepted) | US-2 EC |
 | 9 | 30 | yes | unicode/emoji | owner | 200 | edge |
 
 **DS-2 delete-guard** (Traces to US-7)
 | # | session type | heartbeat enabled | expect | Traces |
 |---|---|---|---|---|
-| 1 | heartbeat | true | 409 + audit | US-7.AC1 |
-| 2 | heartbeat | false | 200 | US-7.AC2 |
-| 3 | chat | n/a | 200 | US-7.AC3 |
-| 4 | heartbeat | (disabled mid-call) | 409 or 200, never orphan | E8 |
+| 1 | heartbeat | true | 409 + audit | US-7.AC2 |
+| 2 | heartbeat | false | 200 | US-7.AC3 |
+| 3 | chat | n/a | 200 | US-7.AC5 |
+| 4 | heartbeat | re-enabled after delete | session recreated + protected | US-7.AC4 |
 
 **DS-3 reconcile keying** (Traces to US-3, E1)
 | # | enabled-in | expect jobs | Traces |
@@ -399,27 +411,29 @@ This **modifies existing functionality** (heartbeat, deleteSession, AgentProfile
 - **FR-004** — The system MUST enforce `interval_minutes ≥ 5` (422 otherwise).
 - **FR-005** — The system MUST enforce a `body` size cap of **16 KB** (422 otherwise).
 - **FR-005b** — The system MUST reject `enabled=true` with an empty `body` (422 "body required when enabled").
-- **FR-006** — member_config writes MUST require workspace owner/admin auth (403 otherwise).
+- **FR-006** *(amended A1/F-01)* — member_config writes use the **existing workspace-edit path with NO owner/admin gate** (#406); only validation (FR-003/004/005/005b) applies. (The earlier 403 requirement is dropped.)
 - **FR-007** — Heartbeat reconcile MUST iterate `(workspace × member)` from `member_configs`, keyed `heartbeat:<ws>:<agent>`.
 - **FR-008** — A heartbeat run MUST use `member_configs[a].heartbeat.body` as the prompt body and MUST NOT read `agents/<a>/HEARTBEAT.md`.
 - **FR-009** — Disabling a member heartbeat MUST remove its job on the next reconcile.
-- **FR-010** — The standing heartbeat session MUST be stamped `type="heartbeat"` and carry the `workspace_id`.
+- **FR-010** *(amended A1/F-02)* — When a heartbeat is **enabled** (during the workspace save), the system MUST **eagerly create** the standing session, stamp it `type="heartbeat"` + `workspace_id` + agent, and store its id at `member_configs[agentId].heartbeat.session_id`. The cron job MUST continue that session (`SessionModeContinue` using the stored id), not create its own.
+- **FR-010b** *(A1/F-02)* — Re-enabling a heartbeat whose stored session was deleted (while disabled) MUST recreate the standing session.
 - **FR-011** — The system MUST NOT auto-migrate per-agent heartbeats; effective heartbeat is OFF unless set per (ws,agent).
 - **FR-012** — `SeedConfig` MUST NOT write agent-level heartbeat fields; legacy agent-level values MUST be ignored (logged once) at boot.
 - **FR-013** — No production reader MUST consult `AgentConfig.HeartbeatEnabled/Interval` after cutover.
-- **FR-014** — `DELETE /sessions/{id}` MUST return 409 (and write an audit entry) when an enabled heartbeat job references that session. If the cron/schedule state is temporarily unreadable, the guard MUST **fail open** (allow the delete) and log a WARN (A6).
+- **FR-014** *(amended A1/F-04)* — `DELETE /sessions/{id}` MUST return 409 (and write an audit entry) when the session is the standing session of a member heartbeat whose **persisted `member_configs[...].enabled` is true**. The guard reads the **config flag** (always available), so there is **no fail-open/closed** case. When `enabled` is false, the session is deletable.
 - **FR-015** — `DELETE` MUST succeed (200) for the standing session once its heartbeat is disabled, and for all non-heartbeat sessions (unchanged).
 - **FR-016** — `AgentProfile` MUST render a Heartbeat tab **iff** opened with a workspace context, editing `member_configs[a].heartbeat`. The Heartbeat tab MUST save to the **workspace** (`PUT /workspaces/{id}`), independently of the agent save used by the other tabs (A3); the rest of `AgentProfile` is unchanged.
 - **FR-017** — Heartbeat fields MUST be removed from the create wizard (Step 2) and the edit Personality tab.
 - **FR-018** — `openEditAgentSlideOver` MUST take `workspaceId` as an **explicit parameter** (A5); the Team tab MUST pass it, and the global Agents screen MUST pass none (→ no Heartbeat tab).
-- **FR-019** — A global **Settings → Memory** tab MUST read/write the existing global settings: `auto_recap_enabled, idle_timeout_minutes, bootstrap_recap_enabled, bootstrap_recap_max_per_minute, bootstrap_recap_daily_budget_usd, recap_model_allow_list, session_days, memory_retros_days`.
+- **FR-019** *(amended A1/F-03)* — A global **Settings → Memory** tab MUST read/write the global recap/retention settings (`auto_recap_enabled, idle_timeout_minutes, bootstrap_recap_enabled, bootstrap_recap_max_per_minute, bootstrap_recap_daily_budget_usd, recap_model_allow_list, session_days, memory_retros_days`) via a **dedicated `GET/PUT /api/v1/settings/memory`** that touches ONLY those fields — NOT `PUT /config` (whose GET redacts secrets). New `MemorySettings` schema (contract-first).
 - **FR-020** — Memory/recap settings MUST NOT appear on the workspace Heartbeat tab nor be scoped per-agent/per-workspace.
 - **FR-021** — The Session panel MUST render a session with `type="heartbeat"` pinned above all groups, badged, with its delete control disabled while active.
-- **FR-022** — Removing an agent from `CoreTeam` MUST delete its `member_config`, remove its heartbeat job, and unprotect its standing session.
+- **FR-022** *(amended A1/F-05)* — Removing an agent from `CoreTeam` (in the workspace-edit handler) MUST, in the same operation, delete its `member_config`, remove its heartbeat job, and unprotect its standing session.
 - **FR-023** — Deleting a workspace MUST release its members' heartbeat jobs and standing sessions.
 - **FR-024** — The `Session` contract `type` enum MUST add `"heartbeat"`; consumers MUST handle the new value and leave other `type`s unchanged (incl. SPA `type`-branches in `SessionPanel`).
-- **FR-025** — Only `Main`-type agents MAY have a heartbeat config; worker/subagent member_configs heartbeat MUST be rejected/ignored.
+- **FR-025** *(amended A1/F-08)* — Only `Main`-type agents MAY have a heartbeat config; worker/subagent member_configs heartbeat MUST be rejected/ignored, via a new `IsMain()` predicate (none exists today — `IsWorker()`/`IsChatTarget()` do).
 - **FR-026** *(scope addition)* — The create wizard's soul field MUST offer a markdown-file upload (`.md/.markdown/.txt` → `payload.soul`), reusing the `UploadButton` pattern from `AgentProfile`.
+- **FR-027** *(A1/F-10)* — Heartbeat fields (`heartbeat`, `heartbeat_enabled`, `heartbeat_interval`) MUST be **removed now** from `Agent.yaml` + `AgentCreateRequest.yaml` (contract-first regen); no deprecation window.
 
 ### Success Criteria
 - **SC-001** — `make verify-contracts`, `gofmt -l`=0, `npm run typecheck`, the full Go gate, and vitest all pass on the branch.
@@ -441,11 +455,12 @@ This **modifies existing functionality** (heartbeat, deleteSession, AgentProfile
 | FR-004 | US-2 | bounds validation | T2, T10, DS-1.3/4 |
 | FR-005 | US-2 | bounds validation | T2, T10, DS-1.6 |
 | FR-005b | US-2 | empty body rejected (E3) | T2, T10, DS-1.7 |
-| FR-006 | US-2 | non-owner rejected | T10, DS-1.8 |
+| FR-006 | US-2 | (no auth gate — validation only, A1/F-01) | T10 |
 | FR-007 | US-3 | reconcile workspace-keyed; two jobs | T4, T11, DS-3 |
 | FR-008 | US-3 | heartbeat uses config body | T11 |
 | FR-009 | US-3 | disabling removes job | T5, DS-3.4 |
-| FR-010 | US-3,US-8 | reconcile; pinned | T8, T13 |
+| FR-010 | US-7,US-8 | eager session on enable; pinned | T8, T13 |
+| FR-010b | US-7 | re-enable recreates session | T12 |
 | FR-011 | US-4 | legacy ignored | T3, T15 |
 | FR-012 | US-4 | seed writes none; legacy ignored | T6, T15 |
 | FR-013 | US-4 | no legacy job | T15 |
@@ -462,6 +477,7 @@ This **modifies existing functionality** (heartbeat, deleteSession, AgentProfile
 | FR-024 | US-8 | pinned (data) | T13 |
 | FR-025 | US-5 | (worker no tab) | T16, E9 |
 | FR-026 | US-10 | soul md upload on the add screen | T22 |
+| FR-027 | US-4 | heartbeat removed from Agent contract | T9, T15 |
 
 ## 9. Ambiguity Self-Audit
 
@@ -488,10 +504,11 @@ This **modifies existing functionality** (heartbeat, deleteSession, AgentProfile
 ---
 
 ### Summary
+- **Amendment A1 applied** (§1.1): F-01 no-auth-gate · F-02/04 eager session + config-driven delete-protection · F-03 dedicated memory endpoint · F-10 immediate Agent-contract removal · F-05/07/08/09 folded.
 - **User stories:** 10 (P0: US-1,2,3,4,7 · P1: US-5,6,8,9 · P2: US-10 soul-upload parity)
-- **BDD scenarios:** 24 (HP 13 · AP 4 · EP 4 · EC 3) + 2 scenario outlines
+- **BDD scenarios:** 23 (HP 13 · AP 4 · EP 3 · EC 3) + 2 scenario outlines
 - **Test datasets:** 3 (DS-1: 9 rows · DS-2: 4 · DS-3: 4) = 17 data rows
-- **Functional requirements:** 27 · **Success criteria:** 9 · all in the traceability matrix
+- **Functional requirements:** 29 · **Success criteria:** 9 · all in the traceability matrix
 - **Regression:** addressed (SessionPanel/AgentProfile/workspace/cron/session suites must stay green; all `type`-branches must handle `"heartbeat"`)
 - **Open items:** none — Ambiguity A1–A6 all resolved by the operator (see §9)
 - **Holdout evals:** 7 (excluded from traceability)

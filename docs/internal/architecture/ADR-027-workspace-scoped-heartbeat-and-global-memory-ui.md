@@ -1,13 +1,24 @@
 # ADR-027 — Workspace-scoped heartbeat config + global memory settings UI
 
-- **Status:** Proposed · **revised after `/grill-spec`** — C-1…C-4 addressed (§4.0, D2, D5, D6); re-grill pending
-- **Review:** `ADR-027-workspace-scoped-heartbeat-and-global-memory-ui-review.md` (verdict BLOCK on the un-revised draft)
+- **Status:** Proposed · ADR-grill (C-1…C-4) + **spec-grill (F-01/02/03/04/07/10) addressed** — see **Amendment A1**
+- **Reviews:** `ADR-027-…-review.md` (ADR grill) · `../specs/workspace-heartbeat-memory-config-spec-review.md` (spec grill, verdict BLOCK)
 - **Date:** 2026-06-30
 - **Deciders:** Operator (Daniel) · Albert (architecture)
 - **Supersedes scope of:** the per-agent heartbeat placement in `agent-form-requirements.md` §2/§4.9
 - **Related:** the continuous-agent / heartbeat-model exploration (preview docs), the memory "sliding window + recall" decision (separate ADR pending)
 
 ---
+
+## Amendment A1 — post spec-grill resolutions (2026-06-30)
+
+The plan-spec was grilled (`../specs/workspace-heartbeat-memory-config-spec-review.md`, verdict BLOCK). Four findings were architectural; the operator resolved them. These **amend** the decisions below — where they conflict, **A1 wins**.
+
+- **F-01 — Authorization (supersedes the D2 "owner/admin auth" bullet).** There is **no permission gate** on `member_configs` writes — they go through the existing workspace-edit path (#406: owner is attribution only, not an access gate). **Validation stays** (key ∈ `CoreTeam`, `interval_minutes ≥ 5`, `body ≤ 16 KB`, body-required-when-enabled); only the *auth gate* is dropped.
+- **F-02 + F-04 — Session lifecycle & delete-protection (supersedes D4's cron-ref guard and the fail-open A6).** The standing session is created **eagerly, when the heartbeat is enabled in the form** (not lazily by the first cron tick). At creation it is stamped `workspace_id` + agent + `type="heartbeat"`, and its id is stored on `member_configs[agentId].heartbeat.session_id`. **Delete-protection follows the persisted `enabled` flag** (not a live cron read): `enabled=true` ⇒ 409 + trash hidden; `enabled=false` ⇒ deletable + trash returns; re-enable ⇒ protected again (recreate the session if it was deleted while disabled). This removes the fail-open/closed question entirely and gives F-02 its missing `workspace_id` mechanism. The cron job simply **continues** the pre-created session (`SessionModeContinue` using the stored `session_id`).
+- **F-03 — Memory settings transport.** The Settings → Memory tab uses a **dedicated `GET/PUT /api/v1/settings/memory`** that reads/writes only the recap/retention fields — **not** the generic `PUT /config` (whose GET redacts secrets, so a read-modify-write would clobber provider keys).
+- **F-10 — Agent contract.** The heartbeat fields are **removed immediately** from `Agent.yaml` + `AgentCreateRequest.yaml` (contract-first regen) — not deprecated.
+- **F-07 (consequence of no-migration, D5).** Existing `agents/<id>/HEARTBEAT.md` **bodies are not carried forward**; operators re-enter the heartbeat body per workspace. Explicitly accepted.
+- **F-08 / F-05 / F-09 (spec detail).** Add an `IsMain()` predicate; wire member-removal GC into the workspace-edit handler; the Heartbeat tab's save targets the **workspace** mutation while the slide-over's other tabs target the **agent** (one form, two scopes).
 
 ## 1. Context
 
@@ -62,7 +73,7 @@ A **split** model. Heartbeat becomes workspace-owned and per-member; memory stay
   `Workspace.member_configs: { "<agentId>": WorkspaceMemberConfig }`, where
   `WorkspaceMemberConfig.heartbeat = { enabled: bool, interval_minutes: int(≥5), body: string }`.
   The **`body` is the per-(workspace,agent) HEARTBEAT.md** (operator-decided). `[Confidence: High]`
-- **Bounds & auth (resolves grill C-3):** map keys MUST be ∈ `Workspace.CoreTeam` (reject unknown / removed agentIds; GC entries on member removal); `interval_minutes ≥ 5`; `body` size-capped; writes go through workspace owner/admin auth on `PUT /workspaces/{id}` (or a `…/members/{agentId}/config` sub-path). `[Confidence: High]`
+- **Bounds (resolves grill C-3):** map keys MUST be ∈ `Workspace.CoreTeam` (reject unknown / removed agentIds; GC entries on member removal); `interval_minutes ≥ 5`; `body` ≤ 16 KB; body-required-when-enabled. Writes go through the **existing workspace-edit path — no owner gate** (Amendment A1/F-01). Plus the eager-created session's id is stored at `member_configs[agentId].heartbeat.session_id`. `[Confidence: High]`
 - **Contract-first (Constraint #8):** add `contracts/components/schemas/WorkspaceMemberConfig.yaml`; reference it as the `additionalProperties` value of `member_configs` in `Workspace.yaml`; regenerate. No hand-written map/value type. `[Confidence: High]`
 - **Memory → unchanged storage** (`agents.defaults.*`, `storage.retention`). The Settings → Memory tab reads/writes the **existing global config** surface, not a new scope. `[Confidence: High]`
 
@@ -74,9 +85,10 @@ A **split** model. Heartbeat becomes workspace-owned and per-member; memory stay
 - Naming: the workspace tab is **"Heartbeat"** (memory has moved to global Settings). `[Confidence: Medium]`
 
 ### D4 — The default heartbeat session (per-(ws,agent), undeletable while active)
+> **Superseded by Amendment A1 (F-02+F-04):** the session is created **eagerly on enable**, stamped `workspace_id`+agent+`type="heartbeat"`, linked via `member_configs[agentId].heartbeat.session_id`; **protection follows the persisted `enabled` flag** (config-driven), not a live cron-job reference. The bullets below are retained for the reasoning trail.
 - Each enabled (workspace, agent) heartbeat owns **one standing session**, workspace-scoped (carries `workspace_id` + the agent), continued across runs (already `SessionModeContinue`). `[Confidence: High]`
-- **Undeletable while active:** guard `deleteSession` (`pkg/gateway/rest.go`) — if an *enabled* heartbeat cron job references this `SessionID`, return **409 Conflict** ("session is in use by an active heartbeat"). The cron job is the source of truth; no new persisted flag. `[Confidence: Medium]`
-- Disabling the heartbeat releases the protection (the job is removed/disabled by reconcile), after which the session is deletable. `[Confidence: Medium]`
+- ~~**Undeletable while active:** guard `deleteSession` — if an *enabled* heartbeat cron job references this `SessionID`, return **409**. The cron job is the source of truth.~~ → **A1:** guard checks the persisted `member_configs…enabled` flag (always readable; no fail-open/closed question).
+- Disabling the heartbeat releases the protection, after which the session is deletable. `[Confidence: High]`
 
 ### D5 — Resolution, NO-migration, decommission (revised after grill)
 - **Effective heartbeat** = `workspace.member_configs[agentId].heartbeat`; absent ⇒ OFF (deny-by-default). `[Confidence: High]`
@@ -114,7 +126,7 @@ A **split** model. Heartbeat becomes workspace-owned and per-member; memory stay
 | `SeedConfig` keeps writing agent-level heartbeat → Mia's heartbeat silently dies (C-4) | Stop seeding heartbeat in `coreagent.SeedConfig`; redirect all ~15+ agent-level readers to `member_configs` in the **same** change |
 | Delete-guard: O(n) job scan, TOCTOU, no audit (grill M-3) | N is small (few Main heartbeats); re-check under the cron read; **emit an audit entry on the 409**; add a `SessionID→job` index only if N grows |
 | Shared agent in many workspaces multiplies heartbeat sessions/cost | Opt-in per (ws,agent), OFF by default; cost/safety guards stay **global** (rate-limits, budgets, recap allow-list) |
-| Unbounded / unauthorized `member_configs` writes (grill C-3) | Keys ∈ `CoreTeam`; interval ≥ 5m; body size cap; workspace owner/admin auth; GC on member removal |
+| Unbounded `member_configs` writes (grill C-3) | Keys ∈ `CoreTeam`; interval ≥ 5m; body ≤ 16 KB; body-required-when-enabled; GC on member removal. **No auth gate** (A1/F-01) |
 | Contract drift (Constraint #8) | `WorkspaceMemberConfig.yaml` first → regenerate → `make verify-contracts`; no hand-written wire structs |
 
 ## 7. Gaps & Ambiguities
