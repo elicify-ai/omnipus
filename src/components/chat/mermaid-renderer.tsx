@@ -129,21 +129,88 @@ async function getMermaid() {
         // SVG into the DOM — our MermaidErrorCard owns the failure UI, and the bomb
         // SVGs otherwise accumulate as orphaned nodes (one per failed render attempt).
         suppressErrorRendering: true,
-        theme: 'dark',
+        // 'base' (not 'dark') so EVERY diagram type derives from the brand seeds below.
+        // 'dark' only let us override ~12 of mermaid's ~100 theme variables, leaving the
+        // non-flowchart types (pie/sequence/class/state/journey/gantt) on mermaid's
+        // generic palette — off-brand and, for categorical charts, dark-on-dark and
+        // invisible. `darkMode: true` tells base to derive for a dark canvas.
+        // Brand: Sovereign Deep — Deep Space Black, Liquid Silver text, Forge Gold accent;
+        // neutral surfaces (NOT the previous blue-purple #1a1a2e family).
+        theme: 'base',
+        flowchart: { curve: 'basis', htmlLabels: true },
         themeVariables: {
+          darkMode: true,
           background: 'transparent',
-          primaryTextColor: '#E2E8F0',
-          lineColor: '#D4AF37',
-          primaryColor: '#1a1a2e',
-          secondaryColor: '#16213e',
-          tertiaryColor: '#0f3460',
-          edgeLabelBackground: '#0A0A0B',
-          clusterBkg: '#0A0A0B',
-          titleColor: '#E2E8F0',
-          nodeBorder: '#D4AF37',
-          mainBkg: '#1a1a2e',
-          fontFamily: 'Inter, sans-serif',
+          fontFamily: '"Inter", system-ui, sans-serif',
+          fontSize: '14px',
+
+          // Core: neutral node fill (a touch lighter than the surface-2 card so nodes read
+          // as elevated), Forge Gold border, Liquid Silver text.
+          primaryColor: '#23232a',
+          primaryBorderColor: '#d4af37',
+          primaryTextColor: '#e2e8f0',
+          secondaryColor: '#2b2b33',
+          secondaryBorderColor: '#3a3a44',
+          secondaryTextColor: '#e2e8f0',
+          tertiaryColor: '#1a1a1e',
+          tertiaryBorderColor: '#2d3748',
+          tertiaryTextColor: '#cbd5e1',
+
+          lineColor: '#d4af37',
+          textColor: '#e2e8f0',
+          titleColor: '#e2e8f0',
+          nodeBorder: '#d4af37',
+          mainBkg: '#23232a',
+          nodeTextColor: '#e2e8f0',
+          edgeLabelBackground: '#1a1a1e',
+          clusterBkg: '#111113',
+          clusterBorder: '#2d3748',
+
+          // Sequence / class notes + actors.
+          noteBkgColor: '#2a2410',
+          noteTextColor: '#e2e8f0',
+          noteBorderColor: '#d4af37',
+          actorBkg: '#23232a',
+          actorBorder: '#d4af37',
+          actorTextColor: '#e2e8f0',
+          labelBoxBkgColor: '#23232a',
+          labelBoxBorderColor: '#d4af37',
+          labelTextColor: '#e2e8f0',
+          signalColor: '#e2e8f0',
+          signalTextColor: '#e2e8f0',
+
+          // Categorical (pie / journey / quadrant): a restrained, brand-anchored ramp of
+          // LIGHT fills (so they read on the dark canvas) with DARK section labels; each
+          // slice is ≥3:1 from the canvas and separated by a 2px Deep-Space stroke, so
+          // adjacent series are always distinguishable. Fixes the dark-on-dark pie.
+          pie1: '#d4af37',
+          pie2: '#c0c8d4',
+          pie3: '#9a8466',
+          pie4: '#6f8296',
+          pie5: '#b8b29a',
+          pie6: '#8a6f9e',
+          pie7: '#7f9c8b',
+          pie8: '#cbd5e1',
+          pie9: '#bda06a',
+          pie10: '#9aa7b8',
+          pie11: '#a99f86',
+          pie12: '#8f7f9e',
+          pieStrokeColor: '#0a0a0b',
+          pieStrokeWidth: '2px',
+          pieOuterStrokeColor: '#0a0a0b',
+          pieOuterStrokeWidth: '2px',
+          pieTitleTextColor: '#e2e8f0',
+          pieSectionTextColor: '#0a0a0b',
+          pieOpacity: '1',
         },
+        // Crisper than the 1px hairline; rounded corners; brand font on every label.
+        themeCSS: [
+          '.node rect, .node polygon, .node path, .node circle, .node ellipse { stroke-width: 1.5px; }',
+          '.node rect { rx: 6px; ry: 6px; }',
+          '.edgePath .path, .flowchart-link { stroke-width: 1.5px; }',
+          '.cluster rect { rx: 8px; ry: 8px; }',
+          '.node .label, .nodeLabel, .edgeLabel, .cluster .label, text { font-family: "Inter", system-ui, sans-serif; }',
+        ].join('\n'),
       })
       initialized = true
     } catch (err) {
