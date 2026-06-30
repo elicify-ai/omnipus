@@ -132,11 +132,10 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 			defaults["recap_model_allow_list"] = *req.RecapModelAllowList
 		}
 
-		// storage.retention section (or omnipus.retention depending on config layout).
-		// The canonical JSON key for the retention block is "omnipus" → "retention".
-		// We try both the flat "storage" key (older config) and the "omnipus" block
-		// (current layout per config.OmnipusConfig.Retention) to be resilient to
-		// config migrations.
+		// storage.retention section. The canonical layout is top-level
+		// "storage" → "retention" (config.OmnipusStorageConfig, json:"storage").
+		// setRetentionFields writes only that path — there is no "try both keys"
+		// fallback and no "omnipus" block alternative.
 		if req.SessionDays != nil || req.MemoryRetrosDays != nil {
 			if err := setRetentionFields(m, req.SessionDays, req.MemoryRetrosDays); err != nil {
 				return err

@@ -51,8 +51,7 @@ properties:
   heartbeat:
     type: string
     description: >
-      New HEARTBEAT.md content. Rejected on locked agents.
-      Writing this triggers a config reload.
+      Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
     example: "Check queue every hour."
   timeout_seconds:
     type: integer
@@ -71,11 +70,13 @@ properties:
     example: "one-at-a-time"
   heartbeat_enabled:
     type: boolean
-    description: Enable/disable heartbeat loop. Allowed on all agents (Main only).
+    description: >
+      Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
     example: false
   heartbeat_interval:
     type: integer
-    description: New heartbeat interval in seconds. Allowed on all agents (Main only).
+    description: >
+      Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
     example: 1800
   sandbox_profile:
     type: string

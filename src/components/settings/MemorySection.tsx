@@ -132,8 +132,8 @@ function ModelAllowListEditor({ value, onChange }: ModelAllowListProps) {
     setNewEntry('')
   }
 
-  function handleDelete(idx: number) {
-    onChange(value.filter((_, i) => i !== idx))
+  function handleDelete(slug: string) {
+    onChange(value.filter((s) => s !== slug))
   }
 
   return (
@@ -147,16 +147,16 @@ function ModelAllowListEditor({ value, onChange }: ModelAllowListProps) {
         <p className="text-xs text-[var(--color-muted)] italic">Empty — any configured model is allowed.</p>
       ) : (
         <div className="space-y-1">
-          {value.map((slug, i) => (
+          {value.map((slug) => (
             <div
-              key={i}
+              key={slug}
               className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5"
             >
               <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">{slug}</span>
               <button
                 type="button"
                 aria-label={`Remove model ${slug}`}
-                onClick={() => handleDelete(i)}
+                onClick={() => handleDelete(slug)}
                 className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
               >
                 <Trash size={12} />

@@ -3548,7 +3548,7 @@ export interface components {
              */
             soul?: string;
             /**
-             * @description New HEARTBEAT.md content. Rejected on locked agents. Writing this triggers a config reload.
+             * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
              * @example Check queue every hour.
              */
             heartbeat?: string;
@@ -3569,12 +3569,12 @@ export interface components {
              */
             steering_mode?: "one-at-a-time" | "queue-and-process";
             /**
-             * @description Enable/disable heartbeat loop. Allowed on all agents (Main only).
+             * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
              * @example false
              */
             heartbeat_enabled?: boolean;
             /**
-             * @description New heartbeat interval in seconds. Allowed on all agents (Main only).
+             * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
              * @example 1800
              */
             heartbeat_interval?: number;

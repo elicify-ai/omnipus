@@ -131,10 +131,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Heartbeat tab can read + write member_configs for this (workspace, agent).
   // Disabled when there is no workspace context (global Agents screen) — in
   // that case the Heartbeat tab is hidden and no fetch is needed.
+  // M-5: use a stable sentinel key so the query never collides with other
+  // empty-key queries (the disabled branch previously used `[]` which is
+  // a valid React Query key that other callers could share).
   const { data: workspaceData } = useQuery({
-    queryKey: editAgentWorkspaceId ? workspacesQueryKeys.detail(editAgentWorkspaceId) : [],
+    queryKey: ['workspace', editAgentWorkspaceId ?? '__none__'],
     queryFn: () => fetchWorkspace(editAgentWorkspaceId as string),
-    enabled: editAgentWorkspaceId !== null,
+    enabled: !!editAgentWorkspaceId,
     staleTime: 30_000,
   })
 
@@ -705,6 +708,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       hbDirtyRef.current = false
       // Refresh the workspace cache so the Heartbeat tab re-reads the latest.
       queryClient.setQueryData(workspacesQueryKeys.detail(editAgentWorkspaceId as string), updated)
+      // I-3 (US-7/US-8/FR-021): invalidate the sessions list so SessionPanel
+      // re-fetches and reflects the new heartbeat state (newly pinned session
+      // appears on enable; delete control re-enables/disables on toggle).
+      queryClient.invalidateQueries({ queryKey: ['sessions'] })
       addToast({ message: 'Heartbeat saved', variant: 'success' })
     },
     onError: (err: unknown) => {

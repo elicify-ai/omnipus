@@ -582,9 +582,11 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 }
 
 // Note: TestUpdateAgent_Worker_RejectsHeartbeat was removed in the
-// workspace-heartbeat decommission (US-4 / FR-027) — the agent PUT no longer
-// carries heartbeat fields. Worker-heartbeat rejection now lives in
-// workspace.ValidateMemberConfigs.
+// workspace-heartbeat decommission (US-4 / FR-027). heartbeat_enabled,
+// heartbeat_interval, and heartbeat (HEARTBEAT.md) are still accepted on the
+// wire (AgentUpdateRequest retains them for backward compatibility) but are
+// silently ignored — heartbeat is workspace-scoped (ADR-027). Worker-heartbeat
+// rejection now lives in workspace.ValidateMemberConfigs.
 
 // TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy proves the worker-PUT-400
 // loosening: a subagent_3p PUT carrying a delegation_policy is no longer rejected

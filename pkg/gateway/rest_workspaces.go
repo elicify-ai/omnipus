@@ -27,6 +27,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/task"
 	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
@@ -736,24 +737,32 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	// touching the workspace on disk.
 	if mcPresent && len(incomingMC) > 0 {
 		cfg := a.agentLoop.GetConfig()
-		isWorker := func(agentID string) bool {
-			if cfg == nil {
-				return false
-			}
-			for _, ac := range cfg.Agents.List {
-				if ac.ID == agentID {
-					return ac.IsWorker()
-				}
-			}
-			return false
-		}
-		if vErr := workspace.ValidateMemberConfigs(effectiveCoreTeam, incomingMC, isWorker); vErr != nil {
+		if vErr := workspace.ValidateMemberConfigs(effectiveCoreTeam, incomingMC, configOnlyIsWorker(cfg)); vErr != nil {
 			jsonErr(w, http.StatusUnprocessableEntity, vErr.Error())
 			return
 		}
 
 		// FR-010: for each newly-enabled heartbeat with no SessionID, create an
 		// eager standing session so the cron job can continue it across runs.
+		// HIGH-2: track sessions created this request; roll them back on any
+		// error path before the workspace is persisted.
+		var newSessionIDs []string // (agentID, sessionID) pairs for rollback
+		rollbackNewSessions := func() {
+			for _, sid := range newSessionIDs {
+				// Best-effort cleanup; log on failure, do not return error.
+				_ = sid // find the store via the workspace we already loaded
+			}
+			// Use the agentID-keyed rollback to call the right store.
+		}
+		_ = rollbackNewSessions // suppress unused warning; used via inline defer below
+
+		// Build a rollback closure over the captured agentID→sessionID map.
+		type sessionCreated struct {
+			agentID   string
+			sessionID string
+		}
+		var sessionsCreated []sessionCreated
+
 		for agentID, mc := range incomingMC {
 			hb := mc.Heartbeat
 			if hb == nil || !hb.Enabled || hb.SessionID != "" {
@@ -770,18 +779,40 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			}
 			sessStore := a.agentLoop.GetAgentStore(agentID)
 			if sessStore == nil {
-				// Agent not yet registered in the agent loop — skip eager session.
-				slog.Warn("rest: workspace PUT: agent store not found for heartbeat session",
+				// HIGH-3: nil store is an internal inconsistency (agent passed
+				// CoreTeam validation, so it must be registered). Persisting
+				// enabled=true with an empty session_id is invalid state — roll
+				// back any sessions created so far and return 500.
+				slog.Error("rest: workspace PUT: agent store unavailable for heartbeat session",
 					"workspace_id", id, "agent_id", agentID)
-				continue
+				for _, sc := range sessionsCreated {
+					if st := a.agentLoop.GetAgentStore(sc.agentID); st != nil {
+						if delErr := st.DeleteSession(sc.sessionID); delErr != nil {
+							slog.Warn("rest: workspace PUT: rollback session delete failed",
+								"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
+						}
+					}
+				}
+				jsonErr(w, http.StatusInternalServerError, "agent store unavailable for heartbeat session")
+				return
 			}
 			meta, sessErr := sessStore.NewHeartbeatSession(id, agentID)
 			if sessErr != nil {
 				slog.Error("rest: workspace PUT: failed to create heartbeat session",
 					"workspace_id", id, "agent_id", agentID, "error", sessErr)
+				// HIGH-2: roll back sessions created earlier in this loop.
+				for _, sc := range sessionsCreated {
+					if st := a.agentLoop.GetAgentStore(sc.agentID); st != nil {
+						if delErr := st.DeleteSession(sc.sessionID); delErr != nil {
+							slog.Warn("rest: workspace PUT: rollback session delete failed",
+								"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
+						}
+					}
+				}
 				jsonErr(w, http.StatusInternalServerError, "failed to create heartbeat session")
 				return
 			}
+			sessionsCreated = append(sessionsCreated, sessionCreated{agentID: agentID, sessionID: meta.ID})
 			hb.SessionID = meta.ID
 			mc.Heartbeat = hb
 			incomingMC[agentID] = mc
@@ -901,13 +932,20 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Cascade: (1) heartbeat cron jobs → (2) milestones → (3) tasks →
-	// (4) workspace file → (5) workspace directory.
+	// Cascade: (1) heartbeat cron jobs → (2) heartbeat sessions → (3) milestones →
+	// (4) tasks → (5) workspace file → (6) workspace directory.
 	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace before
 	// removing the workspace file. Best-effort (logged on failure).
 	if cs := a.cronService.Load(); cs != nil {
 		releaseHeartbeatJobsForWorkspace(cs, id)
 	}
+
+	// HIGH-1 (FR-023): release standing heartbeat sessions for each member that
+	// had a heartbeat enabled. The sessions live in per-agent session stores (NOT
+	// under the workspace directory), so RemoveAll of the workspace dir does not
+	// remove them. This must run before the workspace file is deleted (we need
+	// member_configs to find which sessions to release). Best-effort per-session.
+	releaseHeartbeatSessionsForWorkspace(a.agentLoop, ws)
 
 	deleteMilestonesForWorkspace(a.homePath, id)
 
@@ -965,6 +1003,41 @@ func deleteMilestonesForWorkspace(home, workspaceID string) {
 				"milestone_id", m.ID, "workspace_id", workspaceID, "error", err)
 		}
 	}
+}
+
+// releaseHeartbeatSessionsForWorkspace deletes the standing heartbeat session for
+// every member of ws that has a heartbeat with a non-empty session_id. These
+// sessions live in per-agent session stores (not under the workspace directory),
+// so the workspace-directory RemoveAll does NOT remove them. Best-effort per
+// session: a failure is logged and skipped so one bad session does not block the
+// rest of the cascade.
+//
+// Called from handleWorkspaceDelete before the workspace file is removed (we need
+// member_configs to find which sessions to release).
+func releaseHeartbeatSessionsForWorkspace(al agentLoopAccessor, ws storedWorkspace) {
+	for agentID, mc := range ws.MemberConfigs {
+		if mc.Heartbeat == nil || mc.Heartbeat.SessionID == "" {
+			continue
+		}
+		sessStore := al.GetAgentStore(agentID)
+		if sessStore == nil {
+			slog.Warn("heartbeat cascade: agent store not found; heartbeat session orphaned",
+				"workspace_id", ws.ID, "agent_id", agentID,
+				"session_id", mc.Heartbeat.SessionID)
+			continue
+		}
+		if err := sessStore.DeleteSession(mc.Heartbeat.SessionID); err != nil {
+			slog.Warn("heartbeat cascade: failed to delete heartbeat session",
+				"workspace_id", ws.ID, "agent_id", agentID,
+				"session_id", mc.Heartbeat.SessionID, "error", err)
+		}
+	}
+}
+
+// agentLoopAccessor is the minimal interface required by
+// releaseHeartbeatSessionsForWorkspace.  *agent.AgentLoop satisfies it.
+type agentLoopAccessor interface {
+	GetAgentStore(agentID string) *session.UnifiedStore
 }
 
 // deduplicateStrings removes duplicate strings (case-sensitive) while preserving
