@@ -833,6 +833,25 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete session: %v", err))
 		return
 	}
+
+	// Release in-memory media store refs for any tool-generated inline media
+	// (screenshots, charts, etc.) that were stored with CleanupPolicyForgetOnly
+	// under the session-scoped scope media.SessionInlineScopePrefix+"<id>".
+	// The underlying files are already on disk under uploads/<id>/ and have been
+	// cascade-deleted by DeleteSession above; we only need to drop the in-memory
+	// ref so the store index does not accumulate stale entries.
+	mediaStore := a.agentLoop.GetMediaStore()
+	if mediaStore == nil {
+		mediaStore = a.mediaStore
+	}
+	if mediaStore != nil {
+		if err := mediaStore.ReleaseAll(media.SessionInlineScopePrefix + id); err != nil {
+			// Non-fatal: session data is already removed. Log and continue.
+			slog.Warn("rest: delete session: media store release failed",
+				"session_id", id, "error", err)
+		}
+	}
+
 	jsonOK(w, map[string]bool{"success": true})
 }
 

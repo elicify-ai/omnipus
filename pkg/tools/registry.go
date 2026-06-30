@@ -372,7 +372,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 		}
 	}
 
-	result = normalizeToolResult(result, name, r.mediaStore, channel, chatID)
+	result = normalizeToolResult(ctx, result, name, r.mediaStore, channel, chatID)
 
 	duration := time.Since(start)
 

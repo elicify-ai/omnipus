@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
@@ -27,6 +28,7 @@ var (
 )
 
 func normalizeToolResult(
+	ctx context.Context,
 	result *ToolResult,
 	toolName string,
 	store media.MediaStore,
@@ -54,6 +56,7 @@ func normalizeToolResult(
 		var extractedNotes []string
 
 		result.ForLLM, refs, extractedNotes = extractInlineMediaRefs(
+			ctx,
 			result.ForLLM,
 			toolName,
 			store,
@@ -65,6 +68,7 @@ func normalizeToolResult(
 		notes = append(notes, extractedNotes...)
 
 		result.ForUser, refs, extractedNotes = extractInlineMediaRefs(
+			ctx,
 			result.ForUser,
 			toolName,
 			store,
@@ -145,6 +149,7 @@ func looksLikeLargeBase64Payload(text string) bool {
 }
 
 func extractInlineMediaRefs(
+	ctx context.Context,
 	text string,
 	toolName string,
 	store media.MediaStore,
@@ -160,7 +165,7 @@ func extractInlineMediaRefs(
 			continue
 		}
 		dataURL := match[1]
-		ref, note := storeInlineDataURL(toolName, store, channel, chatID, dataURL, seen)
+		ref, note := storeInlineDataURL(ctx, toolName, store, channel, chatID, dataURL, seen)
 		if ref != "" {
 			refs = append(refs, ref)
 		}
@@ -172,7 +177,7 @@ func extractInlineMediaRefs(
 
 	rawMatches := inlineRawDataURLRe.FindAllString(cleaned, -1)
 	for _, dataURL := range rawMatches {
-		ref, note := storeInlineDataURL(toolName, store, channel, chatID, dataURL, seen)
+		ref, note := storeInlineDataURL(ctx, toolName, store, channel, chatID, dataURL, seen)
 		if ref != "" {
 			refs = append(refs, ref)
 		}
@@ -186,6 +191,7 @@ func extractInlineMediaRefs(
 }
 
 func storeInlineDataURL(
+	ctx context.Context,
 	toolName string,
 	store media.MediaStore,
 	channel string,
@@ -228,13 +234,34 @@ func storeInlineDataURL(
 		return "", fmt.Sprintf("[Tool returned inline media content (%s) that could not be decoded.]", mimeType)
 	}
 
-	dir := media.TempDir()
+	ext := extensionForMIMEType(mimeType)
+	safeTool := sanitizeIdentifierComponent(toolName)
+
+	// Determine the storage destination and cleanup policy.
+	// When a persisted session ID is in context, write the file under the
+	// session's uploads directory (identical to user-uploaded files) so it
+	// is (a) immune to the TTL media cleaner and (b) cascade-deleted with
+	// the session via the existing uploadsRoot() logic in pkg/session.
+	// When there is no session (channel media, repair path, etc.) fall back
+	// to the ephemeral TempDir with the default delete_on_cleanup policy.
+	sessionID := ToolTranscriptSessionID(ctx)
+	uploadsDir, hasSession := media.SessionUploadsDir(sessionID)
+
+	var dir string
+	var cleanupPolicy media.CleanupPolicy
+	if hasSession {
+		dir = uploadsDir
+		cleanupPolicy = media.CleanupPolicyForgetOnly
+	} else {
+		dir = media.TempDir()
+		cleanupPolicy = media.CleanupPolicyDeleteOnCleanup
+	}
+
 	if err = os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be stored.]", mimeType)
 	}
 
-	ext := extensionForMIMEType(mimeType)
-	tmpFile, err := os.CreateTemp(dir, "tool-inline-*"+ext)
+	tmpFile, err := os.CreateTemp(dir, "tool-"+safeTool+"-*"+ext)
 	if err != nil {
 		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be stored.]", mimeType)
 	}
@@ -249,19 +276,34 @@ func storeInlineDataURL(
 		return "", fmt.Sprintf("[Tool returned inline media content (%s) but it could not be stored.]", mimeType)
 	}
 
-	filename := sanitizeIdentifierComponent(toolName) + ext
-	scope := fmt.Sprintf(
-		"tool:inline:%s:%s:%s:%d",
-		sanitizeIdentifierComponent(toolName),
-		channel,
-		chatID,
-		time.Now().UnixNano(),
-	)
+	filename := safeTool + ext
+
+	// Scope selection:
+	// - Session-bound media: media.SessionInlineScopePrefix+"<sessionID>" — stable
+	//   and derivable from the sessionID alone, so deleteSession can call
+	//   ReleaseAll(media.SessionInlineScopePrefix+"<sessionID>") to free all refs
+	//   for that session in one call. This scope is also what CleanExpired pins
+	//   (never TTL-expired) so the media survives in chat history.
+	// - Ephemeral (no session): per-call scope with UnixNano suffix to avoid
+	//   collisions between concurrent tool calls sharing a chatID.
+	var scope string
+	if hasSession {
+		scope = media.SessionInlineScopePrefix + sessionID
+	} else {
+		scope = fmt.Sprintf(
+			"tool:inline:%s:%s:%s:%d",
+			safeTool,
+			channel,
+			chatID,
+			time.Now().UnixNano(),
+		)
+	}
 
 	ref, err = store.Store(tmpPath, media.MediaMeta{
-		Filename:    filename,
-		ContentType: mimeType,
-		Source:      fmt.Sprintf("tool:inline:%s", sanitizeIdentifierComponent(toolName)),
+		Filename:      filename,
+		ContentType:   mimeType,
+		Source:        fmt.Sprintf("tool:inline:%s", safeTool),
+		CleanupPolicy: cleanupPolicy,
 	}, scope)
 	if err != nil {
 		_ = os.Remove(tmpPath)
