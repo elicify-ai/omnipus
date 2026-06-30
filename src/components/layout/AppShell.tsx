@@ -47,44 +47,51 @@ export function AppShell() {
     queryClient.prefetchQuery({ queryKey: ['agents'], queryFn: fetchAgents, staleTime: 30_000 })
   }, [])
 
-  // iOS Safari sizes 100dvh to the LARGE viewport at initial load (until the
-  // first scroll), so a fixed h-dvh shell is ~browser-toolbar-height taller than
-  // what's actually visible and the page can be dragged/scrolled by that amount
-  // on first load. Drive the shell height from window.visualViewport.height —
-  // the EXACT visible area (it accounts for the browser toolbar AND the soft
-  // keyboard) — published as the `--app-vh` CSS var and consumed below. Falls
-  // back to 100dvh where visualViewport is unavailable (older browsers / SSR).
+  // Pin the shell to the actual VISUAL viewport via window.visualViewport, not
+  // CSS viewport units. Two iOS Safari behaviors make units insufficient:
+  //  • At initial load iOS reports 100dvh as the LARGE viewport (until the first
+  //    scroll), so an h-dvh shell is ~toolbar-height too tall → a load-time
+  //    overscroll. `vv.height` is the exact visible height instead.
+  //  • Focusing the chat input shows the keyboard and iOS scrolls the VISUAL
+  //    viewport (not the document — that's locked) to reveal the input, so
+  //    `vv.offsetTop` becomes > 0 and a shell anchored to the layout-viewport
+  //    top has its header pushed above the visible area. We mirror `vv.offsetTop`
+  //    into the shell's `top` so the shell follows the visible viewport and the
+  //    header stays put.
+  // Published as `--app-vh` / `--app-top`; the shell consumes them below and
+  // falls back to (100dvh, 0) where visualViewport is unavailable / pre-hydrate.
   useEffect(() => {
     const vv = window.visualViewport
     if (!vv) return undefined
-    const setAppHeight = () => {
-      document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
+    let raf = 0
+    const setAppMetrics = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
+        document.documentElement.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
+      })
     }
-    setAppHeight()
-    vv.addEventListener('resize', setAppHeight)
-    vv.addEventListener('scroll', setAppHeight)
+    setAppMetrics()
+    vv.addEventListener('resize', setAppMetrics)
+    vv.addEventListener('scroll', setAppMetrics)
     return () => {
-      vv.removeEventListener('resize', setAppHeight)
-      vv.removeEventListener('scroll', setAppHeight)
+      cancelAnimationFrame(raf)
+      vv.removeEventListener('resize', setAppMetrics)
+      vv.removeEventListener('scroll', setAppMetrics)
     }
   }, [])
 
   return (
-    // `fixed inset-x-0 top-0` pins the shell to the viewport so iOS Safari can
-    // never scroll the whole document (header included) away — `overflow-hidden`
-    // on html/body is not a hard guarantee there. Height comes from the
-    // `--app-vh` var (window.visualViewport.height — the exact visible area)
-    // rather than `h-dvh`, because iOS reports 100dvh as the large viewport at
-    // load and that left a ~toolbar-height overscroll. `--app-vh` also tracks the
-    // soft keyboard (with the index.html interactive-widget=resizes-content meta)
-    // so the composer stays in view. Falls back to 100dvh pre-hydration / where
-    // visualViewport is unavailable. Overlays (toasts/modals/lightbox) use their
-    // own fixed/portal positioning and are unaffected (no transform here, so
-    // descendant `position:fixed` stays viewport-relative).
+    // Shell pinned to the VISUAL viewport (see the --app-vh / --app-top hook
+    // above): `fixed inset-x-0` for width, `top`/`height` from the vars so it
+    // tracks the visible area through toolbar collapse + keyboard. `overflow-
+    // hidden` (with the html/body locks) keeps the inner message list the sole
+    // scroller. NB: do NOT add a transform here — overlays (toasts/modals/
+    // lightbox) rely on descendant `position:fixed` staying viewport-relative.
     <div
       data-app-shell
-      className="fixed inset-x-0 top-0 flex overflow-hidden bg-[var(--color-primary)]"
-      style={{ height: 'var(--app-vh, 100dvh)' }}
+      className="fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"
+      style={{ top: 'var(--app-top, 0px)', height: 'var(--app-vh, 100dvh)' }}
     >
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
