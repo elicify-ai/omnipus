@@ -47,16 +47,45 @@ export function AppShell() {
     queryClient.prefetchQuery({ queryKey: ['agents'], queryFn: fetchAgents, staleTime: 30_000 })
   }, [])
 
+  // iOS Safari sizes 100dvh to the LARGE viewport at initial load (until the
+  // first scroll), so a fixed h-dvh shell is ~browser-toolbar-height taller than
+  // what's actually visible and the page can be dragged/scrolled by that amount
+  // on first load. Drive the shell height from window.visualViewport.height —
+  // the EXACT visible area (it accounts for the browser toolbar AND the soft
+  // keyboard) — published as the `--app-vh` CSS var and consumed below. Falls
+  // back to 100dvh where visualViewport is unavailable (older browsers / SSR).
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return undefined
+    const setAppHeight = () => {
+      document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
+    }
+    setAppHeight()
+    vv.addEventListener('resize', setAppHeight)
+    vv.addEventListener('scroll', setAppHeight)
+    return () => {
+      vv.removeEventListener('resize', setAppHeight)
+      vv.removeEventListener('scroll', setAppHeight)
+    }
+  }, [])
+
   return (
     // `fixed inset-x-0 top-0` pins the shell to the viewport so iOS Safari can
     // never scroll the whole document (header included) away — `overflow-hidden`
-    // on html/body is not a hard guarantee there. `h-dvh` keeps it exactly one
-    // dynamic-viewport tall; with the index.html `interactive-widget=resizes-
-    // content` meta, dvh shrinks when the keyboard opens so the composer stays in
-    // view and the header does not scroll out. Overlays (toasts/modals/lightbox)
-    // use their own fixed/portal positioning and are unaffected (no transform on
-    // this element, so descendant `position:fixed` stays viewport-relative).
-    <div data-app-shell className="fixed inset-x-0 top-0 flex h-dvh overflow-hidden bg-[var(--color-primary)]">
+    // on html/body is not a hard guarantee there. Height comes from the
+    // `--app-vh` var (window.visualViewport.height — the exact visible area)
+    // rather than `h-dvh`, because iOS reports 100dvh as the large viewport at
+    // load and that left a ~toolbar-height overscroll. `--app-vh` also tracks the
+    // soft keyboard (with the index.html interactive-widget=resizes-content meta)
+    // so the composer stays in view. Falls back to 100dvh pre-hydration / where
+    // visualViewport is unavailable. Overlays (toasts/modals/lightbox) use their
+    // own fixed/portal positioning and are unaffected (no transform here, so
+    // descendant `position:fixed` stays viewport-relative).
+    <div
+      data-app-shell
+      className="fixed inset-x-0 top-0 flex overflow-hidden bg-[var(--color-primary)]"
+      style={{ height: 'var(--app-vh, 100dvh)' }}
+    >
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
 
