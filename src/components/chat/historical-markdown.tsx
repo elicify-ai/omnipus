@@ -4,6 +4,9 @@
 // renders a plain <pre><code> (Shiki is live-only, to keep this bundle light), the live
 // one uses Shiki. Both route a ```mermaid fence to the shared <MermaidDiagram>.
 
+import { useState, useRef, useEffect } from 'react'
+import type { ReactNode } from 'react'
+import { Copy, Check } from '@phosphor-icons/react'
 import { useQuery } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -13,15 +16,83 @@ import 'katex/dist/katex.min.css'
 import { rehypePhosphorEmoji } from '@/lib/rehype-phosphor-emoji'
 import { resolveEffectivePreview } from '@/lib/preview-url'
 import { fetchAboutInfo } from '@/lib/api'
+import { useUiStore } from '@/store/ui'
+import { copyText } from './media-actions'
 import {
   PhosphorEmojiSpan,
   MarkdownImage,
   createLinkRenderer,
   InlineCode,
   classifyFence,
+  codeText,
   MermaidDiagram,
   commonMarkdownComponents,
 } from './markdown-shared'
+
+// ── Historical block-code header (language label + copy button) ───────────────
+// Mirrors CopyCodeHeader from shiki-highlighter.tsx but uses copyText() from
+// media-actions.ts (Phase A) rather than a raw clipboard call, and uses a 1.5s
+// reset (vs 2s in the live path) to stay snappy in the finalized view.
+
+interface HistoricalCodeBlockProps {
+  code: string
+  className: string | undefined
+  children: ReactNode
+  language: string | undefined
+}
+
+function HistoricalCodeBlock({ code, className, children, language }: HistoricalCodeBlockProps) {
+  const [copied, setCopied] = useState(false)
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current)
+    }
+  }, [])
+
+  const handleCopy = async () => {
+    try {
+      await copyText(code)
+      setCopied(true)
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current)
+      resetTimerRef.current = setTimeout(() => setCopied(false), 1500)
+    } catch {
+      useUiStore.getState().addToast({ message: 'Could not copy', variant: 'error' })
+    }
+  }
+
+  return (
+    <div className="my-2 rounded overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--color-surface-2)] border-b border-[var(--color-border)] rounded-t">
+        <span className="text-[10px] text-[var(--color-muted)] font-mono uppercase tracking-wide">
+          {language || 'code'}
+        </span>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+          aria-label="Copy code to clipboard"
+        >
+          {copied ? (
+            <>
+              <Check size={11} weight="bold" className="text-[var(--color-success)]" />
+              <span className="text-[var(--color-success)]">Copied!</span>
+            </>
+          ) : (
+            <>
+              <Copy size={11} />
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="text-xs bg-[var(--color-surface-1)] rounded-b p-2 overflow-auto font-mono text-[var(--color-secondary)]">
+        <code className={className}>{children}</code>
+      </pre>
+    </div>
+  )
+}
 
 export function HistoricalMessageMarkdown({ content }: { content: string }) {
   const { data: aboutInfo } = useQuery({ queryKey: ['about'], queryFn: fetchAboutInfo, staleTime: 5 * 60 * 1000 })
@@ -44,10 +115,11 @@ export function HistoricalMessageMarkdown({ content }: { content: string }) {
         // (the nested <pre><pre> seen in the DOM). Let `code` own the block layout.
         pre: ({ children }) => <>{children}</>,
 
-        // Block code is a plain <pre><code>; a `language-mermaid` fence routes to the
-        // shared diagram (parity with the live renderer). classifyFence centralises
-        // the block/inline + language detection — block-ness must NOT key solely on a
-        // `language-` class, or bare/indented fences collapse (see regression test).
+        // Block code: a `language-mermaid` fence routes to the shared diagram (parity
+        // with the live renderer); all other block fences render with a copy header.
+        // classifyFence centralises the block/inline + language detection — block-ness
+        // must NOT key solely on a `language-` class, or bare/indented fences collapse
+        // (see regression test).
         code: ({ children, className }) => {
           const { isBlock, language, text } = classifyFence(children, className)
           if (!isBlock) return <InlineCode>{children}</InlineCode>
@@ -56,9 +128,9 @@ export function HistoricalMessageMarkdown({ content }: { content: string }) {
             return <MermaidDiagram code={text.replace(/\n$/, '')} />
           }
           return (
-            <pre className="text-xs bg-[var(--color-surface-1)] rounded p-2 overflow-auto my-2 font-mono text-[var(--color-secondary)]">
-              <code className={className}>{children}</code>
-            </pre>
+            <HistoricalCodeBlock code={codeText(children)} className={className} language={language}>
+              {children}
+            </HistoricalCodeBlock>
           )
         },
 

@@ -60,6 +60,7 @@ import type { SlashCommand, Skill } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
+import { ChatImage } from './ChatImage'
 
 // ── Slash/skill palette item shape ───────────────────────────────────────────
 
@@ -339,12 +340,11 @@ function InlineMedia() {
     <div className="flex flex-col gap-2 mt-2">
       {storeMsg.media.map((m, i) =>
         m.type === 'image' ? (
-          <div key={`${m.url}-${i}`} className="rounded-lg overflow-hidden border border-[var(--color-border)] max-w-2xl">
-            <img
+          <div key={`${m.url}-${i}`} className="max-w-2xl">
+            <ChatImage
               src={m.url}
               alt={m.caption || m.filename}
-              className="block w-full h-auto max-h-[60vh] object-contain"
-              loading="lazy"
+              filename={m.filename}
             />
             {m.caption && (
               <p className="text-xs text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
@@ -523,16 +523,15 @@ export function VirtualUserMessageRow({
             cards, shown above the text like ChatGPT. */}
         {message.media && message.media.length > 0 && (
           <div className="flex flex-wrap gap-2 justify-end">
-            {message.media.map((m, i) => (
-              <AttachmentCard
-                key={`${m.url}-${i}`}
-                filename={m.filename}
-                contentType={m.contentType}
-                imageUrl={m.type === 'image' ? m.url : undefined}
-                isImage={m.type === 'image'}
-                className={m.type === 'image' ? 'max-w-[200px] max-h-[200px]' : undefined}
-              />
-            ))}
+            {message.media.map((m, i) =>
+              m.type === 'image' ? (
+                // Sent images (screenshots) get the full ChatImage treatment — hover
+                // toolbar (copy/share/download/enlarge) + click-to-enlarge lightbox.
+                <ChatImage key={`${m.url}-${i}`} src={m.url} alt={m.filename} filename={m.filename} className="max-w-[240px]" />
+              ) : (
+                <AttachmentCard key={`${m.url}-${i}`} filename={m.filename} contentType={m.contentType} />
+              ),
+            )}
           </div>
         )}
         {message.content.trim().length > 0 && (
@@ -656,12 +655,11 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
             <div className="flex flex-col gap-2 mb-2">
               {mediaItems.map((m, i) =>
                 m.type === 'image' ? (
-                  <div key={`${m.url}-${i}`} className="rounded-lg overflow-hidden border border-[var(--color-border)] max-w-2xl">
-                    <img
+                  <div key={`${m.url}-${i}`} className="max-w-2xl">
+                    <ChatImage
                       src={m.url}
                       alt={m.caption || m.filename}
-                      className="block w-full h-auto max-h-[60vh] object-contain"
-                      loading="lazy"
+                      filename={m.filename}
                     />
                     {m.caption && (
                       <p className="text-xs text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
@@ -727,8 +725,8 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
           ))}
         </div>
 
-        {/* Action bar */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        {/* Action bar — always visible at reduced opacity, fully opaque on hover */}
+        <div className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
           <StaticCopyButton text={message.content ?? ''} />
         </div>
 
@@ -1054,8 +1052,8 @@ function AssistantMessage() {
           <InlineThinkingIndicator />
         </div>
 
-        {/* Action bar — Copy + Retry buttons, visible on hover */}
-        <ActionBarPrimitive.Root className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        {/* Action bar — Copy + Retry buttons, always visible at reduced opacity */}
+        <ActionBarPrimitive.Root className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
           <ActionBarPrimitive.Copy asChild>
             <button
               type="button"

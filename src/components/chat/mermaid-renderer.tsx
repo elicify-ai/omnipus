@@ -1,9 +1,12 @@
 // MermaidDiagram — lazy-loads mermaid.js and renders Mermaid code as SVG.
 // Dark-themed: transparent background, Liquid Silver text, Forge Gold lines.
 
-import { useEffect, useRef, useState, memo } from 'react'
+import { useEffect, useRef, useState, memo, useCallback } from 'react'
 import DOMPurify from 'dompurify'
-import { Warning, ArrowClockwise } from '@phosphor-icons/react'
+import { Warning, ArrowClockwise, Code, Image, ArrowsOutSimple, DownloadSimple, Copy } from '@phosphor-icons/react'
+import { MediaActionToolbar, type MediaAction } from './MediaActionToolbar'
+import { ImageLightbox } from './image-lightbox'
+import { copyText, copyImageBlob, svgToPngBlob, downloadBlob, canCopyImage } from './media-actions'
 
 interface MermaidDiagramProps {
   code: string
@@ -109,6 +112,14 @@ const renderedSvgCache = new Map<string, string>()
 // mount (stable height from the first frame), breaking the loop. Only populated for
 // COMPLETE renders (never while streaming — partial code fails on every token).
 const renderErrorCache = new Map<string, string>()
+
+// Per-diagram UI state that must survive the virtualized list's remounts — the SAME
+// churn the svg/error caches address. Toggling image⇄code (or opening enlarge) changes
+// the row height → react-virtual re-measures → MermaidDiagram remounts → a plain
+// useState would reset to its default, so the toggle/lightbox silently revert. Keying
+// these by `code` keeps them stable across remounts.
+const viewCache = new Map<string, 'image' | 'code'>()
+const lightboxOpenCache = new Set<string>()
 
 async function getMermaid() {
   const m = (await import('mermaid')).default
@@ -266,6 +277,33 @@ function MermaidDiagramImpl({ code, streaming = false }: MermaidDiagramProps) {
   const [error, setError] = useState<string | null>(() => renderErrorCache.get(code) ?? null)
   const idRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`)
 
+  // View toggle: 'image' = rendered diagram (default), 'code' = Mermaid source.
+  // Seeded from viewCache so a remount (see the cache comment above) keeps the chosen
+  // view instead of snapping back to the diagram.
+  const [view, setView] = useState<'image' | 'code'>(() => viewCache.get(code) ?? 'image')
+  // Lightbox open state — also seeded from a per-code cache so a remount while enlarged
+  // does not silently close the overlay.
+  const [lightboxOpen, setLightboxOpen] = useState(() => lightboxOpenCache.has(code))
+
+  const openLightbox = useCallback(() => {
+    lightboxOpenCache.add(code)
+    setLightboxOpen(true)
+  }, [code])
+  const closeLightbox = useCallback(() => {
+    lightboxOpenCache.delete(code)
+    setLightboxOpen(false)
+  }, [code])
+  const toggleView = useCallback(
+    () =>
+      setView((v) => {
+        const next = v === 'image' ? 'code' : 'image'
+        if (next === 'image') viewCache.delete(code)
+        else viewCache.set(code, next)
+        return next
+      }),
+    [code],
+  )
+
   useEffect(() => {
     // Cache hit (success OR a prior complete-render failure of this exact code): show
     // the stored result and skip the async render entirely.
@@ -351,13 +389,123 @@ function MermaidDiagramImpl({ code, streaming = false }: MermaidDiagramProps) {
     )
   }
 
+  // Build the sanitized SVG string once (used for copy/download/lightbox).
+  const sanitizedSvg = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true }, ADD_TAGS: ['foreignObject'] })
+
+  // Actions that depend on the active view.
+  const copyAction: MediaAction = view === 'image'
+    ? {
+        icon: <Copy size={14} />,
+        label: 'Copy diagram as PNG',
+        transientLabel: 'Copied',
+        onClick: async () => {
+          const blob = await svgToPngBlob(sanitizedSvg)
+          await copyImageBlob(blob)
+        },
+      }
+    : {
+        icon: <Copy size={14} />,
+        label: 'Copy source',
+        transientLabel: 'Copied',
+        onClick: () => copyText(code),
+      }
+
+  const downloadAction: MediaAction = view === 'image'
+    ? {
+        icon: <DownloadSimple size={14} />,
+        label: 'Download diagram as PNG',
+        onClick: async () => {
+          const blob = await svgToPngBlob(sanitizedSvg)
+          downloadBlob(blob, 'diagram.png')
+        },
+      }
+    : {
+        icon: <DownloadSimple size={14} />,
+        label: 'Download source',
+        onClick: () => downloadBlob(new Blob([code], { type: 'text/plain' }), 'diagram.mmd'),
+      }
+
+  // Build toolbar actions: toggle, conditionally copy (only if image-copy is supported
+  // in image view), download, and enlarge (only in image view).
+  const toolbarActions: MediaAction[] = [
+    {
+      icon: view === 'image' ? <Code size={14} /> : <Image size={14} />,
+      label: view === 'image' ? 'Show source' : 'Show diagram',
+      onClick: toggleView,
+    },
+    ...(view === 'image' && !canCopyImage() ? [] : [copyAction]),
+    downloadAction,
+    ...(view === 'image'
+      ? [
+          {
+            icon: <ArrowsOutSimple size={14} />,
+            label: 'Enlarge diagram',
+            onClick: openLightbox,
+          } satisfies MediaAction,
+        ]
+      : []),
+  ]
+
+  // Lightbox toolbar: copy + download for the diagram (always image view in lightbox).
+  const lightboxCopyAction: MediaAction = {
+    icon: <Copy size={14} />,
+    label: 'Copy diagram as PNG',
+    transientLabel: 'Copied',
+    onClick: async () => {
+      const blob = await svgToPngBlob(sanitizedSvg)
+      await copyImageBlob(blob)
+    },
+  }
+  const lightboxDownloadAction: MediaAction = {
+    icon: <DownloadSimple size={14} />,
+    label: 'Download diagram as PNG',
+    onClick: async () => {
+      const blob = await svgToPngBlob(sanitizedSvg)
+      downloadBlob(blob, 'diagram.png')
+    },
+  }
+  const lightboxToolbarActions: MediaAction[] = [
+    ...(canCopyImage() ? [lightboxCopyAction] : []),
+    lightboxDownloadAction,
+  ]
+
   return (
-    <div
-      className="my-3 flex justify-center overflow-x-auto rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] p-4"
-      dangerouslySetInnerHTML={{
-        __html: DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true }, ADD_TAGS: ['foreignObject'] }),
-      }}
-    />
+    <>
+      <div className="group/mermaid relative my-3 overflow-x-auto rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+        {/* Hover-revealed overlay toolbar — only on the success (SVG ready) path */}
+        <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/mermaid:opacity-100 transition-opacity duration-150">
+          <MediaActionToolbar actions={toolbarActions} variant="overlay" />
+        </div>
+
+        {view === 'image' ? (
+          <div
+            className="flex justify-center p-4"
+            dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
+          />
+        ) : (
+          <div className="p-4">
+            {/* Language label */}
+            <div className="mb-1.5 text-[10px] font-mono text-[var(--color-muted)] select-none">mermaid</div>
+            <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-[var(--color-secondary)] bg-[var(--color-surface-1)] rounded-md p-3">
+              {code}
+            </pre>
+          </div>
+        )}
+      </div>
+
+      {lightboxOpen && (
+        <ImageLightbox
+          svg={sanitizedSvg}
+          onClose={closeLightbox}
+          toolbar={
+            <MediaActionToolbar
+              variant="bar"
+              actions={lightboxToolbarActions}
+            />
+          }
+        />
+      )}
+    </>
   )
 }
 
