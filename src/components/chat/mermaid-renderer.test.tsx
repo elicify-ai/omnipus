@@ -12,6 +12,10 @@
  *   - fix-button: async handleFix, streaming guard, duplicate-send guard, remount guard
  *   - streaming handoff: dropping `streaming` prop triggers error card (not silent)
  *   - two distinct malformed codes produce distinct, non-contaminated error cards
+ *   - toolbar toggle: image/code view switch
+ *   - toolbar copy: calls correct media-actions helper per view
+ *   - toolbar enlarge: opens ImageLightbox with svg
+ *   - toolbar NOT rendered during streaming or on error path
  *
  * `mermaid` is the dynamic-import target inside getMermaid(); we mock it. The
  * component keeps module-level `initialized`/`initFailed` flags, so each test does
@@ -38,6 +42,48 @@ const sendMessageMock = vi.fn()
 const storeState = { sendMessage: sendMessageMock, isStreaming: false }
 vi.mock('@/store/chat', () => ({ useChatStore: { getState: () => storeState } }))
 
+// Mock Phase A media-actions helpers so tests can assert calls without DOM/canvas.
+const copyTextMock = vi.fn().mockResolvedValue(undefined)
+const copyImageBlobMock = vi.fn().mockResolvedValue(undefined)
+const svgToPngBlobMock = vi.fn().mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+const downloadBlobMock = vi.fn()
+const canCopyImageMock = vi.fn().mockReturnValue(true)
+
+vi.mock('./media-actions', () => ({
+  copyText: (...args: unknown[]) => copyTextMock(...args),
+  copyImageBlob: (...args: unknown[]) => copyImageBlobMock(...args),
+  svgToPngBlob: (...args: unknown[]) => svgToPngBlobMock(...args),
+  downloadBlob: (...args: unknown[]) => downloadBlobMock(...args),
+  canCopyImage: () => canCopyImageMock(),
+}))
+
+// Mock MediaActionToolbar as a simple passthrough that renders buttons by label,
+// so tests can query by aria-label without needing real toolbar styling.
+vi.mock('./MediaActionToolbar', () => ({
+  MediaActionToolbar: ({ actions }: { actions: Array<{ label: string; onClick: () => void }> }) => (
+    <div role="toolbar" aria-label="Media actions">
+      {actions.map((a) => (
+        <button key={a.label} type="button" aria-label={a.label} onClick={a.onClick}>
+          {a.label}
+        </button>
+      ))}
+    </div>
+  ),
+}))
+
+// Mock ImageLightbox so tests can assert it opened without needing a real portal.
+const lightboxCloseMock = vi.fn()
+vi.mock('./image-lightbox', () => ({
+  ImageLightbox: ({ svg, onClose }: { svg: string; onClose: () => void }) => {
+    lightboxCloseMock.mockImplementation(onClose)
+    return (
+      <div data-testid="lightbox" data-svg={svg}>
+        <button type="button" aria-label="Close image preview" onClick={onClose}>Close</button>
+      </div>
+    )
+  },
+}))
+
 // DOMPurify is intentionally NOT mocked — the sanitization test exercises the real one.
 
 beforeEach(() => {
@@ -46,6 +92,12 @@ beforeEach(() => {
   renderFn.mockReset()
   sendMessageMock.mockReset()
   storeState.isStreaming = false
+  copyTextMock.mockReset().mockResolvedValue(undefined)
+  copyImageBlobMock.mockReset().mockResolvedValue(undefined)
+  svgToPngBlobMock.mockReset().mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+  downloadBlobMock.mockReset()
+  canCopyImageMock.mockReset().mockReturnValue(true)
+  lightboxCloseMock.mockReset()
 })
 afterEach(() => cleanup())
 
@@ -56,10 +108,11 @@ async function importDiagram() {
 }
 
 const DIAGRAM = 'graph TD; A-->B'
+const SVG_FIXTURE = '<svg data-testid="diagram"><g id="node"/></svg>'
 
 describe('MermaidDiagram', () => {
   it('renders a valid diagram as inline SVG (happy path)', async () => {
-    renderFn.mockResolvedValue({ svg: '<svg data-testid="diagram"><g id="node"/></svg>' })
+    renderFn.mockResolvedValue({ svg: SVG_FIXTURE })
     const MermaidDiagram = await importDiagram()
 
     render(<MermaidDiagram code={DIAGRAM} />)
@@ -370,5 +423,106 @@ describe('MermaidDiagram', () => {
     await waitFor(() =>
       expect(renderFn).toHaveBeenLastCalledWith(expect.any(String), 'graph LR; X-->Y'),
     )
+  })
+
+  // ── Toolbar + toggle tests ────────────────────────────────────────────────────
+
+  it('toolbar: toggles to code view showing Mermaid source, back to image view showing SVG', async () => {
+    renderFn.mockResolvedValue({ svg: SVG_FIXTURE })
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={DIAGRAM} />)
+    await waitFor(() => expect(document.querySelector('svg')).toBeInTheDocument())
+
+    // Code view: click "Show source" toggle
+    const showSourceBtn = screen.getByRole('button', { name: 'Show source' })
+    fireEvent.click(showSourceBtn)
+
+    // Source code is now visible in a <pre>
+    expect(screen.getByText(DIAGRAM)).toBeInTheDocument()
+    // SVG diagram is no longer shown
+    expect(document.querySelector('svg')).toBeNull()
+
+    // Toggle back: "Show diagram"
+    const showDiagramBtn = screen.getByRole('button', { name: 'Show diagram' })
+    fireEvent.click(showDiagramBtn)
+
+    // Back to image view — SVG is present, source <pre> is gone
+    await waitFor(() => expect(document.querySelector('svg')).toBeInTheDocument())
+    // The source text is not in a standalone <pre> (it's in the SVG fixture itself if present,
+    // but DIAGRAM is 'graph TD; A-->B' which is not in the SVG fixture)
+    expect(screen.queryByText(DIAGRAM)).toBeNull()
+  })
+
+  it('toolbar: copy in image view calls svgToPngBlob then copyImageBlob', async () => {
+    renderFn.mockResolvedValue({ svg: SVG_FIXTURE })
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={DIAGRAM} />)
+    await waitFor(() => expect(document.querySelector('svg')).toBeInTheDocument())
+
+    const copyBtn = screen.getByRole('button', { name: 'Copy diagram as PNG' })
+    fireEvent.click(copyBtn)
+
+    await waitFor(() => expect(svgToPngBlobMock).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(copyImageBlobMock).toHaveBeenCalledTimes(1))
+    expect(copyTextMock).not.toHaveBeenCalled()
+  })
+
+  it('toolbar: copy in code view calls copyText with the source code', async () => {
+    renderFn.mockResolvedValue({ svg: SVG_FIXTURE })
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={DIAGRAM} />)
+    await waitFor(() => expect(document.querySelector('svg')).toBeInTheDocument())
+
+    // Switch to code view
+    fireEvent.click(screen.getByRole('button', { name: 'Show source' }))
+    expect(screen.getByText(DIAGRAM)).toBeInTheDocument()
+
+    // Copy in code view
+    const copyBtn = screen.getByRole('button', { name: 'Copy source' })
+    fireEvent.click(copyBtn)
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith(DIAGRAM))
+    expect(svgToPngBlobMock).not.toHaveBeenCalled()
+    expect(copyImageBlobMock).not.toHaveBeenCalled()
+  })
+
+  it('toolbar: enlarge button opens ImageLightbox with the svg', async () => {
+    renderFn.mockResolvedValue({ svg: SVG_FIXTURE })
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={DIAGRAM} />)
+    await waitFor(() => expect(document.querySelector('svg')).toBeInTheDocument())
+
+    expect(screen.queryByTestId('lightbox')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enlarge diagram' }))
+
+    expect(screen.getByTestId('lightbox')).toBeInTheDocument()
+  })
+
+  it('toolbar: NOT rendered while streaming (container is empty)', async () => {
+    renderFn.mockRejectedValue(new Error('Parse error'))
+    const MermaidDiagram = await importDiagram()
+
+    const { container } = render(<MermaidDiagram code={'graph T'} streaming />)
+
+    await waitFor(() => expect(renderFn).toHaveBeenCalled())
+    // No toolbar rendered while streaming
+    expect(container.querySelector('[role="toolbar"]')).toBeNull()
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('toolbar: NOT rendered on the error card path', async () => {
+    renderFn.mockRejectedValue(new Error('Parse error on line 1'))
+    const MermaidDiagram = await importDiagram()
+
+    render(<MermaidDiagram code={'bad code'} />)
+    await waitFor(() => expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument())
+
+    // The MediaActionToolbar (role="toolbar") must not be present on the error path
+    expect(screen.queryByRole('toolbar')).toBeNull()
   })
 })

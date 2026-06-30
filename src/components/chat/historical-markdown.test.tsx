@@ -13,8 +13,8 @@
  * shiki-highlighter tests only exercised the live path and missed this entirely.
  */
 
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 
 // react-markdown stays REAL — that is the point: the fence must be parsed and the
@@ -36,7 +36,26 @@ vi.mock('./mermaid-renderer', () => ({
   MermaidDiagram: ({ code }: { code: string }) => <div data-testid="mermaid-diagram">{code}</div>,
 }))
 
+// Stub copyText so we can assert the text it was called with without needing
+// a real clipboard API (jsdom does not implement navigator.clipboard.writeText).
+const mockCopyText = vi.fn().mockResolvedValue(undefined)
+vi.mock('./media-actions', () => ({
+  copyText: (...args: unknown[]) => mockCopyText(...args),
+}))
+
+// Stub addToast so error-path tests can assert it was called.
+const mockAddToast = vi.fn()
+vi.mock('@/store/ui', () => ({
+  useUiStore: {
+    getState: () => ({ addToast: mockAddToast }),
+  },
+}))
+
 describe('HistoricalMessageMarkdown — Mermaid in finalized messages', () => {
+  beforeEach(() => {
+    mockCopyText.mockClear()
+    mockAddToast.mockClear()
+  })
   it('renders a ```mermaid fence as a MermaidDiagram, not a code block', () => {
     render(<HistoricalMessageMarkdown content={'```mermaid\ngraph TD; A-->B\n```'} />)
 
@@ -132,5 +151,53 @@ describe('HistoricalMessageMarkdown — Mermaid in finalized messages', () => {
     // Surrounding prose paragraphs must still render
     expect(screen.getByText(/Here is a diagram/)).toBeInTheDocument()
     expect(screen.getByText(/And some text after/)).toBeInTheDocument()
+  })
+})
+
+describe('HistoricalMessageMarkdown — copy header on block code', () => {
+  beforeEach(() => {
+    mockCopyText.mockClear()
+    mockAddToast.mockClear()
+  })
+
+  it('renders a Copy button for a non-mermaid block fence', () => {
+    render(<HistoricalMessageMarkdown content={'```ts\nconst x = 1\n```'} />)
+
+    const copyButton = screen.getByRole('button', { name: /copy code/i })
+    expect(copyButton).toBeInTheDocument()
+  })
+
+  it('shows the language label in the header bar', () => {
+    render(<HistoricalMessageMarkdown content={'```ts\nconst x = 1\n```'} />)
+
+    // The label text is the raw language string; CSS uppercase is a visual transform only.
+    expect(screen.getByText('ts')).toBeInTheDocument()
+  })
+
+  it('clicking Copy calls copyText with the code text', async () => {
+    render(<HistoricalMessageMarkdown content={'```ts\nconst x = 1\n```'} />)
+
+    const copyButton = screen.getByRole('button', { name: /copy code/i })
+    fireEvent.click(copyButton)
+
+    // copyText is async; give the microtask queue a tick
+    await Promise.resolve()
+
+    expect(mockCopyText).toHaveBeenCalledTimes(1)
+    expect(mockCopyText).toHaveBeenCalledWith('const x = 1\n')
+  })
+
+  it('does NOT render a Copy button for inline code', () => {
+    render(<HistoricalMessageMarkdown content={'use `graph TD` inline'} />)
+
+    expect(screen.queryByRole('button', { name: /copy code/i })).toBeNull()
+  })
+
+  it('shows "code" fallback label for a bare (no-language) fence', () => {
+    render(<HistoricalMessageMarkdown content={'```\nline one\n```'} />)
+
+    // Falls back to the "code" label when no language is present (CSS uppercase is visual only).
+    expect(screen.getByText('code')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /copy code/i })).toBeInTheDocument()
   })
 })

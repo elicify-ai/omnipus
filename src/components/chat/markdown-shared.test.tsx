@@ -12,14 +12,14 @@
  *
  * Mocking strategy:
  *   MOCK:  './mermaid-renderer' (MermaidDiagram — avoids loading real mermaid in vitest)
- *   MOCK:  './image-lightbox'   (ImageLightbox sentinel — avoids portal complexity)
+ *   MOCK:  './ChatImage'         (ChatImage sentinel — avoids portal/media-action complexity)
  *   REAL:  '@/lib/preview-url'  (resolveEffectivePreview, rewriteLegacyURL — pure functions)
  *   REAL:  '@/lib/url-safe'     (isSafeHref — pure function)
  *   REAL:  '@/lib/phosphor-emoji-icons' (PHOSPHOR_EMOJI_ICONS — the allow-list itself)
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { createElement } from 'react'
 import type { ReactNode } from 'react'
 
@@ -30,9 +30,11 @@ vi.mock('./mermaid-renderer', () => ({
   ),
 }))
 
-vi.mock('./image-lightbox', () => ({
-  ImageLightbox: ({ src, alt }: { src: string; alt?: string }) => (
-    <div data-testid="lightbox-sentinel" data-src={src} data-alt={alt ?? ''} />
+// ChatImage sentinel — lets us assert that MarkdownImage delegates to ChatImage
+// with the correct src/alt without triggering portal/media-action browser APIs.
+vi.mock('./ChatImage', () => ({
+  ChatImage: ({ src, alt }: { src: string; alt?: string }) => (
+    <div data-testid="chat-image-sentinel" data-src={src} data-alt={alt ?? ''} />
   ),
 }))
 
@@ -329,50 +331,49 @@ describe('InlineCode — styled inline code element', () => {
 
 // ── MarkdownImage ─────────────────────────────────────────────────────────────
 // Traces to: markdown-shared.tsx — MarkdownImage
+// MarkdownImage now delegates to ChatImage (mocked as chat-image-sentinel above).
+// Tests cover: safe-href routing → ChatImage, unsafe rejection, prop forwarding.
 
-describe('MarkdownImage — safe src, unsafe rejection, lightbox', () => {
-  it('safe src → <img> with loading=lazy, role=button, aria-label', () => {
-    const { container } = render(
+describe('MarkdownImage — safe src, unsafe rejection, ChatImage delegation', () => {
+  it('safe src → mounts ChatImage sentinel with correct src and alt', () => {
+    render(
       <MarkdownImage src="https://example.com/photo.png" alt="a photo" />
     )
-    const img = container.querySelector('img')!
-    expect(img).toBeInTheDocument()
-    expect(img).toHaveAttribute('loading', 'lazy')
-    expect(img).toHaveAttribute('role', 'button')
-    expect(img).toHaveAttribute('aria-label', 'View: a photo')
+    const sentinel = screen.getByTestId('chat-image-sentinel')
+    expect(sentinel).toBeInTheDocument()
+    expect(sentinel).toHaveAttribute('data-src', 'https://example.com/photo.png')
+    expect(sentinel).toHaveAttribute('data-alt', 'a photo')
   })
 
-  it('clicking the image mounts the mocked ImageLightbox sentinel', () => {
-    const { container } = render(
+  it('clicking the image mounts the mocked ChatImage sentinel (covers safe-href + delegate path)', () => {
+    render(
       <MarkdownImage src="https://example.com/photo.png" alt="a photo" />
     )
-    const img = container.querySelector('img')!
-    fireEvent.click(img)
-    const lightbox = screen.getByTestId('lightbox-sentinel')
-    expect(lightbox).toBeInTheDocument()
-    expect(lightbox).toHaveAttribute('data-src', 'https://example.com/photo.png')
+    // The sentinel is mounted immediately (not on click) — ChatImage owns the lightbox state.
+    // This test documents that the delegation occurred and that safe srcs reach ChatImage.
+    const sentinel = screen.getByTestId('chat-image-sentinel')
+    expect(sentinel).toBeInTheDocument()
+    expect(sentinel).toHaveAttribute('data-src', 'https://example.com/photo.png')
   })
 
-  it('pressing Enter on the image mounts the lightbox (keyboard accessible)', () => {
-    const { container } = render(
-      <MarkdownImage src="https://example.com/photo.png" alt="kbtest" />
-    )
-    const img = container.querySelector('img')!
-    fireEvent.keyDown(img, { key: 'Enter' })
-    expect(screen.getByTestId('lightbox-sentinel')).toBeInTheDocument()
+  it('safe src without alt → ChatImage sentinel with empty data-alt', () => {
+    render(<MarkdownImage src="https://example.com/photo.png" />)
+    const sentinel = screen.getByTestId('chat-image-sentinel')
+    expect(sentinel).toBeInTheDocument()
+    expect(sentinel).toHaveAttribute('data-alt', '')
   })
 
-  it('unsafe src (javascript:x) with alt → muted "[image: alt]" span, no <img>', () => {
+  it('unsafe src (javascript:x) with alt → muted "[image: alt]" span, no ChatImage', () => {
     const { container } = render(
       <MarkdownImage src="javascript:x" alt="bad image" />
     )
-    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('[data-testid="chat-image-sentinel"]')).toBeNull()
     expect(screen.getByText('[image: bad image]')).toBeInTheDocument()
   })
 
   it('unsafe src (javascript:x) without alt → null (nothing rendered)', () => {
     const { container } = render(<MarkdownImage src="javascript:x" />)
-    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('[data-testid="chat-image-sentinel"]')).toBeNull()
     expect(container.firstChild).toBeNull()
   })
 
@@ -381,15 +382,13 @@ describe('MarkdownImage — safe src, unsafe rejection, lightbox', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('differentiation: two different safe srcs → two different img[src] attributes', () => {
+  it('differentiation: two different safe srcs → two different data-src values on the sentinel', () => {
     const { unmount } = render(<MarkdownImage src="https://a.com/1.png" alt="img1" />)
-    const img1 = document.querySelector('img')
-    const src1 = img1?.getAttribute('src')
+    const src1 = document.querySelector('[data-testid="chat-image-sentinel"]')?.getAttribute('data-src')
     unmount()
 
     render(<MarkdownImage src="https://b.com/2.png" alt="img2" />)
-    const img2 = document.querySelector('img')
-    const src2 = img2?.getAttribute('src')
+    const src2 = document.querySelector('[data-testid="chat-image-sentinel"]')?.getAttribute('data-src')
 
     expect(src1).toBe('https://a.com/1.png')
     expect(src2).toBe('https://b.com/2.png')

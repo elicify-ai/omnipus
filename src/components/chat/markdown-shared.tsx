@@ -20,10 +20,9 @@
 // live path is handled by memoizeMarkdownComponents wrapping these — not by the
 // renderer — so no prop forwarding is required here.
 
-import { useState } from 'react'
 import type { ComponentPropsWithoutRef, CSSProperties, ReactNode } from 'react'
 import type { Components } from 'react-markdown'
-import { ImageLightbox } from './image-lightbox'
+import { ChatImage } from './ChatImage'
 import { MermaidDiagram } from './mermaid-renderer'
 import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
 import { isSafeHref } from '@/lib/url-safe'
@@ -55,28 +54,13 @@ export function PhosphorEmojiSpan({
 // ── Image with click-to-expand lightbox ───────────────────────────────────────
 // Unsafe src schemes (javascript:, data:, …) are rejected: an alt becomes a muted
 // "[image: alt]" placeholder, no alt renders nothing. Keyboard-accessible.
+// Delegates to ChatImage for the actual img + lightbox + action toolbar.
 export function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
-  const [open, setOpen] = useState(false)
   if (!src || typeof src !== 'string') return null
   if (!isSafeHref(src)) {
     return alt ? <span className="text-xs text-[var(--color-muted)] italic">[image: {alt}]</span> : null
   }
-  return (
-    <>
-      <img
-        src={src}
-        alt={alt || ''}
-        loading="lazy"
-        className="max-w-full rounded-md cursor-zoom-in border border-[var(--color-border)] hover:border-[var(--color-accent)]/50 transition-colors"
-        onClick={() => setOpen(true)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && setOpen(true)}
-        aria-label={alt ? `View: ${alt}` : 'View image'}
-      />
-      {open && <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}
-    </>
-  )
+  return <ChatImage src={src} alt={alt} />
 }
 
 // ── Link renderer (preview-host rewrite + scheme allow-list) ──────────────────
