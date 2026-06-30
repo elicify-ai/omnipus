@@ -2,7 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- interactive-widget=resizes-content: on iOS Safari the soft keyboard
+         RESIZES the layout viewport (and 100dvh) instead of overlaying it, so a
+         focused chat input no longer makes Safari scroll the whole document up
+         and push the app header out of view. viewport-fit=cover keeps the notch
+         safe-area insets. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>Omnipus — Elite Simplicity. Sovereign Control.</title>
     <meta name="description" content="Omnipus is the autonomous command center that provides elite feature-richness with military-grade security." />
 
