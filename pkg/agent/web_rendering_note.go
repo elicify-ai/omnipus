@@ -42,7 +42,13 @@ const webRenderingNote = "## Rendering (web chat)\n\n" +
 	"- Wrap any label containing spaces, punctuation, or emoji in straight double quotes, and use " +
 	"`<br/>` for line breaks inside a label.\n" +
 	"- Prefer well-supported diagram types (flowchart/graph, sequenceDiagram, classDiagram, " +
-	"stateDiagram-v2, erDiagram) and keep each diagram small and focused."
+	"stateDiagram-v2, erDiagram) and keep each diagram small and focused.\n" +
+	"- Apply a classDef with the `class` keyword on EVERY line — `class A ok` then `class B ok` — " +
+	"or group ids with commas on ONE line: `class A,B,C ok`. Never write a bare `B ok` line without " +
+	"the leading `class` keyword (a frequent error).\n" +
+	"- Use classDef / class node styling ONLY in flowchart/graph or stateDiagram diagrams; a " +
+	"`sequenceDiagram` cannot style participants with classDef, and never assign a class to the " +
+	"state start/end marker `[*]`."
 
 // buildWebRenderingNote returns the web-rendering guidance note when the turn
 // originates from the web chat surface, and "" for every other surface. The gate

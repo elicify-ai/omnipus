@@ -53,6 +53,12 @@ func TestBuildWebRenderingNote_MermaidSyntaxRules(t *testing.T) {
 		"Match bracket",
 		"reserved word",
 		"end",
+		// class-statement keyword rule + the comma form
+		"class A,B,C",
+		"frequent error",
+		// classDef not supported in sequenceDiagram
+		"cannot style participants",
+		"[*]",
 	} {
 		if !strings.Contains(note, want) {
 			t.Errorf("web rendering note missing Mermaid syntax rule %q; got:\n%s", want, note)
