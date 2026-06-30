@@ -478,6 +478,8 @@ components:
       $ref: ./components/schemas/Workspace.yaml
     WorkspaceMemberConfig:
       $ref: ./components/schemas/WorkspaceMemberConfig.yaml
+    WorkspaceMemberHeartbeat:
+      $ref: ./components/schemas/WorkspaceMemberHeartbeat.yaml
     MemorySettings:
       $ref: ./components/schemas/MemorySettings.yaml
     WorkspaceCreateRequest:

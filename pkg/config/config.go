@@ -773,16 +773,6 @@ type AgentConfig struct {
 	// Distinct from the global VoiceConfig engine settings.
 	// Schema-pinned; not active until v0.2.0 TTS delivery.
 	Voice string `json:"voice,omitempty"`
-	// HeartbeatEnabled controls whether this agent runs its HEARTBEAT.md on a
-	// recurring schedule (O6 — "heartbeat IS a schedule"). Main agents only;
-	// subagents (Type=worker) have no heartbeat and the handler rejects setting
-	// it. A nil pointer means "unset" (inherit the migrated global default at most
-	// once, then per-agent thereafter). Use HeartbeatIsEnabled() to read the
-	// effective value.
-	HeartbeatEnabled *bool `json:"heartbeat_enabled,omitempty"`
-	// HeartbeatInterval is this agent's heartbeat period in minutes (min 5). Zero
-	// means "unset" → fall back to the migrated/global default. Main agents only.
-	HeartbeatInterval int `json:"heartbeat_interval,omitempty"`
 	// Color is the hex color code for this agent's avatar in the UI (e.g. "#22C55E").
 	Color string `json:"color,omitempty"`
 	// Icon is the Phosphor icon name for this agent's avatar in the UI (e.g. "robot").
@@ -815,28 +805,6 @@ type AgentConfig struct {
 	// is a struct type and always serializes (writing "0001-01-01T00:00:00Z"
 	// for agents that were never PUT-updated), defeating omitempty.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
-}
-
-// HeartbeatIsEnabled returns whether this agent's heartbeat schedule should run
-// (O6). A nil pointer means "unset" → treated as disabled (heartbeat is opt-in
-// per agent). A worker never has a heartbeat regardless of the stored flag — the
-// caller is expected to skip workers; this method only reports the stored intent.
-func (a AgentConfig) HeartbeatIsEnabled() bool {
-	return a.HeartbeatEnabled != nil && *a.HeartbeatEnabled
-}
-
-// HeartbeatIntervalMinutes returns the effective heartbeat interval in minutes,
-// applying the 5-minute floor. globalDefault supplies the migrated/global value
-// used when the agent has not set its own interval (0).
-func (a AgentConfig) HeartbeatIntervalMinutes(globalDefault int) int {
-	interval := a.HeartbeatInterval
-	if interval <= 0 {
-		interval = globalDefault
-	}
-	if interval < 5 {
-		interval = 5
-	}
-	return interval
 }
 
 // AgentType classifies an agent for scope-based tool visibility filtering.
@@ -2366,11 +2334,6 @@ type SchedulesConfig struct {
 	// resuming normal cadence. Default [60000,120000,300000].
 	RetryBackoffMs []int64 `json:"retry_backoff_ms,omitempty"`
 }
-
-// DefaultHeartbeatIntervalMinutes is the fallback interval used when a per-agent
-// heartbeat has no explicit interval set. The legacy global HeartbeatConfig (which
-// carried this value) is removed; callers now pass this constant directly.
-const DefaultHeartbeatIntervalMinutes = 30
 
 // Schedules config defaults (#264).
 const (

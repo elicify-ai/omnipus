@@ -25,3 +25,12 @@ properties:
     maxItems: 20
   repository:
     type: string
+  member_configs:
+    type: object
+    additionalProperties:
+      $ref: ./WorkspaceMemberConfig.yaml
+    description: >
+      Per-member (agentId → config) heartbeat settings. Merge semantics: when
+      present, replaces the config for each listed agent and garbage-collects
+      entries for agents no longer on the core team. session_id is server-managed
+      (set at heartbeat-enable time) and ignored on input.

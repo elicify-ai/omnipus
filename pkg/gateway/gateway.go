@@ -1222,24 +1222,23 @@ func setupAndStartServices(
 	}
 	fmt.Println("✓ Cron service started")
 
-	// O6 — "heartbeat IS a schedule." Per-agent heartbeats are reconciled into the
-	// cron engine: every Main agent with an enabled per-agent heartbeat gets a
-	// recurring schedule that runs its HEARTBEAT.md. Best-effort: a reconcile
-	// failure is logged but does not abort boot.
-	if hbErr := ReconcileHeartbeatSchedules(
-		runningServices.CronService,
-		cfg,
-		func(agentID string) string {
-			ws, wsErr := agentWorkspacePath(cfg, agentID, "", homePath)
-			if wsErr != nil {
-				return ""
-			}
-			return ws
-		},
-	); hbErr != nil {
-		slog.Warn("gateway: heartbeat schedule reconcile failed", "error", hbErr)
+	// ADR-027 — heartbeat is workspace-scoped. Reconcile workspace member_configs
+	// into the cron engine: every (workspace, agent) pair with heartbeat.enabled=true
+	// gets a recurring job. Best-effort: a reconcile failure is logged but does not
+	// abort boot — the next hot-path write (workspace PUT) will re-converge.
+	{
+		wsFiles, wsErr := listWorkspaceFiles(homePath)
+		if wsErr != nil {
+			slog.Warn("gateway: heartbeat schedule reconcile: list workspaces failed", "error", wsErr)
+		} else if hbErr := ReconcileHeartbeatSchedules(
+			runningServices.CronService,
+			wsFiles,
+			configOnlyIsWorker(cfg),
+		); hbErr != nil {
+			slog.Warn("gateway: heartbeat schedule reconcile failed", "error", hbErr)
+		}
 	}
-	fmt.Println("✓ Heartbeat running as per-agent schedules")
+	fmt.Println("✓ Heartbeat running as workspace-scoped schedules")
 
 	// Queued-task draining (dispatch of `next` tasks) is owned UNCONDITIONALLY by
 	// the dedicated TaskDrainService — never by the heartbeat path.

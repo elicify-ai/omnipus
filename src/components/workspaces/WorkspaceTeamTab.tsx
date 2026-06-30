@@ -234,7 +234,9 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
   const handleOpenAgent = useCallback(
     (agentId: string) => {
       const agent = agents.find((a) => a.id === agentId)
-      openEditAgentSlideOver(agentId)
+      // FR-018 / A5: pass the workspace id so AgentProfile renders the
+      // conditional Heartbeat tab for this (workspace, agent) pair.
+      openEditAgentSlideOver(agentId, workspaceId)
       if (agent) {
         addToast({
           variant: 'default',
@@ -242,7 +244,7 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
         })
       }
     },
-    [agents, openEditAgentSlideOver, addToast],
+    [agents, openEditAgentSlideOver, addToast, workspaceId],
   )
 
   const handleRejectConnection = useCallback(

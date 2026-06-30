@@ -9,147 +9,155 @@ package gateway
 import (
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/cron"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
-// O6 — "heartbeat IS a schedule." A Main agent's heartbeat is implemented as a
-// per-agent recurring schedule in the one Schedules/cron engine, NOT as separate
-// loop.go logic. This file reconciles the cron store so that exactly the set of
-// Main agents with an enabled per-agent heartbeat carry a recurring heartbeat job
-// that runs their HEARTBEAT.md. Subagents (Type=worker) never get one.
+// ADR-027 — heartbeat is now workspace-scoped. A workspace heartbeat is
+// implemented as a recurring schedule in the one Schedules/cron engine, keyed
+// "heartbeat:<workspaceID>:<agentID>". This file reconciles the cron store so
+// that exactly the set of (workspace, agent) pairs with an enabled heartbeat
+// carry a recurring job, using the body stored in member_configs as the prompt.
 
-// heartbeatJobKind marks a cron job as an agent heartbeat (vs. a user schedule).
+// heartbeatJobKind marks a cron job as a workspace-scoped heartbeat (vs. a
+// user schedule). Shared with listSessions so isHeartbeatJob stays consistent.
 const heartbeatJobKind = "heartbeat"
 
-// heartbeatJobNamePrefix namespaces heartbeat jobs so the reconciler can find
-// and own exactly its jobs without colliding with user-created schedules.
+// heartbeatJobNamePrefix namespaces heartbeat jobs so the reconciler can
+// find and own exactly its jobs without colliding with user-created schedules.
 const heartbeatJobNamePrefix = "heartbeat:"
 
-// heartbeatJobName returns the deterministic job name for an agent's heartbeat.
-func heartbeatJobName(agentID string) string {
-	return heartbeatJobNamePrefix + agentID
+// heartbeatJobName returns the deterministic job name for a (workspace, agent) pair.
+// Format: "heartbeat:<workspaceID>:<agentID>"
+func heartbeatJobName(workspaceID, agentID string) string {
+	return heartbeatJobNamePrefix + workspaceID + ":" + agentID
 }
 
-// isHeartbeatJob reports whether a cron job is an agent-heartbeat job owned by
-// this reconciler.
+// isHeartbeatJob reports whether a cron job is a workspace-heartbeat job
+// owned by this reconciler.
 func isHeartbeatJob(j cron.CronJob) bool {
 	return j.Payload.Kind == heartbeatJobKind || strings.HasPrefix(j.Name, heartbeatJobNamePrefix)
 }
 
-// agentWorkspaceFunc resolves an agent ID to its workspace directory (where
-// HEARTBEAT.md lives). Injected so the reconciler stays testable without a full
-// gateway.
-type agentWorkspaceFunc func(agentID string) string
+// workspaceListFunc returns all workspace records. Injected so the reconciler
+// stays testable without a real filesystem.
+type workspaceListFunc func() ([]workspace.Workspace, error)
 
-// buildHeartbeatMessage reads the agent's HEARTBEAT.md and wraps it in the
-// scheduled-heartbeat prompt. Returns "" when the file is missing/empty (the
-// caller still schedules the job; an empty body just runs the wrapper, mirroring
-// the legacy heartbeat service's tolerance for an empty file).
-func buildHeartbeatMessage(workspace string) string {
-	content := ""
-	if workspace != "" {
-		data, err := os.ReadFile(filepath.Join(workspace, "HEARTBEAT.md"))
-		if err == nil {
-			content = strings.TrimSpace(string(data))
-		} else if !os.IsNotExist(err) {
-			slog.Warn("heartbeat schedule: read HEARTBEAT.md failed", "workspace", workspace, "error", err)
-		}
-	}
+// desiredHeartbeat is the reconciler's target spec for one (workspace, agent) pair.
+type desiredHeartbeat struct {
+	workspaceID string
+	agentID     string
+	interval    int // minutes (>= 5)
+	message     string
+	sessionID   string // eager standing session id (may be empty)
+}
+
+// buildHeartbeatMessage wraps a member's heartbeat body in the standard
+// scheduled-heartbeat prompt. An empty body is accepted — the wrapper alone
+// is enough to trigger a scheduled check-in.
+func buildHeartbeatMessage(body string) string {
+	trimmed := strings.TrimSpace(body)
 	return fmt.Sprintf(`# Heartbeat Check
 
 You are a proactive AI assistant. This is a scheduled heartbeat run.
 Review the following tasks and execute any necessary actions using your available tools.
 If nothing requires attention, respond ONLY with: HEARTBEAT_OK
 
-%s`, content)
+%s`, trimmed)
 }
 
-// desiredHeartbeat is the reconciler's target spec for one agent.
-type desiredHeartbeat struct {
-	agentID  string
-	interval int // minutes (>= 5)
-	message  string
-}
-
-// computeDesiredHeartbeats returns the heartbeat jobs that SHOULD exist: one per
-// Main agent (non-worker) with an enabled per-agent heartbeat. The constant
-// config.DefaultHeartbeatIntervalMinutes is the fallback when an agent leaves its
-// own interval unset.
-func computeDesiredHeartbeats(cfg *config.Config, agentWorkspace agentWorkspaceFunc) []desiredHeartbeat {
-	if cfg == nil {
-		return nil
-	}
+// computeDesiredHeartbeats returns the heartbeat jobs that SHOULD exist: one
+// per (workspace, agent) pair where member_configs[agentID].heartbeat.enabled
+// is true. Workers are never given a heartbeat even if one is configured (the
+// workspace handler rejects it at write time, but we defend here too).
+//
+// isWorker is used as a defense-in-depth guard in the reconciler (the primary
+// enforcement is ValidateMemberConfigs at write time).
+func computeDesiredHeartbeats(workspaces []workspace.Workspace, isWorker func(agentID string) bool) []desiredHeartbeat {
 	var out []desiredHeartbeat
-	for i := range cfg.Agents.List {
-		ac := cfg.Agents.List[i]
-		if ac.IsWorker() {
-			continue // subagents never have a heartbeat
+	for _, ws := range workspaces {
+		for agentID, mc := range ws.MemberConfigs {
+			hb := mc.Heartbeat
+			if hb == nil || !hb.Enabled {
+				continue
+			}
+			if isWorker != nil && isWorker(agentID) {
+				slog.Warn("heartbeat reconcile: skipping worker agent (defense-in-depth)",
+					"workspace_id", ws.ID, "agent_id", agentID)
+				continue
+			}
+			interval := hb.IntervalMinutes
+			if interval < 5 {
+				interval = 30 // safe default when stored value is somehow below minimum
+			}
+			out = append(out, desiredHeartbeat{
+				workspaceID: ws.ID,
+				agentID:     agentID,
+				interval:    interval,
+				message:     buildHeartbeatMessage(hb.Body),
+				sessionID:   hb.SessionID,
+			})
 		}
-		if !ac.HeartbeatIsEnabled() {
-			continue
-		}
-		ws := ""
-		if agentWorkspace != nil {
-			ws = agentWorkspace(ac.ID)
-		}
-		out = append(out, desiredHeartbeat{
-			agentID:  ac.ID,
-			interval: ac.HeartbeatIntervalMinutes(config.DefaultHeartbeatIntervalMinutes),
-			message:  buildHeartbeatMessage(ws),
-		})
 	}
 	return out
 }
 
 // reconcileHeartbeatSchedules is the restAPI hook that re-runs the heartbeat
-// reconciler after an agent's heartbeat config changes (create/update). It reads
-// the live cron service + config and resolves each agent's workspace. Best-effort:
-// a nil cron service (not wired in a unit test) or a reconcile error is logged,
-// never fatal — the persisted config is already the source of truth and the next
-// boot reconcile will converge.
+// reconciler after workspace member_configs change (workspace PUT). Best-effort:
+// a nil cron service or a reconcile error is logged, never fatal — the persisted
+// config is already the source of truth and the next boot reconcile will converge.
 func (a *restAPI) reconcileHeartbeatSchedules() {
 	cs := a.cronService.Load()
 	if cs == nil {
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
-	if err := ReconcileHeartbeatSchedules(cs, cfg, func(agentID string) string {
-		ws, wsErr := agentWorkspacePath(cfg, agentID, "", a.homePath)
-		if wsErr != nil {
-			return ""
+	workspaces, err := listWorkspaceFiles(a.homePath)
+	if err != nil {
+		slog.Warn("rest: heartbeat reconcile: list workspaces failed", "error", err)
+		return
+	}
+	isWorker := func(agentID string) bool {
+		if cfg == nil {
+			return false
 		}
-		return ws
-	}); err != nil {
+		for _, ac := range cfg.Agents.List {
+			if ac.ID == agentID {
+				return ac.IsWorker()
+			}
+		}
+		return false
+	}
+	if err := ReconcileHeartbeatSchedules(cs, workspaces, isWorker); err != nil {
 		slog.Warn("rest: heartbeat schedule reconcile failed", "error", err)
 	}
 }
 
-// ReconcileHeartbeatSchedules brings the cron store into line with the per-agent
-// heartbeat config (O6). It is idempotent: create missing heartbeat jobs, update
-// jobs whose interval/message drifted, and remove heartbeat jobs whose agent no
-// longer wants one. It never touches non-heartbeat (user) schedules.
+// ReconcileHeartbeatSchedules brings the cron store into line with the
+// workspace-scoped heartbeat configs (ADR-027). It is idempotent: create
+// missing heartbeat jobs, update jobs whose interval/message/sessionID
+// drifted, and remove heartbeat jobs whose (workspace, agent) pair no longer
+// has an enabled heartbeat. It never touches non-heartbeat (user) schedules.
 //
 // Returns the first error encountered; reconciliation continues past per-job
-// errors so one bad agent does not block the rest.
-func ReconcileHeartbeatSchedules(cs *cron.CronService, cfg *config.Config, agentWorkspace agentWorkspaceFunc) error {
+// errors so one bad entry does not block the rest.
+func ReconcileHeartbeatSchedules(cs *cron.CronService, workspaces []workspace.Workspace, isWorker func(agentID string) bool) error {
 	if cs == nil {
 		return fmt.Errorf("heartbeat reconcile: cron service is nil")
 	}
 
-	desired := computeDesiredHeartbeats(cfg, agentWorkspace)
+	desired := computeDesiredHeartbeats(workspaces, isWorker)
 	desiredByName := make(map[string]desiredHeartbeat, len(desired))
 	for _, d := range desired {
-		desiredByName[heartbeatJobName(d.agentID)] = d
+		desiredByName[heartbeatJobName(d.workspaceID, d.agentID)] = d
 	}
 
-	// Index existing heartbeat jobs by name (include disabled so we can re-enable
-	// or remove them).
+	// Index existing heartbeat jobs by name (include disabled so we can
+	// re-enable or remove them).
 	existing := make(map[string]cron.CronJob)
 	for _, j := range cs.ListJobs(true) {
 		if isHeartbeatJob(j) {
@@ -168,17 +176,20 @@ func ReconcileHeartbeatSchedules(cs *cron.CronService, cfg *config.Config, agent
 	for name, d := range desiredByName {
 		everyMS := int64(d.interval) * 60_000
 		if cur, ok := existing[name]; ok {
-			// Update in place when interval, message, enabled, or agent drifted.
+			// Update in place when interval, message, sessionID, enabled, or
+			// agent/kind drifted.
 			needsUpdate := !cur.Enabled ||
 				cur.Schedule.Kind != "every" ||
 				cur.Schedule.EveryMS == nil || *cur.Schedule.EveryMS != everyMS ||
 				cur.Payload.Message != d.message ||
 				cur.AgentID != d.agentID ||
-				cur.Payload.Kind != heartbeatJobKind
+				cur.Payload.Kind != heartbeatJobKind ||
+				cur.SessionID != d.sessionID
 			if needsUpdate {
 				cur.Enabled = true
 				cur.AgentID = d.agentID
 				cur.SessionMode = cron.SessionModeContinue
+				cur.SessionID = d.sessionID
 				cur.Schedule = cron.CronSchedule{Kind: "every", EveryMS: &everyMS}
 				cur.Payload = cron.CronPayload{Kind: heartbeatJobKind, Message: d.message, Deliver: false}
 				if err := cs.UpdateJob(&cur); err != nil {
@@ -195,6 +206,7 @@ func ReconcileHeartbeatSchedules(cs *cron.CronService, cfg *config.Config, agent
 			Message:     d.message,
 			AgentID:     d.agentID,
 			SessionMode: cron.SessionModeContinue,
+			SessionID:   d.sessionID,
 			Enabled:     &enabled,
 		})
 		if err != nil {
@@ -225,4 +237,46 @@ func ReconcileHeartbeatSchedules(cs *cron.CronService, cfg *config.Config, agent
 		"desired", len(desiredByName), "existing_before", len(existing),
 		"reconciled_at", time.Now().UTC().Format(time.RFC3339))
 	return firstErr
+}
+
+// releaseHeartbeatJobsForWorkspace removes all heartbeat cron jobs associated
+// with a workspace (used in cascade-delete: workspace DELETE → cron cleanup).
+// Best-effort: each job that cannot be removed is logged and skipped.
+func releaseHeartbeatJobsForWorkspace(cs *cron.CronService, workspaceID string) {
+	if cs == nil {
+		return
+	}
+	prefix := heartbeatJobNamePrefix + workspaceID + ":"
+	for _, j := range cs.ListJobs(true) {
+		if !strings.HasPrefix(j.Name, prefix) {
+			continue
+		}
+		if !cs.RemoveJob(j.ID) {
+			slog.Warn("heartbeat cascade: failed to remove cron job for workspace",
+				"workspace_id", workspaceID, "job_name", j.Name, "job_id", j.ID)
+		}
+	}
+}
+
+// agentWorkspaceFunc is kept for backward compat with any call sites that
+// reference it by name (e.g. legacy test helpers). It is no longer used by the
+// main reconciler path, which iterates workspaces directly.
+//
+// Deprecated: use ReconcileHeartbeatSchedules with a []workspace.Workspace slice.
+type agentWorkspaceFunc = func(agentID string) string
+
+// configOnlyIsWorker returns an isWorker predicate backed by a config snapshot.
+// Exported for test use.
+func configOnlyIsWorker(cfg *config.Config) func(agentID string) bool {
+	return func(agentID string) bool {
+		if cfg == nil {
+			return false
+		}
+		for _, ac := range cfg.Agents.List {
+			if ac.ID == agentID {
+				return ac.IsWorker()
+			}
+		}
+		return false
+	}
 }

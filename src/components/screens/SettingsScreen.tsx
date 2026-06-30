@@ -8,6 +8,7 @@ import { AboutSection } from '@/components/settings/AboutSection'
 import { useAuthStore } from '@/store/auth'
 import { DevicesSection } from '@/components/settings/DevicesSection'
 import { PerformanceSection } from '@/components/settings/PerformanceSection'
+import { MemorySection } from '@/components/settings/MemorySection'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 // O4: the passive RestartBanner at the top of Settings is replaced by the
 // modal-on-save flow (GatewaySection) + persistent Restart control in Gateway tab.
@@ -39,6 +40,7 @@ export function SettingsScreen() {
             <TabsTrigger data-testid="settings-tab-security" value="security">Security</TabsTrigger>
             <TabsTrigger value="gateway">Gateway</TabsTrigger>
             <TabsTrigger value="data">Data</TabsTrigger>
+            <TabsTrigger value="memory">Memory</TabsTrigger>
             {isAdmin && <TabsTrigger value="devices">Devices</TabsTrigger>}
             {isAdmin && <TabsTrigger value="performance">Performance</TabsTrigger>}
             <TabsTrigger data-testid="settings-tab-about" value="about">About</TabsTrigger>
@@ -62,6 +64,10 @@ export function SettingsScreen() {
 
           <TabsContent value="data">
             <DataSection />
+          </TabsContent>
+
+          <TabsContent value="memory">
+            <MemorySection />
           </TabsContent>
 
           {isAdmin && (

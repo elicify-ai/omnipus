@@ -6,6 +6,7 @@ import {
   Circle,
   ListChecks,
   Clock,
+  Heartbeat,
   Trash,
   MagnifyingGlass,
   CaretDown,
@@ -91,6 +92,9 @@ interface SessionItemProps {
   // The owning agent sub-group's agent id, hidden from this row's participant
   // badges to avoid repeating the avatar shown in the group header.
   hideAgentId?: string
+  // When true (heartbeat session with protected=true), the delete button is
+  // hidden so users cannot attempt deletion that would return 409 (FR-021/028).
+  deleteDisabled?: boolean
 }
 
 function taskStatusStyle(status: string | undefined): { color: string; label: string } {
@@ -176,7 +180,9 @@ function SessionHoverCard({
         ? 'Scheduled'
         : session.type === 'channel'
           ? 'Channel'
-          : 'Chat'
+          : session.type === 'heartbeat'
+            ? 'Heartbeat'
+            : 'Chat'
   // Status semantics (running/completed/failed) only apply to task runs.
   const statusLabel =
     session.type === 'task' && session.status ? taskStatusStyle(session.status).label : ''
@@ -229,6 +235,7 @@ function SessionItem({
   onSelect,
   onDeleted,
   hideAgentId,
+  deleteDisabled = false,
 }: SessionItemProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -315,6 +322,7 @@ function SessionItem({
 
   const isTask = session.type === 'task'
   const isScheduled = session.type === 'scheduled'
+  const isHeartbeat = session.type === 'heartbeat'
 
   if (confirmDelete) {
     return (
@@ -391,6 +399,14 @@ function SessionItem({
                   aria-label="Scheduled session"
                 />
               )}
+              {isHeartbeat && (
+                <Heartbeat
+                  size={10}
+                  weight="fill"
+                  className="text-[var(--color-accent)] shrink-0"
+                  aria-label="Heartbeat session"
+                />
+              )}
               <span className="truncate text-xs">{session.title || UNTITLED_SESSION}</span>
               {isStreaming && !isActive && (
                 // Background session is generating — pulse dot so the user knows work is in progress.
@@ -423,6 +439,15 @@ function SessionItem({
               Scheduled
             </Badge>
           )}
+          {isHeartbeat && (
+            <Badge
+              variant="outline"
+              className="text-[9px] h-4 px-1"
+              style={{ color: 'var(--color-accent)', borderColor: 'var(--color-accent)' }}
+            >
+              Heartbeat
+            </Badge>
+          )}
           {session.total_tokens != null && session.total_tokens > 0 && (
             <span
               data-testid="session-token-chip"
@@ -435,18 +460,20 @@ function SessionItem({
           <span className="text-[10px] text-[var(--color-muted)] tabular-nums">
             {formatRelativeTime(session.updated_at)}
           </span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              setConfirmDelete(true)
-            }}
-            className="p-1 rounded opacity-0 group-hover/item:opacity-100 [@media(hover:none)]:opacity-100 text-[var(--color-muted)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-all"
-            aria-label={`Delete session: ${session.title || UNTITLED_SESSION}`}
-            title="Delete session"
-          >
-            <Trash size={11} />
-          </button>
+          {!deleteDisabled && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                setConfirmDelete(true)
+              }}
+              className="p-1 rounded opacity-0 group-hover/item:opacity-100 [@media(hover:none)]:opacity-100 text-[var(--color-muted)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-all"
+              aria-label={`Delete session: ${session.title || UNTITLED_SESSION}`}
+              title="Delete session"
+            >
+              <Trash size={11} />
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -792,18 +819,35 @@ export function SessionPanel() {
       })
     : sortedSessions
 
+  // Partition: heartbeat sessions are pinned above all groups; they are excluded
+  // from the workspace-scoped groups to avoid duplication (FR-021, FR-028).
+  const { heartbeatSessions, nonHeartbeatSessions } = useMemo(() => {
+    const hb: Session[] = []
+    const rest: Session[] = []
+    for (const s of searchFilteredSessions) {
+      if (s.type === 'heartbeat') {
+        hb.push(s)
+      } else {
+        rest.push(s)
+      }
+    }
+    return { heartbeatSessions: hb, nonHeartbeatSessions: rest }
+  }, [searchFilteredSessions])
+
   // Build workspace-scoped groups. Only the active workspace's sessions and a
   // "No workspace" group for orphaned sessions are shown. Other workspaces'
   // sessions are excluded (buildWorkspaceGroups enforces this).
+  // Heartbeat sessions are already extracted above so they don't appear twice.
   const workspaceGroups = useMemo(
-    () => buildWorkspaceGroups(searchFilteredSessions, workspaces, activeWorkspaceId),
-    [searchFilteredSessions, workspaces, activeWorkspaceId],
+    () => buildWorkspaceGroups(nonHeartbeatSessions, workspaces, activeWorkspaceId),
+    [nonHeartbeatSessions, workspaces, activeWorkspaceId],
   )
 
   // Flat list of visible sessions across all groups (for empty-state check).
+  // Include heartbeat sessions in the total count.
   const filteredSessions = useMemo(
-    () => workspaceGroups.flatMap((g) => g.sessions),
-    [workspaceGroups],
+    () => [...heartbeatSessions, ...workspaceGroups.flatMap((g) => g.sessions)],
+    [heartbeatSessions, workspaceGroups],
   )
 
   // Always show workspace group headers as long as there is at least one group.
@@ -859,6 +903,35 @@ export function SessionPanel() {
           {(agentsError || sessionsError) && (
             <div className="px-4 py-3 text-xs text-[var(--color-error)]">
               Could not load sessions.
+            </div>
+          )}
+
+          {/* Pinned heartbeat sessions — always rendered above workspace groups (FR-021/028) */}
+          {heartbeatSessions.length > 0 && (
+            <div
+              className="border-b border-[var(--color-border)] pb-1 pt-2"
+              aria-label="Pinned heartbeat sessions"
+            >
+              <div className="px-3 pb-1 flex items-center gap-1.5">
+                <Heartbeat size={11} weight="fill" className="text-[var(--color-accent)]" />
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+                  Heartbeat
+                </span>
+              </div>
+              <div className="space-y-0.5 px-2">
+                {heartbeatSessions.map((session) => (
+                  <SessionItem
+                    key={session.id}
+                    session={session}
+                    agents={agents}
+                    isActive={session.id === activeSessionId}
+                    isStreaming={sessionsById[session.id]?.isStreaming ?? false}
+                    onSelect={() => handleSelectSession(session)}
+                    onDeleted={handleSessionDeleted}
+                    deleteDisabled={session.protected === true}
+                  />
+                ))}
+              </div>
             </div>
           )}
 

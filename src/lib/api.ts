@@ -133,6 +133,8 @@ import {
   GodModeStatus as GodModeStatusSchema,
   // Slash-command harmonization (contract-first #8):
   SlashCommand as SlashCommandSchema,
+  // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
+  MemorySettings as MemorySettingsSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -309,6 +311,7 @@ import type {
   Workspace,
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
+  WorkspaceMemberConfig,
   // M5 per-workspace delegation graph (contract-first #8):
   WorkspaceDelegation,
   WorkspaceDelegationEdge,
@@ -358,6 +361,8 @@ import type {
   GodModeUpdateRequest,
   // Slash-command harmonization (contract-first #8):
   SlashCommand,
+  // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
+  MemorySettings,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -444,6 +449,7 @@ export type {
   Workspace,
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
+  WorkspaceMemberConfig,
   // M5 per-workspace delegation graph:
   WorkspaceDelegation,
   WorkspaceDelegationEdge,
@@ -477,6 +483,8 @@ export type {
   GodModeUpdateRequest,
   // Slash-command harmonization (contract-first #8):
   SlashCommand,
+  // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
+  MemorySettings,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -772,7 +780,7 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   id: string
   agent_id: string
   title: string
-  type: 'chat' | 'task' | 'channel' | 'scheduled'
+  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string
@@ -789,13 +797,18 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // should fall back to [agent_id] when agent_ids is undefined.
   agent_ids?: string[]      // all agents that participated in this session
   active_agent_id?: string  // the agent currently handling this session
+  // Computed server-side (FR-028, A2/G-01): true while the heartbeat member
+  // whose session_id matches this session's id has heartbeat.enabled = true.
+  // When true the SPA pins the session at the top of the panel and hides its
+  // delete (trash) button; DELETE /sessions/{id} returns 409 server-side.
+  protected?: boolean
 }
 
 interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
   id: string
   agent_id: string
   title: string
-  type?: 'chat' | 'task' | 'channel' | 'scheduled'
+  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string
@@ -804,6 +817,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   channel?: string
   agent_ids?: string[]
   active_agent_id?: string
+  protected?: boolean
   stats?: {
     tokens_in: number
     tokens_out: number
@@ -835,6 +849,8 @@ function rawToSession(raw: RawSession): Session {
     channel: raw.channel,
     agent_ids: raw.agent_ids,
     active_agent_id: raw.active_agent_id,
+    // Computed server-side: true while the heartbeat member is enabled (FR-028).
+    protected: raw.protected,
   }
 }
 
@@ -2718,6 +2734,19 @@ export function fetchWorkspaces(params?: { status?: string }): Promise<Workspace
   return request<Workspace[]>(`/workspaces${qs}`, undefined, z.array(WorkspaceSchema) as ZodType<Workspace[]>)
 }
 
+/**
+ * Fetch a single workspace by id.
+ * Used by the AgentProfile Heartbeat tab (FR-016 / US-5) to read the current
+ * member_configs for the (workspace, agent) heartbeat pair.
+ */
+export function fetchWorkspace(id: string): Promise<Workspace> {
+  return request<Workspace>(
+    `/workspaces/${encodeURIComponent(id)}`,
+    undefined,
+    WorkspaceSchema as ZodType<Workspace>,
+  )
+}
+
 export function createWorkspace(body: WorkspaceCreateRequest): Promise<Workspace> {
   return request<Workspace>(
     '/workspaces',
@@ -2872,5 +2901,29 @@ export function fetchTokenStats(period: TokenStatsPeriod = 'month'): Promise<Tok
     `/stats/tokens?period=${period}`,
     undefined,
     TokenUsageSummarySchema as ZodType<TokenUsageSummary>,
+  )
+}
+
+// ── Memory Settings ───────────────────────────────────────────────────────────
+//
+// Global memory/recap and retention settings. Readable/writable by any
+// authenticated user (no admin gate — operator decision A2/G-02, FR-019).
+// The dedicated endpoint reads/writes ONLY the MemorySettings fields — no
+// merge of sibling config sections or secrets.
+// See contracts/components/schemas/MemorySettings.yaml.
+
+export function fetchMemorySettings(): Promise<MemorySettings> {
+  return request<MemorySettings>(
+    '/settings/memory',
+    undefined,
+    MemorySettingsSchema as ZodType<MemorySettings>,
+  )
+}
+
+export function updateMemorySettings(body: MemorySettings): Promise<MemorySettings> {
+  return request<MemorySettings>(
+    '/settings/memory',
+    { method: 'PUT', body: JSON.stringify(body) },
+    MemorySettingsSchema as ZodType<MemorySettings>,
   )
 }

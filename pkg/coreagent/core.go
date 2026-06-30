@@ -751,38 +751,10 @@ func SeedConfig(cfg *config.Config) bool {
 			modified = true
 		}
 
-		// One-time upgrade migration: enable Mia's per-agent heartbeat when it was
-		// previously delivered by the now-removed global HeartbeatConfig
-		// (enabled=true, interval=30). This replaces the deleted
-		// migrateGlobalHeartbeatToAgent function that ran at load time.
-		//
-		// Guard: HeartbeatEnabled == nil means the field was never written per-agent.
-		// Once this migration fires it writes a non-nil pointer, so the check is a
-		// permanent no-op on all subsequent boots (idempotent).
-		//
-		// Scope: IDMia only — she is the seeded default Main agent and the only one
-		// that previously received the global heartbeat. Workers/specialists are
-		// excluded by the outer ca == nil guard (IsSubagentTierID IDs are still
-		// CoreAgents but the IDMia check is exact). Non-default Main agents and
-		// custom agents are not in this re-enforcement loop at all.
-		//
-		// Known limitation: an operator who had explicitly set the old global
-		// heartbeat.enabled=false will have Mia's heartbeat re-enabled here, because
-		// that global signal is gone. They can disable it per-agent via the Agents
-		// screen → heartbeat_enabled=false, which sets a non-nil false and survives
-		// this migration on subsequent boots. This asymmetry is intentional: the
-		// majority of installs had the global default ON, so we preserve that
-		// behavior rather than silently disabling heartbeats across the upgrade.
-		if ca.ID == IDMia && a.HeartbeatEnabled == nil {
-			enabled := true
-			a.HeartbeatEnabled = &enabled
-			if a.HeartbeatInterval == 0 {
-				a.HeartbeatInterval = config.DefaultHeartbeatIntervalMinutes
-			}
-			modified = true
-			slog.Info("coreagent: migrated Mia per-agent heartbeat (global→per-agent transition)",
-				"interval", a.HeartbeatInterval)
-		}
+		// Heartbeat is now workspace-scoped (ADR-027): per-agent heartbeat fields
+		// are decommissioned. No migration needed — the workspace handler seeds
+		// heartbeat on first opt-in. Existing per-agent heartbeat_enabled /
+		// heartbeat_interval in config.json are ignored (unknown fields on load).
 	}
 
 	for _, ca := range All() {
@@ -827,15 +799,6 @@ func SeedConfig(cfg *config.Config) bool {
 					Policies:      policies,
 				},
 			},
-		}
-		// Mia is the default agent and must have a heartbeat enabled on fresh
-		// installs — this preserves the behavior previously delivered by the
-		// legacy global HeartbeatConfig (enabled=true, interval=30). Workers and
-		// specialists never carry a heartbeat (per IsWorkerID / IsSubagentTierID).
-		if ca.ID == IDMia {
-			enabled := true
-			newAgent.HeartbeatEnabled = &enabled
-			newAgent.HeartbeatInterval = config.DefaultHeartbeatIntervalMinutes
 		}
 		// Subagent-tier agents carry an executor (Spec-4): the seeded worker AND the
 		// specialists run native (inside the Omnipus agent loop). Stored on the

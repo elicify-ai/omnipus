@@ -1,33 +1,33 @@
 //go:build !cgo
 
-// O6 — heartbeat-as-schedule reconciler tests. Proves:
-//  1. A Main agent with heartbeat enabled gets a recurring cron job.
-//  2. A worker is never given a heartbeat job (even if the flag is set).
+// ADR-027 — workspace-scoped heartbeat reconciler tests. Proves:
+//  1. A (workspace, Main-agent) pair with heartbeat enabled gets a recurring cron job.
+//  2. A worker is never given a heartbeat job (even if the member_configs entry exists).
 //  3. Disabling an agent's heartbeat removes its job.
 //  4. Changing the interval updates the existing job (no duplicate).
 //  5. Reconcile is idempotent (a second run makes no changes).
 //  6. User (non-heartbeat) schedules are never touched.
+//  7. Multiple workspaces × multiple members produce separate named jobs.
+//  8. Message drift (body change) re-stamps the existing job in place.
+//  9. SessionID drift (session replaced) re-stamps the existing job in place.
 
 package gateway
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/cron"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
 func newReconcileCron(t *testing.T) *cron.CronService {
 	t.Helper()
 	return cron.NewCronService(filepath.Join(t.TempDir(), "cron.json"))
 }
-
-func boolPtrHB(b bool) *bool { return &b }
 
 func heartbeatJobsFor(cs *cron.CronService) []cron.CronJob {
 	var out []cron.CronJob
@@ -39,82 +39,98 @@ func heartbeatJobsFor(cs *cron.CronService) []cron.CronJob {
 	return out
 }
 
-func TestReconcileHeartbeat_CreatesForEnabledMain(t *testing.T) {
-	cs := newReconcileCron(t)
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{ID: "mia", Type: config.AgentTypeCore, HeartbeatEnabled: boolPtrHB(true), HeartbeatInterval: 15},
-				{ID: "jim", Type: config.AgentTypeCore}, // heartbeat unset → no job
+// neverWorker is an isWorker predicate that always returns false (all agents are Main).
+func neverWorker(_ string) bool { return false }
+
+// alwaysWorker is an isWorker predicate that always returns true (all agents are workers).
+func alwaysWorker(_ string) bool { return true }
+
+// buildMemberConfigs is a convenience constructor for workspace.MemberConfigs.
+func buildMemberConfigs(agentID string, enabled bool, intervalMins int, body, sessionID string) map[string]workspace.MemberConfig {
+	return map[string]workspace.MemberConfig{
+		agentID: {
+			Heartbeat: &workspace.MemberHeartbeat{
+				Enabled:         enabled,
+				IntervalMinutes: intervalMins,
+				Body:            body,
+				SessionID:       sessionID,
 			},
 		},
 	}
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, func(string) string { return "" }))
+}
+
+func TestReconcileHeartbeat_CreatesForEnabledMain(t *testing.T) {
+	cs := newReconcileCron(t)
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check open PRs.", ""),
+		},
+	}
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 
 	jobs := heartbeatJobsFor(cs)
-	require.Len(t, jobs, 1, "exactly one heartbeat job (mia)")
+	require.Len(t, jobs, 1, "exactly one heartbeat job")
 	j := jobs[0]
-	assert.Equal(t, heartbeatJobName("mia"), j.Name)
+	assert.Equal(t, heartbeatJobName("ws1", "mia"), j.Name)
 	assert.Equal(t, "mia", j.AgentID)
 	assert.Equal(t, heartbeatJobKind, j.Payload.Kind)
 	assert.True(t, j.Enabled)
-	// B2: heartbeat jobs are interval-based, so they MUST use the
-	// contract-valid trigger kind "every" (not "recurring", which fails
-	// ScheduleTrigger.yaml and gets dropped by the SPA's Zod validation).
+	// Heartbeat jobs must use the contract-valid trigger kind "every" (not
+	// "recurring", which fails ScheduleTrigger.yaml Zod validation in the SPA).
 	assert.Equal(t, "every", j.Schedule.Kind, "heartbeat job must use contract-valid kind 'every'")
 	require.NotNil(t, j.Schedule.EveryMS)
 	assert.Equal(t, int64(15)*60_000, *j.Schedule.EveryMS)
 	assert.Equal(t, cron.SessionModeContinue, j.SessionMode)
+	assert.Contains(t, j.Payload.Message, "Check open PRs.")
 }
 
 func TestReconcileHeartbeat_WorkerNeverScheduled(t *testing.T) {
 	cs := newReconcileCron(t)
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				// Even with the flag set, a worker must never get a heartbeat job.
-				{ID: "planner", Type: config.AgentTypeWorker, HeartbeatEnabled: boolPtrHB(true), HeartbeatInterval: 10},
-			},
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("planner", true, 10, "Check tasks.", ""),
 		},
 	}
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, func(string) string { return "" }))
+	// isWorker returns true for every agent → reconciler must skip planner.
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, alwaysWorker))
 	assert.Empty(t, heartbeatJobsFor(cs), "a worker must never have a heartbeat schedule")
 }
 
 func TestReconcileHeartbeat_DisablingRemovesJob(t *testing.T) {
 	cs := newReconcileCron(t)
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{ID: "mia", Type: config.AgentTypeCore, HeartbeatEnabled: boolPtrHB(true), HeartbeatInterval: 15},
-			},
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
 		},
 	}
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, func(string) string { return "" }))
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	require.Len(t, heartbeatJobsFor(cs), 1)
 
 	// Disable → reconcile → job removed.
-	cfg.Agents.List[0].HeartbeatEnabled = boolPtrHB(false)
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, func(string) string { return "" }))
+	workspaces[0].MemberConfigs["mia"].Heartbeat.Enabled = false
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	assert.Empty(t, heartbeatJobsFor(cs), "disabling heartbeat must remove the job")
 }
 
 func TestReconcileHeartbeat_IntervalChangeUpdatesInPlace(t *testing.T) {
 	cs := newReconcileCron(t)
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{ID: "mia", Type: config.AgentTypeCore, HeartbeatEnabled: boolPtrHB(true), HeartbeatInterval: 15},
-			},
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
 		},
 	}
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, func(string) string { return "" }))
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	first := heartbeatJobsFor(cs)
 	require.Len(t, first, 1)
 	firstID := first[0].ID
 
-	cfg.Agents.List[0].HeartbeatInterval = 30
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, func(string) string { return "" }))
+	// Change interval.
+	workspaces[0].MemberConfigs["mia"].Heartbeat.IntervalMinutes = 30
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	after := heartbeatJobsFor(cs)
 	require.Len(t, after, 1, "interval change must not create a duplicate")
 	assert.Equal(t, firstID, after[0].ID, "same job updated in place")
@@ -124,19 +140,18 @@ func TestReconcileHeartbeat_IntervalChangeUpdatesInPlace(t *testing.T) {
 
 func TestReconcileHeartbeat_Idempotent(t *testing.T) {
 	cs := newReconcileCron(t)
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{ID: "mia", Type: config.AgentTypeCore, HeartbeatEnabled: boolPtrHB(true), HeartbeatInterval: 15},
-			},
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
 		},
 	}
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, func(string) string { return "" }))
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	before := heartbeatJobsFor(cs)
 	require.Len(t, before, 1)
 	beforeID := before[0].ID
 
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, func(string) string { return "" }))
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	after := heartbeatJobsFor(cs)
 	require.Len(t, after, 1, "second reconcile must not create a duplicate")
 	assert.Equal(t, beforeID, after[0].ID)
@@ -144,8 +159,7 @@ func TestReconcileHeartbeat_Idempotent(t *testing.T) {
 
 func TestReconcileHeartbeat_LeavesUserSchedulesAlone(t *testing.T) {
 	cs := newReconcileCron(t)
-	// A user schedule (not a heartbeat). Use a contract-valid kind ("every")
-	// so the fixture models a real schedule, not an impossible state.
+	// A user schedule (not a heartbeat). Use a contract-valid kind ("every").
 	everyMS := int64(60_000)
 	en := true
 	_, err := cs.AddJobFull(cron.JobSpec{
@@ -157,14 +171,13 @@ func TestReconcileHeartbeat_LeavesUserSchedulesAlone(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{ID: "mia", Type: config.AgentTypeCore, HeartbeatEnabled: boolPtrHB(true), HeartbeatInterval: 15},
-			},
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
 		},
 	}
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, func(string) string { return "" }))
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 
 	// The user schedule survives untouched alongside the new heartbeat job.
 	names := map[string]bool{}
@@ -172,44 +185,137 @@ func TestReconcileHeartbeat_LeavesUserSchedulesAlone(t *testing.T) {
 		names[j.Name] = true
 	}
 	assert.True(t, names["my-daily-digest"], "user schedule must not be removed")
-	assert.True(t, names[heartbeatJobName("mia")], "heartbeat job must be created")
+	assert.True(t, names[heartbeatJobName("ws1", "mia")], "heartbeat job must be created")
 }
 
-// TestReconcileHeartbeat_MessageDriftRestampsInPlace proves that editing an
-// agent's HEARTBEAT.md re-stamps the existing heartbeat job's message in place
-// (same job ID, no duplicate). The reconciler's drift check includes
-// Payload.Message, so a content change must converge the stored job.
 func TestReconcileHeartbeat_MessageDriftRestampsInPlace(t *testing.T) {
 	cs := newReconcileCron(t)
-	ws := t.TempDir()
-	hbPath := filepath.Join(ws, "HEARTBEAT.md")
-	require.NoError(t, os.WriteFile(hbPath, []byte("Check the build queue."), 0o600))
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{ID: "mia", Type: config.AgentTypeCore, HeartbeatEnabled: boolPtrHB(true), HeartbeatInterval: 15},
-			},
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check the build queue.", ""),
 		},
 	}
-	resolve := func(string) string { return ws }
-
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, resolve))
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	first := heartbeatJobsFor(cs)
 	require.Len(t, first, 1)
 	firstID := first[0].ID
-	assert.Contains(t, first[0].Payload.Message, "Check the build queue.",
-		"initial heartbeat message must embed the HEARTBEAT.md content")
+	assert.Contains(t, first[0].Payload.Message, "Check the build queue.")
 
-	// Edit HEARTBEAT.md → reconcile → same job, new message.
-	require.NoError(t, os.WriteFile(hbPath, []byte("Review overnight alerts."), 0o600))
-	require.NoError(t, ReconcileHeartbeatSchedules(cs, cfg, resolve))
+	// Edit body → reconcile → same job, new message.
+	workspaces[0].MemberConfigs["mia"].Heartbeat.Body = "Review overnight alerts."
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 
 	after := heartbeatJobsFor(cs)
 	require.Len(t, after, 1, "message drift must update in place, not duplicate")
 	assert.Equal(t, firstID, after[0].ID, "same job updated in place")
-	assert.Contains(t, after[0].Payload.Message, "Review overnight alerts.",
-		"edited HEARTBEAT.md content must be re-stamped onto the job")
-	assert.NotContains(t, after[0].Payload.Message, "Check the build queue.",
-		"the stale heartbeat message must be replaced")
+	assert.Contains(t, after[0].Payload.Message, "Review overnight alerts.")
+	assert.NotContains(t, after[0].Payload.Message, "Check the build queue.")
+}
+
+func TestReconcileHeartbeat_MultiWorkspaceMultiMember(t *testing.T) {
+	cs := newReconcileCron(t)
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "WS1 check.", ""),
+		},
+		{
+			ID:            "ws2",
+			MemberConfigs: buildMemberConfigs("ray", true, 20, "WS2 scout.", ""),
+		},
+	}
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
+
+	jobs := heartbeatJobsFor(cs)
+	require.Len(t, jobs, 2, "one job per (workspace, agent) pair")
+
+	names := map[string]bool{}
+	for _, j := range jobs {
+		names[j.Name] = true
+	}
+	assert.True(t, names[heartbeatJobName("ws1", "mia")], "ws1/mia job must exist")
+	assert.True(t, names[heartbeatJobName("ws2", "ray")], "ws2/ray job must exist")
+}
+
+func TestReconcileHeartbeat_SessionIDPropagatesToJob(t *testing.T) {
+	cs := newReconcileCron(t)
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", "sess-abc-123"),
+		},
+	}
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
+	jobs := heartbeatJobsFor(cs)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, "sess-abc-123", jobs[0].SessionID, "session_id must propagate to the cron job")
+}
+
+func TestReconcileHeartbeat_SessionIDDriftUpdatesInPlace(t *testing.T) {
+	cs := newReconcileCron(t)
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", "sess-old"),
+		},
+	}
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
+	first := heartbeatJobsFor(cs)
+	require.Len(t, first, 1)
+	firstID := first[0].ID
+	assert.Equal(t, "sess-old", first[0].SessionID)
+
+	// Replace session_id → reconciler must update in place.
+	workspaces[0].MemberConfigs["mia"].Heartbeat.SessionID = "sess-new"
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
+	after := heartbeatJobsFor(cs)
+	require.Len(t, after, 1, "session_id drift must update in place, not duplicate")
+	assert.Equal(t, firstID, after[0].ID)
+	assert.Equal(t, "sess-new", after[0].SessionID)
+}
+
+func TestReconcileHeartbeat_WorkspaceDeletionRemovesJobs(t *testing.T) {
+	cs := newReconcileCron(t)
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws1",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
+		},
+		{
+			ID:            "ws2",
+			MemberConfigs: buildMemberConfigs("ray", true, 20, "Scout.", ""),
+		},
+	}
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
+	require.Len(t, heartbeatJobsFor(cs), 2)
+
+	// Delete ws2 → reconcile with only ws1 → ws2 job removed.
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces[:1], neverWorker))
+	jobs := heartbeatJobsFor(cs)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, heartbeatJobName("ws1", "mia"), jobs[0].Name)
+}
+
+func TestReleaseHeartbeatJobsForWorkspace(t *testing.T) {
+	cs := newReconcileCron(t)
+	workspaces := []workspace.Workspace{
+		{
+			ID:            "ws-alpha",
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check.", ""),
+		},
+		{
+			ID:            "ws-beta",
+			MemberConfigs: buildMemberConfigs("ray", true, 20, "Scout.", ""),
+		},
+	}
+	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
+	require.Len(t, heartbeatJobsFor(cs), 2)
+
+	// Release only ws-alpha; ws-beta job must survive.
+	releaseHeartbeatJobsForWorkspace(cs, "ws-alpha")
+
+	jobs := heartbeatJobsFor(cs)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, heartbeatJobName("ws-beta", "ray"), jobs[0].Name)
 }

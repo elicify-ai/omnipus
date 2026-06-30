@@ -1020,6 +1020,13 @@ type JobSpec struct {
 	TimeoutSeconds int
 	CreatedBy      string
 	Enabled        *bool // nil → default true
+	// SessionID is the stable id of the eager standing session that the
+	// heartbeat reconciler pre-creates when a member heartbeat is enabled
+	// (FR-007b, A2/F-02). When set, AddJobFull threads it onto the created
+	// CronJob so that the runner continues the pre-created session (via
+	// SessionModeContinue / GetOrCreateScheduledSession) rather than minting a
+	// fresh session on each fire.
+	SessionID string
 }
 
 // AddJobFull persists a complete job (including owner/mode/timeout) in a single
@@ -1069,6 +1076,7 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 		SessionMode:    mode,
 		TimeoutSeconds: spec.TimeoutSeconds,
 		CreatedBy:      spec.CreatedBy,
+		SessionID:      spec.SessionID,
 	}
 	if !enabled {
 		job.State.NextRunAtMS = nil

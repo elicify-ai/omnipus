@@ -51,7 +51,23 @@ interface UiStore {
 
   // Edit/view agent slide-over; null = closed.
   editAgentId: string | null
-  openEditAgentSlideOver: (agentId: string) => void
+  /**
+   * The workspace that opened the agent slide-over. Set when the editor is
+   * opened from a workspace Team tab (FR-018 / A5); null when opened from
+   * the global Agents screen. Drives the conditional Heartbeat tab
+   * (US-5 / FR-016): the tab renders only when this is non-null AND the
+   * agent is not a worker (FR-025).
+   */
+  editAgentWorkspaceId: string | null
+  /**
+   * Open the agent edit slide-over.
+   *
+   * @param agentId - The agent to edit.
+   * @param workspaceId - When provided (opened from a workspace Team tab),
+   *   the Heartbeat tab is shown for this (workspace, agent) pair. When
+   *   omitted (opened from the global Agents screen), no Heartbeat tab.
+   */
+  openEditAgentSlideOver: (agentId: string, workspaceId?: string) => void
   closeEditAgentSlideOver: () => void
 
   // Notification center panel (#264)
@@ -127,8 +143,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
     }),
 
   editAgentId: null,
-  openEditAgentSlideOver: (agentId) => set({ editAgentId: agentId }),
-  closeEditAgentSlideOver: () => set({ editAgentId: null }),
+  editAgentWorkspaceId: null,
+  openEditAgentSlideOver: (agentId, workspaceId) =>
+    set({ editAgentId: agentId, editAgentWorkspaceId: workspaceId ?? null }),
+  closeEditAgentSlideOver: () => set({ editAgentId: null, editAgentWorkspaceId: null }),
 
   notificationPanelOpen: false,
   openNotificationPanel: () => set({ notificationPanelOpen: true }),

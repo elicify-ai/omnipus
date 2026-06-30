@@ -305,18 +305,25 @@ describe('CreateAgentModal — step ② Personality (spec §5.3-§5.5)', () => {
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'd' } })
     fireEvent.click(screen.getByTestId('wizard-next-1'))
     expect(await screen.findByTestId('wizard-soul')).toBeInTheDocument()
+    // FR-017: heartbeat is now workspace-scoped — removed from the create wizard.
     expect(screen.queryByTestId('wizard-heartbeat')).toBeNull()
     expect(screen.queryByTestId('wizard-voice')).toBeNull()
   })
 
-  it('Main wizard DOES show Heartbeat and Voice (Main-only per spec §3.1 rows 10-13)', async () => {
+  it('Main wizard shows Voice but NOT Heartbeat (heartbeat is workspace-scoped per FR-017 / US-5.AC3)', async () => {
+    // FR-017: heartbeat has been removed from the create wizard (workspace-scoped now).
+    // Voice is still Main-only. Soul upload control is present (FR-026 / US-10).
     renderModal({ open: true, onClose: vi.fn(), initialType: 'Main' })
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'A' } })
     fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
     fireEvent.click(screen.getByTestId('wizard-next-1'))
     expect(await screen.findByTestId('wizard-soul')).toBeInTheDocument()
-    expect(screen.getByTestId('wizard-heartbeat')).toBeInTheDocument()
+    // Heartbeat MUST be absent — it's configured per workspace, not at create time.
+    expect(screen.queryByTestId('wizard-heartbeat')).toBeNull()
+    // Voice is still present for Main agents.
     expect(screen.getByTestId('wizard-voice')).toBeInTheDocument()
+    // FR-026 / US-10: soul upload button present.
+    expect(screen.getByTestId('wizard-soul-upload')).toBeInTheDocument()
   })
 })
 

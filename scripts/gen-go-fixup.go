@@ -13,9 +13,14 @@
 // Go-side type. This fixup is idempotent: running it twice on a clean tree
 // produces no diff.
 //
-// One known rewrite is currently applied: the `fallback_models` field on
-// AgentDetail, AgentCreateRequest, and AgentUpdateRequest is replaced with a
-// `*[]FallbackModel` reference to the named top-level type.
+// Known rewrites currently applied:
+//   - `fallback_models` on AgentDetail/AgentCreateRequest/AgentUpdateRequest →
+//     `*[]FallbackModel`.
+//   - `edges` on WorkspaceDelegation/WorkspaceDelegationUpdateRequest →
+//     `[]WorkspaceDelegationEdge`.
+//   - `heartbeat` (WorkspaceMemberConfig + inlined member_configs values) →
+//     `*WorkspaceMemberHeartbeat`, then `member_configs` on Workspace/
+//     WorkspaceUpdateRequest → `*map[string]WorkspaceMemberConfig`.
 package main
 
 import (
@@ -60,6 +65,36 @@ var delegationEdgesInline = regexp.MustCompile(`(?s)(Edges)\s+\[\]struct\s*\{.*?
 
 const delegationEdgesRewrite = `Edges []WorkspaceDelegationEdge `
 
+// memberConfigsHeartbeatInline matches the inline anonymous heartbeat struct
+// oapi-codegen emits for `heartbeat: $ref WorkspaceMemberHeartbeat`. The
+// referenced schema declares `additionalProperties: false`, which triggers the
+// inline copy instead of a `*WorkspaceMemberHeartbeat` reference. It appears on
+// the named WorkspaceMemberConfig type AND inside the inlined member_configs map
+// values on Workspace / WorkspaceUpdateRequest (3 sites). The heartbeat body has
+// no nested braces, so `\{.*?\}` bounds it on the first close brace.
+//
+// Group 1: field name ("Heartbeat"); Group 2: json tag with backticks.
+var memberConfigsHeartbeatInline = regexp.MustCompile(
+	`(?s)(Heartbeat)\s+\*struct\s*\{.*?\}\s*(` + "`json:\"heartbeat,omitempty\"`" + `)`,
+)
+
+const memberConfigsHeartbeatRewrite = `Heartbeat *WorkspaceMemberHeartbeat `
+
+// memberConfigsMapInline matches the inline anonymous map-value struct
+// oapi-codegen emits for `member_configs: additionalProperties $ref
+// WorkspaceMemberConfig` (again triggered by `additionalProperties: false` on
+// the referenced schema). MUST run AFTER memberConfigsHeartbeatInline so the
+// inner heartbeat is already the named type and the value struct is single-level
+// (one close brace before the member_configs tag). Appears on Workspace and
+// WorkspaceUpdateRequest.
+//
+// Group 1: field name ("MemberConfigs"); Group 2: json tag with backticks.
+var memberConfigsMapInline = regexp.MustCompile(
+	`(?s)(MemberConfigs)\s+\*map\[string\]struct\s*\{.*?\}\s*(` + "`json:\"member_configs,omitempty\"`" + `)`,
+)
+
+const memberConfigsMapRewrite = `MemberConfigs *map[string]WorkspaceMemberConfig `
+
 func run(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -69,6 +104,10 @@ func run(path string) error {
 	original := string(data)
 	updated := fallbackModelsInline.ReplaceAllString(original, fallbackModelRewrite+"$2")
 	updated = delegationEdgesInline.ReplaceAllString(updated, delegationEdgesRewrite+"$2")
+	// Order matters: rewrite the inner heartbeat to the named type first, then
+	// collapse the member_configs map value to *map[string]WorkspaceMemberConfig.
+	updated = memberConfigsHeartbeatInline.ReplaceAllString(updated, memberConfigsHeartbeatRewrite+"$2")
+	updated = memberConfigsMapInline.ReplaceAllString(updated, memberConfigsMapRewrite+"$2")
 
 	if updated == original {
 		return nil

@@ -54,19 +54,23 @@ import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader } from './A
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
+  fetchWorkspace,
   updateAgent,
+  updateWorkspace,
   deleteAgent,
   fetchProviders,
   fetchActivity,
   fetchSkills,
   testAgentRunner,
   isWorker,
+  workspacesQueryKeys,
   type Agent,
   type ActivityEvent,
   type AgentToolsCfg,
   type SandboxProfile,
   type Skill,
   type ExecutorConfig,
+  type WorkspaceMemberConfig,
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { formatTokens } from '@/lib/formatTokens'
@@ -89,6 +93,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const editAgentId = useUiStore((s) => s.editAgentId)
   const closeEditAgentSlideOver = useUiStore((s) => s.closeEditAgentSlideOver)
   const addToast = useUiStore((s) => s.addToast)
+  // FR-018 / A5: workspace context for the conditional Heartbeat tab (US-5).
+  // Set when the slide-over is opened from a Team tab; null on the global
+  // Agents screen, which suppresses the Heartbeat tab (FR-016 / FR-025).
+  const editAgentWorkspaceId = useUiStore((s) => s.editAgentWorkspaceId)
   const agentId = agentIdProp ?? editAgentId
   const isOpen = agentId !== null
 
@@ -117,6 +125,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     queryKey: ['skills'],
     queryFn: fetchSkills,
     staleTime: 60_000,
+  })
+
+  // FR-016 / US-5: fetch the workspace when opened from a Team tab, so the
+  // Heartbeat tab can read + write member_configs for this (workspace, agent).
+  // Disabled when there is no workspace context (global Agents screen) — in
+  // that case the Heartbeat tab is hidden and no fetch is needed.
+  const { data: workspaceData } = useQuery({
+    queryKey: editAgentWorkspaceId ? workspacesQueryKeys.detail(editAgentWorkspaceId) : [],
+    queryFn: () => fetchWorkspace(editAgentWorkspaceId as string),
+    enabled: editAgentWorkspaceId !== null,
+    staleTime: 30_000,
   })
 
   const recentActivity = allActivity
@@ -164,7 +183,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     isDirtyRef.current = false
     hasHydrated.current = false
     conflictRef.current = false
+    hbDirtyRef.current = false
   }, [agentId])
+
+  // Hydrate heartbeat state from workspace member_configs when the workspace
+  // data loads (or when we navigate to a different agent or workspace).
+  useEffect(() => {
+    if (!workspaceData || !agentId) return
+    if (hbDirtyRef.current) return // Don't overwrite in-flight edits
+    const cfg: WorkspaceMemberConfig | undefined =
+      workspaceData.member_configs?.[agentId]
+    const hb = cfg?.heartbeat
+    setHbEnabled(hb?.enabled ?? false)
+    setHbIntervalMinutes(hb?.interval_minutes ?? 30)
+    setHbBody(hb?.body ?? '')
+  }, [workspaceData, agentId])
 
   // W6-B1 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
   // slide-over (typically the AgentCard button — also covers the TrustGraph
@@ -226,6 +259,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [shellAdvancedOpen, setShellAdvancedOpen] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
+
+  // FR-016 / US-5: Heartbeat tab state — per-(workspace, agent) config, NOT
+  // part of the agent autosave. Only meaningful when editAgentWorkspaceId is set.
+  const [hbEnabled, setHbEnabled] = useState(false)
+  const [hbIntervalMinutes, setHbIntervalMinutes] = useState(30)
+  const [hbBody, setHbBody] = useState('')
+  // Tracks whether the heartbeat form has been modified since last save.
+  const hbDirtyRef = useRef(false)
+  const markHbDirty = () => { hbDirtyRef.current = true }
 
   useEffect(() => {
     if (!agent) return
@@ -639,6 +681,42 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     },
   })
 
+  // FR-016 / A2/F-09: Heartbeat tab saves to the WORKSPACE — a separate mutation
+  // from the agent autosave. The tab opts out of the agent autosave flow entirely.
+  const saveHeartbeatMutation = useMutation({
+    mutationFn: async () => {
+      if (!editAgentWorkspaceId || !agentId) throw new Error('No workspace context')
+      const existingMemberConfigs = workspaceData?.member_configs ?? {}
+      const updatedMemberConfigs = {
+        ...existingMemberConfigs,
+        [agentId]: {
+          heartbeat: {
+            enabled: hbEnabled,
+            interval_minutes: hbIntervalMinutes,
+            body: hbBody,
+          },
+        } satisfies WorkspaceMemberConfig,
+      }
+      return updateWorkspace(editAgentWorkspaceId, {
+        member_configs: updatedMemberConfigs as Record<string, WorkspaceMemberConfig>,
+      } as Parameters<typeof updateWorkspace>[1])
+    },
+    onSuccess: (updated) => {
+      hbDirtyRef.current = false
+      // Refresh the workspace cache so the Heartbeat tab re-reads the latest.
+      queryClient.setQueryData(workspacesQueryKeys.detail(editAgentWorkspaceId as string), updated)
+      addToast({ message: 'Heartbeat saved', variant: 'success' })
+    },
+    onError: (err: unknown) => {
+      const msg = isApiError(err)
+        ? err.userMessage
+        : err instanceof Error
+          ? err.message
+          : 'Heartbeat save failed'
+      addToast({ message: `Heartbeat save failed: ${msg}`, variant: 'error' })
+    },
+  })
+
   if (isLoading) {
     return (
       <ProfileSheet
@@ -714,6 +792,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // because the external runner respects the policy. The callout at the
   // top of the profile explains the omission.
   const isNativeWorkerAgent = isWorkerAgent && (!executor || executor.kind === 'native')
+  // FR-016 / FR-025 / US-5: show the Heartbeat tab only when the slide-over
+  // was opened from a workspace Team tab (editAgentWorkspaceId is set) AND the
+  // agent is not a worker (`!isWorker()` per A2/F-08). Workers are
+  // delegation-only and have no heartbeat concept.
+  const showHeartbeatTab = editAgentWorkspaceId !== null && !isWorkerAgent
 
 
   // Section panels shared by desktop Tabs and mobile Accordion.
@@ -1618,6 +1701,126 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
+  // FR-016 / US-5: Heartbeat tab panel — only rendered when showHeartbeatTab.
+  // Reads/writes member_configs[agentId].heartbeat on the workspace (separate
+  // workspace mutation, NOT the agent autosave — A2/F-09).
+  const heartbeatPanel = showHeartbeatTab ? (
+    <div className="space-y-5">
+      <section className="space-y-3">
+        <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">
+          Heartbeat for this workspace
+        </p>
+        <p className="text-xs text-[var(--color-muted)]">
+          Configure a recurring heartbeat prompt for this agent in this workspace.
+          The heartbeat runs on the schedule you set and uses the body below as its
+          prompt — independent of any other workspace this agent belongs to.
+        </p>
+
+        {/* Enable toggle */}
+        <div
+          data-testid="heartbeat-enabled-row"
+          className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+        >
+          <div className="min-w-0">
+            <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
+            <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+              Runs the agent on the interval below using the body as its prompt.
+            </p>
+          </div>
+          <Switch
+            data-testid="heartbeat-enabled-switch"
+            checked={hbEnabled}
+            onCheckedChange={(v) => { markHbDirty(); setHbEnabled(v) }}
+            aria-label={hbEnabled ? 'Disable heartbeat' : 'Enable heartbeat'}
+          />
+        </div>
+
+        {/* Interval */}
+        <div className="flex items-center gap-3">
+          <label
+            htmlFor="heartbeat-interval"
+            className="text-xs text-[var(--color-muted)] w-44 shrink-0"
+          >
+            Interval (minutes)
+            <span className="block text-[10px] text-[var(--color-muted)]/70">
+              Minimum 5 minutes
+            </span>
+          </label>
+          <Input
+            id="heartbeat-interval"
+            data-testid="heartbeat-interval-input"
+            type="number"
+            min={5}
+            value={hbIntervalMinutes}
+            onChange={(e) => {
+              const raw = e.target.value
+              if (raw === '') { markHbDirty(); setHbIntervalMinutes(5); return }
+              const n = Number(raw)
+              if (!Number.isFinite(n)) return
+              markHbDirty()
+              setHbIntervalMinutes(Math.max(5, Math.floor(n)))
+            }}
+            className="text-xs h-8"
+          />
+        </div>
+
+        {/* Body */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label
+              htmlFor="heartbeat-body"
+              className="text-xs text-[var(--color-muted)]"
+            >
+              Heartbeat body
+              {hbEnabled && (
+                <span className="text-[var(--color-error)] ml-1" aria-label="required">*</span>
+              )}
+            </label>
+            <UploadButton
+              onUpload={(content) => { markHbDirty(); setHbBody(content) }}
+            />
+          </div>
+          <Textarea
+            id="heartbeat-body"
+            data-testid="heartbeat-body-textarea"
+            value={hbBody}
+            onChange={(e) => { markHbDirty(); setHbBody(e.target.value) }}
+            rows={6}
+            placeholder="Periodic instruction prompt — e.g. 'Summarise overnight CI results and update the project board.'"
+            className="text-sm resize-none"
+            aria-required={hbEnabled}
+          />
+          {hbEnabled && hbBody.trim() === '' && (
+            <p
+              data-testid="heartbeat-body-required-hint"
+              className="text-xs text-[var(--color-error)]"
+            >
+              Body is required when heartbeat is enabled.
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* Save button — explicit (not autosave) per A2/F-09 */}
+      <div className="flex justify-end pt-2">
+        <Button
+          data-testid="heartbeat-save-button"
+          onClick={() => {
+            if (hbEnabled && hbBody.trim() === '') {
+              addToast({ message: 'Heartbeat body is required when enabled.', variant: 'error' })
+              return
+            }
+            saveHeartbeatMutation.mutate()
+          }}
+          disabled={saveHeartbeatMutation.isPending}
+          className="px-4"
+        >
+          {saveHeartbeatMutation.isPending ? 'Saving…' : 'Save heartbeat'}
+        </Button>
+      </div>
+    </div>
+  ) : null
+
   return (
     <ProfileSheet
       isOpen={isOpen}
@@ -1725,6 +1928,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             <TabsTrigger value="runtime" data-testid="tab-runtime" className="font-headline">Runtime</TabsTrigger>
           )}
           <TabsTrigger value="advanced" data-testid="tab-advanced" className="font-headline">Advanced</TabsTrigger>
+          {showHeartbeatTab && (
+            <TabsTrigger value="heartbeat" data-testid="tab-heartbeat" className="font-headline">Heartbeat</TabsTrigger>
+          )}
         </TabsList>
 
         {/* ── BASICS TAB ─────────────────────────────────────────────────
@@ -1774,6 +1980,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             here is a compact summary for native workers; subagent_3p's
             editor is in Runtime. */}
         <TabsContent value="advanced" className="space-y-6">{advancedPanel}</TabsContent>
+
+        {/* ── HEARTBEAT TAB ─────────────────────────────────────────────
+            FR-016 / US-5: conditional tab — only rendered when the agent
+            is opened from a workspace Team tab (editAgentWorkspaceId is
+            set) and the agent is not a worker (FR-025). The tab saves to
+            the workspace (separate mutation, A2/F-09). */}
+        {showHeartbeatTab && (
+          <TabsContent value="heartbeat" className="space-y-5">{heartbeatPanel}</TabsContent>
+        )}
       </Tabs>
       <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">
         <AccordionItem value="basics">
@@ -1798,6 +2013,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <AccordionTrigger data-testid="accordion-advanced" className="font-headline">Advanced</AccordionTrigger>
           <AccordionContent>{advancedPanel}</AccordionContent>
         </AccordionItem>
+        {showHeartbeatTab && (
+          <AccordionItem value="heartbeat">
+            <AccordionTrigger data-testid="accordion-heartbeat" className="font-headline">Heartbeat</AccordionTrigger>
+            <AccordionContent>{heartbeatPanel}</AccordionContent>
+          </AccordionItem>
+        )}
       </Accordion>
       </div>
       </div>
