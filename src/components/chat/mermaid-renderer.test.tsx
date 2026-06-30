@@ -28,6 +28,30 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react'
+import { normalizeMermaidSource } from './mermaid-renderer'
+
+// Layer-2 deterministic normalizer: smart/typographic quotes → straight ASCII.
+describe('normalizeMermaidSource', () => {
+  it('replaces smart double quotes (“ ” « » „ ‟) with straight "', () => {
+    expect(normalizeMermaidSource('A[“📦 Box”]')).toBe('A["📦 Box"]')
+    expect(normalizeMermaidSource('subgraph «Title»')).toBe('subgraph "Title"')
+    expect(normalizeMermaidSource('x[„low‟]')).toBe('x["low"]')
+  })
+  it('replaces smart single quotes (‘ ’ ‚ ‛) with straight apostrophes', () => {
+    expect(normalizeMermaidSource('G[“Wind me at midnight.”]')).toBe('G["Wind me at midnight."]')
+    expect(normalizeMermaidSource('Elara’s box')).toBe("Elara's box")
+  })
+  it('leaves already-valid source (straight quotes) untouched', () => {
+    const valid = 'graph TD\n  A["Start"] --> B{Decide}\n'
+    expect(normalizeMermaidSource(valid)).toBe(valid)
+  })
+  it('does NOT rewrite structure — bracket/keyword mismatches are left as-is', () => {
+    // It only fixes quotes; a `]`/`}` mismatch or reserved-word id stays for the
+    // error card + the LLM fix flow.
+    expect(normalizeMermaidSource('D[“x”}')).toBe('D["x"}')
+    expect(normalizeMermaidSource('class A,B end')).toBe('class A,B end')
+  })
+})
 
 // Mock the `mermaid` module. The default export carries initialize + render, which
 // getMermaid()/render() call. These vi.fn()s are reconfigured per test.
