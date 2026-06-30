@@ -50,7 +50,7 @@ properties:
   locked:
     type: boolean
     description: >
-      When true, name, description, soul, and heartbeat are immutable
+      When true, name, description, and soul are immutable
       via the PUT /agents/{id} endpoint. Core agents are always locked.
     example: false
   color:

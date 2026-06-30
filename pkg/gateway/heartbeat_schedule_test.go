@@ -64,6 +64,7 @@ func TestReconcileHeartbeat_CreatesForEnabledMain(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check open PRs.", ""),
 		},
 	}
@@ -90,6 +91,7 @@ func TestReconcileHeartbeat_WorkerNeverScheduled(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"planner"},
 			MemberConfigs: buildMemberConfigs("planner", true, 10, "Check tasks.", ""),
 		},
 	}
@@ -103,6 +105,7 @@ func TestReconcileHeartbeat_DisablingRemovesJob(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
 		},
 	}
@@ -120,6 +123,7 @@ func TestReconcileHeartbeat_IntervalChangeUpdatesInPlace(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
 		},
 	}
@@ -143,6 +147,7 @@ func TestReconcileHeartbeat_Idempotent(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
 		},
 	}
@@ -174,6 +179,7 @@ func TestReconcileHeartbeat_LeavesUserSchedulesAlone(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
 		},
 	}
@@ -193,6 +199,7 @@ func TestReconcileHeartbeat_MessageDriftRestampsInPlace(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check the build queue.", ""),
 		},
 	}
@@ -218,10 +225,12 @@ func TestReconcileHeartbeat_MultiWorkspaceMultiMember(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "WS1 check.", ""),
 		},
 		{
 			ID:            "ws2",
+			CoreTeam:      []string{"ray"},
 			MemberConfigs: buildMemberConfigs("ray", true, 20, "WS2 scout.", ""),
 		},
 	}
@@ -243,6 +252,7 @@ func TestReconcileHeartbeat_SessionIDPropagatesToJob(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", "sess-abc-123"),
 		},
 	}
@@ -257,6 +267,7 @@ func TestReconcileHeartbeat_SessionIDDriftUpdatesInPlace(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", "sess-old"),
 		},
 	}
@@ -280,10 +291,12 @@ func TestReconcileHeartbeat_WorkspaceDeletionRemovesJobs(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
 		},
 		{
 			ID:            "ws2",
+			CoreTeam:      []string{"ray"},
 			MemberConfigs: buildMemberConfigs("ray", true, 20, "Scout.", ""),
 		},
 	}
@@ -302,10 +315,12 @@ func TestReleaseHeartbeatJobsForWorkspace(t *testing.T) {
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws-alpha",
+			CoreTeam:      []string{"mia"},
 			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check.", ""),
 		},
 		{
 			ID:            "ws-beta",
+			CoreTeam:      []string{"ray"},
 			MemberConfigs: buildMemberConfigs("ray", true, 20, "Scout.", ""),
 		},
 	}

@@ -131,11 +131,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Heartbeat tab can read + write member_configs for this (workspace, agent).
   // Disabled when there is no workspace context (global Agents screen) — in
   // that case the Heartbeat tab is hidden and no fetch is needed.
-  // M-5: use a stable sentinel key so the query never collides with other
-  // empty-key queries (the disabled branch previously used `[]` which is
-  // a valid React Query key that other callers could share).
-  const { data: workspaceData } = useQuery({
-    queryKey: ['workspace', editAgentWorkspaceId ?? '__none__'],
+  // M-5 / fix-1: use the canonical workspacesQueryKeys.detail key so the
+  // onSuccess setQueryData in saveHeartbeatMutation lands on the same cache
+  // entry this tab reads (prior singular 'workspace' key caused a cache miss).
+  // fix-1 (DATA-LOSS guard): also destructure isError + isLoading so the
+  // Heartbeat tab can block Save when the workspace failed to load or is still
+  // loading — preventing a save with an empty member_configs base that would
+  // wipe every other member's heartbeat config.
+  const {
+    data: workspaceData,
+    isError: isWorkspaceError,
+    isLoading: isWorkspaceLoading,
+  } = useQuery({
+    queryKey: editAgentWorkspaceId
+      ? workspacesQueryKeys.detail(editAgentWorkspaceId)
+      : workspacesQueryKeys.detail('__none__'),
     queryFn: () => fetchWorkspace(editAgentWorkspaceId as string),
     enabled: !!editAgentWorkspaceId,
     staleTime: 30_000,
@@ -686,10 +696,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // FR-016 / A2/F-09: Heartbeat tab saves to the WORKSPACE — a separate mutation
   // from the agent autosave. The tab opts out of the agent autosave flow entirely.
+  // fix-1 (DATA-LOSS guard): hard-block the mutation if the workspace failed to
+  // load or is still loading. Saving against an undefined/empty member_configs
+  // base would wipe every other member's heartbeat config in the workspace.
   const saveHeartbeatMutation = useMutation({
     mutationFn: async () => {
       if (!editAgentWorkspaceId || !agentId) throw new Error('No workspace context')
-      const existingMemberConfigs = workspaceData?.member_configs ?? {}
+      if (isWorkspaceError || isWorkspaceLoading || workspaceData === undefined) {
+        throw new Error('Workspace data not available — please retry loading the workspace before saving.')
+      }
+      const existingMemberConfigs = workspaceData.member_configs ?? {}
       const updatedMemberConfigs = {
         ...existingMemberConfigs,
         [agentId]: {
@@ -1711,8 +1727,32 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // FR-016 / US-5: Heartbeat tab panel — only rendered when showHeartbeatTab.
   // Reads/writes member_configs[agentId].heartbeat on the workspace (separate
   // workspace mutation, NOT the agent autosave — A2/F-09).
+  // fix-1 (DATA-LOSS guard): when the workspace query is still loading or has
+  // errored, render a blocking error/retry state instead of the form so the
+  // user cannot save against an empty member_configs base.
+  const workspaceUnavailable = !!editAgentWorkspaceId && (isWorkspaceLoading || isWorkspaceError || workspaceData === undefined)
+
   const heartbeatPanel = showHeartbeatTab ? (
     <div className="space-y-5">
+      {workspaceUnavailable && (
+        <div
+          data-testid="heartbeat-workspace-error"
+          className="rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
+          role="alert"
+        >
+          <WarningCircle size={16} weight="fill" className="text-[var(--color-error)] shrink-0 mt-0.5" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-[var(--color-error)]">
+              {isWorkspaceLoading ? 'Loading workspace…' : 'Failed to load workspace'}
+            </p>
+            {isWorkspaceError && (
+              <p className="text-[11px] text-[var(--color-muted)] mt-0.5">
+                Heartbeat settings cannot be saved until the workspace reloads. Check your connection and retry.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
       <section className="space-y-3">
         <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">
           Heartbeat for this workspace
@@ -1796,6 +1836,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             placeholder="Periodic instruction prompt — e.g. 'Summarise overnight CI results and update the project board.'"
             className="text-sm resize-none"
             aria-required={hbEnabled}
+            maxLength={16384}
           />
           {hbEnabled && hbBody.trim() === '' && (
             <p
@@ -1809,17 +1850,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       </section>
 
       {/* Save button — explicit (not autosave) per A2/F-09 */}
+      {/* fix-1 (DATA-LOSS guard): disabled when workspace data is unavailable */}
       <div className="flex justify-end pt-2">
         <Button
           data-testid="heartbeat-save-button"
           onClick={() => {
+            if (workspaceUnavailable) {
+              addToast({ message: 'Workspace not loaded — cannot save heartbeat settings.', variant: 'error' })
+              return
+            }
             if (hbEnabled && hbBody.trim() === '') {
               addToast({ message: 'Heartbeat body is required when enabled.', variant: 'error' })
               return
             }
             saveHeartbeatMutation.mutate()
           }}
-          disabled={saveHeartbeatMutation.isPending}
+          disabled={saveHeartbeatMutation.isPending || workspaceUnavailable}
           className="px-4"
         >
           {saveHeartbeatMutation.isPending ? 'Saving…' : 'Save heartbeat'}

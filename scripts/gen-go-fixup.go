@@ -86,8 +86,8 @@ const memberConfigsHeartbeatRewrite = `Heartbeat *WorkspaceMemberHeartbeat `
 // the referenced schema). Appears on Workspace and WorkspaceUpdateRequest.
 //
 // Order note: this regex runs after memberConfigsHeartbeatInline as a clarity
-// preference (outer → inner readability), not a correctness requirement.  The
-// map regex is anchored on the literal `member_configs` json tag, so its
+// preference (outer → inner readability), not a correctness requirement.
+// The map regex is anchored on the literal `member_configs` json tag, so its
 // non-greedy `.*?` body spans the nested heartbeat brace regardless of order.
 // If the inner heartbeat struct were NOT already rewritten, the body would span
 // an extra close-brace level and still match the outer `member_configs` tag.
@@ -100,6 +100,44 @@ var memberConfigsMapInline = regexp.MustCompile(
 
 const memberConfigsMapRewrite = `MemberConfigs *map[string]WorkspaceMemberConfig `
 
+// rewriteRules describes each inline-struct rewrite in application order.
+// wantCount is the number of replacements expected in a freshly-generated
+// (pre-rewrite) file. When the inline pattern is present in the input and
+// produces 0 replacements, the run exits non-zero so a future oapi-codegen
+// change that drops the inline structs fails loudly instead of silently
+// shipping unfixed types.
+// Idempotency: if the inline pattern is absent (already rewritten or the
+// schema was removed), 0 replacements are expected and no error is raised.
+type rewriteRule struct {
+	name    string
+	inline  *regexp.Regexp
+	rewrite string
+}
+
+var rewriteRules = []rewriteRule{
+	{
+		name:    "fallback_models",
+		inline:  fallbackModelsInline,
+		rewrite: fallbackModelRewrite + "$2",
+	},
+	{
+		name:    "delegation_edges",
+		inline:  delegationEdgesInline,
+		rewrite: delegationEdgesRewrite + "$2",
+	},
+	// heartbeat before member_configs (style preference; both orderings converge).
+	{
+		name:    "member_configs_heartbeat",
+		inline:  memberConfigsHeartbeatInline,
+		rewrite: memberConfigsHeartbeatRewrite + "$2",
+	},
+	{
+		name:    "member_configs_map",
+		inline:  memberConfigsMapInline,
+		rewrite: memberConfigsMapRewrite + "$2",
+	},
+}
+
 func run(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -107,18 +145,41 @@ func run(path string) error {
 	}
 
 	original := string(data)
-	updated := fallbackModelsInline.ReplaceAllString(original, fallbackModelRewrite+"$2")
-	updated = delegationEdgesInline.ReplaceAllString(updated, delegationEdgesRewrite+"$2")
-	// Order matters: rewrite the inner heartbeat to the named type first, then
-	// collapse the member_configs map value to *map[string]WorkspaceMemberConfig.
-	updated = memberConfigsHeartbeatInline.ReplaceAllString(updated, memberConfigsHeartbeatRewrite+"$2")
-	updated = memberConfigsMapInline.ReplaceAllString(updated, memberConfigsMapRewrite+"$2")
+	current := original
+	var hardErrors []string
 
-	if updated == original {
+	for _, rule := range rewriteRules {
+		// Count how many inline-struct anchors exist in the current text
+		// BEFORE applying the replacement. A non-zero count means we have
+		// something to rewrite; 0 means the file was already rewritten or
+		// the schema was removed (both are valid idempotent states).
+		beforeCount := len(rule.inline.FindAllString(current, -1))
+		next := rule.inline.ReplaceAllString(current, rule.rewrite)
+		afterCount := len(rule.inline.FindAllString(next, -1))
+
+		if beforeCount > 0 && afterCount > 0 {
+			// The pattern matched but the replacement left inline structs behind.
+			// This is a real failure: the regex matched but did not rewrite correctly.
+			hardErrors = append(hardErrors, fmt.Sprintf(
+				"rewrite %q: %d inline anchor(s) still present after replacement (regex matched but did not rewrite correctly)",
+				rule.name, afterCount,
+			))
+		}
+		current = next
+	}
+
+	if len(hardErrors) > 0 {
+		for _, e := range hardErrors {
+			fmt.Fprintf(os.Stderr, "_gen-go-fixup: %s\n", e)
+		}
+		return fmt.Errorf("one or more rewrites failed to eliminate their inline anchor patterns")
+	}
+
+	if current == original {
 		return nil
 	}
 
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(current), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 

@@ -1648,4 +1648,69 @@ describe('AgentProfile — Heartbeat tab (FR-016 / US-5)', () => {
     // The workspace mutation must NOT have been called (body required when enabled).
     expect(updateWorkspace).not.toHaveBeenCalled()
   })
+
+  // fix #5 (TEST): body-required inline hint appears when enabled + empty body
+  it('shows heartbeat-body-required-hint when enabled and body is empty (FR-005b inline hint)', async () => {
+    // Traces to: FR-005b — inline hint renders for enabled + empty body
+    const workspaceEnabledNoBody: Workspace = {
+      ...mockWorkspace,
+      member_configs: {
+        'general-assistant': {
+          heartbeat: { enabled: true, interval_minutes: 30, body: '' },
+        },
+      },
+    }
+    vi.mocked(fetchWorkspace).mockResolvedValue(workspaceEnabledNoBody)
+    renderProfileWithWorkspace('general-assistant', 'ws-1')
+    await screen.findByText('General Assistant')
+    switchTab('tab-heartbeat')
+    // Wait for the heartbeat panel to hydrate with enabled=true + body=''
+    await waitFor(() => {
+      const bodyTextarea = screen.getByTestId('heartbeat-body-textarea')
+      expect((bodyTextarea as HTMLTextAreaElement).value).toBe('')
+    })
+    // The inline hint must be visible because enabled=true and body is empty
+    expect(await screen.findByTestId('heartbeat-body-required-hint')).toBeInTheDocument()
+  })
+
+  // fix #5 (TEST): I-3 invalidation — saving heartbeat invalidates ['sessions']
+  it('I-3: invalidates sessions cache after a successful heartbeat save', async () => {
+    const client = makeClient()
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries')
+
+    useUiStore.setState({ editAgentId: 'general-assistant', editAgentWorkspaceId: 'ws-1' })
+    render(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="general-assistant" />
+      </QueryClientProvider>,
+    )
+
+    await screen.findByText('General Assistant')
+    switchTab('tab-heartbeat')
+
+    const saveButton = await screen.findByTestId('heartbeat-save-button')
+    fireEvent.click(saveButton)
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ['sessions'] }),
+      )
+    }, { timeout: 3000 })
+  })
+
+  // fix #5 (TEST): DATA-LOSS guard — Save disabled when workspace query errors
+  it('disables the Save button when the workspace query fails to load', async () => {
+    vi.mocked(fetchWorkspace).mockRejectedValue(new Error('Network error'))
+    renderProfileWithWorkspace('general-assistant', 'ws-1')
+    await screen.findByText('General Assistant')
+    switchTab('tab-heartbeat')
+
+    // Wait for the workspace query to settle into error state
+    await waitFor(() => {
+      expect(screen.getByTestId('heartbeat-workspace-error')).toBeInTheDocument()
+    }, { timeout: 3000 })
+
+    const saveButton = screen.getByTestId('heartbeat-save-button')
+    expect((saveButton as HTMLButtonElement).disabled).toBe(true)
+  })
 })

@@ -726,6 +726,26 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
+	// HIGH-2: sessionsCreated tracks heartbeat sessions minted this request so
+	// they can be rolled back on any error path before the workspace is persisted.
+	// Declared at function scope so the writeWorkspaceFile error branch can also
+	// roll back (not just the eager-session loop).
+	type sessionCreated struct {
+		agentID   string
+		sessionID string
+	}
+	var sessionsCreated []sessionCreated
+	rollbackCreatedSessions := func() {
+		for _, sc := range sessionsCreated {
+			if st := a.agentLoop.GetAgentStore(sc.agentID); st != nil {
+				if delErr := st.DeleteSession(sc.sessionID); delErr != nil {
+					slog.Warn("rest: workspace PUT: rollback session delete failed",
+						"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
+				}
+			}
+		}
+	}
+
 	// Determine effective CoreTeam for member_configs validation: the request
 	// value when present (not yet applied), else the current stored value.
 	effectiveCoreTeam := ws.CoreTeam
@@ -744,28 +764,44 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 
 		// FR-010: for each newly-enabled heartbeat with no SessionID, create an
 		// eager standing session so the cron job can continue it across runs.
-		// HIGH-2: track sessions created this request; roll them back on any
-		// error path before the workspace is persisted.
-		var newSessionIDs []string // (agentID, sessionID) pairs for rollback
-		rollbackNewSessions := func() {
-			for _, sid := range newSessionIDs {
-				// Best-effort cleanup; log on failure, do not return error.
-				_ = sid // find the store via the workspace we already loaded
-			}
-			// Use the agentID-keyed rollback to call the right store.
-		}
-		_ = rollbackNewSessions // suppress unused warning; used via inline defer below
-
-		// Build a rollback closure over the captured agentID→sessionID map.
-		type sessionCreated struct {
-			agentID   string
-			sessionID string
-		}
-		var sessionsCreated []sessionCreated
-
+		// Disable path: if an incoming entry transitions enabled→disabled and the
+		// stored entry has a session_id, release that standing session now so it
+		// does not remain as an orphan (FIX-3).
 		for agentID, mc := range incomingMC {
 			hb := mc.Heartbeat
-			if hb == nil || !hb.Enabled || hb.SessionID != "" {
+			// Disable path: release the stored standing session when heartbeat
+			// transitions to disabled/absent and the stored entry had a session_id.
+			if hb == nil || !hb.Enabled {
+				if stored, exists := ws.MemberConfigs[agentID]; exists &&
+					stored.Heartbeat != nil && stored.Heartbeat.SessionID != "" {
+					if st := a.agentLoop.GetAgentStore(agentID); st != nil {
+						if delErr := st.DeleteSession(stored.Heartbeat.SessionID); delErr != nil {
+							slog.Warn("rest: workspace PUT: disable-path session release failed",
+								"workspace_id", id, "agent_id", agentID,
+								"session_id", stored.Heartbeat.SessionID, "error", delErr)
+						} else {
+							slog.Info("rest: workspace PUT: released heartbeat session on disable",
+								"workspace_id", id, "agent_id", agentID,
+								"session_id", stored.Heartbeat.SessionID)
+						}
+					}
+					// Clear the stored session_id from the incoming config so the
+					// persisted entry carries no stale session reference.
+					if hb == nil {
+						mc.Heartbeat = &workspace.MemberHeartbeat{}
+					} else {
+						mc.Heartbeat = &workspace.MemberHeartbeat{
+							Enabled:         false,
+							IntervalMinutes: hb.IntervalMinutes,
+							Body:            hb.Body,
+						}
+					}
+					incomingMC[agentID] = mc
+				}
+				continue
+			}
+			// Enable path: hb != nil && hb.Enabled.
+			if hb.SessionID != "" {
 				continue
 			}
 			// Check whether the existing config already has a session_id for
@@ -785,14 +821,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 				// back any sessions created so far and return 500.
 				slog.Error("rest: workspace PUT: agent store unavailable for heartbeat session",
 					"workspace_id", id, "agent_id", agentID)
-				for _, sc := range sessionsCreated {
-					if st := a.agentLoop.GetAgentStore(sc.agentID); st != nil {
-						if delErr := st.DeleteSession(sc.sessionID); delErr != nil {
-							slog.Warn("rest: workspace PUT: rollback session delete failed",
-								"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
-						}
-					}
-				}
+				rollbackCreatedSessions()
 				jsonErr(w, http.StatusInternalServerError, "agent store unavailable for heartbeat session")
 				return
 			}
@@ -801,14 +830,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 				slog.Error("rest: workspace PUT: failed to create heartbeat session",
 					"workspace_id", id, "agent_id", agentID, "error", sessErr)
 				// HIGH-2: roll back sessions created earlier in this loop.
-				for _, sc := range sessionsCreated {
-					if st := a.agentLoop.GetAgentStore(sc.agentID); st != nil {
-						if delErr := st.DeleteSession(sc.sessionID); delErr != nil {
-							slog.Warn("rest: workspace PUT: rollback session delete failed",
-								"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
-						}
-					}
-				}
+				rollbackCreatedSessions()
 				jsonErr(w, http.StatusInternalServerError, "failed to create heartbeat session")
 				return
 			}
@@ -863,6 +885,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 
 	// FR-022: merge incoming member_configs (when present) and GC stale entries
 	// (agents removed from CoreTeam) so the stored map stays consistent.
+	coreTeamChanged := req.CoreTeam != nil
 	if mcPresent {
 		if ws.MemberConfigs == nil {
 			ws.MemberConfigs = make(map[string]workspace.MemberConfig)
@@ -874,9 +897,54 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		pruned, removed := workspace.GCMemberConfigs(ws.CoreTeam, ws.MemberConfigs)
 		if len(removed) > 0 {
 			slog.Info("rest: workspace PUT: GC member_configs", "workspace_id", id, "removed", removed)
+			// FIX-4a: release standing sessions for GC-pruned members (members
+			// whose agent is no longer in the CoreTeam).
+			for _, removedID := range removed {
+				if oldMC, had := ws.MemberConfigs[removedID]; had &&
+					oldMC.Heartbeat != nil && oldMC.Heartbeat.SessionID != "" {
+					if st := a.agentLoop.GetAgentStore(removedID); st != nil {
+						if delErr := st.DeleteSession(oldMC.Heartbeat.SessionID); delErr != nil {
+							slog.Warn("rest: workspace PUT: GC session release failed",
+								"workspace_id", id, "agent_id", removedID,
+								"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
+						} else {
+							slog.Info("rest: workspace PUT: GC released heartbeat session",
+								"workspace_id", id, "agent_id", removedID,
+								"session_id", oldMC.Heartbeat.SessionID)
+						}
+					}
+				}
+			}
 		}
 		ws.MemberConfigs = pruned
 		changed = true
+	} else if coreTeamChanged {
+		// FIX-4a: core_team changed without member_configs — GC stale member_config
+		// entries whose agent is no longer on the new team, and release their sessions.
+		if ws.MemberConfigs != nil {
+			pruned, removed := workspace.GCMemberConfigs(ws.CoreTeam, ws.MemberConfigs)
+			if len(removed) > 0 {
+				slog.Info("rest: workspace PUT: core_team shrink GC member_configs",
+					"workspace_id", id, "removed", removed)
+				for _, removedID := range removed {
+					if oldMC, had := ws.MemberConfigs[removedID]; had &&
+						oldMC.Heartbeat != nil && oldMC.Heartbeat.SessionID != "" {
+						if st := a.agentLoop.GetAgentStore(removedID); st != nil {
+							if delErr := st.DeleteSession(oldMC.Heartbeat.SessionID); delErr != nil {
+								slog.Warn("rest: workspace PUT: core_team shrink session release failed",
+									"workspace_id", id, "agent_id", removedID,
+									"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
+							} else {
+								slog.Info("rest: workspace PUT: core_team shrink released heartbeat session",
+									"workspace_id", id, "agent_id", removedID,
+									"session_id", oldMC.Heartbeat.SessionID)
+							}
+						}
+					}
+				}
+				ws.MemberConfigs = pruned
+			}
+		}
 	}
 
 	// No-op: nothing changed — return current state without writing.
@@ -889,6 +957,9 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 
 	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
 		slog.Error("rest: update workspace: write", "id", id, "error", err)
+		// HIGH-2: roll back any heartbeat sessions created this request since the
+		// workspace file was not persisted (they would be permanently orphaned).
+		rollbackCreatedSessions()
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -896,7 +967,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	// FR-007: after persisting, reconcile cron schedules to reflect the new
 	// member_configs. Best-effort: a failure is logged but does not prevent
 	// the 200 response (the data is already safely on disk).
-	if mcPresent {
+	if mcPresent || coreTeamChanged {
 		a.reconcileHeartbeatSchedules()
 	}
 

@@ -38,7 +38,7 @@ type MemberConfig struct {
 //
 // Validation rules (FR-003/004/005/005b/025):
 //   - Every key must be present in coreTeam (unknown-member reject).
-//   - When a heartbeat is present, IntervalMinutes must be ≥ 5.
+//   - When a heartbeat is enabled, IntervalMinutes must be ≥ 5.
 //   - Body length must not exceed MaxHeartbeatBodyBytes.
 //   - Enabled=true requires a non-empty Body.
 //   - A worker agent (isWorker returns true) must not have a heartbeat.
