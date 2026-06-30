@@ -28,7 +28,10 @@ const webRenderingNote = "## Rendering (web chat)\n\n" +
 	"state machine, a hierarchy, an ER/class relationship, a timeline, or an " +
 	"architecture sketch — render it as a ```mermaid fenced code block instead of " +
 	"describing it in words. Keep diagrams small and focused, and use them only when " +
-	"they genuinely serve the conversation; prefer prose for simple answers."
+	"they genuinely serve the conversation; prefer prose for simple answers. " +
+	"When you color-code nodes with a classDef `fill`, ALWAYS set a contrasting text " +
+	"`color` in the same classDef (dark text on light fills, light text on dark fills) " +
+	"so labels stay readable — e.g. `classDef ok fill:#16a34a,color:#0a0a0b`."
 
 // buildWebRenderingNote returns the web-rendering guidance note when the turn
 // originates from the web chat surface, and "" for every other surface. The gate
