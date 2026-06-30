@@ -31,6 +31,14 @@ const (
 	// the SPA can badge them and group them separately from human chat/task/
 	// channel sessions.
 	SessionTypeScheduled UnifiedSessionType = "scheduled"
+	// SessionTypeHeartbeat classifies the eager standing session created when
+	// a workspace-scoped heartbeat is enabled (FR-010, A1/F-02, A2/F-11). The
+	// session is stamped with workspace_id + agent + type="heartbeat" at create
+	// time so the cron job can continue it (via JobSpec.SessionID) rather than
+	// minting a fresh session each run. The SPA pins sessions of this type to
+	// the top of the Session panel and disables their delete control while the
+	// heartbeat is active (FR-021, FR-028).
+	SessionTypeHeartbeat UnifiedSessionType = "heartbeat"
 )
 
 // IsValidSessionType reports whether t is one of the known session types.
@@ -38,7 +46,7 @@ const (
 // validation/listing site accepts them.
 func IsValidSessionType(t UnifiedSessionType) bool {
 	switch t {
-	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeScheduled:
+	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeScheduled, SessionTypeHeartbeat:
 		return true
 	default:
 		return false
@@ -291,6 +299,34 @@ func (us *UnifiedStore) createSessionLocked(
 // wrapper over NewSession that pins the type so callers don't have to remember it.
 func (us *UnifiedStore) NewScheduledSession(ownerAgentID string) (*UnifiedMeta, error) {
 	return us.NewSession(SessionTypeScheduled, "scheduled", ownerAgentID)
+}
+
+// NewHeartbeatSession eagerly creates the standing session for a workspace-
+// scoped heartbeat (FR-010, A1/F-02, A2). It stamps:
+//   - Type = SessionTypeHeartbeat
+//   - WorkspaceID = workspaceID
+//   - AgentID = agentID (also AgentIDs and ActiveAgentID)
+//
+// The caller (gateway workspace handler) stores the returned session's ID at
+// member_configs[agentID].heartbeat.session_id so the cron reconciler can
+// inject it into the JobSpec.SessionID field and continue the same session
+// across every heartbeat run (FR-007b).
+//
+// Unlike NewScheduledSession, this variant accepts an explicit workspaceID so
+// the session carries the correct workspace tag for the delete-guard lookup
+// (FR-014) and the SPA's Session panel grouping (FR-021).
+func (us *UnifiedStore) NewHeartbeatSession(workspaceID, agentID string) (*UnifiedMeta, error) {
+	meta, err := us.NewSession(SessionTypeHeartbeat, "heartbeat", agentID)
+	if err != nil {
+		return nil, fmt.Errorf("session: new heartbeat session (workspace=%s agent=%s): %w", workspaceID, agentID, err)
+	}
+	// Stamp the workspace_id onto the meta so the delete-guard can load the
+	// right workspace without scanning all workspaces (A2/G-01).
+	if err := us.SetMeta(meta.ID, MetaPatch{WorkspaceID: &workspaceID}); err != nil {
+		return nil, fmt.Errorf("session: stamp workspace_id on heartbeat session %s: %w", meta.ID, err)
+	}
+	meta.WorkspaceID = workspaceID
+	return meta, nil
 }
 
 // GetOrCreateScheduledSession returns the scheduled session with the EXACT id,

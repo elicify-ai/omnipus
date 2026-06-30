@@ -30,7 +30,7 @@ interface SessionStore {
     agentType?: AgentKind | null
   ) => void
   setActiveAgentType: (type: AgentKind | null) => void
-  attachedSessionType: 'chat' | 'task' | 'channel' | 'scheduled' | null
+  attachedSessionType: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | null
   attachedTaskTitle: string | null
   attachToSession: (
     sessionId: string,

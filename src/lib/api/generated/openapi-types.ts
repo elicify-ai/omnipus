@@ -7119,29 +7119,30 @@ export interface components {
         };
         /** @description Per-member config inside a workspace (keyed by agentId). */
         WorkspaceMemberConfig: {
-            /** @description Heartbeat settings for this (workspace, agent) pair. */
-            heartbeat?: {
-                /**
-                 * @description Whether the heartbeat is active for this member in this workspace.
-                 * @example true
-                 */
-                enabled?: boolean;
-                /**
-                 * @description Interval in minutes between heartbeat passes. Minimum 5.
-                 * @example 30
-                 */
-                interval_minutes?: number;
-                /**
-                 * @description Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
-                 * @example Every 30 minutes, check the project board for new high-priority tasks.
-                 */
-                body?: string;
-                /**
-                 * @description Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
-                 * @example 550e8400-e29b-41d4-a716-446655440000
-                 */
-                session_id?: string;
-            };
+            heartbeat?: components["schemas"]["WorkspaceMemberHeartbeat"];
+        };
+        /** @description Heartbeat settings for this (workspace, agent) pair. */
+        WorkspaceMemberHeartbeat: {
+            /**
+             * @description Whether the heartbeat is active for this member in this workspace.
+             * @example true
+             */
+            enabled?: boolean;
+            /**
+             * @description Interval in minutes between heartbeat passes. Minimum 5.
+             * @example 30
+             */
+            interval_minutes?: number;
+            /**
+             * @description Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
+             * @example Every 30 minutes, check the project board for new high-priority tasks.
+             */
+            body?: string;
+            /**
+             * @description Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            readonly session_id?: string;
         };
         /** @description Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields. */
         MemorySettings: {
@@ -7214,6 +7215,10 @@ export interface components {
             pin_order?: number;
             core_team?: string[];
             repository?: string;
+            /** @description Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input. */
+            member_configs?: {
+                [key: string]: components["schemas"]["WorkspaceMemberConfig"];
+            };
         };
         /** @description A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster. */
         WorkspaceDelegationEdge: {
@@ -12829,6 +12834,7 @@ export type Notification = components["schemas"]["Notification"];
 export type NotificationList = components["schemas"]["NotificationList"];
 export type Workspace = components["schemas"]["Workspace"];
 export type WorkspaceMemberConfig = components["schemas"]["WorkspaceMemberConfig"];
+export type WorkspaceMemberHeartbeat = components["schemas"]["WorkspaceMemberHeartbeat"];
 export type MemorySettings = components["schemas"]["MemorySettings"];
 export type WorkspaceCreateRequest = components["schemas"]["WorkspaceCreateRequest"];
 export type WorkspaceUpdateRequest = components["schemas"]["WorkspaceUpdateRequest"];

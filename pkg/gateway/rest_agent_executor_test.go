@@ -489,44 +489,11 @@ func TestCreateAgent_Main_CoercesExternalExecutorWithWarning(t *testing.T) {
 	assert.Contains(t, *created.Warning, "coerced")
 }
 
-// TestUpdateAgent_RejectsHeartbeatOnWorker verifies the heartbeat write-time
-// guard: enabling heartbeat on a worker is 400 (workers have no heartbeat
-// and run only via delegation). Setting it to disabled/empty is allowed.
-func TestUpdateAgent_RejectsHeartbeatOnWorker(t *testing.T) {
-	api := buildExecutorTestAPIWithWorker(t)
-
-	// heartbeat_enabled=true on worker → 400.
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
-		strings.NewReader(`{"heartbeat_enabled":true}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "heartbeat",
-		"the rejection must reference heartbeat")
-
-	// heartbeat_interval>0 on worker → 400.
-	w = httptest.NewRecorder()
-	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
-		strings.NewReader(`{"heartbeat_interval":300}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-}
-
-// TestUpdateAgent_AllowsHeartbeatOffOnWorker is the control: a worker may
-// receive an idempotent "off" write so an operator can clear a stray
-// flag. This is NOT a "the worker now has heartbeat" path.
-func TestUpdateAgent_AllowsHeartbeatOffOnWorker(t *testing.T) {
-	api := buildExecutorTestAPIWithWorker(t)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
-		strings.NewReader(`{"heartbeat_enabled":false}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-}
+// Note: agent-level heartbeat write-time guards (RejectsHeartbeatOnWorker /
+// AllowsHeartbeatOffOnWorker) were removed in the workspace-heartbeat
+// decommission (US-4 / FR-027): heartbeat is no longer an agent field. The
+// "workers have no heartbeat" invariant is now enforced in
+// workspace.ValidateMemberConfigs (see pkg/workspace/member_config_test.go).
 
 // TestUpdateAgent_RejectsVoiceOnWorker verifies the voice write-time guard:
 // setting a non-empty voice on a worker is 400. Null / absent voice is fine.
@@ -614,20 +581,10 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 	})
 }
 
-// TestUpdateAgent_Worker_RejectsHeartbeat keeps the genuinely-N/A guard: a worker
-// PUT that ENABLES heartbeat is still rejected 400 (workers run only via
-// delegation; they have no heartbeat schedule).
-func TestUpdateAgent_Worker_RejectsHeartbeat(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-	id := createNativeSubagent(t, api)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id,
-		strings.NewReader(`{"heartbeat_enabled":true,"heartbeat_interval":300}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "enabling heartbeat on a worker must 400; body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "heartbeat")
-}
+// Note: TestUpdateAgent_Worker_RejectsHeartbeat was removed in the
+// workspace-heartbeat decommission (US-4 / FR-027) — the agent PUT no longer
+// carries heartbeat fields. Worker-heartbeat rejection now lives in
+// workspace.ValidateMemberConfigs.
 
 // TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy proves the worker-PUT-400
 // loosening: a subagent_3p PUT carrying a delegation_policy is no longer rejected

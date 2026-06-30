@@ -383,30 +383,6 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 // jsonOK writes body as a 200 OK JSON response.
 func jsonOK(w http.ResponseWriter, body any) { writeJSON(w, http.StatusOK, body) }
 
-// setAgentHeartbeat echoes the agent's per-agent heartbeat schedule fields (O6)
-// onto the wire response. Heartbeat is per-agent for Main agents; a worker never
-// has one (its stored flag, if any, is ignored). When an agent has not set its
-// own heartbeat (HeartbeatEnabled nil and interval 0), the migrated/global
-// default is surfaced as the effective value so the form shows a sensible state.
-func setAgentHeartbeat(ag *gen.Agent, ac config.AgentConfig, cfg *config.Config) {
-	if ac.IsWorker() {
-		// Subagents never have a heartbeat — report disabled regardless of stored bits.
-		ag.HeartbeatEnabled = false
-		ag.HeartbeatInterval = 0
-		return
-	}
-	if ac.HeartbeatEnabled != nil {
-		ag.HeartbeatEnabled = *ac.HeartbeatEnabled
-	} else {
-		ag.HeartbeatEnabled = false
-	}
-	if ac.HeartbeatInterval > 0 {
-		ag.HeartbeatInterval = ac.HeartbeatInterval
-	} else {
-		ag.HeartbeatInterval = config.DefaultHeartbeatIntervalMinutes
-	}
-}
-
 // setAgentModelProvider echoes the agent's explicit primary-model provider (O3
 // two-field model) onto the wire response. A nil model or an empty provider
 // leaves ag.Provider unset (absent on the wire), signaling default-provider
@@ -681,6 +657,36 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 	return s
 }
 
+// computeSessionProtected derives the computed `protected` flag for a session
+// (FR-021/028). A session is protected when:
+//   - its type is "heartbeat", AND
+//   - the workspace it belongs to still has member_configs[agentID].heartbeat.enabled=true
+//     with session_id == this session's ID
+//
+// For any other session type, returns nil (absent on the wire — field is omitted).
+// Disk reads are bounded: we only load the one workspace identified by session.WorkspaceID.
+func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
+	if m == nil || m.Type != session.SessionTypeHeartbeat || m.WorkspaceID == "" {
+		return nil
+	}
+	ws, err := readWorkspaceFile(homePath, m.WorkspaceID)
+	if err != nil {
+		// Workspace deleted or unreadable — session is no longer protected.
+		slog.Debug("computeSessionProtected: workspace not found", "workspace_id", m.WorkspaceID, "error", err)
+		f := false
+		return &f
+	}
+	mc, hasMC := ws.MemberConfigs[m.AgentID]
+	if !hasMC || mc.Heartbeat == nil {
+		f := false
+		return &f
+	}
+	// Protected only when the heartbeat is enabled AND the stored session_id
+	// matches this session (not a replaced/rotated session).
+	protected := mc.Heartbeat.Enabled && mc.Heartbeat.SessionID == m.ID
+	return &protected
+}
+
 func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	agentFilter := r.URL.Query().Get("agent_id")
 	typeFilter := r.URL.Query().Get("type")
@@ -707,7 +713,11 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	// rejects null where the contract says type:array and drops the whole list.
 	genSessions := make([]gen.Session, 0, len(filtered))
 	for _, m := range filtered {
-		genSessions = append(genSessions, unifiedMetaToGenSession(m))
+		s := unifiedMetaToGenSession(m)
+		// FR-021/028: compute the `protected` flag for heartbeat sessions.
+		// Non-heartbeat sessions get nil (field omitted from the wire response).
+		s.Protected = computeSessionProtected(a.homePath, m)
+		genSessions = append(genSessions, s)
 	}
 	if len(partialErrs) == 0 {
 		jsonOK(w, genSessions)
@@ -828,6 +838,21 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 		jsonErr(w, http.StatusNotFound, "session not found")
 		return
 	}
+
+	// FR-014 / US-7: reject deletion of an active heartbeat session with 409.
+	// Load the meta to check the session type before attempting the delete so
+	// we don't make a half-deletion attempt and then fail. The workspace load
+	// is bounded by the session's WorkspaceID (no full scan).
+	meta, metaErr := store.GetMeta(id)
+	if metaErr == nil && meta != nil && meta.Type == session.SessionTypeHeartbeat {
+		if isProtected := computeSessionProtected(a.homePath, meta); isProtected != nil && *isProtected {
+			jsonErr(w, http.StatusConflict,
+				"cannot delete a protected heartbeat session while its heartbeat is enabled; "+
+					"disable the heartbeat in the workspace settings first")
+			return
+		}
+	}
+
 	if err := store.DeleteSession(id); err != nil {
 		slog.Error("rest: delete session", "session_id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete session: %v", err))
@@ -1312,11 +1337,8 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
 		MaxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
 		SteeringMode:      sm,
-		HeartbeatEnabled:  false,
-		HeartbeatInterval: config.DefaultHeartbeatIntervalMinutes,
 		// Required string fields — initialized to empty (overwritten per-agent).
-		Soul:      "",
-		Heartbeat: "",
+		Soul: "",
 	}
 }
 
@@ -1384,7 +1406,6 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Locked = ac.Locked
 		ag.Model = &model
 		setAgentModelProvider(&ag, ac.Model)
-		setAgentHeartbeat(&ag, ac, cfg)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
 		ag.Default = boolPtr(ac.Default)
@@ -1419,7 +1440,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if wsErr != nil {
 				slog.Warn("rest: getAgent: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
 			}
-			soul, heartbeat := readAgentFiles(workspace)
+			soul, _ := readAgentFiles(workspace)
 			// Core agents have compiled prompts — do not expose them.
 			if ac.Locked {
 				soul = ""
@@ -1440,10 +1461,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Locked = ac.Locked
 			ag.Model = &model
 			setAgentModelProvider(&ag, ac.Model)
-			setAgentHeartbeat(&ag, ac, cfg)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 			ag.Soul = soul
-			ag.Heartbeat = heartbeat
 			ag.Default = boolPtr(ac.Default)
 			if len(ac.Skills) > 0 {
 				skills := make([]string, len(ac.Skills))
@@ -1564,16 +1583,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
 		return
 	}
-	// O6 / O12.1 — heartbeat + voice are Main-only (form matrix rows 10–13): a
-	// Subagent / subagent_3p create that tries to set them is rejected. Subagents
-	// run only via delegation (no schedule) and are not chat personas (no voice).
+	// O12.1 — voice is Main-only (form matrix row 13): a Subagent / subagent_3p
+	// create that tries to set voice is rejected. Subagents are not chat personas.
+	// Heartbeat is workspace-scoped (ADR-027) and is no longer set at create time.
 	if createType == config.AgentTypeWorker {
-		if (req.HeartbeatEnabled != nil && *req.HeartbeatEnabled) ||
-			(req.HeartbeatInterval != nil && *req.HeartbeatInterval > 0) ||
-			(req.Heartbeat != nil && strings.TrimSpace(*req.Heartbeat) != "") {
-			jsonErr(w, http.StatusBadRequest, "a worker cannot have heartbeat (Subagents run only via delegation)")
-			return
-		}
 		if req.Voice != nil && strings.TrimSpace(*req.Voice) != "" {
 			jsonErr(w, http.StatusBadRequest, "a worker cannot have a per-agent voice (workers are not chat personas)")
 			return
@@ -1633,16 +1646,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			ac.Model.Provider = strings.TrimSpace(*req.Provider)
 		}
 	}
-	// O6 — per-agent heartbeat (Main only; worker create already rejected above).
-	if createType != config.AgentTypeWorker {
-		if req.HeartbeatEnabled != nil {
-			hb := *req.HeartbeatEnabled
-			ac.HeartbeatEnabled = &hb
-		}
-		if req.HeartbeatInterval != nil {
-			ac.HeartbeatInterval = *req.HeartbeatInterval
-		}
-	}
+	// Heartbeat is workspace-scoped (ADR-027); no per-agent heartbeat at create.
 	if req.Skills != nil && len(*req.Skills) > 0 {
 		ac.Skills = make([]string, len(*req.Skills))
 		copy(ac.Skills, *req.Skills)
@@ -1781,13 +1785,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			newAgent["model"] = modelMap
 		}
-		// O6 — per-agent heartbeat persistence (Main only).
-		if ac.HeartbeatEnabled != nil {
-			newAgent["heartbeat_enabled"] = *ac.HeartbeatEnabled
-		}
-		if ac.HeartbeatInterval > 0 {
-			newAgent["heartbeat_interval"] = ac.HeartbeatInterval
-		}
 		if ac.Tools != nil {
 			builtinMap := map[string]any{
 				"default_policy": string(ac.Tools.Builtin.DefaultPolicy),
@@ -1897,7 +1894,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	ag.Locked = ac.Locked
 	ag.Model = &model
 	setAgentModelProvider(&ag, ac.Model)
-	setAgentHeartbeat(&ag, ac, cfgAfterCreate)
 	// Echo the just-persisted soul so the FE round-trip works (req.Soul was
 	// write-dropped before this fix; a created agent would come back with
 	// soul="" regardless of what the caller sent). Status is derived from
@@ -1921,11 +1917,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if len(warnings) > 0 {
 		w := strings.Join(warnings, "; ")
 		ag.Warning = &w
-	}
-	// O6 — register the new agent's heartbeat schedule when it was created with
-	// heartbeat enabled (Main only; workers were rejected earlier).
-	if ac.HeartbeatEnabled != nil && *ac.HeartbeatEnabled {
-		a.reconcileHeartbeatSchedules()
 	}
 	jsonCreated(w, ag)
 }
@@ -2177,30 +2168,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	// Worker agents have no heartbeat — they execute one delegated task at a
-	// time and never run on a schedule. Reject enabling/setting heartbeat on
-	// a worker at the write gate so a worker never gets a HEARTBEAT.md prompt
-	// or a positive enable flag. Setting heartbeat to disabled / interval
-	// unchanged is fine (the gate below only rejects the "turning it on" path).
-	// This guard runs BEFORE the locked-agent identity check so a locked
-	// worker (the seed default) is also blocked: a worker must never have
-	// heartbeat regardless of its locked status.
-	if foundAgent.IsWorker() && (req.HeartbeatEnabled != nil || req.HeartbeatInterval != nil || req.Heartbeat != nil) {
-		// Allow idempotent "off" writes (e.g., setting enabled=false or
-		// clearing the interval) so an operator's defensive reset is not
-		// blocked; reject any write that would actually enable heartbeat on
-		// a worker. A worker is also free to receive an EMPTY HEARTBEAT.md
-		// (clearing) but never a non-empty one.
-		if (req.HeartbeatEnabled != nil && *req.HeartbeatEnabled) ||
-			(req.HeartbeatInterval != nil && *req.HeartbeatInterval > 0) ||
-			(req.Heartbeat != nil && strings.TrimSpace(*req.Heartbeat) != "") {
-			jsonErr(
-				w,
-				http.StatusBadRequest,
-				"a worker cannot have heartbeat enabled (workers run only via delegation)",
-			)
-			return
-		}
-	}
+	// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat writes on the
+	// agent PUT path are silently ignored. Workers still cannot carry heartbeat.
 	// Per-agent voice is a chat-persona attribute (TTS persona) — workers are
 	// not chat personas. Reject setting a non-empty voice on a worker at the
 	// write gate so a worker never carries a TTS persona. An explicit null
@@ -2248,12 +2217,12 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 
 	if foundAgent.Locked {
-		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
+		// Protected: name, description, soul (prompt content),
 		// color, icon, and skills are identity/capability fields — reject on locked agents.
 		// Skills are included here (B-2 defense-in-depth): core agents have compiled-in capability
 		// sets; allowing runtime skill assignment would silently override that invariant.
 		if req.Name != nil || req.Description != nil ||
-			req.Soul != nil || req.Heartbeat != nil ||
+			req.Soul != nil ||
 			req.Color != nil || req.Icon != nil || req.Skills != nil {
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
 			return
@@ -2619,17 +2588,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 						delete(agentMap, "delegation_policy")
 					}
 				}
-				// O6 — heartbeat IS per-agent: persist heartbeat_enabled /
-				// heartbeat_interval onto THIS agent's entry, never the global
-				// heartbeat block (the old global write bled onto every agent).
-				// Worker rejection happened earlier (a worker PUT carrying these
-				// fields 400s before reaching persistence).
-				if req.HeartbeatEnabled != nil {
-					agentMap["heartbeat_enabled"] = *req.HeartbeatEnabled
-				}
-				if req.HeartbeatInterval != nil {
-					agentMap["heartbeat_interval"] = *req.HeartbeatInterval
-				}
+				// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat fields
+				// are ignored on PUT. Workspace handler manages member_configs.
 				// Optimistic concurrency timestamp: refresh on every successful save.
 				agentMap["updated_at"] = now.Format(time.RFC3339)
 				break
@@ -2686,15 +2646,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			return
 		}
 	}
-	if req.Heartbeat != nil {
-		heartbeatPath := filepath.Join(workspace, "HEARTBEAT.md")
-		if err := fileutil.WriteFileAtomic(heartbeatPath, []byte(*req.Heartbeat), 0o600); err != nil {
-			slog.Error("rest: write HEARTBEAT.md for agent", "agent_id", id, "error", err)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write HEARTBEAT.md: %v", err))
-			return
-		}
-	}
-	// Only trigger a full reload when structural changes require it (SOUL.md, HEARTBEAT.md,
+	// Only trigger a full reload when structural changes require it (SOUL.md,
 	// agent creation/deletion). Model, rate limit, timeout, and steering mode changes are
 	// config-only and do NOT need a reload — avoiding the WebSocket drop and context loss
 	// that a full reload causes mid-conversation.
@@ -2707,7 +2659,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// drop a mode) would silently not apply until a restart. TriggerReload →
 	// executeReload → ReloadProviderAndConfig → registerSharedTools reconstructs every
 	// agent's deny-checkers from the swapped config, applying the new policy live.
-	needsReload := req.Soul != nil || req.Heartbeat != nil ||
+	needsReload := req.Soul != nil ||
 		req.DelegationPolicy != nil
 	var reloadWarning string
 	if needsReload {
@@ -2715,13 +2667,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			slog.Error("config reload after agent update failed", "error", err)
 			reloadWarning = fmt.Sprintf("config reload failed: %v", err)
 		}
-	}
-
-	// O6 — re-reconcile heartbeat schedules when the heartbeat changed (enabled,
-	// interval, or HEARTBEAT.md content). Runs after any reload so the reconciler
-	// reads the fresh per-agent config + updated HEARTBEAT.md.
-	if req.HeartbeatEnabled != nil || req.HeartbeatInterval != nil || req.Heartbeat != nil {
-		a.reconcileHeartbeatSchedules()
 	}
 
 	// #73: a model-only change is intentionally config-only (no reload above, so
@@ -2749,7 +2694,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		}
 	}
 	// Re-read the files so the response reflects what was just persisted.
-	soul, heartbeat := readAgentFiles(workspace)
+	soul, _ := readAgentFiles(workspace)
 	// Build the response from defaults, then override with request values.
 	agentID := cfg.Agents.List[foundIdx].ID
 	model := cfg.Agents.Defaults.ModelName
@@ -2800,41 +2745,12 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			}
 		}
 	}
-	// O6 — per-agent heartbeat: echo the effective schedule fields. A worker
-	// never has a heartbeat. The request value (when present) is authoritative;
-	// otherwise reflect the reloaded per-agent config, falling back to the global
-	// default for an agent that has never set its own.
-	if foundAgent.IsWorker() {
-		ag.HeartbeatEnabled = false
-		ag.HeartbeatInterval = 0
-	} else {
-		var reloaded *config.AgentConfig
-		if cur := a.agentLoop.GetConfig(); cur != nil {
-			for i := range cur.Agents.List {
-				if cur.Agents.List[i].ID == agentID {
-					reloaded = &cur.Agents.List[i]
-					break
-				}
-			}
-		}
-		if req.HeartbeatEnabled != nil {
-			ag.HeartbeatEnabled = *req.HeartbeatEnabled
-		} else if reloaded != nil && reloaded.HeartbeatEnabled != nil {
-			ag.HeartbeatEnabled = *reloaded.HeartbeatEnabled
-		}
-		if req.HeartbeatInterval != nil {
-			ag.HeartbeatInterval = *req.HeartbeatInterval
-		} else if reloaded != nil && reloaded.HeartbeatInterval > 0 {
-			ag.HeartbeatInterval = reloaded.HeartbeatInterval
-		}
-	}
 	ag.Status = gen.AgentStatus(computeAgentStatus(agentID, activeIDs, soul, foundAgent.Locked))
 	// Hide compiled prompts for locked (core) agents.
 	if foundAgent.Locked {
 		soul = ""
 	}
 	ag.Soul = soul
-	ag.Heartbeat = heartbeat
 	if reloadWarning != "" {
 		ag.Warning = &reloadWarning
 	}
@@ -2870,13 +2786,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if req.SteeringMode != nil {
 		sm := gen.AgentSteeringMode(steeringModeOrDefault(string(*req.SteeringMode)))
 		ag.SteeringMode = sm
-	}
-	// tool_feedback removed from the wire in W1 (per-channel runtime behavior now).
-	if req.HeartbeatEnabled != nil {
-		ag.HeartbeatEnabled = *req.HeartbeatEnabled
-	}
-	if req.HeartbeatInterval != nil {
-		ag.HeartbeatInterval = *req.HeartbeatInterval
 	}
 	jsonOK(w, ag)
 }
@@ -3980,6 +3889,11 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// Header notification center (#264).
 	cm.RegisterHTTPHandler("/api/v1/notifications", a.withAuth(a.HandleNotifications))
 	cm.RegisterHTTPHandler("/api/v1/notifications/", a.withAuth(a.HandleNotifications))
+
+	// Memory settings endpoint (FR-019 / US-6, ADR-027): readable/writable by any
+	// authenticated user (A2/G-02 — not admin-only because recap and retention
+	// settings are non-sensitive operational knobs without blast-radius risk).
+	cm.RegisterHTTPHandler("/api/v1/settings/memory", a.withAuth(a.HandleMemorySettings))
 
 	// Settings endpoints (Wave 4).
 	// GET /api/v1/audit-log — admin-only: audit log contains every admin

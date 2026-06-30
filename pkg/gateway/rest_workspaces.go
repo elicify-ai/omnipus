@@ -261,6 +261,33 @@ func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
 		o := w.Owner
 		wire.Owner = &o
 	}
+	// FR-001/ADR-027: include member_configs when present so the SPA can render
+	// heartbeat settings without a separate fetch. Uses the generated named wire
+	// types (gen.WorkspaceMemberConfig / gen.WorkspaceMemberHeartbeat) — see the
+	// member_configs rewrite in scripts/gen-go-fixup.go (Constraint #8).
+	if len(w.MemberConfigs) > 0 {
+		wireMC := make(map[string]gen.WorkspaceMemberConfig, len(w.MemberConfigs))
+		for agentID, mc := range w.MemberConfigs {
+			entry := gen.WorkspaceMemberConfig{}
+			if hb := mc.Heartbeat; hb != nil {
+				enabled := hb.Enabled
+				hbWire := &gen.WorkspaceMemberHeartbeat{Enabled: &enabled}
+				if hb.Body != "" {
+					hbWire.Body = &hb.Body
+				}
+				if hb.IntervalMinutes > 0 {
+					iv := hb.IntervalMinutes
+					hbWire.IntervalMinutes = &iv
+				}
+				if hb.SessionID != "" {
+					hbWire.SessionId = &hb.SessionID
+				}
+				entry.Heartbeat = hbWire
+			}
+			wireMC[agentID] = entry
+		}
+		wire.MemberConfigs = &wireMC
+	}
 	return wire
 }
 
@@ -606,16 +633,53 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 	jsonOK(w, workspaceToWire(ws, countTasksForWorkspace(a.homePath, id)))
 }
 
+// workspaceMemberConfigsFromWire translates the generated member_configs map
+// (gen.WorkspaceMemberConfig, pointer fields) into the internal
+// workspace.MemberConfig map (value fields). It returns mcPresent=false when the
+// wire field is absent (nil) so callers preserve merge semantics (absent →
+// unchanged). The server-managed session_id (FR-010, readOnly in the contract)
+// is intentionally NOT read from client input.
+func workspaceMemberConfigsFromWire(wire *map[string]gen.WorkspaceMemberConfig) (map[string]workspace.MemberConfig, bool) {
+	if wire == nil {
+		return nil, false
+	}
+	out := make(map[string]workspace.MemberConfig, len(*wire))
+	for agentID, wmc := range *wire {
+		var mc workspace.MemberConfig
+		if hb := wmc.Heartbeat; hb != nil {
+			mh := &workspace.MemberHeartbeat{}
+			if hb.Enabled != nil {
+				mh.Enabled = *hb.Enabled
+			}
+			if hb.IntervalMinutes != nil {
+				mh.IntervalMinutes = *hb.IntervalMinutes
+			}
+			if hb.Body != nil {
+				mh.Body = *hb.Body
+			}
+			mc.Heartbeat = mh
+		}
+		out[agentID] = mc
+	}
+	return out, true
+}
+
 func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
+
 	var req gen.WorkspaceUpdateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "WorkspaceUpdateRequest", &req, validateEnabled) {
 		return
 	}
+
+	// member_configs uses merge semantics: when present (non-nil) it replaces the
+	// config for each listed agent and GCs stale entries; when absent it is left
+	// unchanged. session_id is server-managed (FR-010) and ignored on input.
+	incomingMC, mcPresent := workspaceMemberConfigsFromWire(req.MemberConfigs)
 
 	// Validate fields before touching disk.
 	if req.Name != nil {
@@ -661,6 +725,69 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
+	// Determine effective CoreTeam for member_configs validation: the request
+	// value when present (not yet applied), else the current stored value.
+	effectiveCoreTeam := ws.CoreTeam
+	if req.CoreTeam != nil {
+		effectiveCoreTeam = deduplicateStrings(*req.CoreTeam)
+	}
+
+	// FR-010/022: validate and eagerly-session incoming member_configs before
+	// touching the workspace on disk.
+	if mcPresent && len(incomingMC) > 0 {
+		cfg := a.agentLoop.GetConfig()
+		isWorker := func(agentID string) bool {
+			if cfg == nil {
+				return false
+			}
+			for _, ac := range cfg.Agents.List {
+				if ac.ID == agentID {
+					return ac.IsWorker()
+				}
+			}
+			return false
+		}
+		if vErr := workspace.ValidateMemberConfigs(effectiveCoreTeam, incomingMC, isWorker); vErr != nil {
+			jsonErr(w, http.StatusUnprocessableEntity, vErr.Error())
+			return
+		}
+
+		// FR-010: for each newly-enabled heartbeat with no SessionID, create an
+		// eager standing session so the cron job can continue it across runs.
+		for agentID, mc := range incomingMC {
+			hb := mc.Heartbeat
+			if hb == nil || !hb.Enabled || hb.SessionID != "" {
+				continue
+			}
+			// Check whether the existing config already has a session_id for
+			// this (workspace, agent) pair — if so, reuse it (idempotent enable).
+			if existing, exists := ws.MemberConfigs[agentID]; exists &&
+				existing.Heartbeat != nil && existing.Heartbeat.SessionID != "" {
+				hb.SessionID = existing.Heartbeat.SessionID
+				mc.Heartbeat = hb
+				incomingMC[agentID] = mc
+				continue
+			}
+			sessStore := a.agentLoop.GetAgentStore(agentID)
+			if sessStore == nil {
+				// Agent not yet registered in the agent loop — skip eager session.
+				slog.Warn("rest: workspace PUT: agent store not found for heartbeat session",
+					"workspace_id", id, "agent_id", agentID)
+				continue
+			}
+			meta, sessErr := sessStore.NewHeartbeatSession(id, agentID)
+			if sessErr != nil {
+				slog.Error("rest: workspace PUT: failed to create heartbeat session",
+					"workspace_id", id, "agent_id", agentID, "error", sessErr)
+				jsonErr(w, http.StatusInternalServerError, "failed to create heartbeat session")
+				return
+			}
+			hb.SessionID = meta.ID
+			mc.Heartbeat = hb
+			incomingMC[agentID] = mc
+		}
+	}
+
 	// FR-1.9: no access gate — owner is attribution only.
 
 	// Default workspace cannot be archived (mirrors the delete-protection guard below).
@@ -703,6 +830,24 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		changed = true
 	}
 
+	// FR-022: merge incoming member_configs (when present) and GC stale entries
+	// (agents removed from CoreTeam) so the stored map stays consistent.
+	if mcPresent {
+		if ws.MemberConfigs == nil {
+			ws.MemberConfigs = make(map[string]workspace.MemberConfig)
+		}
+		for agentID, mc := range incomingMC {
+			ws.MemberConfigs[agentID] = mc
+		}
+		// GC: drop entries for agents no longer on the effective team.
+		pruned, removed := workspace.GCMemberConfigs(ws.CoreTeam, ws.MemberConfigs)
+		if len(removed) > 0 {
+			slog.Info("rest: workspace PUT: GC member_configs", "workspace_id", id, "removed", removed)
+		}
+		ws.MemberConfigs = pruned
+		changed = true
+	}
+
 	// No-op: nothing changed — return current state without writing.
 	if !changed {
 		jsonOK(w, workspaceToWire(ws, countTasksForWorkspace(a.homePath, id)))
@@ -715,6 +860,13 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		slog.Error("rest: update workspace: write", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+
+	// FR-007: after persisting, reconcile cron schedules to reflect the new
+	// member_configs. Best-effort: a failure is logged but does not prevent
+	// the 200 response (the data is already safely on disk).
+	if mcPresent {
+		a.reconcileHeartbeatSchedules()
 	}
 
 	if a.auditor != nil {
@@ -749,8 +901,14 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Cascade: (1) milestones for workspace → (2) clear milestone_id on those tasks →
-	// (3) delete tasks → (4) workspace file → (5) workspace directory (AGENT.md + memory room).
+	// Cascade: (1) heartbeat cron jobs → (2) milestones → (3) tasks →
+	// (4) workspace file → (5) workspace directory.
+	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace before
+	// removing the workspace file. Best-effort (logged on failure).
+	if cs := a.cronService.Load(); cs != nil {
+		releaseHeartbeatJobsForWorkspace(cs, id)
+	}
+
 	deleteMilestonesForWorkspace(a.homePath, id)
 
 	if err := deleteTasksForWorkspace(a.homePath, id); err != nil {

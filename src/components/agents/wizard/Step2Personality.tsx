@@ -1,34 +1,84 @@
 // Step2Personality — wizard step ② (Personality).
 //
-// Per spec §5.3-§5.5: soul (required for all three types — for External it's
-// passed as CLI prompt content), heartbeat body + enabled + interval (Main
-// only), voice (Main only — routed through `<VoiceProviderSub>` so the widget
-// auto-switches between dropdown / free-text / disabled based on Settings →
-// Voice provider detection).
+// Per spec FR-017 / US-5.AC3: heartbeat fields have been removed from this
+// step — heartbeat is now workspace-scoped (member_configs) and NOT set at
+// agent-creation time.
 //
-// The Heartbeat body + enabled + interval sub-fields use the spec §4.9
-// conditional: heartbeat body shows only when non-empty (Main only),
-// heartbeat_enabled checkbox toggles persistence, heartbeat_interval number
-// input appears when heartbeat_enabled is checked.
+// Per spec FR-026 / US-10: the soul field now offers an Upload .md control
+// (parity with AgentProfile's UploadButton) so operators can upload a
+// SOUL.md file instead of pasting its contents.
 //
-// W4 testids emitted per the plan's UI table:
-//   wizard-soul, wizard-heartbeat (Main only), wizard-voice (Main only)
+// Remaining fields: soul (required for all types), voice (Main only).
+//
+// W4 testids:
+//   wizard-soul, wizard-voice (Main only), wizard-soul-upload
 
-import { Input } from '@/components/ui/input'
+import { useRef } from 'react'
 import { Textarea } from '@/components/ui/textarea'
 import { VoiceProviderSub } from '../voice-provider-sub'
+import { UploadSimple } from '@phosphor-icons/react'
+import { useUiStore } from '@/store/ui'
 import type { StepProps } from './types'
 
 export function Step2Personality({ payload, setField, initialType }: StepProps) {
   const isWorker = initialType !== 'Main'
   const soulLabel = isWorker ? 'Soul / task prompt' : 'Soul'
+  const addToast = useUiStore((s) => s.addToast)
+  // Keep a stable ref for the file input to avoid DOM leak across re-renders.
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  function handleSoulUpload() {
+    // Programmatic file input — same pattern as AgentProfile's UploadButton
+    // (FR-026 / US-10). Accepts .md/.markdown/.txt per the spec.
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.md,.markdown,.txt'
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0]
+      if (!file) return
+      if (file.size > 1_000_000) {
+        addToast({
+          message: `File too large (${(file.size / 1_000_000).toFixed(1)}MB). Max 1MB for markdown files.`,
+          variant: 'error',
+        })
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => {
+        setField('soul', reader.result as string)
+      }
+      reader.onerror = () => {
+        addToast({
+          message: `Failed to read ${file.name}: ${reader.error?.message ?? 'unknown error'}`,
+          variant: 'error',
+        })
+      }
+      reader.readAsText(file)
+    }
+    input.click()
+    // Stash on the ref so tests can query it if needed (no-op for the real flow).
+    fileInputRef.current = input
+  }
 
   return (
     <>
       <div className="space-y-2">
-        <label htmlFor="wizard-soul" className="text-sm font-medium">
-          {soulLabel} <span className="text-[var(--color-error)]" aria-label="required">*</span>
-        </label>
+        <div className="flex items-center justify-between">
+          <label htmlFor="wizard-soul" className="text-sm font-medium">
+            {soulLabel}{' '}
+            <span className="text-[var(--color-error)]" aria-label="required">*</span>
+          </label>
+          {/* FR-026 / US-10: Upload .md control — parity with AgentProfile */}
+          <button
+            type="button"
+            data-testid="wizard-soul-upload"
+            onClick={handleSoulUpload}
+            className="h-7 px-2 text-xs rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-1"
+          >
+            <UploadSimple size={12} />
+            Upload .md
+          </button>
+        </div>
         <Textarea
           id="wizard-soul"
           data-testid="wizard-soul"
@@ -39,51 +89,6 @@ export function Step2Personality({ payload, setField, initialType }: StepProps) 
           aria-required="true"
         />
       </div>
-      {!isWorker && (
-        <div className="space-y-2" data-testid="wizard-heartbeat">
-          <label className="text-sm font-medium">Heartbeat (Main only)</label>
-          <Input
-            value={payload.heartbeat ?? ''}
-            onChange={(e) => setField('heartbeat', e.target.value)}
-            placeholder="Periodic instruction body"
-          />
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              // Heartbeat can only be "enabled" when there is a body —
-              // server-side an enabled heartbeat without a body is
-              // nonsense, so we disable the checkbox until the user
-              // types one.
-              disabled={!payload.heartbeat}
-              checked={!!payload.heartbeat && (payload.heartbeat_enabled ?? false)}
-              onChange={(e) => setField('heartbeat_enabled', e.target.checked)}
-            />
-            <span>Enable periodic heartbeat</span>
-          </label>
-          {payload.heartbeat_enabled && (
-            <Input
-              type="number"
-              value={payload.heartbeat_interval ?? 1800}
-              onChange={(e) => {
-                // Guard against NaN (user clears the field, types "e",
-                // etc.) and clamp to the server's min(60). Without this
-                // the wire sees heartbeat_interval=NaN and the server
-                // returns a generic 400.
-                const raw = e.target.value
-                if (raw === '') {
-                  setField('heartbeat_interval', 1800)
-                  return
-                }
-                const n = Number(raw)
-                if (!Number.isFinite(n)) return
-                setField('heartbeat_interval', Math.max(60, Math.floor(n)))
-              }}
-              min={60}
-              placeholder="Interval in seconds (default 1800)"
-            />
-          )}
-        </div>
-      )}
       {!isWorker && (
         <div className="space-y-2" data-testid="wizard-voice">
           <label className="text-sm font-medium">Voice (Main only)</label>

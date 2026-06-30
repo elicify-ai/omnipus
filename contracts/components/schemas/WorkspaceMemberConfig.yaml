@@ -3,32 +3,4 @@ description: Per-member config inside a workspace (keyed by agentId).
 additionalProperties: false
 properties:
   heartbeat:
-    type: object
-    additionalProperties: false
-    description: Heartbeat settings for this (workspace, agent) pair.
-    properties:
-      enabled:
-        type: boolean
-        description: Whether the heartbeat is active for this member in this workspace.
-        example: true
-      interval_minutes:
-        type: integer
-        minimum: 5
-        description: Interval in minutes between heartbeat passes. Minimum 5.
-        example: 30
-      body:
-        type: string
-        maxLength: 16384
-        description: >
-          Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators
-          re-enter this per workspace — existing agent-level HEARTBEAT.md bodies
-          are NOT migrated (F-07).
-        example: "Every 30 minutes, check the project board for new high-priority tasks."
-      session_id:
-        type: string
-        description: >
-          Eager standing session id created when the heartbeat is enabled (FR-010).
-          Stamped with workspace_id + agent + type="heartbeat". Stored here so the
-          cron job can continue the pre-created session rather than starting a fresh one.
-          Set server-side at enable time; read-only from the client's perspective.
-        example: "550e8400-e29b-41d4-a716-446655440000"
+    $ref: ./WorkspaceMemberHeartbeat.yaml

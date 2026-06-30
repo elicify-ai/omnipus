@@ -48,10 +48,22 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), deleteAgent: vi.fn(), fetchSkills: vi.fn(), fetchProviders: vi.fn(), testAgentRunner: vi.fn() }
+  return {
+    ...actual,
+    fetchAgent: vi.fn(),
+    fetchWorkspace: vi.fn(),
+    updateAgent: vi.fn(),
+    updateWorkspace: vi.fn(),
+    deleteAgent: vi.fn(),
+    fetchSkills: vi.fn(),
+    fetchProviders: vi.fn(),
+    testAgentRunner: vi.fn(),
+  }
 })
 
-import { fetchAgent, fetchSkills, updateAgent, deleteAgent, fetchProviders, testAgentRunner } from '@/lib/api'
+import { fetchAgent, fetchWorkspace, fetchSkills, updateAgent, updateWorkspace, deleteAgent, fetchProviders, testAgentRunner } from '@/lib/api'
+import type { Workspace } from '@/lib/api'
+import { useUiStore } from '@/store/ui'
 import { ApiError } from '@/lib/api-error'
 
 const mockCoreAgent: Agent = {
@@ -1475,5 +1487,165 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
     expect(payload).toHaveProperty('name')
     expect(payload).toHaveProperty('executor')
     expect(payload).toHaveProperty('updated_at')
+  })
+})
+
+// ── FR-016 / US-5: Heartbeat tab — conditional on workspace context ───────────
+//
+// TDD plan tests T16 (AgentProfile.heartbeatTab.test.tsx — wired here for co-
+// location with the existing AgentProfile suite):
+//   - Tab present with workspaceId context, absent without it
+//   - Workers get no tab even with workspace context (FR-025)
+//   - Personality tab has no heartbeat fields (FR-017)
+//   - Save goes to the workspace mutation, NOT agent autosave (A2/F-09)
+
+const mockWorkspace: Workspace = {
+  id: 'ws-1',
+  name: 'Test Workspace',
+  status: 'active',
+  pinned: false,
+  pin_order: 0,
+  task_count: 0,
+  core_team: ['general-assistant'],
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+  member_configs: {
+    'general-assistant': {
+      heartbeat: {
+        enabled: true,
+        interval_minutes: 30,
+        body: 'Summarise overnight CI results.',
+      },
+    },
+  },
+}
+
+/**
+ * Render AgentProfile with a workspace context set in the UI store.
+ * This simulates the flow of opening the slide-over FROM a workspace Team tab
+ * (which calls openEditAgentSlideOver(agentId, workspaceId)).
+ */
+function renderProfileWithWorkspace(agentId: string, workspaceId: string) {
+  // Set the store BEFORE rendering so the component reads the workspaceId.
+  useUiStore.setState({
+    editAgentId: agentId,
+    editAgentWorkspaceId: workspaceId,
+  })
+  return render(
+    <QueryClientProvider client={makeClient()}>
+      <AgentProfile agentId={agentId} />
+    </QueryClientProvider>
+  )
+}
+
+describe('AgentProfile — Heartbeat tab (FR-016 / US-5)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    vi.mocked(fetchSkills).mockResolvedValue([])
+    vi.mocked(fetchWorkspace).mockResolvedValue(mockWorkspace)
+    // Clear call history so tests don't bleed call-count into each other.
+    vi.mocked(updateWorkspace).mockReset().mockResolvedValue(mockWorkspace)
+    vi.mocked(updateAgent).mockClear()
+    // Reset store between tests so workspace context doesn't bleed.
+    useUiStore.setState({ editAgentWorkspaceId: null })
+  })
+
+  it('shows Heartbeat tab when opened from a workspace Team tab (US-5.AC1)', async () => {
+    // Traces to: US-5.AC1 — heartbeat tab present in workspace context
+    renderProfileWithWorkspace('general-assistant', 'ws-1')
+    await screen.findByText('General Assistant')
+    expect(screen.getByTestId('tab-heartbeat')).toBeInTheDocument()
+  })
+
+  it('does NOT show Heartbeat tab when opened globally (US-5.AC2)', async () => {
+    // Traces to: US-5.AC2 — no heartbeat tab on global Agents screen
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    expect(screen.queryByTestId('tab-heartbeat')).toBeNull()
+  })
+
+  it('does NOT show Heartbeat tab for worker agents even with workspace context (FR-025 / E9)', async () => {
+    // Traces to: FR-025 — workers have no heartbeat concept
+    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
+    renderProfileWithWorkspace('web-researcher', 'ws-1')
+    await screen.findByText('Web Researcher')
+    expect(screen.queryByTestId('tab-heartbeat')).toBeNull()
+  })
+
+  it('Heartbeat tab renders enabled toggle, interval, and body from workspace member_configs (US-5.AC1)', async () => {
+    renderProfileWithWorkspace('general-assistant', 'ws-1')
+    await screen.findByText('General Assistant')
+    // Open the Heartbeat tab
+    switchTab('tab-heartbeat')
+    // The enabled switch should be checked (mocked workspace has enabled:true)
+    const enabledSwitch = await screen.findByTestId('heartbeat-enabled-switch')
+    expect(enabledSwitch).toBeInTheDocument()
+    // Body should be hydrated from member_configs
+    const bodyTextarea = await screen.findByTestId('heartbeat-body-textarea')
+    expect((bodyTextarea as HTMLTextAreaElement).value).toBe('Summarise overnight CI results.')
+    // Interval should be hydrated
+    const intervalInput = await screen.findByTestId('heartbeat-interval-input')
+    expect((intervalInput as HTMLInputElement).value).toBe('30')
+  })
+
+  it('Heartbeat tab save calls updateWorkspace, NOT updateAgent (A2/F-09)', async () => {
+    renderProfileWithWorkspace('general-assistant', 'ws-1')
+    await screen.findByText('General Assistant')
+    switchTab('tab-heartbeat')
+    // Wait for the heartbeat panel to hydrate
+    const saveButton = await screen.findByTestId('heartbeat-save-button')
+    // Click the explicit Save button on the Heartbeat tab
+    fireEvent.click(saveButton)
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith('ws-1', expect.objectContaining({
+      member_configs: expect.objectContaining({
+        'general-assistant': expect.objectContaining({
+          heartbeat: expect.objectContaining({ enabled: true }),
+        }),
+      }),
+    })))
+    // The agent autosave must NOT have fired as a result of this action.
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+
+  it('Personality tab has no heartbeat fields (FR-017 / US-5.AC4)', async () => {
+    // Traces to: FR-017 — heartbeat is workspace-scoped now, removed from Personality
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    switchTab('tab-personality')
+    // Wait for tab content to appear
+    await new Promise((r) => setTimeout(r, 50))
+    // The old heartbeat fields must not be present in the Personality tab
+    expect(screen.queryByTestId('wizard-heartbeat')).toBeNull()
+    expect(screen.queryByText(/enable periodic heartbeat/i)).toBeNull()
+    expect(screen.queryByText(/heartbeat body/i)).toBeNull()
+  })
+
+  it('shows validation error when enabled=true with empty body (FR-005b)', async () => {
+    // Traces to: FR-005b — body required when enabled.
+    // Use a workspace with enabled=true + empty body so the form hydrates
+    // directly into the invalid state without needing to interact with the switch.
+    const workspaceEnabledNoBody: Workspace = {
+      ...mockWorkspace,
+      member_configs: {
+        'general-assistant': {
+          heartbeat: { enabled: true, interval_minutes: 30, body: '' },
+        },
+      },
+    }
+    vi.mocked(fetchWorkspace).mockResolvedValue(workspaceEnabledNoBody)
+    renderProfileWithWorkspace('general-assistant', 'ws-1')
+    await screen.findByText('General Assistant')
+    switchTab('tab-heartbeat')
+    // Wait for the heartbeat panel to hydrate — body must be '' from the mock.
+    const saveButton = await screen.findByTestId('heartbeat-save-button')
+    await waitFor(() => {
+      const bodyTextarea = screen.getByTestId('heartbeat-body-textarea')
+      expect((bodyTextarea as HTMLTextAreaElement).value).toBe('')
+    })
+    // Click save with enabled=true + empty body — validation must block the mutation.
+    fireEvent.click(saveButton)
+    await new Promise((r) => setTimeout(r, 100))
+    // The workspace mutation must NOT have been called (body required when enabled).
+    expect(updateWorkspace).not.toHaveBeenCalled()
   })
 })

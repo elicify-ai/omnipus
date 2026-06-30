@@ -51,6 +51,13 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 	// identical and now unified here.
 	Delegation []DelegationEdge `json:"delegation,omitempty"`
 
+	// MemberConfigs holds per-(workspace, agent) configuration keyed by agent
+	// ID. Currently carries heartbeat settings (FR-001). Only agents present
+	// in CoreTeam are valid keys; the gateway handler GCs stale entries when
+	// CoreTeam shrinks (FR-022). omitempty so fresh workspaces serialise
+	// without the field.
+	MemberConfigs map[string]MemberConfig `json:"member_configs,omitempty"`
+
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }

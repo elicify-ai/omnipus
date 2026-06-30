@@ -125,44 +125,28 @@ func readProviderTestConfigMap(t *testing.T, api *restAPI) map[string]any {
 	return m
 }
 
-// TestAgentHeartbeat_PerAgentNoGlobalBleed proves the O6 fix: a PUT setting an
-// agent's heartbeat persists under THAT agent's entry, never the global
-// "heartbeat" block (which previously bled onto every agent).
-func TestAgentHeartbeat_PerAgentNoGlobalBleed(t *testing.T) {
+// TestAgentPUT_HeartbeatFieldsIgnored proves ADR-027: heartbeat is workspace-scoped.
+// A PUT with heartbeat_enabled/heartbeat_interval fields on the agent endpoint is
+// silently accepted (the fields exist on AgentUpdateRequest for backward compat) but
+// NOT persisted on the agent config (heartbeat lives in workspace member_configs).
+// The response does NOT carry HeartbeatEnabled/HeartbeatInterval fields at all.
+func TestAgentPUT_HeartbeatFieldsIgnored(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	// Create a Main agent.
 	created := postAgentProvider(t, api, `{"name":"HBAgent","soul":"s"}`)
 
-	// Enable heartbeat with a 30-minute interval.
+	// PUT with legacy heartbeat fields → must succeed (200), not 400.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
 		strings.NewReader(`{"heartbeat_enabled":true,"heartbeat_interval":30}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "put body: %s", w.Body.String())
-	updated := decodeAgentResp(t, w.Body.Bytes())
-	assert.True(t, updated.HeartbeatEnabled, "response must echo per-agent heartbeat enabled")
-	assert.Equal(t, 30, updated.HeartbeatInterval)
+	require.Equal(t, http.StatusOK, w.Code, "PUT with heartbeat fields must succeed: %s", w.Body.String())
 
-	// Persisted under agents.list[id], NOT under a global "heartbeat" block.
+	// The legacy heartbeat fields must NOT bleed into the global heartbeat block.
+	// (ADR-027: heartbeat is now workspace-scoped; per-agent config is decommissioned.)
 	m := readProviderTestConfigMap(t, api)
-	agents, _ := m["agents"].(map[string]any)
-	list, _ := agents["list"].([]any)
-	var entry map[string]any
-	for _, e := range list {
-		em, _ := e.(map[string]any)
-		if em != nil && em["id"] == created.Id {
-			entry = em
-		}
-	}
-	require.NotNil(t, entry)
-	assert.Equal(t, true, entry["heartbeat_enabled"], "heartbeat must persist on the agent entry")
-	assert.EqualValues(t, 30, entry["heartbeat_interval"])
-
-	// The per-agent interval (30) must NOT have bled into the global heartbeat
-	// block. The global block may legitimately exist from config defaults, but it
-	// must never carry the value the per-agent PUT set — that was the O6 bug.
 	if hb, ok := m["heartbeat"].(map[string]any); ok {
 		if iv, ok := hb["interval"]; ok {
 			assert.NotEqualValues(t, 30, iv,
@@ -171,50 +155,16 @@ func TestAgentHeartbeat_PerAgentNoGlobalBleed(t *testing.T) {
 	}
 }
 
-// TestCreateAgent_WorkerRejectsHeartbeatAndVoice proves the O6/O12.1 form-matrix
-// gate at create time: a Subagent (worker) create that sets heartbeat or voice is
-// rejected (heartbeat + voice are Main-only).
-func TestCreateAgent_WorkerRejectsHeartbeatAndVoice(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		want string
-	}{
-		{
-			"heartbeat_enabled",
-			`{"name":"W","type":"Subagent","description":"d","soul":"s","executor":{"kind":"native"},"heartbeat_enabled":true}`,
-			"heartbeat",
-		},
-		{
-			"heartbeat_interval",
-			`{"name":"W","type":"Subagent","description":"d","soul":"s","executor":{"kind":"native"},"heartbeat_interval":15}`,
-			"heartbeat",
-		},
-		{
-			"voice",
-			`{"name":"W","type":"Subagent","description":"d","soul":"s","executor":{"kind":"native"},"voice":"alloy"}`,
-			"voice",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			api := buildExecutorTestAPI(t)
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(tc.body))
-			r.Header.Set("Content-Type", "application/json")
-			api.HandleAgents(w, r)
-			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-			assert.Contains(t, w.Body.String(), tc.want)
-		})
-	}
-}
-
-// TestCreateAgent_MainAcceptsHeartbeat proves a Main agent create CAN set
-// heartbeat (the inherit/form matrix permits it for Main) and it round-trips.
-func TestCreateAgent_MainAcceptsHeartbeat(t *testing.T) {
+// TestCreateAgent_WorkerRejectsVoice proves the O12.1 form-matrix gate at
+// create time: a Subagent (worker) create that sets voice is rejected.
+// (Heartbeat is workspace-scoped per ADR-027 and is no longer in AgentCreateRequest.)
+func TestCreateAgent_WorkerRejectsVoice(t *testing.T) {
 	api := buildExecutorTestAPI(t)
-	created := postAgentProvider(t, api,
-		`{"name":"MainHB","soul":"s","heartbeat_enabled":true,"heartbeat_interval":20}`)
-	assert.True(t, created.HeartbeatEnabled, "Main create must accept heartbeat_enabled")
-	assert.Equal(t, 20, created.HeartbeatInterval)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
+		strings.NewReader(`{"name":"W","type":"Subagent","description":"d","soul":"s","executor":{"kind":"native"},"voice":"alloy"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "voice")
 }

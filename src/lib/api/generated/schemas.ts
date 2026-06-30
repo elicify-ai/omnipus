@@ -680,12 +680,23 @@ type Workspace = {
   member_configs?: {} | undefined;
 };
 type WorkspaceMemberConfig = Partial<{
-  heartbeat: Partial<{
-    enabled: boolean;
-    interval_minutes: number;
-    body: string;
-    session_id: string;
-  }>;
+  heartbeat: WorkspaceMemberHeartbeat;
+}>;
+type WorkspaceMemberHeartbeat = Partial<{
+  enabled: boolean;
+  interval_minutes: number;
+  body: string;
+  session_id: string;
+}>;
+type WorkspaceUpdateRequest = Partial<{
+  name: string;
+  description: string;
+  status: "active" | "archived";
+  pinned: boolean;
+  pin_order: number;
+  core_team: Array<string>;
+  repository: string;
+  member_configs: {};
 }>;
 type WorkspaceDelegation = {
   workspace_id: string;
@@ -2173,17 +2184,16 @@ export const NotificationList: z.ZodType<NotificationList> = z.object({
   notifications: z.array(Notification),
   unread_count: z.number().int(),
 });
-export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
+export const WorkspaceMemberHeartbeat: z.ZodType<WorkspaceMemberHeartbeat> = z
   .object({
-    heartbeat: z
-      .object({
-        enabled: z.boolean(),
-        interval_minutes: z.number().int().gte(5),
-        body: z.string().max(16384),
-        session_id: z.string(),
-      })
-      .partial(),
+    enabled: z.boolean(),
+    interval_minutes: z.number().int().gte(5),
+    body: z.string().max(16384),
+    session_id: z.string(),
   })
+  .partial();
+export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
+  .object({ heartbeat: WorkspaceMemberHeartbeat })
   .partial();
 export const Workspace: z.ZodType<Workspace> = z
   .object({
@@ -2211,7 +2221,7 @@ export const WorkspaceCreateRequest = z
     repository: z.string().optional(),
   })
   .passthrough();
-export const WorkspaceUpdateRequest = z
+export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
   .object({
     name: z.string().min(1).max(200),
     description: z.string().max(2000),
@@ -2220,6 +2230,7 @@ export const WorkspaceUpdateRequest = z
     pin_order: z.number().int(),
     core_team: z.array(z.string()).max(20),
     repository: z.string(),
+    member_configs: z.record(WorkspaceMemberConfig),
   })
   .partial()
   .passthrough();

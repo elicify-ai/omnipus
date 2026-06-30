@@ -8488,22 +8488,7 @@ type Workspace struct {
 	IsDefault *bool `json:"is_default,omitempty"`
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
-	MemberConfigs *map[string]struct {
-		// Heartbeat Heartbeat settings for this (workspace, agent) pair.
-		Heartbeat *struct {
-			// Body Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
-			Body *string `json:"body,omitempty"`
-
-			// Enabled Whether the heartbeat is active for this member in this workspace.
-			Enabled *bool `json:"enabled,omitempty"`
-
-			// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
-			IntervalMinutes *int `json:"interval_minutes,omitempty"`
-
-			// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
-			SessionId *string `json:"session_id,omitempty"`
-		} `json:"heartbeat,omitempty"`
-	} `json:"member_configs,omitempty"`
+	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 
 	// Name Human-readable workspace name. Not unique.
 	Name string `json:"name"`
@@ -8605,29 +8590,35 @@ type WorkspaceInstructionsResponse struct {
 // WorkspaceMemberConfig Per-member config inside a workspace (keyed by agentId).
 type WorkspaceMemberConfig struct {
 	// Heartbeat Heartbeat settings for this (workspace, agent) pair.
-	Heartbeat *struct {
-		// Body Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
-		Body *string `json:"body,omitempty"`
+	Heartbeat *WorkspaceMemberHeartbeat `json:"heartbeat,omitempty"`
+}
 
-		// Enabled Whether the heartbeat is active for this member in this workspace.
-		Enabled *bool `json:"enabled,omitempty"`
+// WorkspaceMemberHeartbeat Heartbeat settings for this (workspace, agent) pair.
+type WorkspaceMemberHeartbeat struct {
+	// Body Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
+	Body *string `json:"body,omitempty"`
 
-		// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
-		IntervalMinutes *int `json:"interval_minutes,omitempty"`
+	// Enabled Whether the heartbeat is active for this member in this workspace.
+	Enabled *bool `json:"enabled,omitempty"`
 
-		// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
-		SessionId *string `json:"session_id,omitempty"`
-	} `json:"heartbeat,omitempty"`
+	// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
+	IntervalMinutes *int `json:"interval_minutes,omitempty"`
+
+	// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
+	SessionId *string `json:"session_id,omitempty"`
 }
 
 // WorkspaceUpdateRequest Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged.
 type WorkspaceUpdateRequest struct {
 	CoreTeam    *[]string `json:"core_team,omitempty"`
 	Description *string   `json:"description,omitempty"`
-	Name        *string   `json:"name,omitempty"`
-	PinOrder    *int      `json:"pin_order,omitempty"`
-	Pinned      *bool     `json:"pinned,omitempty"`
-	Repository  *string   `json:"repository,omitempty"`
+
+	// MemberConfigs Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input.
+	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
+	Name          *string                           `json:"name,omitempty"`
+	PinOrder      *int                              `json:"pin_order,omitempty"`
+	Pinned        *bool                             `json:"pinned,omitempty"`
+	Repository    *string                           `json:"repository,omitempty"`
 
 	// Status Archive or restore a workspace.
 	Status *WorkspaceUpdateRequestStatus `json:"status,omitempty"`
