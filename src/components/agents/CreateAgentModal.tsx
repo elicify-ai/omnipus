@@ -105,9 +105,6 @@ function payloadToCreateRequest(
   if (payload.description.trim()) req.description = payload.description.trim()
   // O3 two-field: forward provider only when non-empty and not inheriting model.
   if (!inheritModel && payload.provider && payload.provider.trim() !== '') req.provider = payload.provider.trim()
-  if (payload.heartbeat !== undefined) req.heartbeat = payload.heartbeat
-  if (payload.heartbeat_enabled !== undefined) req.heartbeat_enabled = payload.heartbeat_enabled
-  if (payload.heartbeat_interval !== undefined) req.heartbeat_interval = payload.heartbeat_interval
   if (payload.voice !== undefined && payload.voice !== '') req.voice = payload.voice
   // Tools / Skills / Sandbox omitted when inherited so the server keeps the
   // caller's rail (UAT 4a). Fallback models ride with the primary model.

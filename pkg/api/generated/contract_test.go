@@ -790,7 +790,7 @@ func TestContract_Agent_Populated(t *testing.T) {
 }
 
 func TestContract_Agent_ZeroValue(t *testing.T) {
-	// id="", name="", type="" (not in enum), soul="", heartbeat=""
+	// id="", name="", type="" (not in enum), soul=""
 	mustFailComponent(t, "Agent", FixtureAgent_ZeroValue(),
 		"zero value has empty required fields including type which must be enum value")
 }

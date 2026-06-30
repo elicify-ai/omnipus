@@ -980,6 +980,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get global memory and recap/retention settings
+         * @description Returns the global memory/recap and retention settings (agents.defaults.* and storage.retention fields). Readable by any authenticated user. Never exposes secrets.
+         */
+        get: operations["getMemorySettings"];
+        /**
+         * Update global memory and recap/retention settings
+         * @description Writes the global memory/recap and retention settings. Reads/writes ONLY the MemorySettings fields — no merge of sibling config sections or secrets (A2/G-02). Writable by any authenticated user (operator decision, no admin gate). Uses safeUpdateConfigJSON server-side to preserve all other config fields including API keys.
+         */
+        put: operations["updateMemorySettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/channels": {
         parameters: {
             query?: never;
@@ -2703,11 +2727,16 @@ export interface components {
              */
             id: string;
             /**
-             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
+             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
              * @example chat
              * @enum {string}
              */
-            type?: "chat" | "task" | "channel" | "scheduled";
+            type?: "chat" | "task" | "channel" | "scheduled" | "heartbeat";
+            /**
+             * @description Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
+             * @example false
+             */
+            protected?: boolean;
             /**
              * @description ID of the primary agent that owns this session.
              * @example jim
@@ -3106,11 +3135,6 @@ export interface components {
              */
             soul: string;
             /**
-             * @description Contents of HEARTBEAT.md — periodic background instructions. Empty string when not set. Always present on detail responses (never null). Main only.
-             * @example Every hour, check for new tasks in the queue.
-             */
-            heartbeat: string;
-            /**
              * @description Non-fatal advisory (e.g. config reload failed after create/update).
              * @example config reload failed: ...
              */
@@ -3131,16 +3155,6 @@ export interface components {
              * @enum {string}
              */
             steering_mode: "one-at-a-time" | "queue-and-process";
-            /**
-             * @description Whether the HEARTBEAT.md periodic instruction loop is active for this agent (Main only).
-             * @example false
-             */
-            heartbeat_enabled: boolean;
-            /**
-             * @description Interval in seconds between heartbeat passes (Main only).
-             * @example 3600
-             */
-            heartbeat_interval: number;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
              * @description Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. Per-agent "off" is retired (O13) — "no sandbox" is reachable only via the global god-mode switch. Editable on ALL agents, including locked core agents. Hidden for subagent_3p — CLI manages its own isolation.
@@ -3469,21 +3483,6 @@ export interface components {
              * @example You are a focused research assistant...
              */
             soul: string;
-            /**
-             * @description Initial HEARTBEAT.md content (Main only). Optional.
-             * @example Check the queue every hour.
-             */
-            heartbeat?: string;
-            /**
-             * @description Whether the HEARTBEAT.md periodic instruction loop is active (Main only).
-             * @example false
-             */
-            heartbeat_enabled?: boolean;
-            /**
-             * @description Interval in seconds between heartbeat passes (Main only).
-             * @example 1800
-             */
-            heartbeat_interval?: number;
             delegation_policy?: components["schemas"]["DelegationPolicy"];
             /**
              * @description Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
@@ -7101,6 +7100,95 @@ export interface components {
              * @example alice
              */
             owner?: string;
+            /**
+             * @description Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
+             * @example {
+             *       "mia": {
+             *         "heartbeat": {
+             *           "enabled": true,
+             *           "interval_minutes": 30,
+             *           "body": "Check the project board.",
+             *           "session_id": "550e8400-e29b-41d4-a716-446655440000"
+             *         }
+             *       }
+             *     }
+             */
+            member_configs?: {
+                [key: string]: components["schemas"]["WorkspaceMemberConfig"];
+            };
+        };
+        /** @description Per-member config inside a workspace (keyed by agentId). */
+        WorkspaceMemberConfig: {
+            /** @description Heartbeat settings for this (workspace, agent) pair. */
+            heartbeat?: {
+                /**
+                 * @description Whether the heartbeat is active for this member in this workspace.
+                 * @example true
+                 */
+                enabled?: boolean;
+                /**
+                 * @description Interval in minutes between heartbeat passes. Minimum 5.
+                 * @example 30
+                 */
+                interval_minutes?: number;
+                /**
+                 * @description Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
+                 * @example Every 30 minutes, check the project board for new high-priority tasks.
+                 */
+                body?: string;
+                /**
+                 * @description Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
+                 * @example 550e8400-e29b-41d4-a716-446655440000
+                 */
+                session_id?: string;
+            };
+        };
+        /** @description Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields. */
+        MemorySettings: {
+            /**
+             * @description Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled in config.json.
+             * @example true
+             */
+            auto_recap_enabled?: boolean;
+            /**
+             * @description Minutes of inactivity after which a session is considered idle and a recap is triggered. Maps to agents.defaults.idle_timeout_minutes.
+             * @example 30
+             */
+            idle_timeout_minutes?: number;
+            /**
+             * @description Whether boot-time recap (summarise all sessions on gateway start) is enabled. Maps to agents.defaults.bootstrap_recap_enabled.
+             * @example false
+             */
+            bootstrap_recap_enabled?: boolean;
+            /**
+             * @description Maximum number of bootstrap recap operations to run per minute (rate-limit). Maps to agents.defaults.bootstrap_recap_max_per_minute.
+             * @example 5
+             */
+            bootstrap_recap_max_per_minute?: number;
+            /**
+             * Format: double
+             * @description Maximum USD spend allowed for bootstrap recaps in a single calendar day. Maps to agents.defaults.bootstrap_recap_daily_budget_usd.
+             * @example 0.5
+             */
+            bootstrap_recap_daily_budget_usd?: number;
+            /**
+             * @description Model slugs permitted for recap/compaction LLM calls. Empty list = any configured model is allowed. Maps to agents.defaults.recap_model_allow_list.
+             * @example [
+             *       "google/gemini-2.5-flash",
+             *       "anthropic/claude-3.5-haiku"
+             *     ]
+             */
+            recap_model_allow_list?: string[];
+            /**
+             * @description Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
+             * @example 90
+             */
+            session_days?: number;
+            /**
+             * @description Number of days to retain memory retrospective files. Maps to storage.retention.memory_retros_days.
+             * @example 365
+             */
+            memory_retros_days?: number;
         };
         /** @description Request body for POST /workspaces */
         WorkspaceCreateRequest: {
@@ -9551,6 +9639,61 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+        };
+    };
+    getMemorySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current memory settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemorySettings"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    updateMemorySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemorySettings"];
+            };
+        };
+        responses: {
+            /** @description Updated memory settings (echoes the stored values). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemorySettings"];
+                };
+            };
+            /** @description Invalid field value (e.g. negative session_days). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
         };
     };
     listChannels: {
@@ -12685,6 +12828,8 @@ export type ScheduleRunResult = components["schemas"]["ScheduleRunResult"];
 export type Notification = components["schemas"]["Notification"];
 export type NotificationList = components["schemas"]["NotificationList"];
 export type Workspace = components["schemas"]["Workspace"];
+export type WorkspaceMemberConfig = components["schemas"]["WorkspaceMemberConfig"];
+export type MemorySettings = components["schemas"]["MemorySettings"];
 export type WorkspaceCreateRequest = components["schemas"]["WorkspaceCreateRequest"];
 export type WorkspaceUpdateRequest = components["schemas"]["WorkspaceUpdateRequest"];
 export type WorkspaceDelegationEdge = components["schemas"]["WorkspaceDelegationEdge"];

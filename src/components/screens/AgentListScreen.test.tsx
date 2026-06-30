@@ -64,12 +64,9 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     model: 'anthropic/claude-3.5-haiku',
     description: 'Assistant',
     soul: '',
-    heartbeat: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
     steering_mode: 'one-at-a-time',
-    heartbeat_enabled: false,
-    heartbeat_interval: 300,
     ...overrides,
   }
 }

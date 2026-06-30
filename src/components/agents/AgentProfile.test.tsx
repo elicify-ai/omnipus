@@ -63,12 +63,9 @@ const mockCoreAgent: Agent = {
   model: 'claude-sonnet-4-6',
   description: 'General purpose assistant',
   soul: '',
-  heartbeat: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
   steering_mode: 'one-at-a-time',
-  heartbeat_enabled: false,
-  heartbeat_interval: 300,
   rate_limits: { use_global_defaults: true },
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
 }
@@ -82,12 +79,9 @@ const mockLockedCoreAgent: Agent = {
   model: 'claude-opus-4-6',
   description: 'Core agent with compiled prompt — identity is read-only',
   soul: '',
-  heartbeat: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
   steering_mode: 'one-at-a-time',
-  heartbeat_enabled: false,
-  heartbeat_interval: 300,
 }
 
 // Tier-branched form fixtures (Spec-4 FR-4.1 + locked concept in
@@ -629,7 +623,7 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     expect(await screen.findByTestId('runner-test-button')).toBeInTheDocument()
   })
 
-  it('base (core) form: hides Executor, hides Schedules, shows Heartbeat when expanded', async () => {
+  it('base (core) form: hides Executor, hides Schedules, no agent-level heartbeat (now workspace-scoped)', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
@@ -637,9 +631,9 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     switchTab('tab-advanced')
     expect(screen.queryByText(/^Executor$/)).toBeNull()
     expect(screen.queryByText(/^Schedules$/)).toBeNull()
-    // Heartbeat is in the Personality tab.
+    // Heartbeat is now workspace-scoped (spec A1/F-10) — no agent-level heartbeat UI.
     switchTab('tab-personality')
-    expect(await screen.findByText(/Enable heartbeat/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Enable heartbeat/i)).toBeNull()
   })
 
   it('base (core) form: still has the "Personality & instructions" framing (no worker relabel)', async () => {

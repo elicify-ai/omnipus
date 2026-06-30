@@ -209,12 +209,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Schema-pinned on Agent.voice; not active until v0.2.0 TTS. Empty string
   // means "not configured" — the wire payload omits the field entirely.
   const [voice, setVoice] = useState('')
-  const [heartbeat, setHeartbeat] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState(0)
   const [maxToolIterations, setMaxToolIterations] = useState(50)
   const [steeringMode, setSteeringMode] = useState<'one-at-a-time' | 'queue-and-process'>('one-at-a-time')
-  const [heartbeatEnabled, setHeartbeatEnabled] = useState(false)
-  const [heartbeatInterval, setHeartbeatInterval] = useState(30)
   // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
   // Opens an AlertDialog; the confirm mutation invalidates the list and
   // closes the slide-over. Locked agents do not render the trigger.
@@ -271,12 +268,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // renders 3 spaces and the wire round-trip is clean (whitespace was
     // silently reaching the server).
     setVoice((agent.voice ?? '').trim())
-    setHeartbeat(agent.heartbeat ?? '')
     setTimeoutSeconds(agent.timeout_seconds ?? 0)
     setMaxToolIterations(agent.max_tool_iterations ?? 50)
     setSteeringMode((agent.steering_mode ?? 'one-at-a-time') as 'one-at-a-time' | 'queue-and-process')
-    setHeartbeatEnabled(agent.heartbeat_enabled ?? false)
-    setHeartbeatInterval(agent.heartbeat_interval ?? 30)
     setSandboxProfile(agent.sandbox_profile)
     setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
     // Spec-4: hydrate executor (absent → native default, modelled as undefined).
@@ -339,12 +333,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // "no voice configured" rather than persisting a literal "   " that
       // breaks TTS lookup at v0.2.0 release.
       voice: voice.trim() !== '' ? voice.trim() : undefined,
-      heartbeat,
       timeout_seconds: timeoutPayload,
       max_tool_iterations: maxToolIterations,
       steering_mode: steeringMode,
-      heartbeat_enabled: heartbeatEnabled,
-      heartbeat_interval: heartbeatInterval,
       // 'none' is a UI-only marker meaning "inherit global default". Strip it before
       // submitting so the backend receives undefined (omitted) rather than a value
       // that fails the sandbox_profile enum validation (contract does not include 'none').
@@ -372,9 +363,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   }, [
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
-    maxToolCallsPerMinute, maxCostPerDay, soul, voice, heartbeat,
+    maxToolCallsPerMinute, maxCostPerDay, soul, voice,
     timeoutPayload, timeoutSeconds, maxToolIterations, steeringMode,
-    heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
+    sandboxProfile, shellDenyPatterns,
     agentSkills, executor,
   ])
 
@@ -456,7 +447,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       const stripped = agent?.locked
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
-            heartbeat: _h,
             shell_policy: _shp, skills: _sk, executor: _ex, ...rest
           }) => rest)(data as Record<string, unknown>)
         : data
@@ -1059,51 +1049,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             renderUploadButton={(_target, onUpload) => <UploadButton onUpload={onUpload} />}
           />
 
-          {/* Heartbeat — base-only. Workers never run on a schedule. */}
-          {!isWorkerAgent && (
-            <>
-              <Separator />
-              <div className="space-y-2">
-                <p className="text-xs font-medium text-[var(--color-secondary)]">Background tasks / periodic instructions</p>
-                <p className="text-xs text-[var(--color-muted)]">
-                  Instructions the agent runs on a recurring schedule — check queues, summarize,
-                  or perform any background work. Stored as <span className="font-mono text-[11px]">HEARTBEAT.md</span>.
-                </p>
-                <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
-                      <p className="text-xs text-[var(--color-muted)]">Run on a recurring schedule</p>
-                    </div>
-                    <Switch
-                      checked={heartbeatEnabled}
-                      onCheckedChange={(v) => { markDirty(); setHeartbeatEnabled(v) }}
-                    />
-                  </div>
-                  {heartbeatEnabled && (
-                    <div className="flex items-center gap-3 pt-1 border-t border-[var(--color-border)]">
-                      <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Interval (seconds)</label>
-                      <Input
-                        type="number"
-                        min={1}
-                        value={heartbeatInterval}
-                        onChange={(e) => { markDirty(); setHeartbeatInterval(Number(e.target.value)) }}
-                        className="text-xs h-8"
-                      />
-                    </div>
-                  )}
-                </div>
-                <Textarea
-                  value={heartbeat}
-                  onChange={(e) => { markDirty(); setHeartbeat(e.target.value) }}
-                  placeholder="# Heartbeat&#10;&#10;Write persistent context for this agent..."
-                  rows={4}
-                  className="text-xs font-mono resize-none"
-                />
-                <UploadButton onUpload={setHeartbeat} />
-              </div>
-            </>
-          )}
+          {/* Heartbeat — moved to per-workspace Heartbeat tab (spec A1/F-10).
+              Heartbeat is now configured in the Workspace edit panel, not here. */}
         
     </div>
   )

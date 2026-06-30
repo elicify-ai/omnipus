@@ -19,12 +19,9 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     model: 'claude-sonnet-4-6',
     description: 'General purpose assistant',
     soul: '',
-    heartbeat: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
     steering_mode: 'one-at-a-time',
-    heartbeat_enabled: false,
-    heartbeat_interval: 300,
     ...overrides,
   }
 }

@@ -2606,6 +2606,7 @@ func (e SessionStatus) Valid() bool {
 const (
 	SessionTypeChannel   SessionType = "channel"
 	SessionTypeChat      SessionType = "chat"
+	SessionTypeHeartbeat SessionType = "heartbeat"
 	SessionTypeScheduled SessionType = "scheduled"
 	SessionTypeTask      SessionType = "task"
 )
@@ -2616,6 +2617,8 @@ func (e SessionType) Valid() bool {
 	case SessionTypeChannel:
 		return true
 	case SessionTypeChat:
+		return true
+	case SessionTypeHeartbeat:
 		return true
 	case SessionTypeScheduled:
 		return true
@@ -2813,6 +2816,7 @@ func (e SessionDetailSessionStatus) Valid() bool {
 const (
 	SessionDetailSessionTypeChannel   SessionDetailSessionType = "channel"
 	SessionDetailSessionTypeChat      SessionDetailSessionType = "chat"
+	SessionDetailSessionTypeHeartbeat SessionDetailSessionType = "heartbeat"
 	SessionDetailSessionTypeScheduled SessionDetailSessionType = "scheduled"
 	SessionDetailSessionTypeTask      SessionDetailSessionType = "task"
 )
@@ -2823,6 +2827,8 @@ func (e SessionDetailSessionType) Valid() bool {
 	case SessionDetailSessionTypeChannel:
 		return true
 	case SessionDetailSessionTypeChat:
+		return true
+	case SessionDetailSessionTypeHeartbeat:
 		return true
 	case SessionDetailSessionTypeScheduled:
 		return true
@@ -4069,15 +4075,6 @@ type Agent struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Heartbeat Contents of HEARTBEAT.md — periodic background instructions. Empty string when not set. Always present on detail responses (never null). Main only.
-	Heartbeat string `json:"heartbeat"`
-
-	// HeartbeatEnabled Whether the HEARTBEAT.md periodic instruction loop is active for this agent (Main only).
-	HeartbeatEnabled bool `json:"heartbeat_enabled"`
-
-	// HeartbeatInterval Interval in seconds between heartbeat passes (Main only).
-	HeartbeatInterval int `json:"heartbeat_interval"`
-
 	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
 	Icon *string `json:"icon,omitempty"`
 
@@ -4312,15 +4309,6 @@ type AgentCreateRequest struct {
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
-
-	// Heartbeat Initial HEARTBEAT.md content (Main only). Optional.
-	Heartbeat *string `json:"heartbeat,omitempty"`
-
-	// HeartbeatEnabled Whether the HEARTBEAT.md periodic instruction loop is active (Main only).
-	HeartbeatEnabled *bool `json:"heartbeat_enabled,omitempty"`
-
-	// HeartbeatInterval Interval in seconds between heartbeat passes (Main only).
-	HeartbeatInterval *int `json:"heartbeat_interval,omitempty"`
 
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
@@ -5910,6 +5898,33 @@ type MeInfo struct {
 // MeInfoRole RBAC role of the current authenticated user.
 type MeInfoRole string
 
+// MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
+type MemorySettings struct {
+	// AutoRecapEnabled Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled in config.json.
+	AutoRecapEnabled *bool `json:"auto_recap_enabled,omitempty"`
+
+	// BootstrapRecapDailyBudgetUsd Maximum USD spend allowed for bootstrap recaps in a single calendar day. Maps to agents.defaults.bootstrap_recap_daily_budget_usd.
+	BootstrapRecapDailyBudgetUsd *float64 `json:"bootstrap_recap_daily_budget_usd,omitempty"`
+
+	// BootstrapRecapEnabled Whether boot-time recap (summarise all sessions on gateway start) is enabled. Maps to agents.defaults.bootstrap_recap_enabled.
+	BootstrapRecapEnabled *bool `json:"bootstrap_recap_enabled,omitempty"`
+
+	// BootstrapRecapMaxPerMinute Maximum number of bootstrap recap operations to run per minute (rate-limit). Maps to agents.defaults.bootstrap_recap_max_per_minute.
+	BootstrapRecapMaxPerMinute *int `json:"bootstrap_recap_max_per_minute,omitempty"`
+
+	// IdleTimeoutMinutes Minutes of inactivity after which a session is considered idle and a recap is triggered. Maps to agents.defaults.idle_timeout_minutes.
+	IdleTimeoutMinutes *int `json:"idle_timeout_minutes,omitempty"`
+
+	// MemoryRetrosDays Number of days to retain memory retrospective files. Maps to storage.retention.memory_retros_days.
+	MemoryRetrosDays *int `json:"memory_retros_days,omitempty"`
+
+	// RecapModelAllowList Model slugs permitted for recap/compaction LLM calls. Empty list = any configured model is allowed. Maps to agents.defaults.recap_model_allow_list.
+	RecapModelAllowList *[]string `json:"recap_model_allow_list,omitempty"`
+
+	// SessionDays Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
+	SessionDays *int `json:"session_days,omitempty"`
+}
+
 // Message A single transcript entry (session.TranscriptEntry on the Go side). Maps to the Message interface in src/lib/api.ts. The SPA reads this from GET /sessions/{id}/messages.
 type Message struct {
 	// AgentId ID of the agent that produced this entry (FR-002). Always present.
@@ -7116,6 +7131,9 @@ type Session struct {
 	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 	Partitions []string `json:"partitions"`
 
+	// Protected Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
+	Protected *bool `json:"protected,omitempty"`
+
 	// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
 	Provider *string `json:"provider,omitempty"`
 
@@ -7173,7 +7191,7 @@ type Session struct {
 	// Title Human-readable session title. May be auto-generated or user-renamed.
 	Title string `json:"title"`
 
-	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
+	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
 	Type *SessionType `json:"type,omitempty"`
 
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
@@ -7186,7 +7204,7 @@ type Session struct {
 // SessionStatus Current lifecycle status of the session.
 type SessionStatus string
 
-// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
+// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
 type SessionType string
 
 // SessionCreateRequest Body for POST /sessions. Creates a new session for an agent.
@@ -7334,6 +7352,9 @@ type SessionDetail struct {
 		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 		Partitions []string `json:"partitions"`
 
+		// Protected Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
+		Protected *bool `json:"protected,omitempty"`
+
 		// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
 		Provider *string `json:"provider,omitempty"`
 
@@ -7391,7 +7412,7 @@ type SessionDetail struct {
 		// Title Human-readable session title. May be auto-generated or user-renamed.
 		Title string `json:"title"`
 
-		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
+		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
 		Type *SessionDetailSessionType `json:"type,omitempty"`
 
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
@@ -7423,7 +7444,7 @@ type SessionDetailMessagesType string
 // SessionDetailSessionStatus Current lifecycle status of the session.
 type SessionDetailSessionStatus string
 
-// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists.
+// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
 type SessionDetailSessionType string
 
 // SessionRenameRequest Body for PUT /sessions/{id}. Renames a session.
@@ -8466,6 +8487,24 @@ type Workspace struct {
 	// IsDefault True only for the auto-created default workspace. The default workspace cannot be deleted and always appears first in the sidebar.
 	IsDefault *bool `json:"is_default,omitempty"`
 
+	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
+	MemberConfigs *map[string]struct {
+		// Heartbeat Heartbeat settings for this (workspace, agent) pair.
+		Heartbeat *struct {
+			// Body Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
+			Body *string `json:"body,omitempty"`
+
+			// Enabled Whether the heartbeat is active for this member in this workspace.
+			Enabled *bool `json:"enabled,omitempty"`
+
+			// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
+			IntervalMinutes *int `json:"interval_minutes,omitempty"`
+
+			// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
+			SessionId *string `json:"session_id,omitempty"`
+		} `json:"heartbeat,omitempty"`
+	} `json:"member_configs,omitempty"`
+
 	// Name Human-readable workspace name. Not unique.
 	Name string `json:"name"`
 
@@ -8561,6 +8600,24 @@ type WorkspaceInstructionsRequest struct {
 type WorkspaceInstructionsResponse struct {
 	// Content Current content of the workspace's AGENT.md. Empty string when the file does not exist or has not been set yet.
 	Content string `json:"content"`
+}
+
+// WorkspaceMemberConfig Per-member config inside a workspace (keyed by agentId).
+type WorkspaceMemberConfig struct {
+	// Heartbeat Heartbeat settings for this (workspace, agent) pair.
+	Heartbeat *struct {
+		// Body Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
+		Body *string `json:"body,omitempty"`
+
+		// Enabled Whether the heartbeat is active for this member in this workspace.
+		Enabled *bool `json:"enabled,omitempty"`
+
+		// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
+		IntervalMinutes *int `json:"interval_minutes,omitempty"`
+
+		// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
+		SessionId *string `json:"session_id,omitempty"`
+	} `json:"heartbeat,omitempty"`
 }
 
 // WorkspaceUpdateRequest Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged.
@@ -8863,6 +8920,9 @@ type CreateSessionJSONRequestBody = SessionCreateRequest
 
 // RenameSessionJSONRequestBody defines body for RenameSession for application/json ContentType.
 type RenameSessionJSONRequestBody = SessionRenameRequest
+
+// UpdateMemorySettingsJSONRequestBody defines body for UpdateMemorySettings for application/json ContentType.
+type UpdateMemorySettingsJSONRequestBody = MemorySettings
 
 // InstallSkillJSONRequestBody defines body for InstallSkill for application/json ContentType.
 type InstallSkillJSONRequestBody = SkillInstallRequest

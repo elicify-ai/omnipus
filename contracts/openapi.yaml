@@ -476,6 +476,10 @@ components:
       $ref: ./components/schemas/NotificationList.yaml
     Workspace:
       $ref: ./components/schemas/Workspace.yaml
+    WorkspaceMemberConfig:
+      $ref: ./components/schemas/WorkspaceMemberConfig.yaml
+    MemorySettings:
+      $ref: ./components/schemas/MemorySettings.yaml
     WorkspaceCreateRequest:
       $ref: ./components/schemas/WorkspaceCreateRequest.yaml
     WorkspaceUpdateRequest:
@@ -2565,6 +2569,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /settings/memory:
+    get:
+      operationId: getMemorySettings
+      summary: Get global memory and recap/retention settings
+      description: >
+        Returns the global memory/recap and retention settings (agents.defaults.*
+        and storage.retention fields). Readable by any authenticated user.
+        Never exposes secrets.
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current memory settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySettings'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    put:
+      operationId: updateMemorySettings
+      summary: Update global memory and recap/retention settings
+      description: >
+        Writes the global memory/recap and retention settings. Reads/writes
+        ONLY the MemorySettings fields — no merge of sibling config sections
+        or secrets (A2/G-02). Writable by any authenticated user (operator
+        decision, no admin gate). Uses safeUpdateConfigJSON server-side to
+        preserve all other config fields including API keys.
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemorySettings'
+      responses:
+        '200':
+          description: Updated memory settings (echoes the stored values).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySettings'
+        '400':
+          description: Invalid field value (e.g. negative session_days).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
   /channels:
     get:
       operationId: listChannels
