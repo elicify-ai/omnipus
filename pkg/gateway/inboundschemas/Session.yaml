@@ -26,13 +26,26 @@ properties:
       - task
       - channel
       - scheduled
+      - heartbeat
     description: >
       Session classification. Legacy sessions without a type field are treated as "chat"
       by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a
       session created by a fired schedule / heartbeat run (issue #264, FR-005); it must
       be accepted here or GET /api/v1/sessions fails SPA schema validation once any
-      scheduled/heartbeat session exists.
+      scheduled/heartbeat session exists. "heartbeat" tags the eager standing session
+      created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron
+      job continues this session rather than starting a fresh one.
     example: "chat"
+  protected:
+    type: boolean
+    description: >
+      Computed field: true while the heartbeat member whose session_id matches this
+      session's id has heartbeat.enabled = true in its workspace member_configs.
+      NOT a stored flag — derived server-side from member_configs on each GET /sessions
+      response. When true, the SPA pins the session to the top of the Session panel and
+      hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021,
+      FR-028, A2/G-01)
+    example: false
   agent_id:
     type: string
     description: ID of the primary agent that owns this session.

@@ -134,20 +134,6 @@ properties:
       The CLI never reads a file from disk. Backend trims before length-validation,
       so whitespace-only is rejected as minLength violation.
     example: "You are a focused research assistant..."
-  heartbeat:
-    type: string
-    description: >
-      Initial HEARTBEAT.md content (Main only). Optional.
-    example: "Check the queue every hour."
-  heartbeat_enabled:
-    type: boolean
-    description: Whether the HEARTBEAT.md periodic instruction loop is active (Main only).
-    example: false
-  heartbeat_interval:
-    type: integer
-    minimum: 0
-    description: Interval in seconds between heartbeat passes (Main only).
-    example: 1800
   delegation_policy:
     $ref: './DelegationPolicy.yaml'
   voice:

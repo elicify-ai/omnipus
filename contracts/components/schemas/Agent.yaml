@@ -13,12 +13,9 @@ required:
   - locked
   - status
   - soul
-  - heartbeat
   - timeout_seconds
   - max_tool_iterations
   - steering_mode
-  - heartbeat_enabled
-  - heartbeat_interval
 properties:
   id:
     type: string
@@ -110,13 +107,6 @@ properties:
       core agents (prompt is compiled in, not exposed via API). Empty string for
       draft agents (no SOUL.md written yet). Always present (never null).
     example: "You are Jim, a senior software engineer..."
-  heartbeat:
-    type: string
-    description: >
-      Contents of HEARTBEAT.md — periodic background instructions.
-      Empty string when not set. Always present on detail responses (never null).
-      Main only.
-    example: "Every hour, check for new tasks in the queue."
   warning:
     type: string
     description: Non-fatal advisory (e.g. config reload failed after create/update).
@@ -144,15 +134,6 @@ properties:
       Tool execution steering strategy. "one-at-a-time" = approve each tool call
       individually. Workers always use "one-at-a-time" (server-set).
     example: "one-at-a-time"
-  heartbeat_enabled:
-    type: boolean
-    description: Whether the HEARTBEAT.md periodic instruction loop is active for this agent (Main only).
-    example: false
-  heartbeat_interval:
-    type: integer
-    minimum: 0
-    description: Interval in seconds between heartbeat passes (Main only).
-    example: 3600
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
   sandbox_profile:

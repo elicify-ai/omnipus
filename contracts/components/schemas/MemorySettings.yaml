@@ -1,0 +1,61 @@
+type: object
+description: >
+  Global memory and recap/retention settings. Backed by agents.defaults.* and
+  storage.retention fields in config.json. Readable and writable by any
+  authenticated user (operator decision, A2/G-02). Never exposes secrets —
+  the endpoint reads/writes only the listed fields.
+additionalProperties: false
+properties:
+  auto_recap_enabled:
+    type: boolean
+    description: >
+      Whether automatic session recap (context compaction summary) is enabled
+      globally. Maps to agents.defaults.auto_recap_enabled in config.json.
+    example: true
+  idle_timeout_minutes:
+    type: integer
+    description: >
+      Minutes of inactivity after which a session is considered idle and a recap
+      is triggered. Maps to agents.defaults.idle_timeout_minutes.
+    example: 30
+  bootstrap_recap_enabled:
+    type: boolean
+    description: >
+      Whether boot-time recap (summarise all sessions on gateway start) is enabled.
+      Maps to agents.defaults.bootstrap_recap_enabled.
+    example: false
+  bootstrap_recap_max_per_minute:
+    type: integer
+    description: >
+      Maximum number of bootstrap recap operations to run per minute (rate-limit).
+      Maps to agents.defaults.bootstrap_recap_max_per_minute.
+    example: 5
+  bootstrap_recap_daily_budget_usd:
+    type: number
+    format: double
+    description: >
+      Maximum USD spend allowed for bootstrap recaps in a single calendar day.
+      Maps to agents.defaults.bootstrap_recap_daily_budget_usd.
+    example: 0.50
+  recap_model_allow_list:
+    type: array
+    items:
+      type: string
+    description: >
+      Model slugs permitted for recap/compaction LLM calls. Empty list = any
+      configured model is allowed. Maps to agents.defaults.recap_model_allow_list.
+    example:
+      - "google/gemini-2.5-flash"
+      - "anthropic/claude-3.5-haiku"
+  session_days:
+    type: integer
+    description: >
+      Number of days to retain session JSONL files before the retention sweep
+      removes them. Maps to storage.retention.session_days.
+    example: 90
+  memory_retros_days:
+    type: integer
+    description: >
+      Number of days to retain memory retrospective files. Maps to
+      storage.retention.memory_retros_days.
+    example: 365

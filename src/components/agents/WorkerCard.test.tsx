@@ -32,12 +32,9 @@ function makeWorker(overrides: Partial<Agent> = {}): Agent {
     model: 'anthropic/claude-3.5-haiku',
     description: 'General purpose worker',
     soul: '',
-    heartbeat: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
     steering_mode: 'one-at-a-time',
-    heartbeat_enabled: false,
-    heartbeat_interval: 300,
     ...overrides,
   }
 }
@@ -92,8 +89,8 @@ describe('WorkerCard — omitted colleague affordances', () => {
     expect(screen.queryByRole('button', { name: /chat|message|conversation/i })).not.toBeInTheDocument()
   })
 
-  it('does NOT render a heartbeat indicator even when heartbeat_enabled is true', () => {
-    renderCard(makeWorker({ heartbeat_enabled: true }))
+  it('does NOT render a heartbeat indicator (heartbeat is workspace-scoped, not on worker cards)', () => {
+    renderCard(makeWorker())
     expect(screen.queryByText(/heartbeat/i)).not.toBeInTheDocument()
   })
 })

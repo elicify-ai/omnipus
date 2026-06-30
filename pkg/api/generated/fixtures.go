@@ -730,12 +730,9 @@ func FixtureAgent_Populated() Agent {
 		Locked:            true,
 		Status:            AgentStatusIdle,
 		Soul:              "You are Jim, a helpful assistant.",
-		Heartbeat:         "",
 		TimeoutSeconds:    300,
 		MaxToolIterations: 50,
 		SteeringMode:      "one-at-a-time",
-		HeartbeatEnabled:  false,
-		HeartbeatInterval: 300,
 		Color:             &color,
 		Icon:              &icon,
 		Model:             &model,
@@ -756,12 +753,9 @@ func FixtureAgent_Edge() Agent {
 		Locked:            false,
 		Status:            AgentStatusDraft,
 		Soul:              "",
-		Heartbeat:         "",
 		TimeoutSeconds:    0,
 		MaxToolIterations: 0,
 		SteeringMode:      "one-at-a-time",
-		HeartbeatEnabled:  false,
-		HeartbeatInterval: 0,
 	}
 }
 

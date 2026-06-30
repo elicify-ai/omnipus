@@ -21,7 +21,8 @@ type ProviderValidation = {
 };
 type Session = {
   id: string;
-  type?: ("chat" | "task" | "channel" | "scheduled") | undefined;
+  type?: ("chat" | "task" | "channel" | "scheduled" | "heartbeat") | undefined;
+  protected?: boolean | undefined;
   agent_id: string;
   title: string;
   status: "active" | "archived" | "interrupted";
@@ -113,13 +114,10 @@ type Agent = {
   description?: string | undefined;
   status: "active" | "idle" | "draft" | "error";
   soul: string;
-  heartbeat: string;
   warning?: string | undefined;
   timeout_seconds: number;
   max_tool_iterations: number;
   steering_mode: "one-at-a-time" | "queue-and-process";
-  heartbeat_enabled: boolean;
-  heartbeat_interval: number;
   tools_cfg?: AgentToolsCfg | undefined;
   sandbox_profile?: ("workspace" | "workspace+net" | "host") | undefined;
   shell_policy?: AgentShellPolicy | undefined;
@@ -222,9 +220,6 @@ type AgentCreateRequest = {
     | undefined;
   skills?: Array<string> | undefined;
   soul: string;
-  heartbeat?: string | undefined;
-  heartbeat_enabled?: boolean | undefined;
-  heartbeat_interval?: number | undefined;
   delegation_policy?: delegation_policy | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
@@ -668,6 +663,30 @@ type Notification = {
   session_id?: string | undefined;
   agent_id?: string | undefined;
 };
+type Workspace = {
+  id: string;
+  name: string;
+  description?: string | undefined;
+  status: "active" | "archived";
+  pinned: boolean;
+  pin_order: number;
+  core_team?: Array<string> | undefined;
+  repository?: string | undefined;
+  task_count: number;
+  is_default?: boolean | undefined;
+  created_at: string;
+  updated_at: string;
+  owner?: string | undefined;
+  member_configs?: {} | undefined;
+};
+type WorkspaceMemberConfig = Partial<{
+  heartbeat: Partial<{
+    enabled: boolean;
+    interval_minutes: number;
+    body: string;
+    session_id: string;
+  }>;
+}>;
 type WorkspaceDelegation = {
   workspace_id: string;
   edges: Array<WorkspaceDelegationEdge>;
@@ -924,7 +943,10 @@ export const SessionStats: z.ZodType<SessionStats> = z
   .passthrough();
 export const Session: z.ZodType<Session> = z.object({
   id: z.string(),
-  type: z.enum(["chat", "task", "channel", "scheduled"]).optional(),
+  type: z
+    .enum(["chat", "task", "channel", "scheduled", "heartbeat"])
+    .optional(),
+  protected: z.boolean().optional(),
   agent_id: z.string(),
   title: z.string(),
   status: z.enum(["active", "archived", "interrupted"]),
@@ -1137,13 +1159,10 @@ export const Agent: z.ZodType<Agent> = z
     description: z.string().optional(),
     status: z.enum(["active", "idle", "draft", "error"]),
     soul: z.string(),
-    heartbeat: z.string(),
     warning: z.string().optional(),
     timeout_seconds: z.number().int().gte(0),
     max_tool_iterations: z.number().int().gte(0),
     steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
-    heartbeat_enabled: z.boolean(),
-    heartbeat_interval: z.number().int().gte(0),
     tools_cfg: AgentToolsCfg.optional(),
     sandbox_profile: z.enum(["workspace", "workspace+net", "host"]).optional(),
     shell_policy: AgentShellPolicy.optional(),
@@ -1223,9 +1242,6 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
     .optional(),
   skills: z.array(z.string()).optional(),
   soul: z.string().min(1),
-  heartbeat: z.string().optional(),
-  heartbeat_enabled: z.boolean().optional(),
-  heartbeat_interval: z.number().int().gte(0).optional(),
   delegation_policy: delegation_policy.optional(),
   voice: z.string().nullish(),
   executor: ExecutorConfig.optional(),
@@ -1606,6 +1622,18 @@ export const PerformanceSettingsUpdate = z
   .object({
     max_parallel_agents: z.number().int().gte(2).lte(16),
     tools_on_demand: z.boolean(),
+  })
+  .partial();
+export const MemorySettings = z
+  .object({
+    auto_recap_enabled: z.boolean(),
+    idle_timeout_minutes: z.number().int(),
+    bootstrap_recap_enabled: z.boolean(),
+    bootstrap_recap_max_per_minute: z.number().int(),
+    bootstrap_recap_daily_budget_usd: z.number(),
+    recap_model_allow_list: z.array(z.string()),
+    session_days: z.number().int(),
+    memory_retros_days: z.number().int(),
   })
   .partial();
 export const ChannelId = z.enum([
@@ -2145,7 +2173,19 @@ export const NotificationList: z.ZodType<NotificationList> = z.object({
   notifications: z.array(Notification),
   unread_count: z.number().int(),
 });
-export const Workspace = z
+export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
+  .object({
+    heartbeat: z
+      .object({
+        enabled: z.boolean(),
+        interval_minutes: z.number().int().gte(5),
+        body: z.string().max(16384),
+        session_id: z.string(),
+      })
+      .partial(),
+  })
+  .partial();
+export const Workspace: z.ZodType<Workspace> = z
   .object({
     id: z.string(),
     name: z.string().min(1),
@@ -2160,6 +2200,7 @@ export const Workspace = z
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),
+    member_configs: z.record(WorkspaceMemberConfig).optional(),
   })
   .passthrough();
 export const WorkspaceCreateRequest = z
@@ -5302,6 +5343,50 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/settings/memory",
+    alias: "getMemorySettings",
+    description: `Returns the global memory/recap and retention settings (agents.defaults.* and storage.retention fields). Readable by any authenticated user. Never exposes secrets.
+`,
+    requestFormat: "json",
+    response: MemorySettings,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/settings/memory",
+    alias: "updateMemorySettings",
+    description: `Writes the global memory/recap and retention settings. Reads/writes ONLY the MemorySettings fields — no merge of sibling config sections or secrets (A2/G-02). Writable by any authenticated user (operator decision, no admin gate). Uses safeUpdateConfigJSON server-side to preserve all other config fields including API keys.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MemorySettings,
+      },
+    ],
+    response: MemorySettings,
+    errors: [
+      {
+        status: 400,
+        description: `Invalid field value (e.g. negative session_days).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],

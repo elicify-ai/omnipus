@@ -77,14 +77,11 @@ const agentRay: Agent = {
   locked: true,
   status: 'active',
   soul: '',
-  heartbeat: '',
   color: '#3B82F6',
   icon: 'MagnifyingGlass',
   timeout_seconds: 300,
   max_tool_iterations: 50,
   steering_mode: 'one-at-a-time',
-  heartbeat_enabled: false,
-  heartbeat_interval: 3600,
 }
 
 const milestones: Milestone[] = []

@@ -84,3 +84,17 @@ properties:
     type: string
     description: "Username of the user who created this workspace. Set server-side at creation; read-only. Attribution only — not an access gate."
     example: "alice"
+  member_configs:
+    type: object
+    additionalProperties:
+      $ref: './WorkspaceMemberConfig.yaml'
+    description: >
+      Per-member (agentId → config) heartbeat settings for this workspace.
+      Absent when no member has a config (empty map). Keys are agent IDs.
+    example:
+      mia:
+        heartbeat:
+          enabled: true
+          interval_minutes: 30
+          body: "Check the project board."
+          session_id: "550e8400-e29b-41d4-a716-446655440000"

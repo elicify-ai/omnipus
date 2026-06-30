@@ -65,12 +65,9 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       model: 'claude-opus-4-6',
       status: 'active' as const,
       soul: '',
-      heartbeat: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
       steering_mode: 'one-at-a-time',
-      heartbeat_enabled: false,
-      heartbeat_interval: 300,
     } satisfies Agent
 
     expect(mock.id).toBe('mia')
@@ -89,12 +86,9 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       model: 'claude-sonnet-4-6',
       status: 'idle' as const,
       soul: '',
-      heartbeat: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
       steering_mode: 'one-at-a-time',
-      heartbeat_enabled: false,
-      heartbeat_interval: 300,
     } satisfies Agent
 
     expect(mock.type).toBe('Main')
