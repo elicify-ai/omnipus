@@ -31,7 +31,18 @@ const webRenderingNote = "## Rendering (web chat)\n\n" +
 	"they genuinely serve the conversation; prefer prose for simple answers. " +
 	"When you color-code nodes with a classDef `fill`, ALWAYS set a contrasting text " +
 	"`color` in the same classDef (dark text on light fills, light text on dark fills) " +
-	"so labels stay readable — e.g. `classDef ok fill:#16a34a,color:#0a0a0b`."
+	"so labels stay readable — e.g. `classDef ok fill:#16a34a,color:#0a0a0b`.\n\n" +
+	"Mermaid syntax — follow exactly so the diagram renders:\n" +
+	"- Use straight ASCII quotes (\") only — never typographic / smart quotes (“ ” ‘ ’).\n" +
+	"- Match bracket pairs: a node opened with [ ], ( ), or { } MUST close with the same pair " +
+	"(e.g. `A[\"…\"]` or `D{\"…\"}`, never `D[\"…\"}`).\n" +
+	"- Never use a reserved word (end, graph, subgraph, class, click, style, linkStyle, direction) " +
+	"as a node id, subgraph id, or classDef name — `end` in particular collides with subgraph `end`; " +
+	"use e.g. `finish` / `done` instead.\n" +
+	"- Wrap any label containing spaces, punctuation, or emoji in straight double quotes, and use " +
+	"`<br/>` for line breaks inside a label.\n" +
+	"- Prefer well-supported diagram types (flowchart/graph, sequenceDiagram, classDiagram, " +
+	"stateDiagram-v2, erDiagram) and keep each diagram small and focused."
 
 // buildWebRenderingNote returns the web-rendering guidance note when the turn
 // originates from the web chat surface, and "" for every other surface. The gate

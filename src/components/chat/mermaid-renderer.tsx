@@ -8,6 +8,21 @@ import { MediaActionToolbar, type MediaAction } from './MediaActionToolbar'
 import { useUiStore } from '@/store/ui'
 import { copyText, copyImageBlob, svgToPngBlob, downloadBlob, canCopyImage } from './media-actions'
 
+// normalizeMermaidSource deterministically fixes the single most common MECHANICAL
+// syntax error LLMs make in Mermaid: typographic / "smart" quotes
+// (“ ” ‘ ’ « » „ ‟) instead of straight ASCII quotes, which the parser rejects.
+// (Observed repeatedly from smaller models — e.g. `A["📦 Box"]` minted with curly
+// quotes.) This is a SAFE text substitution: it never rewrites diagram STRUCTURE
+// (bracket/keyword mismatches are left to the error card + the LLM fix flow, since
+// auto-rewriting structure is risky). Applied to BOTH the live and finalized
+// render paths because both go through this shared component, and to the copied /
+// "show source" text so the user always gets a portable, valid diagram.
+export function normalizeMermaidSource(src: string): string {
+  return src
+    .replace(/[“”«»„‟]/g, '"') // “ ” « » „ ‟ → "
+    .replace(/[‘’‚‛]/g, "'") // ‘ ’ ‚ ‛ → '
+}
+
 interface MermaidDiagramProps {
   code: string
   // True only on the LIVE streaming path. The block arrives token-by-token, so the
@@ -280,7 +295,11 @@ async function getMermaid() {
   return m
 }
 
-function MermaidDiagramImpl({ code, streaming = false }: MermaidDiagramProps) {
+function MermaidDiagramImpl({ code: rawCode, streaming = false }: MermaidDiagramProps) {
+  // Layer-2 normalization: fix smart-quote → straight-quote up front so the
+  // rendered diagram, the cache keys, the "show source"/copy text, and the fix
+  // prompt all use the same portable source. Cheap regex on a small string.
+  const code = normalizeMermaidSource(rawCode)
   // Seed from the caches so a remount paints the already-resolved result (SVG or error
   // card) synchronously — no loading flash, no redundant async render, and crucially no
   // height-change-driven remount loop on malformed diagrams. See the cache comments above.

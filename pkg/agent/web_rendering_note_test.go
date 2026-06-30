@@ -43,6 +43,23 @@ func TestBuildWebRenderingNote_Content(t *testing.T) {
 	}
 }
 
+// Layer 1: the note must carry the Mermaid syntax rules that prevent the common
+// LLM failure modes (smart quotes, reserved-word ids, bracket mismatch).
+func TestBuildWebRenderingNote_MermaidSyntaxRules(t *testing.T) {
+	note := buildWebRenderingNote("webchat")
+	for _, want := range []string{
+		"straight ASCII quotes",
+		"smart quotes",
+		"Match bracket",
+		"reserved word",
+		"end",
+	} {
+		if !strings.Contains(note, want) {
+			t.Errorf("web rendering note missing Mermaid syntax rule %q; got:\n%s", want, note)
+		}
+	}
+}
+
 func TestInjectWebRenderingNote(t *testing.T) {
 	sys := providers.Message{Role: "system", Content: "you are an agent"}
 	user := providers.Message{Role: "user", Content: "hi"}
