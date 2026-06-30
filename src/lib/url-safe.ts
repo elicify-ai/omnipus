@@ -21,3 +21,20 @@ export function isSafeHref(href: string): boolean {
     return false
   }
 }
+
+/**
+ * Safety check for an <img> src that will ALSO be fetched into the clipboard / a
+ * download. Unlike isSafeHref it RESOLVES relative URLs against the current origin —
+ * chat uploads are same-origin relative paths (e.g. `/api/v1/uploads/…`) that
+ * isSafeHref would reject — and permits only http(s) and self-contained data: images,
+ * rejecting javascript:/blob:/file:. Pair with fetchImageBlob's content-type gate.
+ */
+export function isDisplayableImageSrc(src: string): boolean {
+  if (!src) return false
+  try {
+    const parsed = new URL(src, typeof location !== 'undefined' ? location.href : 'http://localhost')
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'data:'
+  } catch {
+    return false
+  }
+}

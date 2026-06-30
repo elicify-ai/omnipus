@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
+import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
 import { queryClient } from '@/lib/queryClient'
@@ -87,6 +88,10 @@ export function AppShell() {
           </main>
         </OmnipusRuntimeProvider>
       </div>
+
+      {/* Global enlarged-media overlay (images + diagrams) — single instance,
+          decoupled from the virtualized chat list so it survives row remounts */}
+      <MediaLightbox />
 
       {/* Global toast notifications */}
       <ToastContainer />

@@ -1,12 +1,15 @@
-// ChatImage — shared image component with hover-revealed action toolbar and lightbox.
-// Used by MarkdownImage (markdown-shared.tsx) and InlineMedia / historical media
-// (ChatScreen.tsx). Presentational: no store reads, no API calls.
+// ChatImage — shared image component with hover-revealed action toolbar and a
+// click-to-enlarge handoff to the global MediaLightbox. Used by MarkdownImage
+// (markdown-shared.tsx) and InlineMedia / historical media / user attachments
+// (ChatScreen.tsx). Presentational: no API calls; the only store touch is
+// opening the app-root lightbox.
 
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import { Copy, ShareNetwork, DownloadSimple, ArrowsOutSimple } from '@phosphor-icons/react'
-import { ImageLightbox } from './image-lightbox'
 import { MediaActionToolbar } from './MediaActionToolbar'
 import type { MediaAction } from './MediaActionToolbar'
+import { useUiStore } from '@/store/ui'
+import { isDisplayableImageSrc } from '@/lib/url-safe'
 import {
   canCopyImage,
   canShareFiles,
@@ -14,28 +17,8 @@ import {
   shareBlob,
   downloadBlob,
   fetchImageBlob,
+  fetchImagePng,
 } from './media-actions'
-
-// ── Local helper: fetch + ensure PNG ─────────────────────────────────────────
-
-async function toPng(src: string): Promise<Blob> {
-  const b = await fetchImageBlob(src)
-  if (b.type === 'image/png') return b
-  const bmp = await createImageBitmap(b)
-  const c = document.createElement('canvas')
-  c.width = bmp.width
-  c.height = bmp.height
-  c.getContext('2d')!.drawImage(bmp, 0, 0)
-  return new Promise<Blob>((res, rej) =>
-    c.toBlob((x) => (x ? res(x) : rej(new Error('png convert failed'))), 'image/png'),
-  )
-}
-
-// ── Props ─────────────────────────────────────────────────────────────────────
-
-// Per-image enlarge state keyed by src — survives the virtualized list's remounts, which
-// would otherwise reset a plain useState and silently close the lightbox while it's open.
-const lightboxOpenCache = new Set<string>()
 
 export interface ChatImageProps {
   src: string
@@ -44,24 +27,15 @@ export interface ChatImageProps {
   className?: string
 }
 
-// ── ChatImage ─────────────────────────────────────────────────────────────────
-
 export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
-  const [open, setOpen] = useState(() => lightboxOpenCache.has(src))
-  const openLightbox = () => {
-    lightboxOpenCache.add(src)
-    setOpen(true)
-  }
-  const closeLightbox = () => {
-    lightboxOpenCache.delete(src)
-    setOpen(false)
-  }
+  const openMediaLightbox = useUiStore((s) => s.openMediaLightbox)
 
-  // Stable fallback filename for downloads / sharing
+  // Stable fallback filename for downloads / sharing.
   const name = filename || alt || 'image.png'
 
-  // Build hover-overlay actions (memoized on src and name so they don't
-  // recreate on every render of a parent that passes stable props).
+  const enlarge = () => openMediaLightbox({ kind: 'image', src, alt, filename })
+
+  // Hover-overlay actions (memoized on the inputs they close over).
   const overlayActions = useMemo<MediaAction[]>(() => {
     const acts: MediaAction[] = []
 
@@ -70,7 +44,7 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
         icon: <Copy size={14} />,
         label: 'Copy image',
         transientLabel: 'Copied',
-        onClick: async () => copyImageBlob(await toPng(src)),
+        onClick: async () => copyImageBlob(await fetchImagePng(src)),
       })
     }
 
@@ -91,54 +65,40 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
     acts.push({
       icon: <ArrowsOutSimple size={14} />,
       label: 'Enlarge',
-      onClick: () => {
-        lightboxOpenCache.add(src)
-        setOpen(true)
-      },
+      onClick: () => openMediaLightbox({ kind: 'image', src, alt, filename }),
     })
 
     return acts
-  }, [src, name])
+  }, [src, alt, filename, name, openMediaLightbox])
 
-  // Lightbox toolbar: same copy/share/download but no Enlarge (already enlarged)
-  const lightboxActions = useMemo<MediaAction[]>(
-    () => overlayActions.filter((a) => a.label !== 'Enlarge'),
-    [overlayActions],
-  )
+  // Reject unsafe schemes (javascript:, blob:, file:, …) at the render boundary —
+  // defense-in-depth alongside fetchImageBlob's gates, and covers the media-frame
+  // call sites that don't pre-filter the URL the way the markdown path does. Resolves
+  // relative URLs so same-origin uploads (/api/v1/uploads/…) are permitted.
+  if (!isDisplayableImageSrc(src)) {
+    return alt ? <span className="text-xs text-[var(--color-muted)] italic">[image: {alt}]</span> : null
+  }
 
   return (
-    <>
-      {/* Wrapper with hover group for overlay toolbar */}
-      <div className={`relative group/chatimg inline-block${className ? ` ${className}` : ''}`}>
-        <img
-          src={src}
-          alt={alt || ''}
-          loading="lazy"
-          onClick={openLightbox}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => e.key === 'Enter' && openLightbox()}
-          aria-label={alt ? `View: ${alt}` : 'View image'}
-          className="max-w-full rounded-md cursor-zoom-in border border-[var(--color-border)] hover:border-[var(--color-accent)]/50 transition-colors block"
-        />
+    <div className={`relative group/chatimg inline-block${className ? ` ${className}` : ''}`}>
+      <img
+        src={src}
+        alt={alt || ''}
+        loading="lazy"
+        onClick={enlarge}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => e.key === 'Enter' && enlarge()}
+        aria-label={alt ? `View: ${alt}` : 'View image'}
+        className="max-w-full rounded-md cursor-zoom-in border border-[var(--color-border)] hover:border-[var(--color-accent)]/50 transition-colors block"
+      />
 
-        {/* Hover-revealed overlay toolbar */}
-        <MediaActionToolbar
-          variant="overlay"
-          actions={overlayActions}
-          className="absolute top-2 right-2 opacity-0 group-hover/chatimg:opacity-100 focus-within:opacity-100 transition-opacity"
-        />
-      </div>
-
-      {/* Lightbox portal */}
-      {open && (
-        <ImageLightbox
-          src={src}
-          alt={alt}
-          onClose={closeLightbox}
-          toolbar={<MediaActionToolbar variant="bar" actions={lightboxActions} />}
-        />
-      )}
-    </>
+      {/* Hover-revealed overlay toolbar */}
+      <MediaActionToolbar
+        variant="overlay"
+        actions={overlayActions}
+        className="absolute top-2 right-2 opacity-0 group-hover/chatimg:opacity-100 focus-within:opacity-100 transition-opacity"
+      />
+    </div>
   )
 }

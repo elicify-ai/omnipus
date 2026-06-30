@@ -190,33 +190,64 @@ describe('copyImageBlob', () => {
 // ── downloadBlob ─────────────────────────────────────────────────────────────
 
 describe('downloadBlob', () => {
-  it('creates an anchor with download attr, clicks it, and revokes the object URL', () => {
+  function setup() {
     const fakeUrl = 'blob:http://localhost/fake-url'
     const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue(fakeUrl)
     const revokeObjectUrl = vi.spyOn(URL, 'revokeObjectURL').mockReturnValue(undefined)
-
     const clickSpy = vi.fn()
-    const mockAnchor = {
-      href: '',
-      download: '',
-      click: clickSpy,
-    }
+    const removeSpy = vi.fn()
+    const mockAnchor = { href: '', download: '', click: clickSpy, remove: removeSpy }
     const createElementSpy = vi
       .spyOn(document, 'createElement')
       .mockReturnValue(mockAnchor as unknown as HTMLAnchorElement)
+    const appendSpy = vi
+      .spyOn(document.body, 'appendChild')
+      .mockReturnValue(mockAnchor as unknown as Node)
+    const restore = () => {
+      createObjectUrl.mockRestore()
+      revokeObjectUrl.mockRestore()
+      createElementSpy.mockRestore()
+      appendSpy.mockRestore()
+    }
+    return { fakeUrl, createObjectUrl, revokeObjectUrl, clickSpy, removeSpy, mockAnchor, appendSpy, restore }
+  }
+
+  it('appends an anchor, clicks it, removes it, and revokes the URL on a later tick', () => {
+    vi.useFakeTimers()
+    const t = setup()
 
     const blob = makePngBlob()
     downloadBlob(blob, 'diagram.png')
 
-    expect(createObjectUrl).toHaveBeenCalledWith(blob)
-    expect(mockAnchor.href).toBe(fakeUrl)
-    expect(mockAnchor.download).toBe('diagram.png')
-    expect(clickSpy).toHaveBeenCalledTimes(1)
-    expect(revokeObjectUrl).toHaveBeenCalledWith(fakeUrl)
+    expect(t.createObjectUrl).toHaveBeenCalledWith(blob)
+    expect(t.mockAnchor.href).toBe(t.fakeUrl)
+    expect(t.mockAnchor.download).toBe('diagram.png')
+    expect(t.appendSpy).toHaveBeenCalledWith(t.mockAnchor)
+    expect(t.clickSpy).toHaveBeenCalledTimes(1)
+    expect(t.removeSpy).toHaveBeenCalledTimes(1)
+    // Revoke is deferred so a synchronous revoke can't abort the download (Firefox).
+    expect(t.revokeObjectUrl).not.toHaveBeenCalled()
+    vi.runAllTimers()
+    expect(t.revokeObjectUrl).toHaveBeenCalledWith(t.fakeUrl)
 
-    createObjectUrl.mockRestore()
-    revokeObjectUrl.mockRestore()
-    createElementSpy.mockRestore()
+    vi.useRealTimers()
+    t.restore()
+  })
+
+  it('drops path components and bidi-override chars from the download name', () => {
+    const t = setup()
+    // Basename is taken (path stripped) and the U+202E RTL-override removed.
+    downloadBlob(makePngBlob(), '../../etc/pa‮gnp.ss')
+    expect(t.mockAnchor.download).toBe('pagnp.ss')
+    expect(t.mockAnchor.download).not.toMatch(/[\\/\u202A-\u202E]/)
+    t.restore()
+  })
+
+  it('falls back to "download" when the name is only path separators', () => {
+    const t = setup()
+    downloadBlob(makePngBlob(), '///')
+    expect(t.mockAnchor.download).toBe('download')
+    t.restore()
   })
 })
 
@@ -283,9 +314,12 @@ describe('shareBlob', () => {
 // ── fetchImageBlob ────────────────────────────────────────────────────────────
 
 describe('fetchImageBlob', () => {
-  it('fetches the URL and returns the response blob', async () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('fetches the URL and returns an image blob', async () => {
     const fakeBlob = makePngBlob()
     const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
       blob: vi.fn().mockResolvedValue(fakeBlob),
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -293,8 +327,33 @@ describe('fetchImageBlob', () => {
     const result = await fetchImageBlob('http://localhost/img.png')
     expect(fetchMock).toHaveBeenCalledWith('http://localhost/img.png')
     expect(result).toBe(fakeBlob)
+  })
 
-    vi.unstubAllGlobals()
+  // SECURITY: the result lands in the clipboard / a download. These gates stop an
+  // agent-supplied src from turning fetchImageBlob into a credentialed-read exfil sink.
+  it('rejects a non-image content-type (e.g. an internal JSON endpoint)', async () => {
+    const jsonBlob = new Blob(['{"secret":1}'], { type: 'application/json' })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: vi.fn().mockResolvedValue(jsonBlob),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchImageBlob('/api/v1/credentials')).rejects.toThrow(/did not return an image/i)
+  })
+
+  it('rejects a non-ok response without reading its body', async () => {
+    const blobReader = vi.fn()
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 403, blob: blobReader })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchImageBlob('/api/v1/secret')).rejects.toThrow(/403/)
+    expect(blobReader).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unsupported URL scheme (file:) before fetching', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchImageBlob('file:///etc/passwd')).rejects.toThrow(/scheme/i)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
