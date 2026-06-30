@@ -59,14 +59,17 @@ describe('SessionPanel — rendering (test #20)', () => {
     expect(screen.getByText('Sessions')).toBeInTheDocument()
   })
 
-  it('shows sessions from multiple agents in the flat session list', async () => {
-    // Traces to: wave5a-wire-ui-spec.md — AC1: sessions grouped by agent
-    // NOTE: SessionPanel renders a flat session list (no agent-group headers).
-    // findByText('General Assistant') was removed — agent names appear only in the
-    // active-agent avatar tooltip (title attr), not as visible text nodes. The
-    // meaningful assertion is that sessions from multiple agents are all shown.
+  it('groups sessions under their first-agent sub-group headers', async () => {
+    // Traces to: wave5a-wire-ui-spec.md — AC1: sessions grouped by agent.
+    // Sessions are nested workspace -> first-agent: each agent that opened a
+    // conversation gets a sub-group header (its visible name), and all its
+    // sessions render beneath it.
     renderPanel()
     await screen.findByText('First session')
+    // Agent sub-group headers are now visible text nodes.
+    expect(screen.getByText('General Assistant')).toBeInTheDocument()
+    expect(screen.getByText('Researcher')).toBeInTheDocument()
+    // Sessions from both agents are shown.
     expect(screen.getByText('Research session')).toBeInTheDocument()
   })
 
