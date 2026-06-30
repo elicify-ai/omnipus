@@ -20,14 +20,36 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 
 // ── Mock AssistantUI ───────────────────────────────────────────────────────────
+// Captured here so tests can assert autoScroll delegation without re-implementing scroll math.
+let lastViewportAutoScroll: boolean | undefined
+
 vi.mock('@assistant-ui/react', () => {
   const React = require('react')
   return {
     ThreadPrimitive: {
       Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
         React.createElement('div', { className }, children),
-      Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
+      Viewport: React.forwardRef(
+        (
+          {
+            children,
+            className,
+            style,
+            autoScroll,
+            'data-testid': testId,
+          }: {
+            children?: React.ReactNode
+            className?: string
+            style?: React.CSSProperties
+            autoScroll?: boolean
+            'data-testid'?: string
+          },
+          ref: React.Ref<HTMLDivElement>
+        ) => {
+          lastViewportAutoScroll = autoScroll
+          return React.createElement('div', { ref, className, style, 'data-testid': testId }, children)
+        }
+      ),
       Messages: () => null,
     },
     MessagePrimitive: {
@@ -205,54 +227,18 @@ function seedStore(messages: ChatMessage[]): void {
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
 }
 
-/**
- * Patch a DOM element's layout geometry so @tanstack/react-virtual can
- * calculate visible items. jsdom has no layout engine, so all these
- * properties default to 0. The virtualizer uses clientHeight and scrollHeight
- * from getScrollElement() to determine which items are visible.
- */
-function patchScrollContainer(el: Element, opts: { clientHeight: number; scrollHeight: number; scrollTop: number }): void {
-  Object.defineProperty(el, 'clientHeight', { configurable: true, value: opts.clientHeight })
-  Object.defineProperty(el, 'scrollHeight', { configurable: true, value: opts.scrollHeight })
-  Object.defineProperty(el, 'scrollTop', { configurable: true, writable: true, value: opts.scrollTop })
-}
-
 // ── Capturing ResizeObserver stub ──────────────────────────────────────────────
-// jsdom has no ResizeObserver. The production stick-to-bottom relies on one
-// observing the content wrapper, so the tests must (a) make ResizeObserver
-// defined (so the component takes the virtualized path, not the PlainMessageList
-// fallback) and (b) be able to fire the observer callback to simulate a content-
-// height change — which is exactly what re-pins the scroll in production. We
-// record every observer + the elements it watches so a test can fire only the
-// callback watching a given element (the virtualizer registers its own observers
-// internally, which we don't want to drive).
-type RoRecord = { cb: ResizeObserverCallback; els: Element[] }
-let resizeObservers: RoRecord[] = []
-class CapturingResizeObserver {
-  private rec: RoRecord
-  constructor(cb: ResizeObserverCallback) {
-    this.rec = { cb, els: [] }
-    resizeObservers.push(this.rec)
-  }
-  observe(el: Element) { this.rec.els.push(el) }
-  unobserve(el: Element) { this.rec.els = this.rec.els.filter((e) => e !== el) }
-  disconnect() { this.rec.els = []; resizeObservers = resizeObservers.filter((r) => r !== this.rec) }
-}
-/** Fire the ResizeObserver callback(s) observing `el` (default: all). */
-function fireResize(el?: Element): void {
-  for (const rec of [...resizeObservers]) {
-    if (el && !rec.els.includes(el)) continue
-    try {
-      rec.cb([], {} as ResizeObserver)
-    } catch {
-      // The virtualizer's own observer may not tolerate a synthetic empty entry
-      // list; we only care about the component's stick-to-bottom observer.
-    }
-  }
-}
-/** The content wrapper the stick-to-bottom ResizeObserver watches. */
-function contentWrapperOf(scrollEl: Element): Element | null {
-  return scrollEl.querySelector('.max-w-4xl')
+// jsdom has no ResizeObserver. VirtualizedMessageList feature-detects
+// `typeof ResizeObserver === 'undefined'` and falls back to a plain list when
+// absent. This stub must remain so the component takes the Viewport-based path,
+// not the PlainMessageList fallback. Auto-scroll behavior is now owned by
+// assistant-ui's Viewport (useThreadViewportAutoScroll / use-stick-to-bottom)
+// and verified via live browser; the unit test asserts delegation + structure,
+// not scroll math.
+class StubResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
 }
 
 // ── Import the components under test ──────────────────────────────────────────
@@ -272,11 +258,9 @@ describe('VirtualizedMessageList', () => {
       connectionError: null,
       connection: null,
     })
-    // Capturing ResizeObserver (jsdom lacks it). Being defined also makes the
-    // component take the virtualized path. resizeObservers is reset each test so
-    // fireResize() only drives the current render's observers.
-    resizeObservers = []
-    vi.stubGlobal('ResizeObserver', CapturingResizeObserver)
+    // Stub ResizeObserver so the component takes the virtualized path rather than
+    // the PlainMessageList fallback (VirtualizedMessageList feature-detects it).
+    vi.stubGlobal('ResizeObserver', StubResizeObserver)
   })
 
   afterEach(() => {
@@ -304,7 +288,9 @@ describe('VirtualizedMessageList', () => {
       // the virtualizer processes the geometry correctly.
       const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]')
       if (scrollEl) {
-        patchScrollContainer(scrollEl, { clientHeight: 600, scrollHeight: 80_000, scrollTop: 79_400 })
+        Object.defineProperty(scrollEl, 'clientHeight', { configurable: true, value: 600 })
+        Object.defineProperty(scrollEl, 'scrollHeight', { configurable: true, value: 80_000 })
+        Object.defineProperty(scrollEl, 'scrollTop', { configurable: true, writable: true, value: 79_400 })
       }
     })
 
@@ -385,35 +371,10 @@ describe('VirtualizedMessageList', () => {
     })
   })
 
-  it('auto-scroll detection: wasAtBottomRef tracks scrollTop proximity to bottom', async () => {
-    const messages = makeMessages(10)
-    seedStore(messages)
-
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const scrollElOrNull = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
-    // #251: hard assertion — if the scroll container is absent the virtualizer is broken.
-    // jsdom supports DOM but not layout; the scroll container MUST be in the DOM regardless.
-    expect(scrollElOrNull).not.toBeNull()
-    // Non-null assertion after the hard expect above: TypeScript cannot narrow from expect().
-    const scrollEl = scrollElOrNull!
-
-    // Simulate being at the bottom (within 50px).
-    patchScrollContainer(scrollEl, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
-    const distanceFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
-    expect(distanceFromBottom).toBeLessThan(50)
-
-    // Simulate being in the middle (> 50px from bottom).
-    patchScrollContainer(scrollEl, { clientHeight: 600, scrollHeight: 1600, scrollTop: 200 })
-    const distanceFromBottomMid = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
-    expect(distanceFromBottomMid).toBeGreaterThanOrEqual(50)
-  })
-
-  // ── Regression tests for issue #251: auto-scroll during token streaming ────────
+  // ── Auto-scroll delegation + structure ────────────────────────────────────────
+  // Auto-scroll behavior is now owned by assistant-ui's Viewport
+  // (useThreadViewportAutoScroll / use-stick-to-bottom) and verified via live
+  // browser. The unit tests below assert delegation + structure, not scroll math.
 
   /**
    * Helper: seed the store with N completed messages plus a final streaming assistant message.
@@ -463,23 +424,16 @@ describe('VirtualizedMessageList', () => {
     return allMessages
   }
 
-  it('re-pins to bottom on a content-height change while the user is at the bottom', async () => {
+  it('delegates auto-scroll to the assistant-ui Viewport (autoScroll enabled)', async () => {
     // BDD:
-    //   Given: a live chat where the user is pinned to the bottom (within 50px)
-    //   When: the transcript content grows (tokens, tool call, image — anything)
-    //   Then: the scroll container re-pins to the bottom
-    //
-    // Regression test for issue #251. The fix drives a ResizeObserver on the
-    // content wrapper, so ANY content-height change re-pins — not just the
-    // enumerated [messages.length, streamingContentLength] signals the old
-    // implementation watched. Here we drive the observer directly (the
-    // mechanism), independent of what caused the resize.
-    const originalRaf = globalThis.requestAnimationFrame
-    const originalCaf = globalThis.cancelAnimationFrame
-    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0 })
-    vi.stubGlobal('cancelAnimationFrame', (_id: number) => {})
-
-    seedStreamingStore(10)
+    //   Given: a session with messages
+    //   When: VirtualizedMessageListInner renders
+    //   Then: the scroll container [data-testid="virtualized-message-list"] is present
+    //         AND the Viewport receives autoScroll=true (delegating stick-to-bottom
+    //         to assistant-ui's useThreadViewportAutoScroll engine)
+    const messages = makeMessages(5)
+    seedStore(messages)
+    lastViewportAutoScroll = undefined
 
     let container!: HTMLElement
     await act(async () => {
@@ -487,48 +441,18 @@ describe('VirtualizedMessageList', () => {
       container = result.container
     })
 
-    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
-    // Hard assertion — no vacuous skip. If the virtualized list didn't render,
-    // the regression guard must fail, not silently pass.
+    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]')
     expect(scrollEl).not.toBeNull()
-    const content = contentWrapperOf(scrollEl!)
-    expect(content).not.toBeNull()
-
-    // Step 1: user at the bottom (distanceFromBottom = 0). Fire scroll so the
-    // onScroll handler records wasAtBottom=true.
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
-    await act(async () => {
-      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true }))
-    })
-
-    // Step 2: content grows to 2400 (scrollTop not yet followed).
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 2400, scrollTop: 1000 })
-
-    // Step 3: the content wrapper resizes — drive the observer directly.
-    await act(async () => {
-      fireResize(content!)
-    })
-
-    // Re-pinned to the new bottom.
-    expect(scrollEl!.scrollTop).toBe(scrollEl!.scrollHeight)
-
-    vi.stubGlobal('requestAnimationFrame', originalRaf)
-    vi.stubGlobal('cancelAnimationFrame', originalCaf)
+    expect(lastViewportAutoScroll).toBe(true)
   })
 
-  it('re-pins on a NON-text content change (tool call / image render) — the #251 gap', async () => {
-    // This is the specific bug: a tool-call block or image renders in the live
-    // turn, growing the transcript height WITHOUT changing messages.length or the
-    // streaming text length. The old signal-based effect never fired for this, so
-    // the new content sat below the viewport. The ResizeObserver fix re-pins
-    // regardless of WHAT changed, so we assert the re-pin WITHOUT any store/
-    // message mutation — purely a resize.
-    const originalRaf = globalThis.requestAnimationFrame
-    const originalCaf = globalThis.cancelAnimationFrame
-    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0 })
-    vi.stubGlobal('cancelAnimationFrame', (_id: number) => {})
-
-    seedStreamingStore(10)
+  it('renders the live streaming message anchor during streaming', async () => {
+    // BDD:
+    //   Given: an active streaming session
+    //   When: VirtualizedMessageListInner renders
+    //   Then: [data-testid="streaming-message-anchor"] is present so the Viewport
+    //         can scroll it into view as tokens arrive
+    seedStreamingStore(5)
 
     let container!: HTMLElement
     await act(async () => {
@@ -536,100 +460,8 @@ describe('VirtualizedMessageList', () => {
       container = result.container
     })
 
-    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
-    expect(scrollEl).not.toBeNull()
-    const content = contentWrapperOf(scrollEl!)
-    expect(content).not.toBeNull()
-
-    // User at the bottom.
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
-    await act(async () => {
-      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true }))
-    })
-
-    // A tool-call pill + image render: height jumps to 3000. No store mutation.
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3000, scrollTop: 1000 })
-    await act(async () => {
-      fireResize(content!)
-    })
-
-    // Re-pinned even though nothing about the message list "signals" changed.
-    expect(scrollEl!.scrollTop).toBe(3000)
-
-    vi.stubGlobal('requestAnimationFrame', originalRaf)
-    vi.stubGlobal('cancelAnimationFrame', originalCaf)
-  })
-
-  it('suspends ONLY on a user gesture, never on content-growth scrolls; resumes at bottom', async () => {
-    // BDD — the live-browser bug + the correct ChatGPT/Claude behavior:
-    //   1. A scroll event caused by CONTENT GROWTH (no user gesture) that leaves
-    //      the viewport temporarily far from the bottom must NOT suspend
-    //      auto-follow — the ResizeObserver still re-pins. (This is the exact bug
-    //      reproduced in a live browser: a tool-call/image render fired a scroll
-    //      with a large distance and the old code flipped wasAtBottom=false,
-    //      sticking the view ~600px above the bottom.)
-    //   2. A scroll away from the bottom DURING a real user gesture (wheel/touch/
-    //      key/pointer) DOES suspend — don't fight the user reading history.
-    //   3. Returning to the bottom resumes auto-follow.
-
-    const originalRaf = globalThis.requestAnimationFrame
-    const originalCaf = globalThis.cancelAnimationFrame
-    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0 })
-    vi.stubGlobal('cancelAnimationFrame', (_id: number) => {})
-
-    seedStreamingStore(10)
-
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
-    expect(scrollEl).not.toBeNull()
-    const content = contentWrapperOf(scrollEl!)
-    expect(content).not.toBeNull()
-
-    // Establish "at the bottom".
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
-    await act(async () => {
-      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true }))
-    })
-
-    // (1) CONTENT GROWTH leaves us far from the bottom (scrollTop lags) and fires
-    // a scroll — but with NO user gesture. Auto-follow must survive and re-pin.
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3000, scrollTop: 1000 })
-    await act(async () => {
-      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true })) // distance = 1400, no gesture
-      fireResize(content!)
-    })
-    expect(scrollEl!.scrollTop).toBe(3000) // re-pinned despite the large-distance scroll
-
-    // (2) USER scrolls up (wheel gesture) → suspend.
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3000, scrollTop: 200 })
-    await act(async () => {
-      scrollEl!.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 }))
-      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true })) // distance = 2200, gesture active
-    })
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3600, scrollTop: 200 })
-    await act(async () => {
-      fireResize(content!)
-    })
-    expect(scrollEl!.scrollTop).toBe(200) // NOT re-pinned — user is reading history
-
-    // (3) USER scrolls back to the bottom → resume; next growth re-pins.
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3600, scrollTop: 3000 })
-    await act(async () => {
-      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true })) // distance = 0 → resume
-    })
-    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 4200, scrollTop: 3000 })
-    await act(async () => {
-      fireResize(content!)
-    })
-    expect(scrollEl!.scrollTop).toBe(4200) // re-pinned
-
-    vi.stubGlobal('requestAnimationFrame', originalRaf)
-    vi.stubGlobal('cancelAnimationFrame', originalCaf)
+    const anchor = container.querySelector('[data-testid="streaming-message-anchor"]')
+    expect(anchor).not.toBeNull()
   })
 })
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { generateId } from '@/lib/constants'
 import { useQuery } from '@tanstack/react-query'
@@ -807,71 +807,11 @@ function VirtualizedMessageListInner({
 }) {
   const isStreaming = useChatStore((s) => s.isStreaming)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
   const { skills, commandLabels } = useSkillChipData()
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
   const historicalMessages = hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages
-
-  // ── Stick-to-bottom tracking (ChatGPT/Claude-style) ─────────────────────────
-  // wasAtBottomRef = "auto-follow is active". It is SUSPENDED only by a genuine
-  // USER scroll gesture that moves away from the bottom (wheel up, touch drag,
-  // keyboard nav, scrollbar drag) and RESUMED whenever the viewport reaches the
-  // bottom again. This distinction is essential: content-growth reflows (a
-  // streamed token, a tool-call block, an inline image) and our own programmatic
-  // re-pin ALSO fire 'scroll' events, and those must NEVER suspend auto-follow.
-  // The earlier implementation set wasAtBottom = (distance < threshold) on EVERY
-  // scroll, so a transient large distance from a tool-call/image render flipped
-  // it false and stuck the view ~600px above the bottom (the reported bug,
-  // reproduced in a live browser). We therefore only honor a suspend while a real
-  // user-input gesture is in progress — the in-house equivalent of
-  // use-stick-to-bottom's user-vs-programmatic scroll discrimination.
-  const wasAtBottomRef = useRef(true)
-  const userGestureUntilRef = useRef(0)
-  const pointerDownRef = useRef(false)
-
-  const SCROLL_THRESHOLD = 50
-
-  // A real user input opens a short window (wheel/touch/key) — or holds, for a
-  // pointer/scrollbar drag — during which a scroll away from the bottom is
-  // attributed to the user rather than to content growth.
-  const markUserGesture = useCallback(() => {
-    userGestureUntilRef.current = performance.now() + 300
-  }, [])
-  const onPointerDown = useCallback(() => {
-    pointerDownRef.current = true
-    markUserGesture()
-  }, [markUserGesture])
-
-  // Clear the pointer-drag flag on release anywhere (the pointer may leave the
-  // list before release).
-  useEffect(() => {
-    const up = () => {
-      pointerDownRef.current = false
-    }
-    window.addEventListener('pointerup', up)
-    window.addEventListener('pointercancel', up)
-    return () => {
-      window.removeEventListener('pointerup', up)
-      window.removeEventListener('pointercancel', up)
-    }
-  }, [])
-
-  const onScroll = useCallback(() => {
-    const el = scrollContainerRef.current
-    if (!el) return
-    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (dist < SCROLL_THRESHOLD) {
-      // Reached the bottom (by any means) → resume / keep following.
-      wasAtBottomRef.current = true
-    } else if (pointerDownRef.current || performance.now() < userGestureUntilRef.current) {
-      // Away from the bottom due to an ACTIVE user gesture → suspend following.
-      wasAtBottomRef.current = false
-    }
-    // else: away from the bottom due to content growth or a programmatic scroll
-    // → leave wasAtBottomRef unchanged; the ResizeObserver re-pins to the bottom.
-  }, [])
 
   const virtualizer = useVirtualizer({
     count: historicalMessages.length,
@@ -880,45 +820,6 @@ function VirtualizedMessageListInner({
     overscan: 5,
     // measureElement default (getBoundingClientRect().height) is correct; no override needed.
   })
-
-  // Content-agnostic stick-to-bottom. A single ResizeObserver on the content
-  // wrapper fires on ANY height change anywhere in the transcript — streamed
-  // tokens, tool-call blocks, tool results, inline images/media, expanding or
-  // collapsing detail, AND the virtualizer's own row remeasures — without us
-  // having to enumerate each signal (the previous implementation only watched
-  // messages.length + streaming text length, so tool calls / images in the live
-  // turn never triggered a re-pin — the reported bug). On any such change we
-  // re-pin to the bottom, but ONLY when the user is already at the bottom
-  // (wasAtBottomRef, maintained by onScroll): if they've scrolled up to read
-  // history we must not yank them down, and we resume sticking the moment they
-  // scroll back. This matches ChatGPT/Claude and is the same approach
-  // assistant-ui's Viewport uses (use-stick-to-bottom); we keep it inline
-  // because our list is custom-virtualized, not rendered by ThreadPrimitive
-  // .Viewport. ResizeObserver is guaranteed defined here — the parent
-  // feature-detects it and falls back to PlainMessageList otherwise.
-  useLayoutEffect(() => {
-    const el = scrollContainerRef.current
-    const content = contentRef.current
-    if (!el || !content) return undefined
-    const pinIfAtBottom = () => {
-      if (wasAtBottomRef.current) el.scrollTop = el.scrollHeight
-    }
-    // Pin once on mount (opening a session jumps to the latest message).
-    const initialRaf = requestAnimationFrame(pinIfAtBottom)
-    // Re-pin on every subsequent content-size change. rAF defers the read until
-    // the browser has committed the new layout so scrollHeight is final.
-    let rafId = 0
-    const ro = new ResizeObserver(() => {
-      cancelAnimationFrame(rafId)
-      rafId = requestAnimationFrame(pinIfAtBottom)
-    })
-    ro.observe(content)
-    return () => {
-      cancelAnimationFrame(initialRaf)
-      cancelAnimationFrame(rafId)
-      ro.disconnect()
-    }
-  }, [])
 
   const virtualItems = virtualizer.getVirtualItems()
 
@@ -929,20 +830,31 @@ function VirtualizedMessageListInner({
     return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
   }
 
+  // Stick-to-bottom is delegated to assistant-ui's Viewport engine
+  // (useThreadViewportAutoScroll + useOnResizeContent, via ThreadPrimitive
+  // .Viewport). It attaches a ResizeObserver + a subtree MutationObserver to THIS
+  // scroll container, so it follows ALL content growth — streamed tokens,
+  // tool-call blocks, inline images/mermaid that render late, our virtualizer's
+  // row add/remove, AND the live→virtualized finalize hand-off — and scrolls to
+  // the bottom only while the user is already at the bottom. isAtBottom is keyed
+  // off real scrollTop movement (not a touch-gesture heuristic), so a user
+  // scroll-up correctly suspends auto-follow on touch/momentum — the failure mode
+  // of the previous hand-rolled engine. style-only mutations (the virtualizer's
+  // translateY) are ignored by the observer, so there is no feedback loop. We keep
+  // our custom virtualizer for row rendering and only let Viewport own the scroll
+  // element + autoscroll. The Viewport self-provides its viewport context; it runs
+  // within the chat's AssistantRuntimeProvider + ThreadPrimitive.Root (the live
+  // ThreadPrimitive.Messages below needs the runtime). The parent feature-detects
+  // ResizeObserver and falls back to PlainMessageList where it is unavailable.
   return (
-    <div
+    <ThreadPrimitive.Viewport
       ref={scrollContainerRef}
+      autoScroll
       data-testid="virtualized-message-list"
       className="flex-1 overflow-y-auto overscroll-contain pt-4 pb-2"
       style={{ position: 'relative' }}
-      onScroll={onScroll}
-      onWheel={markUserGesture}
-      onTouchStart={markUserGesture}
-      onTouchMove={markUserGesture}
-      onKeyDown={markUserGesture}
-      onPointerDown={onPointerDown}
     >
-      <div ref={contentRef} className="max-w-4xl mx-auto w-full">
+      <div className="max-w-4xl mx-auto w-full">
         <div
           style={{
             height: `${virtualizer.getTotalSize()}px`,
@@ -990,7 +902,7 @@ function VirtualizedMessageListInner({
           </div>
         )}
       </div>
-    </div>
+    </ThreadPrimitive.Viewport>
   )
 }
 
