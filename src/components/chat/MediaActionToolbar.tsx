@@ -66,6 +66,12 @@ function ActionButton({ action, variant }: ActionButtonProps) {
         }, 1500)
       }
     } catch (err) {
+      // A user who dismisses the native share sheet (or any aborted in-flight
+      // request) raises AbortError — that is a deliberate cancel, not a failure,
+      // so swallow it silently instead of flashing a red error toast.
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return
+      }
       const message =
         err instanceof Error ? err.message : 'Action failed'
       useUiStore.getState().addToast({ message, variant: 'error' })

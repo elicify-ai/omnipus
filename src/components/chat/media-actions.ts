@@ -44,28 +44,86 @@ export async function shareBlob(blob: Blob, filename: string, title?: string): P
 
 // ── Download ──────────────────────────────────────────────────────────────────
 
+/** Produce a safe download name: take the basename (drop any path components) and
+ * strip control + bidi-override characters so the suggested name can't spoof an
+ * extension (e.g. via U+202E RTL-override) or look like a path. Legitimate spaces
+ * are kept. The browser already ignores path components, so this is anti-spoofing,
+ * not anti-traversal. Falls back to "download" if nothing usable remains. */
+function sanitizeFilename(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? ''
+  // eslint-disable-next-line no-control-regex
+  const cleaned = base.replace(/[\u0000-\u001F\u202A-\u202E]/g, '').trim().slice(0, 200)
+  return cleaned || 'download'
+}
+
 /**
- * Trigger a browser download for a Blob.
- * Creates a temporary object URL, simulates a click, then revokes the URL.
+ * Trigger a browser download for a Blob. The anchor is appended to the document
+ * (Firefox requires it for a synthetic click) and the object URL is revoked on a
+ * later tick (revoking synchronously after .click() can abort the download).
  */
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = filename
+  anchor.download = sanitizeFilename(filename)
+  document.body.appendChild(anchor)
   anchor.click()
-  URL.revokeObjectURL(url)
+  anchor.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 
 /**
- * Fetch a same-origin image (http/https or data: URL) as a Blob.
- * Chat images are same-origin so no CORS headers are needed.
+ * Fetch a chat image as a Blob for copy/share/download.
+ *
+ * SECURITY: the `src` is agent-influenceable (a media frame / markdown image URL),
+ * and this result lands in the clipboard / a download / a share sheet. Two gates
+ * keep it from becoming a credentialed-read-into-exfil-sink primitive:
+ *   1. Only http(s) and data: URLs are fetched (no file:/blob:/other schemes).
+ *   2. The response must be ok AND have an image/* content-type — so an agent that
+ *      points `src` at an internal/authenticated endpoint (which returns JSON/HTML)
+ *      gets rejected instead of having that body copied/downloaded.
  */
 export async function fetchImageBlob(src: string): Promise<Blob> {
-  const response = await fetch(src)
-  return response.blob()
+  let resolved: URL
+  try {
+    resolved = new URL(src, typeof location !== 'undefined' ? location.href : 'http://localhost')
+  } catch {
+    throw new Error('Invalid image URL')
+  }
+  if (!['http:', 'https:', 'data:'].includes(resolved.protocol)) {
+    throw new Error(`Unsupported image URL scheme: ${resolved.protocol}`)
+  }
+  const response = await fetch(resolved.href)
+  if (!response.ok) {
+    throw new Error(`Image fetch failed (${response.status})`)
+  }
+  const blob = await response.blob()
+  if (!blob.type.startsWith('image/')) {
+    throw new Error('That URL did not return an image')
+  }
+  return blob
+}
+
+/**
+ * Fetch a raster image and guarantee a PNG Blob. Chromium's clipboard image
+ * write only accepts image/png, so non-PNG sources (jpeg/webp/…) are re-encoded
+ * through a canvas. Inherits fetchImageBlob's scheme + content-type gates.
+ */
+export async function fetchImagePng(src: string): Promise<Blob> {
+  const blob = await fetchImageBlob(src)
+  if (blob.type === 'image/png') return blob
+  const bitmap = await createImageBitmap(blob)
+  const canvas = document.createElement('canvas')
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Could not get 2D canvas context')
+  ctx.drawImage(bitmap, 0, 0)
+  return new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG conversion failed'))), 'image/png'),
+  )
 }
 
 // ── SVG → PNG conversion ─────────────────────────────────────────────────────

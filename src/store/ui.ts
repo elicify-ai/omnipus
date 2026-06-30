@@ -83,7 +83,24 @@ interface UiStore {
   // chat-header agent picker opens without the user having to click it directly.
   agentSelectorOpen: boolean
   setAgentSelectorOpen: (open: boolean) => void
+
+  // Media lightbox (enlarged image / diagram). A SINGLE global instance rendered
+  // at the app root (AppShell) — NOT per-message — so it lives outside the
+  // virtualized chat list. The list periodically remounts its rows; a per-row
+  // lightbox would be torn down mid-view, and keying its open-state by content
+  // (src/svg) cross-contaminated two identical images/diagrams. One store-owned
+  // instance avoids both. `closeMediaLightbox` is idempotent.
+  mediaLightbox: MediaLightboxContent | null
+  openMediaLightbox: (content: MediaLightboxContent) => void
+  closeMediaLightbox: () => void
 }
+
+/** Discriminated payload for the global media lightbox: a raster image (by URL)
+ * or an already-sanitized SVG string (diagrams). The renderer derives the
+ * copy/share/download toolbar from `kind`. */
+export type MediaLightboxContent =
+  | { kind: 'image'; src: string; alt?: string; filename?: string }
+  | { kind: 'svg'; svg: string; title?: string; filename?: string }
 
 // Tracks auto-dismiss timers outside state so they can be cleared on manual dismiss
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -150,4 +167,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
 
   agentSelectorOpen: false,
   setAgentSelectorOpen: (open) => set({ agentSelectorOpen: open }),
+
+  mediaLightbox: null,
+  openMediaLightbox: (content) => set({ mediaLightbox: content }),
+  closeMediaLightbox: () => set({ mediaLightbox: null }),
 }))

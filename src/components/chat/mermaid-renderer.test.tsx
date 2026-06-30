@@ -14,7 +14,7 @@
  *   - two distinct malformed codes produce distinct, non-contaminated error cards
  *   - toolbar toggle: image/code view switch
  *   - toolbar copy: calls correct media-actions helper per view
- *   - toolbar enlarge: opens ImageLightbox with svg
+ *   - toolbar enlarge: opens the global media lightbox (store) with the sanitized svg
  *   - toolbar NOT rendered during streaming or on error path
  *
  * `mermaid` is the dynamic-import target inside getMermaid(); we mock it. The
@@ -71,18 +71,8 @@ vi.mock('./MediaActionToolbar', () => ({
   ),
 }))
 
-// Mock ImageLightbox so tests can assert it opened without needing a real portal.
-const lightboxCloseMock = vi.fn()
-vi.mock('./image-lightbox', () => ({
-  ImageLightbox: ({ svg, onClose }: { svg: string; onClose: () => void }) => {
-    lightboxCloseMock.mockImplementation(onClose)
-    return (
-      <div data-testid="lightbox" data-svg={svg}>
-        <button type="button" aria-label="Close image preview" onClick={onClose}>Close</button>
-      </div>
-    )
-  },
-}))
+// Enlarge no longer renders a per-row ImageLightbox — it opens the single app-root
+// MediaLightbox via the real @/store/ui store, which these tests assert directly.
 
 // DOMPurify is intentionally NOT mocked — the sanitization test exercises the real one.
 
@@ -97,7 +87,6 @@ beforeEach(() => {
   svgToPngBlobMock.mockReset().mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
   downloadBlobMock.mockReset()
   canCopyImageMock.mockReset().mockReturnValue(true)
-  lightboxCloseMock.mockReset()
 })
 afterEach(() => cleanup())
 
@@ -489,18 +478,47 @@ describe('MermaidDiagram', () => {
     expect(copyImageBlobMock).not.toHaveBeenCalled()
   })
 
-  it('toolbar: enlarge button opens ImageLightbox with the svg', async () => {
+  it('toolbar: enlarge opens the global media lightbox with the sanitized svg', async () => {
     renderFn.mockResolvedValue({ svg: SVG_FIXTURE })
     const MermaidDiagram = await importDiagram()
+    const { useUiStore } = await import('@/store/ui')
+    useUiStore.getState().closeMediaLightbox()
 
     render(<MermaidDiagram code={DIAGRAM} />)
     await waitFor(() => expect(document.querySelector('svg')).toBeInTheDocument())
 
-    expect(screen.queryByTestId('lightbox')).toBeNull()
+    // Enlarge no longer renders a per-row lightbox; it hands off to the single
+    // app-root MediaLightbox via the store (immune to virtualized-list remounts).
+    expect(useUiStore.getState().mediaLightbox).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Enlarge diagram' }))
 
-    expect(screen.getByTestId('lightbox')).toBeInTheDocument()
+    const lb = useUiStore.getState().mediaLightbox
+    expect(lb?.kind).toBe('svg')
+    expect(lb?.kind === 'svg' && lb.svg).toContain('<svg')
+  })
+
+  it('toolbar: code view survives a remount (viewCache) — does NOT snap back to the diagram', async () => {
+    // Toggling to source changes the row height → the virtualized list re-measures and
+    // REMOUNTS the row. Without the module-level viewCache a plain useState would reset
+    // to 'image' and silently revert the view. This is the exact regression that shipped
+    // and was fixed by seeding the toggle from viewCache — guard it.
+    renderFn.mockResolvedValue({ svg: SVG_FIXTURE })
+    const MermaidDiagram = await importDiagram()
+
+    const first = render(<MermaidDiagram code={DIAGRAM} />)
+    await waitFor(() => expect(document.querySelector('svg')).toBeInTheDocument())
+
+    // Switch to source view.
+    fireEvent.click(screen.getByRole('button', { name: 'Show source' }))
+    expect(screen.getByText(DIAGRAM)).toBeInTheDocument()
+    first.unmount()
+
+    // Remount with the SAME code → viewCache keeps the 'code' view: source shown
+    // immediately, and the toggle now offers switching back to the diagram.
+    render(<MermaidDiagram code={DIAGRAM} />)
+    expect(screen.getByText(DIAGRAM)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show diagram' })).toBeInTheDocument()
   })
 
   it('toolbar: NOT rendered while streaming (container is empty)', async () => {

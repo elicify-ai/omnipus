@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, memo, useCallback } from 'react'
 import DOMPurify from 'dompurify'
 import { Warning, ArrowClockwise, Code, Image, ArrowsOutSimple, DownloadSimple, Copy } from '@phosphor-icons/react'
 import { MediaActionToolbar, type MediaAction } from './MediaActionToolbar'
-import { ImageLightbox } from './image-lightbox'
+import { useUiStore } from '@/store/ui'
 import { copyText, copyImageBlob, svgToPngBlob, downloadBlob, canCopyImage } from './media-actions'
 
 interface MermaidDiagramProps {
@@ -113,13 +113,24 @@ const renderedSvgCache = new Map<string, string>()
 // COMPLETE renders (never while streaming — partial code fails on every token).
 const renderErrorCache = new Map<string, string>()
 
-// Per-diagram UI state that must survive the virtualized list's remounts — the SAME
-// churn the svg/error caches address. Toggling image⇄code (or opening enlarge) changes
+// Per-diagram view toggle (image⇄code) that must survive the virtualized list's
+// remounts — the SAME churn the svg/error caches address. Toggling to source changes
 // the row height → react-virtual re-measures → MermaidDiagram remounts → a plain
-// useState would reset to its default, so the toggle/lightbox silently revert. Keying
-// these by `code` keeps them stable across remounts.
+// useState would reset to 'image', so the chosen view silently reverts. Keyed by
+// `code`; two byte-identical diagrams therefore share a toggle, which is benign (they
+// render the same thing). Enlarge does NOT live here — it opens the single global
+// MediaLightbox (app root), which is immune to row remounts.
 const viewCache = new Map<string, 'image' | 'code'>()
-const lightboxOpenCache = new Set<string>()
+
+// Cap the module-level caches so a very long session can't grow them unbounded. Maps
+// keep insertion order, so deleting the first key is a cheap approximate-LRU eviction.
+const MAX_CACHE = 256
+function capMap(map: Map<string, unknown>): void {
+  if (map.size > MAX_CACHE) {
+    const oldest = map.keys().next().value
+    if (oldest !== undefined) map.delete(oldest)
+  }
+}
 
 async function getMermaid() {
   const m = (await import('mermaid')).default
@@ -281,24 +292,20 @@ function MermaidDiagramImpl({ code, streaming = false }: MermaidDiagramProps) {
   // Seeded from viewCache so a remount (see the cache comment above) keeps the chosen
   // view instead of snapping back to the diagram.
   const [view, setView] = useState<'image' | 'code'>(() => viewCache.get(code) ?? 'image')
-  // Lightbox open state — also seeded from a per-code cache so a remount while enlarged
-  // does not silently close the overlay.
-  const [lightboxOpen, setLightboxOpen] = useState(() => lightboxOpenCache.has(code))
 
-  const openLightbox = useCallback(() => {
-    lightboxOpenCache.add(code)
-    setLightboxOpen(true)
-  }, [code])
-  const closeLightbox = useCallback(() => {
-    lightboxOpenCache.delete(code)
-    setLightboxOpen(false)
-  }, [code])
+  // Enlarge opens the single global lightbox (app root) — it survives row remounts and
+  // can't cross-contaminate, so there is no per-diagram open-state to track here.
+  const openMediaLightbox = useUiStore((s) => s.openMediaLightbox)
+
   const toggleView = useCallback(
     () =>
       setView((v) => {
         const next = v === 'image' ? 'code' : 'image'
         if (next === 'image') viewCache.delete(code)
-        else viewCache.set(code, next)
+        else {
+          viewCache.set(code, next)
+          capMap(viewCache)
+        }
         return next
       }),
     [code],
@@ -345,6 +352,7 @@ function MermaidDiagramImpl({ code, streaming = false }: MermaidDiagramProps) {
       try {
         const { svg: rendered } = await m.render(idRef.current, code.trim())
         renderedSvgCache.set(code, rendered)
+        capMap(renderedSvgCache)
         if (!cancelled) setSvg(rendered)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -353,6 +361,7 @@ function MermaidDiagramImpl({ code, streaming = false }: MermaidDiagramProps) {
         // logging would spam the console with expected mid-stream parse errors.
         if (!streaming) {
           renderErrorCache.set(code, msg)
+          capMap(renderErrorCache)
           console.error('[mermaid] render failed:', msg)
         }
         if (!cancelled) setError(msg)
@@ -440,72 +449,34 @@ function MermaidDiagramImpl({ code, streaming = false }: MermaidDiagramProps) {
           {
             icon: <ArrowsOutSimple size={14} />,
             label: 'Enlarge diagram',
-            onClick: openLightbox,
+            onClick: () => openMediaLightbox({ kind: 'svg', svg: sanitizedSvg, filename: 'diagram.png' }),
           } satisfies MediaAction,
         ]
       : []),
   ]
 
-  // Lightbox toolbar: copy + download for the diagram (always image view in lightbox).
-  const lightboxCopyAction: MediaAction = {
-    icon: <Copy size={14} />,
-    label: 'Copy diagram as PNG',
-    transientLabel: 'Copied',
-    onClick: async () => {
-      const blob = await svgToPngBlob(sanitizedSvg)
-      await copyImageBlob(blob)
-    },
-  }
-  const lightboxDownloadAction: MediaAction = {
-    icon: <DownloadSimple size={14} />,
-    label: 'Download diagram as PNG',
-    onClick: async () => {
-      const blob = await svgToPngBlob(sanitizedSvg)
-      downloadBlob(blob, 'diagram.png')
-    },
-  }
-  const lightboxToolbarActions: MediaAction[] = [
-    ...(canCopyImage() ? [lightboxCopyAction] : []),
-    lightboxDownloadAction,
-  ]
-
   return (
-    <>
-      <div className="group/mermaid relative my-3 overflow-x-auto rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
-        {/* Hover-revealed overlay toolbar — only on the success (SVG ready) path */}
-        <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/mermaid:opacity-100 transition-opacity duration-150">
-          <MediaActionToolbar actions={toolbarActions} variant="overlay" />
-        </div>
-
-        {view === 'image' ? (
-          <div
-            className="flex justify-center p-4"
-            dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
-          />
-        ) : (
-          <div className="p-4">
-            {/* Language label */}
-            <div className="mb-1.5 text-[10px] font-mono text-[var(--color-muted)] select-none">mermaid</div>
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-[var(--color-secondary)] bg-[var(--color-surface-1)] rounded-md p-3">
-              {code}
-            </pre>
-          </div>
-        )}
+    <div className="group/mermaid relative my-3 overflow-x-auto rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+      {/* Hover-revealed overlay toolbar — only on the success (SVG ready) path */}
+      <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/mermaid:opacity-100 transition-opacity duration-150">
+        <MediaActionToolbar actions={toolbarActions} variant="overlay" />
       </div>
 
-      {lightboxOpen && (
-        <ImageLightbox
-          svg={sanitizedSvg}
-          onClose={closeLightbox}
-          toolbar={
-            <MediaActionToolbar
-              variant="bar"
-              actions={lightboxToolbarActions}
-            />
-          }
+      {view === 'image' ? (
+        <div
+          className="flex justify-center p-4"
+          dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
         />
+      ) : (
+        <div className="p-4">
+          {/* Language label */}
+          <div className="mb-1.5 text-[10px] font-mono text-[var(--color-muted)] select-none">mermaid</div>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-[var(--color-secondary)] bg-[var(--color-surface-1)] rounded-md p-3">
+            {code}
+          </pre>
+        </div>
       )}
-    </>
+    </div>
   )
 }
 
