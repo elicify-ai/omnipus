@@ -83,10 +83,15 @@ const memberConfigsHeartbeatRewrite = `Heartbeat *WorkspaceMemberHeartbeat `
 // memberConfigsMapInline matches the inline anonymous map-value struct
 // oapi-codegen emits for `member_configs: additionalProperties $ref
 // WorkspaceMemberConfig` (again triggered by `additionalProperties: false` on
-// the referenced schema). MUST run AFTER memberConfigsHeartbeatInline so the
-// inner heartbeat is already the named type and the value struct is single-level
-// (one close brace before the member_configs tag). Appears on Workspace and
-// WorkspaceUpdateRequest.
+// the referenced schema). Appears on Workspace and WorkspaceUpdateRequest.
+//
+// Order note: this regex runs after memberConfigsHeartbeatInline as a clarity
+// preference (outer → inner readability), not a correctness requirement.  The
+// map regex is anchored on the literal `member_configs` json tag, so its
+// non-greedy `.*?` body spans the nested heartbeat brace regardless of order.
+// If the inner heartbeat struct were NOT already rewritten, the body would span
+// an extra close-brace level and still match the outer `member_configs` tag.
+// The heartbeat body itself has no nested braces, so both orderings converge.
 //
 // Group 1: field name ("MemberConfigs"); Group 2: json tag with backticks.
 var memberConfigsMapInline = regexp.MustCompile(

@@ -206,22 +206,30 @@ describe('WorkspaceTeamTab', () => {
     )
   })
 
-  it('passes the workspaceId to openEditAgentSlideOver when a node is clicked (FR-018 / A5)', async () => {
-    // Traces to: FR-018 / A5 — Team tab passes workspaceId explicitly so
-    // AgentProfile can render the conditional Heartbeat tab.
-    // We spy on the store action rather than simulating a React Flow click
-    // (React Flow node clicks require pointer-event shims outside our scope).
+  it('passes the workspaceId to openEditAgentSlideOver when a node edit button is clicked (FR-018 / A5)', async () => {
+    // Traces to: FR-018 / A5 — Team tab wires handleOpenAgent to call
+    // openEditAgentSlideOver(agentId, workspaceId) so AgentProfile can render
+    // the conditional Heartbeat tab for this (workspace, agent) pair.
+    //
+    // This test exercises the real component path: render WorkspaceTeamTab,
+    // wait for the nodes to appear, click the edit affordance on Jim's node,
+    // and assert the store received (agentId, workspaceId) — NOT bare-store.
     const openSpy = vi.spyOn(useUiStore.getState(), 'openEditAgentSlideOver')
     renderTab()
     await waitFor(() => expect(screen.getByTestId('team-node-jim')).toBeInTheDocument())
 
-    // Directly invoke the handleOpenAgent through the store-observed path.
-    // WorkspaceTeamTab wires handleOpenAgent = (agentId) => openEditAgentSlideOver(agentId, workspaceId)
-    // We test this by calling the action from the rendered context:
-    // after the component mounts, the store's openEditAgentSlideOver is called
-    // with the workspace id whenever a node is clicked. Verify by calling it
-    // from the tab's exposed click interface.
-    useUiStore.getState().openEditAgentSlideOver('jim', 'ws-1')
+    // Click the "Edit Jim" button inside the Jim node. The button is rendered
+    // by WorkspaceTeamGraph inside each non-ghost node when onOpenAgent is
+    // provided (aria-label="Edit <name>"). We target it via querySelector on
+    // the node element (same pattern as the remove-guard test below) because
+    // React Flow renders nodes in a sub-tree that is not part of the ARIA
+    // role tree accessible via getByRole. Clicking it calls
+    // handleOpenAgent('jim') → openEditAgentSlideOver('jim', 'ws-1').
+    const jimNode = screen.getByTestId('team-node-jim')
+    const editBtn = jimNode.querySelector<HTMLElement>('[aria-label="Edit Jim"]')
+    expect(editBtn).not.toBeNull()
+    fireEvent.click(editBtn!)
+
     expect(openSpy).toHaveBeenCalledWith('jim', 'ws-1')
     // The store must record both the agent id and the workspace id.
     expect(useUiStore.getState().editAgentId).toBe('jim')

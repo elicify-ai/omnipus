@@ -4782,13 +4782,13 @@ type AgentUpdateRequest struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Heartbeat New HEARTBEAT.md content. Rejected on locked agents. Writing this triggers a config reload.
+	// Heartbeat Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
 	Heartbeat *string `json:"heartbeat,omitempty"`
 
-	// HeartbeatEnabled Enable/disable heartbeat loop. Allowed on all agents (Main only).
+	// HeartbeatEnabled Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
 	HeartbeatEnabled *bool `json:"heartbeat_enabled,omitempty"`
 
-	// HeartbeatInterval New heartbeat interval in seconds. Allowed on all agents (Main only).
+	// HeartbeatInterval Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
 	HeartbeatInterval *int `json:"heartbeat_interval,omitempty"`
 
 	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").

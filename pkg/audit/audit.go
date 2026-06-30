@@ -167,7 +167,13 @@ func IsValidEventName(e EventName) bool {
 		"project.delete",
 		"milestone.create",
 		"milestone.update",
-		"milestone.delete":
+		"milestone.delete",
+		// Session mutation events (pkg/gateway/rest.go).
+		// session.delete.blocked: emitted when DELETE /api/v1/sessions/{id} is
+		// rejected because the session is a protected heartbeat session (FR-014).
+		"session.delete.blocked",
+		// Agent management events (pkg/gateway/rest.go).
+		"agent.delete":
 		return true
 	}
 	return false

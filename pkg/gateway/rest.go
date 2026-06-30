@@ -671,10 +671,20 @@ func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
 	}
 	ws, err := readWorkspaceFile(homePath, m.WorkspaceID)
 	if err != nil {
-		// Workspace deleted or unreadable — session is no longer protected.
-		slog.Debug("computeSessionProtected: workspace not found", "workspace_id", m.WorkspaceID, "error", err)
-		f := false
-		return &f
+		// MEDIUM-2: distinguish workspace-not-found (deleted) from I/O / corruption.
+		// - Workspace deleted: correct, the session is no longer protected.
+		// - Any other error (corrupt JSON, I/O): fail CLOSED so a transient read
+		//   error never silently unprotects an active heartbeat session.
+		if errors.Is(err, errWorkspaceNotFound) {
+			slog.Debug("computeSessionProtected: workspace not found (deleted)",
+				"workspace_id", m.WorkspaceID, "session_id", m.ID)
+			f := false
+			return &f
+		}
+		slog.Warn("computeSessionProtected: workspace load error (fail closed)",
+			"workspace_id", m.WorkspaceID, "session_id", m.ID, "error", err)
+		t := true
+		return &t
 	}
 	mc, hasMC := ws.MemberConfigs[m.AgentID]
 	if !hasMC || mc.Heartbeat == nil {
@@ -844,8 +854,30 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 	// we don't make a half-deletion attempt and then fail. The workspace load
 	// is bounded by the session's WorkspaceID (no full scan).
 	meta, metaErr := store.GetMeta(id)
-	if metaErr == nil && meta != nil && meta.Type == session.SessionTypeHeartbeat {
+	if metaErr != nil {
+		// MEDIUM-1: fail CLOSED on meta-read error — a session whose metadata
+		// cannot be read must not be silently deleted past the heartbeat guard.
+		slog.Error("rest: delete session: could not read session meta",
+			"session_id", id, "error", metaErr)
+		jsonErr(w, http.StatusInternalServerError, "could not verify session protection")
+		return
+	}
+	if meta != nil && meta.Type == session.SessionTypeHeartbeat {
 		if isProtected := computeSessionProtected(a.homePath, meta); isProtected != nil && *isProtected {
+			// C-1 (FR-014): audit the blocked delete before returning 409.
+			if a.auditor != nil {
+				_ = a.auditor.Log(&audit.Entry{
+					Event:    "session.delete.blocked",
+					Decision: audit.DecisionDeny,
+					AgentID:  meta.AgentID,
+					Details: map[string]any{
+						"session_id":   id,
+						"workspace_id": meta.WorkspaceID,
+						"agent_id":     meta.AgentID,
+						"reason":       "heartbeat enabled",
+					},
+				})
+			}
 			jsonErr(w, http.StatusConflict,
 				"cannot delete a protected heartbeat session while its heartbeat is enabled; "+
 					"disable the heartbeat in the workspace settings first")

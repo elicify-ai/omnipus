@@ -92,7 +92,12 @@ func computeDesiredHeartbeats(workspaces []workspace.Workspace, isWorker func(ag
 			}
 			interval := hb.IntervalMinutes
 			if interval < 5 {
-				interval = 30 // safe default when stored value is somehow below minimum
+				// M-3: clamp to the documented minimum (5 min) and warn so
+				// operators can see the mismatch between stored and applied value.
+				slog.Warn("heartbeat reconcile: interval below minimum; clamping",
+					"workspace_id", ws.ID, "agent_id", agentID,
+					"stored_interval", interval, "clamped_to", 5)
+				interval = 5
 			}
 			out = append(out, desiredHeartbeat{
 				workspaceID: ws.ID,
@@ -121,18 +126,7 @@ func (a *restAPI) reconcileHeartbeatSchedules() {
 		slog.Warn("rest: heartbeat reconcile: list workspaces failed", "error", err)
 		return
 	}
-	isWorker := func(agentID string) bool {
-		if cfg == nil {
-			return false
-		}
-		for _, ac := range cfg.Agents.List {
-			if ac.ID == agentID {
-				return ac.IsWorker()
-			}
-		}
-		return false
-	}
-	if err := ReconcileHeartbeatSchedules(cs, workspaces, isWorker); err != nil {
+	if err := ReconcileHeartbeatSchedules(cs, workspaces, configOnlyIsWorker(cfg)); err != nil {
 		slog.Warn("rest: heartbeat schedule reconcile failed", "error", err)
 	}
 }
@@ -257,13 +251,6 @@ func releaseHeartbeatJobsForWorkspace(cs *cron.CronService, workspaceID string) 
 		}
 	}
 }
-
-// agentWorkspaceFunc is kept for backward compat with any call sites that
-// reference it by name (e.g. legacy test helpers). It is no longer used by the
-// main reconciler path, which iterates workspaces directly.
-//
-// Deprecated: use ReconcileHeartbeatSchedules with a []workspace.Workspace slice.
-type agentWorkspaceFunc = func(agentID string) string
 
 // configOnlyIsWorker returns an isWorker predicate backed by a config snapshot.
 // Exported for test use.
