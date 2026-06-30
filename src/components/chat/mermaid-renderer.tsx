@@ -457,8 +457,10 @@ function MermaidDiagramImpl({ code, streaming = false }: MermaidDiagramProps) {
 
   return (
     <div className="group/mermaid relative my-3 overflow-x-auto rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
-      {/* Hover-revealed overlay toolbar — only on the success (SVG ready) path */}
-      <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/mermaid:opacity-100 transition-opacity duration-150">
+      {/* Hover-revealed overlay toolbar — only on the success (SVG ready) path.
+          [@media(hover:none)] forces it visible on touch devices (iPad), where
+          group-hover never fires and the controls would otherwise be invisible. */}
+      <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/mermaid:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity duration-150">
         <MediaActionToolbar actions={toolbarActions} variant="overlay" />
       </div>
 
