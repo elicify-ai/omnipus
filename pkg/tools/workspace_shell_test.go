@@ -540,6 +540,66 @@ func TestWorkspaceShellTool_NameAndScope(t *testing.T) {
 	}
 }
 
+// TestWorkspaceShellTool_SandboxDenial_UserFacingClean verifies the C2 gap:
+// when workspace_shell receives a fork-denial in the command's stderr (the most
+// common real-world leak channel), the user-facing field (ForUser) does not
+// contain the raw kernel string, the LLM content is the sandbox summary AND
+// preserves the exit code, and Guidance is set.
+//
+// Uses profile=off so ApplyChildHardening is skipped; the denial is injected
+// via a command that writes the raw kernel message to stderr and exits non-zero.
+// This tests the result-construction logic without requiring live kernel sandbox.
+//
+// BDD: Given a command whose stderr contains "Cannot fork" and exits non-zero,
+//
+//	When workspace_shell executes it,
+//	Then result.IsError=true, ForUser does NOT contain "Cannot fork",
+//	the LLM content contains the sanitized summary AND the exit code,
+//	and Guidance is non-empty.
+func TestWorkspaceShellTool_SandboxDenial_UserFacingClean(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX-only test")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileOff, nil, nil)
+	ctx := context.Background()
+
+	// Simulate a fork-denial: write the raw kernel message to stderr and exit 1.
+	result := tool.Execute(ctx, map[string]any{
+		"command": `sh -c 'echo "Cannot fork" >&2; exit 1'`,
+	})
+
+	// Must be an error result.
+	if !result.IsError {
+		t.Fatalf("expected IsError=true for fork-denial command; got IsError=false; ForLLM=%q", result.ForLLM)
+	}
+
+	// ForUser must not contain the raw kernel denial string.
+	if strings.Contains(result.ForUser, "Cannot fork") {
+		t.Errorf("ForUser leaks raw kernel denial: %q", result.ForUser)
+	}
+
+	// ForLLM must be the sanitized summary — NOT the raw "Cannot fork" text.
+	if strings.Contains(result.ForLLM, "Cannot fork") {
+		t.Errorf("ForLLM leaks raw kernel denial string: %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "sandbox") {
+		t.Errorf("ForLLM does not mention sandbox; expected sanitized summary, got: %q", result.ForLLM)
+	}
+
+	// FIX A2: exit code must be preserved in the LLM message.
+	if !strings.Contains(result.ForLLM, "exited with code") {
+		t.Errorf("ForLLM does not preserve exit code; got: %q", result.ForLLM)
+	}
+
+	// Guidance must be set (tells the model not to retry).
+	if result.Guidance == "" {
+		t.Errorf("expected Guidance to be set for sandbox denial; got empty")
+	}
+}
+
 // readAuditEntries reads all JSONL audit entries from dir.
 // Each entry is a map[string]any. Invalid lines are skipped.
 func readAuditEntries(t *testing.T, dir string) []map[string]any {

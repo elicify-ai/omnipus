@@ -5,12 +5,15 @@
 package browser
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -200,7 +203,11 @@ func (m *BrowserManager) ensureStarted() error {
 
 	execPath, err := m.resolveExecPath(context.Background())
 	if err != nil {
-		return fmt.Errorf("browser: cannot locate chromium: %w", err)
+		// Join ErrBrowserUnavailable into the chain so callers (and
+		// browserErrorResult) can use errors.Is instead of substring matching.
+		// This covers both snap-stub fallthrough and egress-blocked managed
+		// installs (the v0.2 internal-CIDR hardening path).
+		return fmt.Errorf("browser: cannot locate chromium: %w", errors.Join(err, ErrBrowserUnavailable))
 	}
 
 	// Point Chrome's HOME and XDG dirs at the profile directory so any stray
@@ -269,6 +276,61 @@ func (m *BrowserManager) ensureStarted() error {
 	return nil
 }
 
+// chromeBinaryVersionRe matches a real Chromium / Google Chrome version line,
+// e.g. "Chromium 120.0.6099.109" or "Google Chrome 125.0.6422.141 built on …".
+var chromeBinaryVersionRe = regexp.MustCompile(`(?i)(chromium|google chrome|chrome)\s+\d+\.\d+`)
+
+// snapStubSignatures are substrings whose presence in --version output marks
+// the binary as the Ubuntu snap-redirect stub (a shell script, not a browser).
+// The stub exits 0 so we cannot rely on the exit code — we must inspect output.
+var snapStubSignatures = []string{
+	"requires the chromium snap",
+	"snap install chromium",
+}
+
+// isUsableChrome runs path --version with a short timeout and returns true
+// only when:
+//  1. The combined stdout+stderr contains a recognised version line
+//     (chromeBinaryVersionRe matches), AND
+//  2. The output does NOT contain any snap-stub signature.
+//
+// This rejects the Ubuntu snap-redirect shell stub
+// (/usr/bin/chromium-browser on 22.04+) which exits 0 but prints a
+// "requires the chromium snap" message instead of a version number.
+// The function is package-level (unexported) so unit tests in the same
+// package can exercise it without a live Chromium binary.
+func isUsableChrome(ctx context.Context, path string) bool {
+	if path == "" {
+		return false
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(probeCtx, path, "--version") //nolint:gosec // path is resolved from trusted sources
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	// A real Chrome exits 0 on --version; a snap stub also exits 0 but prints
+	// the snap error message. We inspect output regardless of exit code because
+	// some wrapper scripts may exit non-zero while still printing the version.
+	_ = cmd.Run()
+
+	combined := out.String()
+
+	// Reject any snap-stub output first — even if the regex below would match
+	// a partial line in some future stub variant.
+	lc := strings.ToLower(combined)
+	for _, sig := range snapStubSignatures {
+		if strings.Contains(lc, sig) {
+			return false
+		}
+	}
+
+	return chromeBinaryVersionRe.MatchString(combined)
+}
+
 // resolveExecPath returns the path to the Chromium binary chromedp should
 // launch. Resolution order:
 //
@@ -292,9 +354,20 @@ func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 	forceManaged := os.Getenv("OMNIPUS_BROWSER_FORCE_MANAGED") == "1"
 	if !forceManaged {
 		for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
-			if path, err := exec.LookPath(name); err == nil {
+			path, err := exec.LookPath(name)
+			if err != nil {
+				continue
+			}
+			if isUsableChrome(ctx, path) {
 				return path, nil
 			}
+			// The binary exists on PATH but failed the usability probe — most
+			// likely the Ubuntu snap-redirect stub. Log a clear warning and
+			// continue so resolution falls through to the managed install.
+			logger.WarnCF("browser", "found browser candidate on PATH but it is not a functional binary; falling back to managed Chromium install", map[string]any{
+				"candidate": path,
+				"name":      name,
+			})
 		}
 	}
 	installRoot := filepath.Join(filepath.Dir(filepath.Clean(m.cfg.ProfileDir)), "..", "chromium")

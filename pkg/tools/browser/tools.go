@@ -58,7 +58,8 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_navigate: %s", err))
+		logger.WarnCF("browser", "browser_navigate: session start failed", map[string]any{"error": err.Error()})
+		return browserErrorResult(err)
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -70,7 +71,8 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		chromedp.Title(&title),
 	)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_navigate: page load failed: %s", err))
+		logger.WarnCF("browser", "browser_navigate: page load failed", map[string]any{"url": rawURL, "error": err.Error()})
+		return browserErrorResult(err)
 	}
 
 	var finalURL string
@@ -133,7 +135,8 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_click: %s", err))
+		logger.WarnCF("browser", "browser_click: session start failed", map[string]any{"error": err.Error()})
+		return browserErrorResult(err)
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -184,7 +187,8 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_type: %s", err))
+		logger.WarnCF("browser", "browser_type: session start failed", map[string]any{"error": err.Error()})
+		return browserErrorResult(err)
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -226,7 +230,8 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: %s", err))
+		logger.WarnCF("browser", "browser_screenshot: session start failed", map[string]any{"error": err.Error()})
+		return browserErrorResult(err)
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -311,7 +316,8 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_get_text: %s", err))
+		logger.WarnCF("browser", "browser_get_text: session start failed", map[string]any{"error": err.Error()})
+		return browserErrorResult(err)
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -365,7 +371,8 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_wait: %s", err))
+		logger.WarnCF("browser", "browser_wait: session start failed", map[string]any{"error": err.Error()})
+		return browserErrorResult(err)
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
@@ -434,7 +441,8 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_evaluate: %s", err))
+		logger.WarnCF("browser", "browser_evaluate: session start failed", map[string]any{"error": err.Error()})
+		return browserErrorResult(err)
 	}
 
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())

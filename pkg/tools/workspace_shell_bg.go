@@ -50,6 +50,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
@@ -343,6 +344,17 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 	parts := strings.Fields(command)
 	cmd, spawnErr := sandbox.SpawnBackgroundChild(parts, cwd, envSlice, exposePort, lim)
 	if spawnErr != nil {
+		rawSpawnErr := spawnErr.Error()
+		if summary, blocked := summarizeSandboxDenial(rawSpawnErr); blocked {
+			logger.WarnCF("workspace_shell_bg", "sandbox denial scrubbed from spawn error",
+				map[string]any{"tool": "workspace_shell_bg", "raw_error": rawSpawnErr})
+			return &ToolResult{
+				ForLLM:   summary,
+				ForUser:  "",
+				IsError:  true,
+				Guidance: sandboxDenialGuidance,
+			}
+		}
 		return ErrorResult(fmt.Sprintf("workspace_shell_bg: failed to start process: %v", spawnErr))
 	}
 

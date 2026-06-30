@@ -40,6 +40,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
@@ -254,7 +255,35 @@ func (t *WorkspaceShellTool) Execute(ctx context.Context, args map[string]any) *
 	// Spawn.
 	result, runErr := t.run(ctx, command, envSlice, lim, timeoutSec)
 	if runErr != nil {
+		// FIX A4: log raw error before scrubbing so kernel denial text is
+		// preserved in the runtime log.
+		rawErrStr := runErr.Error()
+		if rawErrStr != "" {
+			logger.WarnCF("workspace_shell", "sandbox denial scrubbed from tool output",
+				map[string]any{"tool": "workspace_shell", "raw_stderr": rawErrStr})
+		}
+		// The Go error from sandbox.Run / runUnconstrained may itself embed
+		// kernel denial text. Apply the same sanitization as the exec tool so
+		// the raw error string never reaches the user or LLM unfiltered.
+		// FIX A2: no stdout is available from a run-level error; convey exit code 1.
+		if _, blocked := summarizeSandboxDenial(rawErrStr); blocked {
+			return sandboxDenialResult(1, "")
+		}
 		return ErrorResult(fmt.Sprintf("failed to run command: %v", runErr))
+	}
+
+	// FIX A2 + FIX A4: on the nonzero-exit path, scrub sandbox/kernel denial
+	// signatures from stderr and replace them with the sanitized plain ToolResult
+	// that preserves exit_code and stdout. This is the primary intercept point
+	// for seccomp/Landlock denials and apt/snap errors.
+	if result.ExitCode != 0 {
+		if result.Stderr != "" {
+			logger.WarnCF("workspace_shell", "sandbox denial scrubbed from tool output",
+				map[string]any{"tool": "workspace_shell", "raw_stderr": result.Stderr})
+		}
+		if _, blocked := summarizeSandboxDenial(result.Stderr); blocked {
+			return sandboxDenialResult(result.ExitCode, result.Stdout)
+		}
 	}
 
 	data, err := json.Marshal(result)

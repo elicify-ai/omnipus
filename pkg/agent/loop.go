@@ -6981,6 +6981,22 @@ turnLoop:
 				contentForLLM = cfg.FilterSensitiveData(contentForLLM)
 			}
 
+			// FR-CBC-001: Circuit-breaker for consecutive provisioning-tool failures.
+			// recordToolOutcome fires ONCE (at exactly consecutiveShellFailureLimit)
+			// so the model receives a targeted guidance note without prompt spam.
+			// Hard-kill is deliberately NOT used here — MaxIterations remains the
+			// ceiling; we just steer the model away from futile retry loops.
+			if cbGuidance, cbInject := ts.recordToolOutcome(toolName, toolResult.IsError); cbInject {
+				contentForLLM += cbGuidance
+				logger.WarnCF("agent", "FR-CBC-001: consecutive shell-failure limit reached — injecting guidance",
+					map[string]any{
+						"agent_id": ts.agent.ID,
+						"tool":     toolName,
+						"count":    ts.consecutiveToolFailures,
+						"limit":    consecutiveShellFailureLimit,
+					})
+			}
+
 			toolResultMsg := providers.Message{
 				Role:       "tool",
 				Content:    contentForLLM,

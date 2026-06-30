@@ -246,3 +246,103 @@ func TestToolResultContentForLLM_AppendsArtifactPaths(t *testing.T) {
 		t.Fatalf("expected artifact guidance note in ContentForLLM, got %q", content)
 	}
 }
+
+// TestContentForLLM_GuidanceBranch covers the Guidance appending logic in
+// ContentForLLM: empty content, content + guidance, and the idempotent dedup.
+func TestContentForLLM_GuidanceBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty content + guidance returns guidance only", func(t *testing.T) {
+		t.Parallel()
+		tr := &ToolResult{Guidance: "use fetch_url instead"}
+		got := tr.ContentForLLM()
+		if got != "Guidance: use fetch_url instead" {
+			t.Errorf("expected guidance-only content, got %q", got)
+		}
+	})
+
+	t.Run("content + guidance appended with Guidance: prefix", func(t *testing.T) {
+		t.Parallel()
+		tr := &ToolResult{
+			ForLLM:   "tool failed",
+			Guidance: "do not retry",
+		}
+		got := tr.ContentForLLM()
+		if !strings.Contains(got, "tool failed") {
+			t.Errorf("expected original content in result, got %q", got)
+		}
+		if !strings.Contains(got, "Guidance: do not retry") {
+			t.Errorf("expected 'Guidance: do not retry' appended, got %q", got)
+		}
+		// Guidance must appear AFTER the primary content.
+		contentIdx := strings.Index(got, "tool failed")
+		guidanceIdx := strings.Index(got, "Guidance:")
+		if guidanceIdx < contentIdx {
+			t.Errorf("Guidance appeared before content; got %q", got)
+		}
+	})
+
+	t.Run("idempotent dedup: calling ContentForLLM twice does not duplicate guidance", func(t *testing.T) {
+		t.Parallel()
+		tr := &ToolResult{
+			ForLLM:   "tool failed",
+			Guidance: "do not retry",
+		}
+		first := tr.ContentForLLM()
+		second := tr.ContentForLLM()
+		if first != second {
+			t.Errorf("ContentForLLM is not idempotent: first=%q second=%q", first, second)
+		}
+		// Verify "Guidance: do not retry" appears exactly once in the output.
+		count := strings.Count(first, "Guidance: do not retry")
+		if count != 1 {
+			t.Errorf("expected guidance to appear exactly once, appeared %d times in %q", count, first)
+		}
+	})
+
+	t.Run("nil ToolResult returns empty string", func(t *testing.T) {
+		t.Parallel()
+		var tr *ToolResult
+		got := tr.ContentForLLM()
+		if got != "" {
+			t.Errorf("expected empty string for nil ToolResult, got %q", got)
+		}
+	})
+}
+
+// TestErrorResultWithGuidance verifies that ErrorResultWithGuidance sets both
+// ForLLM and Guidance correctly, and that ContentForLLM appends Guidance after
+// the error message.
+func TestErrorResultWithGuidance(t *testing.T) {
+	t.Parallel()
+
+	msg := "capability unavailable in this deployment"
+	guidance := "do NOT try to install a browser; use fetch_url to read the page instead"
+
+	r := ErrorResultWithGuidance(msg, guidance)
+
+	if !r.IsError {
+		t.Errorf("expected IsError=true, got false")
+	}
+	if r.ForLLM != msg {
+		t.Errorf("expected ForLLM=%q, got %q", msg, r.ForLLM)
+	}
+	if r.Guidance != guidance {
+		t.Errorf("expected Guidance=%q, got %q", guidance, r.Guidance)
+	}
+
+	// ContentForLLM must include both the error message and the guidance.
+	content := r.ContentForLLM()
+	if !strings.Contains(content, msg) {
+		t.Errorf("ContentForLLM missing error message; got %q", content)
+	}
+	if !strings.Contains(content, "Guidance: "+guidance) {
+		t.Errorf("ContentForLLM missing guidance; got %q", content)
+	}
+
+	// Guidance already present → calling ContentForLLM again must not duplicate.
+	content2 := r.ContentForLLM()
+	if strings.Count(content2, "Guidance: "+guidance) != 1 {
+		t.Errorf("guidance duplicated on second call; got %q", content2)
+	}
+}

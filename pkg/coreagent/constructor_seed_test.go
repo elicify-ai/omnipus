@@ -383,6 +383,42 @@ func TestSeedConfig_JimProfileApplied(t *testing.T) {
 		"Jim must be seeded with sandbox_profile=workspace+net")
 }
 
+// TestSeed_BrowserSpecialistsHaveBrowserTools is a regression guard for the incident
+// where Ray reported "restricted for my agent" after a load_tool failure for
+// browser_navigate / browser_screenshot — a fabrication, because both tools are
+// explicitly allowed in Ray's seed. This test ensures that Ray AND Jim retain
+// browser_navigate and browser_screenshot as ALLOW in their seeded LoadToolPolicy,
+// so any future change that strips browser tools from the "browser specialists"
+// fails loudly here instead of surfacing as a confusing agent lie.
+//
+// BDD: Given coreAgentSeed is called for Ray (IDRay) and Jim (IDJim),
+//
+//	When the returned policies map is inspected for browser tools,
+//	Then browser_navigate and browser_screenshot are both "allow" for Ray;
+//	And browser_navigate and browser_screenshot are both "allow" for Jim.
+//
+// Traces to: incident fix-7 / fix-8 (browser capability fabrication + reflexive handoff).
+func TestSeed_BrowserSpecialistsHaveBrowserTools(t *testing.T) {
+	browserTools := []string{"browser_navigate", "browser_screenshot"}
+
+	for _, agentID := range []CoreAgentID{IDRay, IDJim} {
+		agentID := agentID
+		t.Run(string(agentID), func(t *testing.T) {
+			_, policies, _ := coreAgentSeed(agentID)
+
+			for _, toolName := range browserTools {
+				p, ok := policies[toolName]
+				require.True(t, ok,
+					"agent %q must have an explicit policy entry for %q (browser specialist)",
+					agentID, toolName)
+				assert.Equal(t, config.ToolPolicyAllow, p,
+					"agent %q policy for %q must be 'allow' — browser tools must not be stripped from browser specialists",
+					agentID, toolName)
+			}
+		})
+	}
+}
+
 // TestSeedConfig_JimProfileMigration verifies the idempotent profile migration:
 // if Jim already exists in config with an empty SandboxProfile, SeedConfig fills
 // it with the seed value. Operator-set profiles are left unchanged.

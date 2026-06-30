@@ -53,6 +53,15 @@ type ToolResult struct {
 	// form, e.g. "[file:/tmp/example.png]". This is used when a tool produced a
 	// reusable local artifact but did not deliver it to the user yet.
 	ArtifactTags []string `json:"artifact_tags,omitempty"`
+
+	// Guidance, when set, is appended to the LLM-visible content as an explicit
+	// next-step directive for a recoverable or environmentally-fixed failure —
+	// e.g. "this capability is unavailable in this deployment; do NOT try to
+	// install it; use fetch_url instead." It is distinct from the raw error
+	// message: the error says what went wrong, Guidance says what to DO about it.
+	// Used to stop models from flailing (e.g. shelling out to apt/npm) when a
+	// tool hits a hard, non-self-fixable environment limit. Not sent to the user.
+	Guidance string `json:"guidance,omitempty"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the
@@ -71,6 +80,17 @@ func (tr *ToolResult) ContentForLLM() string {
 			content = artifactNote
 		} else if !strings.Contains(content, artifactNote) {
 			content += "\n" + artifactNote
+		}
+	}
+	// Guidance is appended after the error/content so the model reads "what went
+	// wrong" then "what to do next" as one block. Prefixed so it reads as a
+	// directive rather than more error text.
+	if tr.Guidance != "" {
+		note := "Guidance: " + tr.Guidance
+		if content == "" {
+			content = note
+		} else if !strings.Contains(content, note) {
+			content += "\n" + note
 		}
 	}
 	if content != "" {
@@ -226,6 +246,22 @@ func ErrorResult(message string) *ToolResult {
 		IsError: true,
 		Async:   false,
 	}
+}
+
+// ErrorResultWithGuidance is ErrorResult plus a Guidance directive telling the
+// model what to do next (see ToolResult.Guidance). Use it for hard, non-self-
+// fixable failures (e.g. an unavailable capability) where, without a directive,
+// a model tends to flail — retrying or shelling out to install software.
+//
+// Example:
+//
+//	return ErrorResultWithGuidance(
+//	    "Browser screenshots aren't available in this deployment.",
+//	    "Do NOT try to install a browser; use fetch_url to read the page instead.")
+func ErrorResultWithGuidance(message, guidance string) *ToolResult {
+	r := ErrorResult(message)
+	r.Guidance = guidance
+	return r
 }
 
 // UserResult creates a ToolResult with content for both LLM and user.

@@ -206,6 +206,15 @@ type turnState struct {
 	// The counter resets per turn (initialized to zero here).
 	syntheticErrorCount int
 
+	// consecutiveToolFailures counts consecutive execution failures on
+	// provisioning-prone tools (exec, workspace_shell, workspace_shell_bg).
+	// Resets on any success or non-provisioning tool call. Used by
+	// recordToolOutcome to inject a one-time guidance note when the threshold
+	// is hit (FR-CBC-001). The counter accumulates across all tool executions
+	// within a turn, including multiple tool calls batched in a single model
+	// response.
+	consecutiveToolFailures int
+
 	// lastProducedModel is the model string that produced the most recent
 	// assistant message in this turn. Set after each successful LLM call in
 	// loop.go (and external_dispatch.go for CLI providers). The transcript
@@ -238,6 +247,78 @@ func (ts *turnState) auditUser() string {
 		return ""
 	}
 	return ts.userID
+}
+
+// consecutiveShellFailureLimit is the number of consecutive provisioning-prone
+// tool failures (exec, workspace_shell, workspace_shell_bg) that triggers a
+// one-time guidance injection into the tool result visible to the model
+// (FR-CBC-001). The guidance fires ONCE — at exactly the threshold — to avoid
+// prompt spam; subsequent failures above the threshold are silent
+// (MaxIterations remains the hard ceiling). Value of 3 matches empirical
+// runaway patterns (typically 3 apt/npm-install attempts before the model
+// escalates or loop burns budget).
+const consecutiveShellFailureLimit = 3
+
+// shellBreakerGuidance is the guidance injected into the tool result content
+// when consecutiveShellFailureLimit consecutive provisioning-prone failures are
+// detected. It is a constant so the unit test can assert on the exact text.
+const shellBreakerGuidance = "\n\n[SYSTEM NOTE] You've had several consecutive shell-command failures. This sandbox blocks installing software (apt/snap/npm are denied by design). Stop trying to install or run external commands to work around it — use the built-in tools (e.g. fetch_url) or tell the user the capability is unavailable in this environment."
+
+// provisioningToolNames is the single source of truth for which tool names are
+// considered provisioning-prone for circuit-breaker purposes (FR-CBC-001).
+// All three shell execution tools are included: exec (direct subprocess),
+// workspace_shell (interactive foreground shell), and workspace_shell_bg
+// (background shell). Adding a tool here is sufficient to make the breaker
+// track it — no other changes needed.
+var provisioningToolNames = map[string]struct{}{
+	"exec":               {},
+	"workspace_shell":    {},
+	"workspace_shell_bg": {},
+}
+
+// isProvisioningTool reports whether the named tool is considered
+// provisioning-prone for circuit-breaker purposes. The check is a map lookup
+// against provisioningToolNames — the single source of truth.
+func isProvisioningTool(toolName string) bool {
+	_, ok := provisioningToolNames[toolName]
+	return ok
+}
+
+// recordToolOutcome updates the consecutive-failure counter and returns a
+// guidance string (inject=true) the first time the limit is reached. The
+// caller must append the guidance to the content sent to the model so the
+// LLM sees it in the same tool-result turn that triggered the breach.
+//
+// The counter advances once per tool execution (including multiple tool calls
+// batched in one model response). The per-call shell tool result already
+// carries sandbox guidance when the kernel blocks the call; this breaker is a
+// backstop — a model receiving the 3rd failure may therefore see both the
+// tool's own sandbox guidance and this note (same advice, harmless).
+//
+// Semantics:
+//   - Non-provisioning tool OR success: counter resets to 0 and ("", false)
+//     is returned (a success on any provisioning tool also resets).
+//   - Provisioning-tool failure: counter increments; all provisioning tools
+//     are treated identically so alternating exec/workspace_shell/
+//     workspace_shell_bg still accumulates toward the limit.
+//   - At exactly consecutiveShellFailureLimit: returns (guidance, true) —
+//     fires ONCE.
+//   - Above the limit: returns ("", false) — no spam.
+func (ts *turnState) recordToolOutcome(toolName string, isError bool) (guidance string, inject bool) {
+	if !isError || !isProvisioningTool(toolName) {
+		// Success on any tool, OR failure on a non-provisioning tool: reset.
+		ts.consecutiveToolFailures = 0
+		return "", false
+	}
+	// Provisioning-tool failure: increment (treat all provisioning tools the
+	// same — alternating exec/workspace_shell/workspace_shell_bg still
+	// accumulates toward limit).
+	ts.consecutiveToolFailures++
+
+	if ts.consecutiveToolFailures == consecutiveShellFailureLimit {
+		return shellBreakerGuidance, true
+	}
+	return "", false
 }
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {

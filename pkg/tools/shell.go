@@ -776,9 +776,10 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult
 		}
 	}
 
+	stderrStr := stderr.String()
 	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\nSTDERR:\n" + stderr.String()
+	if len(stderrStr) > 0 {
+		output += "\nSTDERR:\n" + stderrStr
 	}
 
 	if err != nil {
@@ -821,10 +822,41 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult
 	}
 
 	if err != nil {
+		// FIX A4: log raw stderr before scrubbing so seccomp/Landlock denial
+		// signals are preserved in the runtime audit log even though they are
+		// removed from the model/user-facing output.
+		if stderrStr != "" {
+			logger.WarnCF("shell", "sandbox denial scrubbed from tool output",
+				map[string]any{"tool": "exec", "raw_stderr": stderrStr})
+		}
+		// FIX A2: when blocked, preserve exit code and any stdout so the model
+		// can reason about what was attempted. Stdout almost never carries kernel
+		// internals; only stderr is scrubbed. The summary is prepended so the
+		// model reads "why" before "what ran".
+		if _, blocked := summarizeSandboxDenial(stderrStr); blocked {
+			// Extract the numeric exit code from the error so the model can see it.
+			var exitCode int
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 1
+			}
+			return sandboxDenialResult(exitCode, stdout.String())
+		}
 		return &ToolResult{
 			ForLLM:  output,
 			ForUser: output,
 			IsError: true,
+		}
+	}
+
+	// FIX A3: on the success (exit-0) path, only scrub unambiguous snap/chromium
+	// install-prompt signatures. EPERM/EAGAIN/fork/lock patterns must NOT be
+	// applied here — a command that exited 0 was NOT blocked by the sandbox.
+	if isSnapInstallPrompt(stderrStr) {
+		if _, blocked := summarizeSandboxDenial(stderrStr); blocked {
+			return sandboxDenialResult(0, "")
 		}
 	}
 
@@ -860,12 +892,13 @@ func (t *ExecTool) runSyncHardened(ctx context.Context, command, cwd string) *To
 		return ErrorResult(fmt.Sprintf("sandbox.Run failed: %v", err))
 	}
 
+	stderrStr := string(res.Stderr)
 	output := string(res.Stdout)
-	if len(res.Stderr) > 0 {
+	if len(stderrStr) > 0 {
 		if output != "" {
 			output += "\n"
 		}
-		output += "STDERR:\n" + string(res.Stderr)
+		output += "STDERR:\n" + stderrStr
 	}
 
 	if res.TimedOut {
@@ -882,9 +915,29 @@ func (t *ExecTool) runSyncHardened(ctx context.Context, command, cwd string) *To
 	}
 
 	if res.ExitCode != 0 {
+		// FIX A4: log raw stderr before scrubbing so seccomp/Landlock denial
+		// signals are preserved in the runtime audit log.
+		if stderrStr != "" {
+			logger.WarnCF("shell", "sandbox denial scrubbed from tool output",
+				map[string]any{"tool": "exec", "raw_stderr": stderrStr})
+		}
+		// FIX A2: when blocked, preserve exit code and any stdout. The hardened
+		// path is the primary intercept point for seccomp/Landlock denials.
+		if _, blocked := summarizeSandboxDenial(stderrStr); blocked {
+			return sandboxDenialResult(res.ExitCode, string(res.Stdout))
+		}
 		output += fmt.Sprintf("\n\n[Command exited with code %d]", res.ExitCode)
 		if res.ExitCode == -1 {
 			output += " (killed by signal)"
+		}
+	} else {
+		// FIX A3 (hardened path symmetry): mirror runSync's exit-0 snap scrub.
+		// A command that exits 0 was not sandbox-blocked, but an unambiguous
+		// chromium/snap install prompt in stderr still warrants a sanitized note.
+		if isSnapInstallPrompt(stderrStr) {
+			if _, blocked := summarizeSandboxDenial(stderrStr); blocked {
+				return sandboxDenialResult(0, "")
+			}
 		}
 	}
 
