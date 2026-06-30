@@ -48,7 +48,15 @@ export function AppShell() {
   }, [])
 
   return (
-    <div data-app-shell className="flex h-dvh w-full overflow-hidden bg-[var(--color-primary)]">
+    // `fixed inset-x-0 top-0` pins the shell to the viewport so iOS Safari can
+    // never scroll the whole document (header included) away — `overflow-hidden`
+    // on html/body is not a hard guarantee there. `h-dvh` keeps it exactly one
+    // dynamic-viewport tall; with the index.html `interactive-widget=resizes-
+    // content` meta, dvh shrinks when the keyboard opens so the composer stays in
+    // view and the header does not scroll out. Overlays (toasts/modals/lightbox)
+    // use their own fixed/portal positioning and are unaffected (no transform on
+    // this element, so descendant `position:fixed` stays viewport-relative).
+    <div data-app-shell className="fixed inset-x-0 top-0 flex h-dvh overflow-hidden bg-[var(--color-primary)]">
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
 
