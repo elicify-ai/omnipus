@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState, memo, useCallback } from 'react'
 import DOMPurify from 'dompurify'
-import { Warning, ArrowClockwise, Code, Image, ArrowsOutSimple, DownloadSimple, Copy } from '@phosphor-icons/react'
+import { ArrowClockwise, Code, Image, ArrowsOutSimple, DownloadSimple, Copy } from '@phosphor-icons/react'
 import { MediaActionToolbar, type MediaAction } from './MediaActionToolbar'
 import { useUiStore } from '@/store/ui'
 import { copyText, copyImageBlob, svgToPngBlob, downloadBlob, canCopyImage } from './media-actions'
@@ -58,10 +58,14 @@ function buildFixPrompt(error: string, code: string): string {
 // row is unmounted and recreated by the list.
 const fixRequestedCache = new Set<string>()
 
-// MermaidErrorCard — compact failure state for a COMPLETE but malformed diagram.
-// Shows a short message + the syntax error (not the raw source by default), an
-// "Ask assistant to fix" action that sends the error + code back to the LLM, and a
-// collapsible source view.
+// MermaidErrorCard — GRACEFUL-DEGRADATION failure state for a COMPLETE but
+// malformed diagram. A failed diagram is a supporting visual the *agent* got
+// wrong, not a user error, so we deliberately AVOID an alarming red alert: a
+// neutral container shows the diagram SOURCE as a normal code block (the content
+// survives, just un-drawn) under one muted caption + a quiet "Fix". The raw
+// parser error is NOT dumped into the chat (it's developer jargon) — it's
+// available on hover (title=) and already logged to the console at render time.
+// role="status" (not "alert") so screen readers get a calm notice, not an alarm.
 function MermaidErrorCard({ error, code }: { error: string; code: string }) {
   // Seed from the module-level cache so a remount shows the correct sent state
   // immediately — the virtualized list can unmount and recreate this row at any time.
@@ -80,31 +84,32 @@ function MermaidErrorCard({ error, code }: { error: string; code: string }) {
   }
 
   return (
-    <div className="my-2 rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-surface-2)] p-3 text-xs">
-      <div className="flex items-center gap-1.5 font-medium text-[var(--color-error)]">
-        <Warning size={14} weight="fill" />
-        <span>Couldn&apos;t render the diagram</span>
-      </div>
-      <div className="mt-1.5 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10px] text-[var(--color-muted)]">
-        {error}
-      </div>
-      <div className="mt-2 flex items-center gap-3">
+    <div
+      role="status"
+      className="my-2 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+    >
+      {/* Quiet, neutral caption — no red, no parser dump. The raw error is on
+          hover (title=) and in the console, never shouted into the transcript. */}
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5 text-[11px]">
+        <span className="flex items-center gap-1.5 text-[var(--color-muted)]" title={error}>
+          <Code size={13} />
+          <span>Diagram couldn&apos;t be drawn — showing source</span>
+        </span>
         <button
           type="button"
           onClick={handleFix}
           disabled={sent}
-          className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-1)] disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label={sent ? 'Fix requested' : 'Ask the assistant to fix the diagram'}
+          className="flex shrink-0 items-center gap-1 text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-60"
         >
           <ArrowClockwise size={11} />
-          {sent ? 'Sent to assistant' : 'Ask assistant to fix'}
+          {sent ? 'Fix requested' : 'Fix'}
         </button>
-        <details className="text-[var(--color-muted)]">
-          <summary className="cursor-pointer text-[11px] hover:text-[var(--color-secondary)]">Show source</summary>
-          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[10px] text-[var(--color-secondary)]">
-            {code}
-          </pre>
-        </details>
       </div>
+      {/* The source as an ordinary code block — the content is still readable. */}
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 font-mono text-xs text-[var(--color-secondary)]">
+        {code}
+      </pre>
     </div>
   )
 }

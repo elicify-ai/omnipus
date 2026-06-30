@@ -149,19 +149,22 @@ describe('MermaidDiagram', () => {
     await waitFor(() => expect(document.querySelector('svg')).toBeInTheDocument())
   })
 
-  it('shows the error card (short message + syntax error + collapsible source) when render() throws', async () => {
+  it('shows the graceful error card (quiet caption + source fallback, no red, error in title) when render() throws', async () => {
     renderFn.mockRejectedValue(new Error('Parse error on line 1'))
     const MermaidDiagram = await importDiagram()
 
     render(<MermaidDiagram code={'this is not valid mermaid'} />)
 
-    await waitFor(() => expect(screen.getByText('Parse error on line 1')).toBeInTheDocument())
-    // Short headline, not a raw dump of the source.
-    expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument()
-    // Source still available (in the collapsible <details>).
+    // Neutral caption (graceful degradation — not a red alert) + the source shown as a fallback.
+    await waitFor(() => expect(screen.getByText(/couldn't be drawn/i)).toBeInTheDocument())
     expect(screen.getByText(/this is not valid mermaid/)).toBeInTheDocument()
-    // A "fix" affordance is offered.
-    expect(screen.getByRole('button', { name: /Ask assistant to fix/i })).toBeInTheDocument()
+    // The raw parser error is NOT dumped as visible text — it's available on hover (title=).
+    expect(screen.queryByText('Parse error on line 1')).toBeNull()
+    expect(
+      screen.getByText(/couldn't be drawn/i).closest('[title]')?.getAttribute('title'),
+    ).toContain('Parse error on line 1')
+    // A quiet "fix" affordance is offered (still reachable by its accessible name).
+    expect(screen.getByRole('button', { name: /fix the diagram/i })).toBeInTheDocument()
   })
 
   it('error card "Ask assistant to fix" sends the syntax error + code back to the LLM', async () => {
@@ -170,7 +173,7 @@ describe('MermaidDiagram', () => {
 
     render(<MermaidDiagram code={'graph TD; A--B'} />)
 
-    const btn = await screen.findByRole('button', { name: /Ask assistant to fix/i })
+    const btn = await screen.findByRole('button', { name: /fix the diagram/i })
     fireEvent.click(btn)
 
     // handleFix is async (lazy store import) — wait for sendMessage to be called.
@@ -182,7 +185,7 @@ describe('MermaidDiagram', () => {
     // The prompt uses a backtick fence — guard that it includes the mermaid fence marker.
     expect(sent).toContain('```mermaid')
     // Button reflects the sent state (disabled to prevent double-send).
-    expect(screen.getByRole('button', { name: /Sent to assistant/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Fix requested/i })).toBeInTheDocument()
   })
 
   it('fix button: a second click does NOT call sendMessage again (disabled after sent)', async () => {
@@ -191,7 +194,7 @@ describe('MermaidDiagram', () => {
 
     render(<MermaidDiagram code={'graph TD; A--C'} />)
 
-    const btn = await screen.findByRole('button', { name: /Ask assistant to fix/i })
+    const btn = await screen.findByRole('button', { name: /fix the diagram/i })
     fireEvent.click(btn)
     await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
 
@@ -208,7 +211,7 @@ describe('MermaidDiagram', () => {
 
     render(<MermaidDiagram code={'graph TD; A--D'} />)
 
-    const btn = await screen.findByRole('button', { name: /Ask assistant to fix/i })
+    const btn = await screen.findByRole('button', { name: /fix the diagram/i })
     fireEvent.click(btn)
 
     // Give async handleFix time to run (it awaits the store import then returns early).
@@ -218,13 +221,13 @@ describe('MermaidDiagram', () => {
 
   it('fix button: remount with the same code shows "Sent to assistant" (module-level cache)', async () => {
     // Covers FIX 2: fixRequestedCache is module-level, so a virtualized-list remount
-    // must not reset the button state to "Ask assistant to fix".
+    // must not reset the button state to the un-sent "Fix".
     renderFn.mockRejectedValue(new Error('Parse error on line 1'))
     const MermaidDiagram = await importDiagram()
 
     const { unmount } = render(<MermaidDiagram code={'graph TD; A--E'} />)
 
-    const btn = await screen.findByRole('button', { name: /Ask assistant to fix/i })
+    const btn = await screen.findByRole('button', { name: /fix the diagram/i })
     fireEvent.click(btn)
     await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
 
@@ -233,7 +236,7 @@ describe('MermaidDiagram', () => {
     // The error cache from the first render means the error card shows synchronously
     // on the new mount (no async wait needed); the sent state seeds from fixRequestedCache.
     render(<MermaidDiagram code={'graph TD; A--E'} />)
-    expect(screen.getByRole('button', { name: /Sent to assistant/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Fix requested/i })).toBeInTheDocument()
   })
 
   it('streaming handoff: error card appears after streaming=false, not before', async () => {
@@ -246,11 +249,11 @@ describe('MermaidDiagram', () => {
 
     // While streaming: nothing rendered, including no error card.
     await waitFor(() => expect(renderFn).toHaveBeenCalled())
-    expect(screen.queryByText(/Couldn't render/i)).toBeNull()
+    expect(screen.queryByText(/couldn't be drawn/i)).toBeNull()
 
     // Handoff: streaming ends → the effect reruns → error card appears.
     rerender(<MermaidDiagram code={DIAGRAM} />)
-    await waitFor(() => expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/couldn't be drawn/i)).toBeInTheDocument())
   })
 
   it('two distinct malformed codes produce distinct, non-contaminated error messages', async () => {
@@ -258,17 +261,24 @@ describe('MermaidDiagram', () => {
     // a new code must call mermaid.render() again and show its own error.
     const MermaidDiagram = await importDiagram()
 
+    // The graceful card keeps the parser detail on the caption's title= (hover),
+    // so assert non-contamination via that title rather than visible text.
+    const cardTitle = () =>
+      screen.getByText(/couldn't be drawn/i).closest('[title]')?.getAttribute('title')
+
     renderFn.mockRejectedValue(new Error('err-A'))
     render(<MermaidDiagram code={'AAA'} />)
-    await waitFor(() => expect(screen.getByText('err-A')).toBeInTheDocument())
+    await waitFor(() => expect(cardTitle()).toContain('err-A'))
+    expect(screen.getByText('AAA')).toBeInTheDocument() // its own source fallback
 
     cleanup()
 
     renderFn.mockRejectedValue(new Error('err-B'))
     render(<MermaidDiagram code={'BBB'} />)
     await waitFor(() => expect(renderFn).toHaveBeenCalledWith(expect.any(String), 'BBB'))
-    await waitFor(() => expect(screen.getByText('err-B')).toBeInTheDocument())
-    expect(screen.queryByText('err-A')).toBeNull()
+    await waitFor(() => expect(cardTitle()).toContain('err-B'))
+    expect(cardTitle()).not.toContain('err-A')
+    expect(screen.queryByText('AAA')).toBeNull()
   })
 
   it('streaming: renders NOTHING while the partial code fails to parse (no naked source, no error)', async () => {
@@ -278,7 +288,7 @@ describe('MermaidDiagram', () => {
     const { container } = render(<MermaidDiagram code={'graph T'} streaming />)
 
     await waitFor(() => expect(renderFn).toHaveBeenCalled())
-    expect(screen.queryByText(/Couldn't render/i)).toBeNull()
+    expect(screen.queryByText(/couldn't be drawn/i)).toBeNull()
     expect(screen.queryByText(/Rendering diagram/i)).toBeNull()
     expect(screen.queryByText(/graph T/)).toBeNull()
     expect(container).toBeEmptyDOMElement()
@@ -326,9 +336,12 @@ describe('MermaidDiagram', () => {
 
     render(<MermaidDiagram code={DIAGRAM} />)
 
-    await waitFor(() =>
-      expect(screen.getByText('Mermaid initialization failed')).toBeInTheDocument(),
-    )
+    // Init failure routes through the same graceful card — the reason is on the
+    // caption's title= (hover), and the source is shown as a fallback.
+    await waitFor(() => expect(screen.getByText(/couldn't be drawn/i)).toBeInTheDocument())
+    expect(
+      screen.getByText(/couldn't be drawn/i).closest('[title]')?.getAttribute('title'),
+    ).toContain('Mermaid initialization failed')
     // render() must NOT be reached once init fails.
     expect(renderFn).not.toHaveBeenCalled()
   })
@@ -414,13 +427,13 @@ describe('MermaidDiagram', () => {
     const MermaidDiagram = await importDiagram()
 
     const first = render(<MermaidDiagram code={'graph T--'} />)
-    await waitFor(() => expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/couldn't be drawn/i)).toBeInTheDocument())
     expect(renderFn).toHaveBeenCalledTimes(1)
     first.unmount()
 
     // Remount with the SAME malformed code → error card from cache; render NOT re-called.
     render(<MermaidDiagram code={'graph T--'} />)
-    expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument()
+    expect(screen.getByText(/couldn't be drawn/i)).toBeInTheDocument()
     expect(renderFn).toHaveBeenCalledTimes(1)
   })
 
@@ -562,7 +575,7 @@ describe('MermaidDiagram', () => {
     const MermaidDiagram = await importDiagram()
 
     render(<MermaidDiagram code={'bad code'} />)
-    await waitFor(() => expect(screen.getByText(/Couldn't render the diagram/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/couldn't be drawn/i)).toBeInTheDocument())
 
     // The MediaActionToolbar (role="toolbar") must not be present on the error path
     expect(screen.queryByRole('toolbar')).toBeNull()
