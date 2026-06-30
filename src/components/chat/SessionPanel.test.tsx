@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SessionPanel } from './SessionPanel'
@@ -1001,5 +1001,91 @@ describe('SessionPanel — Q4 Bug 2: open-in-workspace', () => {
 
     expect(attachToSessionSpy).toHaveBeenCalledWith('sess-no-ws', 'chat', 'No Workspace Session', 'agent-chat-1')
     expect(mockNavigate).not.toHaveBeenCalled()
+  })
+})
+
+// ── Agent sub-group nesting (workspace -> first-agent) ────────────────────────
+//
+// Inside each workspace group, sessions are sub-grouped by the FIRST agent of
+// the conversation (agent_ids[0], else legacy agent_id). Group order follows
+// the most-recently-active conversation.
+describe('SessionPanel — agent sub-groups (by first agent of the conversation)', () => {
+  it('groups a multi-agent session under its FIRST agent (agent_ids[0]), not a later participant', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValue([] as never)
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-multi',
+        agent_id: 'agent-task-1', // legacy primary differs — agent_ids[0] must win
+        active_agent_id: 'agent-task-1',
+        agent_ids: ['agent-chat-1', 'agent-task-1'], // Chat Agent opened it
+        title: 'Multi Agent Session',
+        type: 'chat' as const,
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T05:00:00Z',
+        message_count: 4,
+      },
+    ] as never)
+
+    renderPanel()
+
+    // Sub-group header is the FIRST agent (Chat Agent)...
+    await screen.findByRole('button', { name: /Chat Agent conversations/i })
+    // ...and there is no sub-group for the later participant (Task Agent).
+    expect(screen.queryByRole('button', { name: /Task Agent conversations/i })).toBeNull()
+    // The session renders beneath it.
+    expect(screen.getByLabelText('Open session: Multi Agent Session')).toBeInTheDocument()
+  })
+
+  it('collapses one agent sub-group without hiding the others', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValue([] as never)
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-a', agent_id: 'agent-chat-1', active_agent_id: 'agent-chat-1',
+        title: 'Chat One', type: 'chat' as const,
+        created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T03:00:00Z', message_count: 1,
+      },
+      {
+        id: 'sess-b', agent_id: 'agent-task-1', active_agent_id: 'agent-task-1',
+        title: 'Task One', type: 'task' as const,
+        created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T02:00:00Z', message_count: 1,
+      },
+    ] as never)
+
+    renderPanel()
+
+    const chatHeader = await screen.findByRole('button', { name: /Chat Agent conversations/i })
+    await screen.findByLabelText('Open session: Chat One')
+
+    fireEvent.click(chatHeader)
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Open session: Chat One')).toBeNull()
+    })
+    // The sibling Task Agent group is unaffected.
+    expect(screen.getByLabelText('Open session: Task One')).toBeInTheDocument()
+  })
+
+  it('shows a rich details card on hover and removes it on mouse leave', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValue([] as never)
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-hover', agent_id: 'agent-chat-1', active_agent_id: 'agent-chat-1',
+        title: 'Hover Me', type: 'chat' as const,
+        created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T01:00:00Z',
+        message_count: 7, total_tokens: 1234,
+      },
+    ] as never)
+
+    renderPanel()
+
+    const titleBtn = await screen.findByLabelText('Open session: Hover Me')
+    expect(screen.queryByRole('tooltip')).toBeNull()
+
+    fireEvent.mouseEnter(titleBtn)
+    const tip = await screen.findByRole('tooltip')
+    expect(within(tip).getByText('Messages')).toBeInTheDocument()
+    expect(within(tip).getByText('7')).toBeInTheDocument()
+
+    fireEvent.mouseLeave(titleBtn)
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
   })
 })

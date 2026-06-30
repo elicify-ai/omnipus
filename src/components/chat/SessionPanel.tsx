@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -39,19 +40,25 @@ function sessionButtonClass(isActive: boolean): string {
 
 const UNTITLED_SESSION = 'Untitled Session'
 const NO_WORKSPACE_KEY = '__no_workspace__'
+const NO_AGENT_KEY = '__no_agent__'
 
 // ── Agent participation badges ────────────────────────────────────────────────
 
 interface AgentBadgesProps {
   agentIds: string[]
   agents: Agent[]
+  // Optionally drop one id (the row's owning agent sub-group) so single-agent
+  // rows don't repeat the avatar already shown in their group header — only
+  // co-participants remain.
+  hideId?: string
 }
 
-function AgentBadges({ agentIds, agents }: AgentBadgesProps) {
-  if (agentIds.length === 0) return null
+function AgentBadges({ agentIds, agents, hideId }: AgentBadgesProps) {
+  const visible = hideId ? agentIds.filter((id) => id !== hideId) : agentIds
+  if (visible.length === 0) return null
   return (
     <div className="flex -space-x-1 shrink-0">
-      {agentIds.map((id) => {
+      {visible.map((id) => {
         const agent = agents.find((a) => a.id === id)
         return (
           <div
@@ -81,6 +88,9 @@ interface SessionItemProps {
   isStreaming: boolean
   onSelect: () => void
   onDeleted: (sessionId: string) => void
+  // The owning agent sub-group's agent id, hidden from this row's participant
+  // badges to avoid repeating the avatar shown in the group header.
+  hideAgentId?: string
 }
 
 function taskStatusStyle(status: string | undefined): { color: string; label: string } {
@@ -108,7 +118,118 @@ function formatRelativeTime(dateStr: string): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDeleted }: SessionItemProps) {
+function formatAbsoluteTime(dateStr: string): string {
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return ''
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+// ── Rich hover details card (replaces the plain native title= tooltip) ────────
+
+function HoverRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="shrink-0 text-[var(--color-muted)]">{label}</dt>
+      <dd className="min-w-0 truncate text-right text-[var(--color-secondary)]">{children}</dd>
+    </div>
+  )
+}
+
+// Portal'd to document.body so the fixed card escapes the Sheet's transform +
+// overflow context (a position:fixed child of a transformed/animated ancestor
+// would be clipped or mis-anchored). pointer-events-none so it never steals the
+// hover from the row beneath it. Opens to the LEFT of the right-anchored panel,
+// or below the row when the panel is ~full-width (narrow / mobile).
+function SessionHoverCard({
+  session,
+  agents,
+  anchor,
+}: {
+  session: Session
+  agents: Agent[]
+  anchor: DOMRect
+}) {
+  const GAP = 8
+  const CARD_W = 256
+  const EST_H = 210
+
+  const participantIds =
+    session.agent_ids && session.agent_ids.length > 0
+      ? session.agent_ids
+      : session.agent_id
+        ? [session.agent_id]
+        : []
+  const agentNames =
+    participantIds.map((id) => agents.find((a) => a.id === id)?.name ?? '[removed]').join(', ') ||
+    '—'
+
+  const typeLabel =
+    session.type === 'task'
+      ? 'Task'
+      : session.type === 'scheduled'
+        ? 'Scheduled'
+        : session.type === 'channel'
+          ? 'Channel'
+          : 'Chat'
+  // Status semantics (running/completed/failed) only apply to task runs.
+  const statusLabel =
+    session.type === 'task' && session.status ? taskStatusStyle(session.status).label : ''
+  const channel = session.channel && session.channel !== 'webchat' ? session.channel : null
+
+  const openLeft = anchor.left > CARD_W + GAP * 2
+  const top = openLeft
+    ? Math.min(Math.max(anchor.top, GAP), window.innerHeight - EST_H - GAP)
+    : Math.min(anchor.bottom + GAP, window.innerHeight - EST_H - GAP)
+  const style: React.CSSProperties = openLeft
+    ? { top, right: window.innerWidth - (anchor.left - GAP), width: CARD_W }
+    : { top, left: Math.max(GAP, anchor.right - CARD_W), width: CARD_W }
+
+  return createPortal(
+    <div
+      role="tooltip"
+      className="pointer-events-none fixed z-[60] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 shadow-xl"
+      style={style}
+    >
+      <div className="mb-2 line-clamp-3 break-words text-xs font-medium leading-snug text-[var(--color-secondary)]">
+        {session.title || UNTITLED_SESSION}
+      </div>
+      <dl className="space-y-1 text-[11px]">
+        <HoverRow label="Type">
+          {typeLabel}
+          {statusLabel ? ` · ${statusLabel}` : ''}
+        </HoverRow>
+        <HoverRow label={participantIds.length > 1 ? 'Agents' : 'Agent'}>{agentNames}</HoverRow>
+        <HoverRow label="Messages">{session.message_count}</HoverRow>
+        {session.total_tokens != null && session.total_tokens > 0 && (
+          <HoverRow label="Tokens">{formatTokens(session.total_tokens)}</HoverRow>
+        )}
+        {channel && <HoverRow label="Channel">{channel}</HoverRow>}
+        <HoverRow label="Started">{formatAbsoluteTime(session.created_at)}</HoverRow>
+        <HoverRow label="Last active">{formatRelativeTime(session.updated_at)}</HoverRow>
+      </dl>
+      <div className="mt-2 border-t border-[var(--color-border)] pt-1.5 text-[10px] text-[var(--color-muted)]">
+        Click to open · double-click the title to rename
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+function SessionItem({
+  session,
+  agents,
+  isActive,
+  isStreaming,
+  onSelect,
+  onDeleted,
+  hideAgentId,
+}: SessionItemProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
@@ -116,6 +237,13 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
   const [editValue, setEditValue] = useState(session.title || UNTITLED_SESSION)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Rich hover/focus details card. Anchored to the title button's live rect so
+  // the portal'd card can position itself relative to the row.
+  const titleBtnRef = useRef<HTMLButtonElement>(null)
+  const [hoverAnchor, setHoverAnchor] = useState<DOMRect | null>(null)
+  const openCard = () => setHoverAnchor(titleBtnRef.current?.getBoundingClientRect() ?? null)
+  const closeCard = () => setHoverAnchor(null)
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -218,8 +346,8 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
         sessionButtonClass(isActive),
       )}
     >
-      {/* Agent participation badges */}
-      <AgentBadges agentIds={participantIds} agents={agents} />
+      {/* Agent participation badges (co-participants only when nested under an agent group) */}
+      <AgentBadges agentIds={participantIds} agents={agents} hideId={hideAgentId} />
 
       {/* Title / rename input */}
       <div className="flex-1 min-w-0">
@@ -235,14 +363,18 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
           />
         ) : (
           <button
+            ref={titleBtnRef}
             type="button"
             onClick={onSelect}
             onDoubleClick={(e) => {
               e.preventDefault()
               setIsEditing(true)
             }}
+            onMouseEnter={openCard}
+            onMouseLeave={closeCard}
+            onFocus={openCard}
+            onBlur={closeCard}
             aria-label={`Open session: ${session.title || UNTITLED_SESSION}`}
-            title="Click to open, double-click to rename"
             className="w-full text-left"
           >
             <div className="flex items-center gap-1.5 min-w-0">
@@ -266,6 +398,9 @@ function SessionItem({ session, agents, isActive, isStreaming, onSelect, onDelet
               )}
             </div>
           </button>
+        )}
+        {hoverAnchor && !isEditing && (
+          <SessionHoverCard session={session} agents={agents} anchor={hoverAnchor} />
         )}
       </div>
 
@@ -430,11 +565,96 @@ function buildWorkspaceGroups(
   return result
 }
 
+// ── Agent sub-group (nested INSIDE each workspace group) ──────────────────────
+
+interface AgentSubGroupData {
+  agentId: string // first agent of the conversation, or NO_AGENT_KEY
+  agent: Agent | undefined
+  sessions: Session[]
+}
+
+/**
+ * Group a workspace's sessions by the FIRST agent of each conversation.
+ *
+ * The first agent is `agent_ids[0]` — the backend maintains AgentIDs in
+ * participation order (appending each new agent), so index 0 is the agent that
+ * opened the conversation; it falls back to the legacy single `agent_id`.
+ *
+ * Group order follows first appearance in the already-desc-by-updated_at list,
+ * so the agent with the most-recently-active conversation floats to the top.
+ */
+function buildAgentSubGroups(sessions: Session[], agents: Agent[]): AgentSubGroupData[] {
+  const order: string[] = []
+  const byAgent = new Map<string, Session[]>()
+  for (const s of sessions) {
+    const first = (s.agent_ids && s.agent_ids.length > 0 ? s.agent_ids[0] : s.agent_id) || NO_AGENT_KEY
+    let bucket = byAgent.get(first)
+    if (!bucket) {
+      bucket = []
+      byAgent.set(first, bucket)
+      order.push(first)
+    }
+    bucket.push(s)
+  }
+  return order.map((agentId) => ({
+    agentId,
+    agent: agents.find((a) => a.id === agentId),
+    sessions: byAgent.get(agentId)!,
+  }))
+}
+
+interface AgentSubGroupProps {
+  agent: Agent | undefined
+  agentId: string
+  count: number
+  isCollapsed: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}
+
+function AgentSubGroup({ agent, agentId, count, isCollapsed, onToggle, children }: AgentSubGroupProps) {
+  const name = agent?.name ?? (agentId === NO_AGENT_KEY ? 'No agent' : '[removed agent]')
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+        aria-expanded={!isCollapsed}
+        aria-label={`${name} conversations, ${isCollapsed ? 'expand' : 'collapse'}`}
+      >
+        {isCollapsed ? (
+          <CaretRight size={9} className="shrink-0" />
+        ) : (
+          <CaretDown size={9} className="shrink-0" />
+        )}
+        <span
+          className="w-4 h-4 rounded-full border border-[var(--color-primary)] flex items-center justify-center text-[7px] shrink-0"
+          style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
+        >
+          {agent?.icon ? (
+            <IconRenderer icon={agent.icon} size={8} />
+          ) : (
+            <span className="text-[var(--color-secondary)] font-bold">
+              {name.charAt(0).toUpperCase()}
+            </span>
+          )}
+        </span>
+        <span className="flex-1 text-left truncate">{name}</span>
+        <Badge variant="secondary" className="text-[9px] h-4 px-1.5 rounded-full shrink-0">
+          {count}
+        </Badge>
+      </button>
+      {!isCollapsed && <div className="space-y-0.5 pl-3">{children}</div>}
+    </div>
+  )
+}
+
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export function SessionPanel() {
   const { sessionPanelOpen, closeSessionPanel } = useUiStore()
-  const { activeSessionId, activeAgentId, setActiveSession, attachToSession, setActiveAgentType } = useSessionStore()
+  const { activeSessionId, setActiveSession, attachToSession, setActiveAgentType } = useSessionStore()
   const sessionsById = useChatStore((s) => s.sessionsById)
   const seedSessionTokens = useChatStore((s) => s.seedSessionTokens)
   const queryClient = useQueryClient()
@@ -445,6 +665,8 @@ export function SessionPanel() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Collapsed workspace group keys; default: all expanded (empty set)
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => new Set())
+  // Collapsed agent sub-group keys (`${workspaceKey}::${agentId}`); default expanded.
+  const [collapsedAgentGroups, setCollapsedAgentGroups] = useState<Set<string>>(() => new Set())
 
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
@@ -599,31 +821,23 @@ export function SessionPanel() {
     })
   }
 
-  // Resolve the default agent ID (used for active indicator in header)
-  const activeAgent = agents.find((a) => a.id === activeAgentId)
+  const toggleAgentGroup = (key: string) => {
+    setCollapsedAgentGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }
 
   return (
     <Sheet open={sessionPanelOpen} onOpenChange={(open) => !open && closeSessionPanel()}>
-      <SheetContent side="right" className="w-72 p-0 flex flex-col" overlay={false}>
+      <SheetContent side="right" className="w-[90vw] sm:w-[22.5rem] p-0 flex flex-col" overlay={false}>
         <SheetHeader className="px-4 pt-5 pb-3 border-b border-[var(--color-border)]">
-          <div className="flex items-center gap-2">
-            <SheetTitle className="flex-1">Sessions</SheetTitle>
-            {activeAgent && (
-              <div
-                className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
-                style={{ backgroundColor: activeAgent.color ?? 'var(--color-surface-3)' }}
-                title={`Active: ${activeAgent.name}`}
-              >
-                {activeAgent.icon ? (
-                  <IconRenderer icon={activeAgent.icon} size={11} />
-                ) : (
-                  <span className="text-[9px] font-bold text-[var(--color-secondary)]">
-                    {activeAgent.name.charAt(0).toUpperCase()}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
+          <SheetTitle>Sessions</SheetTitle>
         </SheetHeader>
 
         {/* Search input */}
@@ -669,17 +883,32 @@ export function SessionPanel() {
                   isCollapsed={collapsedWorkspaces.has(group.key)}
                   onToggle={() => toggleWorkspace(group.key)}
                 >
-                  {group.sessions.map((session) => (
-                    <SessionItem
-                      key={session.id}
-                      session={session}
-                      agents={agents}
-                      isActive={session.id === activeSessionId}
-                      isStreaming={sessionsById[session.id]?.isStreaming ?? false}
-                      onSelect={() => handleSelectSession(session)}
-                      onDeleted={handleSessionDeleted}
-                    />
-                  ))}
+                  {buildAgentSubGroups(group.sessions, agents).map((sub) => {
+                    const subKey = `${group.key}::${sub.agentId}`
+                    return (
+                      <AgentSubGroup
+                        key={subKey}
+                        agent={sub.agent}
+                        agentId={sub.agentId}
+                        count={sub.sessions.length}
+                        isCollapsed={collapsedAgentGroups.has(subKey)}
+                        onToggle={() => toggleAgentGroup(subKey)}
+                      >
+                        {sub.sessions.map((session) => (
+                          <SessionItem
+                            key={session.id}
+                            session={session}
+                            agents={agents}
+                            hideAgentId={sub.agentId === NO_AGENT_KEY ? undefined : sub.agentId}
+                            isActive={session.id === activeSessionId}
+                            isStreaming={sessionsById[session.id]?.isStreaming ?? false}
+                            onSelect={() => handleSelectSession(session)}
+                            onDeleted={handleSessionDeleted}
+                          />
+                        ))}
+                      </AgentSubGroup>
+                    )
+                  })}
                 </WorkspaceGroup>
               ))}
             </div>
