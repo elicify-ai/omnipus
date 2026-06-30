@@ -3094,7 +3094,7 @@ export interface components {
              */
             type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
             /**
-             * @description When true, name, description, soul, and heartbeat are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
+             * @description When true, name, description, and soul are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
              * @example false
              */
             locked: boolean;
@@ -3514,7 +3514,7 @@ export interface components {
              */
             steering_mode?: "one-at-a-time" | "queue-and-process";
         };
-        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat. model, timeout_seconds, max_tool_iterations, steering_mode, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
+        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. model, timeout_seconds, max_tool_iterations, and steering_mode may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
         AgentUpdateRequest: {
             /**
              * Format: date-time

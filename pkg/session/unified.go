@@ -323,6 +323,12 @@ func (us *UnifiedStore) NewHeartbeatSession(workspaceID, agentID string) (*Unifi
 	// Stamp the workspace_id onto the meta so the delete-guard can load the
 	// right workspace without scanning all workspaces (A2/G-01).
 	if err := us.SetMeta(meta.ID, MetaPatch{WorkspaceID: &workspaceID}); err != nil {
+		// MEDIUM-C: SetMeta failed — best-effort delete the half-initialized session
+		// so a transient failure does not leave an orphaned session directory.
+		if delErr := us.DeleteSession(meta.ID); delErr != nil {
+			slog.Warn("session: cleanup of partial heartbeat session failed",
+				"session_id", meta.ID, "workspace_id", workspaceID, "agent_id", agentID, "error", delErr)
+		}
 		return nil, fmt.Errorf("session: stamp workspace_id on heartbeat session %s: %w", meta.ID, err)
 	}
 	meta.WorkspaceID = workspaceID

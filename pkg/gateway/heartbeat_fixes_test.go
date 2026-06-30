@@ -6,11 +6,15 @@
 // Tests are grouped by traceability:
 //   - T-G1: deleteSession heartbeat guard + audit (C-1, MEDIUM-1)
 //   - T-G2: workspace PUT member_config validation bounds (DS-1 rows)
-//   - T-G3: workspace PUT eager-session idempotence
+//   - T-G3: workspace PUT eager-session idempotence (+ fix-wave extensions)
 //   - T-I1: workspace DELETE cascades heartbeat sessions (HIGH-1)
 //   - T-I3: memory settings PUT does not clobber sibling fields
 //   - T-I2: boot reconcile removes legacy heartbeat jobs (no workspace segment)
 //   - T-Finding2: PUT with forged session_id is not honoured
+//   - FIX-3: disable-path releases the standing session
+//   - FIX-4a: core_team shrink releases heartbeat sessions and removes cron jobs
+//   - FIX-4b: computeDesiredHeartbeats skips off-team agents
+//   - FIX-pickSession: continue mode preserves SessionTypeHeartbeat on existing session
 
 package gateway
 
@@ -743,4 +747,234 @@ func TestWorkspacePUT_SessionIDReadOnly(t *testing.T) {
 		"server-managed session_id must not be overwritten by client-supplied session_id")
 	assert.NotEqual(t, forgedID, mc.Heartbeat.SessionID,
 		"forged session_id must be ignored")
+}
+
+// ---------------------------------------------------------------------------
+// FIX-3: TestWorkspacePUT_DisableReleasesSession
+// ---------------------------------------------------------------------------
+
+// TestWorkspacePUT_DisableReleasesSession verifies that when a workspace PUT
+// transitions a heartbeat from enabled→disabled, the standing session created
+// during enable is deleted from the agent's session store (FIX-3).
+func TestWorkspacePUT_DisableReleasesSession(t *testing.T) {
+	api, _ := buildHeartbeatTestAPI(t)
+	const agentID = "mia"
+
+	wsDir := filepath.Join(api.homePath, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	wsID := "01JXFIXDISABLETESTWSID001"
+	ws := workspace.Workspace{
+		ID: wsID, Name: "Disable Test WS", Status: "active",
+		CoreTeam:  []string{agentID},
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}
+	wsData, err := json.MarshalIndent(ws, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), wsData, 0o600))
+
+	// Step 1: enable heartbeat — session created.
+	enableBody := `{"member_configs":{"mia":{"heartbeat":{"enabled":true,"interval_minutes":10,"body":"Check tasks."}}}}`
+	w1 := httptest.NewRecorder()
+	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(enableBody))
+	r1.Header.Set("Content-Type", "application/json")
+	r1.URL.Path = "/api/v1/workspaces/" + wsID
+	api.HandleWorkspaces(w1, r1)
+	require.Equal(t, http.StatusOK, w1.Code, "enable body=%s", w1.Body.String())
+
+	var resp1 gen.Workspace
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
+	require.NotNil(t, resp1.MemberConfigs)
+	miaConfig1 := (*resp1.MemberConfigs)[agentID]
+	require.NotNil(t, miaConfig1.Heartbeat)
+	require.NotNil(t, miaConfig1.Heartbeat.SessionId)
+	sess1 := *miaConfig1.Heartbeat.SessionId
+	require.NotEmpty(t, sess1, "session_id must be set after enable")
+
+	// Verify the session exists.
+	store := api.agentLoop.GetAgentStore(agentID)
+	require.NotNil(t, store)
+	_, err = store.GetMeta(sess1)
+	require.NoError(t, err, "heartbeat session must exist after enable")
+
+	// Step 2: disable heartbeat — session must be released.
+	disableBody := `{"member_configs":{"mia":{"heartbeat":{"enabled":false,"interval_minutes":10,"body":"Check tasks."}}}}`
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(disableBody))
+	r2.Header.Set("Content-Type", "application/json")
+	r2.URL.Path = "/api/v1/workspaces/" + wsID
+	api.HandleWorkspaces(w2, r2)
+	require.Equal(t, http.StatusOK, w2.Code, "disable body=%s", w2.Body.String())
+
+	// The standing session must now be deleted.
+	_, err = store.GetMeta(sess1)
+	assert.Error(t, err, "heartbeat session must be deleted after disable (FIX-3)")
+
+	// The workspace on disk must have no session_id stored.
+	diskData, err := os.ReadFile(filepath.Join(wsDir, wsID+".json"))
+	require.NoError(t, err)
+	var diskWS workspace.Workspace
+	require.NoError(t, json.Unmarshal(diskData, &diskWS))
+	mc := diskWS.MemberConfigs[agentID]
+	require.NotNil(t, mc.Heartbeat)
+	assert.Empty(t, mc.Heartbeat.SessionID,
+		"session_id must be cleared on disk after disable (FIX-3)")
+}
+
+// ---------------------------------------------------------------------------
+// FIX-4a: TestWorkspacePUT_CoreTeamShrinkReleasesHeartbeat
+// ---------------------------------------------------------------------------
+
+// TestWorkspacePUT_CoreTeamShrinkReleasesHeartbeat verifies that a workspace PUT
+// that shrinks core_team to drop an agent (without touching member_configs) prunes
+// the agent's member_config entry, removes its cron job, and deletes its standing
+// session (FIX-4a, FR-022).
+func TestWorkspacePUT_CoreTeamShrinkReleasesHeartbeat(t *testing.T) {
+	api, cs := buildHeartbeatTestAPI(t)
+	const agentA = "mia"
+
+	wsDir := filepath.Join(api.homePath, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	wsID := "01JXFIXSHRINKTEST00000001"
+
+	// Eagerly create a heartbeat session for agent A.
+	storeA := api.agentLoop.GetAgentStore(agentA)
+	require.NotNil(t, storeA)
+	meta, err := storeA.NewHeartbeatSession(wsID, agentA)
+	require.NoError(t, err)
+
+	// Seed workspace with agent A on the team and an enabled heartbeat.
+	ws := workspace.Workspace{
+		ID: wsID, Name: "Shrink WS", Status: "active",
+		CoreTeam: []string{agentA, "jim"},
+		MemberConfigs: map[string]workspace.MemberConfig{
+			agentA: {Heartbeat: &workspace.MemberHeartbeat{
+				Enabled:         true,
+				IntervalMinutes: 10,
+				Body:            "Check.",
+				SessionID:       meta.ID,
+			}},
+		},
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}
+	wsData, err := json.MarshalIndent(ws, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), wsData, 0o600))
+
+	// Seed a heartbeat cron job for agent A.
+	everyMS := int64(10) * 60_000
+	enabled := true
+	cronJobName := heartbeatJobName(wsID, agentA)
+	_, err = cs.AddJobFull(cron.JobSpec{
+		Name:      cronJobName,
+		Schedule:  cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
+		Message:   "Check.",
+		AgentID:   agentA,
+		SessionID: meta.ID,
+		Enabled:   &enabled,
+	})
+	require.NoError(t, err)
+	for _, j := range cs.ListJobs(true) {
+		if j.Name == cronJobName {
+			j.Payload.Kind = heartbeatJobKind
+			_ = cs.UpdateJob(&j)
+		}
+	}
+	require.Len(t, heartbeatJobsFor(cs), 1, "heartbeat cron job must exist before shrink")
+
+	// Verify the session exists before the shrink.
+	_, err = storeA.GetMeta(meta.ID)
+	require.NoError(t, err, "heartbeat session must exist before core_team shrink")
+
+	// PUT with core_team shrunk to drop agentA (no member_configs).
+	shrinkBody := `{"core_team":["jim"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(shrinkBody))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/workspaces/" + wsID
+	api.HandleWorkspaces(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "shrink body=%s", w.Body.String())
+
+	// The workspace on disk must no longer have agentA in member_configs.
+	diskData, err := os.ReadFile(filepath.Join(wsDir, wsID+".json"))
+	require.NoError(t, err)
+	var diskWS workspace.Workspace
+	require.NoError(t, json.Unmarshal(diskData, &diskWS))
+	_, hasA := diskWS.MemberConfigs[agentA]
+	assert.False(t, hasA, "member_config for dropped agent must be pruned (FIX-4a)")
+
+	// The standing session must be deleted.
+	_, err = storeA.GetMeta(meta.ID)
+	assert.Error(t, err, "heartbeat session for dropped agent must be deleted on core_team shrink (FIX-4a)")
+
+	// The cron job must be gone (reconcile ran after the shrink).
+	assert.Empty(t, heartbeatJobsFor(cs),
+		"heartbeat cron job for dropped agent must be removed after core_team shrink (FIX-4a)")
+}
+
+// ---------------------------------------------------------------------------
+// FIX-4b: TestComputeDesiredHeartbeats_SkipsOffTeam
+// ---------------------------------------------------------------------------
+
+// TestComputeDesiredHeartbeats_SkipsOffTeam verifies that computeDesiredHeartbeats
+// emits no desired job when a member_config entry exists for an agent NOT in the
+// workspace's CoreTeam (FIX-4b: defense-in-depth against stale entries).
+func TestComputeDesiredHeartbeats_SkipsOffTeam(t *testing.T) {
+	// A workspace whose CoreTeam is ["jim"] but member_configs has "mia" (off-team).
+	ws := workspace.Workspace{
+		ID:       "wsX",
+		Name:     "Off-team WS",
+		Status:   "active",
+		CoreTeam: []string{"jim"},
+		MemberConfigs: map[string]workspace.MemberConfig{
+			"mia": {Heartbeat: &workspace.MemberHeartbeat{
+				Enabled:         true,
+				IntervalMinutes: 10,
+				Body:            "Check.",
+			}},
+		},
+	}
+
+	desired := computeDesiredHeartbeats([]workspace.Workspace{ws}, neverWorker)
+	assert.Empty(t, desired,
+		"off-team member_config must yield no desired heartbeat (FIX-4b)")
+}
+
+// ---------------------------------------------------------------------------
+// FIX-pickSession: type-preservation for heartbeat sessions via continue mode
+// ---------------------------------------------------------------------------
+
+// TestPickSession_ContinuePreservesHeartbeatType verifies that when a heartbeat
+// session (SessionTypeHeartbeat) already exists and is used as a continue job's
+// SessionID, pickSession returns the existing session's ID without re-stamping
+// the type to SessionTypeScheduled (i.e. GetOrCreateScheduledSession returns the
+// existing meta as-is when the session already exists on disk).
+func TestPickSession_ContinuePreservesHeartbeatType(t *testing.T) {
+	cfg := baseConfig()
+	r, exec, _, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+
+	// Create a heartbeat session directly in the store.
+	const wsID = "01JXPICKSESSIONTESTWSID00"
+	meta, err := exec.store.NewHeartbeatSession(wsID, "mia")
+	require.NoError(t, err)
+	require.Equal(t, session.SessionTypeHeartbeat, meta.Type)
+
+	// Build a continue-mode cron job carrying the heartbeat session id.
+	job := &cron.CronJob{
+		ID:          "hb-job",
+		AgentID:     "mia",
+		SessionMode: cron.SessionModeContinue,
+		SessionID:   meta.ID,
+		Payload:     cron.CronPayload{Message: "heartbeat check"},
+	}
+
+	// pickSession must return the same session id.
+	sid, err := r.pickSession(job, "mia")
+	require.NoError(t, err)
+	assert.Equal(t, meta.ID, sid, "continue mode must reuse the existing heartbeat session id")
+
+	// The returned session must still have type heartbeat (not re-stamped to scheduled).
+	returnedMeta, err := exec.store.GetMeta(sid)
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeHeartbeat, returnedMeta.Type,
+		"continue mode must not re-stamp an existing heartbeat session to scheduled (type-preservation)")
 }

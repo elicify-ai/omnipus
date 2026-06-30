@@ -95,8 +95,12 @@ function NumberRow({ id, label, description, value, min = 0, step = 1, unit, onC
           step={step}
           value={value}
           onChange={(e) => {
+            // fix-3 (NaN drift): when the input is cleared or partially typed,
+            // parseFloat returns NaN. Coerce to the field's min so the controlled
+            // input and form state never diverge — Save always persists the
+            // displayed value, not a stale value from before the clear.
             const v = parseFloat(e.target.value)
-            if (!isNaN(v)) onChange(v)
+            onChange(isNaN(v) ? min : v)
           }}
           className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-sm text-[var(--color-secondary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
         />

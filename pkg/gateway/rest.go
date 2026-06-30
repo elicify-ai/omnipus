@@ -686,6 +686,21 @@ func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
 		t := true
 		return &t
 	}
+	// FIX-4b: require the agent still be on the workspace's CoreTeam. A stale
+	// member_config entry for an off-team agent must not keep its session protected.
+	inCoreTeam := false
+	for _, id := range ws.CoreTeam {
+		if id == m.AgentID {
+			inCoreTeam = true
+			break
+		}
+	}
+	if !inCoreTeam {
+		slog.Debug("computeSessionProtected: agent not in CoreTeam (stale entry)",
+			"workspace_id", m.WorkspaceID, "agent_id", m.AgentID, "session_id", m.ID)
+		f := false
+		return &f
+	}
 	mc, hasMC := ws.MemberConfigs[m.AgentID]
 	if !hasMC || mc.Heartbeat == nil {
 		f := false

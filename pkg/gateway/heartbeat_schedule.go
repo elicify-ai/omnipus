@@ -72,17 +72,33 @@ If nothing requires attention, respond ONLY with: HEARTBEAT_OK
 
 // computeDesiredHeartbeats returns the heartbeat jobs that SHOULD exist: one
 // per (workspace, agent) pair where member_configs[agentID].heartbeat.enabled
-// is true. Workers are never given a heartbeat even if one is configured (the
-// workspace handler rejects it at write time, but we defend here too).
+// is true and the agentID is still in the workspace's CoreTeam. Workers are
+// never given a heartbeat even if one is configured (the workspace handler
+// rejects it at write time, but we defend here too).
 //
 // isWorker is used as a defense-in-depth guard in the reconciler (the primary
 // enforcement is ValidateMemberConfigs at write time).
+//
+// FIX-4b: only desire a heartbeat for (ws, agentID) when agentID is in that
+// workspace's CoreTeam. This neutralizes stale member_config entries that
+// survive hand-edits or the update_workspace tool write-path which doesn't GC.
 func computeDesiredHeartbeats(workspaces []workspace.Workspace, isWorker func(agentID string) bool) []desiredHeartbeat {
 	var out []desiredHeartbeat
 	for _, ws := range workspaces {
+		// Build a CoreTeam set for fast membership lookup.
+		coreTeamSet := make(map[string]bool, len(ws.CoreTeam))
+		for _, id := range ws.CoreTeam {
+			coreTeamSet[id] = true
+		}
 		for agentID, mc := range ws.MemberConfigs {
 			hb := mc.Heartbeat
 			if hb == nil || !hb.Enabled {
+				continue
+			}
+			// FIX-4b: skip stale entries for agents not in CoreTeam.
+			if !coreTeamSet[agentID] {
+				slog.Warn("heartbeat reconcile: skipping off-team agent in member_configs (stale entry)",
+					"workspace_id", ws.ID, "agent_id", agentID)
 				continue
 			}
 			if isWorker != nil && isWorker(agentID) {

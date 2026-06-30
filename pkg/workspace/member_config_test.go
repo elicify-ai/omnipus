@@ -173,6 +173,15 @@ func TestValidateMemberConfigs(t *testing.T) {
 			isWorker: noWorker,
 			wantErr:  false,
 		},
+		{
+			// disabled heartbeat with interval=4 and empty body is valid (M-1: only gate when enabled)
+			name: "disabled_subfloor_interval_ok",
+			mc: map[string]MemberConfig{
+				"mia": {Heartbeat: &MemberHeartbeat{Enabled: false, IntervalMinutes: 4, Body: ""}},
+			},
+			isWorker: noWorker,
+			wantErr:  false,
+		},
 	}
 
 	for _, tc := range tests {
