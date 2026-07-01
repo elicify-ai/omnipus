@@ -5,9 +5,16 @@
  *   This test exercises the full tool→adapter→room→bleve pipeline end-to-end:
  *
  *   1. The `remember` tool call (pkg/tools/memory.go: Remember handler) must
- *      actually write a .md file to disk at
- *      <OMNIPUS_HOME>/agents/<id>/.omnipus/memories/<ulid>.md
- *      (pkg/memrooms/rooms.go: ResolveAgentPrivateRoom).
+ *      actually write a .md file to disk.  When the session is workspace-scoped
+ *      (which the e2e chat always is — the SPA opens at /#/workspaces/<id>/chat),
+ *      `remember` with no explicit `room` defaults to the SHARED workspace room:
+ *        <OMNIPUS_HOME>/workspaces/<workspaceId>/.omnipus/memories/<ulid>.md
+ *      (pkg/memrooms/rooms.go: DefaultRoomScope returns "shared" when a shared room
+ *      is available; "private" otherwise.)
+ *      If no workspace is associated with the session, the file lands in the PRIVATE
+ *      room:
+ *        <OMNIPUS_HOME>/agents/<agentId>/.omnipus/memories/<ulid>.md
+ *      The disk assertion searches BOTH locations so the test is correct in either case.
  *
  *   2. The MemoryStoreAdapter (pkg/agent/memory_adapter.go) must flush that write
  *      so the bleve index (and the disk-mtime staleness check) picks it up before
@@ -132,17 +139,81 @@ async function waitForTurnFullyDone(page: Page, gapMs = 10_000): Promise<void> {
   }
 }
 
-// ── Disk-assertion helper ─────────────────────────────────────────────────────
+// ── Workspace ID resolver ─────────────────────────────────────────────────────
 
 /**
- * Scan an agent's private memories directory for a file containing `needle`.
- * Returns the matching file path or null if none is found.
+ * Resolve the active workspace ID so we can check the shared memory room.
  *
- * Layout: <OMNIPUS_HOME>/agents/<agentId>/.omnipus/memories/<ulid>.md
- * (pkg/memrooms/rooms.go: OmnipusRoomDir = ".omnipus", MemoriesSubdir = "memories")
+ * Strategy (most-to-least robust):
+ *   1. Query GET /api/v1/workspaces and return the default workspace ID
+ *      (is_default: true) or, failing that, the first active workspace.
+ *   2. Fall back to scanning $OMNIPUS_HOME/workspaces/<id>/ directories on disk —
+ *      works even when the API is unavailable or returns an unexpected shape.
+ *
+ * Returns the workspace ID string, or null when neither strategy finds one.
+ * A null return means memories may have gone to the private agent room — the
+ * disk assertion should still check there.
+ *
+ * Per pkg/memrooms/rooms.go: when a session is workspace-scoped, `remember` with
+ * no explicit `room` defaults to the SHARED workspace room:
+ *   $OMNIPUS_HOME/workspaces/<workspaceId>/.omnipus/memories/
  */
-function findMemoryFileContaining(agentId: string, needle: string): string | null {
-  const memoriesDir = path.join(OMNIPUS_HOME, 'agents', agentId, '.omnipus', 'memories');
+async function resolveWorkspaceId(page: Page): Promise<string | null> {
+  // Strategy 1: REST API
+  try {
+    const resp = await page.request.get(`${BASE_URL}/api/v1/workspaces`, {
+      headers: await apiHeaders(page),
+      failOnStatusCode: false,
+    });
+    if (resp.ok()) {
+      const workspaces = (await resp.json()) as Array<{
+        id: string;
+        is_default?: boolean;
+        status?: string;
+      }>;
+      if (Array.isArray(workspaces) && workspaces.length > 0) {
+        // Prefer the explicitly-flagged default workspace.
+        const def = workspaces.find((w) => w.is_default === true);
+        if (def?.id) return def.id;
+        // Otherwise take the first active workspace.
+        const first = workspaces.find((w) => !w.status || w.status === 'active') ?? workspaces[0];
+        if (first?.id) return first.id;
+      }
+    }
+  } catch {
+    // Network error — fall through to disk scan.
+  }
+
+  // Strategy 2: Disk scan
+  // $OMNIPUS_HOME/workspaces/ contains one directory per workspace (named by its ID)
+  // plus a <id>.json file per workspace.  We want directory names that are not .json.
+  const workspacesDir = path.join(OMNIPUS_HOME, 'workspaces');
+  if (fs.existsSync(workspacesDir)) {
+    try {
+      const entries = fs.readdirSync(workspacesDir, { withFileTypes: true });
+      const wsDirs = entries
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name);
+      if (wsDirs.length > 0) {
+        // Return the first directory found — in practice there is exactly one
+        // default workspace on a fresh e2e install.
+        return wsDirs[0];
+      }
+    } catch {
+      // Scan failed — return null.
+    }
+  }
+
+  return null;
+}
+
+// ── Disk-assertion helpers ────────────────────────────────────────────────────
+
+/**
+ * Scan a single memories directory for a file containing `needle`.
+ * Returns the matching file path or null if none is found.
+ */
+function findMemoryInDir(memoriesDir: string, needle: string): string | null {
   if (!fs.existsSync(memoriesDir)) return null;
   let entries: fs.Dirent[];
   try {
@@ -164,49 +235,100 @@ function findMemoryFileContaining(agentId: string, needle: string): string | nul
 }
 
 /**
+ * Search for a memory file containing `needle` in ALL candidate room directories.
+ *
+ * Search order:
+ *   1. Shared workspace room: $OMNIPUS_HOME/workspaces/<workspaceId>/.omnipus/memories/
+ *      (primary target when session is workspace-scoped — pkg/memrooms/rooms.go
+ *      DefaultRoomScope returns "shared" when a workspace room is available)
+ *   2. Agent private room:    $OMNIPUS_HOME/agents/<agentId>/.omnipus/memories/
+ *      (fallback when no workspace is associated or tool was called with room="private")
+ *
+ * Returns the first matching file path, or null if none found in any location.
+ */
+function findMemoryFileContaining(
+  agentId: string,
+  needle: string,
+  workspaceId: string | null,
+): string | null {
+  // 1. Shared workspace room (primary — where workspace-scoped `remember` writes)
+  if (workspaceId) {
+    const sharedMemoriesDir = path.join(
+      OMNIPUS_HOME,
+      'workspaces',
+      workspaceId,
+      '.omnipus',
+      'memories',
+    );
+    const found = findMemoryInDir(sharedMemoriesDir, needle);
+    if (found) return found;
+  }
+
+  // 2. Agent private room (fallback)
+  const privateMemoriesDir = path.join(OMNIPUS_HOME, 'agents', agentId, '.omnipus', 'memories');
+  return findMemoryInDir(privateMemoriesDir, needle);
+}
+
+/**
  * Poll findMemoryFileContaining until it returns a path or `timeoutMs` elapses.
  * Returns the found path, or throws with an actionable failure message.
  */
 async function waitForMemoryFileDisk(
   agentId: string,
+  workspaceId: string | null,
   nonce: string,
   timeoutMs = 30_000,
-  intervalMs = 1_000,
+  intervalMs = 500,
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const found = findMemoryFileContaining(agentId, nonce);
+    const found = findMemoryFileContaining(agentId, nonce, workspaceId);
     if (found) return found;
     await new Promise<void>((r) => setTimeout(r, intervalMs));
   }
-  // Timeout — build a diagnostic failure message.
-  const memoriesDir = path.join(OMNIPUS_HOME, 'agents', agentId, '.omnipus', 'memories');
-  const dirExists = fs.existsSync(memoriesDir);
-  let fileList = '(dir does not exist)';
-  if (dirExists) {
+
+  // Timeout — build a diagnostic failure message covering both candidate dirs.
+  const sharedMemoriesDir = workspaceId
+    ? path.join(OMNIPUS_HOME, 'workspaces', workspaceId, '.omnipus', 'memories')
+    : null;
+  const privateMemoriesDir = path.join(OMNIPUS_HOME, 'agents', agentId, '.omnipus', 'memories');
+
+  function listDir(dir: string): string {
+    if (!dir || !fs.existsSync(dir)) return `(dir does not exist: ${dir})`;
     try {
-      const files = fs.readdirSync(memoriesDir).filter((f: string) => f.endsWith('.md'));
-      fileList =
-        files.length === 0
-          ? '(dir exists but contains no .md files)'
-          : files.slice(0, 10).join(', ') + (files.length > 10 ? ` … (${files.length} total)` : '');
+      const files = fs.readdirSync(dir).filter((f: string) => f.endsWith('.md'));
+      return files.length === 0
+        ? `(dir exists but contains no .md files)`
+        : files.slice(0, 10).join(', ') + (files.length > 10 ? ` … (${files.length} total)` : '');
     } catch {
-      fileList = '(could not list dir)';
+      return '(could not list dir)';
     }
   }
+
   throw new Error(
     [
-      `BLOCKED or INCOMPLETE: No memory file containing nonce "${nonce}" appeared in`,
-      `  ${memoriesDir}`,
+      `BLOCKED or INCOMPLETE: No memory file containing nonce "${nonce}" appeared`,
       `  within ${timeoutMs / 1000}s after the remember tool call.`,
       `  Agent ID used: ${agentId}`,
-      `  Memory dir exists: ${dirExists}`,
-      `  .md files present: ${fileList}`,
+      `  Workspace ID used: ${workspaceId ?? '(none resolved)'}`,
+      '',
+      '  Searched locations (in priority order):',
+      sharedMemoriesDir
+        ? `  [1] Shared workspace room: ${sharedMemoriesDir}`
+        : '  [1] Shared workspace room: (skipped — no workspace ID)',
+      sharedMemoriesDir ? `      .md files: ${listDir(sharedMemoriesDir)}` : '',
+      `  [2] Agent private room: ${privateMemoriesDir}`,
+      `      .md files: ${listDir(privateMemoriesDir)}`,
       '',
       'This failure means the remember tool call either:',
       '  (a) was never emitted by the LLM (check the chat transcript above),',
-      '  (b) was emitted but the tool handler did not write the .md file (pkg/tools/memory.go),',
-      '  (c) wrote to a different agent ID or OMNIPUS_HOME than expected.',
+      '  (b) was emitted but the tool handler did not write the .md file',
+      '      (pkg/tools/memory.go → pkg/memrooms/memory_file.go WriteMemoryFile),',
+      '  (c) wrote to a different workspace ID or OMNIPUS_HOME than expected.',
+      '',
+      'Expected write path (workspace-scoped session):',
+      '  $OMNIPUS_HOME/workspaces/<workspaceId>/.omnipus/memories/<ulid>.md',
+      '  (pkg/memrooms/rooms.go DefaultRoomScope → "shared" when shared room is set)',
       '',
       'This is a REAL gap, not a test infrastructure problem.',
       'Traces to: pkg/tools/memory.go (remember handler) → pkg/memrooms/memory_file.go (WriteMemoryFile)',
@@ -245,8 +367,9 @@ async function resolveDefaultAgentId(page: Page): Promise<string | null> {
 test(
   'remember→recall round-trip: nonce stored via remember tool and retrieved via recall_memory',
   async ({ page }) => {
-    // Budget: app load(15) + agent resolution(5) + turn1 remember(120) + disk wait(30)
-    //         + turn2 recall(120) + chat assertion(15) = 305s → 360s with margin.
+    // Budget: app load(15) + agent resolution(5) + workspace resolution(5)
+    //         + turn1 remember(120) + disk wait(30)
+    //         + turn2 recall(120) + chat assertion(15) = 310s → 360s with margin.
     // glm-5.2 is slower than gemini-flash; the extra headroom matches T24b's budget.
     test.setTimeout(360_000);
 
@@ -266,6 +389,18 @@ test(
       );
     }
 
+    // Resolve the workspace ID so we can check the shared memory room.
+    // When the e2e chat is workspace-scoped (/#/workspaces/<id>/chat), the
+    // `remember` tool with no explicit room defaults to the SHARED workspace room:
+    //   $OMNIPUS_HOME/workspaces/<workspaceId>/.omnipus/memories/
+    // (pkg/memrooms/rooms.go: DefaultRoomScope returns "shared" when Shared room is set)
+    // A null here means we fall back to the private agent room in the disk assertion.
+    const workspaceId = await resolveWorkspaceId(page);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[memory-remember-recall] agentId=${agentId} workspaceId=${workspaceId ?? '(none)'}`,
+    );
+
     // Start a fresh session so we control the message count exactly.
     const newChatBtn = page.getByRole('banner').getByRole('button', { name: 'New Chat' });
     await expect(newChatBtn).toBeVisible({ timeout: 10_000 });
@@ -282,6 +417,8 @@ test(
     //   When the user sends a forceful instruction to call the remember tool
     //   Then the assistant emits exactly one remember tool call
     //   And a .md memory file containing the nonce appears on disk
+    //     (in the shared workspace room if session is workspace-scoped,
+    //      or in the private agent room if not workspace-scoped)
     //
     // Prompt strategy (glm-class): single imperative sentence, tool name
     // spelled out exactly, no wiggle room for prose-only reply.
@@ -300,12 +437,17 @@ test(
 
     // ── Disk assertion: memory file must exist ────────────────────────────────
     //
-    // The MemoryStoreAdapter writes to:
-    //   <OMNIPUS_HOME>/agents/<agentId>/.omnipus/memories/<ulid>.md
+    // The `remember` tool in a workspace-scoped session writes to:
+    //   $OMNIPUS_HOME/workspaces/<workspaceId>/.omnipus/memories/<ulid>.md
+    // (pkg/memrooms/rooms.go: DefaultRoomScope returns "shared" when Shared room is set)
+    //
+    // The assertion also checks the private room as a fallback:
+    //   $OMNIPUS_HOME/agents/<agentId>/.omnipus/memories/<ulid>.md
+    //
     // We poll for up to 30s to allow the async index flush to settle.
     // A failure here means the remember tool handler never wrote the file —
     // this is a REAL gap and must be investigated, not silently skipped.
-    const memFilePath = await waitForMemoryFileDisk(agentId, NONCE, 30_000, 500);
+    const memFilePath = await waitForMemoryFileDisk(agentId, workspaceId, NONCE, 30_000, 500);
     // memFilePath is a non-null resolved path — log it for CI diagnostics.
     // (Playwright's reporter captures console.log output.)
     // eslint-disable-next-line no-console

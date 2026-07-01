@@ -215,29 +215,83 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		perCandidateTimeout = minPerCandidate
 	}
 
-	// Attempt the recap against each candidate in order, falling through to the
-	// next on any error. Each candidate gets its own fresh context so a stuck
-	// primary cannot consume the entire budget and leave fallbacks with an
-	// already-expired deadline.
+	// recapDeadline is the hard wall-clock limit for the entire recap attempt.
+	// It is used to guard transient retries so they cannot push individual
+	// candidates past the overall 60 s budget even when many retries are needed.
+	recapDeadline := time.Now().Add(overallBudget)
+
+	// maxTransientRetries is the number of additional attempts made per candidate
+	// when the error is classified as a transient stream reset (http2 body closed,
+	// GOAWAY, connection reset, …). The recap output is collected whole and never
+	// streamed to the user, so a retry on a fresh connection is safe.
+	const maxTransientRetries = 2
+
+	// Attempt the recap against each candidate in order. For each candidate,
+	// retry up to maxTransientRetries times on transient stream-reset errors
+	// before moving to the next fallback candidate.
+	// Non-transient errors (4xx, unauthorized, context-overflow) fall through to
+	// the next candidate immediately — retrying them is not safe or useful.
 	var resp *providers.LLMResponse
 	var llmErr error
 	for _, candidate := range candidates {
 		p := resolveRecapProvider(candidate)
-		candidateCtx, candidateCancel := context.WithTimeout(context.Background(), perCandidateTimeout)
-		r, err := p.Chat(candidateCtx, msgs, nil, candidate.Model, opts)
-		candidateCancel()
-		if err == nil {
-			resp = r
-			llmErr = nil
+		for attempt := 0; attempt <= maxTransientRetries; attempt++ {
+			// Respect the hard overall deadline: don't start an attempt if we're
+			// already past the budget boundary.
+			remaining := time.Until(recapDeadline)
+			if remaining <= 0 {
+				slog.Warn("session_end: recap deadline exceeded, stopping retries",
+					"session_id", sessionID,
+					"agent_id", agentInst.ID,
+					"model", candidate.Model,
+				)
+				break
+			}
+			callTimeout := perCandidateTimeout
+			if callTimeout > remaining {
+				callTimeout = remaining
+			}
+
+			candidateCtx, candidateCancel := context.WithTimeout(context.Background(), callTimeout)
+			r, err := p.Chat(candidateCtx, msgs, nil, candidate.Model, opts)
+			candidateCancel()
+			if err == nil {
+				resp = r
+				llmErr = nil
+				break
+			}
+
+			// Check whether this is a transient stream reset that is safe to retry.
+			if attempt < maxTransientRetries && isTransientStreamError(err) {
+				backoff := time.Duration(1+attempt) * 500 * time.Millisecond
+				slog.Warn("session_end: recap transient stream error, retrying",
+					"session_id", sessionID,
+					"agent_id", agentInst.ID,
+					"model", candidate.Model,
+					"attempt", attempt+1,
+					"max_retries", maxTransientRetries,
+					"backoff_ms", backoff.Milliseconds(),
+					"error", err.Error(),
+				)
+				time.Sleep(backoff)
+				llmErr = err
+				continue
+			}
+
+			// Non-transient error or retries exhausted — move to the next candidate.
+			slog.Warn("session_end: recap candidate failed, trying next",
+				"session_id", sessionID,
+				"agent_id", agentInst.ID,
+				"model", candidate.Model,
+				"attempt", attempt+1,
+				"error", err.Error(),
+			)
+			llmErr = err
 			break
 		}
-		slog.Warn("session_end: recap candidate failed, trying next",
-			"session_id", sessionID,
-			"agent_id", agentInst.ID,
-			"model", candidate.Model,
-			"error", err.Error(),
-		)
-		llmErr = err
+		if resp != nil {
+			break
+		}
 	}
 
 	if llmErr != nil {
