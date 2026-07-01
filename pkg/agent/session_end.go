@@ -163,12 +163,23 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		{Role: "user", Content: historyText + "\n\n" + recapPrompt},
 	}
 
-	// Cost-guard options (FR-029a): hard output cap + no thinking/reasoning tokens.
+	// Cost-guard options (FR-029a): hard output cap + reasoning DISABLED.
+	//
+	// reasoning:{enabled:false} (not exclude:true). On reasoning models like
+	// glm-5.2, exclude:true only HIDES reasoning from the response while the model
+	// still GENERATES it — so a low max_tokens is entirely consumed by reasoning
+	// and the recap comes back with empty content (finish=length), which parses
+	// to nothing and falls back to an "llm_error" stub. enabled:false stops the
+	// reasoning generation so the whole budget goes to the JSON recap. Verified
+	// against glm-5.2: enabled:false yields a complete recap within the cap; the
+	// budget is raised to 512 for headroom on fuller recaps (still cheap: one
+	// call per session close). extended_thinking:false is kept for Anthropic-style
+	// providers that honor it.
 	opts := map[string]any{
-		"max_tokens":        250,
+		"max_tokens":        512,
 		"extended_thinking": false,
 		"extra_body": map[string]any{
-			"reasoning": map[string]any{"exclude": true},
+			"reasoning": map[string]any{"enabled": false},
 		},
 	}
 
