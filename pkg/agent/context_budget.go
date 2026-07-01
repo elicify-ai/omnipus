@@ -174,33 +174,3 @@ func isOverContextBudget(
 
 	return total > contextWindow
 }
-
-// splitHistoryAtTurnMidpoint splits history into (dropped, kept) at the
-// midpoint Turn boundary — the oldest ~half of Turns, kept the most recent.
-// Returns ok=false when no safe split point exists (single-turn history
-// with no internal boundary); in that case the caller should fall back to
-// "keep everything" or a more aggressive truncation path.
-//
-// Used by both forceCompression (which then writes the dropped half out of
-// the session entirely) and handleModelSwitch (which feeds the dropped half
-// to summarizeDroppedTurns).
-func splitHistoryAtTurnMidpoint(history []providers.Message) (dropped, kept []providers.Message, ok bool) {
-	if len(history) == 0 {
-		return nil, nil, false
-	}
-	turns := parseTurnBoundaries(history)
-	var mid int
-	if len(turns) >= 2 {
-		mid = turns[len(turns)/2]
-	} else {
-		mid = findSafeBoundary(history, len(history)/2)
-	}
-	if mid <= 0 {
-		// Single-turn history — nothing safe to split. Caller decides what
-		// to do (forceCompression falls back to "keep last user message";
-		// handleModelSwitch keeps everything and lets the next LLM call
-		// trip forceCompression if it overflows).
-		return nil, nil, false
-	}
-	return append([]providers.Message(nil), history[:mid]...), append([]providers.Message(nil), history[mid:]...), true
-}

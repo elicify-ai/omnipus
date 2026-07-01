@@ -1,12 +1,17 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+//
+// Copyright (c) 2026 Omnipus contributors
+
+//go:build goolm && stdjson
+
 package agent
 
 import (
 	"context"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,51 +23,14 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/session"
 )
 
-// recordingSummaryProvider captures the messages sent to it and returns a
-// canned summary. Used by switch-time compress tests to verify that
-// summarizeDroppedTurns asks the LLM to summarize dropped turns.
-type recordingSummaryProvider struct {
-	chatCalls []chatCall
-	summary   string
-}
-
-type chatCall struct {
-	Messages []providers.Message
-	Model    string
-}
-
-func (r *recordingSummaryProvider) Chat(
-	ctx context.Context,
-	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
-) (*providers.LLMResponse, error) {
-	// Capture a copy of the messages we received.
-	r.chatCalls = append(r.chatCalls, chatCall{
-		Messages: append([]providers.Message(nil), messages...),
-		Model:    model,
-	})
-	return &providers.LLMResponse{
-		Content: r.summary,
-	}, nil
-}
-
-func (r *recordingSummaryProvider) GetDefaultModel() string {
-	return "recording-summary-model"
-}
-
 // newSwitchTestAgentLoop builds an AgentLoop with the models needed by the
-// switch-time compress tests registered in cfg.Providers so that
+// switch-time re-window tests registered in cfg.Providers so that
 // ApplyAgentModel (which handleModelSwitch now calls to orchestrate the
-// provider+candidates swap alongside Model) can resolve them. Without this
-// every ApplyAgentModel call would fail with "model not found".
+// provider+candidates swap alongside Model) can resolve them.
 //
-// The ModelName is the public identifier (matches the input passed to
-// handleModelSwitch), and the Model field is the provider-prefixed form
-// ("openai/<name>") so the known-protocol factory can build a stub
-// provider. Protocol = "openai" is a recognized protocol prefix (see
-// pkg/providers/factory_provider.go::knownProtocols).
+// The ModelName is the public identifier, and the Model field is the
+// provider-prefixed form ("openai/<name>") so the known-protocol factory can
+// build a stub provider. Protocol = "openai" is a recognized protocol prefix.
 func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg *config.Config, cleanup func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -76,9 +44,9 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 			APIKeyRef: "SWITCH_TEST_KEY",
 		}
 	}
-	providers := make([]*config.ModelConfig, 0, len(models))
+	cfgProviders := make([]*config.ModelConfig, 0, len(models))
 	for _, m := range models {
-		providers = append(providers, mkProvider(m))
+		cfgProviders = append(cfgProviders, mkProvider(m))
 	}
 	cfg = &config.Config{
 		Agents: config.AgentsConfig{
@@ -89,10 +57,9 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 				MaxToolIterations: 10,
 			},
 		},
-		Providers: providers,
+		Providers: cfgProviders,
 	}
-	// Default model entry must be present too so registry construction succeeds.
-	if len(providers) == 0 {
+	if len(cfgProviders) == 0 {
 		cfg.Providers = append(cfg.Providers, mkProvider("test-model"))
 	}
 	mp := &mockProvider{}
@@ -100,21 +67,23 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 	return al, cfg, func() {}
 }
 
+// --- decideSwitchCompressAction purity tests (unchanged logic) ---
+
 // TestSwitchTimeCompress_LargerToSmaller_TriggersCompress verifies that when
 // the user switches from a large-context model to a smaller-context model and
-// the conversation does not fit, the switch-time compress path is triggered.
+// the conversation does not fit, the switch-time re-window is triggered.
 //
-// BDD-11: Old=200k, new=8k, conv=50k -> compress before switch
+// BDD-11: Old=200k, new=8k, conv=50k -> re-window before switch.
 func TestSwitchTimeCompress_LargerToSmaller_TriggersCompress(t *testing.T) {
 	action := decideSwitchCompressAction(50000, 8000)
 	assert.Equal(t, SwitchActionCompress, action,
-		"50k conversation switched into an 8k window must trigger compress")
+		"50k conversation switched into an 8k window must trigger re-window")
 }
 
 // TestSwitchTimeCompress_SameWindow_NoOp verifies that switching between two
-// models with the same context window does not trigger compress.
+// models with the same context window does not trigger re-window.
 //
-// BDD-14: Old=200k, new=200k, conv=50k -> no compress (new model fits)
+// BDD-14: Old=200k, new=200k, conv=50k -> no re-window (new model fits).
 func TestSwitchTimeCompress_SameWindow_NoOp(t *testing.T) {
 	action := decideSwitchCompressAction(50000, 200000)
 	assert.Equal(t, SwitchActionNoop, action,
@@ -126,124 +95,43 @@ func TestSwitchTimeCompress_SameWindow_NoOp(t *testing.T) {
 }
 
 // TestSwitchTimeCompress_EmptySession_NoOp verifies that switching on an
-// empty session never triggers compress regardless of window size.
+// empty session never triggers re-window regardless of window size.
 //
-// BDD-15, BDD-29: Old=200k, new=8k, conv=0 -> no compress (empty)
+// BDD-15, BDD-29: Old=200k, new=8k, conv=0 -> no re-window (empty).
 func TestSwitchTimeCompress_EmptySession_NoOp(t *testing.T) {
 	action := decideSwitchCompressAction(0, 8000)
 	assert.Equal(t, SwitchActionNoop, action,
-		"empty session must never trigger compress")
+		"empty session must never trigger re-window")
 }
 
 // TestSwitchTimeCompress_BoundaryEqualNoCompress confirms the boundary case
-// where current conversation exactly equals new window does not compress
-// (no need to drop anything).
+// where current conversation exactly equals new window does not trigger re-window.
 func TestSwitchTimeCompress_BoundaryEqualNoCompress(t *testing.T) {
 	action := decideSwitchCompressAction(8000, 8000)
 	assert.Equal(t, SwitchActionNoop, action,
-		"conversation equal to new window must not compress (no overflow yet)")
+		"conversation equal to new window must not re-window (no overflow yet)")
 }
 
 // TestSwitchTimeCompress_SmallerToLarger_NoOp verifies switching to a model
-// with more room never triggers compress.
+// with more room never triggers re-window.
 func TestSwitchTimeCompress_SmallerToLarger_NoOp(t *testing.T) {
 	action := decideSwitchCompressAction(7000, 200000)
 	assert.Equal(t, SwitchActionNoop, action,
-		"switching to a larger-window model must not trigger compress")
+		"switching to a larger-window model must not trigger re-window")
 }
 
-// TestSummarizeDroppedTurns_FallsBackOnLLMError verifies that when the
-// summarization LLM call fails, the function returns the error to the caller
-// (the caller then falls back to forceCompression — see spec FR-011).
-func TestSummarizeDroppedTurns_FailingProvider_ReturnsError(t *testing.T) {
-	tp, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
-	defer cleanup()
-
-	failingProv := &failingProvider{}
-	tp.GetRegistry() // ensure registry initialized
-
-	// Build a temporary agent with a failing provider so we can exercise the
-	// LLM call path. The provider must be set on the agent instance because
-	// summarizeDroppedTurns reads it from there.
-	agent := tp.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, agent)
-	agent.Provider = failingProv
-
-	dropped := []providers.Message{
-		{Role: "user", Content: "hello"},
-		{Role: "assistant", Content: "hi"},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := tp.summarizeDroppedTurns(ctx, agent, dropped, 8000)
-	require.Error(t, err,
-		"summarizeDroppedTurns must propagate LLM errors to the caller")
-}
-
-// TestSummarizeDroppedTurns_Success_StoresSummary verifies the happy path:
-// dropped turns are summarized by the LLM and the summary string is returned.
-func TestSummarizeDroppedTurns_Success_StoresSummary(t *testing.T) {
-	tp, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
-	defer cleanup()
-
-	recProv := &recordingSummaryProvider{
-		summary: "key decisions: pick A; open: confirm with user",
-	}
-
-	agent := tp.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, agent)
-	agent.Provider = recProv
-
-	dropped := []providers.Message{
-		{Role: "user", Content: "should I pick A or B?"},
-		{Role: "assistant", Content: "I'd recommend A because ..."},
-		{Role: "user", Content: "are you sure?"},
-		{Role: "assistant", Content: "Let me verify ..."},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// Use a context window whose half is larger than the agent's existing
-	// MaxTokens so the budget ends up clamped to MaxTokens — this is the
-	// production behavior and we assert against it directly.
-	const contextWindow = 16000
-	expectedBudget := contextWindow / 2
-	if agent.MaxTokens > 0 && agent.MaxTokens < expectedBudget {
-		expectedBudget = agent.MaxTokens
-	}
-
-	summary, err := tp.summarizeDroppedTurns(ctx, agent, dropped, contextWindow)
-	require.NoError(t, err)
-	assert.Equal(t, "key decisions: pick A; open: confirm with user", summary)
-
-	require.Len(t, recProv.chatCalls, 1,
-		"summarizeDroppedTurns must invoke the LLM exactly once")
-	captured := recProv.chatCalls[0]
-	require.NotEmpty(t, captured.Messages,
-		"summarizeDroppedTurns must send at least one prompt message")
-	assert.Contains(t, captured.Messages[0].Content, "Summarize",
-		"summary prompt must ask the LLM to summarize")
-	assert.Contains(t, captured.Messages[0].Content, strconv.Itoa(expectedBudget),
-		"summary prompt must include the budget token cap so the LLM knows the size bound")
-}
+// --- handleModelSwitch integration tests (windowTrim behavior) ---
 
 // TestSwitchTime_EndToEnd_HappyPath verifies the full integration: when an
-// incoming message carries a model_name metadata that differs from the
-// current agent model and the conversation is over-budget, the loop:
+// incoming message carries a model_name metadata that differs from the current
+// agent model and the conversation is over-budget for the new model:
 //
-//  1. detects the switch,
-//  2. calls summarizeDroppedTurns (LLM),
-//  3. inserts the synthetic system message into the session history,
-//  4. drops the oldest turns (forceCompression path),
-//  5. keeps the new Model field on the next outgoing assistant message
-//     (verified here by checking that the agent's Model field was updated).
+//  1. handleModelSwitch detects the switch,
+//  2. calls windowTrim (NOT summarizeDroppedTurns — no LLM call),
+//  3. the live window fits the new model's budget,
+//  4. NO summary marker is written,
+//  5. agent.Model is updated to the new model.
 func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
-	// Register both the default model and the new model so ApplyAgentModel
-	// (called by handleModelSwitch to swap Provider+Candidates alongside
-	// Model) can resolve them.
 	const newModel = "openrouter/some-small-model"
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
@@ -251,36 +139,40 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	agent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, agent)
 
-	// Configure a small window so the existing 50k history triggers compress.
-	agent.ContextWindow = 8000
+	// Calibrated window: large enough that tool defs leave room for some history
+	// turns (toolDefsTokens ≈ 5876 in the test environment), yet small enough
+	// that the seeded conversation overflows and a trim fires.
+	//
+	// cw=20000, mt=4096 → budget = 20000 - 4096 - 1000 (5% headroom) = 14904.
+	// toolDefsTokens ≈ 5876 → history budget ≈ 9028 tokens.
+	// We seed 12 turns × ~1000 tok/turn = ~12000 tokens of history → overflow.
+	// After trim the last 9 turns (~9000 tokens) fit within the history budget.
+	agent.ContextWindow = 20000
 	agent.MaxTokens = 4096
-	// Force the agent to a known starting model so we can detect the switch.
+	al.mu.Lock()
+	al.cfg.Agents.Defaults.ContextWindow = 20000
+	al.mu.Unlock()
+
 	oldModel := agent.Model
 	require.NotEmpty(t, oldModel, "test setup: default agent must have a model")
 
-	// Seed the session history with 50k of conversation (well over 8k window).
 	const sessionKey = "switch-test-session"
-	bigText := make([]byte, 0, 50000)
-	for i := 0; i < 50000; i++ {
-		bigText = append(bigText, 'a')
+	// ~2500 chars per message ≈ 1000 tokens per message → 2000 tokens per turn.
+	turnText := strings.Repeat("a", 2500)
+	var seedMsgs []providers.Message
+	for i := 0; i < 12; i++ {
+		seedMsgs = append(seedMsgs, providers.Message{Role: "user", Content: turnText})
+		seedMsgs = append(seedMsgs, providers.Message{Role: "assistant", Content: turnText})
 	}
-	agent.Sessions.SetHistory(sessionKey, []providers.Message{
-		{Role: "user", Content: "I need help with: " + string(bigText)},
-		{Role: "assistant", Content: "Sure, here is what I think: " + string(bigText)},
-	})
+	agent.Sessions.SetHistory(sessionKey, seedMsgs)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
-	// Override the agent's provider so the summary call is captured, not actually
-	// dispatched to a real LLM.
-	recProv := &recordingSummaryProvider{
-		summary: "Decisions: stay focused on the topic. Open: confirm plan with user.",
-	}
-	agent.Provider = recProv
+	historyBefore := agent.Sessions.GetHistory(sessionKey)
+	tokensBefore := estimateHistoryTokens(historyBefore)
 
 	require.NotEqual(t, oldModel, newModel,
 		"test invariant: new model must differ from current model")
 
-	// Run the switch-time compress path.
 	updatedAgent, err := al.handleModelSwitch(
 		context.Background(),
 		agent,
@@ -293,58 +185,44 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, updatedAgent)
 
-	// After the switch the agent's Model field reflects the new model.
+	// agent.Model must be updated.
 	assert.Equal(t, newModel, updatedAgent.Model,
 		"agent.Model must be updated to the new model after a switch")
 
-	// Strategy B (FR-012): the switch summary lives in Sessions.GetSummary
-	// (consumed by BuildMessages into the dynamic system prompt), NOT as a
-	// role:"system" message in history. sanitizeHistoryForProvider would
-	// have stripped that synthetic system message before it reached the LLM.
+	// No summary marker written (windowTrim never writes one).
 	sessionSummary := updatedAgent.Sessions.GetSummary(sessionKey)
-	require.NotEmpty(t, sessionSummary,
-		"strategy B: switch summary must be stored in session summary (FR-012)")
-	assert.Contains(t, sessionSummary, newModel, "switch summary must name the new model")
-	assert.Contains(t, sessionSummary, oldModel, "switch summary must name the old model")
-	assert.Contains(t, sessionSummary, "Conversation moved",
-		"switch summary must use the agreed wording")
+	assert.NotContains(t, sessionSummary, "Emergency compression dropped",
+		"windowTrim path MUST NOT write a compression summary marker")
+	assert.NotContains(t, sessionSummary, "Conversation moved",
+		"windowTrim path MUST NOT write a model-switch summary note")
 
-	// The conversation was compressed — total token estimate must be < 8k.
-	// Strategy B has no synthetic message in history; only the kept real
-	// turns remain, trimmed to fit.
+	// History must have shrunk.
 	history := updatedAgent.Sessions.GetHistory(sessionKey)
-	total := 0
-	for _, m := range history {
-		total += estimateMessageTokens(m)
-	}
-	assert.Less(t, total, 8000,
-		"after compress, history token estimate must fit in 8k window")
+	tokensAfter := estimateHistoryTokens(history)
+	assert.Less(t, tokensAfter, tokensBefore,
+		"history token estimate must have shrunk after switch-time trim")
 
-	// The LLM summary call actually happened.
-	require.NotEmpty(t, recProv.chatCalls,
-		"summarizeDroppedTurns must have invoked the provider's Chat")
+	// The full request (history + tool defs + maxTokens) must fit within cw.
+	// windowTrim enforces: suffixTokens + toolDefsTokens + recallSpanTokens <=
+	// budget, where budget = cw - maxTokens - ceil(0.05*cw).  We verify the
+	// same constraint post-trim to confirm windowTrim did its job.
+	toolDefsTokens := estimateToolDefsTokens(updatedAgent.Tools.ToProviderDefs())
+	totalAfter := tokensAfter + toolDefsTokens + 4096 // 4096 = MaxTokens
+	assert.LessOrEqual(t, totalAfter, 20000,
+		"post-trim total (history+tool_defs+max_tokens) must fit within the new cw")
 
-	// ApplyAgentModel swap: agent.Provider must have been replaced (the
-	// orchestration call resolved and created a new provider for newModel).
+	// ApplyAgentModel swap: provider pool must be queryable for the new model.
 	require.NotNil(t, updatedAgent.Provider,
 		"agent.Provider must not be nil after ApplyAgentModel swap")
-
-	// Crit 7 (W4-17): the post-switch provider pool must be queryable for
-	// the new pinned provider. Both registered models in this test pin
-	// provider "openai"; the GetProviderForCandidate accessor must return
-	// a non-nil LLMProvider for that pinned name, otherwise a subsequent
-	// fallback that targets the same provider would silently degrade to
-	// the primary's provider (FR-007 violation).
 	pinnedProv := updatedAgent.GetProviderForCandidate(providers.FallbackCandidate{
 		Provider: "openai",
 		Model:    newModel,
 	})
-	require.NotNil(t, pinnedProv, "post-switch pool returned nil provider for the new pinned name 'openai'")
+	require.NotNil(t, pinnedProv, "post-switch pool returned nil provider for 'openai'")
 }
 
 // TestSwitchTime_EmptySession_NoSyntheticMessage verifies that switching on an
-// empty session does NOT insert a synthetic system message — there is nothing
-// to summarize.
+// empty session does NOT insert any synthetic message or write a summary.
 func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	const newModel = "openrouter/some-other-model"
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
@@ -363,9 +241,6 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	agent.Sessions.SetHistory(sessionKey, nil)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
-	recProv := &recordingSummaryProvider{summary: "should not be used"}
-	agent.Provider = recProv
-
 	updatedAgent, err := al.handleModelSwitch(
 		context.Background(),
 		agent,
@@ -379,27 +254,19 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	require.NotNil(t, updatedAgent)
 
 	history := updatedAgent.Sessions.GetHistory(sessionKey)
-	// Strategy B: the empty-session path leaves history empty (no synthetic
-	// anchor in history; the summarization LLM is not invoked).
-	assert.Empty(t, history, "empty session switch must leave history empty (Strategy B)")
+	assert.Empty(t, history, "empty session switch must leave history empty")
 	assert.Equal(t, newModel, updatedAgent.Model,
 		"empty session switch still updates agent.Model")
-	assert.Empty(t, recProv.chatCalls,
-		"empty session must not invoke the summarization LLM call")
+
+	summary := updatedAgent.Sessions.GetSummary(sessionKey)
+	assert.Empty(t, summary,
+		"empty session switch must not write a session summary")
 }
 
-// TestSwitchTime_LLMReceivesSyntheticSummary is the FR-012 regression
-// guard: after a model switch with compression, the LLM MUST see the
-// switch summary text — either in the system prompt (Strategy B) or in
-// the message list (Strategy A). The previous bug was that
-// sanitizeHistoryForProvider stripped the synthetic role:"system" message
-// before it reached the LLM, so the summary the chat runtime paid an LLM
-// call to produce was silently lost.
-//
-// This test drives handleModelSwitch with a recording summary provider,
-// then runs the next LLM call through the agent loop's BuildMessages path
-// and asserts the captured messages contain the summary text.
-func TestSwitchTime_LLMReceivesSyntheticSummary(t *testing.T) {
+// TestSwitchTime_LLMHistoryHasNoSystemMessage verifies that after a model
+// switch with trim, history contains no injected role=="system" message
+// (the summary path is deleted; the breadcrumb is separate from session summary).
+func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 	const newModel = "openrouter/some-small-model"
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
@@ -407,28 +274,20 @@ func TestSwitchTime_LLMReceivesSyntheticSummary(t *testing.T) {
 	agent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, agent)
 
-	// Force compress to fire.
 	agent.ContextWindow = 8000
 	agent.MaxTokens = 4096
+	al.mu.Lock()
+	al.cfg.Agents.Defaults.ContextWindow = 8000
+	al.mu.Unlock()
 
-	const sessionKey = "llm-receives-summary"
-	bigText := make([]byte, 0, 50000)
-	for i := 0; i < 50000; i++ {
-		bigText = append(bigText, 'a')
-	}
+	const sessionKey = "llm-no-system-msg"
+	bigText := strings.Repeat("b", 50000)
 	agent.Sessions.SetHistory(sessionKey, []providers.Message{
-		{Role: "user", Content: "I need help with: " + string(bigText)},
-		{Role: "assistant", Content: "Sure, here is what I think: " + string(bigText)},
+		{Role: "user", Content: "I need help with: " + bigText},
+		{Role: "assistant", Content: "Sure: " + bigText},
 	})
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
-	// Summary the LLM will produce — verify it reaches the next chat call.
-	const summaryText = "FR-012-key-decisions: pick A; open: confirm plan"
-	recProv := &recordingSummaryProvider{summary: summaryText}
-	agent.Provider = recProv
-
-	// Trigger the switch — this is the production path that previously lost
-	// the synthetic system message to sanitizeHistoryForProvider.
 	updatedAgent, err := al.handleModelSwitch(
 		context.Background(),
 		agent,
@@ -441,59 +300,25 @@ func TestSwitchTime_LLMReceivesSyntheticSummary(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, updatedAgent)
 
-	// BuildMessages consumes Sessions.GetSummary and stitches it into the
-	// system prompt. Verify the next LLM call would see the summary text
-	// by running BuildMessages and asserting the system message contains
-	// the summary string (Strategy B: summary → system prompt).
-	messages := updatedAgent.ContextBuilder.BuildMessages(
-		updatedAgent.Sessions.GetHistory(sessionKey),
-		updatedAgent.Sessions.GetSummary(sessionKey),
-		"now please continue",
-		nil,
-		"", "", "", "",
-	)
-	require.NotEmpty(t, messages,
-		"BuildMessages must produce messages for the next turn")
-	require.Equal(t, "system", messages[0].Role,
-		"first message must be the system prompt")
-	systemPrompt := messages[0].Content
-	assert.Contains(t, systemPrompt, summaryText,
-		"the LLM system prompt must contain the switch summary text — FR-012 regression guard")
+	// Session summary must be empty (windowTrim writes no summary).
+	summary := updatedAgent.Sessions.GetSummary(sessionKey)
+	assert.Empty(t, summary,
+		"windowTrim switch path must not populate session summary")
 
-	// Also confirm the summary is not present in history (Strategy B stores
-	// it in summary, not in history messages). The system prompt itself is
-	// messages[0]; any other system message in `messages` would indicate
-	// the summary leaked into history.
-	for _, m := range messages[1:] {
+	// History must have no synthetic system message.
+	history := updatedAgent.Sessions.GetHistory(sessionKey)
+	for _, m := range history {
 		assert.NotEqual(t, "system", m.Role,
-			"summary must not appear in history as a system message (Strategy B)")
+			"no synthetic system message must be in history after windowTrim switch")
 	}
 }
 
 // TestSwitchTime_UnknownModel_LogsWarn is the W4-4 regression guard for
-// silent-failure-A CRITICAL #1: when an operator typo'd `metadata.model_name`
-// arrives at handleModelSwitch, the resolve against cfg.Providers fails
-// silently. The previous code did `_, _ = ResolveModelCfg(...)` — the
-// fallback chain then "appeared to succeed" and routed the next LLM call
-// through the agent's PRIMARY model, recreating the FR-007 bug class.
+// silent-failure-A CRITICAL #1: when a typo'd metadata.model_name arrives,
+// the code MUST emit a WARN rather than silently continuing.
 //
-// The fix surfaces the miss to operators via logger.WarnCF. This test
-// drives handleModelSwitch with a typo'd model name, captures the WARN
-// to a temp file (DisableConsole + EnableFileLogging), and asserts the
-// log line carries the requested model, the agent id, and the resolve
-// error. The agent defaults (cfg.Agents.Defaults.ContextWindow) are
-// deliberately set to a value larger than agent.ContextWindow so the
-// switch window-resolution path is exercised; we only assert the WARN
-// fired — the actual switch still completes against the agent's primary
-// model, matching the historical "unknown model = no-op switch" behavior.
-//
-// BDD: typo'd `metadata.model_name` from operator → WARN with resolve_error
-// is emitted (operator can spot the typo at the switch site).
+// BDD: typo'd metadata.model_name -> WARN with resolve_error emitted.
 func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
-	// Set up log capture to a temp file. DisableConsole silences stderr;
-	// EnableFileLogging routes log output to the file so the assertion can
-	// read it back (standard pattern in this repo; see
-	// pkg/providers/fallback_test.go).
 	tmpDir := t.TempDir()
 	logFile := tmpDir + "/switch-unknown-model.log"
 
@@ -508,22 +333,14 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 		logger.SetLevel(prevLevel)
 	})
 
-	// Register the default model only — the requested model ("not-a-real-model")
-	// is intentionally not in the registry. This guarantees ResolveModelCfg
-	// returns an error and the WARN path is exercised.
+	// Register default model only — typo model is intentionally absent.
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model")
 	defer cleanup()
 
 	agent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, agent)
-	// Drop the agent's existing context window so the cfg.Agents.Defaults
-	// override path is exercised (200k > 8k → newContextWindow = 200k).
 	agent.ContextWindow = 8000
 
-	// Force a wider agent-defaults context window. After my change,
-	// handleModelSwitch reads this value when ResolveModelCfg succeeds OR
-	// fails (we don't bail on the error — we just WARN). The test asserts
-	// only the WARN, not the window value.
 	al.mu.Lock()
 	al.cfg.Agents.Defaults.ContextWindow = 200000
 	al.mu.Unlock()
@@ -533,15 +350,7 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 	agent.Sessions.SetHistory(sessionKey, nil)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
-	recProv := &recordingSummaryProvider{summary: "should not be used"}
-	agent.Provider = recProv
-
-	// Drive the switch with the typo'd model name. handleModelSwitch will
-	// return an error (ApplyAgentModel propagates the registry miss), but
-	// the WARN we're testing fires BEFORE that call — in the window-resolution
-	// block where we look up the new model's config. The agent's in-memory
-	// state stays untouched (ApplyAgentModel is the LAST step, after the
-	// WARN site, and it bails on registry miss).
+	// Drive the switch with the typo'd model name.
 	_, switchErr := al.handleModelSwitch(
 		context.Background(),
 		agent,
@@ -551,17 +360,10 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 			Metadata: map[string]string{"model_name": typoModel},
 		},
 	)
-	// We do NOT assert switchErr == nil — ApplyAgentModel propagates the
-	// registry miss up. The behavior under test is purely the WARN emission
-	// at the ResolveModelCfg site; the error return from handleModelSwitch
-	// is the pre-existing (and correct) error path. W4-4 is about NOT
-	// swallowing the resolve error silently, not about suppressing the
-	// downstream error return.
 	if switchErr != nil {
 		t.Logf("handleModelSwitch returned error (expected for unknown model): %v", switchErr)
 	}
 
-	// Read the captured log back and assert the WARN.
 	data, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatalf("ReadFile(%s): %v", logFile, err)
@@ -585,16 +387,19 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 	}
 }
 
-// failingProvider is used to exercise summarizeDroppedTurns' error path. It
-// returns an error from Chat and exposes a default model.
+// Compile-time check: failingProvider satisfies LLMProvider.
+var _ providers.LLMProvider = (*failingProvider)(nil)
+
+// failingProvider returns an error from Chat. Kept for interface compatibility;
+// the summarizeDroppedTurns path is deleted and no longer needs it.
 type failingProvider struct{}
 
 func (f *failingProvider) Chat(
-	ctx context.Context,
-	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
 ) (*providers.LLMResponse, error) {
 	return nil, context.DeadlineExceeded
 }
@@ -602,12 +407,6 @@ func (f *failingProvider) Chat(
 func (f *failingProvider) GetDefaultModel() string {
 	return "failing-model"
 }
-
-// Compile-time check that failingProvider satisfies the LLMProvider interface.
-var (
-	_ providers.LLMProvider = (*failingProvider)(nil)
-	_ providers.LLMProvider = (*recordingSummaryProvider)(nil)
-)
 
 // Reference unused import session to avoid compile error if the file is later trimmed.
 var _ session.UnifiedSessionType = session.SessionTypeChat

@@ -714,12 +714,31 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderD
 	return sb.String()
 }
 
+// BuildMessages assembles the provider message list for a single agent turn.
+//
+// Assembly order (FR-006/FR-019):
+//  1. Single system message: static cached prompt + dynamic context + skills + legacy
+//     summary (inert, FR-014) + breadcrumb block (FR-007, when non-empty).
+//  2. recallSpan messages (transient recalled turns, Design B), when non-nil — old
+//     recalled turns precede the recent window (FR-019 chronology).
+//  3. history messages (the Skip-trimmed sliding window, post-eviction).
+//  4. Current user message.
+//
+// breadcrumb is the prominent evicted-context block built by buildBreadcrumb
+// (FR-007); pass "" when no turns have been evicted.
+//
+// recallSpan carries the transient native recall span re-injected by
+// recall_conversation (FR-019); pass nil when no recall is active. The span
+// is placed after the breadcrumb and before the sliding window so the model
+// sees recalled (old) context before the most-recent window turns.
 func (cb *ContextBuilder) BuildMessages(
 	history []providers.Message,
 	summary string,
 	currentMessage string,
 	media []string,
 	channel, chatID, senderID, senderDisplayName string,
+	breadcrumb string,
+	recallSpan []providers.Message,
 	activeSkills ...string,
 ) []providers.Message {
 	messages := []providers.Message{}
@@ -759,6 +778,9 @@ func (cb *ContextBuilder) BuildMessages(
 		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: skillsText})
 	}
 
+	// Legacy summary: rendered inertly for backward-compat (FR-014). The summary
+	// field is a leftover from the forceCompression era; any "[dropped N]" marker
+	// is harmless here — we do not parse it.
 	if summary != "" {
 		summaryText := fmt.Sprintf(
 			"CONTEXT_SUMMARY: The following is an approximate summary of prior conversation "+
@@ -766,6 +788,14 @@ func (cb *ContextBuilder) BuildMessages(
 			summary)
 		stringParts = append(stringParts, summaryText)
 		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: summaryText})
+	}
+
+	// FR-007: breadcrumb block — placed AFTER skills (and summary), BEFORE the
+	// sliding window. It is a distinct content block so providers can see it as
+	// a prominent separate section. Non-empty only when turns have been evicted.
+	if breadcrumb != "" {
+		stringParts = append(stringParts, breadcrumb)
+		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: breadcrumb})
 	}
 
 	fullSystemPrompt := strings.Join(stringParts, "\n\n---\n\n")
@@ -779,11 +809,13 @@ func (cb *ContextBuilder) BuildMessages(
 
 	logger.DebugCF("agent", "System prompt built",
 		map[string]any{
-			"static_chars":  len(staticPrompt),
-			"dynamic_chars": len(dynamicCtx),
-			"total_chars":   len(fullSystemPrompt),
-			"has_summary":   summary != "",
-			"cached":        isCached,
+			"static_chars":    len(staticPrompt),
+			"dynamic_chars":   len(dynamicCtx),
+			"total_chars":     len(fullSystemPrompt),
+			"has_summary":     summary != "",
+			"has_breadcrumb":  breadcrumb != "",
+			"recall_span_len": len(recallSpan),
+			"cached":          isCached,
 		})
 
 	// Log preview of system prompt (avoid logging huge content)
@@ -804,7 +836,15 @@ func (cb *ContextBuilder) BuildMessages(
 		SystemParts: contentBlocks,
 	})
 
-	// Add conversation history
+	// FR-019: transient recall span — placed AFTER the system message and BEFORE
+	// the sliding window so chronology is correct (recalled old turns precede the
+	// recent window). The span is an in-memory overlay; it is never written to
+	// context.jsonl and is not subject to Skip-based eviction.
+	if len(recallSpan) > 0 {
+		messages = append(messages, recallSpan...)
+	}
+
+	// Add conversation history (the post-Skip sliding window).
 	messages = append(messages, history...)
 
 	// Add current user message
