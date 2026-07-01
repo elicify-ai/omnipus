@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/memory"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
@@ -116,6 +118,27 @@ func (sm *SessionManager) GetHistory(key string) []providers.Message {
 	history := make([]providers.Message, len(session.Messages))
 	copy(history, session.Messages)
 	return history
+}
+
+// ReadArchive implements SessionStore. The legacy SessionManager is an
+// in-memory store with no append-only JSONL archive, so it returns the
+// current in-memory messages wrapped as ArchivedMessage with TS=0 (no
+// per-line timestamps are available in this backend). Callers must treat
+// TS==0 as "unknown/earlier" (FR-017 backward-compat rule).
+func (sm *SessionManager) ReadArchive(_ context.Context, key string) ([]memory.ArchivedMessage, error) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	session, ok := sm.sessions[key]
+	if !ok {
+		return []memory.ArchivedMessage{}, nil
+	}
+
+	archived := make([]memory.ArchivedMessage, len(session.Messages))
+	for i, m := range session.Messages {
+		archived[i] = memory.ArchivedMessage{Message: m}
+	}
+	return archived, nil
 }
 
 func (sm *SessionManager) GetSummary(key string) string {

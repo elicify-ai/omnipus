@@ -93,12 +93,13 @@ func TestJSONLBackend_TruncateAndSave(t *testing.T) {
 		t.Errorf("got %q, want %q", history[0].Content, "msg 7")
 	}
 
-	// Save triggers compaction.
+	// Save is a no-op for the JSONL backend (FR-005: Compact removed from
+	// Save path so evicted lines are preserved for recall_conversation).
 	if err := b.Save("s1"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Messages still accessible after compaction.
+	// Live window is still accessible after Save.
 	history = b.GetHistory("s1")
 	if len(history) != 3 {
 		t.Fatalf("after save: got %d, want 3", len(history))
@@ -153,7 +154,9 @@ func TestJSONLBackend_SessionIsolation(t *testing.T) {
 
 func TestJSONLBackend_SummarizeFlow(t *testing.T) {
 	// Simulates the real summarization flow in the agent loop:
-	// SetSummary → TruncateHistory → Save
+	// SetSummary → TruncateHistory → Save.
+	// Save is now a no-op (FR-005: Compact removed from Save path) — the
+	// live window is still readable via GetHistory after TruncateHistory.
 	b := newBackend(t)
 
 	for i := 0; i < 20; i++ {

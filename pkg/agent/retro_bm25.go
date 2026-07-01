@@ -6,7 +6,6 @@
 package agent
 
 import (
-	"math"
 	"sort"
 	"strings"
 	"unicode"
@@ -26,76 +25,43 @@ const (
 // retros to the persistent room index — keeping them isolated so long-term recall
 // is never polluted by retro documents, and avoiding a per-query index build over
 // the small, time-bounded retro corpus.
+//
+// rankRetrosBM25 is a thin typed caller over bm25Rank (bm25.go); the BM25 math
+// lives there so recall_conversation can rank conversation Turns via the same core.
 func rankRetrosBM25(retros []Retro, query string, limit int) []Retro {
-	qTerms := retroTokenize(query)
-	if len(qTerms) == 0 || len(retros) == 0 {
+	if len(retros) == 0 {
 		return nil
 	}
 
-	// Tokenize each retro and gather corpus statistics.
-	docTokens := make([][]string, len(retros))
-	docFreq := make(map[string]int) // # retros containing each term (for idf)
-	var totalLen int
+	// Build the plain-text corpus from each retro's searchable text.
+	docs := make([]string, len(retros))
 	for i, r := range retros {
-		toks := retroTokenize(retroSearchText(r))
-		docTokens[i] = toks
-		totalLen += len(toks)
-		seen := make(map[string]bool, len(toks))
-		for _, t := range toks {
-			if !seen[t] {
-				docFreq[t]++
-				seen[t] = true
-			}
-		}
+		docs[i] = retroSearchText(r)
 	}
 
-	n := float64(len(retros))
-	avgdl := float64(totalLen) / n
-	if avgdl == 0 {
-		avgdl = 1
+	hits := bm25Rank(query, docs, 0) // no limit yet — we need to apply the timestamp tie-break first
+	if len(hits) == 0 {
+		return nil
 	}
 
-	type scored struct {
-		idx   int
-		score float64
-	}
-	scoredDocs := make([]scored, 0, len(retros))
-	for i, toks := range docTokens {
-		tf := make(map[string]int, len(toks))
-		for _, t := range toks {
-			tf[t]++
+	// Re-apply the original tie-break: equal scores → newest-first by Timestamp.
+	// bm25Rank returns a stable-sorted slice (equal scores preserve input order),
+	// so this stable secondary sort gives byte-for-byte identical output to the
+	// original monolithic sort.
+	sort.SliceStable(hits, func(a, b int) bool {
+		if hits[a].Score != hits[b].Score {
+			return hits[a].Score > hits[b].Score
 		}
-		dl := float64(len(toks))
-		var score float64
-		for _, qt := range qTerms {
-			f := float64(tf[qt])
-			if f == 0 {
-				continue
-			}
-			df := float64(docFreq[qt])
-			// Standard BM25 idf (non-negative form) + tf saturation with length norm.
-			idf := math.Log(1 + (n-df+0.5)/(df+0.5))
-			score += idf * (f * (retroBM25K1 + 1)) /
-				(f + retroBM25K1*(1-retroBM25B+retroBM25B*dl/avgdl))
-		}
-		if score > 0 {
-			scoredDocs = append(scoredDocs, scored{idx: i, score: score})
-		}
-	}
-
-	sort.SliceStable(scoredDocs, func(a, b int) bool {
-		if scoredDocs[a].score != scoredDocs[b].score {
-			return scoredDocs[a].score > scoredDocs[b].score
-		}
-		return retros[scoredDocs[a].idx].Timestamp.After(retros[scoredDocs[b].idx].Timestamp)
+		return retros[hits[a].Index].Timestamp.After(retros[hits[b].Index].Timestamp)
 	})
 
-	if limit > 0 && len(scoredDocs) > limit {
-		scoredDocs = scoredDocs[:limit]
+	if limit > 0 && len(hits) > limit {
+		hits = hits[:limit]
 	}
-	out := make([]Retro, len(scoredDocs))
-	for i, s := range scoredDocs {
-		out[i] = retros[s.idx]
+
+	out := make([]Retro, len(hits))
+	for i, h := range hits {
+		out[i] = retros[h.Index]
 	}
 	return out
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/dapicom-ai/omnipus/pkg/memory"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
@@ -887,6 +888,7 @@ type ephemeralSessionStoreIface interface {
 	SetSummary(key, summary string)
 	SetHistory(key string, history []providers.Message)
 	TruncateHistory(key string, keepLast int)
+	ReadArchive(ctx context.Context, key string) ([]memory.ArchivedMessage, error)
 	Save(key string) error
 	Close() error
 }
@@ -911,6 +913,20 @@ func (e *ephemeralSessionStore) GetHistory(_ string) []providers.Message {
 	out := make([]providers.Message, len(e.history))
 	copy(out, e.history)
 	return out
+}
+
+// ReadArchive returns the ephemeral in-memory history as ArchivedMessage
+// values with TS=0 (this backend keeps no per-line timestamps and never
+// evicts to disk, so the full history is the archive). Satisfies the
+// session.SessionStore interface (FR-016).
+func (e *ephemeralSessionStore) ReadArchive(_ context.Context, _ string) ([]memory.ArchivedMessage, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]memory.ArchivedMessage, len(e.history))
+	for i, m := range e.history {
+		out[i] = memory.ArchivedMessage{Message: m}
+	}
+	return out, nil
 }
 
 func (e *ephemeralSessionStore) GetSummary(_ string) string {
