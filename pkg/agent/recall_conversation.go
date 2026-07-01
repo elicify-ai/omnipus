@@ -108,12 +108,12 @@ func (t *RecallConversationTool) Category() tools.ToolCategory {
 	return tools.CategoryMemory
 }
 func (t *RecallConversationTool) Description() string {
-	return "Retrieve verbatim turns from earlier in THIS conversation (past the live context " +
-		"window) by query (BM25 keyword search), turn_range (e.g. \"5-10\"), or time window " +
-		"({from,to} as Unix timestamps or RFC3339). " +
-		"Exactly one of query, turn_range, or time must be provided. " +
-		"Results are re-injected as native context so you can reference earlier exchanges. " +
-		"For long-term memory across sessions, use recall_memory instead."
+	return "Look back at an earlier part of the CURRENT conversation that has scrolled out of view. " +
+		"Use this when the user refers to something discussed earlier that you can no longer see " +
+		"above. Find it by keyword (query), by turn numbers (turn_range, e.g. \"5-10\"), or by time. " +
+		"The matching earlier exchanges are brought back so you can read and reference them. " +
+		"Provide exactly one of query, turn_range, or time. " +
+		"Note: to find facts saved across DIFFERENT conversations, use recall_memory instead."
 }
 
 func (t *RecallConversationTool) Parameters() map[string]any {
@@ -122,25 +122,23 @@ func (t *RecallConversationTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"query": map[string]any{
 				"type": "string",
-				"description": "BM25 keyword query to find relevant earlier turns. " +
-					"Returns top matching whole Turns (≤8 turns, ≤4000 tokens).",
+				"description": "Keywords to search for among the earlier turns. The most relevant " +
+					"earlier exchanges are brought back (up to 8).",
 			},
 			"turn_range": map[string]any{
-				"type": "string",
-				"description": "Explicit turn range, e.g. \"5-10\" (inclusive). " +
-					"Returns turns 5 through 10 (≤50 turns, ≤8000 tokens).",
+				"type":        "string",
+				"description": "A range of turn numbers to bring back, e.g. \"5-10\" (inclusive).",
 			},
 			"time": map[string]any{
 				"type": "object",
-				"description": "Time window filter. Turns whose first-message timestamp falls " +
-					"within [from, to] are returned. Timestamps are Unix seconds or RFC3339 strings. " +
-					"A TS==0 legacy line is treated as the session start (included when from==0).",
+				"description": "Bring back turns whose time falls between 'from' and 'to'. " +
+					"Times are Unix seconds or RFC3339 (e.g. 2026-07-01T12:00:00Z).",
 				"properties": map[string]any{
 					"from": map[string]any{
-						"description": "Start of window (Unix seconds or RFC3339). 0 = session start.",
+						"description": "Start of the time window (Unix seconds or RFC3339). 0 = start of the conversation.",
 					},
 					"to": map[string]any{
-						"description": "End of window (Unix seconds or RFC3339). 0 = now.",
+						"description": "End of the time window (Unix seconds or RFC3339). 0 = now.",
 					},
 				},
 			},
