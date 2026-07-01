@@ -102,20 +102,20 @@ func TestIntegration_AutoInject20Recent(t *testing.T) {
 //     - a retrospective containing "ctxIT_topic_flock"
 //   When recall_memory is called for query "ctxIT_topic_flock"
 //   Then long-term memory results are returned (via SearchEntries)
-//   AND when GetMemoryContext is called, last-session content appears
-//   AND retrospectives do NOT appear in GetMemoryContext or recall_memory
-//     (this is the documented gap: recall spans long-term only; retros are
-//      private reflection artifacts surfaced only via ReadRetros / BuildSystemPrompt
-//      if wired — currently they are NOT wired into GetMemoryContext either).
+//   AND matching retrospectives are ALSO returned (finding #1 fix: recall spans
+//     long-term + retros via the tools.RetroSearcher path)
+//   AND when GetMemoryContext is called, long-term + last-session content appears
+//   AND retrospectives do NOT appear in GetMemoryContext (they stay out of the
+//     per-turn auto-inject; they are recall-only, surfaced on demand).
 //
-// The RecallMemoryTool description comment says "searches long-term memory,
-// last session, and retrospectives" but the implementation at memory.go:936 only
-// covers long-term + last-session via GetMemoryContext, and the RecallMemoryTool
-// itself only covers long-term memories. This test verifies the ACTUAL behavior
-// (not the aspirational doc comment) and makes the gap explicit.
+// This locks in the finding #1 fix: recall_memory now searches retrospectives
+// (RetroSearcher on the adapter), so the tool matches its "spans long-term +
+// retrospectives" contract. last-session is auto-injected each turn, so it is
+// always in context rather than searched by recall.
 //
-// Traces to: pkg/tools/memory.go:298 (RecallMemoryTool comment)
-//            pkg/agent/memory.go:927 (GetMemoryContext — no retro section)
+// Traces to: pkg/tools/memory.go (RecallMemoryTool + RetroSearcher)
+//            pkg/agent/memory_adapter.go (MemoryStoreAdapter.SearchRetros)
+//            pkg/agent/memory.go (GetMemoryContext — long-term + last-session)
 // ---------------------------------------------------------------------------
 
 func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
@@ -163,6 +163,14 @@ func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
 	assert.Contains(t, recallResult.ForLLM, needle,
 		"recall_memory must surface the long-term memory entry matching the query")
 
+	// recall_memory now ALSO spans retrospectives (finding #1 fix): the seeded
+	// retro's content matches the query, so recall surfaces it alongside the
+	// long-term hit, labelled as a retrospective.
+	assert.Contains(t, recallResult.ForLLM, "Went well",
+		"recall_memory must surface matching retrospective content (recall spans retros)")
+	assert.Contains(t, recallResult.ForLLM, "retrospective",
+		"recall_memory retro hits are labelled retrospective")
+
 	// Differentiation: a different query must NOT find it.
 	recallResultOther := recallTool.Execute(context.Background(), map[string]any{
 		"query": "completely_unrelated_xyz987",
@@ -181,16 +189,13 @@ func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
 	assert.Contains(t, memCtx, "## Long-term memory",
 		"GetMemoryContext must include the ## Long-term memory section")
 
-	// -- Section C: retrospectives are NOT included by GetMemoryContext --------
-	// This asserts the ACTUAL behavior and makes the gap explicit:
-	// the RecallMemoryTool comment claims "searches ... retrospectives" but the
-	// implementation does not surface retro content via recall or GetMemoryContext.
-	// If this assertion fails it means retros WERE wired in — update the comment
-	// in pkg/tools/memory.go:298 and this explanation accordingly.
+	// -- Section C: retros are recall-only, not in the per-turn auto-inject ------
+	// After the finding #1 fix, recall_memory spans long-term + retrospectives
+	// (asserted in Section A). The per-turn GetMemoryContext auto-inject still
+	// covers long-term + last-session only — retros stay out of the always-on
+	// context and are surfaced on demand via recall_memory / ReadRetros.
 	assert.NotContains(t, memCtx, "ctxIT-session-001",
-		"GetMemoryContext does NOT include retrospective content (retros are private reflection artifacts)")
-	assert.NotContains(t, recallResult.ForLLM, "Went well",
-		"recall_memory must not surface retro content; RecallMemoryTool only covers long-term memories")
+		"GetMemoryContext (auto-inject) does NOT include retrospective content — retros are recall-only")
 
 	// ReadRetros DOES surface the retro (verifying it was written correctly).
 	retros, err := ms.ReadRetros(1)

@@ -17,6 +17,8 @@
 package agent
 
 import (
+	"strings"
+
 	"github.com/dapicom-ai/omnipus/pkg/memrooms"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
@@ -103,6 +105,65 @@ func (a *MemoryStoreAdapter) SearchEntriesInRoom(query string, limit int, scope 
 		}
 	}
 	return result, nil
+}
+
+// --- tools.RetroSearcher implementation -------------------------------------
+
+// SearchRetros implements tools.RetroSearcher. It returns retrospectives from
+// the private room whose content (recap + went-well + needs-improvement) matches
+// the query — case-insensitive literal substring, the same semantics as
+// long-term search — newest-first, capped at limit. This is what lets
+// recall_memory span past reflections, not just long-term memories.
+func (a *MemoryStoreAdapter) SearchRetros(query string, limit int) ([]tools.MemoryEntry, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	retros, err := a.ms.ReadRetros(365)
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(strings.TrimSpace(query))
+	out := make([]tools.MemoryEntry, 0, limit)
+	for _, r := range retros {
+		content := retroSearchText(r)
+		if needle != "" && !strings.Contains(strings.ToLower(content), needle) {
+			continue
+		}
+		out = append(out, tools.MemoryEntry{
+			Timestamp: r.Timestamp,
+			Category:  "retrospective",
+			Content:   content,
+			Title:     "Retrospective",
+		})
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// retroSearchText renders a Retro into a single searchable / human-readable
+// block (recap, then went-well and needs-improvement bullets).
+func retroSearchText(r Retro) string {
+	var sb strings.Builder
+	if r.Recap != "" {
+		sb.WriteString(r.Recap)
+	}
+	if len(r.WentWell) > 0 {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("Went well: ")
+		sb.WriteString(strings.Join(r.WentWell, "; "))
+	}
+	if len(r.NeedsImprovement) > 0 {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("Needs improvement: ")
+		sb.WriteString(strings.Join(r.NeedsImprovement, "; "))
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 // stringToRoomScope converts a string scope to a memrooms.RoomScope.

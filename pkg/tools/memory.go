@@ -84,6 +84,18 @@ type RoomMemorySearcher interface {
 	SearchEntriesInRoom(query string, limit int, scope string) ([]MemoryEntry, error)
 }
 
+// RetroSearcher is an optional read-side extension: a store that can search
+// retrospectives so recall_memory spans past reflections, not just long-term
+// memories (matching the documented behaviour). pkg/agent.MemoryStoreAdapter
+// satisfies it via SearchRetros. Stores that don't implement it (test doubles)
+// simply return long-term hits only.
+type RetroSearcher interface {
+	// SearchRetros returns retrospective records whose content matches query,
+	// newest-first, capped at limit. Retros carry no stable memory ID, so recall
+	// appends them after long-term hits and does not citation-track them.
+	SearchRetros(query string, limit int) ([]MemoryEntry, error)
+}
+
 // RoomMemoryAccess combines room-aware write + search.
 type RoomMemoryAccess interface {
 	RoomMemoryWriter
@@ -295,7 +307,9 @@ func (t *RememberTool) logAudit(agentID, sessionID, outcome, category, content s
 	}
 }
 
-// RecallMemoryTool searches long-term memory, last session, and retrospectives.
+// RecallMemoryTool searches long-term memory and retrospectives (past
+// reflections). LAST_SESSION.md is not searched here — it is auto-injected into
+// every session's system prompt, so it is always already in context.
 // FR-014: not audited (read-side stays clean).
 //
 // Asks for MemorySearcher only — the narrower of the two interfaces. This is
@@ -364,7 +378,9 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 	roomParam, _ := args["room"].(string)
 	workspaceID := ToolWorkspaceID(ctx)
 
-	// Wire workspace_id and use room-aware search when the store supports it.
+	// Search long-term memories (room-aware when supported).
+	var entries []MemoryEntry
+	var err error
 	if rs, ok := t.store.(RoomMemorySearcher); ok {
 		// Also wire the workspace ID on the write side if it implements RoomMemoryWriter.
 		if rw, ok2 := t.store.(RoomMemoryWriter); ok2 {
@@ -375,27 +391,35 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 		if scope == "" {
 			scope = "both"
 		}
-		entries, err := rs.SearchEntriesInRoom(query, limit, scope)
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("recall_memory: %v", err))
-		}
-		// FR-7.5/NFR-1: report the surfaced memories to the turn's citation
-		// tracker so the agent loop can emit op:cited when the LLM references
-		// them by ID/title in its response. No-op when no tracker is installed.
-		if tracker := CitationTrackerFromContext(ctx); tracker != nil {
-			tracker.RecordRecalled(entries)
-		}
-		return formatRecallResult(entries)
+		entries, err = rs.SearchEntriesInRoom(query, limit, scope)
+	} else {
+		// Fallback for plain MemorySearcher (test doubles etc.).
+		entries, err = t.store.SearchEntries(query, limit)
 	}
-
-	// Fallback for plain MemorySearcher (test doubles etc.).
-	entries, err := t.store.SearchEntries(query, limit)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("recall_memory: %v", err))
 	}
+
+	// FR-7.5/NFR-1: report the surfaced long-term memories to the turn's citation
+	// tracker so the agent loop can emit op:cited when the LLM references them by
+	// ID/title. Only long-term hits carry stable IDs, so retros (appended below)
+	// are not citation-tracked. No-op when no tracker is installed.
 	if tracker := CitationTrackerFromContext(ctx); tracker != nil {
 		tracker.RecordRecalled(entries)
 	}
+
+	// Recall also spans retrospectives (past reflections), not just long-term
+	// memories. A retro-search failure is non-fatal — it must not drop the
+	// long-term hits already gathered.
+	if rt, ok := t.store.(RetroSearcher); ok {
+		if retros, rerr := rt.SearchRetros(query, limit); rerr != nil {
+			slog.Warn("recall_memory: retro search failed; returning long-term hits only",
+				"component", "tool", "error", rerr)
+		} else {
+			entries = append(entries, retros...)
+		}
+	}
+
 	return formatRecallResult(entries)
 }
 
