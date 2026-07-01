@@ -821,6 +821,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // delegation-only and have no heartbeat concept.
   const showHeartbeatTab = editAgentWorkspaceId !== null && !isWorkerAgent
 
+  // The Advanced tab collapses to just the Activity feed when every editable
+  // sub-section is hidden: Rate Limits + Execution require `!isLocked`, and the
+  // Executor summary only renders for native (non-subagent_3p) workers. When
+  // that's the case (e.g. a locked core agent), label the tab "Activity"
+  // instead of "Advanced" since Activity is the only thing in it.
+  const advancedOnlyActivity =
+    isLocked && !(isWorkerAgent && agent.type !== 'subagent_3p')
+  const advancedTabLabel = advancedOnlyActivity ? 'Activity' : 'Advanced'
+
 
   // Section panels shared by desktop Tabs and mobile Accordion.
   // basics panel
@@ -1974,16 +1983,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       )}
             <Tabs defaultValue="basics" className="hidden sm:block w-full">
         <TabsList className="w-full justify-start overflow-x-auto">
+          {showHeartbeatTab && (
+            <TabsTrigger value="heartbeat" data-testid="tab-heartbeat" className="font-headline">Heartbeat</TabsTrigger>
+          )}
           <TabsTrigger value="basics" data-testid="tab-basics" className="font-headline">Basics</TabsTrigger>
           <TabsTrigger value="personality" data-testid="tab-personality" className="font-headline">Personality</TabsTrigger>
           <TabsTrigger value="tools" data-testid="tab-tools" className="font-headline">Tools</TabsTrigger>
           {agent.type === 'subagent_3p' && (
             <TabsTrigger value="runtime" data-testid="tab-runtime" className="font-headline">Runtime</TabsTrigger>
           )}
-          <TabsTrigger value="advanced" data-testid="tab-advanced" className="font-headline">Advanced</TabsTrigger>
-          {showHeartbeatTab && (
-            <TabsTrigger value="heartbeat" data-testid="tab-heartbeat" className="font-headline">Heartbeat</TabsTrigger>
-          )}
+          <TabsTrigger value="advanced" data-testid="tab-advanced" className="font-headline">{advancedTabLabel}</TabsTrigger>
         </TabsList>
 
         {/* ── BASICS TAB ─────────────────────────────────────────────────
@@ -2044,6 +2053,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         )}
       </Tabs>
       <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">
+        {showHeartbeatTab && (
+          <AccordionItem value="heartbeat">
+            <AccordionTrigger data-testid="accordion-heartbeat" className="font-headline">Heartbeat</AccordionTrigger>
+            <AccordionContent>{heartbeatPanel}</AccordionContent>
+          </AccordionItem>
+        )}
         <AccordionItem value="basics">
           <AccordionTrigger data-testid="accordion-basics" className="font-headline">Basics</AccordionTrigger>
           <AccordionContent>{basicsPanel}</AccordionContent>
@@ -2063,15 +2078,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </AccordionItem>
       )}
         <AccordionItem value="advanced">
-          <AccordionTrigger data-testid="accordion-advanced" className="font-headline">Advanced</AccordionTrigger>
+          <AccordionTrigger data-testid="accordion-advanced" className="font-headline">{advancedTabLabel}</AccordionTrigger>
           <AccordionContent>{advancedPanel}</AccordionContent>
         </AccordionItem>
-        {showHeartbeatTab && (
-          <AccordionItem value="heartbeat">
-            <AccordionTrigger data-testid="accordion-heartbeat" className="font-headline">Heartbeat</AccordionTrigger>
-            <AccordionContent>{heartbeatPanel}</AccordionContent>
-          </AccordionItem>
-        )}
       </Accordion>
       </div>
       </div>
