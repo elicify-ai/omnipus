@@ -3227,7 +3227,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Re-wire per-turn delegation injectors on the new registry so that the
 	// updated DelegationPolicy (from the fresh AgentInstances) is reflected
 	// on every agent's next turn without a static-prompt cache bust.
-	wireDelegationInjectorsLocked(al, registry)
+	wireDelegationInjectors(al, registry)
 
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
