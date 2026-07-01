@@ -34,7 +34,10 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// — the same key that manifestSessionID returns when transcriptID != "".
 	al.forgetSession(sessionID)
 
-	if !al.cfg.Agents.Defaults.AutoRecapEnabled {
+	// Use GetConfig() (holds al.mu.RLock) so that a PUT /settings/memory that
+	// hot-swaps the config via SwapConfig is immediately visible here — a direct
+	// al.cfg read races with SwapConfig's write and may see the pre-PUT value.
+	if !al.GetConfig().Agents.Defaults.AutoRecapEnabled {
 		return
 	}
 
@@ -140,9 +143,12 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 
 	// Resolve primary recap model.
 	// Priority: recap_model config → overall default model → session agent model.
-	recapModel := al.cfg.Agents.Defaults.RecapModel
+	// Snapshot the config once (under RLock via GetConfig) so all reads below
+	// see a consistent view of the config even if SwapConfig races.
+	snapCfg := al.GetConfig()
+	recapModel := snapCfg.Agents.Defaults.RecapModel
 	if recapModel == "" {
-		recapModel = al.cfg.Agents.Defaults.GetModelName()
+		recapModel = snapCfg.Agents.Defaults.GetModelName()
 	}
 	if recapModel == "" {
 		recapModel = agentInst.Model
@@ -150,9 +156,9 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 
 	// Build the fallback candidate list: [primaryRecapModel, ...RecapFallbackModels].
 	// Each config.FallbackModel carries its own Provider for cross-provider fallback.
-	candidates := make([]providers.FallbackCandidate, 0, 1+len(al.cfg.Agents.Defaults.RecapFallbackModels))
+	candidates := make([]providers.FallbackCandidate, 0, 1+len(snapCfg.Agents.Defaults.RecapFallbackModels))
 	candidates = append(candidates, providers.FallbackCandidate{Model: recapModel})
-	for _, fm := range al.cfg.Agents.Defaults.RecapFallbackModels {
+	for _, fm := range snapCfg.Agents.Defaults.RecapFallbackModels {
 		candidates = append(candidates, providers.FallbackCandidate{Provider: fm.Provider, Model: fm.Model})
 	}
 
@@ -188,7 +194,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// FR-007). The agent's own providerPool only contains its turn candidates;
 	// recap candidates are separate config fields and are never included there.
 	// We build a one-off pool here using the same buildProviderPool helper.
-	recapProviderPool := buildProviderPool(al.cfg, candidates)
+	recapProviderPool := buildProviderPool(snapCfg, candidates)
 
 	// resolveRecapProvider mirrors GetProviderForCandidate but consults the
 	// one-off recap pool first, then the agent's turn pool (single-passthrough
@@ -573,7 +579,10 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 		}
 	}()
 
-	defaults := &al.cfg.Agents.Defaults
+	// Snapshot config under RLock so BootstrapRecapPass sees a consistent view
+	// even if SwapConfig races (same reasoning as in CloseSession).
+	snapCfgBoot := al.GetConfig()
+	defaults := &snapCfgBoot.Agents.Defaults
 	if !defaults.AutoRecapEnabled || !defaults.BootstrapRecapEnabled {
 		slog.Info("session_end: bootstrap recap skipped",
 			"BootstrapRecapEnabled", defaults.BootstrapRecapEnabled,

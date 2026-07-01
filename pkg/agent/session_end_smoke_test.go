@@ -136,3 +136,47 @@ func syncMapLen(m *sync.Map) int {
 	})
 	return n
 }
+
+// TestCloseSession_HonorsSwappedConfig verifies that CloseSession reads the
+// config via GetConfig() (not a stale al.cfg pointer), so that a hot-swap via
+// SwapConfig (the path taken by PUT /settings/memory → safeUpdateConfigJSON →
+// refreshConfigAndRewireServices → SwapConfig) is immediately honoured.
+//
+// Regression guard: before the fix, CloseSession read al.cfg directly without
+// al.mu.RLock(), so it could race with SwapConfig and see the pre-PUT value of
+// AutoRecapEnabled even after the PUT returned successfully.
+func TestCloseSession_HonorsSwappedConfig(t *testing.T) {
+	// Boot with AutoRecapEnabled=false.
+	cfg := &config.Config{}
+	cfg.Agents.Defaults.AutoRecapEnabled = false
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	t.Cleanup(func() { al.Close() })
+
+	// First close — must be a no-op (AutoRecapEnabled=false).
+	al.CloseSession("hot-swap-session-001", "test-pre-swap")
+	if _, ok := al.claimedCloseSessions.Load("hot-swap-session-001"); ok {
+		t.Fatal("CloseSession must not claim when AutoRecapEnabled=false")
+	}
+
+	// Hot-swap the config to AutoRecapEnabled=true (mirrors the PUT path).
+	newCfg := &config.Config{}
+	newCfg.Agents.Defaults.AutoRecapEnabled = true
+	al.SwapConfig(newCfg)
+
+	// After the swap, CloseSession must observe the new value and claim the session.
+	al.CloseSession("hot-swap-session-002", "test-post-swap")
+	if _, ok := al.claimedCloseSessions.Load("hot-swap-session-002"); !ok {
+		t.Fatal("CloseSession must claim session after SwapConfig sets AutoRecapEnabled=true")
+	}
+
+	// Swap back to false — new sessions must not be claimed.
+	offCfg := &config.Config{}
+	offCfg.Agents.Defaults.AutoRecapEnabled = false
+	al.SwapConfig(offCfg)
+
+	al.CloseSession("hot-swap-session-003", "test-post-swap-off")
+	if _, ok := al.claimedCloseSessions.Load("hot-swap-session-003"); ok {
+		t.Fatal("CloseSession must not claim session after SwapConfig sets AutoRecapEnabled=false")
+	}
+}
