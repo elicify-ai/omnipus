@@ -76,9 +76,9 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 	if !strings.Contains(got, `"ava"`) {
 		t.Errorf("missing concrete agent id 'ava' in tool calls; got:\n%s", got)
 	}
-	// run_subagent must NOT have an agent param (it has no such parameter).
-	if strings.Contains(got, "run_subagent(agent") {
-		t.Errorf("run_subagent must NOT have an agent param; got:\n%s", got)
+	// run_subagent now targets a named agent by id (await mode).
+	if !strings.Contains(got, `run_subagent(agent_id="ava"`) {
+		t.Errorf("run_subagent must target the named agent via agent_id; got:\n%s", got)
 	}
 	// Depth.
 	if !strings.Contains(got, "max chain depth: 3") {
@@ -112,9 +112,9 @@ func TestBuildDelegationContext_ModesAwaitOnly(t *testing.T) {
 	if !strings.Contains(got, "allowed modes: await") {
 		t.Errorf("missing mode footer; got:\n%s", got)
 	}
-	// run_subagent must not have an agent param.
-	if strings.Contains(got, "run_subagent(agent") {
-		t.Errorf("run_subagent must NOT have an agent param; got:\n%s", got)
+	// run_subagent targets the named agent by id (await mode).
+	if !strings.Contains(got, `run_subagent(agent_id="ava"`) {
+		t.Errorf("run_subagent must target the named agent via agent_id; got:\n%s", got)
 	}
 }
 

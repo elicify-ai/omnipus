@@ -327,10 +327,12 @@ type SubagentTool struct {
 	delegateChecker func() bool
 	// delegationDeny, when non-nil, applies the full delegation policy (trust
 	// set + modes + depth — FR-6.2) for the synchronous "await" mode. It receives
-	// the call ctx (for current delegation depth) and returns a non-empty reason
-	// to DENY or nil to ALLOW. Takes precedence over delegateChecker so the LLM
-	// (and the SPA) see *why* the delegation was rejected.
-	delegationDeny func(ctx context.Context) *DelegationDenial
+	// the call ctx (for current delegation depth) and the resolved target agent
+	// id ("" when no explicit target was given), and returns a non-nil
+	// *DelegationDenial to DENY or nil to ALLOW. Takes precedence over
+	// delegateChecker so the LLM (and the SPA) see *why* the delegation was
+	// rejected. Mirrors spawn's delegationDeny signature exactly.
+	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
 }
 
 func NewSubagentTool(manager *SubagentManager) *SubagentTool {
@@ -358,10 +360,12 @@ func (t *SubagentTool) SetDelegateChecker(check func() bool) {
 }
 
 // SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2):
-// trust set + modes ("await") + depth. Returns a non-empty reason to DENY or ""
-// to ALLOW. When set, it takes precedence over the boolean delegateChecker so a
-// rejected sync delegation surfaces a clear reason to the LLM.
-func (t *SubagentTool) SetDelegationDenyChecker(check func(ctx context.Context) *DelegationDenial) {
+// trust set + modes ("await") + depth. The checker receives the call context and
+// the resolved target agent id ("" for untargeted). Returns a non-nil
+// *DelegationDenial to DENY or nil to ALLOW. When set, it takes precedence over
+// the boolean delegateChecker so a rejected sync delegation surfaces a clear
+// reason to the LLM. Matches spawn's SetDelegationDenyChecker signature exactly.
+func (t *SubagentTool) SetDelegationDenyChecker(check func(ctx context.Context, targetAgentID string) *DelegationDenial) {
 	t.delegationDeny = check
 }
 
@@ -370,7 +374,7 @@ func (t *SubagentTool) Name() string {
 }
 
 func (t *SubagentTool) Description() string {
-	return "Execute a subagent task synchronously and return the result. Use this for delegating specific tasks to an independent agent instance. Returns execution summary to user and full details to LLM."
+	return "Execute a task synchronously (await/blocking) by running a specified agent and return its result inline. Optionally provide agent_id to run a named agent from your delegation allowlist; omit to run a generic synchronous subagent under your own agent. Use this when you need the result before proceeding."
 }
 
 func (t *SubagentTool) Scope() ToolScope       { return ScopeCore }
@@ -388,16 +392,25 @@ func (t *SubagentTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional short label for the task (for display)",
 			},
+			"agent_id": map[string]any{
+				"type":        "string",
+				"description": "Optional: the id of a specific agent to run the task as (must be in your delegation allowlist). Omit to run a generic synchronous subagent under your own agent.",
+			},
 		},
 		"required": []string{"task"},
 	}
 }
 
 func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	agentID, _ := args["agent_id"].(string)
+
 	// Delegation policy gate (FR-6.2): trust set + modes ("await") + depth.
 	// The full-policy checker takes precedence and surfaces a specific reason.
+	// agentID is passed through so a targeted run_subagent(agent_id="X") is
+	// checked against the caller→X edge, exactly as spawn does for background
+	// mode. An empty agentID triggers the untargeted path (evalUntargetedDelegation).
 	if t.delegationDeny != nil {
-		if denial := t.delegationDeny(ctx); denial != nil {
+		if denial := t.delegationDeny(ctx, agentID); denial != nil {
 			return DelegationDeniedResult("run_subagent", denial)
 		}
 	} else if t.delegateChecker != nil && !t.delegateChecker() {
@@ -416,21 +429,22 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// Use spawner if available (direct SpawnSubTurn call)
 	//
 	// The task is the first USER message; the delegate's soul (worker / configured
-	// agent) is resolved inside spawnSubTurn and used as the system role. The
-	// legacy "You are a subagent" wrapper is REMOVED — the subagent tool does
-	// not pre-inject any persona, so a configured delegate exposes its own soul
-	// and a soul-less worker runs with an empty system role (worker souls are
-	// OPTIONAL by design). The label, when set, is preserved as the task label
-	// for the WS subTurn_start frame.
+	// agent) is resolved inside spawnSubTurn via TargetAgentID and used as the
+	// system role. The legacy "You are a subagent" wrapper is REMOVED — the
+	// subagent tool does not pre-inject any persona, so a configured delegate
+	// exposes its own soul and a soul-less worker runs with an empty system role
+	// (worker souls are OPTIONAL by design). The label, when set, is preserved as
+	// the task label for the WS subTurn_start frame.
 	if t.spawner != nil {
 		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-			Model:        t.defaultModel,
-			Tools:        nil, // Will inherit from parent via context
-			SystemPrompt: task,
-			TaskLabel:    label,
-			MaxTokens:    t.maxTokens,
-			Temperature:  t.temperature,
-			Async:        false, // Synchronous execution
+			Model:         t.defaultModel,
+			Tools:         nil, // Will inherit from parent via context
+			SystemPrompt:  task,
+			TargetAgentID: agentID, // "" → parent's own soul; non-empty → named agent's soul
+			TaskLabel:     label,
+			MaxTokens:     t.maxTokens,
+			Temperature:   t.temperature,
+			Async:         false, // Synchronous execution (await)
 		})
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("Subagent execution failed: %v", err)).WithError(err)

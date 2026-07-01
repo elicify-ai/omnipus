@@ -23,9 +23,9 @@ import (
 //     Background mode. Poll check_spawn_status for the result.
 //   - create_task (task.go):  params agent_id + title + prompt (all required).
 //     Task mode. Creates a durable tracked task.
-//   - run_subagent (subagent.go): params task (required) + label ONLY.
-//     NO agent_id param — Execute ignores any target; it spawns an anonymous
-//     synchronous helper and CANNOT direct a specific colleague. Await mode.
+//   - run_subagent (subagent.go): params task (required) + agent_id (optional) + label.
+//     Await mode — runs the named agent SYNCHRONOUSLY (blocks) and returns its
+//     result inline. Omitting agent_id runs a generic helper under your own agent.
 func buildDelegationContext(policy *config.DelegationPolicy, resolveLabel func(id string) (label string, ok bool)) string {
 	// nil policy or explicitly empty To list → cannot delegate.
 	if policy == nil || len(policy.To) == 0 {
@@ -66,9 +66,7 @@ func buildDelegationContext(policy *config.DelegationPolicy, resolveLabel func(i
 				sb.WriteString("\n- `create_task(agent_id=\"<id>\", title=\"…\", prompt=\"…\")` — creates a durable, tracked task; replace `<id>` with a concrete agent id.")
 			}
 			if activeAwait {
-				// run_subagent has no agent param — it cannot target a specific
-				// colleague. Present it once here for the wildcard case with a note.
-				sb.WriteString("\n- `run_subagent(task=\"…\")` — blocks this turn; returns the result inline. (Runs a synchronous helper subagent; does not target a specific colleague.)")
+				sb.WriteString("\n- `run_subagent(agent_id=\"<id>\", task=\"…\")` — blocks this turn; runs the named agent synchronously and returns its result inline. Replace `<id>` with a concrete agent id.")
 			}
 			renderedCount++
 			continue
@@ -93,10 +91,8 @@ func buildDelegationContext(policy *config.DelegationPolicy, resolveLabel func(i
 			fmt.Fprintf(&sb, "\n- `create_task(agent_id=%q, title=\"…\", prompt=\"…\")` — files a durable, tracked task in the task DAG.", ref.ID)
 		}
 		if activeAwait {
-			// run_subagent has NO agent_id param — its Execute ignores any target.
-			// It cannot direct a specific colleague; present it once per target
-			// section with a clarifier so the agent understands the constraint.
-			sb.WriteString("\n- `run_subagent(task=\"…\")` — blocks this turn; returns the result inline. (Runs a synchronous helper subagent; does not target a specific colleague.)")
+			// run_subagent(agent_id=…) runs the named agent synchronously (await mode).
+			fmt.Fprintf(&sb, "\n- `run_subagent(agent_id=%q, task=\"…\")` — blocks this turn; runs %s synchronously and returns the result inline.", ref.ID, label)
 		}
 		renderedCount++
 	}

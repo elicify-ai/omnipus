@@ -294,14 +294,20 @@ func TestDelegationDenyChecker_ConfigPolicyNoLongerAffectsRuntime(t *testing.T) 
 }
 
 // --- synchronous subagent gate (mode = "await") ---
+//
+// buildSubagentDelegationDenyChecker was removed; these tests now use
+// buildDelegationDenyChecker with DelegationModeAwait directly, matching the
+// wiring site in registerSharedTools. The checker now accepts a targetAgentID;
+// untargeted calls pass "" (same as the previous no-arg signature).
 
 func TestSubagentDelegationDenyChecker_AllowedWhenPermitted(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"await"}, intPtr(3)),
 	})
-	check := buildSubagentDelegationDenyChecker(&config.AgentConfig{ID: "mia"}, config.AgentDefaults{})
+	check := buildDelegationDenyChecker("mia", nil, config.AgentDefaults{},
+		config.DelegationModeAwait, nil)
 
-	if denial := check(ctxWS(testWS, 0)); denial != nil {
+	if denial := check(ctxWS(testWS, 0), ""); denial != nil {
 		t.Fatalf("expected sync delegation allowed, got deny: %+v", denial)
 	}
 }
@@ -311,9 +317,10 @@ func TestSubagentDelegationDenyChecker_DeniedWhenNoEdges(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("jim", "ray", nil, nil), // an edge, but not FROM mia
 	})
-	check := buildSubagentDelegationDenyChecker(&config.AgentConfig{ID: "mia"}, config.AgentDefaults{})
+	check := buildDelegationDenyChecker("mia", nil, config.AgentDefaults{},
+		config.DelegationModeAwait, nil)
 
-	denial := check(ctxWS(testWS, 0))
+	denial := check(ctxWS(testWS, 0), "")
 	if denial == nil || denial.Policy != tools.DenyTrustSet {
 		t.Fatalf("expected trust_set denial with no outgoing edge, got: %+v", denial)
 	}
@@ -324,9 +331,10 @@ func TestSubagentDelegationDenyChecker_DeniedWhenModeForbidden(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, nil), // await forbidden
 	})
-	check := buildSubagentDelegationDenyChecker(&config.AgentConfig{ID: "mia"}, config.AgentDefaults{})
+	check := buildDelegationDenyChecker("mia", nil, config.AgentDefaults{},
+		config.DelegationModeAwait, nil)
 
-	denial := check(ctxWS(testWS, 0))
+	denial := check(ctxWS(testWS, 0), "")
 	if denial == nil || denial.Policy != tools.DenyMode {
 		t.Fatalf("expected mode denial for await, got: %+v", denial)
 	}
@@ -336,9 +344,10 @@ func TestSubagentDelegationDenyChecker_DeniedWhenDepthExceeded(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"await"}, intPtr(1)),
 	})
-	check := buildSubagentDelegationDenyChecker(&config.AgentConfig{ID: "mia"}, config.AgentDefaults{})
+	check := buildDelegationDenyChecker("mia", nil, config.AgentDefaults{},
+		config.DelegationModeAwait, nil)
 
-	denial := check(ctxWS(testWS, 1)) // depth 1 >= edge cap 1
+	denial := check(ctxWS(testWS, 1), "") // depth 1 >= edge cap 1
 	if denial == nil || denial.Policy != tools.DenyDepth {
 		t.Fatalf("expected depth denial, got: %+v", denial)
 	}
@@ -346,9 +355,10 @@ func TestSubagentDelegationDenyChecker_DeniedWhenDepthExceeded(t *testing.T) {
 
 func TestSubagentDelegationDenyChecker_FailsClosedWhenNoWorkspace(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
-	check := buildSubagentDelegationDenyChecker(&config.AgentConfig{ID: "mia"}, config.AgentDefaults{})
+	check := buildDelegationDenyChecker("mia", nil, config.AgentDefaults{},
+		config.DelegationModeAwait, nil)
 
-	if denial := check(ctxAtDepth(0)); denial == nil {
+	if denial := check(ctxAtDepth(0), ""); denial == nil {
 		t.Fatal("expected fail-closed DENY for sync subagent with no default workspace, got allow")
 	}
 }

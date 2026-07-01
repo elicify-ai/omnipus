@@ -1624,11 +1624,14 @@ func registerSharedTools(
 				}
 				return false
 			})
-			// FR-6.2: full-policy gate for the synchronous "await" mode. The sync
-			// subagent tool has no explicit target, so the trust check is "can
-			// delegate at all"; mode + depth still apply.
-			subagentTool.SetDelegationDenyChecker(buildSubagentDelegationDenyChecker(
-				subagentAgentCfg, cfg.Agents.Defaults,
+			// FR-6.2: full-policy gate for the synchronous "await" mode. Uses the
+			// same buildDelegationDenyChecker as spawn (DelegationModeBackground)
+			// but with DelegationModeAwait, so targeted run_subagent(agent_id="X")
+			// is checked against the caller→X edge for the "await" mode, and
+			// untargeted run_subagent falls back to evalUntargetedDelegation.
+			subagentTool.SetDelegationDenyChecker(buildDelegationDenyChecker(
+				currentAgentID, subagentAgentCfg, cfg.Agents.Defaults,
+				config.DelegationModeAwait, registry,
 			))
 			agent.Tools.Register(subagentTool)
 
@@ -2348,32 +2351,6 @@ func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, calle
 			config.DelegationModeTask, nil,
 		)
 		return gate(ctx, targetAgentID)
-	}
-}
-
-// buildSubagentDelegationDenyChecker returns the per-workspace, graph-authoritative
-// gate for the synchronous subagent tool (mode = "await"). The sync subagent tool
-// has no explicit target, so the trust check is "can this agent delegate at all"
-// in the effective workspace graph (at least one outgoing edge whose modes permit
-// "await"), then mode and depth apply identically to the targeted path.
-//
-// The graph (workspaces/<id>.json) is the SOLE runtime authority; the per-agent
-// config.DelegationPolicy is seed-only and is not consulted here. FAIL-CLOSED on
-// graph load failure or a missing workspace. The agentCfg parameter is retained
-// for the call-site signature but only its ID is used; defaults supplies the
-// global depth ceiling.
-func buildSubagentDelegationDenyChecker(
-	agentCfg *config.AgentConfig,
-	defaults config.AgentDefaults,
-) func(ctx context.Context) *tools.DelegationDenial {
-	var callerAgentID string
-	if agentCfg != nil {
-		callerAgentID = agentCfg.ID
-	}
-	globalDepthCap := defaults.SubTurn.MaxDepth
-
-	return func(ctx context.Context) *tools.DelegationDenial {
-		return evalUntargetedDelegation(ctx, callerAgentID, config.DelegationModeAwait, globalDepthCap)
 	}
 }
 
