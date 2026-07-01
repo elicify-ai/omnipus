@@ -135,9 +135,16 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 				}
 				label, ok := resolveDelegationLabel(liveRegistry, e.ToAgent)
 				if !ok {
-					// Unknown or unavailable target in the graph — skip (unresolvable
-					// targets get an empty label, buildDelegationContext will skip them).
-					label = ""
+					// A graph edge points at an agent absent from the live registry
+					// (deleted/renamed target, or a hand-authored graph inconsistency).
+					// Skip it — advertising a target the model can't name is worse —
+					// but WARN so the operator can reconcile the graph. The gate would
+					// independently deny this target too, so under-advertising here is
+					// fail-safe (advertise ⊆ enforce).
+					logger.WarnCF("agent.env",
+						"wireDelegationInjectors: graph delegation edge target not in live registry — skipping from advertised block",
+						map[string]any{"agent_id": id, "target": e.ToAgent, "workspace_id": wsID})
+					continue
 				}
 				// Convert workspace.DelegationMode to config.DelegationMode (same string
 				// values, typed separately to avoid import cycle in pkg/workspace).
