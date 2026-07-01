@@ -52,8 +52,8 @@ func (a *restAPI) getMemorySettings(w http.ResponseWriter, _ *http.Request) {
 	resp := gen.MemorySettings{
 		AutoRecapEnabled:           boolPtr(d.AutoRecapEnabled),
 		BootstrapRecapEnabled:      boolPtr(d.BootstrapRecapEnabled),
-		BootstrapRecapMaxPerMinute: intPtr(d.BootstrapRecapMaxPerMinute),
-		IdleTimeoutMinutes:         intPtr(d.IdleTimeoutMinutes),
+		BootstrapRecapMaxPerMinute: intPtr(d.GetBootstrapRecapMaxPerMinute()),
+		IdleTimeoutMinutes:         intPtr(d.GetIdleTimeoutMinutes()),
 		SessionDays:                intPtr(ret.RetentionSessionDays()),
 		MemoryRetrosDays:           intPtr(ret.RetentionMemoryRetrosDays()),
 	}
