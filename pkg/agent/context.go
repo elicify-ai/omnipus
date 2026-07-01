@@ -66,10 +66,15 @@ type ContextBuilder struct {
 	// delegationInjector is an optional per-turn callback that renders the
 	// "## Delegation" block for this agent. Unlike resourcesInjector it is
 	// called in buildDynamicContext (the UN-CACHED path) so that a runtime
-	// change to the delegation policy is reflected on the very next turn
-	// without waiting for the cached system-prompt to expire. Set via
-	// WithDelegationInjector; wired by wireEnvProviders in loop_env.go.
-	delegationInjector func() string
+	// change to the workspace delegation graph is reflected on the very next
+	// turn without waiting for the cached system-prompt to expire.
+	//
+	// The workspaceID argument is the turn's effective workspace (from
+	// ts.opts.WorkspaceID → tools.ToolWorkspaceID(ctx)), which MUST match the
+	// authority the enforcement gate reads — so the block advertises exactly
+	// what the gate allows. Set via WithDelegationInjector; wired by
+	// wireDelegationInjectors in loop_env.go.
+	delegationInjector func(workspaceID string) string
 
 	// env carries the environment provider + any per-builder env state. Split
 	// into a nested struct so context_env.go owns the mutation surface without
@@ -85,11 +90,12 @@ func (cb *ContextBuilder) WithResourcesInjector(fn func() string) *ContextBuilde
 }
 
 // WithDelegationInjector installs the per-turn delegation context callback. fn
-// is called on every turn from buildDynamicContext (the UN-CACHED path) so that
-// any runtime change to the delegation policy is reflected on the agent's next
-// turn without waiting for the cached system-prompt to expire. Passing nil
-// disables the block (no delegation section is appended).
-func (cb *ContextBuilder) WithDelegationInjector(fn func() string) *ContextBuilder {
+// receives the turn's effective workspaceID (ts.opts.WorkspaceID, may be "") and
+// is called on every turn from buildDynamicContext (the UN-CACHED path). The
+// closure reads the workspace delegation graph for that workspace so the block
+// advertises exactly what the enforcement gate allows. Passing nil disables the
+// block (no delegation section is appended).
+func (cb *ContextBuilder) WithDelegationInjector(fn func(workspaceID string) string) *ContextBuilder {
 	cb.delegationInjector = fn
 	return cb
 }
@@ -714,7 +720,7 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 	}
 }
 
-func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderDisplayName string) string {
+func (cb *ContextBuilder) buildDynamicContext(workspaceID, channel, chatID, senderID, senderDisplayName string) string {
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
@@ -728,10 +734,12 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderD
 		fmt.Fprintf(&sb, "\n\n## Current Sender\n%s", senderLine)
 	}
 
-	// Delegation block: injected per-turn so a runtime policy change is
-	// visible on the agent's NEXT turn (not mtime-cached like the static prompt).
+	// Delegation block: injected per-turn so the workspace graph read reflects
+	// the CURRENT graph state without waiting for the cached static prompt to
+	// expire. workspaceID is the turn's effective workspace — the same value the
+	// enforcement gate resolves, so advertisement == enforcement by construction.
 	if cb.delegationInjector != nil {
-		if block := cb.delegationInjector(); block != "" {
+		if block := cb.delegationInjector(workspaceID); block != "" {
 			fmt.Fprintf(&sb, "\n\n%s", block)
 		}
 	}
@@ -749,6 +757,12 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderD
 //  3. history messages (the Skip-trimmed sliding window, post-eviction).
 //  4. Current user message.
 //
+// workspaceID is the turn's effective workspace (ts.opts.WorkspaceID). It is
+// threaded into buildDynamicContext and thence into delegationInjector so the
+// "## Delegation" block reads the SAME workspace graph the enforcement gate
+// consults — advertisement == enforcement by construction. Pass "" when no
+// workspace is bound to the turn (the injector will resolve the default).
+//
 // breadcrumb is the prominent evicted-context block built by buildBreadcrumb
 // (FR-007); pass "" when no turns have been evicted.
 //
@@ -761,6 +775,7 @@ func (cb *ContextBuilder) BuildMessages(
 	summary string,
 	currentMessage string,
 	media []string,
+	workspaceID string,
 	channel, chatID, senderID, senderDisplayName string,
 	breadcrumb string,
 	recallSpan []providers.Message,
@@ -779,8 +794,9 @@ func (cb *ContextBuilder) BuildMessages(
 	// - OpenAI-compat passes messages through as-is.
 	staticPrompt := cb.BuildSystemPromptWithCache()
 
-	// Build short dynamic context (time, runtime, session) — changes per request
-	dynamicCtx := cb.buildDynamicContext(channel, chatID, senderID, senderDisplayName)
+	// Build short dynamic context (time, runtime, session, delegation) — changes per request.
+	// workspaceID is threaded so the delegation block reads the same graph the gate enforces.
+	dynamicCtx := cb.buildDynamicContext(workspaceID, channel, chatID, senderID, senderDisplayName)
 
 	// Compose a single system message: static (cached) + dynamic + optional summary.
 	// Keeping all system content in one message ensures every provider adapter can

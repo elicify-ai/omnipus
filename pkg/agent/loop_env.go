@@ -7,6 +7,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
 // wireEnvProviders injects an envcontext.DefaultProvider into every registered
@@ -50,9 +51,13 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 
 // wireDelegationInjectors installs a delegation-context callback on every
 // agent's ContextBuilder in registry. The callback is invoked on each turn from
-// buildDynamicContext (the UN-CACHED path) so a runtime change to the delegation
-// policy — which happens via TriggerReload → full registry rebuild followed by
-// this call — appears on the agent's VERY NEXT turn.
+// buildDynamicContext (the UN-CACHED path), receives the turn's workspaceID, and
+// reads the workspace delegation graph (workspaces/<id>.json) to render the
+// "## Delegation" block — matching the SAME authority the enforcement gate uses.
+//
+// Advertisement == enforcement by construction: both the injector and
+// buildDelegationDenyChecker call workspace.ReadDelegation for the same wsID,
+// so what is advertised is exactly what the gate allows.
 //
 // Must NOT be called while holding al.mu: the closures it installs call
 // al.GetRegistry() and al.GetConfig(), both of which acquire al.mu.RLock.
@@ -60,13 +65,10 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 // the atomic swap in ReloadProviderAndConfig; that is safe because no other
 // goroutine holds a reference to registry yet.
 //
-// Per-turn freshness guarantee: each closure captures al (the AgentLoop
-// pointer) and agentID. On every invocation it calls al.GetRegistry() and
-// al.GetConfig() to fetch the CURRENT live config and registry (which may
-// have been swapped since the closure was created). The effective delegation
-// policy is resolved the same way the enforcement gate does (loop.go:1588),
-// via config.ResolveDelegationTo(agentCfg, cfg.Agents.Defaults), so the
-// context block always matches what the gate will allow.
+// Per-turn freshness guarantee: the graph is read on every injector call
+// (workspace.ReadDelegation is not cached), so a graph change (e.g. a PUT to
+// /workspaces/:id/delegation) takes effect on the very next turn with no agent
+// reload.
 func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 	for _, agentID := range registry.ListAgentIDs() {
 		agentInst, ok := registry.GetAgent(agentID)
@@ -76,10 +78,9 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 
 		// Capture by value so the closure refers to this specific agentID string.
 		id := agentID
-		agentInst.ContextBuilder.WithDelegationInjector(func() string {
-			// Read the CURRENT live registry and config — not the ones captured
-			// at wire time. After a hot-reload, al.registry and al.cfg are the
-			// new values built from the updated config.
+		agentInst.ContextBuilder.WithDelegationInjector(func(workspaceID string) string {
+			// DW-001: read the CURRENT live registry — not the one captured at wire time.
+			// After a hot-reload, al.registry is the new value.
 			liveRegistry := al.GetRegistry()
 			if liveRegistry == nil {
 				logger.WarnCF("agent.env",
@@ -87,6 +88,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					map[string]any{"error_id": "DW-001", "agent_id": id})
 				return ""
 			}
+			// DW-002: the agent must still be present in the live registry.
 			_, exists := liveRegistry.GetAgent(id)
 			if !exists {
 				logger.WarnCF("agent.env",
@@ -95,51 +97,63 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 				return ""
 			}
 
-			// Resolve the EFFECTIVE policy the same way the enforcement gate does
-			// (loop.go:1588). ResolveDelegationTo consults:
-			//   1. agentCfg.DelegationPolicy.To   (canonical per-agent policy)
-			//   2. agentCfg.CanDelegateTo          (legacy per-agent allowlist)
-			//   3. defaults.DelegationPolicy.To    (global default canonical policy)
-			//   4. defaults.CanDelegateTo           (global default legacy allowlist)
-			// Returns nil only when none of the above is set.
+			// Resolve the effective workspace, mirroring resolveEffectiveWorkspaceID
+			// in loop.go exactly:
+			//   1. use the turn's bound workspaceID when non-empty;
+			//   2. fall back to the is_default workspace;
+			//   3. fail-closed (render cannot-delegate) when neither resolves.
+			wsID := workspaceID
+			if wsID == "" {
+				def, err := workspace.ResolveDefaultID(omnipusHome())
+				if err != nil || def == "" {
+					logger.WarnCF("agent.env",
+						"wireDelegationInjectors: cannot resolve default workspace — rendering fail-closed delegation block",
+						map[string]any{"agent_id": id, "error": errString(err)})
+					return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+				}
+				wsID = def
+			}
+
+			// Read the workspace delegation graph — SAME call the enforcement gate makes.
+			// Fail-closed on any error: an unreadable graph DENIES (matching the gate).
+			edges, err := workspace.ReadDelegation(omnipusHome(), wsID)
+			if err != nil {
+				logger.WarnCF("agent.env",
+					"wireDelegationInjectors: workspace delegation graph unreadable — rendering fail-closed delegation block",
+					map[string]any{"agent_id": id, "workspace_id": wsID, "error": err.Error()})
+				return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+			}
+
+			// Filter to outgoing edges from this agent.
 			liveCfg := al.GetConfig()
-			agentCfg := findAgentConfig(liveCfg, id)
-			toList := config.ResolveDelegationTo(agentCfg, liveCfg.Agents.Defaults)
+			globalDepthCap := liveCfg.Agents.Defaults.SubTurn.MaxDepth
 
-			if toList == nil {
-				// Final fallback: Subagents.AllowAgents (legacy spawn-tool path).
-				// Mirror the CanSpawnSubagent logic (registry.go:155-168) so the
-				// context block is never "cannot delegate" when the legacy allowlist
-				// permits delegation.
-				if agentCfg != nil && agentCfg.Subagents != nil && len(agentCfg.Subagents.AllowAgents) > 0 {
-					refs := make([]config.AgentRef, len(agentCfg.Subagents.AllowAgents))
-					for i, aid := range agentCfg.Subagents.AllowAgents {
-						refs[i] = config.AgentRef{Kind: "local", ID: aid}
-					}
-					toList = refs
+			var targets []delegationTarget
+			for _, e := range edges {
+				if e.FromAgent != id {
+					continue
 				}
+				label, ok := resolveDelegationLabel(liveRegistry, e.ToAgent)
+				if !ok {
+					// Unknown or unavailable target in the graph — skip (unresolvable
+					// targets get an empty label, buildDelegationContext will skip them).
+					label = ""
+				}
+				// Convert workspace.DelegationMode to config.DelegationMode (same string
+				// values, typed separately to avoid import cycle in pkg/workspace).
+				modes := make([]config.DelegationMode, len(e.Modes))
+				for i, m := range e.Modes {
+					modes[i] = config.DelegationMode(m)
+				}
+				targets = append(targets, delegationTarget{
+					ID:    e.ToAgent,
+					Label: label,
+					Modes: modes,
+					Depth: e.Depth,
+				})
 			}
 
-			// Construct the effective policy for rendering. Modes and Depth come
-			// from the canonical policy (ResolveDelegationPolicy); the To list is
-			// the fully resolved one from above (covers legacy paths too).
-			effectivePolicy := config.ResolveDelegationPolicy(agentCfg, liveCfg.Agents.Defaults)
-			var renderPolicy *config.DelegationPolicy
-			if toList != nil {
-				if effectivePolicy != nil {
-					// Clone so we don't mutate the shared config struct.
-					clone := *effectivePolicy
-					clone.To = toList
-					renderPolicy = &clone
-				} else {
-					renderPolicy = &config.DelegationPolicy{To: toList}
-				}
-			}
-			// If toList is still nil, renderPolicy stays nil → "cannot delegate".
-
-			return buildDelegationContext(renderPolicy, func(targetID string) (string, bool) {
-				return resolveDelegationLabel(liveRegistry, targetID)
-			})
+			return buildDelegationContext(targets, globalDepthCap)
 		})
 	}
 }

@@ -242,6 +242,7 @@ func TestFitInvariantHolds_WindowPlusRecall(t *testing.T) {
 		"",
 		"Current question",
 		nil,
+		"",
 		"test", "chat1", "", "",
 		breadcrumb,
 		span.Messages(),
@@ -370,6 +371,7 @@ func TestRecallSpan_ZeroDuplicateOrphanToolCallIDs_EndToEnd(t *testing.T) {
 		"",
 		"What did we find?",
 		nil,
+		"",
 		"test", "chat1", "", "",
 		"", // no breadcrumb for simplicity
 		spanMsgs,
@@ -465,6 +467,7 @@ func TestLegacySummaryMarker_Inert(t *testing.T) {
 		legacySummary,
 		"What about the Eiffel Tower?",
 		nil,
+		"",
 		"test", "chat1", "", "",
 		"",  // no breadcrumb
 		nil, // no recall span
@@ -746,6 +749,7 @@ func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
 		"",
 		currentMsg,
 		nil,
+		"",
 		"test", "chat1", "", "",
 		breadcrumb,
 		spanMsgs,

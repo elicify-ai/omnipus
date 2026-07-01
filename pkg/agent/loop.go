@@ -7416,6 +7416,7 @@ func (al *AgentLoop) assembleMessages(
 		summary,
 		userMsg,
 		media,
+		ts.opts.WorkspaceID,
 		ts.channel,
 		ts.chatID,
 		ts.opts.SenderID,
