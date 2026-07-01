@@ -3,7 +3,7 @@ import * as path from 'path'
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages } from './fixtures/selectors';
+import { chatInput, agentPicker, assistantMessages, selectAgent } from './fixtures/selectors';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -238,12 +238,18 @@ test(
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
 
+    // Route to Jim: the default agent Mia is a guide whose policy excludes the
+    // `spawn` tool (verified in CI: `load_tool(load): ... Rejected: spawn — denied
+    // by this agent's policy`) and whose persona declines to spawn — she answers
+    // in prose offering create_task/hand_off instead, so no SubagentBlock ever
+    // renders. Every spawn-dependent spec switches to Jim (see subagent.spec.ts
+    // startFreshChat); Jim is the general-purpose task agent and can spawn.
+    await selectAgent(page, /Jim/i);
+
     // Deterministic prompt: explicit tool name, exact arguments, no prose allowed.
     // temperature=0 + seed=42 are plumbed into OpenRouter requests for determinism.
-    // Use `exec` (not `shell`) — the spawned subagent inherits the parent's
-    // toolset and Mia's policy excludes the workspace shell tools, so a
-    // `shell`-named call gets refused with "tool not available". `exec` is on
-    // Mia by default and produces the tool_call_badge the test asserts.
+    // The spawned subagent inherits Jim's toolset (which includes `exec`); it calls
+    // `exec` once, producing the tool_call_badge the expanded block asserts.
     await input.fill(
       [
         'Call the `spawn` tool exactly once, right now, with these arguments:',
