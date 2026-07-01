@@ -428,13 +428,14 @@ func normalizeModel(model, apiBase string) string {
 	}
 
 	if strings.Contains(strings.ToLower(apiBase), "openrouter.ai") {
-		// OpenRouter's API accepts model IDs without the "openrouter/" config
-		// prefix (e.g. "z-ai/glm-5.2", not "openrouter/z-ai/glm-5.2").
-		// The prefix is valid in Omnipus config as a namespace disambiguator
-		// but must be stripped before the upstream call. All other slashes in
-		// OpenRouter model IDs (vendor/model-name) are part of the namespace
-		// and must be preserved.
-		if strings.EqualFold(before, "openrouter") {
+		// OpenRouter model IDs are "<vendor>/<model>" (e.g. "z-ai/glm-5.2").
+		// Omnipus config may namespace them with an extra "openrouter/" prefix
+		// ("openrouter/z-ai/glm-5.2" — the form onboarding writes), which the
+		// upstream rejects ("... is not a valid model ID"). Strip that prefix —
+		// but ONLY when a vendor/model slash remains after it, so the genuine
+		// OpenRouter router model "openrouter/auto" (and "openrouter/auto:*") is
+		// left intact (it IS a valid upstream ID, not a namespace prefix).
+		if strings.EqualFold(before, "openrouter") && strings.Contains(after, "/") {
 			return after
 		}
 		return model
