@@ -76,6 +76,21 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 				// shared archive container — do not queue it for removal.
 				if parts[0] != ".context" {
 					touchedSessionDirs[filepath.Join(us.baseDir, parts[0])] = struct{}{}
+				} else {
+					// The .context/ entry is a memory.JSONLStore file:
+					// each <key>.jsonl has a sibling <key>.meta.json holding
+					// the Skip/Count offset. Remove the meta file alongside
+					// the archive so that a recycled session key never reads a
+					// stale Skip/Count against a now-empty .jsonl (phantom
+					// offset bug). Failure to remove the meta is logged at
+					// Warn but does NOT revert the removed count — the .jsonl
+					// is already gone and the meta file on its own is harmless
+					// (readMeta returns defaults when the .jsonl is absent).
+					metaPath := strings.TrimSuffix(path, ".jsonl") + ".meta.json"
+					if metaDelErr := os.Remove(metaPath); metaDelErr != nil && !os.IsNotExist(metaDelErr) {
+						slog.Warn("session: retention_sweep: delete context meta failed",
+							"file", metaPath, "error", metaDelErr)
+					}
 				}
 			}
 		}

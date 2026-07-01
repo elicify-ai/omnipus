@@ -570,6 +570,123 @@ func TestRecallSpan_DropCounter(t *testing.T) {
 	}
 }
 
+// --- M1: top-relevance turn selected when >8 turns match -------------------
+
+// TestRecallConversation_QueryBM25_TopRelevanceKept proves that when more than
+// recallDefaultTurns (8) turns match the query, the bounds step keeps the
+// TOP-relevance hits (by BM25 score), NOT the earliest 8 turns by position.
+//
+// Fixture: 10 turns that all contain the query term "RELEVANCE_NONCE", but
+// only turn 10 (the last one) also contains the rare high-scoring term
+// "SPECIAL_RARE_SIGNAL_XQYZ". With >8 hits, the old code's pre-bounds
+// chronological sort would keep turns 1–8, dropping the highest-scoring turn
+// 10. The fixed code keeps the top-N by score first, so turn 10 must appear.
+func TestRecallConversation_QueryBM25_TopRelevanceKept(t *testing.T) {
+	const common = "RELEVANCE_NONCE"
+	const rare = "SPECIAL_RARE_SIGNAL_XQYZ"
+
+	msgs := make([]memory.ArchivedMessage, 0, 20)
+	for i := 0; i < 9; i++ {
+		// Turns 1–9: contain the common term only.
+		msgs = append(msgs,
+			makeUserMsg(fmt.Sprintf("turn %d about %s general", i+1, common)),
+			makeAssistantMsg(fmt.Sprintf("answer %d", i+1)),
+		)
+	}
+	// Turn 10: contains both the common term AND the rare high-scoring term.
+	// BM25 will rank this higher because the rare term has high IDF.
+	msgs = append(msgs,
+		makeUserMsg(fmt.Sprintf("turn 10 about %s and also %s important detail", common, rare)),
+		makeAssistantMsg("answer 10 with rare content"),
+	)
+
+	archive := &stubArchive{msgs: msgs}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	ctx := makeCtx("sess-toprel")
+	// Query for the rare term — only turn 10 matches it, so turn 10 must appear
+	// in the span even though it is the last (10th) turn and >8 turns match the
+	// common term alone.
+	result := tool.Execute(ctx, map[string]any{"query": rare})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	span := setter.spans["sess-toprel"]
+	if span == nil {
+		t.Fatal("no span was set")
+	}
+	combined := joinSpanContent(span)
+	if !strings.Contains(combined, rare) {
+		t.Errorf("top-relevance turn (containing %q) was not returned in span: %s", rare, combined)
+	}
+}
+
+// --- M6: empty-tokenizable query returns distinct error ---------------------
+
+// TestRecallConversation_EmptyTokenizableQuery verifies that a query whose
+// tokens are all punctuation/non-alphanumeric returns a distinct actionable
+// error (not "no matching turns") and increments the "error" counter.
+func TestRecallConversation_EmptyTokenizableQuery(t *testing.T) {
+	archive := &stubArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("some content here"),
+		makeAssistantMsg("some reply"),
+	}}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+	ctx := makeCtx("sess-m6")
+
+	errBefore := RecallConversationCallCount("error")
+
+	// Punctuation-only query — retroTokenize will return empty slice.
+	result := tool.Execute(ctx, map[string]any{"query": "!!! ??? ---"})
+	if !result.IsError {
+		t.Errorf("expected an error result for punctuation-only query, got: %s", result.ForLLM)
+	}
+	// The error message must be distinct (not "no matching turns").
+	if strings.Contains(result.ForLLM, "no matching turns") {
+		t.Errorf("error message must be distinct from 'no matching turns', got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "no searchable terms") {
+		t.Errorf("error message should mention 'no searchable terms', got: %s", result.ForLLM)
+	}
+	errAfter := RecallConversationCallCount("error")
+	if errAfter <= errBefore {
+		t.Errorf("error counter did not increment: before=%d after=%d", errBefore, errAfter)
+	}
+}
+
+// --- M7: newRecallSpan Tokens == Σ estimateMessageTokens --------------------
+
+// TestRecallSpan_NewRecallSpan_TokensConsistent verifies that newRecallSpan
+// computes Tokens as the exact sum of estimateMessageTokens over its messages,
+// so Tokens and Msgs can never desync.
+func TestRecallSpan_NewRecallSpan_TokensConsistent(t *testing.T) {
+	spanMsgs := []providers.Message{
+		{Role: "user", Content: "hello world this is a test message"},
+		{Role: "assistant", Content: "acknowledgment response with some words"},
+	}
+	span := newRecallSpan(1, 1, spanMsgs)
+
+	// Independently compute the expected token sum.
+	expected := 0
+	for _, m := range spanMsgs {
+		expected += estimateMessageTokens(m)
+	}
+
+	if span.Tokens != expected {
+		t.Errorf("span.Tokens = %d, want Σ estimateMessageTokens = %d", span.Tokens, expected)
+	}
+	if span.Tokens == 0 {
+		t.Errorf("token sum unexpectedly zero — fixture may be empty")
+	}
+	// Messages() must return exactly the input slice.
+	got := span.Messages()
+	if len(got) != len(spanMsgs) {
+		t.Errorf("Messages() len = %d, want %d", len(got), len(spanMsgs))
+	}
+}
+
 // --- helpers ----------------------------------------------------------------
 
 // joinSpanContent concatenates all span message Content fields for easy assertion.

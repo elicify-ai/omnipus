@@ -413,6 +413,75 @@ func (s *JSONLStore) TruncateHistory(
 	return s.writeMeta(sessionKey, meta)
 }
 
+// RollbackAppended truncates the JSONL file to the first targetLines
+// non-empty lines and updates meta.Count accordingly. meta.Skip is LEFT
+// UNTOUCHED (clamped to the new Count if it would exceed it).
+//
+// This is the Skip-preserving rollback primitive used by turn-abort and
+// hard-abort to remove only the messages appended during the current turn,
+// without touching evicted (skipped) turns. It is the ONLY correct way to
+// undo turn appends after eviction has occurred — SetHistory would overwrite
+// the archive and reset Skip=0, permanently deleting evicted turns (SC-001).
+//
+// If targetLines >= meta.Count (nothing to remove), the method returns nil
+// immediately without touching the file.
+func (s *JSONLStore) RollbackAppended(
+	_ context.Context, sessionKey string, targetLines int,
+) error {
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := s.readMeta(sessionKey)
+	if err != nil {
+		return err
+	}
+
+	// Reconcile meta.Count with actual line count (in case of a prior crash).
+	n, countErr := countLines(s.jsonlPath(sessionKey))
+	if countErr != nil {
+		return countErr
+	}
+	meta.Count = n
+
+	if targetLines < 0 {
+		targetLines = 0
+	}
+	if targetLines >= meta.Count {
+		// Nothing to roll back — the file is already at or below targetLines.
+		return nil
+	}
+
+	// Read the first targetLines lines from the archive. readMessages(path, 0)
+	// returns ALL lines; we keep only the first targetLines.
+	all, err := readMessages(s.jsonlPath(sessionKey), 0)
+	if err != nil {
+		return fmt.Errorf("memory: rollback_appended read: %w", err)
+	}
+	kept := all
+	if targetLines < len(kept) {
+		kept = all[:targetLines]
+	}
+
+	// Update meta: Count shrinks, Skip clamped so it never exceeds Count.
+	meta.Count = len(kept)
+	if meta.Skip > meta.Count {
+		meta.Skip = meta.Count
+	}
+	meta.UpdatedAt = time.Now()
+
+	// Write meta BEFORE rewriting the file. If we crash between the two
+	// writes, meta.Count is the reduced value and the old (larger) file is
+	// still present — GetHistory will read more messages than Count says,
+	// which is "too many" (safe, conservative). The next rollback or
+	// TruncateHistory call corrects it via the countLines reconcile step.
+	if err := s.writeMeta(sessionKey, meta); err != nil {
+		return err
+	}
+
+	return s.rewriteJSONL(sessionKey, kept)
+}
+
 func (s *JSONLStore) SetHistory(
 	_ context.Context,
 	sessionKey string,

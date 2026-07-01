@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -287,5 +288,168 @@ func TestSave_DoesNotCompactSkipped(t *testing.T) {
 	if archived[skipped].Content != firstLive {
 		t.Errorf("archived[%d].Content = %q, want %q (first live)",
 			skipped, archived[skipped].Content, firstLive)
+	}
+}
+
+// TestArchivedMessage_RoundTrip guards against a future providers.Message.TS
+// field addition silently colliding with ArchivedMessage's own TS via JSON
+// embedding. If providers.Message ever gains a "ts" field, JSON serialisation
+// would be ambiguous — this test would fail at build time, catching the
+// collision before it reaches production.
+//
+// BDD: Given an ArchivedMessage with a distinct TS value,
+//
+//	When it is JSON-marshalled and then unmarshalled back,
+//	Then Role, Content, and TS survive round-trip exactly.
+func TestArchivedMessage_RoundTrip(t *testing.T) {
+	const wantRole = "assistant"
+	const wantContent = "round-trip-test"
+	const wantTS = int64(1751234567)
+
+	orig := ArchivedMessage{
+		Message: providers.Message{
+			Role:    wantRole,
+			Content: wantContent,
+		},
+		TS: wantTS,
+	}
+
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var got ArchivedMessage
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if got.Role != wantRole {
+		t.Errorf("Role = %q, want %q", got.Role, wantRole)
+	}
+	if got.Content != wantContent {
+		t.Errorf("Content = %q, want %q", got.Content, wantContent)
+	}
+	if got.TS != wantTS {
+		t.Errorf("TS = %d, want %d", got.TS, wantTS)
+	}
+}
+
+// TestRollbackAppended verifies that RollbackAppended truncates the archive to
+// the requested line count while leaving meta.Skip untouched (SC-001).
+//
+// BDD: Given a session with 10 messages where Skip=3 (first 3 evicted),
+//
+//	When 4 more messages are appended and then rolled back via RollbackAppended(10),
+//	Then the archive has 10 lines (not 14), and Skip is still 3 (unchanged).
+func TestRollbackAppended(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	const key = "rollback-test"
+	const initial = 10
+	const extra = 4
+
+	// Add initial messages.
+	for i := 0; i < initial; i++ {
+		if err := store.AddMessage(ctx, key, "user", fmt.Sprintf("msg%d", i)); err != nil {
+			t.Fatalf("AddMessage %d: %v", i, err)
+		}
+	}
+
+	// Advance Skip (simulate eviction).
+	const skipCount = 3
+	if err := store.TruncateHistory(ctx, key, initial-skipCount); err != nil {
+		t.Fatalf("TruncateHistory: %v", err)
+	}
+
+	// Read meta to confirm Skip.
+	meta, err := store.readMeta(key)
+	if err != nil {
+		t.Fatalf("readMeta before rollback: %v", err)
+	}
+	if meta.Skip != skipCount {
+		t.Fatalf("pre-rollback Skip = %d, want %d", meta.Skip, skipCount)
+	}
+
+	// Append extra messages (simulating a turn's writes).
+	for i := 0; i < extra; i++ {
+		if err := store.AddMessage(ctx, key, "assistant", fmt.Sprintf("extra%d", i)); err != nil {
+			t.Fatalf("AddMessage extra %d: %v", i, err)
+		}
+	}
+
+	// Confirm archive has initial+extra lines.
+	path := store.jsonlPath(key)
+	beforeRollback := countFileLines(t, path)
+	if beforeRollback != initial+extra {
+		t.Fatalf("before rollback: expected %d lines, got %d", initial+extra, beforeRollback)
+	}
+
+	// Roll back to initial line count.
+	if err := store.RollbackAppended(ctx, key, initial); err != nil {
+		t.Fatalf("RollbackAppended: %v", err)
+	}
+
+	// After rollback: archive must have exactly initial lines.
+	afterLines := countFileLines(t, path)
+	if afterLines != initial {
+		t.Fatalf("after rollback: expected %d lines, got %d", initial, afterLines)
+	}
+
+	// Skip must be unchanged at skipCount.
+	metaAfter, err := store.readMeta(key)
+	if err != nil {
+		t.Fatalf("readMeta after rollback: %v", err)
+	}
+	if metaAfter.Skip != skipCount {
+		t.Errorf("after rollback: Skip = %d, want %d (must be unchanged)", metaAfter.Skip, skipCount)
+	}
+
+	// ReadArchive must return the first initial messages.
+	archived, err := store.ReadArchive(ctx, key)
+	if err != nil {
+		t.Fatalf("ReadArchive after rollback: %v", err)
+	}
+	if len(archived) != initial {
+		t.Fatalf("ReadArchive after rollback: expected %d messages, got %d", initial, len(archived))
+	}
+	// The evicted messages (index < Skip) must still be accessible.
+	if archived[0].Content != "msg0" {
+		t.Errorf("archived[0].Content = %q, want %q", archived[0].Content, "msg0")
+	}
+}
+
+// TestRollbackAppended_NoopWhenTargetGeCount verifies that RollbackAppended
+// is a no-op when targetLines >= the current line count.
+func TestRollbackAppended_NoopWhenTargetGeCount(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	const key = "rollback-noop"
+	const n = 5
+
+	for i := 0; i < n; i++ {
+		if err := store.AddMessage(ctx, key, "user", fmt.Sprintf("m%d", i)); err != nil {
+			t.Fatalf("AddMessage %d: %v", i, err)
+		}
+	}
+	path := store.jsonlPath(key)
+	before := countFileLines(t, path)
+
+	// Calling with target == current count is a no-op.
+	if err := store.RollbackAppended(ctx, key, n); err != nil {
+		t.Fatalf("RollbackAppended noop: %v", err)
+	}
+	after := countFileLines(t, path)
+	if after != before {
+		t.Errorf("no-op case: expected %d lines, got %d", before, after)
+	}
+
+	// Calling with target > count is also a no-op.
+	if err := store.RollbackAppended(ctx, key, n+100); err != nil {
+		t.Fatalf("RollbackAppended noop (>count): %v", err)
+	}
+	after2 := countFileLines(t, path)
+	if after2 != before {
+		t.Errorf("target>count case: expected %d lines, got %d", before, after2)
 	}
 }

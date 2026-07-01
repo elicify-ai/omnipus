@@ -634,12 +634,14 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 	// Use isHardAbort=true for hard abort to immediately cancel all children.
 	ts.Finish(true)
 
-	// Roll back session history to the state before the turn started.
+	// Roll back session history to the state before the turn started using the
+	// Skip-preserving rollback primitive. SetHistory is explicitly NOT used here:
+	// it would overwrite the JSONL archive and reset Skip=0, permanently deleting
+	// any turns that were evicted (skipped) before this turn began (SC-001,
+	// CRITICAL 1 path 3). RollbackAppended truncates only the tail appended
+	// during this turn, leaving meta.Skip untouched.
 	if ts.session != nil {
-		history := ts.session.GetHistory(sessionKey)
-		if ts.initialHistoryLength < len(history) {
-			ts.session.SetHistory(sessionKey, history[:ts.initialHistoryLength])
-		}
+		ts.session.RollbackAppended(sessionKey, ts.initialArchiveLen)
 	}
 
 	return nil
